@@ -30,9 +30,9 @@ services:
     cap_add:
       - NET_ADMIN
       - SYS_NICE
-    sysctls:
-      - net.core.rmem_max=16777216
-      - net.core.wmem_max=16777216
+    # sysctls:
+      # - net.core.rmem_max=16777216
+      # - net.core.wmem_max=16777216
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:2223/status"]
       interval: 30s
