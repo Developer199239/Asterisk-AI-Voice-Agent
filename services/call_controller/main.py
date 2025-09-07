@@ -11,6 +11,7 @@ import signal
 import sys
 from pathlib import Path
 from typing import Optional
+from aiohttp import web
 
 # Add shared modules to path
 sys.path.append(str(Path(__file__).parent.parent.parent / "shared"))
@@ -134,6 +135,15 @@ class CallControllerService:
     
     async def _start_services(self):
         """Start all background services"""
+        # Start health check server
+        health_app = web.Application()
+        health_app.router.add_get('/health', self._health_endpoint)
+        health_runner = web.AppRunner(health_app)
+        await health_runner.setup()
+        health_site = web.TCPSite(health_runner, '0.0.0.0', 8000)
+        await health_site.start()
+        logger.info("Health check server started on port 8000")
+        
         tasks = [
             asyncio.create_task(self.ari_client.start_listening()),
             asyncio.create_task(self.redis_queue.start_listening()),
@@ -146,6 +156,14 @@ class CallControllerService:
         except Exception as e:
             logger.error(f"Error in background services: {e}")
             raise
+    
+    async def _health_endpoint(self, request):
+        """Health check endpoint"""
+        return web.json_response({
+            "status": "healthy",
+            "service": "call_controller",
+            "timestamp": asyncio.get_event_loop().time()
+        })
     
     # ARI Event Handlers
     
