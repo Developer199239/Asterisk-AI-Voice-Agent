@@ -1,30 +1,181 @@
 version: '3.8'
 
 services:
-  asterisk-ai-voice-agent:
-    build: .
-    container_name: asterisk-ai-voice-agent
-    network_mode: host
-    environment:
-      - INTEGRATION_MODE=sip
-      - ASTERISK_HOST=voiprnd.nemtclouddispatch.com
-      - ASTERISK_VERSION=16
-      - SIP_EXTENSION=${SIP_EXTENSION:-1001}
-      - SIP_PASSWORD=${SIP_PASSWORD:-password}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - LOG_LEVEL=info
-      - VAD_ENABLED=true
-      - NOISE_SUPPRESSION=true
-      - ECHO_CANCELLATION=true
+  # Redis Message Queue
+  redis:
+    image: redis:7.2-alpine
+    container_name: asterisk-ai-voice-agent-redis
+    ports:
+      - "6379:6379"
     volumes:
-      - ./config:/app/config:ro
-      - ./logs:/app/logs
+      - redis_data:/data
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - ai-voice-network
+
+  # RTPEngine Media Proxy
+  rtpengine:
+    image: sipwise/rtpengine:latest
+    container_name: asterisk-ai-voice-agent-rtpengine
+    ports:
+      - "2223:2223"  # Control port
+      - "10000-10100:10000-10100/udp"  # RTP port range
+    volumes:
+      - rtpengine_data:/var/spool/rtpengine
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+      - SYS_NICE
+    sysctls:
+      - net.core.rmem_max=16777216
+      - net.core.wmem_max=16777216
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:2223/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - ai-voice-network
+
+  # Call Controller Service
+  call_controller:
+    build:
+      context: .
+      dockerfile: services/call_controller/Dockerfile
+    container_name: asterisk-ai-voice-agent-call-controller
+    ports:
+      - "8000:8000"  # Health check endpoint
+    environment:
+      - ASTERISK_HOST=${ASTERISK_HOST:-voiprnd.nemtclouddispatch.com}
+      - ASTERISK_VERSION=${ASTERISK_VERSION:-16}
+      - ARI_USERNAME=${ARI_USERNAME:-AIAgent}
+      - ARI_PASSWORD=${ARI_PASSWORD:-c4d5359e2f9ddd394cd6aa116c1c6a96}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      - RTPENGINE_HOST=${RTPENGINE_HOST:-rtpengine}
+      - RTPENGINE_PORT=${RTPENGINE_PORT:-2223}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - shared_audio:/shared/audio
+      - shared_logs:/shared/logs
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      rtpengine:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
+    networks:
+      - ai-voice-network
 
+  # STT Service
+  stt_service:
+    build:
+      context: .
+      dockerfile: services/stt_service/Dockerfile
+    container_name: asterisk-ai-voice-agent-stt
+    ports:
+      - "8001:8001"  # Health check endpoint
+      - "5004:5004/udp"  # RTP stream reception
+    environment:
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - shared_audio:/shared/audio
+      - shared_logs:/shared/logs
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - ai-voice-network
 
+  # LLM Service
+  llm_service:
+    build:
+      context: .
+      dockerfile: services/llm_service/Dockerfile
+    container_name: asterisk-ai-voice-agent-llm
+    ports:
+      - "8002:8002"  # Health check endpoint
+    environment:
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - FALLBACK_LLM_MODEL=${FALLBACK_LLM_MODEL:-gpt-3.5-turbo}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - shared_logs:/shared/logs
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - ai-voice-network
+
+  # TTS Service
+  tts_service:
+    build:
+      context: .
+      dockerfile: services/tts_service/Dockerfile
+    container_name: asterisk-ai-voice-agent-tts
+    ports:
+      - "8003:8003"  # Health check endpoint
+    environment:
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - shared_audio:/shared/audio
+      - shared_logs:/shared/logs
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - ai-voice-network
+
+volumes:
+  redis_data:
+    driver: local
+  rtpengine_data:
+    driver: local
+  shared_audio:
+    driver: local
+  shared_logs:
+    driver: local
+
+networks:
+  ai-voice-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

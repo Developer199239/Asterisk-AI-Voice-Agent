@@ -1,13 +1,13 @@
 ---
-description: Development rules and guidelines for the Asterisk AI Voice Agent project
-globs: src/**/*.py, tests/**/*.py, *.py, docker-compose.yml, Dockerfile
+description: Development rules and guidelines for the Asterisk AI Voice Agent v2.0 project
+globs: services/**/*.py, shared/**/*.py, *.py, docker-compose.yml, Dockerfile
 alwaysApply: true
 ---
 
-# Asterisk AI Voice Agent - Development Rules
+# Asterisk AI Voice Agent v2.0 - Development Rules
 
 ## Project Overview
-This is an open-source AI Voice Agent that integrates with Asterisk/FreePBX using SIP/RTP technology (Asterisk 16+) and answers calls using configurable AI providers.
+This is an open-source AI Voice Agent that integrates with Asterisk/FreePBX using the Asterisk REST Interface (ARI) and microservices architecture. The system answers calls using configurable AI providers with real-time conversation capabilities and barge-in support.
 
 ## Development Workflow
 
@@ -20,7 +20,7 @@ This is an open-source AI Voice Agent that integrates with Asterisk/FreePBX usin
 ### Development Process
 1. **Local Development**: All code changes are made locally
 2. **Git Workflow**: 
-   - Build locally test on server
+   - Build locally, test on server
    - Commit changes to Git
    - Push to remote repository
 3. **Server Testing**:
@@ -28,6 +28,7 @@ This is an open-source AI Voice Agent that integrates with Asterisk/FreePBX usin
    - Pull latest changes from Git
    - Test with Asterisk 16+ environment
    - No direct code changes on server
+   - No changes to Asterisk config on server - ask user to make any changes related to asterisk
 
 ### Code Standards
 - **Python Version**: 3.11+
@@ -39,38 +40,53 @@ This is an open-source AI Voice Agent that integrates with Asterisk/FreePBX usin
 ### Project Structure
 ```
 Asterisk-AI-Voice-Agent/
-├── src/
-│   ├── providers/          # AI provider integrations
-│   ├── security/           # Security and compliance
-│   ├── monitoring/         # Health checks and metrics
-│   ├── sip_client.py       # SIP/RTP integration
-│   ├── audio_processor.py  # Audio processing engine
-│   ├── config_manager.py   # Configuration management
-│   └── engine.py           # Core conversation loop
-├── config/
-│   └── engine.json         # Default configuration
-├── tests/                  # Unit and integration tests
-├── docs/                   # Documentation
-├── scripts/                # Deployment and utility scripts
-├── docker-compose.yml      # Local development
+├── services/
+│   ├── call_controller/     # ARI integration & call orchestration
+│   │   ├── main.py         # Service entry point
+│   │   └── __init__.py
+│   ├── stt_service/         # Speech-to-text processing
+│   │   ├── main.py
+│   │   ├── stt_handler.py  # OpenAI Whisper integration
+│   │   ├── realtime_client.py
+│   │   └── __init__.py
+│   ├── llm_service/         # Language model & conversation logic
+│   │   ├── main.py
+│   │   ├── llm_handler.py  # OpenAI GPT integration
+│   │   └── __init__.py
+│   └── tts_service/         # Text-to-speech synthesis
+│       ├── main.py
+│       ├── tts_handler.py  # OpenAI TTS integration
+│       └── __init__.py
+├── shared/
+│   └── audio_processing/    # Reusable audio utilities
+│       ├── codec_handler.py # Audio codec handling
+│       ├── vad.py          # Voice activity detection
+│       └── __init__.py
+├── Project Requirement Documents/
+├── docs/
+├── monitoring/
+├── docker-compose.yml      # Microservices orchestration
 ├── Dockerfile              # Container configuration
 └── requirements.txt        # Python dependencies
 ```
 
 ### Key Technologies
-- **SIP/RTP**: PJSUA2 or aiortc for Asterisk 16+ integration
-- **Audio Processing**: WebRTC VAD, RNNoise, SpeexDSP
+- **Asterisk Integration**: ARI (Asterisk REST Interface) via ari-py
+- **Media Proxy**: rtpengine for RTP stream management
+- **Message Queue**: Redis Pub/Sub for inter-service communication
+- **Audio Processing**: WebRTC VAD, RTP packet parsing
 - **AI Providers**: OpenAI Realtime API, Azure Speech, Deepgram
 - **Configuration**: Pydantic v2 for validation
 - **Monitoring**: FastAPI for health endpoints
 - **Security**: TLS encryption, JWT authentication
 
 ### Development Guidelines
-1. **Start with SIP Integration**: Focus on getting SIP registration working first
+1. **Start with ARI Integration**: Focus on getting ARI WebSocket connection working first
 2. **Test Early and Often**: Use the test server for integration testing
 3. **Audio Quality First**: Ensure clear audio before adding AI features
 4. **Security by Design**: Implement security features from the start
 5. **Documentation**: Keep documentation updated with code changes
+6. **Microservices First**: Design each service as independent and stateless
 
 ### Testing Strategy
 **ALL TESTING ON SERVER ONLY - NO LOCAL TESTING**
@@ -80,25 +96,31 @@ Asterisk-AI-Voice-Agent/
 4. **Live Testing**: Use final test command when project is complete
 
 ### Deployment Process
-1. **Local Build**: `docker build -t asterisk-ai-voice-agent .`
+1. **Local Build**: `docker-compose build`
 2. **Git Push**: `git add . && git commit -m "message" && git push`
 3. **Server Deploy**: SSH to server, pull changes, build and test with Asterisk
 4. **Server Testing**: All testing performed on server environment only
 
 ### Environment Variables
-- `INTEGRATION_MODE`: `sip` (default)
 - `ASTERISK_HOST`: `voiprnd.nemtclouddispatch.com`
 - `ASTERISK_VERSION`: `16`
-- `SIP_EXTENSION`: `3000`
-- `SIP_PASSWORD`: `AIAgent2025`
+- `ARI_USERNAME`: `AIAgent`
+- `ARI_PASSWORD`: `c4d5359e2f9ddd394cd6aa116c1c6a96`
+- `REDIS_URL`: `redis://redis:6379`
+- `RTPENGINE_HOST`: `rtpengine`
+- `RTPENGINE_PORT`: `2223`
 - `OPENAI_API_KEY`: `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`
 - `DEEPGRAM_API_KEY`: `55f64bf8b7773814ed3840a5d6dd61e512f71d66`
+- `LOG_LEVEL`: `INFO` (DEBUG, INFO, WARN, ERROR)
+- `FALLBACK_LLM_MODEL`: `gpt-3.5-turbo` (optional fallback)
 
 ### Testing Configuration
-#### Extension Credentials for Testing
-- **Extension Number**: 3000
-- **Password**: AIAgent2025
-- **Verification Command**: `asterisk -rx "pjsip show endpoint 3000"`
+#### ARI Configuration for Testing
+- **ARI Username**: `AIAgent`
+- **ARI Password**: `c4d5359e2f9ddd394cd6aa116c1c6a96`
+- **Password Type**: `Crypt`
+- **ARI Port**: `8088`
+- **Verification Command**: `asterisk -rx "ari show applications"`
 
 #### API Keys for Testing
 - **OpenAI API Key**: `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`
@@ -122,25 +144,31 @@ git push origin main
 
 # Server testing
 ssh root@voiprnd.nemtclouddispatch.com
-cd /path/to/project
+cd /root/Asterisk-AI-Voice-Agent
 git pull origin main
 docker-compose up --build
 ```
 
 ### Testing Commands
 ```bash
-# Verify SIP extension registration
-asterisk -rx "pjsip show endpoint 3000"
+# Verify ARI connection
+asterisk -rx "ari show applications"
 
 # Check Asterisk status
 asterisk -rx "core show version"
 asterisk -rx "pjsip show endpoints"
 
-# Test Docker container
-docker run --rm asterisk-voice-agent python -c "import sys; print(f'Python {sys.version}')"
+# Test Redis connectivity
+docker exec -it asterisk-ai-voice-agent-redis-1 redis-cli ping
 
-# Test health endpoint
-curl -f http://localhost:8000/health
+# Test rtpengine status
+curl -f http://rtpengine:2223/status
+
+# Test health endpoints
+curl -f http://localhost:8000/health  # call_controller
+curl -f http://localhost:8001/health  # stt_service
+curl -f http://localhost:8002/health  # llm_service
+curl -f http://localhost:8003/health  # tts_service
 
 # Monitor Asterisk logs
 tail -f /var/log/asterisk/full
@@ -162,21 +190,25 @@ This command will:
 ### Important Notes
 - **No Server Changes**: Never modify code directly on the test server
 - **Asterisk 16+ Focus**: All development targets Asterisk 16+ compatibility
-- **SIP/RTP Primary**: Focus on SIP/RTP integration, AudioSocket is future enhancement
+- **ARI Primary**: Focus on ARI integration, rtpengine for media handling
 - **Real-time Performance**: Sub-second response times are critical
 - **Audio Quality**: Clear audio with noise suppression is essential
+- **Microservices Architecture**: Each service must be independent and stateless
 
 ### Troubleshooting
-- **SIP Registration Issues**: Check Asterisk logs, verify extension configuration
+- **ARI Connection Issues**: Check Asterisk ari.conf, verify credentials
+- **Redis Connection Problems**: Check Redis container status and network connectivity
+- **RTPEngine Issues**: Verify rtpengine container and port configuration
 - **Audio Quality Problems**: Test with different codecs, check network latency
 - **AI Provider Errors**: Verify API keys, check WebSocket connections
-- **Docker Issues**: Ensure host networking is enabled for SIP/RTP
+- **Docker Issues**: Ensure proper networking between services
 
 ### Security Considerations
 - **API Keys**: Never commit API keys to Git
 - **Voice Data**: Implement encryption for voice data transmission
 - **Access Control**: Use proper authentication and authorization
 - **Compliance**: Follow GDPR, HIPAA, CCPA requirements
+- **Service Isolation**: Ensure proper network isolation between services
 
 ### Performance Targets
 - **Response Time**: <2 seconds for AI responses
@@ -184,80 +216,83 @@ This command will:
 - **Uptime**: 99.9% availability
 - **CPU Usage**: <80% under normal load
 - **Memory Usage**: <2GB per instance
+- **Barge-in Detection**: <200ms response time
 
-## Asterisk to AI Agent Call Handling
+## ARI Integration and Call Handling
 
-### SDP Format Requirements
-The AI agent must send properly formatted SDP responses to Asterisk to avoid parsing errors. Key requirements:
+### ARI WebSocket Events
+The call_controller service handles these key ARI events:
 
-1. **Media Line Format**: Must include payload format numbers in the media line
-   ```
-   m=audio 15060 RTP/AVP 0 8 9
-   ```
-   Where:
-   - `0` = PCMU (μ-law)
-   - `8` = PCMA (A-law) 
-   - `9` = G722
+1. **StasisStart**: New call enters the Stasis application
+   - Extract channel ID and caller ID
+   - Initialize call state management
+   - Configure rtpengine media proxy
 
-2. **Required SDP Attributes**:
-   ```
-   a=rtpmap:0 PCMU/8000
-   a=rtpmap:8 PCMA/8000
-   a=rtpmap:9 G722/8000
-   a=ptime:20
-   a=maxptime:150
-   a=sendrecv
-   ```
+2. **StasisEnd**: Call leaves the Stasis application
+   - Clean up call resources
+   - Remove from active call tracking
+   - Deallocate rtpengine ports
 
-3. **Common SDP Parsing Errors**:
-   - `PJMEDIA_SDP_ENOFMT`: Missing payload format in media line
-   - Solution: Include payload numbers (0 8 9) in `m=audio` line
+3. **ChannelDtmfReceived**: User input via DTMF
+   - Process DTMF input for call control
+   - Handle special commands (transfer, hangup)
 
 ### Call State Management
 1. **Call Lifecycle States**:
    - `ringing`: Call received, not yet answered
-   - `connected`: Call answered, RTP established
+   - `answered`: Call answered, RTP established
+   - `listening`: Waiting for user speech
+   - `speaking`: AI is speaking
    - `ended`: Call terminated, cleanup required
 
 2. **State Transition Rules**:
-   - `ringing` → `connected`: After sending 200 OK + ACK
-   - `connected` → `ended`: After receiving BYE or timeout
-   - `ended` calls must be removed from active_calls to prevent infinite loops
+   - `ringing` → `answered`: After ARI answer command
+   - `answered` → `listening`: After media setup complete
+   - `listening` → `speaking`: After TTS audio starts
+   - `speaking` → `listening`: After TTS audio ends or barge-in
+   - `*` → `ended`: After hangup or timeout
 
 3. **Call Cleanup**:
-   - Remove ended calls from active_calls immediately
-   - Clean up conversation loops and RTP sockets
-   - Send proper BYE responses (200 OK)
+   - Remove from active call registry
+   - Deallocate rtpengine ports
+   - Clean up Redis conversation history
+   - Remove audio files from shared volume
 
-### SIP Message Handling
-1. **INVITE Processing**:
-   - Parse Call-ID, From, To headers
-   - Extract SDP for RTP information
-   - Send 200 OK with proper SDP format
-   - Handle ACK to establish RTP
+### RTPEngine Media Proxy Integration
+1. **Media Setup**:
+   - Allocate RTP ports via rtpengine HTTP API
+   - Configure media forking to STT service
+   - Handle SDP offer/answer with Asterisk
 
-2. **BYE Processing**:
-   - Send 200 OK response to BYE
-   - Set call state to "ended"
-   - Schedule cleanup after delay
+2. **Audio Stream Management**:
+   - Fork incoming RTP to STT service
+   - Handle playback via ARI channels.play()
+   - Manage barge-in detection and control
 
-3. **OPTIONS Processing**:
-   - Respond to OPTIONS with 200 OK
-   - Echo Via, From, To headers from request
-   - Keep endpoint "Available" in Asterisk
+3. **Port Management**:
+   - Allocate ports on call start
+   - Deallocate ports on call end
+   - Handle port conflicts and retries
 
-### RTP Audio Handling
-1. **Audio Format**:
-   - Use μ-law (PCMU) encoding for telephony
-   - 8kHz sample rate
-   - 20ms packet intervals
+### Redis Message Channels
+The system uses these Redis Pub/Sub channels:
 
-2. **Bidirectional Audio**:
-   - Receive RTP from caller (μ-law)
-   - Convert to linear PCM for AI processing
-   - Convert AI output back to μ-law
-   - Send RTP to caller
+1. **calls:new**: New call notification
+2. **stt:transcription:complete**: Speech-to-text results
+3. **stt:vad:activity**: Voice activity detection events
+4. **llm:response:ready**: AI response ready
+5. **calls:control:play**: Audio playback requests
+6. **calls:control:stop**: Stop current playback (barge-in)
 
-3. **Keep-Alive**:
-   - Send silence packets during conversation
-   - Maintain RTP flow to prevent timeouts
+### Barge-in Implementation
+1. **Detection**: STT service monitors VAD during TTS playback
+2. **Notification**: Publishes `stt:vad:activity` with "speaking" status
+3. **Response**: Call controller stops current playback via ARI
+4. **Recovery**: System returns to listening state for new input
+
+### Error Handling and Resilience
+1. **Service Failures**: Each service has fallback mechanisms
+2. **API Timeouts**: Exponential backoff retry with circuit breakers
+3. **Redis Unavailability**: Local fallback responses when possible
+4. **RTPEngine Issues**: Graceful degradation to basic audio handling
+5. **ARI Disconnection**: Automatic reconnection with call state recovery
