@@ -5,8 +5,7 @@ websockets>=12.0
 aiohttp>=3.9.0
 httpx>=0.27.0
 
-# ARI Integration
-ari-py>=1.5.0
+# ARI Integration - Using custom implementation
 
 # Redis Message Queue
 redis>=5.0.0
