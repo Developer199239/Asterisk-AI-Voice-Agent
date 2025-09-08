@@ -24,7 +24,7 @@ from shared.logging_config import setup_logging
 from shared.config import load_config, CallControllerConfig
 from shared.redis_client import get_redis_queue, Channels, CallNewMessage, CallControlMessage
 from ari_client import ARIClient, ARIEvent
-# from rtpengine_client import RTPEngineClient
+from rtpengine_client import RTPEngineClient
 from call_state_machine import CallStateMachine, CallState, CallData
 import structlog
 from shared.logging_config import set_correlation_id
@@ -43,7 +43,7 @@ class CallControllerService:
     def __init__(self):
         self.config: Optional[CallControllerConfig] = None
         self.ari_client: Optional[ARIClient] = None
-        # self.rtpengine_client: Optional[RTPEngineClient] = None
+        self.rtpengine_client: Optional[RTPEngineClient] = None
         self.redis_queue = None
         self.state_machine = CallStateMachine()
         self.running = False
@@ -69,13 +69,13 @@ class CallControllerService:
             await self.ari_client.connect()
             logger.info("Connected to Asterisk ARI")
             
-            # # Initialize RTPEngine client
-            # self.rtpengine_client = RTPEngineClient(
-            #     host=self.config.rtpengine_host,
-            #     port=self.config.rtpengine_port
-            # )
-            # await self.rtpengine_client.connect()
-            # logger.info("Connected to RTPEngine")
+            # Initialize RTPEngine client
+            self.rtpengine_client = RTPEngineClient(
+                host=self.config.rtpengine_host,
+                port=self.config.rtpengine_port
+            )
+            await self.rtpengine_client.connect()
+            logger.info("Connected to RTPEngine")
             
             # Set up event handlers
             self._setup_ari_handlers()
@@ -100,9 +100,9 @@ class CallControllerService:
         if self.ari_client:
             await self.ari_client.disconnect()
         
-        # # Stop RTPEngine client
-        # if self.rtpengine_client:
-        #     await self.rtpengine_client.disconnect()
+        # Stop RTPEngine client
+        if self.rtpengine_client:
+            await self.rtpengine_client.disconnect()
         
         # Stop Redis queue
         if self.redis_queue:
@@ -144,7 +144,7 @@ class CallControllerService:
         dependency_checks = {
             "ari": lambda: self.ari_client.health_check(),
             "redis": lambda: self.redis_queue.health_check(),
-            # "rtpengine": lambda: self.rtpengine_client.health_check(),
+            "rtpengine": lambda: self.rtpengine_client.health_check(),
         }
         app = create_health_check_app("call_controller", dependency_checks)
         
@@ -189,6 +189,17 @@ class CallControllerService:
             # Create new call
             call_id = self.state_machine.create_call(channel_id, caller_id, caller_name)
             
+            # Set up media with RTPEngine
+            rtp_info = await self.rtpengine_client.offer(channel_id)
+            if not rtp_info:
+                logger.error(f"Failed to set up media for call {call_id}")
+                self.state_machine.transition_call(call_id, CallState.ERROR, "rtpengine_offer_failed")
+                await self.ari_client.hangup_channel(channel_id)
+                return
+            
+            # Store RTP info in state machine
+            self.state_machine.update_call_media(call_id, rtp_info)
+
             # Answer the call
             await self.ari_client.answer_channel(channel_id)
             
@@ -223,6 +234,8 @@ class CallControllerService:
             call_data = self.state_machine.get_call_by_channel(channel_id)
             
             if call_data:
+                # Tear down media with RTPEngine
+                await self.rtpengine_client.delete(call_data.call_id)
                 self.state_machine.end_call(call_data.call_id, "stasis_end")
                 logger.info(f"Call {call_data.call_id} ended via StasisEnd")
             
