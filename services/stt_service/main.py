@@ -80,7 +80,7 @@ class STTService:
             enable_volume_correlation=True,
             enable_timing_correlation=True
         )
-        self.barge_in_detector = BargeInDetector(barge_in_config, self.redis_client, self.channel_correlation)
+        self.barge_in_detector = BargeInDetector(self.redis_client, barge_in_config)
 
     async def start(self):
         """Start the STT service"""
@@ -167,13 +167,13 @@ class STTService:
 
     async def _start_health_check_server(self):
         """Start the health check server."""
-        dependency_checks = [
-            ("redis", self.redis_client.health_check),
-            ("realtime_api", self.realtime_client.test_connection),
-        ]
-        app = create_health_check_app("stt_service", dependency_checks)
+        dependency_checks = {
+            "redis": self.redis_client.health_check,
+            "openai_realtime": self.realtime_client.test_connection
+        }
+        app = create_health_check_app(self.config.service_name, dependency_checks)
         
-        config = uvicorn.Config(app, host="0.0.0.0", port=8001, log_level="info") # Assuming port 8001 for stt
+        config = uvicorn.Config(app, host="0.0.0.0", port=self.config.health_check_port, log_level="info")
         server = uvicorn.Server(config)
         await server.serve()
 

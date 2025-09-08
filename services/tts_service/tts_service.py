@@ -17,6 +17,8 @@ from redis.asyncio import Redis
 from openai_tts_client import OpenAITTSClient, TTSConfig as OpenAITTSConfig, VoiceType, AudioFormat
 from audio_file_manager import AudioFileManager, AudioFileConfig, AudioFileInfo
 from asterisk_fallback import AsteriskFallbackHandler, AsteriskFallbackConfig, FallbackMode
+from shared.health_check import create_health_check_app
+import uvicorn
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +104,6 @@ class TTSService:
         
         # Service state
         self._running = False
-        self._health_check_task: Optional[asyncio.Task] = None
         
         # Statistics
         self.stats = {
@@ -116,6 +117,18 @@ class TTSService:
             'file_errors': 0
         }
     
+    async def _start_health_check_server(self):
+        """Start the health check server."""
+        dependency_checks = {
+            "redis": self.redis_client.ping,
+            "openai_tts": self.tts_client.test_connection
+        }
+        app = create_health_check_app(self.config.service_name, dependency_checks)
+        
+        config = uvicorn.Config(app, host="0.0.0.0", port=self.config.health_check_port, log_level="info")
+        server = uvicorn.Server(config)
+        await server.serve()
+
     async def start(self):
         """Start the TTS service."""
         try:
@@ -132,15 +145,16 @@ class TTSService:
             if not await self.tts_client.test_connection():
                 raise Exception("OpenAI TTS API connection test failed")
             
-            # Start health check task
+            # Start background tasks
             self._running = True
-            self._health_check_task = asyncio.create_task(self._health_check_loop())
-            
-            # Start message processing
-            await self._start_message_processing()
-            
+            health_check_task = asyncio.create_task(self._start_health_check_server())
+            message_processing_task = asyncio.create_task(self._start_message_processing())
+
             self.stats['service_started_at'] = time.time()
             logger.info("TTS service started successfully")
+
+            # Keep the service running by waiting on the tasks
+            await asyncio.gather(health_check_task, message_processing_task)
             
         except Exception as e:
             logger.error(f"Failed to start TTS service: {e}")
@@ -469,57 +483,6 @@ class TTSService:
         except Exception as e:
             self.stats['redis_errors'] += 1
             logger.error(f"Error publishing error message: {e}")
-    
-    async def _health_check_loop(self):
-        """Background health check loop."""
-        while self._running:
-            try:
-                await asyncio.sleep(self.config.health_check_interval)
-                
-                if not self._running:
-                    break
-                
-                # Check Redis connection
-                try:
-                    await self.redis_client.ping()
-                except Exception as e:
-                    logger.error(f"Redis health check failed: {e}")
-                    self.stats['redis_errors'] += 1
-                
-                # Check TTS client connection
-                try:
-                    if not await self.tts_client.test_connection():
-                        logger.error("TTS client health check failed")
-                        self.stats['tts_errors'] += 1
-                except Exception as e:
-                    logger.error(f"TTS client health check failed: {e}")
-                    self.stats['tts_errors'] += 1
-                
-                # Publish health status
-                await self._publish_health_status()
-                
-                logger.debug("Health check completed")
-                
-            except Exception as e:
-                logger.error(f"Error in health check loop: {e}")
-    
-    async def _publish_health_status(self):
-        """Publish health status to Redis."""
-        try:
-            health_data = {
-                'service': 'tts_service',
-                'status': 'healthy',
-                'timestamp': time.time(),
-                'stats': self.get_stats()
-            }
-            
-            await self.redis_client.publish(
-                "services:health:tts",
-                json.dumps(health_data)
-            )
-            
-        except Exception as e:
-            logger.error(f"Error publishing health status: {e}")
     
     def get_stats(self) -> Dict[str, Any]:
         """Get service statistics."""

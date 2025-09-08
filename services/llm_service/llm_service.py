@@ -17,6 +17,8 @@ from redis.asyncio import Redis
 from conversation_manager import ConversationManager, ConversationConfig
 from openai_client import OpenAIClient, LLMConfig as OpenAIConfig, ModelType
 from shared.fallback_responses import FallbackResponseManager
+from shared.health_check import create_health_check_app
+import uvicorn
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +46,8 @@ class LLMServiceConfig:
     # Service settings
     health_check_interval: int = 30
     enable_debug_logging: bool = True
+    service_name: str = "llm_service"
+    health_check_port: int = 8000
 
 
 class LLMService:
@@ -91,7 +95,6 @@ class LLMService:
         
         # Service state
         self._running = False
-        self._health_check_task: Optional[asyncio.Task] = None
         
         # Statistics
         self.stats = {
@@ -105,6 +108,18 @@ class LLMService:
             'openai_errors': 0
         }
     
+    async def _start_health_check_server(self):
+        """Start the health check server."""
+        dependency_checks = {
+            "redis": self.redis_client.ping,
+            "openai": self.openai_client.test_connection
+        }
+        app = create_health_check_app(self.config.service_name, dependency_checks)
+        
+        config = uvicorn.Config(app, host="0.0.0.0", port=self.config.health_check_port, log_level="info")
+        server = uvicorn.Server(config)
+        await server.serve()
+
     async def start(self):
         """Start the LLM service."""
         try:
@@ -121,15 +136,16 @@ class LLMService:
             if not await self.openai_client.test_connection():
                 raise Exception("OpenAI API connection test failed")
             
-            # Start health check task
+            # Start background tasks
             self._running = True
-            self._health_check_task = asyncio.create_task(self._health_check_loop())
-            
-            # Start message processing
-            await self._start_message_processing()
+            health_check_task = asyncio.create_task(self._start_health_check_server())
+            message_processing_task = asyncio.create_task(self._start_message_processing())
             
             self.stats['service_started_at'] = time.time()
             logger.info("LLM service started successfully")
+
+            # Keep the service running by waiting on the tasks
+            await asyncio.gather(health_check_task, message_processing_task)
             
         except Exception as e:
             logger.error(f"Failed to start LLM service: {e}")
@@ -141,14 +157,6 @@ class LLMService:
             logger.info("Stopping LLM service...")
             
             self._running = False
-            
-            # Stop health check task
-            if self._health_check_task:
-                self._health_check_task.cancel()
-                try:
-                    await self._health_check_task
-                except asyncio.CancelledError:
-                    pass
             
             # Stop conversation manager
             await self.conversation_manager.stop()
@@ -370,57 +378,6 @@ class LLMService:
         except Exception as e:
             self.stats['redis_errors'] += 1
             logger.error(f"Error publishing error message: {e}")
-    
-    async def _health_check_loop(self):
-        """Background health check loop."""
-        while self._running:
-            try:
-                await asyncio.sleep(self.config.health_check_interval)
-                
-                if not self._running:
-                    break
-                
-                # Check Redis connection
-                try:
-                    await self.redis_client.ping()
-                except Exception as e:
-                    logger.error(f"Redis health check failed: {e}")
-                    self.stats['redis_errors'] += 1
-                
-                # Check OpenAI connection
-                try:
-                    if not await self.openai_client.test_connection():
-                        logger.error("OpenAI health check failed")
-                        self.stats['openai_errors'] += 1
-                except Exception as e:
-                    logger.error(f"OpenAI health check failed: {e}")
-                    self.stats['openai_errors'] += 1
-                
-                # Publish health status
-                await self._publish_health_status()
-                
-                logger.debug("Health check completed")
-                
-            except Exception as e:
-                logger.error(f"Error in health check loop: {e}")
-    
-    async def _publish_health_status(self):
-        """Publish health status to Redis."""
-        try:
-            health_data = {
-                'service': 'llm_service',
-                'status': 'healthy',
-                'timestamp': time.time(),
-                'stats': self.get_stats()
-            }
-            
-            await self.redis_client.publish(
-                "services:health:llm",
-                json.dumps(health_data)
-            )
-            
-        except Exception as e:
-            logger.error(f"Error publishing health status: {e}")
     
     def get_stats(self) -> Dict[str, Any]:
         """Get service statistics."""
