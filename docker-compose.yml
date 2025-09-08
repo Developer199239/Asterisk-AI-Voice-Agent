@@ -37,8 +37,6 @@ services:
       dockerfile: services/call_controller/Dockerfile
     container_name: asterisk-ai-voice-agent-call-controller
     restart: unless-stopped
-    env_file:
-      - .env
     ports:
       - "15000:5000"
     volumes:
