@@ -15,10 +15,10 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Union
 
-from .stt_handler import STTConfig, TranscriptResult, STTState
-from .realtime_client import RealtimeClient, RealtimeConfig, VoiceType
-from .vad_handler import SpeechSegment
-from .audio_buffer import AudioBufferManager, BufferConfig, AudioFormatConverter
+from stt_handler import STTConfig, TranscriptResult, STTState
+from realtime_client import RealtimeClient, RealtimeConfig, VoiceType
+from vad_handler import SpeechSegment
+from audio_buffer import AudioBufferManager, BufferConfig, AudioFormatConverter
 
 logger = logging.getLogger(__name__)
 
