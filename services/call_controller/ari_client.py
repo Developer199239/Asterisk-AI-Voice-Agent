@@ -14,9 +14,6 @@ from datetime import datetime
 import aiohttp
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
-from shared.circuit_breaker import CircuitBreaker, CircuitBreakerError
-
-
 logger = logging.getLogger(__name__)
 
 
@@ -45,9 +42,6 @@ class ARIClient:
         self.http_session = None
         self.event_handlers: Dict[str, List[Callable]] = {}
         self.running = False
-        
-        # Circuit Breaker for ARI HTTP calls
-        self.http_breaker = CircuitBreaker(fail_max=5, reset_timeout=60, name="ari_http")
         
         # ARI URLs
         self.ws_url = f"ws://{host}:{port}/ari/events?api_key={username}:{password}&app=asterisk-ai-voice-agent"
@@ -186,86 +180,76 @@ class ARIClient:
     
     async def answer_channel(self, channel_id: str) -> bool:
         """Answer a channel"""
-        async def do_answer():
-            try:
-                async with self.http_session.post(f"{self.http_url}/channels/{channel_id}/answer") as response:
-                    if response.status == 204:
-                        logger.info(f"Answered channel {channel_id}")
-                        return True
-                    else:
-                        logger.error(f"Failed to answer channel {channel_id}: {response.status}")
-                        return False
-            except Exception as e:
-                logger.error(f"Error answering channel {channel_id}: {e}")
-                return False
-        return await self.http_breaker.call_async(do_answer)
+        try:
+            async with self.http_session.post(f"{self.http_url}/channels/{channel_id}/answer") as response:
+                if response.status == 204:
+                    logger.info(f"Answered channel {channel_id}")
+                    return True
+                else:
+                    logger.error(f"Failed to answer channel {channel_id}: {response.status}")
+                    return False
+        except Exception as e:
+            logger.error(f"Error answering channel {channel_id}: {e}")
+            return False
     
     async def hangup_channel(self, channel_id: str, reason: str = "normal") -> bool:
         """Hangup a channel"""
-        async def do_hangup():
-            try:
-                async with self.http_session.delete(f"{self.http_url}/channels/{channel_id}?reason={reason}") as response:
-                    if response.status == 204:
-                        logger.info(f"Hung up channel {channel_id}")
-                        return True
-                    else:
-                        logger.error(f"Failed to hangup channel {channel_id}: {response.status}")
-                        return False
-            except Exception as e:
-                logger.error(f"Error hanging up channel {channel_id}: {e}")
-                return False
-        return await self.http_breaker.call_async(do_hangup)
+        try:
+            async with self.http_session.delete(f"{self.http_url}/channels/{channel_id}?reason={reason}") as response:
+                if response.status == 204:
+                    logger.info(f"Hung up channel {channel_id}")
+                    return True
+                else:
+                    logger.error(f"Failed to hangup channel {channel_id}: {response.status}")
+                    return False
+        except Exception as e:
+            logger.error(f"Error hanging up channel {channel_id}: {e}")
+            return False
     
     async def play_media(self, channel_id: str, media: str, language: str = "en") -> bool:
         """Play media to a channel"""
-        async def do_play():
-            try:
-                data = {
-                    "media": media,
-                    "language": language
-                }
-                async with self.http_session.post(f"{self.http_url}/channels/{channel_id}/play", json=data) as response:
-                    if response.status == 201:
-                        logger.info(f"Started playing media to channel {channel_id}")
-                        return True
-                    else:
-                        logger.error(f"Failed to play media to channel {channel_id}: {response.status}")
-                        return False
-            except Exception as e:
-                logger.error(f"Error playing media to channel {channel_id}: {e}")
-                return False
-        return await self.http_breaker.call_async(do_play)
+        try:
+            data = {
+                "media": media,
+                "language": language
+            }
+            async with self.http_session.post(f"{self.http_url}/channels/{channel_id}/play", json=data) as response:
+                if response.status == 201:
+                    logger.info(f"Started playing media to channel {channel_id}")
+                    return True
+                else:
+                    logger.error(f"Failed to play media to channel {channel_id}: {response.status}")
+                    return False
+        except Exception as e:
+            logger.error(f"Error playing media to channel {channel_id}: {e}")
+            return False
     
     async def stop_media(self, channel_id: str) -> bool:
         """Stop media playback on a channel"""
-        async def do_stop():
-            try:
-                async with self.http_session.post(f"{self.http_url}/channels/{channel_id}/stop") as response:
-                    if response.status == 204:
-                        logger.info(f"Stopped media on channel {channel_id}")
-                        return True
-                    else:
-                        logger.error(f"Failed to stop media on channel {channel_id}: {response.status}")
-                        return False
-            except Exception as e:
-                logger.error(f"Error stopping media on channel {channel_id}: {e}")
-                return False
-        return await self.http_breaker.call_async(do_stop)
+        try:
+            async with self.http_session.post(f"{self.http_url}/channels/{channel_id}/stop") as response:
+                if response.status == 204:
+                    logger.info(f"Stopped media on channel {channel_id}")
+                    return True
+                else:
+                    logger.error(f"Failed to stop media on channel {channel_id}: {response.status}")
+                    return False
+        except Exception as e:
+            logger.error(f"Error stopping media on channel {channel_id}: {e}")
+            return False
     
     async def get_channel_info(self, channel_id: str) -> Optional[Dict[str, Any]]:
         """Get channel information"""
-        async def do_get_info():
-            try:
-                async with self.http_session.get(f"{self.http_url}/channels/{channel_id}") as response:
-                    if response.status == 200:
-                        return await response.json()
-                    else:
-                        logger.error(f"Failed to get channel info for {channel_id}: {response.status}")
-                        return None
-            except Exception as e:
-                logger.error(f"Error getting channel info for {channel_id}: {e}")
-                return None
-        return await self.http_breaker.call_async(do_get_info)
+        try:
+            async with self.http_session.get(f"{self.http_url}/channels/{channel_id}") as response:
+                if response.status == 200:
+                    return await response.json()
+                else:
+                    logger.error(f"Failed to get channel info for {channel_id}: {response.status}")
+                    return None
+        except Exception as e:
+            logger.error(f"Error getting channel info for {channel_id}: {e}")
+            return None
     
     async def health_check(self) -> bool:
         """Check ARI connection health"""
