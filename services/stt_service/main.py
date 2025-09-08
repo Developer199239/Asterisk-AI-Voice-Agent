@@ -22,6 +22,7 @@ from rtp_stt_handler import RTPSTTHandler, RTPSTTConfig
 from channel_correlation import ChannelCorrelationManager
 from realtime_client import RealtimeClient, RealtimeConfig
 from transcription_publisher import TranscriptionPublisher, TranscriptionMessage
+from barge_in_detector import BargeInDetector, BargeInConfig, BargeInEvent
 
 # Configure logging
 logging.basicConfig(
@@ -62,6 +63,18 @@ class STTService:
         
         # Initialize transcription publisher
         self.transcription_publisher = TranscriptionPublisher(self.redis_client, self.channel_correlation)
+        
+        # Initialize barge-in detector
+        barge_in_config = BargeInConfig(
+            sensitivity_threshold=0.7,
+            debounce_duration_ms=200,
+            min_speech_duration_ms=100,
+            max_silence_duration_ms=500,
+            enable_debouncing=True,
+            enable_volume_correlation=True,
+            enable_timing_correlation=True
+        )
+        self.barge_in_detector = BargeInDetector(barge_in_config, self.redis_client, self.channel_correlation)
 
     async def start(self):
         """Start the STT service"""
@@ -89,6 +102,10 @@ class STTService:
             # Start transcription publisher
             await self.transcription_publisher.start()
             logger.info("Transcription publisher started")
+            
+            # Start barge-in detector
+            await self.barge_in_detector.start()
+            logger.info("Barge-in detector started")
             
             # Start RTP UDP server with VAD support
             rtp_started = await self.rtp_manager.start(
@@ -186,8 +203,55 @@ class STTService:
             if not success:
                 logger.warning(f"Failed to process speech segment for SSRC {stream_info.ssrc}")
             
+            # Process barge-in detection
+            channel_id = None
+            if stream_info.ssrc:
+                channel_info = self.channel_correlation.get_channel_by_ssrc(stream_info.ssrc)
+                if channel_info:
+                    channel_id = channel_info.channel_id
+            
+            if channel_id:
+                # Process speech detection for barge-in analysis
+                self.barge_in_detector.process_speech_detection(
+                    channel_id=channel_id,
+                    ssrc=stream_info.ssrc,
+                    confidence=segment.confidence,
+                    duration=segment.duration
+                )
+            
         except Exception as e:
             logger.error(f"Error handling speech segment: {e}")
+    
+    async def register_tts_session(self, session_id: str, channel_id: str, metadata: Dict[str, Any] = None) -> bool:
+        """Register a TTS session for barge-in detection."""
+        try:
+            success = self.barge_in_detector.register_tts_session(session_id, channel_id, metadata)
+            if success:
+                logger.info(f"Registered TTS session {session_id} for channel {channel_id}")
+            return success
+        except Exception as e:
+            logger.error(f"Error registering TTS session: {e}")
+            return False
+    
+    async def unregister_tts_session(self, session_id: str) -> bool:
+        """Unregister a TTS session from barge-in detection."""
+        try:
+            success = self.barge_in_detector.unregister_tts_session(session_id)
+            if success:
+                logger.info(f"Unregistered TTS session {session_id}")
+            return success
+        except Exception as e:
+            logger.error(f"Error unregistering TTS session: {e}")
+            return False
+    
+    async def update_tts_volume(self, session_id: str, volume_level: float) -> bool:
+        """Update TTS volume level for barge-in detection."""
+        try:
+            success = self.barge_in_detector.update_tts_volume(session_id, volume_level)
+            return success
+        except Exception as e:
+            logger.error(f"Error updating TTS volume: {e}")
+            return False
     
     async def _handle_transcript(self, text: str, is_final: bool, metadata: Dict[str, Any] = None):
         """Handle transcript from RTP STT handler"""
@@ -267,6 +331,10 @@ class STTService:
         # Stop transcription publisher
         await self.transcription_publisher.stop()
         logger.info("Transcription publisher stopped")
+        
+        # Stop barge-in detector
+        await self.barge_in_detector.stop()
+        logger.info("Barge-in detector stopped")
         
         # Stop channel correlation manager
         await self.channel_correlation.stop()
