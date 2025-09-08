@@ -54,6 +54,8 @@ services:
       - REDIS_URL=${REDIS_URL:-redis://redis:6379}
       - RTPENGINE_HOST=${RTPENGINE_HOST:-rtpengine}
       - RTPENGINE_PORT=${RTPENGINE_PORT:-2223}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
     volumes:
       - shared_audio:/shared/audio
