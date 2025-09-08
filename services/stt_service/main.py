@@ -15,7 +15,7 @@ sys.path.append(str(Path(__file__).parent.parent.parent / "shared"))
 
 from config import CallControllerConfig
 from redis_client import RedisMessageQueue
-from .rtp_handler import RTPStreamManager, RTPStreamInfo
+from rtp_handler import RTPStreamManager, RTPStreamInfo
 
 # Configure logging
 logging.basicConfig(
