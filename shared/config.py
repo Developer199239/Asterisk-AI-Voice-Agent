@@ -167,6 +167,8 @@ class LLMServiceConfig(AIProviderConfig, AsteriskConfig):
     )
     conversation_ttl: int = Field(default=3600, description="Time-to-live for conversation history in seconds")
     max_conversation_tokens: int = Field(default=4000, description="Maximum tokens for conversation history")
+    token_limit: int = Field(default=4096, description="Token limit for conversation history")
+    conversation_timeout: int = Field(default=600, description="Conversation timeout in seconds")
     response_timeout_seconds: int = Field(
         default=30,
         description="Maximum time to wait for LLM response"
