@@ -45,6 +45,10 @@ class AsteriskConfig(BaseConfig):
         default="16",
         description="Asterisk version for compatibility"
     )
+    asterisk_port: int = Field(
+        default=8088,
+        description="Asterisk ARI port"
+    )
     
     # ARI Configuration
     ari_username: str = Field(
@@ -59,7 +63,7 @@ class AsteriskConfig(BaseConfig):
     @property
     def ari_url(self) -> str:
         """Generate ARI WebSocket URL"""
-        return f"ws://{self.asterisk_host}:8088/ari/events?api_key={self.ari_username}:{self.ari_password}"
+        return f"ws://{self.asterisk_host}:{self.asterisk_port}/ari/events?api_key={self.ari_username}:{self.ari_password}"
 
 
 class RTPEngineConfig(BaseConfig):
