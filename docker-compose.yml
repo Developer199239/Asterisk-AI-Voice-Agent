@@ -29,7 +29,7 @@ services:
     command: rtpengine --interface=0.0.0.0 --listen-ng=2223 -L 7 --log-stderr
     ports:
       - "2223:2223" # Control port
-      - "10000-10100:10000-10100/udp" # RTP port range
+      - "10000-10009:10000-10009/udp" # RTP port range
     restart: unless-stopped
     cap_add:
       - NET_ADMIN
