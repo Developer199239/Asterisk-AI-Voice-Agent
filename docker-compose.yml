@@ -26,7 +26,7 @@ services:
       context: .
       dockerfile: services/rtpengine/Dockerfile
     container_name: asterisk-ai-voice-agent-rtpengine
-    command: rtpengine --listen-ng=2223 --interface=172.20.0.3 -L 7 --log-stderr --no-fallback
+    command: rtpengine --listen-ng=2223 --interface=172.20.0.3 -L 7 --log-stderr
     privileged: true
     ports:
       - "2223:2223" # Control port
