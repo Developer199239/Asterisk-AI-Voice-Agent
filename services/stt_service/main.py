@@ -124,19 +124,43 @@ class STTService:
             
             self.running = True
             
-            # Start listening for messages
-            await self.redis_client.start_listening()
-            
             # Start health check server in a background task
             health_check_task = asyncio.create_task(self._start_health_check_server())
-
-            # Main service loop
+            
+            # Start listening for messages in a background task
+            listening_task = asyncio.create_task(self.redis_client.start_listening())
+            
+            # Gather all background tasks
+            tasks = [health_check_task, listening_task]
+            
+            # Main service loop to keep the service alive
             while self.running:
                 try:
-                    await asyncio.sleep(1)
-                except KeyboardInterrupt:
-                    break
+                    # Wait for any task to complete
+                    done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
                     
+                    for task in done:
+                        # If a task has an exception, it will be raised here
+                        exc = task.exception()
+                        if exc:
+                            logger.error(f"A background task failed: {exc}")
+                            self.running = False # Trigger shutdown
+                    
+                    # If a task completes without error, it might be unexpected
+                    # We can decide to log this or restart it if necessary
+                    if self.running and not any(t.done() for t in tasks if not t.exception()):
+                        await asyncio.sleep(1)
+                        
+                except KeyboardInterrupt:
+                    logger.info("Keyboard interrupt received, shutting down.")
+                    self.running = False
+                    
+                # Cancel all pending tasks on shutdown
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+
         except Exception as e:
             logger.error(f"Failed to start STT service: {e}")
             raise
