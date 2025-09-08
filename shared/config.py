@@ -12,8 +12,21 @@ import os
 from pathlib import Path
 
 
+class MediasoupConfig(BaseSettings):
+    """Mediasoup client configuration"""
+
+    ws_url: str = Field(
+        default="ws://mediasoup:4443",
+        description="Mediasoup WebSocket URL"
+    )
+    request_timeout: int = Field(
+        default=10,
+        description="Timeout for mediasoup requests in seconds"
+    )
+
+
 class BaseConfig(BaseSettings):
-    """Base configuration class with common settings"""
+    """Base configuration for all services"""
     
     # Logging
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = Field(
@@ -66,24 +79,6 @@ class AsteriskConfig(BaseConfig):
         return f"ws://{self.asterisk_host}:{self.asterisk_port}/ari/events?api_key={self.ari_username}:{self.ari_password}"
 
 
-class RTPEngineConfig(BaseConfig):
-    """RTPEngine media proxy configuration"""
-    
-    rtpengine_host: str = Field(
-        default="rtpengine",
-        description="RTPEngine server hostname"
-    )
-    rtpengine_port: int = Field(
-        default=2223,
-        description="RTPEngine control port"
-    )
-    
-    @property
-    def rtpengine_url(self) -> str:
-        """Generate RTPEngine control URL"""
-        return f"http://{self.rtpengine_host}:{self.rtpengine_port}"
-
-
 class AIProviderConfig(BaseConfig):
     """AI provider configuration"""
     
@@ -113,7 +108,7 @@ class AIProviderConfig(BaseConfig):
         return v
 
 
-class CallControllerConfig(AsteriskConfig, RTPEngineConfig, AIProviderConfig):
+class CallControllerConfig(BaseConfig, AsteriskConfig):
     """Call Controller service configuration"""
     
     # Service-specific settings
@@ -266,6 +261,5 @@ if __name__ == "__main__":
         print(f"✅ Configuration loaded successfully for {config.service_name}")
         print(f"   ARI URL: {config.ari_url}")
         print(f"   Redis URL: {config.redis_url}")
-        print(f"   RTPEngine URL: {config.rtpengine_url}")
     except Exception as e:
         print(f"❌ Configuration error: {e}")

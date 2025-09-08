@@ -3,44 +3,29 @@ version: "3.8"
 services:
   # Redis Message Queue
   redis:
-    image: redis:7.2-alpine
-    container_name: asterisk-ai-voice-agent-redis
+    image: "redis:alpine"
+    container_name: "asterisk-ai-voice-agent-redis"
+    restart: unless-stopped
     ports:
       - "6379:6379"
-    volumes:
-      - redis_data:/data
-    restart: unless-stopped
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
-      retries: 3
-    networks:
-      - ai-voice-network
-    env_file:
-      - .env
+      retries: 5
 
-  # RTPEngine Media Proxy
-  rtpengine:
-    build:
-      context: .
-      dockerfile: services/rtpengine/Dockerfile
-    container_name: asterisk-ai-voice-agent-rtpengine
-    command: rtpengine --listen-ng=2223 --interface=172.20.0.3 -L 7 --log-stderr
-    privileged: true
+  # Mediasoup Media Server
+  mediasoup:
+    image: versatica/mediasoup-demo-server:v3
+    container_name: asterisk-ai-voice-agent-mediasoup
     ports:
-      - "2223:2223" # Control port
-      - "10000-10009:10000-10009/udp" # RTP port range
+      - "4443:4443" # Control port
+      - "10000-10009:10000-10009/udp"
+      - "10000-10009:10000-10009/tcp"
+    environment:
+      - MEDIASOUP_LISTEN_IP=0.0.0.0
+      - MEDIASOUP_ANNOUNCED_IP=127.0.0.1 # This will be the Docker host IP
     restart: unless-stopped
-    cap_add:
-      - NET_ADMIN
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:2223/status"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    networks:
-      - ai-voice-network
 
   # Call Controller Service
   call_controller:

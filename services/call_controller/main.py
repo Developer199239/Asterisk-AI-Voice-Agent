@@ -28,6 +28,15 @@ from rtpengine_client import RTPEngineClient
 from call_state_machine import CallStateMachine, CallState, CallData
 import structlog
 from shared.logging_config import set_correlation_id
+from services.call_controller.mediasoup_client import MediasoupClient
+from services.call_controller.ari_client import ARIClient
+from services.call_controller.call_state_machine import CallStateMachine, CallState
+from services.call_controller.models import ARIEvent
+from services.call_controller.mediasoup_client import MediasoupClient
+from shared.config import CallControllerConfig
+from shared.logging_config import setup_logging
+from shared.redis_client import RedisMessageQueue
+from shared.timescale_client import TimescaleClient
 
 
 # Load configuration and set up logging
@@ -188,33 +197,39 @@ class CallControllerService:
             
             # Create new call
             call_id = self.state_machine.create_call(channel_id, caller_id, caller_name)
-            
-            # Set up media with RTPEngine
-            rtp_info = await self.rtpengine_client.offer(channel_id)
-            if not rtp_info:
-                logger.error(f"Failed to set up media for call {call_id}")
-                self.state_machine.transition_call(call_id, CallState.ERROR, "rtpengine_offer_failed")
+
+            try:
+                # Set up media with Mediasoup
+                rtp_caps = await self.mediasoup_client.get_router_rtp_capabilities()
+                # In a real scenario, you'd negotiate capabilities here
+                
+                transport = await self.mediasoup_client.create_plain_transport()
+                transport_id = transport['id']
+                rtp_info = {
+                    "ip": transport['ip'],
+                    "port": transport['port'],
+                    "rtcpPort": transport.get('rtcpPort'),
+                }
+
+                # Store media info in state machine
+                self.state_machine.update_call_media(call_id, {"transport_id": transport_id, "rtp_info": rtp_info})
+
+                # Answer the call
+                await self.ari_client.answer_channel(channel_id)
+
+                # TODO: Bridge the channel to the mediasoup transport
+                # This requires sending media from Asterisk to mediasoup,
+                # which is a more complex step involving external bridging or custom media handling.
+                # For now, we log that the media transport is ready.
+                logger.info(f"Mediasoup transport ready for call {call_id}", transport_info=rtp_info)
+
+            except Exception as e:
+                logger.error(f"Failed to set up media for call {call_id}", error=str(e))
+                self.state_machine.transition_call(call_id, CallState.ERROR, "mediasoup_setup_failed")
                 await self.ari_client.hangup_channel(channel_id)
                 return
-            
-            # Store RTP info in state machine
-            self.state_machine.update_call_media(call_id, rtp_info)
 
-            # Answer the call
-            await self.ari_client.answer_channel(channel_id)
-            
-            # Transition to answered state
-            self.state_machine.transition_call(call_id, CallState.ANSWERED)
-            
-            # Publish call new message
-            message = CallNewMessage(
-                message_id=f"call-{call_id}",
-                source_service="call_controller",
-                call_id=call_id,
-                channel_id=channel_id,
-                caller_id=caller_id,
-                caller_name=caller_name
-            )
+            # Publish new call event to Redis
             await self.redis_queue.publish(Channels.CALLS_NEW, message)
             
             logger.info(f"Handled new call {call_id} from {caller_id}")
