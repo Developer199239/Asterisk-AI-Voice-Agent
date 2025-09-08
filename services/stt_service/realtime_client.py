@@ -208,6 +208,27 @@ class RealtimeClient:
             
             return False
     
+    async def test_connection(self) -> bool:
+        """Test the connection to the Realtime API without starting the full client."""
+        uri = f"wss://api.openai.com/v1/realtime?model={self.config.model}&language={self.config.language}"
+        headers = {
+            "Authorization": f"Bearer {self.config.api_key}"
+        }
+        try:
+            async with websockets.connect(
+                uri,
+                additional_headers=headers,
+                ping_interval=5,
+                ping_timeout=5,
+                close_timeout=5
+            ) as websocket:
+                # If connection succeeds, we're good.
+                logger.info("Realtime API connection test successful.")
+                return True
+        except Exception as e:
+            logger.error(f"Realtime API connection test failed: {e}")
+            return False
+    
     async def disconnect(self):
         """Disconnect from OpenAI Realtime API."""
         if not self.is_connected:
