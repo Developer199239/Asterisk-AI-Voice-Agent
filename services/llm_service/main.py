@@ -11,10 +11,17 @@ import sys
 from pathlib import Path
 
 # Add shared modules to path
-sys.path.append(str(Path(__file__).parent.parent.parent / "shared"))
+shared_path = str(Path(__file__).parent.parent.parent / "shared")
+sys.path.append(shared_path)
 
-from config import CallControllerConfig
-from redis_client import RedisClient
+try:
+    from config import CallControllerConfig
+    from redis_client import RedisClient
+except ImportError as e:
+    print(f"Import error: {e}")
+    print(f"Python path: {sys.path}")
+    print(f"Shared path: {shared_path}")
+    sys.exit(1)
 
 # Configure logging
 logging.basicConfig(
