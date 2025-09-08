@@ -31,7 +31,7 @@ RUN apt-get update && \
 
 # Clone rtpengine source
 WORKDIR /src
-RUN git clone https://github.com/sipwise/rtpengine.git -b mr10.5.1.1 rtpengine-src
+RUN git -c http.sslVerify=false clone https://github.com/sipwise/rtpengine.git -b mr10.5.1.1 rtpengine-src
 
 # Build rtpengine
 WORKDIR /src/rtpengine-src
