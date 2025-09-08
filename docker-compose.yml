@@ -80,6 +80,10 @@ services:
       - .env
     environment:
       - PYTHONPATH=/app
+      - REDIS_URL=redis://redis:6379
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
 
   llm_service:
     build:
@@ -105,6 +109,10 @@ services:
       - .env
     environment:
       - PYTHONPATH=/app
+      - REDIS_URL=redis://redis:6379
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - FALLBACK_LLM_MODEL=${FALLBACK_LLM_MODEL:-gpt-3.5-turbo}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
 
   tts_service:
     build:
@@ -131,6 +139,9 @@ services:
       - .env
     environment:
       - PYTHONPATH=/app
+      - REDIS_URL=redis://redis:6379
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
 
 volumes:
   redis_data:
