@@ -1,3 +1,5 @@
+version: "3.8"
+
 services:
   # Redis Message Queue
   redis:
@@ -15,6 +17,8 @@ services:
       retries: 3
     networks:
       - ai-voice-network
+    env_file:
+      - .env
 
   # RTPEngine Media Proxy - Temporarily disabled for testing
   # rtpengine:
@@ -71,6 +75,8 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+    env_file:
+      - .env
 
   # STT Service
   stt_service:
@@ -101,6 +107,8 @@ services:
       start_period: 40s
     networks:
       - ai-voice-network
+    env_file:
+      - .env
 
   # LLM Service
   llm_service:
@@ -129,6 +137,8 @@ services:
       start_period: 40s
     networks:
       - ai-voice-network
+    env_file:
+      - .env
 
   # TTS Service
   tts_service:
@@ -157,6 +167,8 @@ services:
       start_period: 40s
     networks:
       - ai-voice-network
+    env_file:
+      - .env
 
 volumes:
   redis_data:
