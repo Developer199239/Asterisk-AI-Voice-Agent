@@ -28,7 +28,6 @@ from rtpengine_client import RTPEngineClient
 from call_state_machine import CallStateMachine, CallState, CallData
 import structlog
 from shared.logging_config import set_correlation_id
-from services.call_controller.mediasoup_client import MediasoupClient
 from services.call_controller.ari_client import ARIClient
 from services.call_controller.call_state_machine import CallStateMachine, CallState
 from services.call_controller.models import ARIEvent
