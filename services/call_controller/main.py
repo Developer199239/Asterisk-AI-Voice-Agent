@@ -9,6 +9,7 @@ import asyncio
 import logging
 import signal
 import sys
+import traceback
 from pathlib import Path
 from typing import Optional
 from aiohttp import web
@@ -208,7 +209,11 @@ class CallControllerService:
             logger.info(f"Handled new call {call_id} from {caller_id}")
             
         except Exception as e:
-            logger.error(f"Error handling StasisStart: {e}")
+            logger.error(
+                "Error handling StasisStart", 
+                error=str(e), 
+                traceback=traceback.format_exc()
+            )
     
     async def _handle_stasis_end(self, event: ARIEvent):
         """Handle StasisEnd event - call ended"""
