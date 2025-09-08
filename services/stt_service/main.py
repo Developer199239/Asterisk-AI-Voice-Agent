@@ -8,6 +8,7 @@ It adapts the existing stt_handler.py from the v1.0 architecture.
 import asyncio
 import logging
 import sys
+import time
 from pathlib import Path
 
 # Add shared modules to path
@@ -17,6 +18,8 @@ from config import CallControllerConfig
 from redis_client import RedisMessageQueue
 from rtp_handler import RTPStreamManager, RTPStreamInfo
 from vad_handler import SpeechSegment
+from rtp_stt_handler import RTPSTTHandler, RTPSTTConfig
+from realtime_client import RealtimeClient, RealtimeConfig
 
 # Configure logging
 logging.basicConfig(
@@ -32,6 +35,27 @@ class STTService:
         self.rtp_manager = RTPStreamManager(host="0.0.0.0", port=5004)
         self.running = False
         self.active_streams = {}  # Track active RTP streams
+        
+        # Initialize RTP STT handler
+        self.rtp_stt_config = RTPSTTConfig(
+            rtp_sample_rate=8000,
+            target_sample_rate=24000,
+            enable_audio_resampling=True,
+            on_transcript=self._handle_transcript,
+            on_speech_segment=self._handle_speech_segment_callback,
+            on_error=self._handle_stt_error
+        )
+        
+        # Initialize Realtime API client
+        self.realtime_config = RealtimeConfig(
+            api_key=self.config.openai_api_key,
+            voice=VoiceType.ALLOY,
+            model="gpt-4o-realtime-preview-2024-10-01"
+        )
+        self.realtime_client = RealtimeClient(self.realtime_config)
+        
+        # Initialize RTP STT handler
+        self.rtp_stt_handler = RTPSTTHandler(self.rtp_stt_config, self.realtime_client)
 
     async def start(self):
         """Start the STT service"""
@@ -45,6 +69,12 @@ class STTService:
             # Subscribe to new call events
             await self.redis_client.subscribe(["calls:new"], self._handle_new_call)
             logger.info("Subscribed to calls:new")
+            
+            # Start RTP STT handler
+            stt_started = await self.rtp_stt_handler.start()
+            if not stt_started:
+                raise Exception("Failed to start RTP STT handler")
+            logger.info("RTP STT handler started")
             
             # Start RTP UDP server with VAD support
             rtp_started = await self.rtp_manager.start(
@@ -98,14 +128,20 @@ class STTService:
         try:
             logger.debug(f"Received audio data from SSRC {stream_info.ssrc}: {len(audio_data)} bytes")
             
-            # TODO: Process audio data with VAD
-            # TODO: Perform speech-to-text conversion
-            # TODO: Publish transcription to stt:transcription:complete
+            # Convert stream info to dict for RTP STT handler
+            stream_dict = {
+                'ssrc': stream_info.ssrc,
+                'payload_type': stream_info.payload_type,
+                'sample_rate': stream_info.sample_rate,
+                'channels': stream_info.channels,
+                'packet_count': stream_info.packet_count,
+                'bytes_received': stream_info.bytes_received
+            }
             
-            # For now, just log the audio data
-            logger.info(f"Processing audio: SSRC={stream_info.ssrc}, "
-                       f"packets={stream_info.packet_count}, "
-                       f"bytes={stream_info.bytes_received}")
+            # Process audio with RTP STT handler
+            success = await self.rtp_stt_handler.process_rtp_audio(audio_data, stream_dict)
+            if not success:
+                logger.warning(f"Failed to process RTP audio for SSRC {stream_info.ssrc}")
             
         except Exception as e:
             logger.error(f"Error handling RTP audio data: {e}")
@@ -115,19 +151,69 @@ class STTService:
         try:
             logger.info(f"Speech segment detected: {segment.duration:.2f}s, {len(segment.audio_data)} bytes from SSRC {stream_info.ssrc}")
             
-            # TODO: Process speech segment for transcription
-            # TODO: Publish transcription to stt:transcription:complete
+            # Convert stream info to dict for RTP STT handler
+            stream_dict = {
+                'ssrc': stream_info.ssrc,
+                'payload_type': stream_info.payload_type,
+                'sample_rate': stream_info.sample_rate,
+                'channels': stream_info.channels,
+                'packet_count': stream_info.packet_count,
+                'bytes_received': stream_info.bytes_received
+            }
             
-            # For now, just log the segment
-            logger.debug(f"Speech segment: start={segment.start_time:.2f}, end={segment.end_time:.2f}, confidence={segment.confidence:.2f}")
+            # Process speech segment with RTP STT handler
+            success = await self.rtp_stt_handler.process_speech_segment(segment, stream_dict)
+            if not success:
+                logger.warning(f"Failed to process speech segment for SSRC {stream_info.ssrc}")
             
         except Exception as e:
             logger.error(f"Error handling speech segment: {e}")
+    
+    async def _handle_transcript(self, text: str, is_final: bool, metadata: Dict[str, Any] = None):
+        """Handle transcript from RTP STT handler"""
+        try:
+            logger.info(f"Transcript received: '{text}' (final: {is_final})")
+            
+            # Publish transcription to Redis
+            message = {
+                'text': text,
+                'is_final': is_final,
+                'timestamp': time.time(),
+                'metadata': metadata or {}
+            }
+            
+            await self.redis_client.publish("stt:transcription:complete", message)
+            logger.info("Published transcription to stt:transcription:complete")
+            
+        except Exception as e:
+            logger.error(f"Error handling transcript: {e}")
+    
+    async def _handle_speech_segment_callback(self, segment: SpeechSegment):
+        """Handle speech segment callback from RTP STT handler"""
+        try:
+            logger.debug(f"Speech segment callback: {segment.duration:.2f}s")
+            # Additional processing can be added here if needed
+            
+        except Exception as e:
+            logger.error(f"Error in speech segment callback: {e}")
+    
+    async def _handle_stt_error(self, error_msg: str, exception: Exception):
+        """Handle STT errors"""
+        try:
+            logger.error(f"STT Error: {error_msg} - {exception}")
+            # Additional error handling can be added here
+            
+        except Exception as e:
+            logger.error(f"Error handling STT error: {e}")
 
     async def stop(self):
         """Stop the STT service"""
         logger.info("Stopping STT Service")
         self.running = False
+        
+        # Stop RTP STT handler
+        if self.rtp_stt_handler:
+            await self.rtp_stt_handler.stop()
         
         # Stop RTP server
         await self.rtp_manager.stop()
