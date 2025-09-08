@@ -14,6 +14,8 @@ from dataclasses import dataclass
 from typing import Dict, Optional, Callable, Any, List, Tuple
 from enum import Enum
 
+from .vad_handler import VADHandler, SpeechSegment
+
 logger = logging.getLogger(__name__)
 
 
@@ -183,10 +185,17 @@ class RTPStreamInfo:
 class RTPStreamHandler:
     """Handles individual RTP stream processing."""
     
-    def __init__(self, ssrc: int, payload_type: int, on_audio_data: Callable[[bytes, RTPStreamInfo], None]):
+    def __init__(
+        self, 
+        ssrc: int, 
+        payload_type: int, 
+        on_audio_data: Callable[[bytes, RTPStreamInfo], None],
+        on_speech_segment: Optional[Callable[[SpeechSegment, RTPStreamInfo], None]] = None
+    ):
         self.ssrc = ssrc
         self.payload_type = payload_type
         self.on_audio_data = on_audio_data
+        self.on_speech_segment = on_speech_segment
         
         # Stream information
         self.info = RTPStreamInfo(
@@ -206,6 +215,13 @@ class RTPStreamHandler:
         # Audio buffer for reassembly
         self.audio_buffer = bytearray()
         self.last_timestamp = 0
+        
+        # Initialize VAD
+        self.vad_handler = VADHandler(
+            sample_rate=self.info.sample_rate,
+            frame_duration_ms=20,
+            on_speech_end=self._on_speech_segment
+        )
         
     def _get_sample_rate(self, payload_type: int) -> int:
         """Get sample rate for payload type."""
@@ -251,17 +267,16 @@ class RTPStreamHandler:
             # Extract and decode audio samples
             audio_samples = packet.get_audio_samples(self.info.sample_rate)
             if audio_samples:
-                # Add decoded audio to buffer
-                self.audio_buffer.extend(audio_samples)
+                # Process audio through VAD
+                speech_segments = self.vad_handler.process_audio(audio_samples)
                 
-                # Process audio data if we have enough (20ms worth)
-                samples_per_20ms = (self.info.sample_rate * 2) // 50  # 2 bytes per sample
-                if len(self.audio_buffer) >= samples_per_20ms:
-                    audio_data = bytes(self.audio_buffer[:samples_per_20ms])
-                    self.audio_buffer = self.audio_buffer[samples_per_20ms:]
-                    
-                    # Call audio data handler
-                    self.on_audio_data(audio_data, self.info)
+                # Handle detected speech segments
+                for segment in speech_segments:
+                    if self.on_speech_segment:
+                        self.on_speech_segment(segment, self.info)
+                
+                # Also call the original audio data handler for continuous processing
+                self.on_audio_data(audio_samples, self.info)
             else:
                 # Fallback: add raw payload to buffer
                 self.audio_buffer.extend(packet.payload)
@@ -271,6 +286,14 @@ class RTPStreamHandler:
                     audio_data = bytes(self.audio_buffer)
                     self.audio_buffer.clear()
                     
+                    # Process through VAD
+                    speech_segments = self.vad_handler.process_audio(audio_data)
+                    
+                    # Handle detected speech segments
+                    for segment in speech_segments:
+                        if self.on_speech_segment:
+                            self.on_speech_segment(segment, self.info)
+                    
                     # Call audio data handler
                     self.on_audio_data(audio_data, self.info)
             
@@ -279,13 +302,34 @@ class RTPStreamHandler:
         except Exception as e:
             logger.error(f"Error processing RTP packet for SSRC {self.ssrc}: {e}")
             return False
+    
+    def _on_speech_segment(self, segment: SpeechSegment):
+        """Handle detected speech segment."""
+        if self.on_speech_segment:
+            try:
+                self.on_speech_segment(segment, self.info)
+            except Exception as e:
+                logger.error(f"Error handling speech segment for SSRC {self.ssrc}: {e}")
+    
+    def get_vad_state(self):
+        """Get current VAD state."""
+        return self.vad_handler.get_current_state()
+    
+    def reset_vad(self):
+        """Reset VAD state."""
+        self.vad_handler.reset()
 
 
 class RTPUDPServer(asyncio.DatagramProtocol):
     """UDP server for receiving RTP streams."""
     
-    def __init__(self, on_audio_data: Callable[[bytes, RTPStreamInfo], None]):
+    def __init__(
+        self, 
+        on_audio_data: Callable[[bytes, RTPStreamInfo], None],
+        on_speech_segment: Optional[Callable[[SpeechSegment, RTPStreamInfo], None]] = None
+    ):
         self.on_audio_data = on_audio_data
+        self.on_speech_segment = on_speech_segment
         self.streams: Dict[int, RTPStreamHandler] = {}
         self.transport = None
         self.logger = logging.getLogger(f"{__name__}.RTPUDPServer")
@@ -309,7 +353,8 @@ class RTPUDPServer(asyncio.DatagramProtocol):
                 self.streams[ssrc] = RTPStreamHandler(
                     ssrc=ssrc,
                     payload_type=packet.payload_type,
-                    on_audio_data=self.on_audio_data
+                    on_audio_data=self.on_audio_data,
+                    on_speech_segment=self.on_speech_segment
                 )
                 self.logger.info(f"New RTP stream: SSRC={ssrc}, PT={packet.payload_type}")
             
@@ -367,12 +412,16 @@ class RTPStreamManager:
         self.protocol = None
         self.logger = logging.getLogger(f"{__name__}.RTPStreamManager")
         
-    async def start(self, on_audio_data: Callable[[bytes, RTPStreamInfo], None]) -> bool:
+    async def start(
+        self, 
+        on_audio_data: Callable[[bytes, RTPStreamInfo], None],
+        on_speech_segment: Optional[Callable[[SpeechSegment, RTPStreamInfo], None]] = None
+    ) -> bool:
         """Start the RTP UDP server."""
         try:
             # Create UDP server
             loop = asyncio.get_event_loop()
-            self.protocol = RTPUDPServer(on_audio_data)
+            self.protocol = RTPUDPServer(on_audio_data, on_speech_segment)
             self.transport, self.protocol = await loop.create_datagram_endpoint(
                 lambda: self.protocol,
                 local_addr=(self.host, self.port)

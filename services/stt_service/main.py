@@ -16,6 +16,7 @@ sys.path.append(str(Path(__file__).parent.parent.parent / "shared"))
 from config import CallControllerConfig
 from redis_client import RedisMessageQueue
 from rtp_handler import RTPStreamManager, RTPStreamInfo
+from vad_handler import SpeechSegment
 
 # Configure logging
 logging.basicConfig(
@@ -45,11 +46,14 @@ class STTService:
             await self.redis_client.subscribe(["calls:new"], self._handle_new_call)
             logger.info("Subscribed to calls:new")
             
-            # Start RTP UDP server
-            rtp_started = await self.rtp_manager.start(self._handle_rtp_audio_data)
+            # Start RTP UDP server with VAD support
+            rtp_started = await self.rtp_manager.start(
+                on_audio_data=self._handle_rtp_audio_data,
+                on_speech_segment=self._handle_speech_segment
+            )
             if not rtp_started:
                 raise Exception("Failed to start RTP UDP server")
-            logger.info("RTP UDP server started on port 5004")
+            logger.info("RTP UDP server started on port 5004 with VAD")
             
             self.running = True
             
@@ -105,6 +109,20 @@ class STTService:
             
         except Exception as e:
             logger.error(f"Error handling RTP audio data: {e}")
+    
+    async def _handle_speech_segment(self, segment: SpeechSegment, stream_info: RTPStreamInfo):
+        """Handle detected speech segment"""
+        try:
+            logger.info(f"Speech segment detected: {segment.duration:.2f}s, {len(segment.audio_data)} bytes from SSRC {stream_info.ssrc}")
+            
+            # TODO: Process speech segment for transcription
+            # TODO: Publish transcription to stt:transcription:complete
+            
+            # For now, just log the segment
+            logger.debug(f"Speech segment: start={segment.start_time:.2f}, end={segment.end_time:.2f}, confidence={segment.confidence:.2f}")
+            
+        except Exception as e:
+            logger.error(f"Error handling speech segment: {e}")
 
     async def stop(self):
         """Stop the STT service"""
