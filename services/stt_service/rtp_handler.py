@@ -1,0 +1,328 @@
+"""
+RTP Stream Handler for STT Service
+
+This module handles RTP stream reception and processing for speech-to-text.
+It implements UDP server using asyncio.DatagramProtocol for RTP packet reception.
+"""
+
+import asyncio
+import logging
+import struct
+import time
+from dataclasses import dataclass
+from typing import Dict, Optional, Callable, Any
+from enum import Enum
+
+logger = logging.getLogger(__name__)
+
+
+class RTPPayloadType(Enum):
+    """RTP payload types for audio codecs."""
+    PCMU = 0      # G.711 μ-law
+    PCMA = 8      # G.711 A-law
+    G722 = 9      # G.722
+    G729 = 18     # G.729
+    OPUS = 111    # Opus (dynamic)
+
+
+@dataclass
+class RTPPacket:
+    """RTP packet structure."""
+    version: int
+    padding: bool
+    extension: bool
+    csrc_count: int
+    marker: bool
+    payload_type: int
+    sequence_number: int
+    timestamp: int
+    ssrc: int
+    payload: bytes
+    header_length: int = 12
+
+
+@dataclass
+class RTPStreamInfo:
+    """Information about an RTP stream."""
+    ssrc: int
+    payload_type: int
+    sample_rate: int
+    channels: int
+    first_packet_time: float
+    last_packet_time: float
+    packet_count: int
+    bytes_received: int
+    sequence_number: int
+    expected_sequence: int
+    lost_packets: int
+
+
+class RTPStreamHandler:
+    """Handles individual RTP stream processing."""
+    
+    def __init__(self, ssrc: int, payload_type: int, on_audio_data: Callable[[bytes, RTPStreamInfo], None]):
+        self.ssrc = ssrc
+        self.payload_type = payload_type
+        self.on_audio_data = on_audio_data
+        
+        # Stream information
+        self.info = RTPStreamInfo(
+            ssrc=ssrc,
+            payload_type=payload_type,
+            sample_rate=self._get_sample_rate(payload_type),
+            channels=1,  # Assume mono for now
+            first_packet_time=0,
+            last_packet_time=0,
+            packet_count=0,
+            bytes_received=0,
+            sequence_number=0,
+            expected_sequence=0,
+            lost_packets=0
+        )
+        
+        # Audio buffer for reassembly
+        self.audio_buffer = bytearray()
+        self.last_timestamp = 0
+        
+    def _get_sample_rate(self, payload_type: int) -> int:
+        """Get sample rate for payload type."""
+        sample_rates = {
+            RTPPayloadType.PCMU.value: 8000,
+            RTPPayloadType.PCMA.value: 8000,
+            RTPPayloadType.G722.value: 8000,
+            RTPPayloadType.G729.value: 8000,
+            RTPPayloadType.OPUS.value: 48000,
+        }
+        return sample_rates.get(payload_type, 8000)
+    
+    def process_packet(self, packet: RTPPacket) -> bool:
+        """Process an RTP packet."""
+        try:
+            # Update stream info
+            current_time = time.time()
+            if self.info.first_packet_time == 0:
+                self.info.first_packet_time = current_time
+            
+            self.info.last_packet_time = current_time
+            self.info.packet_count += 1
+            self.info.bytes_received += len(packet.payload)
+            
+            # Check for packet loss
+            if self.info.expected_sequence > 0:
+                expected = (self.info.expected_sequence + 1) % 65536
+                if packet.sequence_number != expected:
+                    lost = (packet.sequence_number - expected) % 65536
+                    self.info.lost_packets += lost
+                    logger.warning(f"Lost {lost} packets for SSRC {self.ssrc}")
+            
+            self.info.expected_sequence = packet.sequence_number
+            
+            # Check for timestamp discontinuity (new talk spurt)
+            if self.last_timestamp > 0 and packet.timestamp < self.last_timestamp:
+                # Timestamp wrapped around or new talk spurt
+                logger.debug(f"Timestamp discontinuity for SSRC {self.ssrc}")
+                self.audio_buffer.clear()
+            
+            self.last_timestamp = packet.timestamp
+            
+            # Add payload to buffer
+            self.audio_buffer.extend(packet.payload)
+            
+            # Process audio data if we have enough
+            if len(self.audio_buffer) >= 320:  # 20ms of 8kHz audio
+                audio_data = bytes(self.audio_buffer)
+                self.audio_buffer.clear()
+                
+                # Call audio data handler
+                self.on_audio_data(audio_data, self.info)
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error processing RTP packet for SSRC {self.ssrc}: {e}")
+            return False
+
+
+class RTPUDPServer(asyncio.DatagramProtocol):
+    """UDP server for receiving RTP streams."""
+    
+    def __init__(self, on_audio_data: Callable[[bytes, RTPStreamInfo], None]):
+        self.on_audio_data = on_audio_data
+        self.streams: Dict[int, RTPStreamHandler] = {}
+        self.transport = None
+        self.logger = logging.getLogger(f"{__name__}.RTPUDPServer")
+        
+    def connection_made(self, transport):
+        """Called when connection is made."""
+        self.transport = transport
+        self.logger.info("RTP UDP server started")
+    
+    def datagram_received(self, data, addr):
+        """Called when a datagram is received."""
+        try:
+            # Parse RTP packet
+            packet = self._parse_rtp_packet(data)
+            if not packet:
+                return
+            
+            # Get or create stream handler
+            ssrc = packet.ssrc
+            if ssrc not in self.streams:
+                self.streams[ssrc] = RTPStreamHandler(
+                    ssrc=ssrc,
+                    payload_type=packet.payload_type,
+                    on_audio_data=self.on_audio_data
+                )
+                self.logger.info(f"New RTP stream: SSRC={ssrc}, PT={packet.payload_type}")
+            
+            # Process packet
+            stream_handler = self.streams[ssrc]
+            success = stream_handler.process_packet(packet)
+            
+            if not success:
+                self.logger.error(f"Failed to process packet for SSRC {ssrc}")
+            
+        except Exception as e:
+            self.logger.error(f"Error processing datagram from {addr}: {e}")
+    
+    def _parse_rtp_packet(self, data: bytes) -> Optional[RTPPacket]:
+        """Parse RTP packet from raw data."""
+        try:
+            if len(data) < 12:
+                self.logger.warning("RTP packet too short")
+                return None
+            
+            # Parse RTP header (first 12 bytes)
+            header = struct.unpack('!BBHII', data[:12])
+            
+            # Extract fields
+            version = (header[0] >> 6) & 0x3
+            padding = bool((header[0] >> 5) & 0x1)
+            extension = bool((header[0] >> 4) & 0x1)
+            csrc_count = header[0] & 0xF
+            marker = bool((header[1] >> 7) & 0x1)
+            payload_type = header[1] & 0x7F
+            sequence_number = header[2]
+            timestamp = header[3]
+            ssrc = header[4]
+            
+            # Calculate header length
+            header_length = 12 + (csrc_count * 4)
+            if extension:
+                # Extension header present
+                if len(data) < header_length + 4:
+                    self.logger.warning("RTP packet too short for extension")
+                    return None
+                ext_header = struct.unpack('!HH', data[header_length:header_length + 4])
+                ext_length = ext_header[1] * 4
+                header_length += 4 + ext_length
+            
+            # Extract payload
+            if len(data) <= header_length:
+                self.logger.warning("RTP packet has no payload")
+                return None
+            
+            payload = data[header_length:]
+            
+            return RTPPacket(
+                version=version,
+                padding=padding,
+                extension=extension,
+                csrc_count=csrc_count,
+                marker=marker,
+                payload_type=payload_type,
+                sequence_number=sequence_number,
+                timestamp=timestamp,
+                ssrc=ssrc,
+                payload=payload,
+                header_length=header_length
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Error parsing RTP packet: {e}")
+            return None
+    
+    def error_received(self, exc):
+        """Called when an error occurs."""
+        self.logger.error(f"RTP UDP server error: {exc}")
+    
+    def connection_lost(self, exc):
+        """Called when connection is lost."""
+        if exc:
+            self.logger.error(f"RTP UDP server connection lost: {exc}")
+        else:
+            self.logger.info("RTP UDP server connection closed")
+    
+    def get_stream_info(self, ssrc: int) -> Optional[RTPStreamInfo]:
+        """Get information about a specific stream."""
+        stream_handler = self.streams.get(ssrc)
+        return stream_handler.info if stream_handler else None
+    
+    def get_all_streams(self) -> Dict[int, RTPStreamInfo]:
+        """Get information about all streams."""
+        return {ssrc: handler.info for ssrc, handler in self.streams.items()}
+    
+    def remove_stream(self, ssrc: int) -> bool:
+        """Remove a stream handler."""
+        if ssrc in self.streams:
+            del self.streams[ssrc]
+            self.logger.info(f"Removed stream SSRC {ssrc}")
+            return True
+        return False
+
+
+class RTPStreamManager:
+    """Manages RTP streams and UDP server."""
+    
+    def __init__(self, host: str = "0.0.0.0", port: int = 5004):
+        self.host = host
+        self.port = port
+        self.server = None
+        self.transport = None
+        self.protocol = None
+        self.logger = logging.getLogger(f"{__name__}.RTPStreamManager")
+        
+    async def start(self, on_audio_data: Callable[[bytes, RTPStreamInfo], None]) -> bool:
+        """Start the RTP UDP server."""
+        try:
+            # Create UDP server
+            loop = asyncio.get_event_loop()
+            self.protocol = RTPUDPServer(on_audio_data)
+            self.transport, self.protocol = await loop.create_datagram_endpoint(
+                lambda: self.protocol,
+                local_addr=(self.host, self.port)
+            )
+            
+            self.logger.info(f"RTP UDP server started on {self.host}:{self.port}")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Failed to start RTP UDP server: {e}")
+            return False
+    
+    async def stop(self):
+        """Stop the RTP UDP server."""
+        try:
+            if self.transport:
+                self.transport.close()
+                self.logger.info("RTP UDP server stopped")
+        except Exception as e:
+            self.logger.error(f"Error stopping RTP UDP server: {e}")
+    
+    def get_stream_info(self, ssrc: int) -> Optional[RTPStreamInfo]:
+        """Get information about a specific stream."""
+        if self.protocol:
+            return self.protocol.get_stream_info(ssrc)
+        return None
+    
+    def get_all_streams(self) -> Dict[int, RTPStreamInfo]:
+        """Get information about all streams."""
+        if self.protocol:
+            return self.protocol.get_all_streams()
+        return {}
+    
+    def remove_stream(self, ssrc: int) -> bool:
+        """Remove a stream handler."""
+        if self.protocol:
+            return self.protocol.remove_stream(ssrc)
+        return False

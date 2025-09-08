@@ -15,6 +15,7 @@ sys.path.append(str(Path(__file__).parent.parent.parent / "shared"))
 
 from config import CallControllerConfig
 from redis_client import RedisMessageQueue
+from .rtp_handler import RTPStreamManager, RTPStreamInfo
 
 # Configure logging
 logging.basicConfig(
@@ -27,7 +28,9 @@ class STTService:
     def __init__(self):
         self.config = CallControllerConfig()
         self.redis_client = RedisMessageQueue()
+        self.rtp_manager = RTPStreamManager(host="0.0.0.0", port=5004)
         self.running = False
+        self.active_streams = {}  # Track active RTP streams
 
     async def start(self):
         """Start the STT service"""
@@ -41,6 +44,12 @@ class STTService:
             # Subscribe to new call events
             await self.redis_client.subscribe(["calls:new"], self._handle_new_call)
             logger.info("Subscribed to calls:new")
+            
+            # Start RTP UDP server
+            rtp_started = await self.rtp_manager.start(self._handle_rtp_audio_data)
+            if not rtp_started:
+                raise Exception("Failed to start RTP UDP server")
+            logger.info("RTP UDP server started on port 5004")
             
             self.running = True
             
@@ -63,19 +72,49 @@ class STTService:
         try:
             logger.info(f"Received new call on {channel}: {message}")
             
-            # TODO: Process RTP audio stream
-            # TODO: Perform speech-to-text conversion
-            # TODO: Publish transcription to stt:transcription:complete
+            # Extract channel ID from message
+            channel_id = message.get('channel_id')
+            if not channel_id:
+                logger.warning("No channel_id in new call message")
+                return
             
-            logger.info("New call processed successfully")
+            # Track the new call
+            self.active_streams[channel_id] = {
+                'start_time': asyncio.get_event_loop().time(),
+                'status': 'waiting_for_rtp'
+            }
+            
+            logger.info(f"Tracking new call for channel {channel_id}")
             
         except Exception as e:
             logger.error(f"Error handling new call: {e}")
+
+    async def _handle_rtp_audio_data(self, audio_data: bytes, stream_info: RTPStreamInfo):
+        """Handle RTP audio data from streams"""
+        try:
+            logger.debug(f"Received audio data from SSRC {stream_info.ssrc}: {len(audio_data)} bytes")
+            
+            # TODO: Process audio data with VAD
+            # TODO: Perform speech-to-text conversion
+            # TODO: Publish transcription to stt:transcription:complete
+            
+            # For now, just log the audio data
+            logger.info(f"Processing audio: SSRC={stream_info.ssrc}, "
+                       f"packets={stream_info.packet_count}, "
+                       f"bytes={stream_info.bytes_received}")
+            
+        except Exception as e:
+            logger.error(f"Error handling RTP audio data: {e}")
 
     async def stop(self):
         """Stop the STT service"""
         logger.info("Stopping STT Service")
         self.running = False
+        
+        # Stop RTP server
+        await self.rtp_manager.stop()
+        
+        # Disconnect from Redis
         await self.redis_client.disconnect()
 
 async def main():
