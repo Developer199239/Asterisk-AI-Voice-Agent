@@ -64,7 +64,7 @@ class VoiceType(Enum):
 class RealtimeConfig:
     """Configuration for the Realtime API client."""
     api_key: str
-    model: str = "whisper-large-v3"
+    model: str = "gpt-4o-realtime-preview"
     voice: VoiceType = VoiceType.ALLOY
     language: str = "en"
     base_url: str = "wss://api.openai.com/v1/realtime"
