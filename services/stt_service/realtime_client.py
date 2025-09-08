@@ -62,10 +62,12 @@ class VoiceType(Enum):
 
 @dataclass
 class RealtimeConfig:
-    """Configuration for OpenAI Realtime API client."""
+    """Configuration for the Realtime API client."""
     api_key: str
-    base_url: str = "wss://api.openai.com/v1/realtime"
+    model: str = "whisper-large-v3"
     voice: VoiceType = VoiceType.ALLOY
+    language: str = "en"
+    base_url: str = "wss://api.openai.com/v1/realtime"
     instructions: str = "You are a helpful AI assistant for Jugaar LLC."
     temperature: float = 0.8
     max_response_tokens: int = 4096
@@ -151,18 +153,15 @@ class RealtimeClient:
     
     async def connect(self) -> bool:
         """Connect to OpenAI Realtime API."""
+        uri = f"wss://api.openai.com/v1/realtime?model={self.config.model}&language={self.config.language}"
+        headers = {
+            "Authorization": f"Bearer {self.config.api_key}"
+        }
+        if self.config.enable_logging:
+            logger.info(f"Connecting to OpenAI Realtime API: {uri}")
         try:
-            if self.config.enable_logging:
-                logger.info(f"Connecting to OpenAI Realtime API: {self.config.base_url}")
-            
-            # Create WebSocket connection with authentication
-            headers = {
-                "Authorization": f"Bearer {self.config.api_key}",
-                "OpenAI-Beta": "realtime=v1"
-            }
-            
             self.websocket = await websockets.connect(
-                self.config.base_url,
+                uri,
                 additional_headers=headers,
                 ping_interval=20,
                 ping_timeout=10,
