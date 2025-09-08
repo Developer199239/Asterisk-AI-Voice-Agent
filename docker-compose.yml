@@ -22,11 +22,9 @@ services:
 
   # RTPEngine Media Proxy
   rtpengine:
-    build:
-      context: .
-      dockerfile: services/rtpengine/Dockerfile
+    image: sipwise/rtpengine:mr10.5.1.1
     container_name: asterisk-ai-voice-agent-rtpengine
-    command: rtpengine --interface=internal=172.20.0.0/16 --interface=external=0.0.0.0/0 -L 7 --no-fallback
+    command: rtpengine --interface=internal=172.20.0.0/16 --interface=external=0.0.0.0/0 -L 7
     ports:
       - "2223:2223" # Control port
       - "10000-10100:10000-10100/udp" # RTP port range
