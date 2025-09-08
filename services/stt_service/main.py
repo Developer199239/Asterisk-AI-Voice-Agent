@@ -14,7 +14,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent.parent / "shared"))
 
 from config import CallControllerConfig
-from redis_client import RedisClient
+from redis_client import RedisMessageQueue
 
 # Configure logging
 logging.basicConfig(
@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 class STTService:
     def __init__(self):
         self.config = CallControllerConfig()
-        self.redis_client = RedisClient()
+        self.redis_client = RedisMessageQueue()
         self.running = False
 
     async def start(self):

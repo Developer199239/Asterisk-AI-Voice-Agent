@@ -27,8 +27,8 @@ try:
     from config import CallControllerConfig
     print("Successfully imported CallControllerConfig")
     
-    from redis_client import RedisClient
-    print("Successfully imported RedisClient")
+    from redis_client import RedisMessageQueue
+    print("Successfully imported RedisMessageQueue")
     
 except ImportError as e:
     print(f"Import error: {e}")
