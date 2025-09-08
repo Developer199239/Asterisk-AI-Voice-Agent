@@ -14,9 +14,9 @@ from dataclasses import dataclass
 
 from redis.asyncio import Redis
 
-from .openai_tts_client import OpenAITTSClient, TTSConfig as OpenAITTSConfig, VoiceType
-from .audio_file_manager import AudioFileManager, AudioFileConfig, AudioFileInfo
-from .asterisk_fallback import AsteriskFallbackHandler, AsteriskFallbackConfig, FallbackMode
+from openai_tts_client import OpenAITTSClient, TTSConfig as OpenAITTSConfig, VoiceType
+from audio_file_manager import AudioFileManager, AudioFileConfig, AudioFileInfo
+from asterisk_fallback import AsteriskFallbackHandler, AsteriskFallbackConfig, FallbackMode
 
 logger = logging.getLogger(__name__)
 

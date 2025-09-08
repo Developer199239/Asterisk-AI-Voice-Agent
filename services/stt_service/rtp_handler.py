@@ -190,16 +190,16 @@ class RTPStreamHandler:
         self, 
         ssrc: int, 
         payload_type: int, 
+        on_audio_data: Callable[[bytes, RTPStreamInfo], None],
         channel_id: Optional[str] = None,
         correlation_manager: Optional[ChannelCorrelationManager] = None,
-        on_audio_data: Callable[[bytes, RTPStreamInfo], None],
         on_speech_segment: Optional[Callable[[SpeechSegment, RTPStreamInfo], None]] = None
     ):
         self.ssrc = ssrc
         self.payload_type = payload_type
+        self.on_audio_data = on_audio_data
         self.channel_id = channel_id
         self.correlation_manager = correlation_manager
-        self.on_audio_data = on_audio_data
         self.on_speech_segment = on_speech_segment
         
         # Stream information
@@ -386,9 +386,9 @@ class RTPUDPServer(asyncio.DatagramProtocol):
                 self.streams[ssrc] = RTPStreamHandler(
                     ssrc=ssrc,
                     payload_type=packet.payload_type,
+                    on_audio_data=self.on_audio_data,
                     channel_id=channel_id,
                     correlation_manager=self.correlation_manager,
-                    on_audio_data=self.on_audio_data,
                     on_speech_segment=self.on_speech_segment
                 )
                 self.logger.info(f"New RTP stream: SSRC={ssrc}, PT={packet.payload_type}, Channel={channel_id}")

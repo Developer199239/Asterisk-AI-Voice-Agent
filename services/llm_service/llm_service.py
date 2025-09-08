@@ -14,8 +14,8 @@ from dataclasses import dataclass
 
 from redis.asyncio import Redis
 
-from .conversation_manager import ConversationManager, ConversationConfig
-from .openai_client import OpenAIClient, LLMConfig as OpenAIConfig, ModelType
+from conversation_manager import ConversationManager, ConversationConfig
+from openai_client import OpenAIClient, LLMConfig as OpenAIConfig, ModelType
 
 logger = logging.getLogger(__name__)
 
