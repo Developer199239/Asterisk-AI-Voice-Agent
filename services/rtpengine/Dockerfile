@@ -1,6 +1,3 @@
-# RTPEngine Dockerfile
-# Based on Debian Bullseye for compatibility with required libraries
-
 FROM debian:bullseye-slim AS builder
 
 # Install build dependencies
