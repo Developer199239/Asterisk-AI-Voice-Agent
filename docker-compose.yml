@@ -49,11 +49,10 @@ services:
         condition: service_healthy
       rtpengine:
         condition: service_started
-    environment:
-      - DOCKER_BUILDKIT=1
-      - PYTHONPATH=/app
     networks:
       - ai-voice-network
+    env_file:
+      - .env
 
   stt_service:
     build:
@@ -75,13 +74,6 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-    environment:
-      - DOCKER_BUILDKIT=1
-      - PYTHONPATH=/app
-      - REDIS_URL=redis://redis:6379
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
     networks:
       - ai-voice-network
     env_file:
@@ -105,13 +97,6 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-    environment:
-      - DOCKER_BUILDKIT=1
-      - PYTHONPATH=/app
-      - REDIS_URL=redis://redis:6379
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - FALLBACK_LLM_MODEL=${FALLBACK_LLM_MODEL:-gpt-3.5-turbo}
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
     networks:
       - ai-voice-network
     env_file:
@@ -136,12 +121,6 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-    environment:
-      - DOCKER_BUILDKIT=1
-      - PYTHONPATH=/app
-      - REDIS_URL=redis://redis:6379
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
     networks:
       - ai-voice-network
     env_file:
