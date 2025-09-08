@@ -19,6 +19,7 @@ from redis_client import RedisMessageQueue
 from rtp_handler import RTPStreamManager, RTPStreamInfo
 from vad_handler import SpeechSegment
 from rtp_stt_handler import RTPSTTHandler, RTPSTTConfig
+from channel_correlation import ChannelCorrelationManager
 from realtime_client import RealtimeClient, RealtimeConfig
 
 # Configure logging
@@ -32,7 +33,8 @@ class STTService:
     def __init__(self):
         self.config = CallControllerConfig()
         self.redis_client = RedisMessageQueue()
-        self.rtp_manager = RTPStreamManager(host="0.0.0.0", port=5004)
+        self.channel_correlation = ChannelCorrelationManager()
+        self.rtp_manager = RTPStreamManager(host="0.0.0.0", port=5004, correlation_manager=self.channel_correlation)
         self.running = False
         self.active_streams = {}  # Track active RTP streams
         
@@ -62,6 +64,10 @@ class STTService:
         logger.info("Starting STT Service - v2.0")
         
         try:
+            # Start channel correlation manager
+            await self.channel_correlation.start()
+            logger.info("Channel correlation manager started")
+            
             # Connect to Redis
             await self.redis_client.connect()
             logger.info("Connected to Redis")
@@ -112,13 +118,19 @@ class STTService:
                 logger.warning("No channel_id in new call message")
                 return
             
+            # Register channel with correlation manager
+            self.channel_correlation.register_channel(channel_id, {
+                'call_start_time': asyncio.get_event_loop().time(),
+                'status': 'waiting_for_rtp'
+            })
+            
             # Track the new call
             self.active_streams[channel_id] = {
                 'start_time': asyncio.get_event_loop().time(),
                 'status': 'waiting_for_rtp'
             }
             
-            logger.info(f"Tracking new call for channel {channel_id}")
+            logger.info(f"Registered and tracking new call for channel {channel_id}")
             
         except Exception as e:
             logger.error(f"Error handling new call: {e}")
@@ -174,6 +186,18 @@ class STTService:
         try:
             logger.info(f"Transcript received: '{text}' (final: {is_final})")
             
+            # Update channel correlation for transcript activity
+            if metadata and 'ssrc' in metadata:
+                ssrc = metadata['ssrc']
+                channel_info = self.channel_correlation.get_channel_by_ssrc(ssrc)
+                if channel_info:
+                    self.channel_correlation.update_channel_activity(
+                        channel_info.channel_id,
+                        activity_type="transcript",
+                        transcript_text=text,
+                        is_final=is_final
+                    )
+            
             # Publish transcription to Redis
             message = {
                 'text': text,
@@ -217,6 +241,10 @@ class STTService:
         
         # Stop RTP server
         await self.rtp_manager.stop()
+        
+        # Stop channel correlation manager
+        await self.channel_correlation.stop()
+        logger.info("Channel correlation manager stopped")
         
         # Disconnect from Redis
         await self.redis_client.disconnect()

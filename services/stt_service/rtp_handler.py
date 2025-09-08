@@ -15,6 +15,7 @@ from typing import Dict, Optional, Callable, Any, List, Tuple
 from enum import Enum
 
 from .vad_handler import VADHandler, SpeechSegment
+from .channel_correlation import ChannelCorrelationManager, ChannelState
 
 logger = logging.getLogger(__name__)
 
@@ -189,11 +190,15 @@ class RTPStreamHandler:
         self, 
         ssrc: int, 
         payload_type: int, 
+        channel_id: Optional[str] = None,
+        correlation_manager: Optional[ChannelCorrelationManager] = None,
         on_audio_data: Callable[[bytes, RTPStreamInfo], None],
         on_speech_segment: Optional[Callable[[SpeechSegment, RTPStreamInfo], None]] = None
     ):
         self.ssrc = ssrc
         self.payload_type = payload_type
+        self.channel_id = channel_id
+        self.correlation_manager = correlation_manager
         self.on_audio_data = on_audio_data
         self.on_speech_segment = on_speech_segment
         
@@ -246,6 +251,16 @@ class RTPStreamHandler:
             self.info.packet_count += 1
             self.info.bytes_received += len(packet.payload)
             
+            # Update channel correlation if available
+            if self.correlation_manager and self.channel_id:
+                self.correlation_manager.update_channel_activity(
+                    self.channel_id,
+                    activity_type="rtp_packet",
+                    bytes=len(packet.payload),
+                    ssrc=self.ssrc,
+                    payload_type=self.payload_type
+                )
+            
             # Check for packet loss
             if self.info.expected_sequence > 0:
                 expected = (self.info.expected_sequence + 1) % 65536
@@ -272,6 +287,15 @@ class RTPStreamHandler:
                 
                 # Handle detected speech segments
                 for segment in speech_segments:
+                    # Update channel correlation for speech activity
+                    if self.correlation_manager and self.channel_id:
+                        self.correlation_manager.update_channel_activity(
+                            self.channel_id,
+                            activity_type="speech_segment",
+                            segment_duration=segment.duration,
+                            segment_confidence=segment.confidence
+                        )
+                    
                     if self.on_speech_segment:
                         self.on_speech_segment(segment, self.info)
                 
@@ -326,10 +350,12 @@ class RTPUDPServer(asyncio.DatagramProtocol):
     def __init__(
         self, 
         on_audio_data: Callable[[bytes, RTPStreamInfo], None],
-        on_speech_segment: Optional[Callable[[SpeechSegment, RTPStreamInfo], None]] = None
+        on_speech_segment: Optional[Callable[[SpeechSegment, RTPStreamInfo], None]] = None,
+        correlation_manager: Optional[ChannelCorrelationManager] = None
     ):
         self.on_audio_data = on_audio_data
         self.on_speech_segment = on_speech_segment
+        self.correlation_manager = correlation_manager
         self.streams: Dict[int, RTPStreamHandler] = {}
         self.transport = None
         self.logger = logging.getLogger(f"{__name__}.RTPUDPServer")
@@ -350,13 +376,22 @@ class RTPUDPServer(asyncio.DatagramProtocol):
             # Get or create stream handler
             ssrc = packet.ssrc
             if ssrc not in self.streams:
+                # Try to find channel ID from correlation manager
+                channel_id = None
+                if self.correlation_manager:
+                    channel_info = self.correlation_manager.get_channel_by_ssrc(ssrc)
+                    if channel_info:
+                        channel_id = channel_info.channel_id
+                
                 self.streams[ssrc] = RTPStreamHandler(
                     ssrc=ssrc,
                     payload_type=packet.payload_type,
+                    channel_id=channel_id,
+                    correlation_manager=self.correlation_manager,
                     on_audio_data=self.on_audio_data,
                     on_speech_segment=self.on_speech_segment
                 )
-                self.logger.info(f"New RTP stream: SSRC={ssrc}, PT={packet.payload_type}")
+                self.logger.info(f"New RTP stream: SSRC={ssrc}, PT={packet.payload_type}, Channel={channel_id}")
             
             # Process packet
             stream_handler = self.streams[ssrc]
@@ -404,9 +439,10 @@ class RTPUDPServer(asyncio.DatagramProtocol):
 class RTPStreamManager:
     """Manages RTP streams and UDP server."""
     
-    def __init__(self, host: str = "0.0.0.0", port: int = 5004):
+    def __init__(self, host: str = "0.0.0.0", port: int = 5004, correlation_manager: Optional[ChannelCorrelationManager] = None):
         self.host = host
         self.port = port
+        self.correlation_manager = correlation_manager
         self.server = None
         self.transport = None
         self.protocol = None
@@ -421,7 +457,7 @@ class RTPStreamManager:
         try:
             # Create UDP server
             loop = asyncio.get_event_loop()
-            self.protocol = RTPUDPServer(on_audio_data, on_speech_segment)
+            self.protocol = RTPUDPServer(on_audio_data, on_speech_segment, self.correlation_manager)
             self.transport, self.protocol = await loop.create_datagram_endpoint(
                 lambda: self.protocol,
                 local_addr=(self.host, self.port)
