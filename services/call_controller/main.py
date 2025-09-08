@@ -52,10 +52,10 @@ class CallControllerService:
     def __init__(self, config: CallControllerConfig):
         self.config = config
         self.state_machine = CallStateMachine()
-        self.redis_client = RedisMessageQueue(config)
-        self.ari_client = ARIClient(config)
-        self.rtpengine_client = RTPEngineClient(config)
-        self.timescale_client = TimescaleClient(config)
+        self.redis_client = RedisMessageQueue(config.redis)
+        self.ari_client = ARIClient(config.asterisk)
+        self.rtpengine_client = RTPEngineClient(config.rtpengine)
+        self.timescale_client = TimescaleClient(config) # Assuming TimescaleConfig is on BaseConfig or passed differently
         self.running = False
         
     async def start(self):
@@ -154,7 +154,7 @@ class CallControllerService:
         }
         app = create_health_check_app("call_controller", dependency_checks)
 
-        config = uvicorn.Config(app, host="0.0.0.0", port=5000, log_level="info")
+        config = uvicorn.Config(app, host="0.0.0.0", port=self.config.health_check_port, log_level="info")
         server = uvicorn.Server(config)
         await server.serve()
 

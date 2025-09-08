@@ -139,22 +139,25 @@ class AIProviderConfig(BaseConfig):
         return v
 
 
-class CallControllerConfig(BaseConfig, RedisConfig, AsteriskConfig, RTPEngineConfig):
+class CallControllerConfig(BaseConfig):
     """Call Controller service configuration"""
-    
-    # Service-specific settings
+
     service_name: str = "call_controller"
-    health_check_port: int = 16000
-    
-    # Call handling settings
-    max_concurrent_calls: int = Field(
-        default=10,
-        description="Maximum number of concurrent calls"
-    )
-    call_timeout_seconds: int = Field(
-        default=300,
-        description="Maximum call duration in seconds"
-    )
+    health_check_port: int = Field(default=15000)
+
+    redis: RedisConfig = Field(default_factory=RedisConfig)
+    asterisk: AsteriskConfig = Field(default_factory=AsteriskConfig)
+    rtpengine: RTPEngineConfig = Field(default_factory=RTPEngineConfig)
+
+    def __init__(self, **values):
+        super().__init__(**values)
+        # Manually trigger parsing for nested models if they are passed as dicts
+        if isinstance(self.redis, dict):
+            self.redis = RedisConfig(**self.redis)
+        if isinstance(self.asterisk, dict):
+            self.asterisk = AsteriskConfig(**self.asterisk)
+        if isinstance(self.rtpengine, dict):
+            self.rtpengine = RTPEngineConfig(**self.rtpengine)
 
 
 class STTServiceConfig(AIProviderConfig, AsteriskConfig):
