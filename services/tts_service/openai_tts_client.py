@@ -14,6 +14,7 @@ from enum import Enum
 
 import openai
 from openai import AsyncOpenAI
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +117,20 @@ class OpenAITTSClient:
         # Response tracking
         self._response_times: list[float] = []
     
+    @retry(
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        stop=stop_after_attempt(3),
+        retry=retry_if_exception_type((openai.APIConnectionError, openai.RateLimitError, openai.APIStatusError))
+    )
+    async def _create_speech_with_retry(self, text, voice):
+        return await self.client.audio.speech.create(
+            model=self.config.model,
+            voice=voice,
+            input=text,
+            response_format=self.config.audio_format.value,
+            speed=self.config.speed
+        )
+
     async def synthesize_text(self, text: str, voice: Optional[VoiceType] = None) -> TTSResponse:
         """Synthesize text to speech."""
         try:
@@ -175,13 +190,7 @@ class OpenAITTSClient:
             try:
                 start_time = time.time()
                 
-                response = await self.client.audio.speech.create(
-                    model=self.config.model,
-                    voice=voice.value,
-                    input=text,
-                    response_format=self.config.audio_format.value,
-                    speed=self.config.speed
-                )
+                response = await self._create_speech_with_retry(text, voice.value)
                 
                 # Read audio data
                 audio_data = response.content
@@ -218,12 +227,7 @@ class OpenAITTSClient:
         """Test the OpenAI TTS API connection."""
         try:
             # Test with a simple synthesis request
-            response = await self.client.audio.speech.create(
-                model=self.config.model,
-                voice=self.config.voice.value,
-                input="Hello",
-                response_format=self.config.audio_format.value
-            )
+            response = await self._create_speech_with_retry("Hello", self.config.voice.value)
             
             # Read the response to ensure it's valid
             audio_data = response.content

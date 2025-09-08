@@ -16,6 +16,7 @@ from redis.asyncio import Redis
 
 from conversation_manager import ConversationManager, ConversationConfig
 from openai_client import OpenAIClient, LLMConfig as OpenAIConfig, ModelType
+from shared.fallback_responses import FallbackResponseManager
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +86,8 @@ class LLMService:
                 max_tokens=config.max_tokens
             )
         )
+        
+        self.fallback_manager = FallbackResponseManager()
         
         # Service state
         self._running = False
@@ -317,8 +320,13 @@ class LLMService:
             self.stats['openai_errors'] += 1
             logger.error(f"Error generating response for channel {channel_id}: {e}")
             
-            # Publish error to TTS service
-            await self._publish_error(channel_id, str(e))
+            # Use fallback response
+            fallback_text = self.fallback_manager.get_response("ERROR_GENERIC")
+            if fallback_text:
+                await self._publish_response(channel_id, {"content": fallback_text, "model_used": "fallback"})
+            else:
+                # Publish error to TTS service if no fallback available
+                await self._publish_error(channel_id, str(e))
     
     async def _publish_response(self, channel_id: str, response):
         """Publish LLM response to TTS service."""

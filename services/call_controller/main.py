@@ -13,22 +13,27 @@ from pathlib import Path
 from typing import Optional
 from aiohttp import web
 
+from shared.health_check import create_health_check_app
+import uvicorn
+
 # Add shared modules to path
 sys.path.append(str(Path(__file__).parent.parent.parent / "shared"))
 
-from config import load_config, CallControllerConfig
+from shared.logging_config import setup_logging
+from shared.config import load_config, CallControllerConfig
 from redis_client import get_redis_queue, Channels, CallNewMessage, CallControlMessage
 from ari_client import ARIClient, ARIEvent
 from rtpengine_client import RTPEngineClient
 from call_state_machine import CallStateMachine, CallState, CallData
+import structlog
+from shared.logging_config import set_correlation_id
 
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+# Load configuration and set up logging
+config = load_config("call_controller")
+setup_logging(log_level=config.log_level)
+
+logger = structlog.get_logger(__name__)
 
 
 class CallControllerService:
@@ -116,7 +121,7 @@ class CallControllerService:
         """Set up Redis message handlers"""
         # Subscribe to call control messages
         asyncio.create_task(self.redis_queue.subscribe(
-            [Channels.CALLS_CONTROL_PLAY, Channels.CALLS_CONTROL_STOP],
+            [Channels.CALLS_CONTROL_PLAY, Channels.CALLS_CONTROL_STOP, "barge_in:detected"],
             self._handle_call_control
         ))
     
@@ -133,18 +138,23 @@ class CallControllerService:
             CallState.RINGING, CallState.ANSWERED, self._handle_call_answered_transition
         )
     
+    async def _start_health_check_server(self):
+        """Start the health check server."""
+        dependency_checks = [
+            ("ari", self.ari_client.health_check),
+            ("redis", self.redis_queue.health_check),
+            ("rtpengine", self.rtpengine_client.health_check),
+        ]
+        app = create_health_check_app("call_controller", dependency_checks)
+        
+        config = uvicorn.Config(app, host="0.0.0.0", port=self.config.health_check_port, log_level="info")
+        server = uvicorn.Server(config)
+        await server.serve()
+
     async def _start_services(self):
         """Start all background services"""
-        # Start health check server
-        health_app = web.Application()
-        health_app.router.add_get('/health', self._health_endpoint)
-        health_runner = web.AppRunner(health_app)
-        await health_runner.setup()
-        health_site = web.TCPSite(health_runner, '0.0.0.0', self.config.health_check_port)
-        await health_site.start()
-        logger.info(f"Health check server started on port {self.config.health_check_port}")
-        
         tasks = [
+            asyncio.create_task(self._start_health_check_server()),
             asyncio.create_task(self.ari_client.start_listening()),
             asyncio.create_task(self.redis_queue.start_listening()),
             asyncio.create_task(self._timeout_checker()),
@@ -170,7 +180,9 @@ class CallControllerService:
     async def _handle_stasis_start(self, event: ARIEvent):
         """Handle StasisStart event - new call received"""
         try:
-            channel_id = event.data["args"][0]
+            channel_id = event.data["channel"]["id"]
+            set_correlation_id(channel_id)
+            
             caller_id = event.data.get("caller", {}).get("number")
             caller_name = event.data.get("caller", {}).get("name")
             
@@ -203,6 +215,7 @@ class CallControllerService:
         """Handle StasisEnd event - call ended"""
         try:
             channel_id = event.data["channel"]["id"]
+            set_correlation_id(channel_id)
             call_data = self.state_machine.get_call_by_channel(channel_id)
             
             if call_data:
@@ -216,6 +229,7 @@ class CallControllerService:
         """Handle DTMF input"""
         try:
             channel_id = event.data["channel"]["id"]
+            set_correlation_id(channel_id)
             digit = event.data["digit"]
             
             call_data = self.state_machine.get_call_by_channel(channel_id)
@@ -237,6 +251,7 @@ class CallControllerService:
         """Handle playback started event"""
         try:
             channel_id = event.data["playback"]["target_uri"].split(":")[1]
+            set_correlation_id(channel_id)
             call_data = self.state_machine.get_call_by_channel(channel_id)
             
             if call_data and call_data.state == CallState.LISTENING:
@@ -250,6 +265,7 @@ class CallControllerService:
         """Handle playback finished event"""
         try:
             channel_id = event.data["playback"]["target_uri"].split(":")[1]
+            set_correlation_id(channel_id)
             call_data = self.state_machine.get_call_by_channel(channel_id)
             
             if call_data and call_data.state == CallState.SPEAKING:
@@ -263,7 +279,13 @@ class CallControllerService:
     
     async def _handle_call_control(self, channel: str, message_data: dict):
         """Handle call control messages from Redis"""
+        if channel == "barge_in:detected":
+            await self._handle_barge_in(message_data)
+            return
+
         try:
+            channel_id = message_data.get("channel_id")
+            set_correlation_id(channel_id)
             action = message_data.get("action")
             call_id = message_data.get("call_id")
             
@@ -291,7 +313,25 @@ class CallControllerService:
             
         except Exception as e:
             logger.error(f"Error handling call control: {e}")
-    
+
+    async def _handle_barge_in(self, message_data: dict):
+        """Handle barge-in events from Redis"""
+        try:
+            channel_id = message_data.get("channel_id")
+            if not channel_id:
+                return
+
+            set_correlation_id(channel_id)
+            call_data = self.state_machine.get_call_by_channel(channel_id)
+            
+            if call_data and call_data.state == CallState.SPEAKING:
+                logger.info("Barge-in detected, stopping playback", call_id=call_data.call_id)
+                await self.ari_client.stop_media(call_data.channel_id)
+                self.state_machine.transition_call(call_data.call_id, CallState.LISTENING)
+        
+        except Exception as e:
+            logger.error("Error handling barge-in", exc_info=True)
+
     # State Machine Handlers
     
     async def _handle_call_answered(self, call_data: CallData):

@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable, Dict, List, Optional, Any
 from collections import deque
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -347,7 +348,7 @@ class BargeInDetector:
                 'metadata': event.metadata
             }
             
-            await self.redis_client.publish("calls:control:play", message)
+            await self.redis_client.publish("barge_in:detected", json.dumps(message))
             logger.debug(f"Published barge-in event: {event.event_id}")
             
         except Exception as e:

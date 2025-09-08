@@ -78,17 +78,20 @@ services:
     env_file:
       - .env
 
-  # STT Service
   stt_service:
-    build:
-      context: .
-      dockerfile: services/stt_service/Dockerfile
-    container_name: asterisk-ai-voice-agent-stt
+    build: ./services/stt_service
+    restart: unless-stopped
     ports:
-      - "18001:8001"  # Health check endpoint
-      - "5004:5004/udp"  # RTP stream reception
+      - "18001:8001"
+      - "5004:5004/udp"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
     environment:
-      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      - REDIS_URL=redis://redis:6379
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
@@ -110,16 +113,19 @@ services:
     env_file:
       - .env
 
-  # LLM Service
   llm_service:
-    build:
-      context: .
-      dockerfile: services/llm_service/Dockerfile
-    container_name: asterisk-ai-voice-agent-llm
+    build: ./services/llm_service
+    restart: unless-stopped
     ports:
-      - "18002:8002"  # Health check endpoint
+      - "18002:8002"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
     environment:
-      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      - REDIS_URL=redis://redis:6379
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - FALLBACK_LLM_MODEL=${FALLBACK_LLM_MODEL:-gpt-3.5-turbo}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
@@ -140,16 +146,19 @@ services:
     env_file:
       - .env
 
-  # TTS Service
   tts_service:
-    build:
-      context: .
-      dockerfile: services/tts_service/Dockerfile
-    container_name: asterisk-ai-voice-agent-tts
+    build: ./services/tts_service
+    restart: unless-stopped
     ports:
-      - "18003:8003"  # Health check endpoint
+      - "18003:8003"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
     environment:
-      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      - REDIS_URL=redis://redis:6379
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
     volumes:

@@ -18,6 +18,7 @@ from typing import Any, Callable, Dict, List, Optional, Union
 import aiohttp
 import websockets
 from websockets.exceptions import ConnectionClosed, WebSocketException
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 logger = logging.getLogger(__name__)
 
@@ -151,6 +152,11 @@ class RealtimeClient:
             RealtimeMessageType.ERROR: self._handle_error
         }
     
+    @retry(
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        stop=stop_after_attempt(3),
+        retry=retry_if_exception_type(Exception)
+    )
     async def connect(self) -> bool:
         """Connect to OpenAI Realtime API."""
         uri = f"wss://api.openai.com/v1/realtime?model={self.config.model}&language={self.config.language}"

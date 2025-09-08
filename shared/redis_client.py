@@ -15,6 +15,8 @@ from redis.asyncio import Redis, ConnectionPool
 from pydantic import BaseModel, Field
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
+from shared.circuit_breaker import CircuitBreaker, CircuitBreakerError
+
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +99,11 @@ class RedisMessageQueue:
         self.subscribers: Dict[str, List[Callable]] = {}
         self._running = False
         
+        # Circuit breakers
+        self.publish_breaker = CircuitBreaker(fail_max=3, reset_timeout=30, name="redis_publish")
+        self.subscribe_breaker = CircuitBreaker(fail_max=3, reset_timeout=30, name="redis_subscribe")
+        self._health_check_task: Optional[asyncio.Task] = None
+        
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=4, max=10),
@@ -145,19 +152,22 @@ class RedisMessageQueue:
         if not self.redis:
             raise RuntimeError("Redis not connected")
         
-        try:
-            # Serialize message to JSON
-            message_data = message.model_dump_json()
-            
-            # Publish to Redis
-            subscribers = await self.redis.publish(channel, message_data)
-            logger.debug(f"Published message to {channel}, {subscribers} subscribers")
-            
-            return subscribers
-            
-        except Exception as e:
-            logger.error(f"Failed to publish message to {channel}: {e}")
-            raise
+        async def do_publish():
+            try:
+                # Serialize message to JSON
+                message_data = message.model_dump_json()
+                
+                # Publish to Redis
+                subscribers = await self.redis.publish(channel, message_data)
+                logger.debug(f"Published message to {channel}, {subscribers} subscribers")
+                
+                return subscribers
+                
+            except Exception as e:
+                logger.error(f"Failed to publish message to {channel}: {e}")
+                raise
+
+        return await self.publish_breaker.call_async(do_publish)
     
     async def subscribe(self, channels: List[str], message_handler: Callable):
         """
@@ -170,16 +180,19 @@ class RedisMessageQueue:
         if not self.redis:
             raise RuntimeError("Redis not connected")
         
-        self.pubsub = self.redis.pubsub()
-        await self.pubsub.subscribe(*channels)
-        
-        # Store subscribers for cleanup
-        for channel in channels:
-            if channel not in self.subscribers:
-                self.subscribers[channel] = []
-            self.subscribers[channel].append(message_handler)
-        
-        logger.info(f"Subscribed to channels: {channels}")
+        async def do_subscribe():
+            self.pubsub = self.redis.pubsub()
+            await self.pubsub.subscribe(*channels)
+            
+            # Store subscribers for cleanup
+            for channel in channels:
+                if channel not in self.subscribers:
+                    self.subscribers[channel] = []
+                self.subscribers[channel].append(message_handler)
+            
+            logger.info(f"Subscribed to channels: {channels}")
+
+        await self.subscribe_breaker.call_async(do_subscribe)
     
     async def start_listening(self):
         """Start listening for messages on subscribed channels"""
@@ -189,6 +202,9 @@ class RedisMessageQueue:
         self._running = True
         logger.info("Started listening for messages")
         
+        # Start health check loop
+        self._health_check_task = asyncio.create_task(self._health_check_loop())
+
         try:
             async for message in self.pubsub.listen():
                 if not self._running:
@@ -208,8 +224,36 @@ class RedisMessageQueue:
         self._running = False
         if self.pubsub:
             await self.pubsub.unsubscribe()
+        
+        # Stop health check loop
+        if self._health_check_task:
+            self._health_check_task.cancel()
+            try:
+                await self._health_check_task
+            except asyncio.CancelledError:
+                pass
+
         logger.info("Stopped listening for messages")
     
+    async def _health_check_loop(self):
+        """Periodically check Redis connection and reconnect if necessary."""
+        while self._running:
+            await asyncio.sleep(30) # Check every 30 seconds
+            is_healthy = await self.health_check()
+            if not is_healthy:
+                logger.warning("Redis connection lost. Attempting to reconnect...")
+                try:
+                    await self.connect()
+                    # Re-subscribe to channels
+                    if self.subscribers:
+                        channels = list(self.subscribers.keys())
+                        # This is a simplified re-subscription. A more robust
+                        # implementation would re-apply the original handlers.
+                        await self.pubsub.subscribe(*channels)
+                        logger.info(f"Re-subscribed to channels: {channels}")
+                except Exception as e:
+                    logger.error(f"Failed to reconnect to Redis: {e}")
+
     async def _handle_message(self, message: Dict[str, Any]):
         """Handle incoming message from Redis"""
         try:

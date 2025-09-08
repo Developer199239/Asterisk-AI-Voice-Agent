@@ -14,6 +14,7 @@ from enum import Enum
 
 import openai
 from openai import AsyncOpenAI
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +106,23 @@ class OpenAIClient:
         # Response tracking
         self._response_times: List[float] = []
     
+    @retry(
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        stop=stop_after_attempt(3),
+        retry=retry_if_exception_type((openai.APIConnectionError, openai.RateLimitError, openai.APIStatusError))
+    )
+    async def _create_completion_with_retry(self, model, messages, stream):
+        return await self.client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=self.config.temperature,
+            max_tokens=self.config.max_tokens,
+            top_p=self.config.top_p,
+            frequency_penalty=self.config.frequency_penalty,
+            presence_penalty=self.config.presence_penalty,
+            stream=stream
+        )
+
     async def generate_response(self, messages: List[Dict[str, str]], 
                               model: Optional[ModelType] = None,
                               stream: bool = None) -> LLMResponse:
@@ -198,14 +216,9 @@ class OpenAIClient:
                     content = "".join(content_parts)
                 else:
                     # Non-streaming response
-                    response = await self.client.chat.completions.create(
+                    response = await self._create_completion_with_retry(
                         model=current_model.value,
                         messages=messages,
-                        temperature=self.config.temperature,
-                        max_tokens=self.config.max_tokens,
-                        top_p=self.config.top_p,
-                        frequency_penalty=self.config.frequency_penalty,
-                        presence_penalty=self.config.presence_penalty,
                         stream=False
                     )
                     
@@ -254,14 +267,9 @@ class OpenAIClient:
         
         for attempt, current_model in enumerate(models_to_try):
             try:
-                response = await self.client.chat.completions.create(
+                response = await self._create_completion_with_retry(
                     model=current_model.value,
                     messages=messages,
-                    temperature=self.config.temperature,
-                    max_tokens=self.config.max_tokens,
-                    top_p=self.config.top_p,
-                    frequency_penalty=self.config.frequency_penalty,
-                    presence_penalty=self.config.presence_penalty,
                     stream=True
                 )
                 
@@ -300,10 +308,10 @@ class OpenAIClient:
     async def test_connection(self) -> bool:
         """Test the OpenAI API connection."""
         try:
-            response = await self.client.chat.completions.create(
+            response = await self._create_completion_with_retry(
                 model=self.config.primary_model.value,
                 messages=[{"role": "user", "content": "Hello"}],
-                max_tokens=10
+                stream=False
             )
             
             logger.info("OpenAI API connection test successful")

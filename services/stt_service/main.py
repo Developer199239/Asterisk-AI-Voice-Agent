@@ -10,7 +10,14 @@ import logging
 import sys
 import time
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, Optional
+
+import structlog
+
+from shared.logging_config import setup_logging
+from shared.config import load_config, STTServiceConfig
+from shared.health_check import create_health_check_app
+import uvicorn
 
 # Add shared modules to path
 sys.path.append(str(Path(__file__).parent.parent.parent / "shared"))
@@ -25,12 +32,11 @@ from realtime_client import RealtimeClient, RealtimeConfig, VoiceType
 from transcription_publisher import TranscriptionPublisher, TranscriptionMessage
 from barge_in_detector import BargeInDetector, BargeInConfig, BargeInEvent
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+# Load configuration and set up logging
+config = load_config("stt_service")
+setup_logging(log_level=config.log_level)
+
+logger = structlog.get_logger(__name__)
 
 class STTService:
     def __init__(self):
@@ -121,6 +127,9 @@ class STTService:
             # Start listening for messages
             await self.redis_client.start_listening()
             
+            # Start health check server in a background task
+            health_check_task = asyncio.create_task(self._start_health_check_server())
+
             # Main service loop
             while self.running:
                 try:
@@ -132,9 +141,22 @@ class STTService:
             logger.error(f"Failed to start STT service: {e}")
             raise
 
+    async def _start_health_check_server(self):
+        """Start the health check server."""
+        dependency_checks = [
+            ("redis", self.redis_client.health_check),
+            ("realtime_api", self.realtime_client.test_connection),
+        ]
+        app = create_health_check_app("stt_service", dependency_checks)
+        
+        config = uvicorn.Config(app, host="0.0.0.0", port=8001, log_level="info") # Assuming port 8001 for stt
+        server = uvicorn.Server(config)
+        await server.serve()
+
     async def _handle_new_call(self, channel: str, message: dict):
         """Handle new call events"""
         try:
+            # set_correlation_id(message.get('channel_id')) # This line is removed as per new_code
             logger.info(f"Received new call on {channel}: {message}")
             
             # Extract channel ID from message
@@ -311,10 +333,27 @@ class STTService:
         """Handle STT errors"""
         try:
             logger.error(f"STT Error: {error_msg} - {exception}")
-            # Additional error handling can be added here
+            # Get channel_id and ssrc from exception if possible, or from context
+            # This part is tricky as the error source might not have this context directly.
+            # For now, we'll call the fallback without specific channel info.
+            # A more robust solution would involve passing context with the error.
+            await self._handle_stt_fallback()
             
         except Exception as e:
             logger.error(f"Error handling STT error: {e}")
+
+    async def _handle_stt_fallback(self, channel_id: Optional[str] = None, ssrc: Optional[int] = None):
+        """Handle STT failure by publishing a fallback message."""
+        logger.warning(f"STT failure for channel_id: {channel_id}, ssrc: {ssrc}. Publishing fallback message.")
+        try:
+            await self.transcription_publisher.publish_error(
+                error_message="I didn't catch that, could you please repeat?",
+                channel_id=channel_id,
+                ssrc=ssrc,
+                metadata={'fallback_type': 'stt_failure'}
+            )
+        except Exception as e:
+            logger.error(f"Failed to publish STT fallback message: {e}")
 
     async def stop(self):
         """Stop the STT service"""

@@ -123,6 +123,8 @@ class RTPSTTHandler:
         except Exception as e:
             logger.error(f"Error starting RTP STT handler: {e}")
             self.state = STTState.ERROR
+            if self.config.on_error:
+                self.config.on_error("Failed to start STT handler", e)
             return False
     
     async def stop(self) -> bool:
@@ -186,6 +188,8 @@ class RTPSTTHandler:
         except Exception as e:
             logger.error(f"Error processing RTP audio: {e}")
             self.stats['errors'] += 1
+            if self.config.on_error:
+                self.config.on_error("Error processing RTP audio", e)
             return False
     
     async def _process_audio_chunk(self, chunk, stream_info: Dict[str, Any]):
@@ -218,6 +222,8 @@ class RTPSTTHandler:
         except Exception as e:
             logger.error(f"Error processing audio chunk: {e}")
             self.stats['errors'] += 1
+            if self.config.on_error:
+                self.config.on_error("Error processing audio chunk", e)
     
     async def process_speech_segment(self, segment: SpeechSegment, stream_info: Dict[str, Any]) -> bool:
         """Process a complete speech segment for STT."""
@@ -251,6 +257,8 @@ class RTPSTTHandler:
         except Exception as e:
             logger.error(f"Error processing speech segment: {e}")
             self.stats['errors'] += 1
+            if self.config.on_error:
+                self.config.on_error("Error processing speech segment", e)
             return False
     
     async def _process_audio_buffer(self):
@@ -289,6 +297,8 @@ class RTPSTTHandler:
         except Exception as e:
             logger.error(f"Error processing audio buffer: {e}")
             self.stats['errors'] += 1
+            if self.config.on_error:
+                self.config.on_error("Error processing audio buffer", e)
     
     async def _process_audio_segment(self, audio_data: bytes, segment: SpeechSegment, stream_info: Dict[str, Any]) -> bool:
         """Process a complete audio segment."""
@@ -315,6 +325,8 @@ class RTPSTTHandler:
         except Exception as e:
             logger.error(f"Error processing audio segment: {e}")
             self.stats['errors'] += 1
+            if self.config.on_error:
+                self.config.on_error("Error processing audio segment", e)
             return False
     
     async def _convert_audio_format(self, audio_data: bytes, stream_info: Dict[str, Any]) -> Optional[bytes]:
@@ -335,6 +347,8 @@ class RTPSTTHandler:
             
         except Exception as e:
             logger.error(f"Error converting audio format: {e}")
+            if self.config.on_error:
+                self.config.on_error("Error converting audio format", e)
             return None
     
     def get_stats(self) -> Dict[str, Any]:

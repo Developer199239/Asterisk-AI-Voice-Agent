@@ -10,19 +10,23 @@ import logging
 import os
 import sys
 from pathlib import Path
+import structlog
+from typing import Dict, Any
+
+from shared.health_check import create_health_check_app
+import uvicorn
 
 # Add shared modules to path
 sys.path.append(str(Path(__file__).parent.parent.parent / "shared"))
 
-from config import CallControllerConfig
-from llm_service import LLMService, LLMServiceConfig
+from shared.logging_config import setup_logging
+from shared.config import load_config, LLMServiceConfig
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+# Load configuration and set up logging
+config = load_config("llm_service")
+setup_logging(log_level=config.log_level)
+
+logger = structlog.get_logger(__name__)
 
 
 async def main():
