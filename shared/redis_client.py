@@ -192,7 +192,7 @@ class RedisMessageQueue:
             
             logger.info(f"Subscribed to channels: {channels}")
 
-        await self.subscribe_breaker.call_async(do_subscribe)
+        await do_subscribe()
     
     async def start_listening(self):
         """Start listening for messages on subscribed channels"""
