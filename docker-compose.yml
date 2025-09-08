@@ -38,7 +38,7 @@ services:
     container_name: asterisk-ai-voice-agent-call-controller
     restart: unless-stopped
     ports:
-      - "5000:5000"
+      - "15000:5000"
     volumes:
       - shared_audio:/shared/audio
       - shared_logs:/shared/logs
