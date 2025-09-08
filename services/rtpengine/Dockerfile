@@ -33,6 +33,9 @@ RUN apt-get update && \
 WORKDIR /src
 RUN git -c http.sslVerify=false clone https://github.com/sipwise/rtpengine.git -b mr10.5.1.1 rtpengine-src
 
+# List contents for debugging
+RUN ls -l /src/rtpengine-src/debian && ls -l /src/rtpengine-src/debian/flavours
+
 # Build rtpengine
 WORKDIR /src/rtpengine-src
 RUN ./debian/flavours/no_ngcp
