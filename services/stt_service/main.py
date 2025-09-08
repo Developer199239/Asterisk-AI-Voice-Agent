@@ -10,6 +10,7 @@ import logging
 import sys
 import time
 from pathlib import Path
+from typing import Dict, Any
 
 # Add shared modules to path
 sys.path.append(str(Path(__file__).parent.parent.parent / "shared"))

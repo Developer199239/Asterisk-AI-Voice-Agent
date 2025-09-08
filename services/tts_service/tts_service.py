@@ -14,7 +14,7 @@ from dataclasses import dataclass
 
 from redis.asyncio import Redis
 
-from openai_tts_client import OpenAITTSClient, TTSConfig as OpenAITTSConfig, VoiceType
+from openai_tts_client import OpenAITTSClient, TTSConfig as OpenAITTSConfig, VoiceType, AudioFormat
 from audio_file_manager import AudioFileManager, AudioFileConfig, AudioFileInfo
 from asterisk_fallback import AsteriskFallbackHandler, AsteriskFallbackConfig, FallbackMode
 
@@ -86,7 +86,7 @@ class TTSService:
             base_url=self.config.openai_base_url,
             voice=VoiceType(self.config.voice),
             model=self.config.model,
-            audio_format=self.config.audio_format, # Standardize on MP3 for now
+            audio_format=AudioFormat(self.config.audio_format),
             speed=self.config.speed
         )
         self.tts_client = OpenAITTSClient(tts_client_config)
