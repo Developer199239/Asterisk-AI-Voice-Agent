@@ -49,6 +49,12 @@ class ARIClient:
     
     async def connect(self):
         """Connect to Asterisk ARI WebSocket and HTTP API"""
+        if self.websocket:
+            logger.warning("Already connected to ARI WebSocket")
+            return
+
+        ws_url = f"ws://{self.host}:{self.port}/ari/events?api_key={self.username}:{self.password}&app=asterisk-ai-voice-agent"
+        logger.info(f"Connecting to ARI WebSocket at {ws_url}")
         try:
             # Create HTTP session for ARI API calls
             self.http_session = aiohttp.ClientSession(
@@ -60,12 +66,18 @@ class ARIClient:
             await self._test_http_connection()
             
             # Connect to WebSocket
-            await self._connect_websocket()
-            
-            logger.info(f"✅ Connected to Asterisk ARI at {self.host}:{self.port}")
+            self.websocket = await websockets.connect(
+                ws_url,
+                ping_interval=30,
+                ping_timeout=10,
+                close_timeout=10
+            )
+            logger.info("Successfully connected to ARI WebSocket")
             
         except Exception as e:
-            logger.error(f"❌ Failed to connect to ARI: {e}")
+            logger.error("ARI WebSocket connection failed", error=str(e), exc_info=True)
+            if self.http_session:
+                await self.http_session.close()
             raise
     
     async def disconnect(self):
