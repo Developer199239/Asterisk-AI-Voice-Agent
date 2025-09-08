@@ -69,26 +69,6 @@ class TTSService:
         self.redis_client: Optional[Redis] = None
         
         # Initialize components
-        self.tts_client = OpenAITTSClient(
-            OpenAITTSConfig(
-                api_key=config.openai_api_key,
-                base_url=config.openai_base_url,
-                voice=VoiceType(config.voice),
-                model=config.model,
-                audio_format=config.audio_format,
-                speed=config.speed
-            )
-        )
-        
-        self.file_manager = AudioFileManager(
-            AudioFileConfig(
-                base_directory=config.base_directory,
-                temp_directory=config.temp_directory,
-                file_ttl=config.file_ttl,
-                max_file_size=config.max_file_size
-            )
-        )
-        
         self.fallback_handler = AsteriskFallbackHandler(
             AsteriskFallbackConfig(
                 enabled=config.enable_fallback,
@@ -97,6 +77,26 @@ class TTSService:
                 asterisk_port=config.asterisk_port,
                 ari_username=config.ari_username,
                 ari_password=config.ari_password
+            )
+        )
+        
+        # Initialize OpenAI TTS client
+        tts_client_config = OpenAITTSConfig(
+            api_key=self.config.openai_api_key,
+            base_url=self.config.openai_base_url,
+            voice=VoiceType(self.config.voice),
+            model=self.config.model,
+            audio_format=self.config.audio_format, # Standardize on MP3 for now
+            speed=self.config.speed
+        )
+        self.tts_client = OpenAITTSClient(tts_client_config)
+        
+        self.file_manager = AudioFileManager(
+            AudioFileConfig(
+                base_directory=config.base_directory,
+                temp_directory=config.temp_directory,
+                file_ttl=config.file_ttl,
+                max_file_size=config.max_file_size
             )
         )
         
@@ -572,3 +572,4 @@ class TTSService:
         if success:
             self.stats['audio_files_deleted'] += 1
         return success
+

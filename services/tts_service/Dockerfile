@@ -21,6 +21,7 @@ COPY services/tts_service/ /app/
 # Install Python dependencies
 COPY requirements.txt /app/
 RUN pip install --no-cache-dir -r requirements.txt
+RUN apt-get update && apt-get install -y ffmpeg
 
 # Create shared directories
 RUN mkdir -p /shared/audio /shared/logs

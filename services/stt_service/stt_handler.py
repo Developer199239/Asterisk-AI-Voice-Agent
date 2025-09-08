@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Union
 
-from .realtime_client import RealtimeClient, RealtimeConfig, VoiceType
+from realtime_client import RealtimeClient, RealtimeConfig, VoiceType
 
 logger = logging.getLogger(__name__)
 

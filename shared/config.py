@@ -114,7 +114,7 @@ class CallControllerConfig(AsteriskConfig, RTPEngineConfig, AIProviderConfig):
     
     # Service-specific settings
     service_name: str = "call_controller"
-    health_check_port: int = 15000
+    health_check_port: int = 16000
     
     # Call handling settings
     max_concurrent_calls: int = Field(
