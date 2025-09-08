@@ -9,8 +9,9 @@ import asyncio
 import logging
 import struct
 import time
+import audioop
 from dataclasses import dataclass
-from typing import Dict, Optional, Callable, Any
+from typing import Dict, Optional, Callable, Any, List, Tuple
 from enum import Enum
 
 logger = logging.getLogger(__name__)
@@ -38,7 +39,129 @@ class RTPPacket:
     timestamp: int
     ssrc: int
     payload: bytes
-    header_length: int = 12
+    csrc_list: List[int] = None
+    extension_header: Optional[bytes] = None
+    
+    def __post_init__(self):
+        if self.csrc_list is None:
+            self.csrc_list = []
+    
+    @property
+    def header_length(self) -> int:
+        """Calculate total header length including CSRC and extension."""
+        length = 12  # Basic header
+        length += self.csrc_count * 4  # CSRC list
+        if self.extension:
+            length += 4  # Extension header length field
+            if self.extension_header:
+                length += len(self.extension_header)
+        return length
+    
+    def get_audio_samples(self, sample_rate: int = 8000) -> Optional[bytes]:
+        """Extract and decode audio samples from RTP payload."""
+        try:
+            payload_type = RTPPayloadType(self.payload_type)
+            
+            if payload_type == RTPPayloadType.PCMU:
+                # G.711 μ-law to linear PCM
+                return audioop.ulaw2lin(self.payload, 2)
+            elif payload_type == RTPPayloadType.PCMA:
+                # G.711 A-law to linear PCM
+                return audioop.alaw2lin(self.payload, 2)
+            elif payload_type == RTPPayloadType.G722:
+                # G.722 - return as-is (already 16-bit PCM)
+                return self.payload
+            else:
+                logger.warning(f"Unsupported payload type: {self.payload_type}")
+                return None
+                
+        except ValueError:
+            logger.warning(f"Unknown payload type: {self.payload_type}")
+            return None
+        except Exception as e:
+            logger.error(f"Error decoding audio: {e}")
+            return None
+    
+    @staticmethod
+    def parse_rtp_packet(data: bytes) -> Optional['RTPPacket']:
+        """Parse RTP packet from raw bytes with full header support."""
+        if len(data) < 12:
+            logger.warning("RTP packet too short")
+            return None
+            
+        try:
+            # Parse basic RTP header (first 12 bytes)
+            header = struct.unpack('!BBHII', data[:12])
+            
+            version = (header[0] >> 6) & 0x3
+            padding = bool((header[0] >> 5) & 0x1)
+            extension = bool((header[0] >> 4) & 0x1)
+            csrc_count = header[0] & 0xF
+            
+            marker = bool((header[1] >> 7) & 0x1)
+            payload_type = header[1] & 0x7F
+            
+            sequence_number = header[2]
+            timestamp = header[3]
+            ssrc = header[4]
+            
+            # Calculate header length
+            header_length = 12 + (csrc_count * 4)
+            
+            # Parse CSRC list if present
+            csrc_list = []
+            if csrc_count > 0:
+                csrc_data = data[12:header_length]
+                csrc_list = list(struct.unpack(f'!{csrc_count}I', csrc_data))
+            
+            # Parse extension header if present
+            extension_header = None
+            if extension:
+                if len(data) < header_length + 4:
+                    logger.warning("RTP packet too short for extension header")
+                    return None
+                
+                # Extension header: 16-bit length field, then extension data
+                ext_length = struct.unpack('!H', data[header_length:header_length + 2])[0]
+                ext_length *= 4  # Length is in 32-bit words
+                
+                if len(data) < header_length + 4 + ext_length:
+                    logger.warning("RTP packet too short for extension data")
+                    return None
+                
+                extension_header = data[header_length + 2:header_length + 2 + ext_length]
+                header_length += 4 + ext_length
+            
+            # Extract payload
+            payload = data[header_length:]
+            
+            # Remove padding if present
+            if padding and len(payload) > 0:
+                padding_length = payload[-1]
+                if padding_length > 0 and padding_length <= len(payload):
+                    payload = payload[:-padding_length]
+            
+            return RTPPacket(
+                version=version,
+                padding=padding,
+                extension=extension,
+                csrc_count=csrc_count,
+                marker=marker,
+                payload_type=payload_type,
+                sequence_number=sequence_number,
+                timestamp=timestamp,
+                ssrc=ssrc,
+                payload=payload,
+                csrc_list=csrc_list,
+                extension_header=extension_header
+            )
+            
+        except struct.error as e:
+            logger.error(f"Error parsing RTP packet: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error parsing RTP packet: {e}")
+            return None
 
 
 @dataclass
@@ -125,16 +248,31 @@ class RTPStreamHandler:
             
             self.last_timestamp = packet.timestamp
             
-            # Add payload to buffer
-            self.audio_buffer.extend(packet.payload)
-            
-            # Process audio data if we have enough
-            if len(self.audio_buffer) >= 320:  # 20ms of 8kHz audio
-                audio_data = bytes(self.audio_buffer)
-                self.audio_buffer.clear()
+            # Extract and decode audio samples
+            audio_samples = packet.get_audio_samples(self.info.sample_rate)
+            if audio_samples:
+                # Add decoded audio to buffer
+                self.audio_buffer.extend(audio_samples)
                 
-                # Call audio data handler
-                self.on_audio_data(audio_data, self.info)
+                # Process audio data if we have enough (20ms worth)
+                samples_per_20ms = (self.info.sample_rate * 2) // 50  # 2 bytes per sample
+                if len(self.audio_buffer) >= samples_per_20ms:
+                    audio_data = bytes(self.audio_buffer[:samples_per_20ms])
+                    self.audio_buffer = self.audio_buffer[samples_per_20ms:]
+                    
+                    # Call audio data handler
+                    self.on_audio_data(audio_data, self.info)
+            else:
+                # Fallback: add raw payload to buffer
+                self.audio_buffer.extend(packet.payload)
+                
+                # Process raw audio data if we have enough
+                if len(self.audio_buffer) >= 320:  # 20ms of 8kHz audio
+                    audio_data = bytes(self.audio_buffer)
+                    self.audio_buffer.clear()
+                    
+                    # Call audio data handler
+                    self.on_audio_data(audio_data, self.info)
             
             return True
             
@@ -186,61 +324,8 @@ class RTPUDPServer(asyncio.DatagramProtocol):
             self.logger.error(f"Error processing datagram from {addr}: {e}")
     
     def _parse_rtp_packet(self, data: bytes) -> Optional[RTPPacket]:
-        """Parse RTP packet from raw data."""
-        try:
-            if len(data) < 12:
-                self.logger.warning("RTP packet too short")
-                return None
-            
-            # Parse RTP header (first 12 bytes)
-            header = struct.unpack('!BBHII', data[:12])
-            
-            # Extract fields
-            version = (header[0] >> 6) & 0x3
-            padding = bool((header[0] >> 5) & 0x1)
-            extension = bool((header[0] >> 4) & 0x1)
-            csrc_count = header[0] & 0xF
-            marker = bool((header[1] >> 7) & 0x1)
-            payload_type = header[1] & 0x7F
-            sequence_number = header[2]
-            timestamp = header[3]
-            ssrc = header[4]
-            
-            # Calculate header length
-            header_length = 12 + (csrc_count * 4)
-            if extension:
-                # Extension header present
-                if len(data) < header_length + 4:
-                    self.logger.warning("RTP packet too short for extension")
-                    return None
-                ext_header = struct.unpack('!HH', data[header_length:header_length + 4])
-                ext_length = ext_header[1] * 4
-                header_length += 4 + ext_length
-            
-            # Extract payload
-            if len(data) <= header_length:
-                self.logger.warning("RTP packet has no payload")
-                return None
-            
-            payload = data[header_length:]
-            
-            return RTPPacket(
-                version=version,
-                padding=padding,
-                extension=extension,
-                csrc_count=csrc_count,
-                marker=marker,
-                payload_type=payload_type,
-                sequence_number=sequence_number,
-                timestamp=timestamp,
-                ssrc=ssrc,
-                payload=payload,
-                header_length=header_length
-            )
-            
-        except Exception as e:
-            self.logger.error(f"Error parsing RTP packet: {e}")
-            return None
+        """Parse RTP packet from raw data using the static method."""
+        return RTPPacket.parse_rtp_packet(data)
     
     def error_received(self, exc):
         """Called when an error occurs."""
