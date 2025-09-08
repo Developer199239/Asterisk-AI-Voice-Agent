@@ -184,9 +184,7 @@ class OpenAITTSClient:
                 )
                 
                 # Read audio data
-                audio_data = b""
-                async for chunk in response.iter_bytes():
-                    audio_data += chunk
+                audio_data = await response.read()
                 
                 response_time_ms = int((time.time() - start_time) * 1000)
                 
@@ -228,9 +226,7 @@ class OpenAITTSClient:
             )
             
             # Read the response to ensure it's valid
-            audio_data = b""
-            async for chunk in response.iter_bytes():
-                audio_data += chunk
+            audio_data = await response.read()
             
             if len(audio_data) > 0:
                 logger.info("OpenAI TTS API connection test successful")

@@ -21,7 +21,7 @@ from rtp_handler import RTPStreamManager, RTPStreamInfo
 from vad_handler import SpeechSegment
 from rtp_stt_handler import RTPSTTHandler, RTPSTTConfig
 from channel_correlation import ChannelCorrelationManager
-from realtime_client import RealtimeClient, RealtimeConfig
+from realtime_client import RealtimeClient, RealtimeConfig, VoiceType
 from transcription_publisher import TranscriptionPublisher, TranscriptionMessage
 from barge_in_detector import BargeInDetector, BargeInConfig, BargeInEvent
 
