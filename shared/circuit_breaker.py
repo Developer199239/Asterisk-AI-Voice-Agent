@@ -25,36 +25,27 @@ class CircuitBreaker:
         return self._breaker.call(func, *args, **kwargs)
 
     async def call_async(self, func, *args, **kwargs):
-        """
-        Execute an async function within the circuit breaker, avoiding the
-        problematic @gen.coroutine decorator in pybreaker.
-        """
-        if self._breaker.current_state == "open":
-            raise CircuitBreakerError("Circuit Breaker is open")
-        
-        try:
-            result = await func(*args, **kwargs)
-            self._breaker.success()
-            return result
-        except Exception as e:
-            self._breaker.fail()
-            raise e
+        """Execute an async function within the circuit breaker."""
+        return await self._breaker.call_async(func, *args, **kwargs)
 
     def decorate(self, func):
         """Decorate a function with this circuit breaker."""
-        return self._breaker.decorate(func)
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            try:
+                return self.call(func, *args, **kwargs)
+            except CircuitBreakerError as e:
+                logger.error(f"Circuit breaker '{self._breaker.name}' is open: {e}")
+                raise
+        return wrapper
         
     def decorate_async(self, func):
         """Decorate an async function with the circuit breaker."""
         @wraps(func)
-        async def async_wrapper(*args, **kwargs):
+        async def wrapper(*args, **kwargs):
             try:
                 return await self.call_async(func, *args, **kwargs)
             except CircuitBreakerError as e:
                 logger.error(f"Circuit breaker '{self._breaker.name}' is open: {e}")
                 raise
-        return async_wrapper
-
-    @property
-    def state(self):
-        return self._breaker.current_state
+        return wrapper
