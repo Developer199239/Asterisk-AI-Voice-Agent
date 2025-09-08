@@ -37,6 +37,8 @@ services:
       dockerfile: services/call_controller/Dockerfile
     container_name: asterisk-ai-voice-agent-call-controller
     restart: unless-stopped
+    env_file:
+      - .env
     ports:
       - "15000:5000"
     volumes:
@@ -47,13 +49,11 @@ services:
         condition: service_healthy
       rtpengine:
         condition: service_started
-    networks:
-      - ai-voice-network
-    env_file:
-      - .env
     environment:
       - DOCKER_BUILDKIT=1
       - PYTHONPATH=/app
+    networks:
+      - ai-voice-network
 
   stt_service:
     build:
@@ -69,24 +69,23 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
-    environment:
-      - REDIS_URL=redis://redis:6379
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
     volumes:
       - shared_audio:/shared/audio
       - shared_logs:/shared/logs
     depends_on:
       redis:
         condition: service_healthy
+    environment:
+      - DOCKER_BUILDKIT=1
+      - PYTHONPATH=/app
+      - REDIS_URL=redis://redis:6379
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
     networks:
       - ai-voice-network
     env_file:
       - .env
-    environment:
-      - DOCKER_BUILDKIT=1
-      - PYTHONPATH=/app
 
   llm_service:
     build:
@@ -101,23 +100,22 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
-    environment:
-      - REDIS_URL=redis://redis:6379
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - FALLBACK_LLM_MODEL=${FALLBACK_LLM_MODEL:-gpt-3.5-turbo}
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
     volumes:
       - shared_logs:/shared/logs
     depends_on:
       redis:
         condition: service_healthy
+    environment:
+      - DOCKER_BUILDKIT=1
+      - PYTHONPATH=/app
+      - REDIS_URL=redis://redis:6379
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - FALLBACK_LLM_MODEL=${FALLBACK_LLM_MODEL:-gpt-3.5-turbo}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
     networks:
       - ai-voice-network
     env_file:
       - .env
-    environment:
-      - DOCKER_BUILDKIT=1
-      - PYTHONPATH=/app
 
   tts_service:
     build:
@@ -132,23 +130,22 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
-    environment:
-      - REDIS_URL=redis://redis:6379
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
     volumes:
       - shared_audio:/shared/audio
       - shared_logs:/shared/logs
     depends_on:
       redis:
         condition: service_healthy
+    environment:
+      - DOCKER_BUILDKIT=1
+      - PYTHONPATH=/app
+      - REDIS_URL=redis://redis:6379
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
     networks:
       - ai-voice-network
     env_file:
       - .env
-    environment:
-      - DOCKER_BUILDKIT=1
-      - PYTHONPATH=/app
 
 volumes:
   redis_data:
