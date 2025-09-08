@@ -26,11 +26,19 @@ class CircuitBreaker:
 
     async def call_async(self, func, *args, **kwargs):
         """
-        Execute an async function within the circuit breaker using a
-        context manager to bypass the buggy native call_async.
+        Manually implement the circuit breaker logic for async functions
+        to bypass issues in pybreaker < 2.0.
         """
-        with self._breaker:
-            return await func(*args, **kwargs)
+        if self._breaker.current_state == "open":
+            raise CircuitBreakerError("Circuit Breaker is open")
+        
+        try:
+            result = await func(*args, **kwargs)
+            self._breaker.success()
+            return result
+        except Exception as e:
+            self._breaker.fail()
+            raise
 
     def decorate(self, func):
         """Decorate a function with this circuit breaker."""
