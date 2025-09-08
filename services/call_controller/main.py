@@ -32,7 +32,7 @@ from services.call_controller.mediasoup_client import MediasoupClient
 from services.call_controller.ari_client import ARIClient
 from services.call_controller.call_state_machine import CallStateMachine, CallState
 from services.call_controller.models import ARIEvent
-from services.call_controller.mediasoup_client import MediasoupClient
+from services.call_controller.rtpengine_client import RTPEngineClient
 from shared.config import CallControllerConfig
 from shared.logging_config import setup_logging
 from shared.redis_client import RedisMessageQueue
@@ -49,12 +49,13 @@ logger = structlog.get_logger(__name__)
 class CallControllerService:
     """Main call controller service"""
     
-    def __init__(self):
-        self.config: Optional[CallControllerConfig] = None
-        self.ari_client: Optional[ARIClient] = None
-        self.rtpengine_client: Optional[RTPEngineClient] = None
-        self.redis_queue = None
+    def __init__(self, config: CallControllerConfig):
+        self.config = config
         self.state_machine = CallStateMachine()
+        self.redis_client = RedisMessageQueue(config)
+        self.ari_client = ARIClient(config)
+        self.rtpengine_client = RTPEngineClient(config)
+        self.timescale_client = TimescaleClient(config)
         self.running = False
         
     async def start(self):
@@ -64,27 +65,16 @@ class CallControllerService:
             self.config = load_config("call_controller")
             logger.info(f"Loaded configuration for {self.config.service_name}")
             
-            # Initialize Redis message queue
-            self.redis_queue = await get_redis_queue(self.config.redis_url)
-            logger.info("Connected to Redis message queue")
-            
-            # Initialize ARI client
-            self.ari_client = ARIClient(
-                host=self.config.asterisk_host,
-                port=8088,  # Standard ARI port
-                username=self.config.ari_username,
-                password=self.config.ari_password
-            )
-            await self.ari_client.connect()
-            logger.info("Connected to Asterisk ARI")
-            
+            # Initialize Redis client
+            await self.redis_client.connect()
+            logger.info("Connected to Redis")
+
             # Initialize RTPEngine client
-            self.rtpengine_client = RTPEngineClient(
-                host=self.config.rtpengine_host,
-                port=self.config.rtpengine_port
-            )
             await self.rtpengine_client.connect()
             logger.info("Connected to RTPEngine")
+
+            # Initialize TimescaleDB client
+            await self.timescale_client.connect()
             
             # Set up event handlers
             self._setup_ari_handlers()
@@ -99,6 +89,12 @@ class CallControllerService:
             logger.error(f"Failed to start call controller service: {e}")
             await self.stop()
             raise
+        finally:
+            # Clean up resources
+            await self.redis_client.disconnect()
+            await self.ari_client.disconnect()
+            await self.rtpengine_client.disconnect()
+            await self.timescale_client.disconnect()
     
     async def stop(self):
         """Stop the call controller service"""
@@ -114,8 +110,8 @@ class CallControllerService:
             await self.rtpengine_client.disconnect()
         
         # Stop Redis queue
-        if self.redis_queue:
-            await self.redis_queue.disconnect()
+        if self.redis_client:
+            await self.redis_client.disconnect()
         
         logger.info("Call controller service stopped")
     
@@ -130,7 +126,7 @@ class CallControllerService:
     def _setup_redis_handlers(self):
         """Set up Redis message handlers"""
         # Subscribe to call control messages
-        asyncio.create_task(self.redis_queue.subscribe(
+        asyncio.create_task(self.redis_client.subscribe(
             [Channels.CALLS_CONTROL_PLAY, Channels.CALLS_CONTROL_STOP, "barge_in:detected"],
             self._handle_call_control
         ))
@@ -151,13 +147,14 @@ class CallControllerService:
     async def _start_health_check_server(self):
         """Start the health check server."""
         dependency_checks = {
-            "ari": lambda: self.ari_client.health_check(),
-            "redis": lambda: self.redis_queue.health_check(),
-            "rtpengine": lambda: self.rtpengine_client.health_check(),
+            "redis": self.redis_client.ping,
+            "ari": self.ari_client.ping,
+            "rtpengine": self.rtpengine_client.ping,
+            "timescale": self.timescale_client.ping
         }
         app = create_health_check_app("call_controller", dependency_checks)
-        
-        config = uvicorn.Config(app, host="0.0.0.0", port=self.config.health_check_port, log_level="info")
+
+        config = uvicorn.Config(app, host="0.0.0.0", port=5000, log_level="info")
         server = uvicorn.Server(config)
         await server.serve()
 
@@ -166,7 +163,7 @@ class CallControllerService:
         tasks = [
             asyncio.create_task(self._start_health_check_server()),
             asyncio.create_task(self.ari_client.start_listening()),
-            asyncio.create_task(self.redis_queue.start_listening()),
+            asyncio.create_task(self.redis_client.start_listening()),
             asyncio.create_task(self._timeout_checker()),
         ]
         
@@ -198,39 +195,32 @@ class CallControllerService:
             # Create new call
             call_id = self.state_machine.create_call(channel_id, caller_id, caller_name)
 
-            try:
-                # Set up media with Mediasoup
-                rtp_caps = await self.mediasoup_client.get_router_rtp_capabilities()
-                # In a real scenario, you'd negotiate capabilities here
-                
-                transport = await self.mediasoup_client.create_plain_transport()
-                transport_id = transport['id']
-                rtp_info = {
-                    "ip": transport['ip'],
-                    "port": transport['port'],
-                    "rtcpPort": transport.get('rtcpPort'),
-                }
-
-                # Store media info in state machine
-                self.state_machine.update_call_media(call_id, {"transport_id": transport_id, "rtp_info": rtp_info})
-
-                # Answer the call
-                await self.ari_client.answer_channel(channel_id)
-
-                # TODO: Bridge the channel to the mediasoup transport
-                # This requires sending media from Asterisk to mediasoup,
-                # which is a more complex step involving external bridging or custom media handling.
-                # For now, we log that the media transport is ready.
-                logger.info(f"Mediasoup transport ready for call {call_id}", transport_info=rtp_info)
-
-            except Exception as e:
-                logger.error(f"Failed to set up media for call {call_id}", error=str(e))
-                self.state_machine.transition_call(call_id, CallState.ERROR, "mediasoup_setup_failed")
+            # Set up media with RTPEngine
+            rtp_info = await self.rtpengine_client.offer(call_id, event.data["channel"]["dialplan"]["context"])
+            if not rtp_info:
+                logger.error(f"Failed to set up media for call {call_id}")
+                self.state_machine.transition_call(call_id, CallState.ERROR, "rtpengine_offer_failed")
                 await self.ari_client.hangup_channel(channel_id)
                 return
 
+            # Store RTP info in state machine
+            self.state_machine.update_call_media(call_id, rtp_info)
+
+            # Answer the call
+            await self.ari_client.answer_channel(channel_id)
+
             # Publish new call event to Redis
-            await self.redis_queue.publish(Channels.CALLS_NEW, message)
+            await self.redis_client.publish(
+                Channels.CALLS_NEW,
+                CallNewMessage(
+                    call_id=call_id,
+                    channel_id=channel_id,
+                    caller_id=caller_id,
+                    caller_name=caller_name,
+                    state=CallState.RINGING,
+                    media_info=rtp_info
+                )
+            )
             
             logger.info(f"Handled new call {call_id} from {caller_id}")
             
@@ -412,7 +402,7 @@ class CallControllerService:
 
 async def main():
     """Main entry point"""
-    service = CallControllerService()
+    service = CallControllerService(load_config("call_controller"))
     
     # Set up signal handlers
     def signal_handler(signum, frame):

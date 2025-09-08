@@ -79,6 +79,37 @@ class AsteriskConfig(BaseConfig):
         return f"ws://{self.asterisk_host}:{self.asterisk_port}/ari/events?api_key={self.ari_username}:{self.ari_password}"
 
 
+class RTPEngineConfig(BaseSettings):
+    """RTPEngine media proxy configuration"""
+
+    rtpengine_host: str = Field(
+        default="rtpengine",
+        description="RTPEngine server hostname"
+    )
+    rtpengine_port: int = Field(
+        default=2223,
+        description="RTPEngine control port"
+    )
+
+    @property
+    def rtpengine_url(self) -> str:
+        """Generate RTPEngine control URL"""
+        return f"http://{self.rtpengine_host}:{self.rtpengine_port}"
+
+
+class RedisConfig(BaseSettings):
+    """Redis client configuration"""
+
+    redis_url: str = Field(
+        default="redis://redis:6379",
+        description="Redis connection URL for message queue"
+    )
+    request_timeout: int = Field(
+        default=10,
+        description="Timeout for Redis requests in seconds"
+    )
+
+
 class AIProviderConfig(BaseConfig):
     """AI provider configuration"""
     
@@ -108,7 +139,7 @@ class AIProviderConfig(BaseConfig):
         return v
 
 
-class CallControllerConfig(BaseConfig, AsteriskConfig):
+class CallControllerConfig(BaseConfig, RedisConfig, AsteriskConfig, RTPEngineConfig):
     """Call Controller service configuration"""
     
     # Service-specific settings
