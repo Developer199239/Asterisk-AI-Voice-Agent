@@ -21,6 +21,7 @@ from vad_handler import SpeechSegment
 from rtp_stt_handler import RTPSTTHandler, RTPSTTConfig
 from channel_correlation import ChannelCorrelationManager
 from realtime_client import RealtimeClient, RealtimeConfig
+from transcription_publisher import TranscriptionPublisher, TranscriptionMessage
 
 # Configure logging
 logging.basicConfig(
@@ -58,6 +59,9 @@ class STTService:
         
         # Initialize RTP STT handler
         self.rtp_stt_handler = RTPSTTHandler(self.rtp_stt_config, self.realtime_client)
+        
+        # Initialize transcription publisher
+        self.transcription_publisher = TranscriptionPublisher(self.redis_client, self.channel_correlation)
 
     async def start(self):
         """Start the STT service"""
@@ -81,6 +85,10 @@ class STTService:
             if not stt_started:
                 raise Exception("Failed to start RTP STT handler")
             logger.info("RTP STT handler started")
+            
+            # Start transcription publisher
+            await self.transcription_publisher.start()
+            logger.info("Transcription publisher started")
             
             # Start RTP UDP server with VAD support
             rtp_started = await self.rtp_manager.start(
@@ -186,31 +194,45 @@ class STTService:
         try:
             logger.info(f"Transcript received: '{text}' (final: {is_final})")
             
-            # Update channel correlation for transcript activity
-            if metadata and 'ssrc' in metadata:
-                ssrc = metadata['ssrc']
-                channel_info = self.channel_correlation.get_channel_by_ssrc(ssrc)
-                if channel_info:
-                    self.channel_correlation.update_channel_activity(
-                        channel_info.channel_id,
-                        activity_type="transcript",
-                        transcript_text=text,
-                        is_final=is_final
-                    )
+            # Extract channel information
+            channel_id = None
+            ssrc = None
+            if metadata:
+                ssrc = metadata.get('ssrc')
+                if ssrc:
+                    channel_info = self.channel_correlation.get_channel_by_ssrc(ssrc)
+                    if channel_info:
+                        channel_id = channel_info.channel_id
             
-            # Publish transcription to Redis
-            message = {
-                'text': text,
-                'is_final': is_final,
-                'timestamp': time.time(),
-                'metadata': metadata or {}
-            }
+            # Publish transcription using the publisher
+            success = await self.transcription_publisher.publish_transcription(
+                text=text,
+                is_final=is_final,
+                channel_id=channel_id,
+                ssrc=ssrc,
+                confidence=metadata.get('confidence') if metadata else None,
+                language=metadata.get('language') if metadata else None,
+                duration=metadata.get('duration') if metadata else None,
+                metadata=metadata
+            )
             
-            await self.redis_client.publish("stt:transcription:complete", message)
-            logger.info("Published transcription to stt:transcription:complete")
+            if success:
+                logger.info("Published transcription to stt:transcription:complete")
+            else:
+                logger.warning("Failed to publish transcription")
             
         except Exception as e:
             logger.error(f"Error handling transcript: {e}")
+            # Try to publish error message
+            try:
+                await self.transcription_publisher.publish_error(
+                    error_message=f"Error processing transcript: {str(e)}",
+                    channel_id=metadata.get('channel_id') if metadata else None,
+                    ssrc=metadata.get('ssrc') if metadata else None,
+                    metadata={'error': str(e)}
+                )
+            except Exception as publish_error:
+                logger.error(f"Failed to publish error message: {publish_error}")
     
     async def _handle_speech_segment_callback(self, segment: SpeechSegment):
         """Handle speech segment callback from RTP STT handler"""
@@ -241,6 +263,10 @@ class STTService:
         
         # Stop RTP server
         await self.rtp_manager.stop()
+        
+        # Stop transcription publisher
+        await self.transcription_publisher.stop()
+        logger.info("Transcription publisher stopped")
         
         # Stop channel correlation manager
         await self.channel_correlation.stop()
