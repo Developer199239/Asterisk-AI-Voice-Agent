@@ -45,7 +45,7 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-      mediasoup:
+      rtpengine:
         condition: service_started
     networks:
       - ai-voice-network
