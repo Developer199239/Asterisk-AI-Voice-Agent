@@ -35,8 +35,8 @@ services:
   #     interval: 30s
   #     timeout: 10s
   #     retries: 3
-    networks:
-      - ai-voice-network
+  #   networks:
+  #     - ai-voice-network
 
   # Call Controller Service
   call_controller:
