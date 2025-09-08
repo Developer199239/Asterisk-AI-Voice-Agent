@@ -45,7 +45,7 @@ services:
       dockerfile: services/call_controller/Dockerfile
     container_name: asterisk-ai-voice-agent-call-controller
     ports:
-      - "8000:8000"  # Health check endpoint
+      - "18000:8000"  # Health check endpoint
     environment:
       - ASTERISK_HOST=${ASTERISK_HOST:-voiprnd.nemtclouddispatch.com}
       - ASTERISK_VERSION=${ASTERISK_VERSION:-16}
@@ -80,7 +80,7 @@ services:
       dockerfile: services/stt_service/Dockerfile
     container_name: asterisk-ai-voice-agent-stt
     ports:
-      - "8001:8001"  # Health check endpoint
+      - "18001:8001"  # Health check endpoint
       - "5004:5004/udp"  # RTP stream reception
     environment:
       - REDIS_URL=${REDIS_URL:-redis://redis:6379}
@@ -110,7 +110,7 @@ services:
       dockerfile: services/llm_service/Dockerfile
     container_name: asterisk-ai-voice-agent-llm
     ports:
-      - "8002:8002"  # Health check endpoint
+      - "18002:8002"  # Health check endpoint
     environment:
       - REDIS_URL=${REDIS_URL:-redis://redis:6379}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
@@ -138,7 +138,7 @@ services:
       dockerfile: services/tts_service/Dockerfile
     container_name: asterisk-ai-voice-agent-tts
     ports:
-      - "8003:8003"  # Health check endpoint
+      - "18003:8003"  # Health check endpoint
     environment:
       - REDIS_URL=${REDIS_URL:-redis://redis:6379}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
