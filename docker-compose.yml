@@ -79,7 +79,9 @@ services:
       - .env
 
   stt_service:
-    build: ./services/stt_service
+    build:
+      context: .
+      dockerfile: services/stt_service/Dockerfile
     restart: unless-stopped
     ports:
       - "18001:8001"
@@ -107,7 +109,9 @@ services:
       - .env
 
   llm_service:
-    build: ./services/llm_service
+    build:
+      context: .
+      dockerfile: services/llm_service/Dockerfile
     restart: unless-stopped
     ports:
       - "18002:8002"
@@ -133,7 +137,9 @@ services:
       - .env
 
   tts_service:
-    build: ./services/tts_service
+    build:
+      context: .
+      dockerfile: services/tts_service/Dockerfile
     restart: unless-stopped
     ports:
       - "18003:8003"
