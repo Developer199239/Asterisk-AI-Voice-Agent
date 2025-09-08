@@ -205,20 +205,29 @@ class RedisMessageQueue:
         # Start health check loop
         self._health_check_task = asyncio.create_task(self._health_check_loop())
 
-        try:
-            async for message in self.pubsub.listen():
-                if not self._running:
-                    break
-                
-                if message["type"] == "message":
-                    await self._handle_message(message)
+        while self._running:
+            try:
+                async for message in self.pubsub.listen():
+                    if not self._running:
+                        break
                     
-        except Exception as e:
-            logger.error(f"Error in message listening loop: {e}")
-            raise
-        finally:
-            self._running = False
-    
+                    if message["type"] == "message":
+                        await self._handle_message(message)
+                        
+            except Exception as e:
+                logger.error(f"Error in message listening loop: {e}, attempting to reconnect...")
+                await asyncio.sleep(5) # Wait before retrying
+                # Attempt to re-establish the pubsub connection
+                if self.redis:
+                    try:
+                        self.pubsub = self.redis.pubsub()
+                        channels = list(self.subscribers.keys())
+                        if channels:
+                            await self.pubsub.subscribe(*channels)
+                            logger.info(f"Re-subscribed to channels: {channels}")
+                    except Exception as sub_e:
+                        logger.error(f"Failed to re-subscribe after connection error: {sub_e}")
+
     async def stop_listening(self):
         """Stop listening for messages"""
         self._running = False
