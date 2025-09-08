@@ -150,6 +150,8 @@ git push origin main
 ssh root@voiprnd.nemtclouddispatch.com
 cd /root/Asterisk-AI-Voice-Agent
 git pull origin main
+docker compose down
+docker system prune -f
 docker-compose up --build
 ```
 
@@ -171,7 +173,7 @@ docker exec -it asterisk-ai-voice-agent-redis-1 redis-cli ping
 # Test rtpengine status
 curl -f http://rtpengine:2223/status
 
-# Test health endpoints
+# Test health endpoints [Need Updates based on new ports]
 curl -f http://localhost:8000/health  # call_controller
 curl -f http://localhost:8001/health  # stt_service
 curl -f http://localhost:8002/health  # llm_service
@@ -201,6 +203,7 @@ This command will:
 - **Real-time Performance**: Sub-second response times are critical
 - **Audio Quality**: Clear audio with noise suppression is essential
 - **Microservices Architecture**: Each service must be independent and stateless
+- **Docker Build Images**: When building new images delete all old unused images to save space
 
 ### Troubleshooting
 - **ARI Connection Issues**: Check Asterisk ari.conf, verify credentials

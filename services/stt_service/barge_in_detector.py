@@ -218,7 +218,8 @@ class BargeInDetector:
                     )
                 else:
                     # Immediate barge-in detection
-                    await self._trigger_barge_in(channel_id, ssrc, confidence, duration, active_sessions[0].session_id)
+                    # Create a task to run the async function
+                    asyncio.create_task(self._trigger_barge_in(channel_id, ssrc, confidence, duration, active_sessions[0].session_id))
             
             return True
             
