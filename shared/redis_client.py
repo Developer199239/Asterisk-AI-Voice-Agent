@@ -10,8 +10,8 @@ import json
 import logging
 from typing import Any, Dict, List, Optional, Callable, Union
 from datetime import datetime
-import aioredis
-from aioredis import Redis, ConnectionPool
+import redis.asyncio as aioredis
+from redis.asyncio import Redis, ConnectionPool
 from pydantic import BaseModel, Field
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
