@@ -14,8 +14,8 @@ from dataclasses import dataclass
 from typing import Dict, Optional, Callable, Any, List, Tuple
 from enum import Enum
 
-from .vad_handler import VADHandler, SpeechSegment
-from .channel_correlation import ChannelCorrelationManager, ChannelState
+from vad_handler import VADHandler, SpeechSegment
+from channel_correlation import ChannelCorrelationManager, ChannelState
 
 logger = logging.getLogger(__name__)
 

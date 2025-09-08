@@ -24,11 +24,12 @@ logger = logging.getLogger(__name__)
 @dataclass
 class TTSServiceConfig:
     """Configuration for the TTS service."""
+    # OpenAI settings
+    openai_api_key: str
+
     # Redis settings
     redis_url: str = "redis://localhost:6379"
     
-    # OpenAI settings
-    openai_api_key: str
     openai_base_url: Optional[str] = None
     voice: str = "alloy"
     model: str = "tts-1"

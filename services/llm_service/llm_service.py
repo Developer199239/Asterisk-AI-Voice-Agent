@@ -23,11 +23,12 @@ logger = logging.getLogger(__name__)
 @dataclass
 class LLMServiceConfig:
     """Configuration for the LLM service."""
+    # OpenAI settings
+    openai_api_key: str
+
     # Redis settings
     redis_url: str = "redis://localhost:6379"
     
-    # OpenAI settings
-    openai_api_key: str
     openai_base_url: Optional[str] = None
     primary_model: str = "gpt-4o"
     fallback_model: str = "gpt-3.5-turbo"

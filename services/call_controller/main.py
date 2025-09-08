@@ -140,9 +140,9 @@ class CallControllerService:
         health_app.router.add_get('/health', self._health_endpoint)
         health_runner = web.AppRunner(health_app)
         await health_runner.setup()
-        health_site = web.TCPSite(health_runner, '0.0.0.0', 8000)
+        health_site = web.TCPSite(health_runner, '0.0.0.0', self.config.health_check_port)
         await health_site.start()
-        logger.info("Health check server started on port 8000")
+        logger.info(f"Health check server started on port {self.config.health_check_port}")
         
         tasks = [
             asyncio.create_task(self.ari_client.start_listening()),
