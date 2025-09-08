@@ -16,28 +16,25 @@ services:
     networks:
       - ai-voice-network
 
-  # RTPEngine Media Proxy
-  rtpengine:
-    image: davehorton/rtpengine:latest
-    container_name: asterisk-ai-voice-agent-rtpengine
-    command: rtpengine --interface=internal=172.20.0.0/16 --interface=external=0.0.0.0 -L 7
-    ports:
-      - "2223:2223"  # Control port
-      - "10000-10100:10000-10100/udp"  # RTP port range
-    volumes:
-      - rtpengine_data:/var/spool/rtpengine
-    restart: unless-stopped
-    cap_add:
-      - NET_ADMIN
-      - SYS_NICE
-    # sysctls:
-      # - net.core.rmem_max=16777216
-      # - net.core.wmem_max=16777216
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:2223/status"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+  # RTPEngine Media Proxy - Temporarily disabled for testing
+  # rtpengine:
+  #   image: davehorton/rtpengine:latest
+  #   container_name: asterisk-ai-voice-agent-rtpengine
+  #   command: rtpengine --interface=internal=172.20.0.0/16 --interface=external=0.0.0.0/0 -L 7
+  #   ports:
+  #     - "2223:2223"  # Control port
+  #     - "10000-10100:10000-10100/udp"  # RTP port range
+  #   volumes:
+  #     - rtpengine_data:/var/spool/rtpengine
+  #   restart: unless-stopped
+  #   cap_add:
+  #     - NET_ADMIN
+  #     - SYS_NICE
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://localhost:2223/status"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
     networks:
       - ai-voice-network
 
@@ -65,8 +62,8 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-      rtpengine:
-        condition: service_healthy
+      # rtpengine:
+      #   condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
