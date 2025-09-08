@@ -54,8 +54,7 @@ class STTService:
         # Initialize Realtime API client
         self.realtime_config = RealtimeConfig(
             api_key=self.config.openai_api_key,
-            voice=VoiceType.ALLOY,
-            model="gpt-4o-realtime-preview-2024-10-01"
+            voice=VoiceType.ALLOY
         )
         self.realtime_client = RealtimeClient(self.realtime_config)
         
