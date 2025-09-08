@@ -26,7 +26,7 @@ services:
       context: .
       dockerfile: services/rtpengine/Dockerfile
     container_name: asterisk-ai-voice-agent-rtpengine
-    command: rtpengine --interface=0.0.0.0 --listen-ng=2223 -L 7 --log-stderr
+    command: rtpengine --interface=internal=172.20.0.0/16 --interface=external=0.0.0.0/0 -L 7 --log-stderr
     ports:
       - "2223:2223" # Control port
       - "10000-10009:10000-10009/udp" # RTP port range
