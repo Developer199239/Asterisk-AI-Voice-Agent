@@ -140,11 +140,11 @@ class CallControllerService:
     
     async def _start_health_check_server(self):
         """Start the health check server."""
-        dependency_checks = [
-            ("ari", lambda: self.ari_client.health_check()),
-            ("redis", lambda: self.redis_queue.health_check()),
-            # ("rtpengine", lambda: self.rtpengine_client.health_check()),
-        ]
+        dependency_checks = {
+            "ari": lambda: self.ari_client.health_check(),
+            "redis": lambda: self.redis_queue.health_check(),
+            # "rtpengine": lambda: self.rtpengine_client.health_check(),
+        }
         app = create_health_check_app("call_controller", dependency_checks)
         
         config = uvicorn.Config(app, host="0.0.0.0", port=self.config.health_check_port, log_level="info")

@@ -8,7 +8,7 @@ for all services in the Asterisk AI Voice Agent v2.0.
 from fastapi import FastAPI, Response
 from pydantic import BaseModel, Field
 import time
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Callable
 
 class HealthCheckStatus(BaseModel):
     status: str = Field(..., description="Overall health status (healthy, unhealthy)")
@@ -16,7 +16,7 @@ class HealthCheckStatus(BaseModel):
     timestamp: float = Field(default_factory=time.time, description="Timestamp of the health check")
     dependencies: Optional[List[Dict[str, Any]]] = Field(None, description="Status of dependencies")
 
-def create_health_check_app(service_name: str, dependency_checks: Optional[List[callable]] = None) -> FastAPI:
+def create_health_check_app(service_name: str, dependency_checks: Optional[Dict[str, Callable]] = None) -> FastAPI:
     """
     Create a FastAPI application with a standardized health check endpoint.
     
@@ -36,14 +36,14 @@ def create_health_check_app(service_name: str, dependency_checks: Optional[List[
         dependencies = []
         
         if dependency_checks:
-            for check in dependency_checks:
+            for dep_name, check_func in dependency_checks.items():
                 try:
-                    dep_name, dep_status = await check()
+                    dep_status = await check_func()
                     dependencies.append({"name": dep_name, "status": "healthy" if dep_status else "unhealthy"})
                     if not dep_status:
                         healthy = False
                 except Exception as e:
-                    dependencies.append({"name": "unknown", "status": "unhealthy", "error": str(e)})
+                    dependencies.append({"name": dep_name, "status": "unhealthy", "error": str(e)})
                     healthy = False
         
         status = "healthy" if healthy else "unhealthy"
