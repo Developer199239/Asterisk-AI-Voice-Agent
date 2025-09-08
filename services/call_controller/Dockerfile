@@ -13,6 +13,7 @@ RUN apt-get update && apt-get install -y \
 
 # Copy shared utilities
 COPY shared/ /app/shared/
+COPY shared/ /shared/
 
 # Copy service-specific code
 COPY services/call_controller/ /app/
