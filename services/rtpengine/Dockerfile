@@ -27,7 +27,31 @@ RUN apt-get update && \
     markdown \
     libopus-dev \
     libsrtp2-dev \
-    dpkg-dev
+    dpkg-dev \
+    debhelper-compat \
+    default-libmysqlclient-dev \
+    gperf \
+    libavcodec-dev \
+    libavfilter-dev \
+    libavformat-dev \
+    libavutil-dev \
+    libbencode-perl \
+    libcrypt-openssl-rsa-perl \
+    libcrypt-rijndael-perl \
+    libdigest-crc-perl \
+    libdigest-hmac-perl \
+    libevent-dev \
+    libio-multiplex-perl \
+    libio-socket-inet6-perl \
+    libiptc-dev \
+    libjson-perl \
+    libmosquitto-dev \
+    libnet-interface-perl \
+    libsocket6-perl \
+    libswresample-dev \
+    libwebsockets-dev \
+    libxtables-dev \
+    python3-websockets
 
 # Clone rtpengine source
 WORKDIR /src
