@@ -39,33 +39,29 @@ class STTService:
             logger.info("Connected to Redis")
             
             # Subscribe to new call events
-            await self.redis_client.subscribe("calls:new")
+            await self.redis_client.subscribe(["calls:new"], self._handle_new_call)
             logger.info("Subscribed to calls:new")
             
             self.running = True
             
+            # Start listening for messages
+            await self.redis_client.start_listening()
+            
             # Main service loop
             while self.running:
                 try:
-                    # Process Redis messages
-                    message = await self.redis_client.get_message()
-                    if message:
-                        await self._handle_new_call(message)
-                        
-                    await asyncio.sleep(0.1)
-                    
-                except Exception as e:
-                    logger.error(f"Error in main loop: {e}")
                     await asyncio.sleep(1)
+                except KeyboardInterrupt:
+                    break
                     
         except Exception as e:
             logger.error(f"Failed to start STT service: {e}")
             raise
 
-    async def _handle_new_call(self, message):
+    async def _handle_new_call(self, channel: str, message: dict):
         """Handle new call events"""
         try:
-            logger.info(f"Received new call: {message}")
+            logger.info(f"Received new call on {channel}: {message}")
             
             # TODO: Process RTP audio stream
             # TODO: Perform speech-to-text conversion

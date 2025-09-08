@@ -27,7 +27,6 @@ This is an open-source AI Voice Agent that integrates with Asterisk/FreePBX usin
    - SSH to test server
    - Pull latest changes from Git
    - Test with Asterisk 16+ environment
-   - No direct code changes on server
    - No changes to Asterisk config on server - ask user to make any changes related to asterisk
 
 ### Code Standards

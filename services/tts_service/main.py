@@ -39,33 +39,29 @@ class TTSService:
             logger.info("Connected to Redis")
             
             # Subscribe to LLM response events
-            await self.redis_client.subscribe("llm:response:ready")
+            await self.redis_client.subscribe(["llm:response:ready"], self._handle_llm_response)
             logger.info("Subscribed to llm:response:ready")
             
             self.running = True
             
+            # Start listening for messages
+            await self.redis_client.start_listening()
+            
             # Main service loop
             while self.running:
                 try:
-                    # Process Redis messages
-                    message = await self.redis_client.get_message()
-                    if message:
-                        await self._handle_llm_response(message)
-                        
-                    await asyncio.sleep(0.1)
-                    
-                except Exception as e:
-                    logger.error(f"Error in main loop: {e}")
                     await asyncio.sleep(1)
+                except KeyboardInterrupt:
+                    break
                     
         except Exception as e:
             logger.error(f"Failed to start TTS service: {e}")
             raise
 
-    async def _handle_llm_response(self, message):
+    async def _handle_llm_response(self, channel: str, message: dict):
         """Handle LLM response for TTS synthesis"""
         try:
-            logger.info(f"Received LLM response: {message}")
+            logger.info(f"Received LLM response on {channel}: {message}")
             
             # TODO: Convert text to speech
             # TODO: Generate audio file
