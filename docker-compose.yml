@@ -22,7 +22,7 @@ services:
 
   # RTPEngine Media Proxy
   rtpengine:
-    image: davehorton/rtpengine:latest
+    image: sipwise/rtpengine:mr11.5.1.1
     container_name: asterisk-ai-voice-agent-rtpengine
     command: rtpengine --interface=internal=172.20.0.0/16 --interface=external=0.0.0.0/0 -L 7
     ports:
