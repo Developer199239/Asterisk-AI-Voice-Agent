@@ -5,11 +5,14 @@ This module provides a circuit breaker implementation using the 'pybreaker' libr
 to prevent cascade failures in service-to-service communication.
 """
 
+import pybreaker
+import asyncio
+from pybreaker import CircuitBreaker as PyCircuitBreaker, CircuitBreakerError
 import logging
 from functools import wraps
-from pybreaker import CircuitBreaker as PyCircuitBreaker, CircuitBreakerError
 
 logger = logging.getLogger(__name__)
+
 
 class CircuitBreaker:
     """A wrapper around pybreaker.CircuitBreaker."""
@@ -22,19 +25,24 @@ class CircuitBreaker:
         return self._breaker.call(func, *args, **kwargs)
 
     async def call_async(self, func, *args, **kwargs):
-        """Execute an async function within the circuit breaker."""
-        return await self._breaker.call_async(func, *args, **kwargs)
+        """
+        Execute an async function within the circuit breaker, avoiding the
+        problematic @gen.coroutine decorator in pybreaker.
+        """
+        if self._breaker.current_state == "open":
+            raise CircuitBreakerError("Circuit Breaker is open")
+        
+        try:
+            result = await func(*args, **kwargs)
+            self._breaker.success()
+            return result
+        except Exception as e:
+            self._breaker.fail()
+            raise e
 
     def decorate(self, func):
-        """Decorate a function with the circuit breaker."""
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            try:
-                return self.call(func, *args, **kwargs)
-            except CircuitBreakerError as e:
-                logger.error(f"Circuit breaker '{self._breaker.name}' is open: {e}")
-                raise
-        return wrapper
+        """Decorate a function with this circuit breaker."""
+        return self._breaker.decorate(func)
         
     def decorate_async(self, func):
         """Decorate an async function with the circuit breaker."""
