@@ -1,12 +1,13 @@
 """
 TTS Service - Main Entry Point
 
-This service handles text-to-speech synthesis.
-It adapts the existing tts_handler.py from the v1.0 architecture.
+This service handles text-to-speech processing and audio file management
+using OpenAI TTS API and shared volume file storage.
 """
 
 import asyncio
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -14,7 +15,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent.parent / "shared"))
 
 from config import CallControllerConfig
-from redis_client import RedisMessageQueue
+from tts_service import TTSService, TTSServiceConfig
 
 # Configure logging
 logging.basicConfig(
@@ -23,74 +24,40 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-class TTSService:
-    def __init__(self):
-        self.config = CallControllerConfig()
-        self.redis_client = RedisMessageQueue()
-        self.running = False
-
-    async def start(self):
-        """Start the TTS service"""
-        logger.info("Starting TTS Service - v2.0")
-        
-        try:
-            # Connect to Redis
-            await self.redis_client.connect()
-            logger.info("Connected to Redis")
-            
-            # Subscribe to LLM response events
-            await self.redis_client.subscribe(["llm:response:ready"], self._handle_llm_response)
-            logger.info("Subscribed to llm:response:ready")
-            
-            self.running = True
-            
-            # Start listening for messages
-            await self.redis_client.start_listening()
-            
-            # Main service loop
-            while self.running:
-                try:
-                    await asyncio.sleep(1)
-                except KeyboardInterrupt:
-                    break
-                    
-        except Exception as e:
-            logger.error(f"Failed to start TTS service: {e}")
-            raise
-
-    async def _handle_llm_response(self, channel: str, message: dict):
-        """Handle LLM response for TTS synthesis"""
-        try:
-            logger.info(f"Received LLM response on {channel}: {message}")
-            
-            # TODO: Convert text to speech
-            # TODO: Generate audio file
-            # TODO: Publish audio to tts:audio:ready
-            
-            logger.info("TTS synthesis completed successfully")
-            
-        except Exception as e:
-            logger.error(f"Error handling LLM response: {e}")
-
-    async def stop(self):
-        """Stop the TTS service"""
-        logger.info("Stopping TTS Service")
-        self.running = False
-        await self.redis_client.disconnect()
 
 async def main():
-    """Main entry point"""
-    service = TTSService()
-    
+    """Main entry point."""
     try:
+        # Load configuration from environment
+        config = TTSServiceConfig(
+            redis_url=os.getenv("REDIS_URL", "redis://localhost:6379"),
+            openai_api_key=os.getenv("OPENAI_API_KEY", ""),
+            openai_base_url=os.getenv("OPENAI_BASE_URL"),
+            voice=os.getenv("TTS_VOICE", "alloy"),
+            model=os.getenv("TTS_MODEL", "tts-1"),
+            audio_format=os.getenv("TTS_AUDIO_FORMAT", "mp3"),
+            speed=float(os.getenv("TTS_SPEED", "1.0")),
+            base_directory=os.getenv("TTS_BASE_DIRECTORY", "/shared/audio"),
+            temp_directory=os.getenv("TTS_TEMP_DIRECTORY", "/tmp/tts_audio"),
+            file_ttl=int(os.getenv("TTS_FILE_TTL", "300")),
+            max_file_size=int(os.getenv("TTS_MAX_FILE_SIZE", "10485760")),  # 10MB
+            enable_debug_logging=os.getenv("TTS_DEBUG_LOGGING", "true").lower() == "true"
+        )
+        
+        # Validate required configuration
+        if not config.openai_api_key:
+            raise ValueError("OPENAI_API_KEY environment variable is required")
+        
+        # Create and start service
+        service = TTSService(config)
         await service.start()
+        
     except KeyboardInterrupt:
         logger.info("Received interrupt signal")
     except Exception as e:
         logger.error(f"Service failed: {e}")
         sys.exit(1)
-    finally:
-        await service.stop()
+
 
 if __name__ == "__main__":
     asyncio.run(main())

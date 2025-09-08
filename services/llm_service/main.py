@@ -1,11 +1,13 @@
 """
 LLM Service - Main Entry Point
 
-This service handles language model processing and conversation management.
+This service handles language model operations for the AI Voice Agent.
+It processes transcription data and generates appropriate responses using OpenAI.
 """
 
 import asyncio
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -13,7 +15,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent.parent / "shared"))
 
 from config import CallControllerConfig
-from redis_client import RedisMessageQueue
+from llm_service import LLMService, LLMServiceConfig
 
 # Configure logging
 logging.basicConfig(
@@ -22,74 +24,39 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-class LLMService:
-    def __init__(self):
-        self.config = CallControllerConfig()
-        self.redis_client = RedisMessageQueue()
-        self.running = False
-
-    async def start(self):
-        """Start the LLM service"""
-        logger.info("Starting LLM Service - v2.0")
-        
-        try:
-            # Connect to Redis
-            await self.redis_client.connect()
-            logger.info("Connected to Redis")
-            
-            # Subscribe to transcription events
-            await self.redis_client.subscribe(["stt:transcription:complete"], self._handle_transcription)
-            logger.info("Subscribed to stt:transcription:complete")
-            
-            self.running = True
-            
-            # Start listening for messages
-            await self.redis_client.start_listening()
-            
-            # Main service loop
-            while self.running:
-                try:
-                    await asyncio.sleep(1)
-                except KeyboardInterrupt:
-                    break
-                    
-        except Exception as e:
-            logger.error(f"Failed to start LLM service: {e}")
-            raise
-
-    async def _handle_transcription(self, channel: str, message: dict):
-        """Handle transcription completion events"""
-        try:
-            logger.info(f"Received transcription on {channel}: {message}")
-            
-            # TODO: Process transcription with LLM
-            # TODO: Generate response
-            # TODO: Publish response to llm:response:ready
-            
-            logger.info("Transcription processed successfully")
-            
-        except Exception as e:
-            logger.error(f"Error handling transcription: {e}")
-
-    async def stop(self):
-        """Stop the LLM service"""
-        logger.info("Stopping LLM Service")
-        self.running = False
-        await self.redis_client.disconnect()
 
 async def main():
-    """Main entry point"""
-    service = LLMService()
-    
+    """Main entry point."""
     try:
+        # Load configuration from environment
+        config = LLMServiceConfig(
+            redis_url=os.getenv("REDIS_URL", "redis://localhost:6379"),
+            openai_api_key=os.getenv("OPENAI_API_KEY", ""),
+            openai_base_url=os.getenv("OPENAI_BASE_URL"),
+            primary_model=os.getenv("LLM_PRIMARY_MODEL", "gpt-4o"),
+            fallback_model=os.getenv("LLM_FALLBACK_MODEL", "gpt-3.5-turbo"),
+            temperature=float(os.getenv("LLM_TEMPERATURE", "0.8")),
+            max_tokens=int(os.getenv("LLM_MAX_TOKENS", "4096")),
+            conversation_ttl=int(os.getenv("LLM_CONVERSATION_TTL", "3600")),
+            max_conversation_tokens=int(os.getenv("LLM_MAX_CONVERSATION_TOKENS", "4000")),
+            system_message=os.getenv("LLM_SYSTEM_MESSAGE", "You are a helpful AI assistant for Jugaar LLC."),
+            enable_debug_logging=os.getenv("LLM_DEBUG_LOGGING", "true").lower() == "true"
+        )
+        
+        # Validate required configuration
+        if not config.openai_api_key:
+            raise ValueError("OPENAI_API_KEY environment variable is required")
+        
+        # Create and start service
+        service = LLMService(config)
         await service.start()
+        
     except KeyboardInterrupt:
         logger.info("Received interrupt signal")
     except Exception as e:
         logger.error(f"Service failed: {e}")
         sys.exit(1)
-    finally:
-        await service.stop()
+
 
 if __name__ == "__main__":
     asyncio.run(main())

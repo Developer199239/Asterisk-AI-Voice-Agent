@@ -683,7 +683,7 @@
           3,
           5
         ],
-        "status": "pending",
+        "status": "done",
         "subtasks": [
           {
             "id": 1,
@@ -691,7 +691,7 @@
             "description": "Implement asyncio.DatagramProtocol-based UDP server to receive forked RTP streams from rtpengine",
             "dependencies": [],
             "details": "Create UDP server class inheriting from asyncio.DatagramProtocol. Implement datagram_received() method for RTP packet handling. Add proper socket binding and error handling. Implement connection tracking for multiple concurrent streams. Add logging for received packets and connection events.",
-            "status": "pending",
+            "status": "done",
             "testStrategy": ""
           },
           {
@@ -702,7 +702,7 @@
               "6.1"
             ],
             "details": "Implement RTP header parsing using struct.unpack for version, payload type, sequence number, timestamp, and SSRC fields. Extract audio payload from RTP packets. Add payload type validation for supported audio codecs. Implement sequence number tracking for packet loss detection. Handle RTP header extensions if present.",
-            "status": "pending",
+            "status": "done",
             "testStrategy": ""
           },
           {
@@ -713,7 +713,7 @@
               "6.2"
             ],
             "details": "Integrate webrtcvad>=2.0.10 from existing implementation. Configure VAD sensitivity levels (0-3). Implement audio frame processing for VAD analysis. Add VAD state tracking (speaking/silent). Implement configurable silence thresholds for speech boundary detection.",
-            "status": "pending",
+            "status": "done",
             "testStrategy": ""
           },
           {
@@ -724,7 +724,7 @@
               "6.3"
             ],
             "details": "Adapt existing OpenAI Whisper integration from stt_handler.py. Modify audio input handling to work with RTP audio streams instead of file uploads. Implement streaming audio buffer to Whisper API conversion. Add proper audio format handling for RTP payloads. Maintain existing error handling and retry logic.",
-            "status": "pending",
+            "status": "done",
             "testStrategy": ""
           },
           {
@@ -736,7 +736,7 @@
               "6.3"
             ],
             "details": "Create audio buffer class with configurable chunk sizes (1-3 seconds). Implement circular buffer for continuous audio stream handling. Add VAD-triggered buffer flushing for speech boundaries. Implement buffer overflow protection and memory management. Add audio format conversion utilities for Whisper compatibility.",
-            "status": "pending",
+            "status": "done",
             "testStrategy": ""
           },
           {
@@ -748,7 +748,7 @@
               "6.5"
             ],
             "details": "Implement Redis publishing using aioredis for transcription results. Create message schema for stt:transcription:complete channel. Add channel ID correlation for call tracking. Implement error handling for Redis connection failures. Add message serialization with proper JSON formatting and metadata.",
-            "status": "pending",
+            "status": "done",
             "testStrategy": ""
           },
           {
@@ -760,7 +760,7 @@
               "6.6"
             ],
             "details": "Implement barge-in detection using VAD state changes during TTS playback. Create Redis publisher for calls:control:play channel with barge-in events. Add timing correlation between speech detection and active TTS sessions. Implement debouncing logic to prevent false barge-in triggers. Add configurable sensitivity thresholds.",
-            "status": "pending",
+            "status": "done",
             "testStrategy": ""
           },
           {
@@ -771,7 +771,7 @@
               "6.1"
             ],
             "details": "Create channel ID extraction from RTP stream metadata or headers. Implement channel mapping and tracking throughout the STT pipeline. Add correlation ID propagation in all Redis messages. Create channel state management for concurrent call handling. Implement proper cleanup for completed calls.",
-            "status": "pending",
+            "status": "done",
             "testStrategy": ""
           },
           {
@@ -789,7 +789,7 @@
               "6.8"
             ],
             "details": "Create integration tests for complete RTP processing pipeline. Test UDP server packet reception with simulated RTP streams. Validate RTP parsing accuracy and audio extraction quality. Test VAD performance with various audio conditions. Verify transcription accuracy and Redis message delivery. Test barge-in detection timing and channel correlation.",
-            "status": "pending",
+            "status": "done",
             "testStrategy": ""
           }
         ]
@@ -805,8 +805,85 @@
           3,
           6
         ],
-        "status": "pending",
-        "subtasks": []
+        "status": "done",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Adapt existing OpenAI integration from llm_handler.py",
+            "description": "Review and adapt the existing OpenAI integration code from services/llm_service/llm_handler.py to support conversation context and prepare for Redis integration",
+            "dependencies": [],
+            "details": "Analyze current llm_handler.py implementation, identify reusable components, modify for conversation context support, and prepare OpenAI client for GPT-4o integration with function calling capabilities",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 2,
+            "title": "Implement Redis-based conversation history storage",
+            "description": "Create Redis integration for storing and retrieving conversation history with TTL configuration",
+            "dependencies": [
+              "7.1"
+            ],
+            "details": "Set up Redis client, implement conversation storage schema, add TTL management (1 hour default), create CRUD operations for conversation history, and add Redis connection handling with error recovery",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 3,
+            "title": "Create channel ID-based context isolation",
+            "description": "Implement context isolation mechanism using channel IDs to prevent conversation leakage between concurrent calls",
+            "dependencies": [
+              "7.2"
+            ],
+            "details": "Design channel ID keying strategy for Redis, implement context retrieval by channel ID, add isolation verification, and ensure thread-safe operations for concurrent access",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 4,
+            "title": "Add fallback LLM support with graceful degradation",
+            "description": "Implement fallback mechanism from GPT-4o to GPT-3.5-turbo with automatic degradation on failures",
+            "dependencies": [
+              "7.1"
+            ],
+            "details": "Add GPT-3.5-turbo client configuration, implement retry logic with model fallback, add error detection and switching logic, and ensure response quality consistency across models",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 5,
+            "title": "Implement conversation memory management with token limits",
+            "description": "Create token counting and conversation truncation logic to maintain 4000 token context limit",
+            "dependencies": [
+              "7.3"
+            ],
+            "details": "Add token counting using tiktoken, implement conversation truncation strategy, maintain context relevance when truncating, and add token limit monitoring and alerts",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 6,
+            "title": "Add response streaming preparation",
+            "description": "Prepare infrastructure for streaming responses to optimize future latency requirements",
+            "dependencies": [
+              "7.4"
+            ],
+            "details": "Design streaming response architecture, implement async response handling, add streaming client setup for OpenAI, and create buffering mechanisms for future streaming implementation",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 7,
+            "title": "Test context persistence and isolation across concurrent calls",
+            "description": "Create comprehensive tests to verify conversation context works correctly with multiple simultaneous calls",
+            "dependencies": [
+              "7.5",
+              "7.6"
+            ],
+            "details": "Create test scenarios for concurrent calls, verify context isolation between channels, test conversation persistence across exchanges, validate fallback behavior, and ensure memory management under load",
+            "status": "done",
+            "testStrategy": ""
+          }
+        ]
       },
       {
         "id": 8,
@@ -819,8 +896,75 @@
           3,
           7
         ],
-        "status": "pending",
-        "subtasks": []
+        "status": "in-progress",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Adapt OpenAI TTS Integration from Existing Handler",
+            "description": "Extract and adapt the existing OpenAI TTS integration code from services/tts_service/tts_handler.py, configuring it to use the 'alloy' voice model for consistent audio output",
+            "dependencies": [],
+            "details": "Review existing tts_handler.py implementation, extract reusable components, configure OpenAI TTS API client with 'alloy' voice model, implement error handling and logging for TTS requests",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 2,
+            "title": "Implement Shared Volume Audio File Management",
+            "description": "Create audio file management system using shared volume (/shared/audio/) with UUID-based unique filename generation for cross-service file access",
+            "dependencies": [
+              "8.1"
+            ],
+            "details": "Set up shared volume directory structure, implement UUID-based filename generation, create file path management utilities, ensure proper permissions for cross-container access",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 3,
+            "title": "Add Audio Format Standardization for Asterisk Compatibility",
+            "description": "Implement audio format conversion to 16kHz WAV format optimized for Asterisk compatibility using pydub library",
+            "dependencies": [
+              "8.2"
+            ],
+            "details": "Install and configure pydub>=0.25.1, implement audio format conversion functions, standardize output to 16kHz WAV format, validate audio quality and compatibility with Asterisk",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 4,
+            "title": "Create Audio File Cleanup with TTL System",
+            "description": "Implement time-to-live (TTL) based audio file cleanup system that removes files 5 minutes after playback completion",
+            "dependencies": [
+              "8.2"
+            ],
+            "details": "Create background cleanup process, implement TTL tracking for audio files, add file deletion logic with 5-minute timeout, implement cleanup scheduling and monitoring",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 5,
+            "title": "Implement Fallback to Asterisk SayAlpha",
+            "description": "Add fallback mechanism to Asterisk SayAlpha function when OpenAI TTS service fails or is unavailable",
+            "dependencies": [
+              "8.1"
+            ],
+            "details": "Implement error detection for TTS failures, create Asterisk SayAlpha integration, add fallback routing logic, ensure seamless transition between TTS methods",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 6,
+            "title": "Test Audio Generation and Shared Volume Access",
+            "description": "Validate complete TTS service functionality including audio synthesis, file management, format compatibility, and cross-service file access",
+            "dependencies": [
+              "8.3",
+              "8.4",
+              "8.5"
+            ],
+            "details": "Test audio synthesis quality and format compatibility, verify shared volume file access from call_controller, test audio cleanup and TTL functionality, validate fallback to SayAlpha on failures, test concurrent audio generation",
+            "status": "pending",
+            "testStrategy": ""
+          }
+        ]
       },
       {
         "id": 9,
@@ -1027,7 +1171,7 @@
     ],
     "metadata": {
       "created": "2025-09-07T22:52:06.635Z",
-      "updated": "2025-09-07T23:26:39.134Z",
+      "updated": "2025-09-08T02:05:34.908Z",
       "description": "Tasks for v2-0-ari-refactor context"
     }
   }

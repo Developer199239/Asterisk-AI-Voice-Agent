@@ -120,6 +120,11 @@ Asterisk-AI-Voice-Agent/
 - **Password Type**: `Crypt`
 - **ARI Port**: `8088`
 - **Verification Command**: `asterisk -rx "ari show applications"`
+- **Asterisk Dialpan Configured for stasis app** `[from-ai-agent]
+; Send the call to the Stasis application for the AI Voice Agent
+exten => s,1,NoOp(Entering Stasis application for AI Voice Agent)
+exten => s,n,Stasis(asterisk-ai-voice-agent)
+exten => s,n,Hangup()`
 
 #### API Keys for Testing
 - **OpenAI API Key**: `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`
@@ -151,11 +156,14 @@ docker-compose up --build
 ### Testing Commands
 ```bash
 # Verify ARI connection
-asterisk -rx "ari show applications"
+asterisk -rx "ari show apps"
+asterisk -rx "ari show users"
+asterisk -rx "ari show user AIAgent"
+asterisk -rx "ari show app asterisk-ai-voice-agent"
 
 # Check Asterisk status
 asterisk -rx "core show version"
-asterisk -rx "pjsip show endpoints"
+asterisk -rx "dialplan show from-ai-agent"
 
 # Test Redis connectivity
 docker exec -it asterisk-ai-voice-agent-redis-1 redis-cli ping
