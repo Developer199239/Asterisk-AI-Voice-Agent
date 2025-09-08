@@ -16,19 +16,15 @@ services:
 
   # RTPEngine Media Proxy
   rtpengine:
-    build:
-      context: .
-      dockerfile: services/rtpengine/Dockerfile
+    image: sipwise/rtpengine:mr10.5.1.1
     container_name: asterisk-ai-voice-agent-rtpengine
-    command: rtpengine --listen-ng=2223 --interface=172.20.0.3 -L 7 --log-stderr
-    privileged: true
+    command: rtpengine --interface=internal=172.20.0.0/16 --interface=external=0.0.0.0/0 -L 7 --log-stderr
     ports:
       - "2223:2223" # Control port
       - "10000-10009:10000-10009/udp" # RTP port range
     restart: unless-stopped
     cap_add:
       - NET_ADMIN
-      - SYS_NICE
 
   # Call Controller Service
   call_controller:
