@@ -1150,7 +1150,7 @@
           12,
           13
         ],
-        "status": "pending",
+        "status": "in-progress",
         "subtasks": []
       },
       {
@@ -1171,7 +1171,7 @@
     ],
     "metadata": {
       "created": "2025-09-07T22:52:06.635Z",
-      "updated": "2025-09-08T04:26:32.121Z",
+      "updated": "2025-09-08T04:27:35.805Z",
       "description": "Tasks for v2-0-ari-refactor context"
     }
   }

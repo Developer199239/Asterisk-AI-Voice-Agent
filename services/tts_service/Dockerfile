@@ -2,26 +2,23 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies first to leverage caching
 RUN apt-get update && apt-get install -y \
     curl \
     gcc \
     g++ \
     make \
     python3-dev \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy shared utilities
-COPY shared/ /app/shared/
-COPY shared/ /shared/
-
-# Copy service-specific code
-COPY services/tts_service/ /app/
-
-# Install Python dependencies
-COPY requirements.txt /app/
+# Install Python dependencies next to leverage caching
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-RUN apt-get update && apt-get install -y ffmpeg
+
+# Copy source code
+COPY shared/ /app/shared/
+COPY services/tts_service/ /app/
 
 # Create shared directories
 RUN mkdir -p /shared/audio /shared/logs

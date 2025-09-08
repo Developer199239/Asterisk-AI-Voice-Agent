@@ -21,6 +21,7 @@ sys.path.append(str(Path(__file__).parent.parent.parent / "shared"))
 
 from shared.logging_config import setup_logging
 from shared.config import load_config, LLMServiceConfig
+from llm_service import LLMService
 
 # Load configuration and set up logging
 config = load_config("llm_service")

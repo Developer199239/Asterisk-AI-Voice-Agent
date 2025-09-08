@@ -11,16 +11,13 @@ RUN apt-get update && apt-get install -y \
     python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy shared utilities
-COPY shared/ /app/shared/
-COPY shared/ /shared/
-
-# Copy service-specific code
-COPY services/llm_service/ /app/
-
 # Install Python dependencies
-COPY requirements.txt /app/
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy source code
+COPY shared/ /app/shared/
+COPY services/llm_service/ /app/
 
 # Create shared directories
 RUN mkdir -p /shared/logs

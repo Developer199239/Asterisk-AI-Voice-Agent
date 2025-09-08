@@ -151,11 +151,22 @@ class LLMServiceConfig(AIProviderConfig):
     service_name: str = "llm_service"
     health_check_port: int = 8002
     
+    # OpenAI LLM specific settings
+    openai_base_url: Optional[str] = Field(default=None, description="OpenAI API base URL")
+    primary_model: str = Field(default="gpt-4o", description="Primary LLM model")
+    fallback_model: str = Field(default="gpt-3.5-turbo", description="Fallback LLM model")
+    temperature: float = Field(default=0.8, description="LLM temperature")
+    max_tokens: int = Field(default=4096, description="LLM max tokens")
+    system_message: str = Field(default="You are a helpful AI assistant for Jugaar LLC.", description="LLM system message")
+    enable_debug_logging: bool = Field(default=False, description="Enable debug logging for conversation manager")
+
     # Conversation settings
     max_conversation_history: int = Field(
         default=20,
         description="Maximum conversation turns to keep in memory"
     )
+    conversation_ttl: int = Field(default=3600, description="Time-to-live for conversation history in seconds")
+    max_conversation_tokens: int = Field(default=4000, description="Maximum tokens for conversation history")
     response_timeout_seconds: int = Field(
         default=30,
         description="Maximum time to wait for LLM response"
@@ -168,6 +179,22 @@ class TTSServiceConfig(AIProviderConfig):
     service_name: str = "tts_service"
     health_check_port: int = 8003
     
+    # OpenAI TTS specific settings
+    openai_base_url: Optional[str] = Field(default=None, description="OpenAI API base URL")
+    voice: str = Field(default="alloy", description="TTS voice")
+    model: str = Field(default="tts-1", description="TTS model")
+    audio_format: str = Field(default="mp3", description="TTS audio format")
+    speed: float = Field(default=1.0, description="TTS speed")
+
+    # Audio file management settings
+    base_directory: str = Field(default="/shared/audio", description="Base directory for audio files")
+    temp_directory: str = Field(default="/tmp/tts_audio", description="Temporary directory for audio files")
+    file_ttl: int = Field(default=300, description="Time-to-live for audio files in seconds")
+    max_file_size: int = Field(default=10485760, description="Maximum file size for audio files in bytes")
+    enable_debug_logging: bool = Field(default=False, description="Enable debug logging for file manager")
+    enable_fallback: bool = Field(default=True, description="Enable fallback to Asterisk's SayAlpha")
+    fallback_mode: str = Field(default="sayalpha", description="Fallback mode: 'sayalpha', 'saydigits', 'sayphonetic', or 'disabled'")
+
     # Audio output settings
     output_sample_rate: int = Field(
         default=16000,

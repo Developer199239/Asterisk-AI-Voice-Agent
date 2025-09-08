@@ -14,15 +14,6 @@ import uuid
 import structlog
 from logging.handlers import RotatingFileHandler
 
-from shared/logging_config.py import setup_logging
-from shared/config.py import load_config
-
-# Load configuration and set up logging
-config = load_config("my_service")
-setup_logging(log_level=config.log_level)
-
-logger = structlog.get_logger(__name__)
-
 # Context variable for correlation ID
 correlation_id_var = contextvars.ContextVar('correlation_id', default=None)
 

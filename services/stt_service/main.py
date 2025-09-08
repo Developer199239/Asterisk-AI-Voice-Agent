@@ -15,15 +15,14 @@ from typing import Dict, Any, Optional
 import structlog
 
 from shared.logging_config import setup_logging
-from shared.config import load_config, STTServiceConfig
+from shared.config import load_config, STTServiceConfig, CallControllerConfig
 from shared.health_check import create_health_check_app
 import uvicorn
 
 # Add shared modules to path
-sys.path.append(str(Path(__file__).parent.parent.parent / "shared"))
+# sys.path.append(str(Path(__file__).parent.parent.parent / "shared"))
 
-from config import CallControllerConfig
-from redis_client import RedisMessageQueue
+from shared.redis_client import RedisMessageQueue
 from rtp_handler import RTPStreamManager, RTPStreamInfo
 from vad_handler import SpeechSegment
 from rtp_stt_handler import RTPSTTHandler, RTPSTTConfig
@@ -39,8 +38,8 @@ setup_logging(log_level=config.log_level)
 logger = structlog.get_logger(__name__)
 
 class STTService:
-    def __init__(self):
-        self.config = CallControllerConfig()
+    def __init__(self, config: STTServiceConfig):
+        self.config = config
         self.redis_client = RedisMessageQueue()
         self.channel_correlation = ChannelCorrelationManager()
         self.rtp_manager = RTPStreamManager(host="0.0.0.0", port=5004, correlation_manager=self.channel_correlation)
@@ -60,6 +59,7 @@ class STTService:
         # Initialize Realtime API client
         self.realtime_config = RealtimeConfig(
             api_key=self.config.openai_api_key,
+            model="gpt-4o-realtime-preview",
             voice=VoiceType.ALLOY
         )
         self.realtime_client = RealtimeClient(self.realtime_config)
@@ -384,7 +384,7 @@ class STTService:
 
 async def main():
     """Main entry point"""
-    service = STTService()
+    service = STTService(config)
     
     try:
         await service.start()

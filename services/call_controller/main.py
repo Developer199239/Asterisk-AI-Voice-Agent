@@ -17,11 +17,11 @@ from shared.health_check import create_health_check_app
 import uvicorn
 
 # Add shared modules to path
-sys.path.append(str(Path(__file__).parent.parent.parent / "shared"))
+# sys.path.append(str(Path(__file__).parent.parent.parent / "shared"))
 
 from shared.logging_config import setup_logging
 from shared.config import load_config, CallControllerConfig
-from redis_client import get_redis_queue, Channels, CallNewMessage, CallControlMessage
+from shared.redis_client import get_redis_queue, Channels, CallNewMessage, CallControlMessage
 from ari_client import ARIClient, ARIEvent
 from rtpengine_client import RTPEngineClient
 from call_state_machine import CallStateMachine, CallState, CallData
