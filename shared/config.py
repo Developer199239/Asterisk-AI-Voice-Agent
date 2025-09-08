@@ -127,7 +127,7 @@ class CallControllerConfig(AsteriskConfig, RTPEngineConfig, AIProviderConfig):
     )
 
 
-class STTServiceConfig(AIProviderConfig):
+class STTServiceConfig(AIProviderConfig, AsteriskConfig):
     """STT Service configuration"""
     
     service_name: str = "stt_service"
@@ -145,7 +145,7 @@ class STTServiceConfig(AIProviderConfig):
     )
 
 
-class LLMServiceConfig(AIProviderConfig):
+class LLMServiceConfig(AIProviderConfig, AsteriskConfig):
     """LLM Service configuration"""
     
     service_name: str = "llm_service"
@@ -173,7 +173,7 @@ class LLMServiceConfig(AIProviderConfig):
     )
 
 
-class TTSServiceConfig(AIProviderConfig):
+class TTSServiceConfig(AIProviderConfig, AsteriskConfig):
     """TTS Service configuration"""
     
     service_name: str = "tts_service"
