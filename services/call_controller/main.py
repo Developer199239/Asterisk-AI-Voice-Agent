@@ -141,9 +141,9 @@ class CallControllerService:
     async def _start_health_check_server(self):
         """Start the health check server."""
         dependency_checks = [
-            ("ari", self.ari_client.health_check),
-            ("redis", self.redis_queue.health_check),
-            # ("rtpengine", self.rtpengine_client.health_check),
+            ("ari", lambda: self.ari_client.health_check()),
+            ("redis", lambda: self.redis_queue.health_check()),
+            # ("rtpengine", lambda: self.rtpengine_client.health_check()),
         ]
         app = create_health_check_app("call_controller", dependency_checks)
         
@@ -158,7 +158,6 @@ class CallControllerService:
             asyncio.create_task(self.ari_client.start_listening()),
             asyncio.create_task(self.redis_queue.start_listening()),
             asyncio.create_task(self._timeout_checker()),
-            asyncio.create_task(self._health_checker())
         ]
         
         try:
@@ -376,30 +375,6 @@ class CallControllerService:
             except Exception as e:
                 logger.error(f"Error in timeout checker: {e}")
                 await asyncio.sleep(30)
-    
-    async def _health_checker(self):
-        """Check service health"""
-        while self.running:
-            try:
-                # Check ARI health
-                ari_health = await self.ari_client.health_check()
-                if not ari_health:
-                    logger.error("ARI health check failed")
-                
-                # # Check RTPEngine health
-                # rtpengine_health = await self.rtpengine_client.health_check()
-                # if not rtpengine_health:
-                #     logger.error("RTPEngine health check failed")
-                
-                # Check Redis health
-                redis_health = await self.redis_queue.health_check()
-                if not redis_health:
-                    logger.error("Redis health check failed")
-                
-                await asyncio.sleep(60)  # Check every minute
-            except Exception as e:
-                logger.error(f"Error in health checker: {e}")
-                await asyncio.sleep(60)
 
 
 async def main():
