@@ -18,6 +18,7 @@ from typing import Any, Callable, Dict, List, Optional, Union
 from .stt_handler import STTConfig, TranscriptResult, STTState
 from .realtime_client import RealtimeClient, RealtimeConfig, VoiceType
 from .vad_handler import SpeechSegment
+from .audio_buffer import AudioBufferManager, BufferConfig, AudioFormatConverter
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +67,19 @@ class RTPSTTHandler:
         
         # RTP stream tracking
         self.active_streams: Dict[int, Dict[str, Any]] = {}  # SSRC -> stream info
+        
+        # Initialize audio buffer manager
+        buffer_config = BufferConfig(
+            max_duration_seconds=3.0,
+            min_duration_seconds=0.5,
+            chunk_duration_seconds=1.0,
+            sample_rate=self.config.rtp_sample_rate,
+            channels=self.config.channels,
+            bit_depth=self.config.bit_depth,
+            enable_auto_flush=True,
+            enable_overflow_protection=True
+        )
+        self.buffer_manager = AudioBufferManager(buffer_config)
         self.current_stream_id: Optional[int] = None
         
         # Statistics
@@ -145,22 +159,27 @@ class RTPSTTHandler:
             if ssrc:
                 self.active_streams[ssrc] = stream_info
                 self.current_stream_id = ssrc
+                
+                # Get or create buffer for this stream
+                buffer_id = f"stream_{ssrc}"
+                buffer = self.buffer_manager.get_buffer(buffer_id)
+                if not buffer:
+                    buffer = self.buffer_manager.create_buffer(buffer_id)
+                    # Set up buffer callbacks
+                    buffer.on_chunk_ready = lambda chunk: asyncio.create_task(self._process_audio_chunk(chunk, stream_info))
+                    buffer.on_overflow = lambda: logger.warning(f"Buffer overflow for stream {ssrc}")
+                    buffer.on_silence_detected = lambda: logger.debug(f"Silence detected for stream {ssrc}")
             
-            # Add to RTP buffer
-            self.rtp_audio_buffer.append(audio_data)
-            self.last_audio_time = time.time()
-            
-            # Check buffer size
-            if len(self.rtp_audio_buffer) > self.config.max_rtp_buffer_size:
-                # Remove oldest chunks
-                excess = len(self.rtp_audio_buffer) - self.config.max_rtp_buffer_size
-                self.rtp_audio_buffer = self.rtp_audio_buffer[excess:]
-            
-            # Process audio buffer
-            await self._process_audio_buffer()
+            # Add audio to buffer
+            if buffer:
+                success = buffer.add_audio(audio_data, time.time())
+                if not success:
+                    logger.warning(f"Failed to add audio to buffer for stream {ssrc}")
+                    return False
             
             # Update statistics
             self.stats['rtp_packets_processed'] += 1
+            self.last_audio_time = time.time()
             
             return True
             
@@ -168,6 +187,37 @@ class RTPSTTHandler:
             logger.error(f"Error processing RTP audio: {e}")
             self.stats['errors'] += 1
             return False
+    
+    async def _process_audio_chunk(self, chunk, stream_info: Dict[str, Any]):
+        """Process an audio chunk from the buffer manager."""
+        try:
+            # Convert audio format for Whisper
+            converted_audio, sample_rate = AudioFormatConverter.convert_to_whisper_format(
+                chunk.data,
+                source_sample_rate=chunk.sample_rate,
+                target_sample_rate=self.config.target_sample_rate,
+                source_channels=chunk.channels,
+                target_channels=1,
+                source_bit_depth=chunk.bit_depth,
+                target_bit_depth=16
+            )
+            
+            # Send to Realtime API
+            ssrc = stream_info.get('ssrc')
+            if ssrc in self.active_streams:
+                client_stream = self.active_streams[ssrc].get('client_stream')
+                if client_stream:
+                    success = await self.client.send_audio_chunk(converted_audio, client_stream)
+                    if not success:
+                        logger.warning(f"Failed to send audio chunk to Realtime API for SSRC {ssrc}")
+                else:
+                    logger.warning(f"No client stream found for SSRC {ssrc}")
+            else:
+                logger.warning(f"No active stream found for SSRC {ssrc}")
+                
+        except Exception as e:
+            logger.error(f"Error processing audio chunk: {e}")
+            self.stats['errors'] += 1
     
     async def process_speech_segment(self, segment: SpeechSegment, stream_info: Dict[str, Any]) -> bool:
         """Process a complete speech segment for STT."""
