@@ -25,8 +25,12 @@ class CircuitBreaker:
         return self._breaker.call(func, *args, **kwargs)
 
     async def call_async(self, func, *args, **kwargs):
-        """Execute an async function within the circuit breaker."""
-        return await self._breaker.call_async(func, *args, **kwargs)
+        """
+        Execute an async function within the circuit breaker using a
+        context manager to bypass the buggy native call_async.
+        """
+        with self._breaker:
+            return await func(*args, **kwargs)
 
     def decorate(self, func):
         """Decorate a function with this circuit breaker."""
