@@ -34,6 +34,7 @@ services:
       - ASTERISK_HOST=127.0.0.1
       - REDIS_HOST=127.0.0.1
       - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
 
 volumes:
   shared_audio:
