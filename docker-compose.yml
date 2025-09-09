@@ -21,15 +21,10 @@ services:
       context: .
       dockerfile: services/rtpengine/Dockerfile
     container_name: asterisk-ai-voice-agent-rtpengine
-    command: rtpengine --listen-ng=172.20.0.3:2223 --interface=172.20.0.3 --port-min=30000 --port-max=30009 -L 7 --log-stderr --log-dtmf=ng
+    command: rtpengine --listen-ng=127.0.0.1:2223 --interface=127.0.0.1 --port-min=30000 --port-max=30009 -L 7 --log-stderr --log-dtmf=ng
     privileged: true
-    ports:
-      - "2223:2223" # Control port
-      - "30000-30009:30000-30009/udp" # RTP port range
     restart: unless-stopped
-    networks:
-      ai-voice-network:
-        ipv4_address: 172.20.0.4
+    network_mode: host
     cap_add:
       - NET_ADMIN
       - SYS_NICE
@@ -151,11 +146,3 @@ volumes:
     driver: local
   shared_logs:
     driver: local
-
-networks:
-  ai-voice-network:
-    driver: bridge
-    ipam:
-      driver: default
-      config:
-        - subnet: 172.20.0.0/16
