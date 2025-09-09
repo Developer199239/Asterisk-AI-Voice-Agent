@@ -63,24 +63,26 @@ class CallControllerService:
 
     async def listen_for_control_messages(self):
         logger.info("Listening for control messages from Redis...")
-        try:
-            async for message in self.redis_queue.listen(Channels.CALLS_CONTROL_PLAY):
+        await self.redis_queue.subscribe([Channels.CALLS_CONTROL_PLAY])
+        
+        while self.running:
+            try:
+                message = await self.redis_queue.get_message()
                 if message and self.running:
                     try:
-                        control_message = CallControlMessage.model_validate_json(message)
+                        control_message = CallControlMessage.model_validate_json(message['data'])
                         logger.debug("Received control message", data=control_message)
                         if control_message.action == "play":
                             await self.ari_client.play_media(control_message.channel_id, f"sound:{control_message.file_path}")
                         elif control_message.action == "stop_playback":
-                            # This requires knowing the playback ID, which needs to be stored first.
-                            # For now, we'll log that we received it.
                             logger.info("Received stop_playback command", channel_id=control_message.channel_id)
                     except Exception as e:
                         logger.error("Error processing control message", exc_info=True, raw_message=message)
-        except Exception as e:
-            logger.error("Exception in listen_for_control_messages loop", exc_info=True)
-        finally:
-            logger.info("Stopped listening for control messages.")
+                await asyncio.sleep(0.01)
+            except Exception as e:
+                logger.error("Exception in listen_for_control_messages loop", exc_info=True)
+        
+        logger.info("Stopped listening for control messages.")
 
     async def _handle_stasis_start(self, event_data: dict):
         channel = event_data.get('channel', {})
