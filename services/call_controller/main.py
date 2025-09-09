@@ -16,6 +16,7 @@ import base64
 import wave
 import random
 import struct
+import os
 from typing import Any, Callable, Coroutine, Dict, List
 
 import aiohttp
