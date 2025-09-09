@@ -166,6 +166,7 @@ class CallControllerConfig(BaseConfig):
     redis: RedisConfig = Field(default_factory=RedisConfig)
     asterisk: AsteriskConfig = Field(default_factory=AsteriskConfig)
     deepgram: DeepgramConfig = Field(default_factory=DeepgramConfig)
+    llm: 'LLMServiceConfig' = Field(default_factory=lambda: LLMServiceConfig())
 
 
 class STTServiceConfig(AIProviderConfig, AsteriskConfig):

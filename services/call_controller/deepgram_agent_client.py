@@ -4,7 +4,7 @@ import websockets
 from typing import Callable, Optional
 
 from structlog import get_logger
-from .config import DeepgramConfig, LLMConfig
+from shared.config import DeepgramConfig, LLMServiceConfig as LLMConfig
 
 # Force git update by adding a comment
 logger = get_logger(__name__)
