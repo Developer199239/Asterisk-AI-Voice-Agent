@@ -99,19 +99,32 @@ class RTPEngineConfig(BaseSettings):
 class RedisConfig(BaseSettings):
     """Redis client configuration"""
 
-    url: str = Field(
-        alias="REDIS_URL",
-        default="redis://redis:6379",
-        description="Redis connection URL for message queue"
+    host: str = Field(
+        alias="REDIS_HOST",
+        default="redis",
+        description="Redis server hostname"
     )
-    request_timeout: int = Field(
-        default=10,
-        description="Timeout for Redis requests in seconds"
+    port: int = Field(
+        alias="REDIS_PORT",
+        default=6379,
+        description="Redis server port"
     )
     decode_responses: bool = Field(
         default=True,
         description="Decode responses from Redis"
     )
+
+
+class DeepgramConfig(BaseSettings):
+    """Deepgram client configuration"""
+
+    api_key: Optional[str] = Field(
+        alias="DEEPGRAM_API_KEY",
+        default=None,
+        description="Deepgram API key for STT"
+    )
+    model: str = Field(default="nova-2-phonecall", description="Deepgram STT model")
+    language: str = Field(default="en-US", description="STT language")
 
 
 class AIProviderConfig(BaseConfig):
@@ -148,11 +161,11 @@ class CallControllerConfig(BaseConfig):
 
     service_name: str = "call_controller"
     health_check_port: int = Field(default=15000)
-    service_host: str = "127.0.0.1"
+    service_host: str = "call_controller"
 
     redis: RedisConfig = Field(default_factory=RedisConfig)
     asterisk: AsteriskConfig = Field(default_factory=AsteriskConfig)
-    rtpengine: RTPEngineConfig = Field(default_factory=RTPEngineConfig)
+    deepgram: DeepgramConfig = Field(default_factory=DeepgramConfig)
 
 
 class STTServiceConfig(AIProviderConfig, AsteriskConfig):
@@ -268,7 +281,11 @@ def load_config(service_name: str) -> BaseConfig:
     if service_name not in config_map:
         raise ValueError(f"Unknown service: {service_name}")
     
-    return config_map[service_name]()
+    config_class = config_map[service_name]
+    
+    # Create an instance of the configuration class.
+    # This will automatically load from environment variables and .env file.
+    return config_class()
 
 
 def validate_required_env_vars():
@@ -281,6 +298,10 @@ def validate_required_env_vars():
     required_vars = [
         "OPENAI_API_KEY",
         "DEEPGRAM_API_KEY",
+        "ASTERISK_HOST",
+        "ASTERISK_ARI_USERNAME",
+        "ASTERISK_ARI_PASSWORD",
+        "REDIS_HOST"
     ]
     
     missing_vars = []
@@ -295,9 +316,18 @@ def validate_required_env_vars():
 if __name__ == "__main__":
     # Test configuration loading
     try:
+        # Load .env file for local testing
+        from dotenv import load_dotenv
+        dotenv_path = Path(__file__).parent.parent / '.env'
+        load_dotenv(dotenv_path=dotenv_path)
+
         config = load_config("call_controller")
         print(f"✅ Configuration loaded successfully for {config.service_name}")
-        print(f"   ARI URL: {config.ari_url}")
-        print(f"   Redis URL: {config.redis_url}")
+        print(f"   Log Level: {config.log_level}")
+        print(f"   Service Host: {config.service_host}")
+        print(f"   ARI URL: {config.asterisk.ari_url}")
+        print(f"   Redis Host: {config.redis.host}")
+        print(f"   Deepgram Model: {config.deepgram.model}")
+
     except Exception as e:
         print(f"❌ Configuration error: {e}")
