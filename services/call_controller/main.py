@@ -10,11 +10,13 @@ import structlog
 import signal
 from typing import Dict, Any
 import uuid
+import json
+from concurrent.futures import ThreadPoolExecutor
 
 from shared.config import load_config
 from services.call_controller.ari_client import ARIClient
-from services.call_controller.rtpengine_client import RTPEngineClient
 from shared.redis_client import RedisMessageQueue, CallControlMessage, CallNewMessage, Channels
+from services.call_controller.udp_server import UDPServer
 
 logger = structlog.get_logger(__name__)
 
@@ -22,7 +24,7 @@ class CallControllerService:
     def __init__(self):
         self.config = load_config('call_controller')
         self.ari_client = ARIClient(self.config.asterisk)
-        self.rtpengine_client = RTPEngineClient(self.config.rtpengine)
+        # self.rtpengine_client = RTPEngineClient(self.config.rtpengine) # No longer needed
         self.redis_queue = RedisMessageQueue(self.config.redis)
         self.active_calls: Dict[str, Any] = {}
         self.running = False
@@ -35,12 +37,16 @@ class CallControllerService:
         self.ari_client.on_event('PlaybackStarted', self._handle_playback_started)
         self.ari_client.on_event('PlaybackFinished', self._handle_playback_finished)
         self.ari_client.on_event('ChannelStateChange', self._handle_channel_state_change)
+        self.udp_server = UDPServer('0.0.0.0', 54321)
 
     async def start(self):
         logger.info(f"Starting service {self.config.service_name}")
         await self.redis_queue.connect()
-        await self.rtpengine_client.connect()
+        # await self.rtpengine_client.connect() # No longer needed
         await self.ari_client.connect()
+
+        # Start UDP server in a background task
+        asyncio.create_task(self.udp_server.start())
 
         asyncio.create_task(self.listen_for_control_messages())
 
@@ -55,10 +61,12 @@ class CallControllerService:
             await self._cleanup_call(channel_id)
         if self.ari_client:
             await self.ari_client.disconnect()
-        if self.rtpengine_client:
-            await self.rtpengine_client.disconnect()
+        # if self.rtpengine_client:
+        #     await self.rtpengine_client.disconnect()
         if self.redis_queue:
             await self.redis_queue.disconnect()
+        
+        self.udp_server.stop()
         logger.info("Call controller service stopped")
 
     async def _handle_control_message(self, channel: str, message_data: dict):
@@ -103,15 +111,23 @@ class CallControllerService:
             call_id = f"call-{uuid.uuid4()}"
             self.active_calls[channel_id]['call_id'] = call_id
 
-            sdp = event_data.get('channel', {}).get('dialplan', {}).get('exten')
-            # The SDP from the event is not a full SDP, so we pass a placeholder.
-            # RTPEngine primarily uses the call-id and channel info.
-            rtp_info = await self.rtpengine_client.offer(sdp, call_id=call_id)
-
-            self.active_calls[channel_id]['rtp_info'] = rtp_info
+            # sdp = event_data.get('channel', {}).get('dialplan', {}).get('exten')
+            # rtp_info = await self.rtpengine_client.offer(sdp, call_id=call_id)
+            # self.active_calls[channel_id]['rtp_info'] = rtp_info
 
             await self.ari_client.answer_channel(channel_id)
             self.active_calls[channel_id]['state'] = 'answered'
+            logger.info("Channel answered", channel_id=channel_id)
+
+            # Start forwarding media to our UDP server
+            logger.info("Issuing externalMedia command to Asterisk...")
+            await self.ari_client.channels.externalMedia(
+                channelId=channel_id,
+                app=self.config.asterisk.app_name,
+                external_host="127.0.0.1:54321", # Host machine's loopback
+                format="slin16" # Signed Linear PCM 16-bit
+            )
+            logger.info("externalMedia command sent successfully.")
 
             new_call_message = CallNewMessage(
                 message_id=f"msg-{uuid.uuid4()}",
@@ -138,9 +154,9 @@ class CallControllerService:
 
     async def _cleanup_call(self, channel_id: str):
         if channel_id in self.active_calls:
-            rtp_info = self.active_calls[channel_id].get('rtp_info')
-            if rtp_info:
-                await self.rtpengine_client.delete(rtp_info['call-id'])
+            # rtp_info = self.active_calls[channel_id].get('rtp_info')
+            # if rtp_info:
+            #     await self.rtpengine_client.delete(rtp_info['call-id'])
             del self.active_calls[channel_id]
             logger.info("Cleaned up call resources", channel_id=channel_id)
 
@@ -178,7 +194,8 @@ class CallControllerService:
                 'action': 'generate_response',
                 'text': greeting_text
             }
-            await self.redis_queue.publish_raw('llm:response:ready', llm_message)
+            # Use Redis client directly for raw dict messages
+            await self.redis_queue.redis.publish('llm:response:ready', json.dumps(llm_message))
             logger.info("Published LLM message", channel_id=channel_id)
             
         except Exception as e:
