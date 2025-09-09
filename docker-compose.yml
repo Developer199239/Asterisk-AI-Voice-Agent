@@ -17,7 +17,7 @@ services:
   rtpengine:
     image: readytalk/rtpengine-docker:mr6.2.1.1-39f2f23
     container_name: asterisk-ai-voice-agent-rtpengine
-    command: rtpengine --listen-ng=0.0.0.0:2223 --interface=0.0.0.0 --port-min=30000 --port-max=30009 -L 7 --log-stderr --foreground
+    command: rtpengine --listen-ng=0.0.0.0:2223 --listen-tcp=0.0.0.0:2223 --interface=0.0.0.0 --port-min=30000 --port-max=30009 -L 7 --log-stderr --foreground
     privileged: true
     restart: unless-stopped
     network_mode: host
