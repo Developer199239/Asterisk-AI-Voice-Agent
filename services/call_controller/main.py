@@ -58,7 +58,7 @@ class CallControllerService:
         self.ari_client = ARIClient(
             self.config.asterisk.username,
             self.config.asterisk.password,
-            f"http://{self.config.asterisk.host}:{self.config.asterisk.asterisk_port}",
+            f"http://{self.config.asterisk.host}:{self.config.asterisk.asterisk_port}/ari",
             self.config.asterisk.app_name
         )
         # self.rtpengine_client = RTPEngineClient(self.config.rtpengine) # No longer needed
