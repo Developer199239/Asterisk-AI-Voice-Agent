@@ -4,8 +4,9 @@ import websockets
 from typing import Callable, Optional
 
 from structlog import get_logger
-from services.call_controller.config import DeepgramConfig, LLMConfig
+from .config import DeepgramConfig, LLMConfig
 
+# Force git update by adding a comment
 logger = get_logger(__name__)
 
 class DeepgramAgentClient:
