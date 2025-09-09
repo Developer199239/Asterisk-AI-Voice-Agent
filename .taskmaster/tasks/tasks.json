@@ -1151,7 +1151,76 @@
           13
         ],
         "status": "in-progress",
-        "subtasks": []
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Enhance Test Fixtures and Mock Infrastructure",
+            "description": "Extend existing pytest fixtures with comprehensive rtpengine mocking and enhanced ARI simulation capabilities",
+            "dependencies": [],
+            "details": "Build upon existing Redis fixtures to add rtpengine mock server with proper RTP stream simulation. Enhance ARI mocking with complete call state management, event generation, and channel lifecycle simulation. Create reusable fixtures for external API mocking (OpenAI, Azure) with configurable response patterns.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 2,
+            "title": "Implement End-to-End Call Flow Integration Tests",
+            "description": "Create comprehensive tests covering complete call scenarios from ingress to TTS playback",
+            "dependencies": [
+              "14.1"
+            ],
+            "details": "Develop tests for full call flow: incoming call handling -> STT transcription -> LLM processing -> TTS generation -> audio playback. Test multiple conversation turns with context preservation. Validate proper channel state management and audio file handling throughout the pipeline.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 3,
+            "title": "Develop Barge-in Scenario Test Suite",
+            "description": "Create specialized tests for interrupt handling and barge-in scenarios with realistic simulation",
+            "dependencies": [
+              "14.1",
+              "14.2"
+            ],
+            "details": "Implement barge-in interrupt simulation with timing variations. Test mid-playback interruptions and proper audio cleanup. Validate conversation state recovery after interruptions. Create edge case tests for rapid successive interruptions and concurrent barge-in attempts.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 4,
+            "title": "Implement Load Testing with Concurrent Call Handling",
+            "description": "Create performance tests using pytest-xdist for concurrent call scenarios and resource management",
+            "dependencies": [
+              "14.1"
+            ],
+            "details": "Use pytest-xdist to simulate multiple concurrent calls. Test resource allocation and Redis connection pooling under load. Validate service performance with 10+ concurrent calls. Create stress tests for memory usage and audio file management during high load scenarios.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 5,
+            "title": "Expand Error Scenario and Fallback Testing",
+            "description": "Enhance existing resilience tests with comprehensive error handling and fallback mechanism validation",
+            "dependencies": [
+              "14.2",
+              "14.3"
+            ],
+            "details": "Build upon existing resilience tests to cover service failure cascades. Test OpenAI API failures and fallback model activation. Validate TTS service failures with SayAlpha fallback. Create network partition tests and Redis connectivity failure scenarios. Test graceful degradation under partial system failures.",
+            "status": "pending",
+            "testStrategy": ""
+          },
+          {
+            "id": 6,
+            "title": "Add Performance Benchmarking and Coverage Analysis",
+            "description": "Implement latency benchmarking tests and achieve 80%+ test coverage across critical service paths",
+            "dependencies": [
+              "14.2",
+              "14.4",
+              "14.5"
+            ],
+            "details": "Create performance benchmark tests for STT, LLM, and TTS latency targets. Implement automated coverage reporting with pytest-cov. Add performance regression detection for response time SLAs. Generate comprehensive coverage reports for all service interaction paths and identify gaps to reach 80%+ coverage target.",
+            "status": "pending",
+            "testStrategy": ""
+          }
+        ]
       },
       {
         "id": 15,

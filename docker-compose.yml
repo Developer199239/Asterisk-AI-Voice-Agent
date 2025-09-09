@@ -57,6 +57,7 @@ services:
     environment:
       - ASTERISK_HOST=127.0.0.1
       - REDIS_URL=redis://127.0.0.1:6379
+      - RTPENGINE_HOST=127.0.0.1
 
   stt_service:
     build:

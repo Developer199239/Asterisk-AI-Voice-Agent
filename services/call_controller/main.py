@@ -9,6 +9,7 @@ import asyncio
 import structlog
 import signal
 from typing import Dict, Any
+import uuid
 
 from shared.config import load_config
 from services.call_controller.ari_client import ARIClient
@@ -92,17 +93,30 @@ class CallControllerService:
         self.active_calls[channel_id] = {'channel_data': channel, 'state': 'ringing'}
         
         try:
+            # Generate a unique call ID for tracking across services
+            call_id = f"call-{uuid.uuid4()}"
+            self.active_calls[channel_id]['call_id'] = call_id
+
             sdp = event_data.get('channel', {}).get('dialplan', {}).get('exten')
-            rtp_info = await self.rtpengine_client.offer(sdp)
+            # The SDP from the event is not a full SDP, so we pass a placeholder.
+            # RTPEngine primarily uses the call-id and channel info.
+            rtp_info = await self.rtpengine_client.offer(sdp, call_id=call_id)
             
             self.active_calls[channel_id]['rtp_info'] = rtp_info
             
             await self.ari_client.answer_channel(channel_id)
             self.active_calls[channel_id]['state'] = 'answered'
             
-            new_call_message = CallNewMessage(channel_id=channel_id, sdp=sdp, rtp_info=rtp_info)
-            await self.redis_queue.publish(Channels.CALL_NEW.value, new_call_message.model_dump_json())
-            logger.info("Published new call event to Redis", channel_id=channel_id)
+            new_call_message = CallNewMessage(
+                message_id=f"msg-{uuid.uuid4()}",
+                source_service=self.config.service_name,
+                call_id=call_id,
+                channel_id=channel_id,
+                caller_id=channel.get('caller', {}).get('number'),
+                caller_name=channel.get('caller', {}).get('name')
+            )
+            await self.redis_queue.publish(Channels.CALL_NEW.value, new_call_message)
+            logger.info("Published new call event to Redis", channel_id=channel_id, call_id=call_id)
 
         except Exception as e:
             logger.error("Error handling StasisStart", channel_id=channel_id, exc_info=True)
