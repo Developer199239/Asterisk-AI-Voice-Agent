@@ -141,17 +141,11 @@ class CallControllerService:
 
             # Create the externalMedia channel
             logger.info("Creating externalMedia channel...")
-            media_channel_params = {
-                "app": self.config.asterisk.app_name,
-                "external_host": f"{self.config.service_host}:{self.udp_server.port}",
-                "format": "slin16"
-            }
-            media_channel = await self.ari_client.send_command(
-                "POST",
-                "channels/externalMedia",
-                params=media_channel_params
+            media_channel = await self.ari_client.create_external_media_channel(
+                channel_id=incoming_channel_id,
+                app_name=self.config.asterisk.app_name
             )
-            if not media_channel or 'id' not in media_channel:
+            if not media_channel or media_channel.get('status', 200) >= 400:
                  raise Exception(f"Failed to create externalMedia channel. Response: {media_channel}")
             
             media_channel_id = media_channel['id']
