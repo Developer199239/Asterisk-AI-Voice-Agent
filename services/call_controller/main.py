@@ -142,7 +142,6 @@ class CallControllerService:
             # Create the externalMedia channel
             logger.info("Creating externalMedia channel...")
             media_channel = await self.ari_client.create_external_media_channel(
-                channel_id=incoming_channel_id,
                 app_name=self.config.asterisk.app_name
             )
             if not media_channel or media_channel.get('status', 200) >= 400:
