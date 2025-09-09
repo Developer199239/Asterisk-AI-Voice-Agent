@@ -45,6 +45,7 @@ class AsteriskConfig(BaseConfig):
     
     # Asterisk Connection
     host: str = Field(
+        alias="ASTERISK_HOST",
         default="voiprnd.nemtclouddispatch.com",
         description="Asterisk server hostname or IP"
     )
@@ -151,18 +152,6 @@ class CallControllerConfig(BaseConfig):
     redis: RedisConfig = Field(default_factory=RedisConfig)
     asterisk: AsteriskConfig = Field(default_factory=AsteriskConfig)
     rtpengine: RTPEngineConfig = Field(default_factory=RTPEngineConfig)
-
-    class Config:
-        env_file = Path(__file__).parent.parent / ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = False
-
-    def __init__(self, **values):
-        super().__init__(**values)
-        # Manually trigger parsing for nested models, passing the top-level env settings down
-        self.redis = RedisConfig()
-        self.asterisk = AsteriskConfig()
-        self.rtpengine = RTPEngineConfig()
 
 
 class STTServiceConfig(AIProviderConfig, AsteriskConfig):
