@@ -21,7 +21,7 @@ services:
       context: .
       dockerfile: services/rtpengine/Dockerfile
     container_name: asterisk-ai-voice-agent-rtpengine
-    command: rtpengine --listen-ng=127.0.0.1:2223 --interface=127.0.0.1 --port-min=30000 --port-max=30009 -L 7 --log-stderr --log-dtmf=ng
+    command: /bin/bash -c "IP=$$(hostname -I | awk '{print $$1}') && rtpengine --listen-ng=$$IP:2223 --interface=$$IP --port-min=30000 --port-max=30009 -L 7 --log-stderr --log-dtmf=ng"
     privileged: true
     restart: unless-stopped
     network_mode: host
