@@ -6,12 +6,13 @@ services:
     image: redis:7.2-alpine
     container_name: asterisk-ai-voice-agent-redis
     restart: always
+    ports:
+      - "6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
-    network_mode: host
 
   # Call Controller Service
   call_controller:
@@ -20,22 +21,22 @@ services:
       dockerfile: services/call_controller/Dockerfile
     container_name: asterisk-ai-voice-agent-call-controller
     restart: always
-    extra_hosts:
-      - "voiprnd.nemtclouddispatch.com:45.79.181.39"
     volumes:
       - shared_audio:/shared/audio
       - shared_logs:/shared/logs
     depends_on:
       redis:
         condition: service_healthy
-    network_mode: host
+    ports:
+      - "15000:15000" # Expose health check port if needed
+      - "54322:54322/udp" # Expose UDP server port
     env_file:
       - .env
     environment:
       - PYTHONPATH=/app
-      - ASTERISK_HOST=127.0.0.1 # Overridden for host network
-      - REDIS_URL=redis://127.0.0.1:6379 # Overridden for host network
-      - RTPENGINE_HOST=127.0.0.1
+      - ASTERISK_HOST=voiprnd.nemtclouddispatch.com
+      - REDIS_HOST=redis
+      - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
 
 volumes:
   shared_audio:
