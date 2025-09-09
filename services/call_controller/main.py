@@ -67,8 +67,12 @@ class CallControllerService:
             logger.info("Connected to Redis")
 
             # Initialize RTPEngine client
-            await self.rtpengine_client.ping()
+            await self.rtpengine_client.connect()
             logger.info("Connected to RTPEngine")
+            
+            # Initialize ARI client
+            await self.ari_client.connect()
+            logger.info("Connected to ARI")
 
             # Set up event handlers
             self._setup_ari_handlers()
