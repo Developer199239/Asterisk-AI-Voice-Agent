@@ -13,8 +13,10 @@ from typing import Dict, Any, Optional, Callable, List
 from datetime import datetime
 import aiohttp
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from shared.config import AsteriskConfig
+import structlog
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 class ARIEvent:
@@ -32,20 +34,20 @@ class ARIEvent:
 class ARIClient:
     """Asterisk ARI WebSocket client for call management"""
     
-    def __init__(self, host: str, port: int, username: str, password: str):
-        self.host = host
-        self.port = port
-        self.username = username
-        self.password = password
+    def __init__(self, config: AsteriskConfig):
+        self.host = config.host
+        self.port = config.asterisk_port
+        self.username = config.username
+        self.password = config.password
         
-        self.websocket = None
-        self.http_session = None
+        self.websocket: Optional[websockets.WebSocketClientProtocol] = None
+        self.http_session: Optional[aiohttp.ClientSession] = None
         self.event_handlers: Dict[str, List[Callable]] = {}
         self.running = False
         
         # ARI URLs
-        self.ws_url = f"ws://{host}:{port}/ari/events?api_key={username}:{password}&app=asterisk-ai-voice-agent"
-        self.http_url = f"http://{host}:{port}/ari"
+        self.ws_url = f"ws://{self.host}:{self.port}/ari/events?api_key={self.username}:{self.password}&app=asterisk-ai-voice-agent"
+        self.http_url = f"http://{self.host}:{self.port}/ari"
     
     async def connect(self):
         """Connect to Asterisk ARI WebSocket and HTTP API"""
@@ -273,16 +275,22 @@ class ARIClient:
                 return response.status == 200
         except Exception:
             return False
+    
+    async def ping(self) -> bool:
+        """Ping ARI to check connection status."""
+        return await self.health_check()
 
 
 if __name__ == "__main__":
     # Test ARI client
     async def test_ari_client():
         client = ARIClient(
-            host="voiprnd.nemtclouddispatch.com",
-            port=8088,
-            username="AIAgent",
-            password="c4d5359e2f9ddd394cd6aa116c1c6a96"
+            config=AsteriskConfig(
+                host="voiprnd.nemtclouddispatch.com",
+                asterisk_port=8088,
+                username="AIAgent",
+                password="c4d5359e2f9ddd394cd6aa116c1c6a96"
+            )
         )
         
         try:
