@@ -35,7 +35,6 @@ async def main():
     try:
         # Load configuration from environment
         config = LLMServiceConfig(
-            redis_url=os.getenv("REDIS_URL", "redis://localhost:6379"),
             openai_api_key=os.getenv("OPENAI_API_KEY", ""),
             openai_base_url=os.getenv("OPENAI_BASE_URL"),
             primary_model=os.getenv("LLM_PRIMARY_MODEL", "gpt-4o"),

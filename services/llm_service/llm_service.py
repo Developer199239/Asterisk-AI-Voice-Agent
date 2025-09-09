@@ -18,36 +18,10 @@ from conversation_manager import ConversationManager, ConversationConfig
 from openai_client import OpenAIClient, LLMConfig as OpenAIConfig, ModelType
 from shared.fallback_responses import FallbackResponseManager
 from shared.health_check import create_health_check_app
+from shared.config import LLMServiceConfig
 import uvicorn
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class LLMServiceConfig:
-    """Configuration for the LLM service."""
-    # OpenAI settings
-    openai_api_key: str
-
-    # Redis settings
-    redis_url: str = "redis://localhost:6379"
-    
-    openai_base_url: Optional[str] = None
-    primary_model: str = "gpt-4o"
-    fallback_model: str = "gpt-3.5-turbo"
-    temperature: float = 0.8
-    max_tokens: int = 4096
-    
-    # Conversation settings
-    conversation_ttl: int = 3600  # 1 hour
-    max_conversation_tokens: int = 4000
-    system_message: str = "You are a helpful AI assistant for Jugaar LLC."
-    
-    # Service settings
-    health_check_interval: int = 30
-    enable_debug_logging: bool = True
-    service_name: str = "llm_service"
-    health_check_port: int = 8000
 
 
 class LLMService:
@@ -66,7 +40,7 @@ class LLMService:
         # Initialize components
         self.conversation_manager = ConversationManager(
             ConversationConfig(
-                redis_url=config.redis_url,
+                redis_url=config.redis.url,
                 conversation_ttl=config.conversation_ttl,
                 max_tokens=config.max_conversation_tokens,
                 system_message=config.system_message
@@ -126,7 +100,7 @@ class LLMService:
             logger.info("Starting LLM service...")
             
             # Initialize Redis client
-            self.redis_client = Redis.from_url(self.config.redis_url, decode_responses=True)
+            self.redis_client = Redis.from_url(self.config.redis.url, decode_responses=True)
             await self.redis_client.ping()
             
             # Start conversation manager

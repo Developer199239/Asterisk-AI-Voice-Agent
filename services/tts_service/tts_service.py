@@ -18,43 +18,10 @@ from openai_tts_client import OpenAITTSClient, TTSConfig as OpenAITTSConfig, Voi
 from audio_file_manager import AudioFileManager, AudioFileConfig, AudioFileInfo
 from asterisk_fallback import AsteriskFallbackHandler, AsteriskFallbackConfig, FallbackMode
 from shared.health_check import create_health_check_app
+from shared.config import TTSServiceConfig
 import uvicorn
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class TTSServiceConfig:
-    """Configuration for the TTS service."""
-    # OpenAI settings
-    openai_api_key: str
-
-    # Redis settings
-    redis_url: str = "redis://localhost:6379"
-    
-    openai_base_url: Optional[str] = None
-    voice: str = "alloy"
-    model: str = "tts-1"
-    audio_format: str = "mp3"
-    speed: float = 1.0
-    
-    # File management settings
-    base_directory: str = "/shared/audio"
-    temp_directory: str = "/tmp/tts_audio"
-    file_ttl: int = 300  # 5 minutes
-    max_file_size: int = 10 * 1024 * 1024  # 10MB
-    
-    # Service settings
-    health_check_interval: int = 30
-    enable_debug_logging: bool = True
-    
-    # Fallback settings
-    enable_fallback: bool = True
-    fallback_mode: str = "sayalpha"
-    asterisk_host: str = "localhost"
-    asterisk_port: int = 8088
-    ari_username: str = "AIAgent"
-    ari_password: str = "c4d5359e2f9ddd394cd6aa116c1c6a96"
 
 
 class TTSService:
@@ -135,7 +102,7 @@ class TTSService:
             logger.info("Starting TTS service...")
             
             # Initialize Redis client
-            self.redis_client = Redis.from_url(self.config.redis_url, decode_responses=True)
+            self.redis_client = Redis.from_url(self.config.redis.url, decode_responses=True)
             await self.redis_client.ping()
             
             # Start file manager
