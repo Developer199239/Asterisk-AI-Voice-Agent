@@ -41,41 +41,49 @@ class DeepgramAgentClient:
             raise
 
     async def _configure_agent(self, deepgram_config: DeepgramConfig, llm_config: LLMConfig):
-        # Per the V1 API documentation, the think.provider object is simpler,
-        # and the greeting is sent as a separate message.
+        """Builds and sends the V1 Settings message to the Deepgram Voice Agent."""
         settings = {
             "type": "Settings",
+            "audio": {
+                "input": {
+                    "encoding": "linear16",
+                    "sample_rate": 16000
+                },
+                "output": {
+                    "encoding": "linear16",
+                    "sample_rate": 24000,
+                    "container": "none"
+                }
+            },
             "agent": {
+                "language": "en",
                 "listen": {
                     "provider": {
                         "type": "deepgram",
-                        # The 'model' key is no longer required here per docs
+                        "model": deepgram_config.model,
+                        "smart_format": True
                     }
                 },
                 "think": {
-                    "provider": "open_ai",
-                    "model": llm_config.model,
-                    "prompt": llm_config.prompt,
+                    "provider": {
+                        "type": "open_ai",
+                        "model": llm_config.model
+                    },
+                    "prompt": llm_config.prompt
                 },
                 "speak": {
-                    "provider": "deepgram",
-                    "model": deepgram_config.tts_model
+                    "provider": {
+                        "type": "deepgram",
+                        "model": deepgram_config.tts_model
+                    }
                 }
             }
         }
         await self.websocket.send(json.dumps(settings))
         logger.debug("Sent agent settings", settings=settings)
 
-        # Send the greeting as a separate message
-        greeting_message = {
-            "type": "Greeting",
-            "text": llm_config.greeting
-        }
-        await self.websocket.send(json.dumps(greeting_message))
-        logger.debug("Sent agent greeting", greeting=greeting_message)
-
     async def _keep_alive(self):
-        """Send a keep-alive message every 10 seconds to maintain the connection."""
+        """Sends a keep-alive message every 10 seconds to maintain the connection."""
         while True:
             try:
                 await asyncio.sleep(10)

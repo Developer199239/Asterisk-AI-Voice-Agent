@@ -131,6 +131,7 @@ class DeepgramConfig(BaseSettings):
     model: str = Field(default="nova-2-phonecall", description="Deepgram STT model")
     language: str = Field(default="en-US", description="STT language")
     tts_model: str = Field(default="aura-asteria-en", description="Deepgram TTS model for Agent")
+    smart_format: bool = Field(default=True, description="Enable smart format for Deepgram STT")
 
 
 class AIProviderConfig(BaseConfig):
@@ -196,7 +197,7 @@ class STTServiceConfig(AIProviderConfig, AsteriskConfig):
     )
 
 
-class LLMServiceConfig(AIProviderConfig, AsteriskConfig):
+class LLMServiceConfig(BaseSettings):
     """LLM Service configuration"""
     
     service_name: str = "llm_service"
@@ -211,8 +212,10 @@ class LLMServiceConfig(AIProviderConfig, AsteriskConfig):
     fallback_model: str = Field(default="gpt-3.5-turbo", description="Fallback LLM model")
     temperature: float = Field(default=0.7, description="LLM temperature")
     max_tokens: int = Field(default=150, description="LLM max tokens for a single response")
-    prompt: str = Field(default="You are a helpful AI assistant for Jugaar LLC.", description="LLM system message")
-    greeting: str = Field(default="Hello, I am an AI Assistant for Jugaar LLC. How can I help you today.", description="Initial greeting from the AI")
+    prompt: str = Field(
+        "You are a helpful AI assistant for Jugaar LLC. Your first response must be the greeting: 'Hello, I am an AI Assistant for Jugaar LLC. How can I help you today.'",
+        description="LLM system message"
+    )
 
     # Conversation settings
     max_conversation_history: int = Field(
