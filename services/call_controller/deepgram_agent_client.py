@@ -89,6 +89,7 @@ class DeepgramAgentClient:
                 break
 
     async def _receive_loop(self):
+        """Continuously listen for messages from the WebSocket."""
         if not self.websocket:
             return
         try:
@@ -117,12 +118,17 @@ class DeepgramAgentClient:
 
     async def send_audio(self, audio_chunk: bytes):
         """Send an audio chunk through the WebSocket."""
-        # Use 'not self.websocket.closed' to check connection state
-        if self.websocket and not self.websocket.closed:
+        if self.websocket:
             try:
+                logger.debug("Attempting to send audio chunk to Deepgram...", chunk_size=len(audio_chunk))
                 self._is_audio_flowing = True
                 await self.websocket.send(audio_chunk)
-            except websockets.exceptions.ConnectionClosed:
-                logger.warning("Could not send audio, WebSocket connection is closed.")
+                logger.debug("Successfully sent audio chunk.")
+            except websockets.exceptions.ConnectionClosed as e:
+                logger.warning(
+                    "Could not send audio, WebSocket connection was closed.",
+                    code=e.code,
+                    reason=e.reason
+                )
             except Exception:
-                logger.error("Error sending audio chunk", exc_info=True)
+                logger.error("An unexpected error occurred while sending audio chunk", exc_info=True)

@@ -21,8 +21,7 @@ services:
     container_name: asterisk-ai-voice-agent-call-controller
     restart: always
     volumes:
-      - shared_audio:/shared/audio
-      - shared_logs:/shared/logs
+      - ./shared:/app/shared
     depends_on:
       redis:
         condition: service_healthy
@@ -33,11 +32,7 @@ services:
       - PYTHONPATH=/app
       - ASTERISK_HOST=127.0.0.1
       - REDIS_HOST=127.0.0.1
+      - REDIS_URL=redis://redis:6379
+      - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
       - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
-
-volumes:
-  shared_audio:
-    driver: local
-  shared_logs:
-    driver: local

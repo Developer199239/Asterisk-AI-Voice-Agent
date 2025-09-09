@@ -256,12 +256,10 @@ class CallControllerService:
         This is the callback for the UDP server. It finds the appropriate
         Deepgram agent client and forwards the audio payload.
         """
-        # A simple way to map incoming RTP packets to a call is needed.
-        # For now, since we only handle one call at a time for this MVP,
-        # we can find the one active call with an agent client.
-        # THIS IS A SIMPLIFICATION and will need to be improved for concurrent calls.
-        
+        logger.debug("UDP server received a packet", size=len(data), source_addr=addr)
         active_agent_client = None
+        # Find the active agent client. This simple approach works for one call at a time.
+        # For multi-call, we'd need a way to map UDP source addr to a call.
         for call_info in self.active_calls.values():
             if 'agent_client' in call_info:
                 active_agent_client = call_info['agent_client']
@@ -270,6 +268,10 @@ class CallControllerService:
         if active_agent_client:
             if len(data) > 12: # Basic RTP header check
                 audio_payload = data[12:]
+                logger.debug(
+                    "Forwarding audio payload to Deepgram agent...",
+                    payload_size=len(audio_payload)
+                )
                 await active_agent_client.send_audio(audio_payload)
             else:
                 logger.warning("Received a packet too small to be RTP", size=len(data), source_addr=addr)
