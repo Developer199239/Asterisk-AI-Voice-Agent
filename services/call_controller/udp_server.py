@@ -34,7 +34,8 @@ class UDPServer:
         try:
             self.transport, self.protocol = await loop.create_datagram_endpoint(
                 lambda: UDPServerProtocol(),
-                local_addr=(self.host, self.port)
+                local_addr=(self.host, self.port),
+                reuse_port=True
             )
             self._is_running = True
             logger.info("UDP server is running.")
