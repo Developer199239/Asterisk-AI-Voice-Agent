@@ -12,6 +12,8 @@ from typing import Dict, Any, List, Callable
 import uuid
 import json
 from concurrent.futures import ThreadPoolExecutor
+import base64
+import wave
 
 from shared.config import load_config
 from services.call_controller.ari_client import ARIClient
@@ -125,6 +127,7 @@ class CallControllerService:
                 'channel_data': channel, 
                 'state': 'answered',
                 'call_id': call_id,
+                'request_id': None # We will populate this on Welcome event
             }
 
             # Set up and start the Deepgram Agent client
@@ -196,7 +199,57 @@ class CallControllerService:
     async def _handle_deepgram_event(self, event: dict):
         """Handle incoming events from the Deepgram Agent client."""
         logger.info("Received event from Deepgram Agent", dg_event=event)
-        # We will add logic here later to handle playback events, etc.
+        event_type = event.get('type')
+        request_id = event.get('request_id')
+
+        # Find the channel_id associated with this request_id
+        channel_id = None
+        call_info_to_update = None
+        for cid, info in self.active_calls.items():
+            if info.get('request_id') == request_id:
+                channel_id = cid
+                break
+            # If request_id is not yet set, we might be processing the Welcome event
+            if info.get('request_id') is None and event_type == 'Welcome':
+                channel_id = cid
+                call_info_to_update = info
+                break
+        
+        if call_info_to_update and event_type == 'Welcome':
+            call_info_to_update['request_id'] = request_id
+            logger.info("Associated request_id with channel", request_id=request_id, channel_id=channel_id)
+
+
+        if not channel_id:
+            logger.warning("Could not find channel for request_id", request_id=request_id)
+            return
+
+        if event_type == 'AgentAudio':
+            audio_data = event.get('data')
+
+            if not audio_data:
+                logger.warning("AgentAudio event missing data", event=event)
+                return
+
+            try:
+                # Decode the base64 audio data
+                decoded_audio = base64.b64decode(audio_data)
+
+                # Save the audio to a temporary WAV file
+                # Note: This assumes mono, 16-bit PCM at 8000 Hz, which is common for telephony.
+                # Deepgram's output format should be verified.
+                temp_filename = f"/tmp/agent_audio_{channel_id}_{uuid.uuid4()}.wav"
+                with wave.open(temp_filename, 'wb') as wf:
+                    wf.setnchannels(1)
+                    wf.setsampwidth(2)
+                    wf.setframerate(8000)
+                    wf.writeframes(decoded_audio)
+
+                # Play the audio file on the channel
+                await self.ari_client.play_media(channel_id, f"sound:{temp_filename[:-4]}") # ARI needs path without extension
+                
+            except Exception as e:
+                logger.error("Error handling AgentAudio event", exc_info=True)
 
     async def _forward_audio_to_agent(self, data: bytes, addr: tuple):
         """

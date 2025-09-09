@@ -15,6 +15,7 @@ class DeepgramAgentClient:
         self.websocket: Optional[websockets.WebSocketClientProtocol] = None
         self._keep_alive_task: Optional[asyncio.Task] = None
         self._is_audio_flowing = False
+        self.request_id: Optional[str] = None
 
     async def connect(self, deepgram_config: DeepgramConfig, llm_config: LLMConfig):
         # The correct V1 endpoint from the migration guide
@@ -92,7 +93,16 @@ class DeepgramAgentClient:
             return
         try:
             async for message in self.websocket:
-                await self.event_handler(json.loads(message))
+                event_data = json.loads(message)
+                # If this is the Welcome message, store the request_id
+                if event_data.get('type') == 'Welcome':
+                    self.request_id = event_data.get('request_id')
+                
+                # Add the request_id to every event we pass to the handler
+                if self.request_id:
+                    event_data['request_id'] = self.request_id
+
+                await self.event_handler(event_data)
         except websockets.exceptions.ConnectionClosed as e:
             logger.warning("Deepgram Voice Agent connection closed", reason=str(e))
         except Exception:
