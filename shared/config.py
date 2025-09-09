@@ -212,7 +212,7 @@ class TTSServiceConfig(AIProviderConfig, AsteriskConfig):
     """TTS Service configuration"""
     
     service_name: str = "tts_service"
-    health_check_port: int = 8003
+    health_check_port: int = 8005
     
     # Redis configuration
     redis: RedisConfig = Field(default_factory=RedisConfig)
