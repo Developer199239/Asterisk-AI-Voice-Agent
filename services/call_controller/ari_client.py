@@ -163,15 +163,22 @@ class ARIClient:
         logger.debug("Getting details for ARI app", app_name=app_name)
         return await self.send_command("GET", f"applications/{app_name}")
 
-    async def create_external_media_channel(self, app_name: str, external_host: str) -> Optional[Dict[str, Any]]:
+    async def create_external_media_channel(self, app_name: str, external_host: str, format: str) -> Optional[Dict[str, Any]]:
         """Create an external media channel for streaming."""
-        logger.info("Creating externalMedia channel...", external_host=external_host)
+        logger.info("Creating externalMedia channel...", external_host=external_host, format=format)
+        
+        # This command is unique and uses query parameters, not a JSON body.
+        params = {
+            "app": app_name,
+            "external_host": external_host,
+            "format": format,
+            "encapsulation": "rtp", # Explicitly state we are using RTP
+            "transport": "udp",     # Explicitly state we are using UDP
+            "direction": "both"     # We want to send and receive audio
+        }
+        
         return await self.send_command(
             "POST",
             "channels/externalMedia",
-            params={
-                "app": app_name,
-                "external_host": external_host,
-                "format": "slin16"
-            }
+            params=params
         )
