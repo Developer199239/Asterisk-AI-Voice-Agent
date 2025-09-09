@@ -7,6 +7,8 @@ import json
 import websockets
 import structlog
 from typing import Callable, Optional
+import functools
+from websockets.client import WebSocketClientProtocol
 
 from shared.config import DeepgramConfig
 
@@ -24,8 +26,12 @@ class STTClient:
             ws_url = f"wss://api.deepgram.com/v1/listen?model={self.config.model}&language={self.config.language}&encoding=linear16&sample_rate=8000"
             
             logger.info("Connecting to Deepgram...")
-            # Correctly pass headers using the extra_headers argument
-            self.websocket = await websockets.connect(ws_url, extra_headers=extra_headers)
+            
+            # Create a protocol factory with the extra headers.
+            # This is a more robust way to pass headers than using **kwargs in connect().
+            create_protocol = functools.partial(WebSocketClientProtocol, extra_headers=extra_headers)
+
+            self.websocket = await websockets.connect(ws_url, create_protocol=create_protocol)
             logger.info("✅ Successfully connected to Deepgram.")
         except Exception as e:
             logger.error("Failed to connect to Deepgram", exc_info=True)
