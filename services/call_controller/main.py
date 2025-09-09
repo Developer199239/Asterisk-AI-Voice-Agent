@@ -224,8 +224,9 @@ class CallControllerService:
             logger.info("Creating externalMedia channel...")
             media_channel_response = await self.ari_client.create_external_media_channel(
                 app_name=self.config.asterisk.app_name,
-                external_host=f"{self.udp_server.host}:{self.udp_server.port}", # Use the actual port
-                format="slin16" # Explicitly set the format for outgoing audio
+                # With host networking, we can use localhost to communicate with Asterisk
+                external_host=f"127.0.0.1:{self.udp_server.port}",
+                format="slin16"
             )
             # The response body *is* the channel object, not nested under a 'channel' key.
             if not media_channel_response or 'id' not in media_channel_response:
@@ -234,9 +235,8 @@ class CallControllerService:
             media_channel_id = media_channel_response['id']
             self.active_calls[channel_id]['media_channel_id'] = media_channel_id
             
-            # NETWORKING FIX: Override the local address with the configured ASTERISK_HOST
-            # to ensure we send RTP to the correct, reachable IP.
-            asterisk_rtp_host = self.config.asterisk.host
+            # NETWORKING FIX: With host networking, Asterisk's local RTP port is on localhost.
+            asterisk_rtp_host = "127.0.0.1"
             asterisk_rtp_port = int(media_channel_response["channelvars"]["UNICASTRTP_LOCAL_PORT"])
             self.active_calls[channel_id]['asterisk_rtp_addr'] = (asterisk_rtp_host, asterisk_rtp_port)
 
