@@ -161,6 +161,9 @@ class STTServiceConfig(AIProviderConfig, AsteriskConfig):
     health_check_port: int = 8001
     rtp_listen_port: int = 5004
     
+    # Redis configuration
+    redis: RedisConfig = Field(default_factory=RedisConfig)
+    
     # Audio processing settings
     sample_rate: int = Field(
         default=16000,
@@ -177,6 +180,9 @@ class LLMServiceConfig(AIProviderConfig, AsteriskConfig):
     
     service_name: str = "llm_service"
     health_check_port: int = 8002
+    
+    # Redis configuration
+    redis: RedisConfig = Field(default_factory=RedisConfig)
     
     # OpenAI LLM specific settings
     openai_base_url: Optional[str] = Field(default=None, description="OpenAI API base URL")
@@ -207,6 +213,9 @@ class TTSServiceConfig(AIProviderConfig, AsteriskConfig):
     
     service_name: str = "tts_service"
     health_check_port: int = 8003
+    
+    # Redis configuration
+    redis: RedisConfig = Field(default_factory=RedisConfig)
     
     # OpenAI TTS specific settings
     openai_base_url: Optional[str] = Field(default=None, description="OpenAI API base URL")
