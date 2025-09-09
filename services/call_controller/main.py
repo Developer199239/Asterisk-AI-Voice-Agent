@@ -130,7 +130,7 @@ class CallControllerService:
         # The UDPServer now needs the host and port to be explicitly passed to its start method.
         # We'll use a dynamic port to avoid conflicts.
         # Let's define host and port here for clarity.
-        udp_host = "0.0.0.0"
+        udp_host = "127.0.0.1" # Bind specifically to localhost for host networking
         udp_port = 0 # 0 means the OS will pick an available port
         self.udp_server_task = asyncio.create_task(self.udp_server.start(udp_host, udp_port))
 
