@@ -18,6 +18,7 @@ from services.call_controller.ari_client import ARIClient
 from shared.redis_client import RedisMessageQueue, CallControlMessage, CallNewMessage, Channels
 from services.call_controller.udp_server import UDPServer
 from services.call_controller.stt_client import STTClient
+from services.call_controller.deepgram_agent_client import DeepgramAgentClient
 
 logger = structlog.get_logger(__name__)
 
@@ -104,6 +105,11 @@ class CallControllerService:
         incoming_channel_id = channel.get('id')
         if not incoming_channel_id:
             logger.warning("StasisStart event with no channel ID")
+            return
+
+        # This is the fix for the recursive loop. We only handle SIP/PJSIP channels.
+        if not (channel.get('name', '').startswith("SIP/") or channel.get('name', '').startswith("PJSIP/")):
+            logger.debug("Ignoring non-SIP/PJSIP channel", channel_name=channel.get('name'))
             return
 
         logger.info("New call received", channel_id=incoming_channel_id, caller=channel.get('caller'))
