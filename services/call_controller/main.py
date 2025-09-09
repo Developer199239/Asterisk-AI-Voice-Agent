@@ -14,26 +14,60 @@ import json
 from concurrent.futures import ThreadPoolExecutor
 import base64
 import wave
+import random
+import struct
+from typing import Any, Callable, Coroutine, Dict, List
 
-from shared.config import load_config
-from services.call_controller.ari_client import ARIClient
+import aiohttp
+import asyncio
+from aiohttp import web
+from shared.config import Settings
+from shared.logging_config import get_logger
 from shared.redis_client import RedisMessageQueue, CallControlMessage, CallNewMessage, Channels
-from services.call_controller.udp_server import UDPServer
+from services.call_controller.ari_client import ARIClient
+from shared.udp_server import UDPServer
 from services.call_controller.deepgram_agent_client import DeepgramAgentClient
 
-logger = structlog.get_logger(__name__)
+logger = get_logger(__name__)
+
+# --- RTP Packetizer ---
+class RTPPacketizer:
+    def __init__(self, ssrc):
+        self.sequence_number = random.randint(0, 65535)
+        self.timestamp = random.randint(0, 4294967295)
+        self.ssrc = ssrc
+        logger.debug(f"RTP Packetizer initialized.", initial_seq=self.sequence_number, initial_ts=self.timestamp, ssrc=self.ssrc)
+
+    def packetize(self, payload: bytes) -> bytes:
+        header = struct.pack('!BBHII',
+            0b10000000,  # Version 2, no padding, no extension, no CSRC
+            96,          # Payload Type 96 (Dynamic for slin16)
+            self.sequence_number,
+            self.timestamp,
+            self.ssrc
+        )
+        self.sequence_number = (self.sequence_number + 1) % 65536
+        # slin16 is 2 bytes per sample. Timestamp increases by number of samples.
+        self.timestamp = (self.timestamp + len(payload) // 2) % 4294967296
+        return header + payload
 
 class CallControllerService:
-    def __init__(self):
-        self.config = load_config('call_controller')
-        self.ari_client = ARIClient(self.config.asterisk)
+    def __init__(self, config: Settings):
+        self.config = config
+        self.ari_client = ARIClient(
+            self.config.asterisk.ari_username,
+            self.config.asterisk.ari_password,
+            f"http://{self.config.asterisk.ari_host}:{self.config.asterisk.ari_port}",
+            self.config.asterisk.app_name
+        )
         # self.rtpengine_client = RTPEngineClient(self.config.rtpengine) # No longer needed
         self.redis_queue = RedisMessageQueue(self.config.redis)
-        self.active_calls: Dict[str, Any] = {}
+        self.active_calls: Dict[str, Dict[str, Any]] = {}
         self.running = False
         self.event_handlers: Dict[str, List[Callable]] = {}
         self.setup_event_handlers()
-        self.udp_server = UDPServer('0.0.0.0', 54322, self._forward_audio_to_agent)
+        self.udp_server = UDPServer(self._forward_audio_to_agent)
+        self.http_server_task = None
 
     def setup_event_handlers(self):
         self.ari_client.on_event('StasisStart', self._handle_stasis_start)
@@ -135,8 +169,8 @@ class CallControllerService:
 
     async def _handle_stasis_start(self, event_data: dict):
         channel = event_data.get('channel', {})
-        incoming_channel_id = channel.get('id')
-        if not incoming_channel_id:
+        channel_id = channel.get('id')
+        if not channel_id:
             logger.warning("StasisStart event with no channel ID")
             return
 
@@ -145,27 +179,29 @@ class CallControllerService:
             logger.debug("Ignoring non-SIP/PJSIP channel", channel_name=channel.get('name'))
             return
 
-        logger.info("New call received", channel_id=incoming_channel_id, caller=channel.get('caller'))
+        logger.info("New call received", channel_id=channel_id, caller=channel.get('caller'))
         
         call_id = f"call-{uuid.uuid4()}"
         
         try:
             # Answer the incoming channel first
-            await self.ari_client.answer_channel(incoming_channel_id)
-            logger.info("Channel answered", channel_id=incoming_channel_id)
+            await self.ari_client.answer_channel(channel_id)
+            logger.info("Channel answered", channel_id=channel_id)
 
             # Store preliminary call state
-            self.active_calls[incoming_channel_id] = {
-                'channel_data': channel, 
-                'state': 'answered',
-                'call_id': call_id,
-                'request_id': None # We will populate this on Welcome event
+            self.active_calls[channel_id] = {
+                "call_id": call_id,
+                "channel_data": channel,
+                "agent_client": None,
+                "media_channel_id": None,
+                "bridge_id": None,
+                "rtp_packetizer": RTPPacketizer(ssrc=random.randint(0, 4294967295)) # Create packetizer per call
             }
 
             # Set up and start the Deepgram Agent client
             agent_client = DeepgramAgentClient(self._handle_deepgram_event)
             await agent_client.connect(self.config.deepgram, self.config.llm)
-            self.active_calls[incoming_channel_id]['agent_client'] = agent_client
+            self.active_calls[channel_id]['agent_client'] = agent_client
             logger.info("Deepgram Agent client connected", call_id=call_id)
 
             # Create the externalMedia channel for two-way audio
@@ -179,24 +215,32 @@ class CallControllerService:
                 raise Exception(f"Failed to create externalMedia channel. Response: {media_channel_response}")
             
             media_channel_id = media_channel_response['id']
-            self.active_calls[incoming_channel_id]['media_channel_id'] = media_channel_id
-            logger.info("externalMedia channel created", media_channel_id=media_channel_id)
+            self.active_calls[channel_id]['media_channel_id'] = media_channel_id
+            self.active_calls[channel_id]['asterisk_rtp_addr'] = (
+                media_channel_response["channelvars"]["UNICASTRTP_LOCAL_ADDRESS"],
+                int(media_channel_response["channelvars"]["UNICASTRTP_LOCAL_PORT"])
+            )
+            logger.info(
+                "externalMedia channel created",
+                media_channel_id=media_channel_id,
+                rtp_addr=self.active_calls[channel_id]['asterisk_rtp_addr']
+            )
 
-            # Add media_channel_id to active_calls for reverse lookup
-            self.active_calls[media_channel_id] = self.active_calls[incoming_channel_id]
+            # Reverse lookup for cleanup
+            self.active_calls[media_channel_id] = self.active_calls[channel_id]
 
             # Bridge the incoming call with the media channel
             bridge = await self.ari_client.create_bridge()
             bridge_id = bridge['id']
-            self.active_calls[incoming_channel_id]['bridge_id'] = bridge_id
+            self.active_calls[channel_id]['bridge_id'] = bridge_id
             
-            await self.ari_client.add_channel_to_bridge(bridge_id, incoming_channel_id)
+            await self.ari_client.add_channel_to_bridge(bridge_id, channel_id)
             await self.ari_client.add_channel_to_bridge(bridge_id, media_channel_id)
             logger.info("Incoming call and media channel bridged", bridge_id=bridge_id)
 
         except Exception as e:
-            logger.error("Error handling StasisStart", channel_id=incoming_channel_id, exc_info=True)
-            await self._cleanup_call(incoming_channel_id)
+            logger.error("Error handling StasisStart", channel_id=channel_id, exc_info=True)
+            await self._cleanup_call(channel_id)
 
     async def _handle_stasis_end(self, event_data: dict):
         channel = event_data.get('channel', {})
@@ -333,6 +377,13 @@ class CallControllerService:
             except Exception as e:
                 logger.error("Error handling AgentAudio event", exc_info=True)
 
+        elif event_type == "UserStartedSpeaking":
+            logger.debug("Handling UserStartedSpeaking event")
+            # This event now contains the audio payload to be played back.
+            audio_payload_b64 = event.get("payload")
+            if audio_payload_b64:
+                await self._play_deepgram_audio(channel_id, audio_payload_b64)
+
     async def _forward_audio_to_agent(self, data: bytes, addr: tuple):
         """
         This is the callback for the UDP server. It finds the appropriate
@@ -359,6 +410,39 @@ class CallControllerService:
                 logger.warning("Received a packet too small to be RTP", size=len(data), source_addr=addr)
         else:
             logger.warning("Received UDP packet but no active agent client", source_addr=addr)
+
+    async def _play_deepgram_audio(self, channel_id: str, audio_payload_b64: str):
+        call_info = self.active_calls.get(channel_id)
+        if not call_info:
+            logger.warning("Could not find call info to play audio for channel", channel_id=channel_id)
+            return
+
+        rtp_packetizer = call_info.get('rtp_packetizer')
+        asterisk_addr = call_info.get('asterisk_rtp_addr')
+
+        if not rtp_packetizer or not asterisk_addr:
+            logger.warning("Missing RTP packetizer or Asterisk address for call", call_id=call_info.get('call_id'))
+            return
+
+        try:
+            audio_payload = base64.b64decode(audio_payload_b64)
+            logger.debug("Received audio from Deepgram", payload_size=len(audio_payload), call_id=call_info.get('call_id'))
+
+            # Deepgram sends audio in chunks. A common size is 640 bytes for 20ms of L16 audio.
+            # We will packetize and send it as is.
+            rtp_packet = rtp_packetizer.packetize(audio_payload)
+            
+            logger.debug("Sending RTP packet to Asterisk",
+                         addr=asterisk_addr,
+                         seq=rtp_packetizer.sequence_number,
+                         ts=rtp_packetizer.timestamp,
+                         ssrc=rtp_packetizer.ssrc,
+                         size=len(rtp_packet))
+                         
+            await self.udp_server.send(rtp_packet, asterisk_addr)
+
+        except Exception as e:
+            logger.error("Failed to process and send audio to Asterisk", error=e, call_id=call_info.get('call_id'))
 
 
 async def main():
