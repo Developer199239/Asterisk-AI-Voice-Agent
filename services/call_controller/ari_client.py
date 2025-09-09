@@ -50,6 +50,10 @@ class ARIClient:
         self.ws_url = f"ws://{self.host}:{self.port}/ari/events?api_key={self.username}:{self.password}&app={self.app_name}"
         self.http_url = f"http://{self.host}:{self.port}/ari"
     
+    def on_event(self, event_type: str, handler: Callable):
+        """Alias for add_event_handler for backward compatibility."""
+        self.add_event_handler(event_type, handler)
+
     async def connect(self):
         """Connect to Asterisk ARI WebSocket and HTTP API"""
         if self.websocket:
