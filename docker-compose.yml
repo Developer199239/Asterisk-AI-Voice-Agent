@@ -21,6 +21,8 @@ services:
       dockerfile: services/call_controller/Dockerfile
     container_name: asterisk-ai-voice-agent-call-controller
     restart: always
+    extra_hosts:
+      - "voiprnd.nemtclouddispatch.com:45.79.181.39"
     volumes:
       - shared_audio:/shared/audio
       - shared_logs:/shared/logs
