@@ -140,3 +140,15 @@ class ARIClient:
         """Add a channel to a bridge."""
         logger.info("Adding channel to bridge", channel_id=channel_id, bridge_id=bridge_id)
         await self.send_command("POST", f"bridges/{bridge_id}/addChannel", data={"channel": channel_id})
+
+    async def create_external_media_channel(self, channel_id: str, app_name: str) -> Optional[Dict[str, Any]]:
+        """Create an external media channel for streaming."""
+        logger.info("Creating externalMedia channel...")
+        media_channel = await self.client.channels.externalMedia(
+            channelId=channel_id,
+            app=app_name,
+            external_host="127.0.0.1:54322",
+            format="slin16"
+        )
+        logger.info("External media channel created", channel_id=media_channel.get('id'))
+        return media_channel
