@@ -178,7 +178,7 @@ class CallControllerService:
                 'action': 'generate_response',
                 'text': greeting_text
             }
-            await self.redis_queue.publish('llm:response:ready', llm_message)
+            await self.redis_queue.publish_raw('llm:response:ready', llm_message)
             logger.info("Published LLM message", channel_id=channel_id)
             
         except Exception as e:
