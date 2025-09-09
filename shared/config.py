@@ -158,7 +158,7 @@ class STTServiceConfig(AIProviderConfig, AsteriskConfig):
     """STT Service configuration"""
     
     service_name: str = "stt_service"
-    health_check_port: int = 8001
+    health_check_port: int = 8004
     rtp_listen_port: int = 5004
     
     # Redis configuration
