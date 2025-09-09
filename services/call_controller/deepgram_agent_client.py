@@ -4,7 +4,7 @@ import websockets
 from typing import Callable, Optional
 
 from structlog import get_logger
-from .config import DeepgramConfig, LLMConfig
+from services.call_controller.config import DeepgramConfig, LLMConfig
 
 logger = get_logger(__name__)
 
