@@ -61,27 +61,31 @@ class CallControllerService:
             await self.redis_queue.disconnect()
         logger.info("Call controller service stopped")
 
+    async def _handle_control_message(self, channel: str, message_data: dict):
+        """Handler for incoming Redis control messages."""
+        try:
+            control_message = CallControlMessage.model_validate(message_data)
+            logger.debug("Received control message", data=control_message)
+            
+            if control_message.action == "play":
+                # Assuming 'file_path' is in parameters
+                file_path = control_message.parameters.get("file_path")
+                if file_path:
+                    await self.ari_client.play_media(control_message.call_id, f"sound:{file_path}")
+            elif control_message.action == "stop_playback":
+                logger.info("Received stop_playback command", call_id=control_message.call_id)
+
+        except Exception as e:
+            logger.error("Error processing control message", exc_info=True, raw_message=message_data)
+
     async def listen_for_control_messages(self):
-        logger.info("Listening for control messages from Redis...")
-        await self.redis_queue.subscribe([Channels.CALLS_CONTROL_PLAY])
-        
-        while self.running:
-            try:
-                message = await self.redis_queue.get_message()
-                if message and self.running:
-                    try:
-                        control_message = CallControlMessage.model_validate_json(message['data'])
-                        logger.debug("Received control message", data=control_message)
-                        if control_message.action == "play":
-                            await self.ari_client.play_media(control_message.channel_id, f"sound:{control_message.file_path}")
-                        elif control_message.action == "stop_playback":
-                            logger.info("Received stop_playback command", channel_id=control_message.channel_id)
-                    except Exception as e:
-                        logger.error("Error processing control message", exc_info=True, raw_message=message)
-                await asyncio.sleep(0.01)
-            except Exception as e:
-                logger.error("Exception in listen_for_control_messages loop", exc_info=True)
-        
+        logger.info("Subscribing to control messages from Redis...")
+        control_channels = [
+            Channels.CALLS_CONTROL_PLAY,
+            Channels.CALLS_CONTROL_STOP
+        ]
+        await self.redis_queue.subscribe(control_channels, self._handle_control_message)
+        await self.redis_queue.start_listening()
         logger.info("Stopped listening for control messages.")
 
     async def _handle_stasis_start(self, event_data: dict):
