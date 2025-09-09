@@ -212,6 +212,7 @@ This command will:
 - **Audio Quality Problems**: Test with different codecs, check network latency
 - **AI Provider Errors**: Verify API keys, check WebSocket connections
 - **Docker Issues**: Ensure proper networking between services
+- **Detailed Log**: For a detailed, ongoing log of troubleshooting steps and resolutions, see the [Troubleshooting Guide](mdc:.taskmaster/docs/Troubleshooting.md).
 
 ### Security Considerations
 - **API Keys**: Never commit API keys to Git
