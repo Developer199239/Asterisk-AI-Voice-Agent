@@ -6,112 +6,149 @@ It replaces engine.py, sip_client.py, and call_session.py from the v1.0 architec
 """
 
 import asyncio
-import signal
-import traceback
-
-from shared.health_check import create_health_check_app
-import uvicorn
 import structlog
+import signal
+from typing import Dict, Any
 
-from shared.logging_config import setup_logging
-from shared.config import load_config, CallControllerConfig
-from shared.redis_client import RedisMessageQueue, Channels, CallNewMessage
+from shared.config import load_config
 from services.call_controller.ari_client import ARIClient
-from services.call_controller.models import ARIEvent
 from services.call_controller.rtpengine_client import RTPEngineClient
-from services.call_controller.call_state_machine import CallStateMachine, CallState, CallData
-from shared.logging_config import set_correlation_id
-
-# Load configuration and set up logging
-config = load_config("call_controller")
-setup_logging(log_level=config.log_level)
+from shared.redis_client import RedisMessageQueue, CallControlMessage, CallNewMessage, Channels
 
 logger = structlog.get_logger(__name__)
 
-
 class CallControllerService:
-    """Main call controller service"""
-    
-    def __init__(self, config: CallControllerConfig):
-        self.config = config
-        self.state_machine = CallStateMachine()
-        self.redis_client = RedisMessageQueue(config.redis)
-        self.ari_client = ARIClient(config.asterisk)
-        self.rtpengine_client = RTPEngineClient(config.rtpengine)
+    def __init__(self):
+        self.config = load_config('call_controller')
+        self.ari_client = ARIClient(self.config.asterisk)
+        self.rtpengine_client = RTPEngineClient(self.config.rtpengine)
+        self.redis_queue = RedisMessageQueue(self.config.redis)
+        self.active_calls: Dict[str, Any] = {}
         self.running = False
-        
-    async def start(self):
-        """Start the call controller service"""
-        logger.info(f"Starting service {self.config.service_name}")
-        
-        await self.ari_client.connect()
-        logger.info("Connected to ARI")
+        self._setup_event_handlers()
 
-        self.ari_client.add_event_handler("StasisStart", self._handle_stasis_start)
+    def _setup_event_handlers(self):
+        self.ari_client.on_event('StasisStart', self._handle_stasis_start)
+        self.ari_client.on_event('StasisEnd', self._handle_stasis_end)
+        self.ari_client.on_event('ChannelDtmfReceived', self._handle_dtmf_received)
+        self.ari_client.on_event('PlaybackStarted', self._handle_playback_started)
+        self.ari_client.on_event('PlaybackFinished', self._handle_playback_finished)
+        self.ari_client.on_event('ChannelStateChange', self._handle_channel_state_change)
+
+    async def start(self):
+        logger.info(f"Starting service {self.config.service_name}")
+        await self.redis_queue.connect()
+        await self.rtpengine_client.connect()
+        await self.ari_client.connect()
+        
+        asyncio.create_task(self.listen_for_control_messages())
         
         self.running = True
         logger.info("Call controller service components started, entering main loop.")
         await self.ari_client.start_listening()
-            
+
     async def stop(self):
-        """Stop the call controller service"""
         logger.info("Stopping call controller service...")
         self.running = False
-        
-        # Stop ARI client
+        for channel_id in list(self.active_calls.keys()):
+            await self._cleanup_call(channel_id)
         if self.ari_client:
             await self.ari_client.disconnect()
-        
+        if self.rtpengine_client:
+            await self.rtpengine_client.disconnect()
+        if self.redis_queue:
+            await self.redis_queue.disconnect()
         logger.info("Call controller service stopped")
-    
+
+    async def listen_for_control_messages(self):
+        while self.running:
+            try:
+                message = await self.redis_queue.get_message(Channels.CALL_CONTROL.value)
+                if message:
+                    control_message = CallControlMessage.model_validate_json(message)
+                    if control_message.action == "play":
+                        await self.ari_client.play_media(control_message.channel_id, f"sound:{control_message.file_path}")
+                    elif control_message.action == "stop_playback":
+                        # Logic to stop playback if ARI supports it
+                        pass
+            except Exception as e:
+                logger.error("Error processing control message", exc_info=True)
+            await asyncio.sleep(0.01)
+
     async def _handle_stasis_start(self, event_data: dict):
-        """Handle StasisStart event - new call received"""
-        channel_id = event_data.get("channel", {}).get("id")
+        channel = event_data.get('channel', {})
+        channel_id = channel.get('id')
         if not channel_id:
+            logger.warning("StasisStart event with no channel ID")
             return
+
+        logger.info("New call received", channel_id=channel_id, caller=channel.get('caller'))
+        self.active_calls[channel_id] = {'channel_data': channel, 'state': 'ringing'}
         
-        logger.info(f"Received StasisStart for channel {channel_id}")
-        await self.ari_client.answer_channel(channel_id)
-        logger.info(f"Answered channel {channel_id}")
+        try:
+            sdp = event_data.get('channel', {}).get('dialplan', {}).get('exten')
+            rtp_info = await self.rtpengine_client.offer(sdp)
+            
+            self.active_calls[channel_id]['rtp_info'] = rtp_info
+            
+            await self.ari_client.answer_channel(channel_id)
+            self.active_calls[channel_id]['state'] = 'answered'
+            
+            new_call_message = CallNewMessage(channel_id=channel_id, sdp=sdp, rtp_info=rtp_info)
+            await self.redis_queue.publish(Channels.CALL_NEW.value, new_call_message.model_dump_json())
+            logger.info("Published new call event to Redis", channel_id=channel_id)
 
-    def is_stopped(self) -> bool:
-        """Check if the service is stopped."""
-        return not self.running
+        except Exception as e:
+            logger.error("Error handling StasisStart", channel_id=channel_id, exc_info=True)
+            await self._cleanup_call(channel_id)
 
+    async def _handle_stasis_end(self, event_data: dict):
+        channel_id = event_data.get('channel', {}).get('id')
+        logger.info("Call ended", channel_id=channel_id)
+        await self._cleanup_call(channel_id)
+
+    async def _cleanup_call(self, channel_id: str):
+        if channel_id in self.active_calls:
+            rtp_info = self.active_calls[channel_id].get('rtp_info')
+            if rtp_info:
+                await self.rtpengine_client.delete(rtp_info['call-id'])
+            del self.active_calls[channel_id]
+            logger.info("Cleaned up call resources", channel_id=channel_id)
+
+    async def _handle_dtmf_received(self, event_data: dict):
+        channel_id = event_data.get('channel', {}).get('id')
+        digit = event_data.get('digit')
+        logger.info("DTMF received", channel_id=channel_id, digit=digit)
+
+    async def _handle_playback_started(self, event_data: dict):
+        playback = event_data.get('playback', {})
+        logger.info("Playback started", playback_id=playback.get('id'), channel_id=playback.get('target_uri'))
+
+    async def _handle_playback_finished(self, event_data: dict):
+        playback = event_data.get('playback', {})
+        logger.info("Playback finished", playback_id=playback.get('id'), channel_id=playback.get('target_uri'))
+
+    async def _handle_channel_state_change(self, event_data: dict):
+        channel = event_data.get('channel', {})
+        logger.debug("Channel state changed", channel_id=channel.get('id'), state=channel.get('state'))
 
 async def main():
-    """Main entry point"""
+    service = CallControllerService()
     
-    config = load_config("call_controller")
-    setup_logging(log_level=config.log_level)
-    service = CallControllerService(config)
-    
-    # Set up signal handlers
-    def signal_handler(signum, frame):
-        logger.info(f"Received signal {signum}, shutting down...")
-        asyncio.create_task(service.stop())
-    
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, lambda: asyncio.create_task(service.stop()))
 
-    service_task = None
     try:
-        service_task = asyncio.create_task(service.start())
-        logger.info("Call Controller Service starting...")
-
-        # Keep running until shutdown is triggered
-        while not service.is_stopped():
-            await asyncio.sleep(1)
-
-    except asyncio.CancelledError:
-        logger.info("Main task cancelled.")
+        await service.start()
     except Exception as e:
-        logger.error(f"Service error in main: {e}", exc_info=True)
+        logger.error("Failed to start CallControllerService", exc_info=True)
     finally:
-        if service_task and not service_task.done():
-            service_task.cancel()
-        await service.stop()
-
+        if service.running:
+             await service.stop()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("Call controller service shut down.")

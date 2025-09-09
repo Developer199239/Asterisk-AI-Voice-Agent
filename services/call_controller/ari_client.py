@@ -5,9 +5,10 @@ Focuses on robust connection and logging to debug startup issues.
 
 import asyncio
 import json
-import websockets
 from typing import Dict, Any, Optional, Callable, List
 import aiohttp
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+import websockets
 import structlog
 
 from shared.config import AsteriskConfig
@@ -15,6 +16,8 @@ from shared.config import AsteriskConfig
 logger = structlog.get_logger(__name__)
 
 class ARIClient:
+    """A client for interacting with the Asterisk REST Interface (ARI)."""
+
     def __init__(self, config: AsteriskConfig):
         self.config = config
         self.ws_url = f"ws://{config.host}:{config.asterisk_port}/ari/events?api_key={config.username}:{config.password}&app={config.app_name}"
@@ -24,79 +27,108 @@ class ARIClient:
         self.running = False
         self.event_handlers: Dict[str, List[Callable]] = {}
 
-    async def connect(self):
-        logger.info("ARIClient: connect() called.")
-        if self.running:
-            logger.warning("ARIClient is already running.")
-            return
+    def on_event(self, event_type: str, handler: Callable):
+        """Alias for add_event_handler for backward compatibility."""
+        self.add_event_handler(event_type, handler)
 
+    @retry(
+        stop=stop_after_attempt(5),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type(Exception),
+    )
+    async def connect(self):
+        """Connect to the ARI WebSocket and establish an HTTP session."""
+        logger.info("Connecting to ARI...")
         try:
-            logger.info("Creating aiohttp ClientSession.")
+            # First, test HTTP connection to ensure ARI is available
             self.http_session = aiohttp.ClientSession(auth=aiohttp.BasicAuth(self.config.username, self.config.password))
-            
-            logger.info(f"Attempting to connect to WebSocket: {self.ws_url}")
+            async with self.http_session.get(f"{self.http_url}/asterisk/info") as response:
+                if response.status != 200:
+                    raise ConnectionError(f"Failed to connect to ARI HTTP endpoint. Status: {response.status}")
+                logger.info("Successfully connected to ARI HTTP endpoint.")
+
+            # Then, connect to the WebSocket
             self.websocket = await websockets.connect(self.ws_url)
             self.running = True
             logger.info("Successfully connected to ARI WebSocket.")
         except Exception as e:
-            logger.error("Failed to connect to ARI.", error=str(e), exc_info=True)
-            self.running = False
+            logger.error("Failed to connect to ARI, will retry...", error=str(e), exc_info=True)
             if self.http_session and not self.http_session.closed:
                 await self.http_session.close()
             raise
 
     async def start_listening(self):
+        """Start listening for events from the ARI WebSocket."""
         if not self.running or not self.websocket:
             logger.error("Cannot start listening, client is not connected.")
             return
 
-        logger.info("Starting ARI event listener loop.")
+        logger.info("Starting ARI event listener.")
         try:
             async for message in self.websocket:
                 try:
                     event_data = json.loads(message)
-                    event_type = event_data.get("type", "unknown")
-                    logger.debug("Received ARI event", event_type=event_type, data=event_data)
-                    if event_type in self.event_handlers:
+                    event_type = event_data.get("type")
+                    if event_type and event_type in self.event_handlers:
                         for handler in self.event_handlers[event_type]:
                             asyncio.create_task(handler(event_data))
                 except json.JSONDecodeError:
                     logger.warning("Failed to decode ARI event JSON", message=message)
-                except Exception as e:
-                    logger.error("Error processing ARI event", exc_info=True)
-        except websockets.exceptions.ConnectionClosed as e:
-            logger.warning("ARI WebSocket connection closed.", reason=str(e))
-        except Exception as e:
-            logger.error("Exception in ARI listener loop.", exc_info=True)
-        finally:
+        except websockets.exceptions.ConnectionClosed:
+            logger.warning("ARI WebSocket connection closed.")
             self.running = False
-            logger.info("ARI event listener loop stopped.")
+        except Exception as e:
+            logger.error("An error occurred in the ARI listener", exc_info=True)
+            self.running = False
 
     async def disconnect(self):
+        """Disconnect from the ARI WebSocket and close the HTTP session."""
         self.running = False
         if self.websocket:
             await self.websocket.close()
             self.websocket = None
-            logger.info("ARI WebSocket disconnected.")
         if self.http_session and not self.http_session.closed:
             await self.http_session.close()
             self.http_session = None
-            logger.info("ARI HTTP session closed.")
+        logger.info("Disconnected from ARI.")
 
     def add_event_handler(self, event_type: str, handler: Callable):
+        """Register a handler for a specific ARI event type."""
         if event_type not in self.event_handlers:
             self.event_handlers[event_type] = []
         self.event_handlers[event_type].append(handler)
+        logger.debug("Added event handler", event_type=event_type, handler=handler.__name__)
+
+    async def send_command(self, method: str, url_path: str, params: Optional[Dict[str, Any]] = None, data: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+        """Send a command to the ARI HTTP endpoint."""
+        if not self.http_session:
+            logger.error("HTTP session not available.")
+            return None
+        
+        url = f"{self.http_url}/{url_path}"
+        try:
+            async with self.http_session.request(method, url, params=params, json=data) as response:
+                if response.status >= 400:
+                    logger.error("ARI command failed", method=method, url=url, status=response.status, reason=await response.text())
+                    return None
+                if response.content_type == 'application/json':
+                    return await response.json()
+                return await response.text()
+        except aiohttp.ClientError as e:
+            logger.error("Failed to send ARI command", exc_info=True)
+            return None
 
     async def answer_channel(self, channel_id: str):
-        if not self.http_session:
-            return
-        url = f"{self.http_url}/channels/{channel_id}/answer"
-        try:
-            async with self.http_session.post(url) as response:
-                if response.status == 204:
-                    logger.info("Answered channel", channel_id=channel_id)
-                else:
-                    logger.error("Failed to answer channel", channel_id=channel_id, status=response.status)
-        except Exception as e:
-            logger.error("Exception answering channel", exc_info=True)
+        """Answer a channel."""
+        logger.info("Answering channel", channel_id=channel_id)
+        await self.send_command("POST", f"channels/{channel_id}/answer")
+
+    async def hangup_channel(self, channel_id: str):
+        """Hang up a channel."""
+        logger.info("Hanging up channel", channel_id=channel_id)
+        await self.send_command("DELETE", f"channels/{channel_id}")
+
+    async def play_media(self, channel_id: str, media_uri: str) -> Optional[Dict[str, Any]]:
+        """Play media on a channel."""
+        logger.info("Playing media on channel", channel_id=channel_id, media_uri=media_uri)
+        return await self.send_command("POST", f"channels/{channel_id}/play", data={"media": media_uri})
