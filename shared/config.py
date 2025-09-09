@@ -207,12 +207,12 @@ class LLMServiceConfig(AIProviderConfig, AsteriskConfig):
     
     # OpenAI LLM specific settings
     openai_base_url: Optional[str] = Field(default=None, description="OpenAI API base URL")
-    primary_model: str = Field(default="gpt-4o", description="Primary LLM model")
+    model: str = Field(default="gpt-4o", description="Primary LLM model")
     fallback_model: str = Field(default="gpt-3.5-turbo", description="Fallback LLM model")
-    temperature: float = Field(default=0.8, description="LLM temperature")
-    max_tokens: int = Field(default=4096, description="LLM max tokens")
-    system_message: str = Field(default="You are a helpful AI assistant for Jugaar LLC.", description="LLM system message")
-    enable_debug_logging: bool = Field(default=False, description="Enable debug logging for conversation manager")
+    temperature: float = Field(default=0.7, description="LLM temperature")
+    max_tokens: int = Field(default=150, description="LLM max tokens for a single response")
+    prompt: str = Field(default="You are a helpful AI assistant for Jugaar LLC.", description="LLM system message")
+    greeting: str = Field(default="Hello, I am an AI Assistant for Jugaar LLC. How can I help you today.", description="Initial greeting from the AI")
 
     # Conversation settings
     max_conversation_history: int = Field(

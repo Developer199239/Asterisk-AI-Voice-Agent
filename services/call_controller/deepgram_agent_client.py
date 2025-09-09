@@ -51,7 +51,7 @@ class DeepgramAgentClient:
                     "provider": {
                         "type": "open_ai",
                         "model": llm_config.model,
-                        "api_key": llm_config.api_key
+                        "api_key": llm_config.openai_api_key
                     },
                     "prompt": llm_config.prompt,
                 },
