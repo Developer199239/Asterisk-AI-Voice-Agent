@@ -395,7 +395,7 @@ class CallControllerService:
 async def main():
     """Main entry point"""
     
-    config = CallControllerConfig()
+    config = load_config("call_controller")
     setup_logging(log_level=config.log_level)
     service = CallControllerService(config)
     
