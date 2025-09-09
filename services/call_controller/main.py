@@ -168,8 +168,8 @@ class CallControllerService:
             greeting_text = "Hello, I am an AI Assistant for Jugaar LLC. How can I help you today?"
             logger.info("Generating AI response", channel_id=channel_id, call_id=call_id)
             
-            # Use Asterisk's SayAlpha to speak the greeting
-            await self.ari_client.play_media(channel_id, f"sayalpha:{greeting_text}")
+            # Use a simple sound file for testing
+            await self.ari_client.play_media(channel_id, "sound:1-yes-2-no")
             
             # Publish a message to trigger LLM processing
             llm_message = {
