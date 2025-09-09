@@ -213,8 +213,12 @@ class LLMServiceConfig(BaseSettings):
     temperature: float = Field(default=0.7, description="LLM temperature")
     max_tokens: int = Field(default=150, description="LLM max tokens for a single response")
     prompt: str = Field(
-        "You are a helpful AI assistant for Jugaar LLC. Your first response must be the greeting: 'Hello, I am an AI Assistant for Jugaar LLC. How can I help you today.'",
+        "You are a helpful AI assistant for Jugaar LLC.",
         description="LLM system message"
+    )
+    initial_greeting: str = Field(
+        "Hello, I am an AI Assistant for Jugaar LLC. How can I help you today.",
+        description="The very first thing the agent says to the user."
     )
 
     # Conversation settings
