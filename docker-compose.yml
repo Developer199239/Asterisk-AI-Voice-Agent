@@ -42,7 +42,7 @@ services:
       context: .
       dockerfile: services/call_controller/Dockerfile
     container_name: asterisk-ai-voice-agent-call-controller
-    restart: unless-stopped
+    restart: always
     ports:
       - "15000:5000"
     extra_hosts:
@@ -53,13 +53,11 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-      rtpengine:
-        condition: service_started
-    networks:
-      ai-voice-network:
-        ipv4_address: 172.20.0.4
+    network_mode: host
     env_file:
       - .env
+    environment:
+      - ASTERISK_HOST=127.0.0.1
 
   stt_service:
     build:
