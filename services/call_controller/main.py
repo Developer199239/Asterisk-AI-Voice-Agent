@@ -135,7 +135,8 @@ class CallControllerService:
             stt_client = STTClient(self.config.deepgram, self._handle_transcript)
             await stt_client.connect()
             self.active_calls[incoming_channel_id]['stt_client'] = stt_client
-            asyncio.create_task(stt_client.receive_transcripts())
+            # The receive loop is now started automatically within stt_client.connect()
+            # so we no longer need to call it here.
             logger.info("STT client connected and listening", call_id=call_id)
 
             # Create the externalMedia channel
