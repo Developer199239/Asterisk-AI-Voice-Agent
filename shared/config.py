@@ -100,13 +100,17 @@ class RTPEngineConfig(BaseSettings):
 class RedisConfig(BaseSettings):
     """Redis client configuration"""
 
-    redis_url: str = Field(
+    url: str = Field(
         default="redis://redis:6379",
         description="Redis connection URL for message queue"
     )
     request_timeout: int = Field(
         default=10,
         description="Timeout for Redis requests in seconds"
+    )
+    decode_responses: bool = Field(
+        default=True,
+        description="Decode responses from Redis"
     )
 
 
