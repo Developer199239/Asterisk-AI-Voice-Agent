@@ -35,7 +35,6 @@ from services.call_controller.rtpengine_client import RTPEngineClient
 from shared.config import CallControllerConfig
 from shared.logging_config import setup_logging
 from shared.redis_client import RedisMessageQueue
-from shared.timescale_client import TimescaleClient
 
 
 # Load configuration and set up logging
@@ -54,7 +53,6 @@ class CallControllerService:
         self.redis_client = RedisMessageQueue(config.redis)
         self.ari_client = ARIClient(config.asterisk)
         self.rtpengine_client = RTPEngineClient(config.rtpengine)
-        self.timescale_client = TimescaleClient(config) # Assuming TimescaleConfig is on BaseConfig or passed differently
         self.running = False
         
     async def start(self):
@@ -69,12 +67,9 @@ class CallControllerService:
             logger.info("Connected to Redis")
 
             # Initialize RTPEngine client
-            await self.rtpengine_client.connect()
+            await self.rtpengine_client.ping()
             logger.info("Connected to RTPEngine")
 
-            # Initialize TimescaleDB client
-            await self.timescale_client.connect()
-            
             # Set up event handlers
             self._setup_ari_handlers()
             self._setup_redis_handlers()
@@ -93,7 +88,6 @@ class CallControllerService:
             await self.redis_client.disconnect()
             await self.ari_client.disconnect()
             await self.rtpengine_client.disconnect()
-            await self.timescale_client.disconnect()
     
     async def stop(self):
         """Stop the call controller service"""
@@ -116,11 +110,11 @@ class CallControllerService:
     
     def _setup_ari_handlers(self):
         """Set up ARI event handlers"""
-        self.ari_client.add_event_handler("StasisStart", self._handle_stasis_start)
-        self.ari_client.add_event_handler("StasisEnd", self._handle_stasis_end)
-        self.ari_client.add_event_handler("ChannelDtmfReceived", self._handle_dtmf)
-        self.ari_client.add_event_handler("PlaybackStarted", self._handle_playback_started)
-        self.ari_client.add_event_handler("PlaybackFinished", self._handle_playback_finished)
+        self.ari_client.on_event("StasisStart", self._handle_stasis_start)
+        self.ari_client.on_event("StasisEnd", self._handle_stasis_end)
+        self.ari_client.on_event("ChannelDtmfReceived", self._handle_dtmf)
+        self.ari_client.on_event("PlaybackStarted", self._handle_playback_started)
+        self.ari_client.on_event("PlaybackFinished", self._handle_playback_finished)
     
     def _setup_redis_handlers(self):
         """Set up Redis message handlers"""
@@ -148,10 +142,9 @@ class CallControllerService:
         dependency_checks = {
             "redis": self.redis_client.ping,
             "ari": self.ari_client.ping,
-            "rtpengine": self.rtpengine_client.ping,
-            "timescale": self.timescale_client.ping
+            "rtpengine": self.rtpengine_client.ping
         }
-        app = create_health_check_app("call_controller", dependency_checks)
+        app = create_health_check_app(self.config.service_name, dependency_checks)
 
         config = uvicorn.Config(app, host="0.0.0.0", port=self.config.health_check_port, log_level="info")
         server = uvicorn.Server(config)
@@ -216,9 +209,9 @@ class CallControllerService:
                     channel_id=channel_id,
                     caller_id=caller_id,
                     caller_name=caller_name,
-                    state=CallState.RINGING,
+                    state=CallState.RINGING.value,
                     media_info=rtp_info
-                )
+                ).model_dump_json()
             )
             
             logger.info(f"Handled new call {call_id} from {caller_id}")
@@ -401,7 +394,10 @@ class CallControllerService:
 
 async def main():
     """Main entry point"""
-    service = CallControllerService(load_config("call_controller"))
+    
+    config = CallControllerConfig()
+    setup_logging(log_level=config.log_level)
+    service = CallControllerService(config)
     
     # Set up signal handlers
     def signal_handler(signum, frame):
@@ -422,7 +418,7 @@ async def main():
     except KeyboardInterrupt:
         logger.info("Received keyboard interrupt")
     except Exception as e:
-        logger.error(f"Service error: {e}")
+        logger.error(f"Service error: {e}", exc_info=True)
     finally:
         await service.stop()
 
