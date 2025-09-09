@@ -88,19 +88,27 @@ class CallControllerService:
             
             app_name = self.config.asterisk.app_name
             stale_channels = [ch for ch in channels if ch.get('app') == app_name]
-            stale_bridges = [br for br in bridges if br.get('channels') and any(ch_id in [c['id'] for c in stale_channels] for ch_id in br['channels'])]
+            # A bridge is stale if it was created by our app, regardless of its current channels.
+            stale_bridges = [br for br in bridges if br.get('creator') == app_name]
 
+            # First, hang up all stale channels.
             for channel in stale_channels:
                 logger.info("Hanging up stale channel", channel_id=channel['id'])
                 try:
                     await self.ari_client.hangup_channel(channel['id'])
                 except Exception as e:
                     logger.warning("Could not hang up stale channel", channel_id=channel['id'], error=e)
+            
+            # Give a moment for channels to hang up before destroying bridges
+            await asyncio.sleep(1)
 
+            # Then, destroy all stale bridges.
             for bridge in stale_bridges:
                 logger.info("Destroying stale bridge", bridge_id=bridge['id'])
                 try:
-                    await self.ari_client.destroy_bridge(bridge['id'])
+                    # Don't destroy if it's already gone
+                    if bridge.get('id') in [b['id'] for b in await self.ari_client.list_bridges()]:
+                        await self.ari_client.destroy_bridge(bridge['id'])
                 except Exception as e:
                     logger.warning("Could not destroy stale bridge", bridge_id=bridge['id'], error=e)
 
@@ -118,7 +126,13 @@ class CallControllerService:
         await self._cleanup_stale_resources()
 
         # Start UDP server in a background task
-        asyncio.create_task(self.udp_server.start())
+        # The UDPServer now needs the host and port to be explicitly passed to its start method.
+        # We'll use a dynamic port to avoid conflicts.
+        # Let's define host and port here for clarity.
+        udp_host = "0.0.0.0"
+        udp_port = 0 # 0 means the OS will pick an available port
+        self.udp_server_task = asyncio.create_task(self.udp_server.start(udp_host, udp_port))
+
 
         asyncio.create_task(self.listen_for_control_messages())
 
@@ -209,7 +223,7 @@ class CallControllerService:
             logger.info("Creating externalMedia channel...")
             media_channel_response = await self.ari_client.create_external_media_channel(
                 app_name=self.config.asterisk.app_name,
-                external_host=f"{self.udp_server.host}:{self.udp_server.port}"
+                external_host=f"127.0.0.1:{self.udp_server.port}" # Use the actual port
             )
             # The response body *is* the channel object, not nested under a 'channel' key.
             if not media_channel_response or 'id' not in media_channel_response:

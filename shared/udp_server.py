@@ -8,6 +8,8 @@ class UDPServer:
     def __init__(self, on_data: Callable[[bytes, tuple], Coroutine]):
         self.on_data = on_data
         self.transport = None
+        self.host = None
+        self.port = None
 
     class UDPProtocol(asyncio.DatagramProtocol):
         def __init__(self, on_data: Callable[[bytes, tuple], Coroutine]):
@@ -34,7 +36,9 @@ class UDPServer:
             lambda: self.UDPProtocol(self.on_data),
             local_addr=(host, port)
         )
-        logger.info(f"UDP Server listening on {host}:{port}")
+        # Store the actual host and port the OS is listening on
+        self.host, self.port = self.transport.get_extra_info('sockname')
+        logger.info(f"UDP Server listening on {self.host}:{self.port}")
 
     async def send(self, data: bytes, addr: tuple):
         if self.transport:
