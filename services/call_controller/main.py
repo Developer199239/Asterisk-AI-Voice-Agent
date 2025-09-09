@@ -41,9 +41,9 @@ class CallControllerService:
         await self.redis_queue.connect()
         await self.rtpengine_client.connect()
         await self.ari_client.connect()
-        
+
         asyncio.create_task(self.listen_for_control_messages())
-        
+
         self.running = True
         logger.info("Call controller service components started, entering main loop.")
         await self.ari_client.start_listening()
@@ -66,7 +66,7 @@ class CallControllerService:
         try:
             control_message = CallControlMessage.model_validate(message_data)
             logger.debug("Received control message", data=control_message)
-            
+
             if control_message.action == "play":
                 # Assuming 'file_path' is in parameters
                 file_path = control_message.parameters.get("file_path")
@@ -97,7 +97,7 @@ class CallControllerService:
 
         logger.info("New call received", channel_id=channel_id, caller=channel.get('caller'))
         self.active_calls[channel_id] = {'channel_data': channel, 'state': 'ringing'}
-        
+
         try:
             # Generate a unique call ID for tracking across services
             call_id = f"call-{uuid.uuid4()}"
@@ -107,12 +107,12 @@ class CallControllerService:
             # The SDP from the event is not a full SDP, so we pass a placeholder.
             # RTPEngine primarily uses the call-id and channel info.
             rtp_info = await self.rtpengine_client.offer(sdp, call_id=call_id)
-            
+
             self.active_calls[channel_id]['rtp_info'] = rtp_info
-            
+
             await self.ari_client.answer_channel(channel_id)
             self.active_calls[channel_id]['state'] = 'answered'
-            
+
             new_call_message = CallNewMessage(
                 message_id=f"msg-{uuid.uuid4()}",
                 source_service=self.config.service_name,
@@ -160,7 +160,7 @@ class CallControllerService:
 
 async def main():
     service = CallControllerService()
-    
+
     # Create a future that will complete upon receiving a shutdown signal
     shutdown_event = asyncio.Event()
 
@@ -176,7 +176,7 @@ async def main():
 
     # Wait until the shutdown signal is received
     await shutdown_event.wait()
-    
+
     # Once signal is received, gracefully stop the service
     logger.info("Gracefully stopping service...")
     await service.stop()
