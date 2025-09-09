@@ -141,15 +141,15 @@ class ARIClient:
         logger.info("Adding channel to bridge", channel_id=channel_id, bridge_id=bridge_id)
         await self.send_command("POST", f"bridges/{bridge_id}/addChannel", data={"channel": channel_id})
 
-    async def create_external_media_channel(self, app_name: str) -> Optional[Dict[str, Any]]:
+    async def create_external_media_channel(self, app_name: str, external_host: str) -> Optional[Dict[str, Any]]:
         """Create an external media channel for streaming."""
-        logger.info("Creating externalMedia channel...")
+        logger.info("Creating externalMedia channel...", external_host=external_host)
         return await self.send_command(
             "POST",
             "channels/externalMedia",
             params={
                 "app": app_name,
-                "external_host": "127.0.0.1:54322",
+                "external_host": external_host,
                 "format": "slin16"
             }
         )

@@ -137,7 +137,6 @@ class CallControllerService:
             logger.info("Creating externalMedia channel...")
             media_channel_response = await self.ari_client.create_external_media_channel(
                 app_name=self.config.asterisk.app_name,
-                channel_id=incoming_channel_id,
                 external_host=f"{self.udp_server.host}:{self.udp_server.port}"
             )
             if not media_channel_response or 'id' not in media_channel_response:
@@ -196,7 +195,7 @@ class CallControllerService:
 
     async def _handle_deepgram_event(self, event: dict):
         """Handle incoming events from the Deepgram Agent client."""
-        logger.info("Received event from Deepgram Agent", event=event)
+        logger.info("Received event from Deepgram Agent", dg_event=event)
         # We will add logic here later to handle playback events, etc.
 
     async def _forward_audio_to_agent(self, data: bytes, addr: tuple):
