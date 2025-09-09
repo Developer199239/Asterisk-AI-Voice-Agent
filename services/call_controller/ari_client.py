@@ -18,10 +18,12 @@ logger = structlog.get_logger(__name__)
 class ARIClient:
     """A client for interacting with the Asterisk REST Interface (ARI)."""
 
-    def __init__(self, config: AsteriskConfig):
-        self.config = config
-        self.ws_url = f"ws://{config.host}:{config.asterisk_port}/ari/events?api_key={config.username}:{config.password}&app={config.app_name}"
-        self.http_url = f"http://{config.host}:{config.asterisk_port}/ari"
+    def __init__(self, username: str, password: str, base_url: str, app_name: str):
+        self.username = username
+        self.password = password
+        self.http_url = base_url
+        ws_host = base_url.replace("http://", "").split('/')[0]
+        self.ws_url = f"ws://{ws_host}/ari/events?api_key={username}:{password}&app={app_name}"
         self.websocket: Optional[websockets.WebSocketClientProtocol] = None
         self.http_session: Optional[aiohttp.ClientSession] = None
         self.running = False
@@ -41,7 +43,7 @@ class ARIClient:
         logger.info("Connecting to ARI...")
         try:
             # First, test HTTP connection to ensure ARI is available
-            self.http_session = aiohttp.ClientSession(auth=aiohttp.BasicAuth(self.config.username, self.config.password))
+            self.http_session = aiohttp.ClientSession(auth=aiohttp.BasicAuth(self.username, self.password))
             async with self.http_session.get(f"{self.http_url}/asterisk/info") as response:
                 if response.status != 200:
                     raise ConnectionError(f"Failed to connect to ARI HTTP endpoint. Status: {response.status}")
