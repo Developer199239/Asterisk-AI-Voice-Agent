@@ -17,11 +17,11 @@ class DeepgramAgentClient:
         self._is_audio_flowing = False
 
     async def connect(self, deepgram_config: DeepgramConfig, llm_config: LLMConfig):
-        ws_url = f"wss://api.deepgram.com/v1/agent?encoding=linear16&sample_rate=8000"
+        ws_url = f"wss://api.deepgram.com/v1/agent/{deepgram_config.project_id}?encoding=linear16&sample_rate=8000"
         headers = {'Authorization': f'Token {deepgram_config.api_key}'}
 
         try:
-            logger.info("Connecting to Deepgram Voice Agent...")
+            logger.info("Connecting to Deepgram Voice Agent...", url=ws_url)
             self.websocket = await websockets.connect(ws_url, additional_headers=headers)
             logger.info("✅ Successfully connected to Deepgram Voice Agent.")
 

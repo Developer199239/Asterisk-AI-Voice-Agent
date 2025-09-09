@@ -123,8 +123,14 @@ class DeepgramConfig(BaseSettings):
         default=None,
         description="Deepgram API key for STT"
     )
+    project_id: Optional[str] = Field(
+        alias="DEEPGRAM_PROJECT_ID",
+        default="1688db0e-5245-4208-9af5-0168c6cca580",
+        description="Deepgram Project ID for Voice Agent"
+    )
     model: str = Field(default="nova-2-phonecall", description="Deepgram STT model")
     language: str = Field(default="en-US", description="STT language")
+    tts_model: str = Field(default="aura-asteria-en", description="Deepgram TTS model for Agent")
 
 
 class AIProviderConfig(BaseConfig):
