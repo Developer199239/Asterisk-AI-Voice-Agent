@@ -20,9 +20,8 @@ services:
     build:
       context: .
       dockerfile: services/rtpengine/Dockerfile
-      no_cache: true
     container_name: asterisk-ai-voice-agent-rtpengine
-    command: rtpengine --listen-ng=172.20.0.3:2223 --interface=172.20.0.3 -L 7 --log-stderr
+    command: rtpengine --listen-ng=2223 --interface=127.0.0.1 -L 7 --log-stderr
     privileged: true
     ports:
       - "2223:2223" # Control port
@@ -40,7 +39,6 @@ services:
     build:
       context: .
       dockerfile: services/call_controller/Dockerfile
-      no_cache: true
     container_name: asterisk-ai-voice-agent-call-controller
     restart: always
     ports:
@@ -65,7 +63,7 @@ services:
     build:
       context: .
       dockerfile: services/stt_service/Dockerfile
-      no_cache: true
+    container_name: asterisk-ai-voice-agent-stt-service
     restart: unless-stopped
     ports:
       - "18001:8001"
@@ -92,7 +90,7 @@ services:
     build:
       context: .
       dockerfile: services/llm_service/Dockerfile
-      no_cache: true
+    container_name: asterisk-ai-voice-agent-llm-service
     restart: unless-stopped
     ports:
       - "18002:8002"
@@ -118,7 +116,7 @@ services:
     build:
       context: .
       dockerfile: services/tts_service/Dockerfile
-      no_cache: true
+    container_name: asterisk-ai-voice-agent-tts-service
     restart: unless-stopped
     ports:
       - "18003:8003"
