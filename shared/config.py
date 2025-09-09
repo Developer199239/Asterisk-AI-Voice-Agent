@@ -34,12 +34,6 @@ class BaseConfig(BaseSettings):
         description="Logging level for the service"
     )
     
-    # Redis Configuration
-    redis_url: str = Field(
-        default="redis://redis:6379",
-        description="Redis connection URL for message queue"
-    )
-    
     class Config:
         env_file = Path(__file__).parent.parent / ".env"
         env_file_encoding = "utf-8"
@@ -105,6 +99,7 @@ class RedisConfig(BaseSettings):
     """Redis client configuration"""
 
     url: str = Field(
+        alias="REDIS_URL",
         default="redis://redis:6379",
         description="Redis connection URL for message queue"
     )
@@ -157,15 +152,17 @@ class CallControllerConfig(BaseConfig):
     asterisk: AsteriskConfig = Field(default_factory=AsteriskConfig)
     rtpengine: RTPEngineConfig = Field(default_factory=RTPEngineConfig)
 
+    class Config:
+        env_file = Path(__file__).parent.parent / ".env"
+        env_file_encoding = "utf-8"
+        case_sensitive = False
+
     def __init__(self, **values):
         super().__init__(**values)
-        # Manually trigger parsing for nested models if they are passed as dicts
-        if isinstance(self.redis, dict):
-            self.redis = RedisConfig(**self.redis)
-        if isinstance(self.asterisk, dict):
-            self.asterisk = AsteriskConfig(**self.asterisk)
-        if isinstance(self.rtpengine, dict):
-            self.rtpengine = RTPEngineConfig(**self.rtpengine)
+        # Manually trigger parsing for nested models, passing the top-level env settings down
+        self.redis = RedisConfig()
+        self.asterisk = AsteriskConfig()
+        self.rtpengine = RTPEngineConfig()
 
 
 class STTServiceConfig(AIProviderConfig, AsteriskConfig):
