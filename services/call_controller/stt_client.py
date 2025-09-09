@@ -22,11 +22,11 @@ class STTClient:
 
     async def connect(self):
         try:
-            extra_headers = {'Authorization': f'Token {self.config.api_key}'}
+            headers = {'Authorization': f'Token {self.config.api_key}'}
             ws_url = f"wss://api.deepgram.com/v1/listen?model={self.config.model}&language={self.config.language}&encoding=linear16&sample_rate=8000"
             
             logger.info("Connecting to Deepgram...")
-            self.websocket = await websockets.connect(ws_url, extra_headers=extra_headers)
+            self.websocket = await websockets.connect(ws_url, additional_headers=headers)
             logger.info("✅ Successfully connected to Deepgram.")
             asyncio.create_task(self._receive_loop())
         except Exception as e:
