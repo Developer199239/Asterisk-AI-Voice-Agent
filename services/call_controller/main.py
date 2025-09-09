@@ -204,24 +204,27 @@ class CallControllerService:
             await self.ari_client.answer_channel(channel_id)
             logger.info("Channel answered", channel_id=channel_id)
 
+            # Set up and start the Deepgram Agent client
+            # Pass a lambda that captures the current llm_config
+            agent_client = DeepgramAgentClient(
+                lambda event: self._handle_deepgram_event(event, self.config.llm)
+            )
+
             # Store preliminary call state
             self.active_calls[channel_id] = {
                 "call_id": call_id,
                 "channel_data": channel,
-                "agent_client": None,
+                "agent_client": agent_client, # Store client immediately
                 "media_channel_id": None,
                 "bridge_id": None,
                 "rtp_packetizer": RTPPacketizer(ssrc=random.randint(0, 4294967295)) # Create packetizer per call
             }
 
-            # Set up and start the Deepgram Agent client
-            agent_client = DeepgramAgentClient(self._handle_deepgram_event)
             await agent_client.connect(self.config.deepgram, self.config.llm)
 
-            # **FIX**: Send the initial greeting from here, where config is guaranteed to be loaded.
+            # Send the initial greeting from here, where config is guaranteed to be loaded.
             await agent_client.speak(self.config.llm.initial_greeting)
 
-            self.active_calls[channel_id]['agent_client'] = agent_client
             logger.info("Deepgram Agent client connected", call_id=call_id)
 
             # Create the externalMedia channel for two-way audio
@@ -347,7 +350,7 @@ class CallControllerService:
         channel = event_data.get('channel', {})
         logger.debug("Channel state changed", channel_id=channel.get('id'), state=channel.get('state'))
 
-    async def _handle_deepgram_event(self, event: dict):
+    async def _handle_deepgram_event(self, event: dict, llm_config: 'LLMServiceConfig'):
         """Handle incoming events from the Deepgram Agent client."""
         logger.info("Received event from Deepgram Agent", dg_event=event)
         event_type = event.get('type')
