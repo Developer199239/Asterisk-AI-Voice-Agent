@@ -21,7 +21,7 @@ services:
       context: .
       dockerfile: services/rtpengine/Dockerfile
     container_name: asterisk-ai-voice-agent-rtpengine
-    command: rtpengine --listen-ng=172.20.0.3:2223 --interface=172.20.0.3 --port-min=30000 --port-max=30009 -L 7 --log-stderr
+    command: rtpengine --listen-ng=172.20.0.3:2223 --interface=172.20.0.3 --port-min=30000 --port-max=30009 -L 7 --log-stderr --log-dtmf=ng
     privileged: true
     ports:
       - "2223:2223" # Control port
@@ -29,7 +29,7 @@ services:
     restart: unless-stopped
     networks:
       ai-voice-network:
-        ipv4_address: 172.20.0.3
+        ipv4_address: 172.20.0.4
     cap_add:
       - NET_ADMIN
       - SYS_NICE
@@ -55,8 +55,9 @@ services:
     env_file:
       - .env
     environment:
-      - ASTERISK_HOST=127.0.0.1
-      - REDIS_URL=redis://127.0.0.1:6379
+      - PYTHONPATH=/app
+      - ASTERISK_HOST=127.0.0.1 # Overridden for host network
+      - REDIS_URL=redis://127.0.0.1:6379 # Overridden for host network
       - RTPENGINE_HOST=127.0.0.1
 
   stt_service:
@@ -84,6 +85,7 @@ services:
     env_file:
       - .env
     environment:
+      - PYTHONPATH=/app
       - REDIS_URL=redis://127.0.0.1:6379
 
   llm_service:
@@ -110,6 +112,7 @@ services:
     env_file:
       - .env
     environment:
+      - PYTHONPATH=/app
       - REDIS_URL=redis://127.0.0.1:6379
 
   tts_service:
@@ -136,6 +139,7 @@ services:
     env_file:
       - .env
     environment:
+      - PYTHONPATH=/app
       - REDIS_URL=redis://127.0.0.1:6379
 
 volumes:
