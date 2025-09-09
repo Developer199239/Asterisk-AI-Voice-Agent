@@ -22,7 +22,7 @@ import aiohttp
 import asyncio
 from aiohttp import web
 from shared.config import CallControllerConfig, load_config
-from shared.logging_config import get_logger
+from shared.logging_config import get_logger, configure_logging
 from shared.redis_client import RedisMessageQueue, CallControlMessage, CallNewMessage, Channels
 from services.call_controller.ari_client import ARIClient
 from shared.udp_server import UDPServer
@@ -447,6 +447,7 @@ class CallControllerService:
 
 async def main():
     logger.info("Starting Call Controller Service")
+    configure_logging(log_level=os.getenv("LOG_LEVEL", "DEBUG"))
     config = load_config('call_controller')
     service = CallControllerService(config)
 

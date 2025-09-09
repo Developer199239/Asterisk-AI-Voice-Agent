@@ -34,7 +34,7 @@ def add_correlation_id(logger, method_name, event_dict):
         event_dict['correlation_id'] = correlation_id
     return event_dict
 
-def setup_logging(log_level="INFO", log_to_file=False, log_file_path="service.log"):
+def configure_logging(log_level="INFO", log_to_file=False, log_file_path="service.log"):
     """
     Set up structured logging.
     """
@@ -66,3 +66,7 @@ def setup_logging(log_level="INFO", log_to_file=False, log_file_path="service.lo
         )
         file_handler.setFormatter(logging.Formatter("%(message)s"))
         root_logger.addHandler(file_handler)
+
+def get_logger(name: str):
+    """Get a structlog logger."""
+    return structlog.get_logger(name)
