@@ -26,7 +26,7 @@ services:
       - shared_logs:/shared/logs
     environment:
       - PYTHONUNBUFFERED=1
-      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - ASTERISK_HOST=${ASTERISK_HOST:-172.17.0.1}
       - ARI_USERNAME=${ARI_USERNAME}
       - ARI_PASSWORD=${ARI_PASSWORD}
