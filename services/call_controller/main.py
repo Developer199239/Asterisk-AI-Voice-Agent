@@ -44,11 +44,43 @@ class CallControllerService:
         self.ari_client.on_event('ChannelStateChange', self._handle_channel_state_change)
         # self.udp_server = UDPServer('0.0.0.0', 54321) # This line is moved to __init__
 
+    async def _cleanup_stale_resources(self):
+        """Find and clean up any channels or bridges left over from previous runs."""
+        logger.info("Cleaning up stale ARI resources...")
+        try:
+            channels = await self.ari_client.list_channels()
+            bridges = await self.ari_client.list_bridges()
+            
+            app_name = self.config.asterisk.app_name
+            stale_channels = [ch for ch in channels if ch.get('app') == app_name]
+            stale_bridges = [br for br in bridges if br.get('channels') and any(ch_id in [c['id'] for c in stale_channels] for ch_id in br['channels'])]
+
+            for channel in stale_channels:
+                logger.info("Hanging up stale channel", channel_id=channel['id'])
+                try:
+                    await self.ari_client.hangup_channel(channel['id'])
+                except Exception as e:
+                    logger.warning("Could not hang up stale channel", channel_id=channel['id'], error=e)
+
+            for bridge in stale_bridges:
+                logger.info("Destroying stale bridge", bridge_id=bridge['id'])
+                try:
+                    await self.ari_client.destroy_bridge(bridge['id'])
+                except Exception as e:
+                    logger.warning("Could not destroy stale bridge", bridge_id=bridge['id'], error=e)
+
+            logger.info("Finished cleaning up stale resources.")
+        except Exception as e:
+            logger.error("Error during stale resource cleanup", exc_info=True)
+
     async def start(self):
         logger.info(f"Starting service {self.config.service_name}")
         await self.redis_queue.connect()
         # await self.rtpengine_client.connect() # No longer needed
         await self.ari_client.connect()
+        
+        # Clean up any leftover resources from a previous run
+        await self._cleanup_stale_resources()
 
         # Start UDP server in a background task
         asyncio.create_task(self.udp_server.start())
@@ -283,21 +315,20 @@ class CallControllerService:
                 return
 
             try:
-                # Decode the base64 audio data
-                decoded_audio = base64.b64decode(audio_data)
-
-                # Save the audio to a temporary WAV file
-                # Note: This assumes mono, 16-bit PCM at 8000 Hz, which is common for telephony.
-                # Deepgram's output format should be verified.
-                temp_filename = f"/tmp/agent_audio_{channel_id}_{uuid.uuid4()}.wav"
-                with wave.open(temp_filename, 'wb') as wf:
-                    wf.setnchannels(1)
-                    wf.setsampwidth(2)
-                    wf.setframerate(8000)
-                    wf.writeframes(decoded_audio)
-
-                # Play the audio file on the channel
-                await self.ari_client.play_media(channel_id, f"sound:{temp_filename[:-4]}") # ARI needs path without extension
+                # The 'data' is already base64 encoded. We play it directly.
+                # The audio should be played on the incoming channel so the caller can hear it.
+                logger.debug("Attempting to play agent audio on channel", channel_id=channel_id, audio_data_size=len(audio_data))
+                
+                # The media URI for base64 encoded audio is `sound:base64,...`
+                # The audio format from Deepgram is L16 at 24000 Hz. We need to specify this.
+                # Format: sound:base64,slin24@24000,<base64_data>
+                # However, ARI's base64 playback is tricky with sample rates.
+                # A more compatible format is just raw slin16.
+                # Let's try a simple playback first. Asterisk is often smart about resampling.
+                media_uri = f"sound:base64,{audio_data}"
+                
+                playback_response = await self.ari_client.play_media(channel_id, media_uri)
+                logger.debug("ARI play media response", response=playback_response)
                 
             except Exception as e:
                 logger.error("Error handling AgentAudio event", exc_info=True)

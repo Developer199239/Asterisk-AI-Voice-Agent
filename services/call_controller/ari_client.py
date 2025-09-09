@@ -141,6 +141,21 @@ class ARIClient:
         logger.info("Adding channel to bridge", channel_id=channel_id, bridge_id=bridge_id)
         await self.send_command("POST", f"bridges/{bridge_id}/addChannel", data={"channel": channel_id})
 
+    async def destroy_bridge(self, bridge_id: str):
+        """Destroy a bridge."""
+        logger.info("Destroying bridge", bridge_id=bridge_id)
+        await self.send_command("DELETE", f"bridges/{bridge_id}")
+
+    async def list_channels(self) -> List[Dict[str, Any]]:
+        """List all active channels."""
+        logger.debug("Listing all channels")
+        return await self.send_command("GET", "channels")
+
+    async def list_bridges(self) -> List[Dict[str, Any]]:
+        """List all active bridges."""
+        logger.debug("Listing all bridges")
+        return await self.send_command("GET", "bridges")
+
     async def create_external_media_channel(self, app_name: str, external_host: str) -> Optional[Dict[str, Any]]:
         """Create an external media channel for streaming."""
         logger.info("Creating externalMedia channel...", external_host=external_host)
