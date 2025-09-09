@@ -360,24 +360,23 @@ class CallControllerService:
         channel_id = None
         call_info = None
 
-        if event_type == 'Welcome':
-            # For the first event, find the call that doesn't have a request_id yet.
+        # No longer need the complex logic for Welcome, just associate the request_id.
+        if event_type == 'Welcome' and request_id:
             for cid, info in self.active_calls.items():
-                # We only care about primary channels, not the media channel lookups
                 if 'channel_data' in info and info.get('request_id') is None:
-                    info['request_id'] = request_id
+                    self.active_calls[cid]['request_id'] = request_id
+                    logger.info("Associated request_id with call", 
+                                request_id=request_id, call_id=info.get('call_id'))
                     channel_id = cid
                     call_info = info
-                    logger.info("Associated request_id with new call", request_id=request_id, channel_id=channel_id)
                     break
         else:
-            # For all other events, find the call by the request_id.
             for cid, info in self.active_calls.items():
                 if info.get('request_id') == request_id:
                     channel_id = cid
                     call_info = info
                     break
-
+        
         if not call_info:
             logger.warning("Could not find call info for request_id", request_id=request_id)
             return

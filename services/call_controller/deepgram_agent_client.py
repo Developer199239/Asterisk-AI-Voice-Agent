@@ -18,8 +18,6 @@ class DeepgramAgentClient:
         self.request_id: Optional[str] = None
 
     async def connect(self, deepgram_config: DeepgramConfig, llm_config: LLMConfig):
-        # The correct V1 endpoint from the migration guide
-        # Correct the sample rate to match the audio from Asterisk (slin16 = 16kHz)
         ws_url = f"wss://agent.deepgram.com/v1/agent/converse?encoding=linear16&sample_rate=16000"
         headers = {'Authorization': f'Token {deepgram_config.api_key}'}
 
@@ -28,7 +26,6 @@ class DeepgramAgentClient:
             self.websocket = await websockets.connect(ws_url, additional_headers=headers)
             logger.info("✅ Successfully connected to Deepgram Voice Agent.")
 
-            # Send initial configuration
             await self._configure_agent(deepgram_config, llm_config)
 
             asyncio.create_task(self._receive_loop())
