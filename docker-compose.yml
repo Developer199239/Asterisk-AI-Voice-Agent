@@ -15,15 +15,25 @@ services:
 
   # RTPEngine Media Proxy
   rtpengine:
-    image: readytalk/rtpengine-docker:mr6.2.1.1-39f2f23
+    image: fonoster/rtpengine:latest
     container_name: asterisk-ai-voice-agent-rtpengine
-    command: rtpengine --listen-ng=0.0.0.0:2223 --listen-tcp=0.0.0.0:2223 --interface=0.0.0.0 --port-min=30000 --port-max=30009 -L 7 --log-stderr --foreground
     privileged: true
     restart: unless-stopped
     network_mode: host
     cap_add:
       - NET_ADMIN
       - SYS_NICE
+    environment:
+      - RTPENGINE_PUBLIC_IP=207.38.71.85
+      - RTPENGINE_BIND_HTTP_PORT=2223
+      - RTPENGINE_BIND_NG_PORT=22222
+      - RTPENGINE_LOG_LEVEL=7
+      - RTPENGINE_PORT_MIN=30000
+      - RTPENGINE_PORT_MAX=30009
+      - RTPENGINE_CLOUD=*
+    volumes:
+      - shared_audio:/shared/audio
+      - shared_logs:/shared/logs
 
   # Call Controller Service
   call_controller:
