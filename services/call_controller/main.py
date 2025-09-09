@@ -21,7 +21,7 @@ from typing import Any, Callable, Coroutine, Dict, List
 import aiohttp
 import asyncio
 from aiohttp import web
-from shared.config import Settings
+from shared.config import CallControllerConfig, load_config
 from shared.logging_config import get_logger
 from shared.redis_client import RedisMessageQueue, CallControlMessage, CallNewMessage, Channels
 from services.call_controller.ari_client import ARIClient
@@ -52,12 +52,12 @@ class RTPPacketizer:
         return header + payload
 
 class CallControllerService:
-    def __init__(self, config: Settings):
+    def __init__(self, config: CallControllerConfig):
         self.config = config
         self.ari_client = ARIClient(
-            self.config.asterisk.ari_username,
-            self.config.asterisk.ari_password,
-            f"http://{self.config.asterisk.ari_host}:{self.config.asterisk.ari_port}",
+            self.config.asterisk.username,
+            self.config.asterisk.password,
+            f"http://{self.config.asterisk.host}:{self.config.asterisk.port}",
             self.config.asterisk.app_name
         )
         # self.rtpengine_client = RTPEngineClient(self.config.rtpengine) # No longer needed
@@ -446,7 +446,9 @@ class CallControllerService:
 
 
 async def main():
-    service = CallControllerService()
+    logger.info("Starting Call Controller Service")
+    config = load_config('call_controller')
+    service = CallControllerService(config)
 
     # Create a future that will complete upon receiving a shutdown signal
     shutdown_event = asyncio.Event()
