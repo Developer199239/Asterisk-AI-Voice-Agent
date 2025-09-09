@@ -30,9 +30,6 @@ class DeepgramAgentClient:
 
             # Send initial configuration
             await self._configure_agent(deepgram_config, llm_config)
-            
-            # **FIX**: Explicitly tell the agent to speak the initial greeting
-            await self._speak_greeting(llm_config.initial_greeting)
 
             asyncio.create_task(self._receive_loop())
             self._keep_alive_task = asyncio.create_task(self._keep_alive())
@@ -85,15 +82,15 @@ class DeepgramAgentClient:
         await self.websocket.send(json.dumps(settings))
         logger.debug("Sent agent settings", settings=settings)
 
-    async def _speak_greeting(self, greeting: str):
-        """Sends a Speak message to make the agent talk without user input."""
+    async def speak(self, text: str):
+        """Sends a Speak message to make the agent talk."""
         if self.websocket and not self.websocket.closed:
             speak_message = {
                 "type": "Speak",
-                "text": greeting
+                "text": text
             }
             await self.websocket.send(json.dumps(speak_message))
-            logger.info("Sent initial Speak greeting to agent", greeting=greeting)
+            logger.info("Sent Speak message to agent", text=text)
 
     async def _keep_alive(self):
         """Sends a keep-alive message every 10 seconds to maintain the connection."""

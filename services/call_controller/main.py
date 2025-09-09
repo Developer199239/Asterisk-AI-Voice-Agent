@@ -217,6 +217,10 @@ class CallControllerService:
             # Set up and start the Deepgram Agent client
             agent_client = DeepgramAgentClient(self._handle_deepgram_event)
             await agent_client.connect(self.config.deepgram, self.config.llm)
+
+            # **FIX**: Send the initial greeting from here, where config is guaranteed to be loaded.
+            await agent_client.speak(self.config.llm.initial_greeting)
+
             self.active_calls[channel_id]['agent_client'] = agent_client
             logger.info("Deepgram Agent client connected", call_id=call_id)
 
