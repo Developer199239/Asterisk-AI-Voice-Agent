@@ -121,7 +121,7 @@ class CallControllerService:
 
             # Start forwarding media to our UDP server
             logger.info("Issuing externalMedia command to Asterisk...")
-            await self.ari_client.channels.externalMedia(
+            await self.ari_client.client.channels.channel_externalMedia(
                 channelId=channel_id,
                 app=self.config.asterisk.app_name,
                 external_host="127.0.0.1:54321", # Host machine's loopback
