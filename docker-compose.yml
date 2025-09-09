@@ -3,19 +3,17 @@ version: "3.8"
 services:
   # Redis Message Queue
   redis:
-    image: "redis:alpine"
-    container_name: "asterisk-ai-voice-agent-redis"
-    restart: unless-stopped
+    image: redis:7.2-alpine
+    container_name: asterisk-ai-voice-agent-redis
+    restart: always
     ports:
       - "6379:6379"
-    networks:
-      ai-voice-network:
-        ipv4_address: 172.20.0.2
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
+    network_mode: host
 
   # RTPEngine Media Proxy
   rtpengine:
@@ -58,6 +56,7 @@ services:
       - .env
     environment:
       - ASTERISK_HOST=127.0.0.1
+      - REDIS_URL=redis://127.0.0.1:6379
 
   stt_service:
     build:
@@ -79,11 +78,11 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-    networks:
-      ai-voice-network:
-        ipv4_address: 172.20.0.5
+    network_mode: host
     env_file:
       - .env
+    environment:
+      - REDIS_URL=redis://127.0.0.1:6379
 
   llm_service:
     build:
@@ -100,14 +99,15 @@ services:
       start_period: 40s
     volumes:
       - shared_logs:/shared/logs
+      - ./services/llm_service/fallback_responses.json:/app/fallback_responses.json
     depends_on:
       redis:
         condition: service_healthy
-    networks:
-      ai-voice-network:
-        ipv4_address: 172.20.0.6
+    network_mode: host
     env_file:
       - .env
+    environment:
+      - REDIS_URL=redis://127.0.0.1:6379
 
   tts_service:
     build:
@@ -128,11 +128,11 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-    networks:
-      ai-voice-network:
-        ipv4_address: 172.20.0.7
+    network_mode: host
     env_file:
       - .env
+    environment:
+      - REDIS_URL=redis://127.0.0.1:6379
 
 volumes:
   redis_data:
@@ -148,5 +148,6 @@ networks:
   ai-voice-network:
     driver: bridge
     ipam:
+      driver: default
       config:
         - subnet: 172.20.0.0/16
