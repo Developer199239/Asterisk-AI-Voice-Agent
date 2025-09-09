@@ -13,28 +13,6 @@ services:
       retries: 5
     network_mode: host
 
-  # RTPEngine Media Proxy
-  rtpengine:
-    image: fonoster/rtpengine:latest
-    container_name: asterisk-ai-voice-agent-rtpengine
-    privileged: true
-    restart: unless-stopped
-    network_mode: host
-    cap_add:
-      - NET_ADMIN
-      - SYS_NICE
-    environment:
-      - RTPENGINE_PUBLIC_IP=207.38.71.85
-      - RTPENGINE_BIND_HTTP_PORT=2223
-      - RTPENGINE_BIND_NG_PORT=22222
-      - RTPENGINE_LOG_LEVEL=7
-      - RTPENGINE_PORT_MIN=30000
-      - RTPENGINE_PORT_MAX=30009
-      - RTPENGINE_CLOUD=*
-    volumes:
-      - shared_audio:/shared/audio
-      - shared_logs:/shared/logs
-
   # Call Controller Service
   call_controller:
     build:
@@ -59,86 +37,7 @@ services:
       - REDIS_URL=redis://127.0.0.1:6379 # Overridden for host network
       - RTPENGINE_HOST=127.0.0.1
 
-  stt_service:
-    build:
-      context: .
-      dockerfile: services/stt_service/Dockerfile
-    container_name: asterisk-ai-voice-agent-stt-service
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    volumes:
-      - shared_audio:/shared/audio
-      - shared_logs:/shared/logs
-    depends_on:
-      redis:
-        condition: service_healthy
-    network_mode: host
-    env_file:
-      - .env
-    environment:
-      - PYTHONPATH=/app
-      - REDIS_URL=redis://127.0.0.1:6379
-
-  llm_service:
-    build:
-      context: .
-      dockerfile: services/llm_service/Dockerfile
-    container_name: asterisk-ai-voice-agent-llm-service
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    volumes:
-      - shared_logs:/shared/logs
-      - ./services/llm_service/fallback_responses.json:/app/fallback_responses.json
-    depends_on:
-      redis:
-        condition: service_healthy
-    network_mode: host
-    env_file:
-      - .env
-    environment:
-      - PYTHONPATH=/app
-      - REDIS_URL=redis://127.0.0.1:6379
-
-  tts_service:
-    build:
-      context: .
-      dockerfile: services/tts_service/Dockerfile
-    container_name: asterisk-ai-voice-agent-tts-service
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    volumes:
-      - shared_audio:/shared/audio
-      - shared_logs:/shared/logs
-    depends_on:
-      redis:
-        condition: service_healthy
-    network_mode: host
-    env_file:
-      - .env
-    environment:
-      - PYTHONPATH=/app
-      - REDIS_URL=redis://127.0.0.1:6379
-
 volumes:
-  redis_data:
-    driver: local
-  rtpengine_data:
-    driver: local
   shared_audio:
     driver: local
   shared_logs:
