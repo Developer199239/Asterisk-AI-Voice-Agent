@@ -14,8 +14,10 @@ import redis.asyncio as aioredis
 from redis.asyncio import Redis, ConnectionPool
 from pydantic import BaseModel, Field
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from shared.config import RedisConfig
+import structlog
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 class MessageBase(BaseModel):
@@ -89,8 +91,8 @@ class CallControlMessage(MessageBase):
 class RedisMessageQueue:
     """Async Redis message queue with Pub/Sub functionality"""
     
-    def __init__(self, redis_url: str = "redis://redis:6379"):
-        self.redis_url = redis_url
+    def __init__(self, config: RedisConfig):
+        self.config = config
         self.redis: Optional[Redis] = None
         self.pubsub = None
         self.subscribers: Dict[str, List[Callable]] = {}
@@ -106,9 +108,9 @@ class RedisMessageQueue:
         """Connect to Redis with retry logic"""
         try:
             self.redis = aioredis.from_url(
-                self.redis_url,
+                self.config.url,
                 encoding="utf-8",
-                decode_responses=True,
+                decode_responses=self.config.decode_responses,
                 retry_on_timeout=True,
                 socket_keepalive=True,
                 socket_keepalive_options={}
@@ -116,7 +118,7 @@ class RedisMessageQueue:
             
             # Test connection
             await self.redis.ping()
-            logger.info(f"✅ Connected to Redis at {self.redis_url}")
+            logger.info(f"✅ Connected to Redis at {self.config.url}")
             
         except Exception as e:
             logger.error(f"❌ Failed to connect to Redis: {e}")
