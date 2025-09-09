@@ -107,8 +107,12 @@ class DeepgramAgentClient:
 
     async def send_audio(self, audio_chunk: bytes):
         """Send an audio chunk through the WebSocket."""
-        if self.websocket and self.websocket.open:
+        # Use 'not self.websocket.closed' to check connection state
+        if self.websocket and not self.websocket.closed:
             try:
+                self._is_audio_flowing = True
                 await self.websocket.send(audio_chunk)
             except websockets.exceptions.ConnectionClosed:
-                logger.warning("Attempted to send audio on a closed Deepgram Agent connection.")
+                logger.warning("Could not send audio, WebSocket connection is closed.")
+            except Exception:
+                logger.error("Error sending audio chunk", exc_info=True)
