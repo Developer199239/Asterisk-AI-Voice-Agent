@@ -22,7 +22,7 @@ class DeepgramAgentClient:
 
         try:
             logger.info("Connecting to Deepgram Voice Agent...")
-            self.websocket = await websockets.connect(ws_url, extra_headers=headers)
+            self.websocket = await websockets.connect(ws_url, additional_headers=headers)
             logger.info("✅ Successfully connected to Deepgram Voice Agent.")
 
             # Send initial configuration
