@@ -100,29 +100,24 @@ class RedisMessageQueue:
         self._health_check_task: Optional[asyncio.Task] = None
         
     @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=4, max=10),
-        retry=retry_if_exception_type((ConnectionError, OSError))
+        stop=stop_after_attempt(5),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type(ConnectionError),
     )
     async def connect(self):
-        """Connect to Redis with retry logic"""
+        """Connect to Redis and initialize pub/sub."""
         try:
+            logger.info("Attempting to connect to Redis...")
             self.redis = aioredis.from_url(
-                self.config.url,
-                encoding="utf-8",
-                decode_responses=self.config.decode_responses,
-                retry_on_timeout=True,
-                socket_keepalive=True,
-                socket_keepalive_options={}
+                self.config.url, 
+                decode_responses=self.config.decode_responses
             )
-            
-            # Test connection
             await self.redis.ping()
-            logger.info(f"✅ Connected to Redis at {self.config.url}")
-            
+            self.pubsub = self.redis.pubsub()
+            logger.info("✅ Successfully connected to Redis.")
         except Exception as e:
-            logger.error(f"❌ Failed to connect to Redis: {e}")
-            raise
+            logger.error("❌ Failed to connect to Redis, will retry...", error=str(e))
+            raise ConnectionError("Could not connect to Redis") from e
     
     async def disconnect(self):
         """Disconnect from Redis"""
