@@ -1,29 +1,34 @@
 import asyncio
 import socket
 import structlog
+from typing import Callable, Optional
 
 logger = structlog.get_logger(__name__)
 
 class UDPServerProtocol(asyncio.DatagramProtocol):
+    def __init__(self, on_datagram: Callable):
+        self.on_datagram = on_datagram
+        super().__init__()
+
     def connection_made(self, transport):
-        logger.info("UDP transport connection made")
         self.transport = transport
+        logger.info("UDP transport connection made")
 
     def datagram_received(self, data, addr):
-        logger.info(f"Received {len(data)} bytes from {addr}")
-        # Here we would parse RTP and forward to STT
+        asyncio.create_task(self.on_datagram(data, addr))
 
     def error_received(self, exc):
-        logger.error(f"UDP server error: {exc}")
+        logger.error("UDP connection error", exc_info=exc)
 
     def connection_lost(self, exc):
         logger.warning("UDP transport connection lost")
 
 
 class UDPServer:
-    def __init__(self, host, port):
+    def __init__(self, host: str, port: int, on_datagram: Callable):
         self.host = host
         self.port = port
+        self.on_datagram = on_datagram
         self.transport = None
         self.protocol = None
         self._is_running = False
@@ -33,7 +38,7 @@ class UDPServer:
         loop = asyncio.get_running_loop()
         try:
             self.transport, self.protocol = await loop.create_datagram_endpoint(
-                lambda: UDPServerProtocol(),
+                lambda: UDPServerProtocol(self.on_datagram),
                 local_addr=(self.host, self.port),
                 reuse_port=True
             )
@@ -53,7 +58,7 @@ class UDPServer:
         logger.info("UDP server stopped.")
 
 async def main():
-    server = UDPServer('0.0.0.0', 54322)
+    server = UDPServer('0.0.0.0', 54322, lambda data, addr: logger.info("Received datagram", source_addr=addr, size=len(data)))
     try:
         await server.start()
     except KeyboardInterrupt:

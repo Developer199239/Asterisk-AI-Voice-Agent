@@ -99,24 +99,22 @@ class ARIClient:
         self.event_handlers[event_type].append(handler)
         logger.debug("Added event handler", event_type=event_type, handler=handler.__name__)
 
-    async def send_command(self, method: str, url_path: str, params: Optional[Dict[str, Any]] = None, data: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    async def send_command(self, method: str, resource: str, data: Optional[Dict[str, Any]] = None, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Send a command to the ARI HTTP endpoint."""
-        if not self.http_session:
-            logger.error("HTTP session not available.")
-            return None
-        
-        url = f"{self.http_url}/{url_path}"
+        url = f"{self.http_url}/{resource}"
         try:
-            async with self.http_session.request(method, url, params=params, json=data) as response:
+            async with self.http_session.request(method, url, json=data, params=params) as response:
                 if response.status >= 400:
-                    logger.error("ARI command failed", method=method, url=url, status=response.status, reason=await response.text())
-                    return None
-                if response.content_type == 'application/json':
-                    return await response.json()
-                return await response.text()
+                    reason = await response.text()
+                    logger.error("ARI command failed", method=method, url=url, status=response.status, reason=reason)
+                    # To prevent crashing on expected 404s for hangup, we return a dict
+                    return {"status": response.status, "reason": reason}
+                if response.status == 204: # No Content
+                    return {"status": response.status}
+                return await response.json()
         except aiohttp.ClientError as e:
-            logger.error("Failed to send ARI command", exc_info=True)
-            return None
+            logger.error("ARI HTTP request failed", exc_info=True)
+            return {"status": 500, "reason": str(e)}
 
     async def answer_channel(self, channel_id: str):
         """Answer a channel."""
@@ -132,3 +130,13 @@ class ARIClient:
         """Play media on a channel."""
         logger.info("Playing media on channel", channel_id=channel_id, media_uri=media_uri)
         return await self.send_command("POST", f"channels/{channel_id}/play", data={"media": media_uri})
+
+    async def create_bridge(self) -> Optional[Dict[str, Any]]:
+        """Create a new bridge."""
+        logger.info("Creating a new bridge")
+        return await self.send_command("POST", "bridges")
+
+    async def add_channel_to_bridge(self, bridge_id: str, channel_id: str):
+        """Add a channel to a bridge."""
+        logger.info("Adding channel to bridge", channel_id=channel_id, bridge_id=bridge_id)
+        await self.send_command("POST", f"bridges/{bridge_id}/addChannel", data={"channel": channel_id})

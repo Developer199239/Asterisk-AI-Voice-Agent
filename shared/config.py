@@ -148,6 +148,7 @@ class CallControllerConfig(BaseConfig):
 
     service_name: str = "call_controller"
     health_check_port: int = Field(default=15000)
+    service_host: str = "127.0.0.1"
 
     redis: RedisConfig = Field(default_factory=RedisConfig)
     asterisk: AsteriskConfig = Field(default_factory=AsteriskConfig)
