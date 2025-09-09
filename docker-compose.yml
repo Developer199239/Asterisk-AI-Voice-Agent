@@ -6,8 +6,6 @@ services:
     image: redis:7.2-alpine
     container_name: asterisk-ai-voice-agent-redis
     restart: always
-    ports:
-      - "6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -17,11 +15,9 @@ services:
 
   # RTPEngine Media Proxy
   rtpengine:
-    build:
-      context: .
-      dockerfile: services/rtpengine/Dockerfile
+    image: readytalk/rtpengine-docker:mr6.2.1.1-39f2f23
     container_name: asterisk-ai-voice-agent-rtpengine
-    command: sh -c "IP=$$(hostname -I | awk '{print $$1}') && exec rtpengine --listen-ng=$$IP:2223 --interface=$$IP --port-min=30000 --port-max=30009 -L 7 --log-stderr --log-dtmf=ng"
+    command: rtpengine --listen-ng=207.38.71.85:2223 --interface=207.38.71.85 --port-min=30000 --port-max=30009 -L 7 --log-stderr --log-dtmf=ng
     privileged: true
     restart: unless-stopped
     network_mode: host
@@ -36,8 +32,6 @@ services:
       dockerfile: services/call_controller/Dockerfile
     container_name: asterisk-ai-voice-agent-call-controller
     restart: always
-    ports:
-      - "15000:5000"
     extra_hosts:
       - "voiprnd.nemtclouddispatch.com:45.79.181.39"
     volumes:
@@ -61,9 +55,6 @@ services:
       dockerfile: services/stt_service/Dockerfile
     container_name: asterisk-ai-voice-agent-stt-service
     restart: unless-stopped
-    ports:
-      - "18001:8001"
-      - "5004:5004/udp"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
       interval: 30s
@@ -89,8 +80,6 @@ services:
       dockerfile: services/llm_service/Dockerfile
     container_name: asterisk-ai-voice-agent-llm-service
     restart: unless-stopped
-    ports:
-      - "18002:8002"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
       interval: 30s
@@ -116,8 +105,6 @@ services:
       dockerfile: services/tts_service/Dockerfile
     container_name: asterisk-ai-voice-agent-tts-service
     restart: unless-stopped
-    ports:
-      - "18003:8003"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
       interval: 30s
