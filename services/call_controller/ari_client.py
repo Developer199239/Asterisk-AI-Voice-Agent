@@ -158,6 +158,11 @@ class ARIClient:
         logger.debug("Listing all bridges")
         return await self.send_command("GET", "bridges")
 
+    async def get_app(self, app_name: str) -> Optional[Dict[str, Any]]:
+        """Get details for a specific ARI application."""
+        logger.debug("Getting details for ARI app", app_name=app_name)
+        return await self.send_command("GET", f"applications/{app_name}")
+
     async def create_external_media_channel(self, app_name: str, external_host: str) -> Optional[Dict[str, Any]]:
         """Create an external media channel for streaming."""
         logger.info("Creating externalMedia channel...", external_host=external_host)

@@ -83,34 +83,35 @@ class CallControllerService:
         """Find and clean up any channels or bridges left over from previous runs."""
         logger.info("Cleaning up stale ARI resources...")
         try:
-            channels = await self.ari_client.list_channels()
-            bridges = await self.ari_client.list_bridges()
-            
             app_name = self.config.asterisk.app_name
-            stale_channels = [ch for ch in channels if ch.get('app') == app_name]
-            # A bridge is stale if it was created by our app, regardless of its current channels.
-            stale_bridges = [br for br in bridges if br.get('creator') == app_name]
+            
+            # Use the ARI endpoint to get subscriptions for our app specifically
+            app_details = await self.ari_client.get_app(app_name)
+            if not app_details:
+                logger.warning("Could not get details for ARI application", app_name=app_name)
+                return
+
+            stale_channel_ids = app_details.get('channel_ids', [])
+            stale_bridge_ids = app_details.get('bridge_ids', [])
 
             # First, hang up all stale channels.
-            for channel in stale_channels:
-                logger.info("Hanging up stale channel", channel_id=channel['id'])
+            for channel_id in stale_channel_ids:
+                logger.info("Hanging up stale channel", channel_id=channel_id)
                 try:
-                    await self.ari_client.hangup_channel(channel['id'])
+                    await self.ari_client.hangup_channel(channel_id)
                 except Exception as e:
-                    logger.warning("Could not hang up stale channel", channel_id=channel['id'], error=e)
+                    logger.warning("Could not hang up stale channel", channel_id=channel_id, error=e)
             
             # Give a moment for channels to hang up before destroying bridges
             await asyncio.sleep(1)
 
             # Then, destroy all stale bridges.
-            for bridge in stale_bridges:
-                logger.info("Destroying stale bridge", bridge_id=bridge['id'])
+            for bridge_id in stale_bridge_ids:
+                logger.info("Destroying stale bridge", bridge_id=bridge_id)
                 try:
-                    # Don't destroy if it's already gone
-                    if bridge.get('id') in [b['id'] for b in await self.ari_client.list_bridges()]:
-                        await self.ari_client.destroy_bridge(bridge['id'])
+                    await self.ari_client.destroy_bridge(bridge_id)
                 except Exception as e:
-                    logger.warning("Could not destroy stale bridge", bridge_id=bridge['id'], error=e)
+                    logger.warning("Could not destroy stale bridge", bridge_id=bridge_id, error=e)
 
             logger.info("Finished cleaning up stale resources.")
         except Exception as e:
