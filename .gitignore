@@ -101,3 +101,11 @@ node_modules/
 # Task files
 # tasks.json
 # tasks/ 
+
+# Rider files
+.idea/
+*.sln
+*.suo
+
+# Environment
+.env 
