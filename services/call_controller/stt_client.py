@@ -26,16 +26,24 @@ class STTClient:
             ws_url = f"wss://api.deepgram.com/v1/listen?model={self.config.model}&language={self.config.language}&encoding=linear16&sample_rate=8000"
             
             logger.info("Connecting to Deepgram...")
-            
-            # Create a protocol factory with the extra headers.
-            # This is a more robust way to pass headers than using **kwargs in connect().
-            create_protocol = functools.partial(WebSocketClientProtocol, extra_headers=extra_headers)
-
-            self.websocket = await websockets.connect(ws_url, create_protocol=create_protocol)
+            self.websocket = await websockets.connect(ws_url, extra_headers=extra_headers)
             logger.info("✅ Successfully connected to Deepgram.")
+            asyncio.create_task(self._receive_loop())
         except Exception as e:
-            logger.error("Failed to connect to Deepgram", exc_info=True)
+            logger.error("Failed to connect to Deepgram", error=str(e))
             raise
+
+    async def _receive_loop(self):
+        if not self.websocket:
+            return
+
+        try:
+            async for message in self.websocket:
+                await self.transcript_handler(message)
+        except websockets.exceptions.ConnectionClosed:
+            logger.info("Deepgram connection closed.")
+        except Exception as e:
+            logger.error("Error receiving transcripts", exc_info=True)
 
     async def disconnect(self):
         if self.websocket:
@@ -48,15 +56,3 @@ class STTClient:
                 await self.websocket.send(audio_chunk)
             except websockets.exceptions.ConnectionClosed:
                 logger.warning("Attempted to send audio on a closed connection.")
-
-    async def receive_transcripts(self):
-        if not self.websocket:
-            return
-
-        try:
-            async for message in self.websocket:
-                await self.transcript_handler(message)
-        except websockets.exceptions.ConnectionClosed:
-            logger.info("Deepgram connection closed.")
-        except Exception as e:
-            logger.error("Error receiving transcripts", exc_info=True)
