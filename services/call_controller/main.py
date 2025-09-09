@@ -57,9 +57,7 @@ class CallControllerService:
         
     async def start(self):
         """Start the call controller service"""
-        # Load configuration
-        self.config = load_config("call_controller")
-        logger.info(f"Loaded configuration for {self.config.service_name}")
+        logger.info(f"Starting service {self.config.service_name}")
         
         # Initialize Redis client
         await self.redis_client.connect()
