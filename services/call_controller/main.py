@@ -355,38 +355,38 @@ class CallControllerService:
 
         # Find the channel_id associated with this request_id
         channel_id = None
-        call_info_to_update = None
-        for cid, info in self.active_calls.items():
-            if info.get('request_id') == request_id:
-                channel_id = cid
-                break
-            # If request_id is not yet set, we might be processing the Welcome event
-            if info.get('request_id') is None and event_type == 'Welcome':
-                channel_id = cid
-                call_info_to_update = info
-                break
-        
-        if call_info_to_update and event_type == 'Welcome':
-            call_info_to_update['request_id'] = request_id
-            logger.info("Associated request_id with channel", request_id=request_id, channel_id=channel_id)
+        call_info = None
 
+        if event_type == 'Welcome':
+            # For the first event, find the call that doesn't have a request_id yet.
+            for cid, info in self.active_calls.items():
+                # We only care about primary channels, not the media channel lookups
+                if 'channel_data' in info and info.get('request_id') is None:
+                    info['request_id'] = request_id
+                    channel_id = cid
+                    call_info = info
+                    logger.info("Associated request_id with new call", request_id=request_id, channel_id=channel_id)
+                    break
+        else:
+            # For all other events, find the call by the request_id.
+            for cid, info in self.active_calls.items():
+                if info.get('request_id') == request_id:
+                    channel_id = cid
+                    call_info = info
+                    break
 
-        if not channel_id:
-            logger.warning("Could not find channel for request_id", request_id=request_id)
+        if not call_info:
+            logger.warning("Could not find call info for request_id", request_id=request_id)
             return
 
         if event_type == 'AgentAudio':
-            # This event now contains the audio payload to be played back.
             audio_payload_b64 = event.get("data")
             if audio_payload_b64:
                 await self._play_deepgram_audio(channel_id, audio_payload_b64)
 
         elif event_type == "UserStartedSpeaking":
             logger.debug("Handling UserStartedSpeaking event")
-            # This event now contains the audio payload to be played back.
-            audio_payload_b64 = event.get("payload")
-            if audio_payload_b64:
-                await self._play_deepgram_audio(channel_id, audio_payload_b64)
+            # This event may not have a payload, it's just a notification.
 
     async def _forward_audio_to_agent(self, data: bytes, addr: tuple):
         """
