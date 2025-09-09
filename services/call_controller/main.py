@@ -8,7 +8,7 @@ It replaces engine.py, sip_client.py, and call_session.py from the v1.0 architec
 import asyncio
 import structlog
 import signal
-from typing import Dict, Any
+from typing import Dict, Any, List, Callable
 import uuid
 import json
 from concurrent.futures import ThreadPoolExecutor
@@ -28,16 +28,18 @@ class CallControllerService:
         self.redis_queue = RedisMessageQueue(self.config.redis)
         self.active_calls: Dict[str, Any] = {}
         self.running = False
-        self._setup_event_handlers()
+        self.event_handlers: Dict[str, List[Callable]] = {}
+        self.setup_event_handlers()
+        self.udp_server = UDPServer('0.0.0.0', 54322)
 
-    def _setup_event_handlers(self):
+    def setup_event_handlers(self):
         self.ari_client.on_event('StasisStart', self._handle_stasis_start)
         self.ari_client.on_event('StasisEnd', self._handle_stasis_end)
         self.ari_client.on_event('ChannelDtmfReceived', self._handle_dtmf_received)
         self.ari_client.on_event('PlaybackStarted', self._handle_playback_started)
         self.ari_client.on_event('PlaybackFinished', self._handle_playback_finished)
         self.ari_client.on_event('ChannelStateChange', self._handle_channel_state_change)
-        self.udp_server = UDPServer('0.0.0.0', 54321)
+        # self.udp_server = UDPServer('0.0.0.0', 54321) # This line is moved to __init__
 
     async def start(self):
         logger.info(f"Starting service {self.config.service_name}")
@@ -119,6 +121,9 @@ class CallControllerService:
             self.active_calls[channel_id]['state'] = 'answered'
             logger.info("Channel answered", channel_id=channel_id)
 
+            # Add a small delay to ensure the channel is fully up in ARI
+            await asyncio.sleep(1)
+
             # Start forwarding media to our UDP server
             logger.info("Issuing externalMedia command to Asterisk...")
             await self.ari_client.send_command(
@@ -126,7 +131,7 @@ class CallControllerService:
                 f"channels/{channel_id}/externalMedia",
                 data={
                     "app": self.config.asterisk.app_name,
-                    "external_host": "127.0.0.1:54321",
+                    "external_host": f"127.0.0.1:54322",
                     "format": "slin16"
                 }
             )

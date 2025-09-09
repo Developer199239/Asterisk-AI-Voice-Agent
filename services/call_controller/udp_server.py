@@ -53,7 +53,7 @@ class UDPServer:
         logger.info("UDP server stopped.")
 
 async def main():
-    server = UDPServer('0.0.0.0', 54321)
+    server = UDPServer('0.0.0.0', 54322)
     try:
         await server.start()
     except KeyboardInterrupt:
