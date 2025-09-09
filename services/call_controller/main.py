@@ -6,36 +6,21 @@ It replaces engine.py, sip_client.py, and call_session.py from the v1.0 architec
 """
 
 import asyncio
-import logging
 import signal
-import sys
 import traceback
-from pathlib import Path
-from typing import Optional
-from aiohttp import web
 
 from shared.health_check import create_health_check_app
 import uvicorn
-
-# Add shared modules to path
-# sys.path.append(str(Path(__file__).parent.parent.parent / "shared"))
+import structlog
 
 from shared.logging_config import setup_logging
 from shared.config import load_config, CallControllerConfig
-from shared.redis_client import get_redis_queue, Channels, CallNewMessage, CallControlMessage
-from ari_client import ARIClient, ARIEvent
-from rtpengine_client import RTPEngineClient
-from call_state_machine import CallStateMachine, CallState, CallData
-import structlog
-from shared.logging_config import set_correlation_id
+from shared.redis_client import RedisMessageQueue, Channels, CallNewMessage
 from services.call_controller.ari_client import ARIClient
-from services.call_controller.call_state_machine import CallStateMachine, CallState
 from services.call_controller.models import ARIEvent
 from services.call_controller.rtpengine_client import RTPEngineClient
-from shared.config import CallControllerConfig
-from shared.logging_config import setup_logging
-from shared.redis_client import RedisMessageQueue
-
+from services.call_controller.call_state_machine import CallStateMachine, CallState, CallData
+from shared.logging_config import set_correlation_id
 
 # Load configuration and set up logging
 config = load_config("call_controller")
