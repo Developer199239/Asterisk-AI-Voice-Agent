@@ -24,6 +24,7 @@ class STTClient:
             ws_url = f"wss://api.deepgram.com/v1/listen?model={self.config.model}&language={self.config.language}&encoding=linear16&sample_rate=8000"
             
             logger.info("Connecting to Deepgram...")
+            # Correctly pass headers using the extra_headers argument
             self.websocket = await websockets.connect(ws_url, extra_headers=extra_headers)
             logger.info("✅ Successfully connected to Deepgram.")
         except Exception as e:
