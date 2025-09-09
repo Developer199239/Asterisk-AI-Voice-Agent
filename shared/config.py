@@ -50,7 +50,7 @@ class AsteriskConfig(BaseConfig):
     """Asterisk-specific configuration"""
     
     # Asterisk Connection
-    asterisk_host: str = Field(
+    host: str = Field(
         default="voiprnd.nemtclouddispatch.com",
         description="Asterisk server hostname or IP"
     )
@@ -64,11 +64,11 @@ class AsteriskConfig(BaseConfig):
     )
     
     # ARI Configuration
-    ari_username: str = Field(
+    username: str = Field(
         default="AIAgent",
         description="ARI username for authentication"
     )
-    ari_password: str = Field(
+    password: str = Field(
         default="c4d5359e2f9ddd394cd6aa116c1c6a96",
         description="ARI password for authentication"
     )
@@ -76,7 +76,7 @@ class AsteriskConfig(BaseConfig):
     @property
     def ari_url(self) -> str:
         """Generate ARI WebSocket URL"""
-        return f"ws://{self.asterisk_host}:{self.asterisk_port}/ari/events?api_key={self.ari_username}:{self.ari_password}"
+        return f"ws://{self.host}:{self.asterisk_port}/ari/events?api_key={self.username}:{self.password}"
 
 
 class RTPEngineConfig(BaseSettings):
