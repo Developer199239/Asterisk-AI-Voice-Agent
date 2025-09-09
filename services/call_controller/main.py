@@ -57,42 +57,32 @@ class CallControllerService:
         
     async def start(self):
         """Start the call controller service"""
-        try:
-            # Load configuration
-            self.config = load_config("call_controller")
-            logger.info(f"Loaded configuration for {self.config.service_name}")
-            
-            # Initialize Redis client
-            await self.redis_client.connect()
-            logger.info("Connected to Redis")
+        # Load configuration
+        self.config = load_config("call_controller")
+        logger.info(f"Loaded configuration for {self.config.service_name}")
+        
+        # Initialize Redis client
+        await self.redis_client.connect()
+        logger.info("Connected to Redis")
 
-            # Initialize RTPEngine client
-            await self.rtpengine_client.connect()
-            logger.info("Connected to RTPEngine")
-            
-            # Initialize ARI client
-            await self.ari_client.connect()
-            logger.info("Connected to ARI")
+        # Initialize RTPEngine client
+        await self.rtpengine_client.connect()
+        logger.info("Connected to RTPEngine")
+        
+        # Initialize ARI client
+        await self.ari_client.connect()
+        logger.info("Connected to ARI")
 
-            # Set up event handlers
-            self._setup_ari_handlers()
-            self._setup_redis_handlers()
-            self._setup_state_handlers()
+        # Set up event handlers
+        self._setup_ari_handlers()
+        self._setup_redis_handlers()
+        self._setup_state_handlers()
+        
+        # Start services
+        self.running = True
+        logger.info("Call controller service components started, entering main loop.")
+        await self._start_services()
             
-            # Start services
-            self.running = True
-            await self._start_services()
-            
-        except Exception as e:
-            logger.error(f"Failed to start call controller service: {e}")
-            await self.stop()
-            raise
-        finally:
-            # Clean up resources
-            await self.redis_client.disconnect()
-            await self.ari_client.disconnect()
-            await self.rtpengine_client.disconnect()
-    
     async def stop(self):
         """Stop the call controller service"""
         logger.info("Stopping call controller service...")
@@ -395,6 +385,10 @@ class CallControllerService:
                 logger.error(f"Error in timeout checker: {e}")
                 await asyncio.sleep(30)
 
+    def is_stopped(self) -> bool:
+        """Check if the service is stopped."""
+        return not self.running
+
 
 async def main():
     """Main entry point"""
@@ -410,20 +404,23 @@ async def main():
     
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
-    
+
+    service_task = None
     try:
-        await service.start()
-        logger.info("Call Controller Service started successfully")
-        
-        # Keep running
-        while service.running:
+        service_task = asyncio.create_task(service.start())
+        logger.info("Call Controller Service starting...")
+
+        # Keep running until shutdown is triggered
+        while not service.is_stopped():
             await asyncio.sleep(1)
-            
-    except KeyboardInterrupt:
-        logger.info("Received keyboard interrupt")
+
+    except asyncio.CancelledError:
+        logger.info("Main task cancelled.")
     except Exception as e:
-        logger.error(f"Service error: {e}", exc_info=True)
+        logger.error(f"Service error in main: {e}", exc_info=True)
     finally:
+        if service_task and not service_task.done():
+            service_task.cancel()
         await service.stop()
 
 
