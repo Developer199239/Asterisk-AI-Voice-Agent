@@ -224,7 +224,8 @@ class CallControllerService:
             logger.info("Creating externalMedia channel...")
             media_channel_response = await self.ari_client.create_external_media_channel(
                 app_name=self.config.asterisk.app_name,
-                external_host=f"127.0.0.1:{self.udp_server.port}" # Use the actual port
+                external_host=f"{self.udp_server.host}:{self.udp_server.port}", # Use the actual port
+                format="slin16" # Explicitly set the format for outgoing audio
             )
             # The response body *is* the channel object, not nested under a 'channel' key.
             if not media_channel_response or 'id' not in media_channel_response:
@@ -232,10 +233,13 @@ class CallControllerService:
             
             media_channel_id = media_channel_response['id']
             self.active_calls[channel_id]['media_channel_id'] = media_channel_id
-            self.active_calls[channel_id]['asterisk_rtp_addr'] = (
-                media_channel_response["channelvars"]["UNICASTRTP_LOCAL_ADDRESS"],
-                int(media_channel_response["channelvars"]["UNICASTRTP_LOCAL_PORT"])
-            )
+            
+            # NETWORKING FIX: Override the local address with the configured ASTERISK_HOST
+            # to ensure we send RTP to the correct, reachable IP.
+            asterisk_rtp_host = self.config.asterisk.host
+            asterisk_rtp_port = int(media_channel_response["channelvars"]["UNICASTRTP_LOCAL_PORT"])
+            self.active_calls[channel_id]['asterisk_rtp_addr'] = (asterisk_rtp_host, asterisk_rtp_port)
+
             logger.info(
                 "externalMedia channel created",
                 media_channel_id=media_channel_id,
@@ -368,30 +372,10 @@ class CallControllerService:
             return
 
         if event_type == 'AgentAudio':
-            audio_data = event.get('data')
-
-            if not audio_data:
-                logger.warning("AgentAudio event missing data", event=event)
-                return
-
-            try:
-                # The 'data' is already base64 encoded. We play it directly.
-                # The audio should be played on the incoming channel so the caller can hear it.
-                logger.debug("Attempting to play agent audio on channel", channel_id=channel_id, audio_data_size=len(audio_data))
-                
-                # The media URI for base64 encoded audio is `sound:base64,...`
-                # The audio format from Deepgram is L16 at 24000 Hz. We need to specify this.
-                # Format: sound:base64,slin24@24000,<base64_data>
-                # However, ARI's base64 playback is tricky with sample rates.
-                # A more compatible format is just raw slin16.
-                # Let's try a simple playback first. Asterisk is often smart about resampling.
-                media_uri = f"sound:base64,{audio_data}"
-                
-                playback_response = await self.ari_client.play_media(channel_id, media_uri)
-                logger.debug("ARI play media response", response=playback_response)
-                
-            except Exception as e:
-                logger.error("Error handling AgentAudio event", exc_info=True)
+            # This event now contains the audio payload to be played back.
+            audio_payload_b64 = event.get("data")
+            if audio_payload_b64:
+                await self._play_deepgram_audio(channel_id, audio_payload_b64)
 
         elif event_type == "UserStartedSpeaking":
             logger.debug("Handling UserStartedSpeaking event")
