@@ -135,20 +135,35 @@ class CallControllerService:
 async def main():
     service = CallControllerService()
     
-    loop = asyncio.get_running_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, lambda: asyncio.create_task(service.stop()))
+    # Create a future that will complete upon receiving a shutdown signal
+    shutdown_event = asyncio.Event()
 
+    def _signal_handler(*args):
+        logger.info("Shutdown signal received.")
+        shutdown_event.set()
+
+    loop = asyncio.get_event_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, _signal_handler)
+
+    service_task = loop.create_task(service.start())
+
+    # Wait until the shutdown signal is received
+    await shutdown_event.wait()
+    
+    # Once signal is received, gracefully stop the service
+    logger.info("Gracefully stopping service...")
+    await service.stop()
+    service_task.cancel()
     try:
-        await service.start()
-    except Exception as e:
-        logger.error("Failed to start CallControllerService", exc_info=True)
-    finally:
-        if service.running:
-             await service.stop()
+        await service_task
+    except asyncio.CancelledError:
+        logger.info("Service task cancelled.")
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
-        logger.info("Call controller service shut down.")
+        pass
+    finally:
+        logger.info("Call controller service has shut down.")
