@@ -139,11 +139,11 @@ class CallControllerService:
                 app_name=self.config.asterisk.app_name,
                 external_host=f"{self.udp_server.host}:{self.udp_server.port}"
             )
+            # The response body *is* the channel object, not nested under a 'channel' key.
             if not media_channel_response or 'id' not in media_channel_response:
-                 raise Exception(f"Failed to create externalMedia channel. Response: {media_channel_response}")
+                raise Exception(f"Failed to create externalMedia channel. Response: {media_channel_response}")
             
-            media_channel = media_channel_response['channel']
-            media_channel_id = media_channel['id']
+            media_channel_id = media_channel_response['id']
             self.active_calls[incoming_channel_id]['media_channel_id'] = media_channel_id
             logger.info("externalMedia channel created", media_channel_id=media_channel_id)
 

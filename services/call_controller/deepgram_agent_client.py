@@ -39,6 +39,8 @@ class DeepgramAgentClient:
             raise
 
     async def _configure_agent(self, deepgram_config: DeepgramConfig, llm_config: LLMConfig):
+        # Per the V1 API documentation, the think.provider object is simpler.
+        # 'type' and 'api_key' are not specified here.
         settings = {
             "type": "Settings",
             "agent": {
@@ -50,9 +52,7 @@ class DeepgramAgentClient:
                 },
                 "think": {
                     "provider": {
-                        "type": "open_ai",
-                        "model": llm_config.model,
-                        "api_key": llm_config.openai_api_key
+                        "model": llm_config.model
                     },
                     "prompt": llm_config.prompt,
                 },
@@ -68,17 +68,24 @@ class DeepgramAgentClient:
         await self.websocket.send(json.dumps(settings))
 
     async def _keep_alive(self):
-        try:
-            while True:
-                if self.websocket and self.websocket.open:
-                    await self.websocket.send(json.dumps({"type": "KeepAlive"}))
+        """Send a keep-alive message every 10 seconds to maintain the connection."""
+        while True:
+            try:
                 await asyncio.sleep(10)
-        except asyncio.CancelledError:
-            pass
-        except websockets.exceptions.ConnectionClosed:
-            logger.warning("Keep-alive task could not send message, connection is closed.")
-        except Exception:
-            logger.error("Error in keep-alive task", exc_info=True)
+                # Use 'not self.websocket.closed' to check connection state
+                if self.websocket and not self.websocket.closed:
+                    if not self._is_audio_flowing:
+                        await self.websocket.send(json.dumps({"type": "KeepAlive"}))
+                        logger.debug("Sent KeepAlive message.")
+                    self._is_audio_flowing = False
+                else:
+                    logger.warning("WebSocket is closed, stopping keep-alive.")
+                    break
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                logger.error("Error in keep-alive task", exc_info=True)
+                break
 
     async def _receive_loop(self):
         if not self.websocket:
@@ -99,6 +106,7 @@ class DeepgramAgentClient:
             logger.info("Disconnected from Deepgram Voice Agent.")
 
     async def send_audio(self, audio_chunk: bytes):
+        """Send an audio chunk through the WebSocket."""
         if self.websocket and self.websocket.open:
             try:
                 await self.websocket.send(audio_chunk)
