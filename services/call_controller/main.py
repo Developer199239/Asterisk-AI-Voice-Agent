@@ -64,9 +64,12 @@ class CallControllerService:
         
         logger.info("Call controller service stopped")
     
-    async def _handle_stasis_start(self, event: ARIEvent):
+    async def _handle_stasis_start(self, event_data: dict):
         """Handle StasisStart event - new call received"""
-        channel_id = event.data["channel"]["id"]
+        channel_id = event_data.get("channel", {}).get("id")
+        if not channel_id:
+            return
+        
         logger.info(f"Received StasisStart for channel {channel_id}")
         await self.ari_client.answer_channel(channel_id)
         logger.info(f"Answered channel {channel_id}")
