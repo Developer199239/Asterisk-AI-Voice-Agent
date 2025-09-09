@@ -18,21 +18,26 @@ services:
     build:
       context: .
       dockerfile: services/call_controller/Dockerfile
-    container_name: asterisk-ai-voice-agent-call-controller
-    restart: always
+    container_name: asterisk-ai-voice-agent-call_controller
+    # Use host network to allow RTP streams from Asterisk to reach the container
+    network_mode: "host"
     volumes:
-      - ./shared:/app/shared
-    depends_on:
-      redis:
-        condition: service_healthy
-    network_mode: host
-    env_file:
-      - .env
+      - shared_audio:/shared/audio
+      - shared_logs:/shared/logs
     environment:
-      - PYTHONPATH=/app
-      - ASTERISK_HOST=127.0.0.1
-      - REDIS_HOST=127.0.0.1
-      - REDIS_URL=redis://redis:6379
-      - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
+      - PYTHONUNBUFFERED=1
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - ASTERISK_HOST=${ASTERISK_HOST:-172.17.0.1}
+      - ARI_USERNAME=${ARI_USERNAME}
+      - ARI_PASSWORD=${ARI_PASSWORD}
       - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      # The host IP is now required for Asterisk to send media back to this container
+      - CONTAINER_HOST_IP=${CONTAINER_HOST_IP}
+    depends_on:
+      - redis
+    restart: on-failure
+
+volumes:
+  shared_audio:
+  shared_logs:
