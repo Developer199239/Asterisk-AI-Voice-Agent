@@ -41,33 +41,38 @@ class DeepgramAgentClient:
             raise
 
     async def _configure_agent(self, deepgram_config: DeepgramConfig, llm_config: LLMConfig):
-        # Per the V1 API documentation, the think.provider object is simpler.
-        # 'type' and 'api_key' are not specified here.
+        # Per the V1 API documentation, the think.provider object is simpler,
+        # and the greeting is sent as a separate message.
         settings = {
             "type": "Settings",
             "agent": {
                 "listen": {
                     "provider": {
                         "type": "deepgram",
-                        "model": deepgram_config.model,
+                        # The 'model' key is no longer required here per docs
                     }
                 },
                 "think": {
-                    "provider": {
-                        "model": llm_config.model
-                    },
+                    "provider": "open_ai",
+                    "model": llm_config.model,
                     "prompt": llm_config.prompt,
                 },
                 "speak": {
-                    "provider": {
-                        "type": "deepgram",
-                        "model": deepgram_config.tts_model
-                    }
-                },
-                "greeting": llm_config.greeting
+                    "provider": "deepgram",
+                    "model": deepgram_config.tts_model
+                }
             }
         }
         await self.websocket.send(json.dumps(settings))
+        logger.debug("Sent agent settings", settings=settings)
+
+        # Send the greeting as a separate message
+        greeting_message = {
+            "type": "Greeting",
+            "text": llm_config.greeting
+        }
+        await self.websocket.send(json.dumps(greeting_message))
+        logger.debug("Sent agent greeting", greeting=greeting_message)
 
     async def _keep_alive(self):
         """Send a keep-alive message every 10 seconds to maintain the connection."""
@@ -111,6 +116,7 @@ class DeepgramAgentClient:
             logger.error("Error receiving events from Deepgram Voice Agent", exc_info=True)
 
     async def disconnect(self):
+        """Disconnects the WebSocket client."""
         if self._keep_alive_task:
             self._keep_alive_task.cancel()
         if self.websocket:

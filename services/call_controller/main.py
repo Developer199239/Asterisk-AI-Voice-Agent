@@ -150,6 +150,9 @@ class CallControllerService:
             self.active_calls[incoming_channel_id]['media_channel_id'] = media_channel_id
             logger.info("externalMedia channel created", media_channel_id=media_channel_id)
 
+            # Add media_channel_id to active_calls for reverse lookup
+            self.active_calls[media_channel_id] = self.active_calls[incoming_channel_id]
+
             # Bridge the incoming call with the media channel
             bridge = await self.ari_client.create_bridge()
             bridge_id = bridge['id']
@@ -164,20 +167,68 @@ class CallControllerService:
             await self._cleanup_call(incoming_channel_id)
 
     async def _handle_stasis_end(self, event_data: dict):
-        channel_id = event_data.get('channel', {}).get('id')
-        logger.info("Call ended", channel_id=channel_id)
-        await self._cleanup_call(channel_id)
+        channel = event_data.get('channel', {})
+        channel_id = channel.get('id')
+        logger.info("StasisEnd event received for channel", channel_id=channel_id)
+        
+        # Find the primary call record associated with this channel (either incoming or media)
+        call_info = self.active_calls.get(channel_id)
+        if call_info:
+            primary_channel_id = call_info.get('channel_data', {}).get('id')
+            if primary_channel_id:
+                await self._cleanup_call(primary_channel_id)
+            else:
+                logger.warning("Could not determine primary channel ID from StasisEnd event", channel_id=channel_id)
+        else:
+            logger.warning("Received StasisEnd for a channel not in active_calls", channel_id=channel_id)
+
 
     async def _cleanup_call(self, channel_id: str):
         if channel_id in self.active_calls:
             call_info = self.active_calls[channel_id]
+            
+            # Use a copy of keys to avoid issues with modifying dict during iteration
+            active_channel_ids = list(self.active_calls.keys())
+            
+            # Clean up all related entries from active_calls
+            for key_id in active_channel_ids:
+                if self.active_calls.get(key_id) == call_info:
+                    del self.active_calls[key_id]
+
+            # Hang up the media channel if it exists
+            media_channel_id = call_info.get('media_channel_id')
+            if media_channel_id:
+                logger.info("Hanging up media channel", channel_id=media_channel_id)
+                try:
+                    await self.ari_client.hangup_channel(media_channel_id)
+                except Exception as e:
+                    logger.warning("Could not hang up media channel", channel_id=media_channel_id, error=e)
+
+            # Hang up the incoming channel if it exists and is still up
+            incoming_channel_id = call_info.get('channel_data', {}).get('id')
+            if incoming_channel_id and incoming_channel_id != media_channel_id:
+                logger.info("Hanging up incoming channel", channel_id=incoming_channel_id)
+                try:
+                    await self.ari_client.hangup_channel(incoming_channel_id)
+                except Exception as e:
+                    logger.warning("Could not hang up incoming channel", channel_id=incoming_channel_id, error=e)
+
+            # Destroy the bridge if it exists
+            bridge_id = call_info.get('bridge_id')
+            if bridge_id:
+                logger.info("Destroying bridge", bridge_id=bridge_id)
+                try:
+                    await self.ari_client.destroy_bridge(bridge_id)
+                except Exception as e:
+                    logger.warning("Could not destroy bridge", bridge_id=bridge_id, error=e)
+
             agent_client = call_info.get('agent_client')
             if agent_client:
                 await agent_client.disconnect()
                 logger.info("Deepgram Agent client disconnected for call", call_id=call_info.get('call_id'))
             
-            del self.active_calls[channel_id]
-            logger.info("Cleaned up call resources", channel_id=channel_id)
+            logger.info("Cleaned up all resources for call", call_id=call_info.get('call_id'))
+
 
     async def _handle_dtmf_received(self, event_data: dict):
         channel_id = event_data.get('channel', {}).get('id')
