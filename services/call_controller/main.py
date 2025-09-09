@@ -124,6 +124,9 @@ class CallControllerService:
             await self.redis_queue.publish(Channels.CALLS_NEW, new_call_message)
             logger.info("Published new call event to Redis", channel_id=channel_id, call_id=call_id)
 
+            # Generate a basic AI response
+            await self._generate_ai_response(channel_id, call_id)
+
         except Exception as e:
             logger.error("Error handling StasisStart", channel_id=channel_id, exc_info=True)
             await self._cleanup_call(channel_id)
@@ -157,6 +160,29 @@ class CallControllerService:
     async def _handle_channel_state_change(self, event_data: dict):
         channel = event_data.get('channel', {})
         logger.debug("Channel state changed", channel_id=channel.get('id'), state=channel.get('state'))
+
+    async def _generate_ai_response(self, channel_id: str, call_id: str):
+        """Generate a basic AI response for the call."""
+        try:
+            # For now, just play a simple greeting message
+            greeting_text = "Hello, I am an AI Assistant for Jugaar LLC. How can I help you today?"
+            logger.info("Generating AI response", channel_id=channel_id, call_id=call_id)
+            
+            # Use Asterisk's SayAlpha to speak the greeting
+            await self.ari_client.play_media(channel_id, f"sayalpha:{greeting_text}")
+            
+            # Publish a message to trigger LLM processing
+            llm_message = {
+                'channel_id': channel_id,
+                'call_id': call_id,
+                'action': 'generate_response',
+                'text': greeting_text
+            }
+            await self.redis_queue.publish('llm:response:ready', llm_message)
+            logger.info("Published LLM message", channel_id=channel_id)
+            
+        except Exception as e:
+            logger.error("Error generating AI response", channel_id=channel_id, exc_info=True)
 
 async def main():
     service = CallControllerService()
