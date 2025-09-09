@@ -72,6 +72,10 @@ class AsteriskConfig(BaseConfig):
         default="c4d5359e2f9ddd394cd6aa116c1c6a96",
         description="ARI password for authentication"
     )
+    app_name: str = Field(
+        default="asterisk-ai-voice-agent",
+        description="ARI application name"
+    )
     
     @property
     def ari_url(self) -> str:

@@ -39,6 +39,7 @@ class ARIClient:
         self.port = config.asterisk_port
         self.username = config.username
         self.password = config.password
+        self.app_name = config.app_name
         
         self.websocket: Optional[websockets.WebSocketClientProtocol] = None
         self.http_session: Optional[aiohttp.ClientSession] = None
@@ -46,7 +47,7 @@ class ARIClient:
         self.running = False
         
         # ARI URLs
-        self.ws_url = f"ws://{self.host}:{self.port}/ari/events?api_key={self.username}:{self.password}&app=asterisk-ai-voice-agent"
+        self.ws_url = f"ws://{self.host}:{self.port}/ari/events?api_key={self.username}:{self.password}&app={self.app_name}"
         self.http_url = f"http://{self.host}:{self.port}/ari"
     
     async def connect(self):
@@ -55,8 +56,7 @@ class ARIClient:
             logger.warning("Already connected to ARI WebSocket")
             return
 
-        ws_url = f"ws://{self.host}:{self.port}/ari/events?api_key={self.username}:{self.password}&app=asterisk-ai-voice-agent"
-        logger.info(f"Connecting to ARI WebSocket at {ws_url}")
+        logger.info(f"Connecting to ARI WebSocket at {self.ws_url}")
         try:
             # Create HTTP session for ARI API calls
             self.http_session = aiohttp.ClientSession(
@@ -69,7 +69,7 @@ class ARIClient:
             
             # Connect to WebSocket
             self.websocket = await websockets.connect(
-                ws_url,
+                self.ws_url,
                 ping_interval=30,
                 ping_timeout=10,
                 close_timeout=10
@@ -110,20 +110,6 @@ class ARIClient:
                     raise ConnectionError(f"ARI HTTP connection failed: {response.status}")
         except Exception as e:
             logger.error(f"ARI HTTP connection test failed: {e}")
-            raise
-    
-    async def _connect_websocket(self):
-        """Connect to ARI WebSocket"""
-        try:
-            self.websocket = await websockets.connect(
-                self.ws_url,
-                ping_interval=30,
-                ping_timeout=10,
-                close_timeout=10
-            )
-            logger.info("ARI WebSocket connected")
-        except Exception as e:
-            logger.error(f"Failed to connect to ARI WebSocket: {e}")
             raise
     
     async def start_listening(self):
