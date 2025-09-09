@@ -64,7 +64,7 @@ class CallControllerService:
     async def listen_for_control_messages(self):
         logger.info("Listening for control messages from Redis...")
         try:
-            async for message in self.redis_queue.listen(Channels.CALL_CONTROL.value):
+            async for message in self.redis_queue.listen(Channels.CALLS_CONTROL_PLAY):
                 if message and self.running:
                     try:
                         control_message = CallControlMessage.model_validate_json(message)
@@ -115,7 +115,7 @@ class CallControllerService:
                 caller_id=channel.get('caller', {}).get('number'),
                 caller_name=channel.get('caller', {}).get('name')
             )
-            await self.redis_queue.publish(Channels.CALL_NEW.value, new_call_message)
+            await self.redis_queue.publish(Channels.CALLS_NEW, new_call_message)
             logger.info("Published new call event to Redis", channel_id=channel_id, call_id=call_id)
 
         except Exception as e:
