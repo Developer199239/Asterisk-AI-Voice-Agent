@@ -40,7 +40,7 @@ logger = structlog.get_logger(__name__)
 class STTService:
     def __init__(self, config: STTServiceConfig):
         self.config = config
-        self.redis_client = RedisMessageQueue()
+        self.redis_client = RedisMessageQueue(config.redis)
         self.channel_correlation = ChannelCorrelationManager()
         self.rtp_manager = RTPStreamManager(host="0.0.0.0", port=5004, correlation_manager=self.channel_correlation)
         self.running = False
