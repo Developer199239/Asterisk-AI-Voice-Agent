@@ -42,10 +42,10 @@ class TTSService:
             AsteriskFallbackConfig(
                 enabled=config.enable_fallback,
                 fallback_mode=FallbackMode(config.fallback_mode),
-                asterisk_host=config.asterisk_host,
+                asterisk_host=config.host,
                 asterisk_port=config.asterisk_port,
-                ari_username=config.ari_username,
-                ari_password=config.ari_password
+                ari_username=config.username,
+                ari_password=config.password
             )
         )
         
