@@ -121,11 +121,14 @@ class CallControllerService:
 
             # Start forwarding media to our UDP server
             logger.info("Issuing externalMedia command to Asterisk...")
-            await self.ari_client.client.channels.channel_externalMedia(
-                channelId=channel_id,
-                app=self.config.asterisk.app_name,
-                external_host="127.0.0.1:54321", # Host machine's loopback
-                format="slin16" # Signed Linear PCM 16-bit
+            await self.ari_client.send_command(
+                "POST",
+                f"channels/{channel_id}/externalMedia",
+                data={
+                    "app": self.config.asterisk.app_name,
+                    "external_host": "127.0.0.1:54321",
+                    "format": "slin16"
+                }
             )
             logger.info("externalMedia command sent successfully.")
 
