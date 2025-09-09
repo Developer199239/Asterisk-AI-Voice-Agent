@@ -17,7 +17,8 @@ class DeepgramAgentClient:
         self._is_audio_flowing = False
 
     async def connect(self, deepgram_config: DeepgramConfig, llm_config: LLMConfig):
-        ws_url = f"wss://api.deepgram.com/v1/agent/{deepgram_config.project_id}?encoding=linear16&sample_rate=8000"
+        # The correct V1 endpoint from the migration guide
+        ws_url = f"wss://agent.deepgram.com/v1/agent/converse?encoding=linear16&sample_rate=8000"
         headers = {'Authorization': f'Token {deepgram_config.api_key}'}
 
         try:
