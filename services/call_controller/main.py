@@ -443,6 +443,10 @@ class CallControllerService:
             logger.warning("Missing RTP packetizer or Asterisk address for call", call_id=call_info.get('call_id'))
             return
 
+        # FOR TESTING: Override the IP to localhost to diagnose Docker host networking issue
+        asterisk_addr_override = ("127.0.0.1", asterisk_addr[1])
+        logger.info(f"Overriding Asterisk RTP destination from {asterisk_addr} to {asterisk_addr_override}")
+
         try:
             # Check if the payload is base64-encoded string and decode if needed
             if isinstance(audio_payload, str):
@@ -457,19 +461,17 @@ class CallControllerService:
 
             # Deepgram sends audio in chunks. A common size is 640 bytes for 20ms of L16 audio.
             # We will packetize and send it as is.
-            rtp_packet = rtp_packetizer.packetize(raw_audio)
-            
-            logger.debug("Sending RTP packet to Asterisk",
-                         addr=asterisk_addr,
-                         seq=rtp_packetizer.sequence_number,
-                         ts=rtp_packetizer.timestamp,
-                         ssrc=rtp_packetizer.ssrc,
-                         size=len(rtp_packet))
-                         
-            await self.udp_server.send(rtp_packet, asterisk_addr)
+            rtp_packets = rtp_packetizer.packetize(raw_audio)
 
+            for packet in rtp_packets:
+                await self.udp_server.send(packet, asterisk_addr_override)
+            logger.debug(
+                f"Sent {len(rtp_packets)} RTP packets to Asterisk",
+                destination_addr=asterisk_addr_override,
+                total_payload_size=len(raw_audio)
+            )
         except Exception as e:
-            logger.error("Failed to process and send audio to Asterisk", error=e, call_id=call_info.get('call_id'))
+            logger.error("Error processing or sending agent audio", error=str(e), call_id=call_info.get('call_id'))
 
 
 async def main():
