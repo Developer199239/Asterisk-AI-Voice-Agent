@@ -132,14 +132,6 @@ class DeepgramAgentClient:
                     # Handle text messages (JSON events)
                     try:
                         event_data = json.loads(message)
-                        # If this is the Welcome message, store the request_id
-                        if event_data.get('type') == 'Welcome':
-                            self.request_id = event_data.get('request_id')
-                        
-                        # Add the request_id to every event we pass to the handler
-                        if self.request_id:
-                            event_data['request_id'] = self.request_id
-
                         logger.debug("Received JSON message from Deepgram", data=event_data)
                         await self.event_handler(event_data)
                     except json.JSONDecodeError as e:
@@ -151,11 +143,6 @@ class DeepgramAgentClient:
                         'type': 'AgentAudio',
                         'data': message  # Forward the raw bytes directly
                     }
-                    
-                    # Add the request_id if we have it
-                    if self.request_id:
-                        audio_event['request_id'] = self.request_id
-                    
                     logger.debug("Received binary audio from Deepgram", size=len(message))
                     await self.event_handler(audio_event)
 

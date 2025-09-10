@@ -206,9 +206,9 @@ class CallControllerService:
 
             # Define a small, dedicated coroutine to handle the connection
             async def connect_agent():
-                # Pass a lambda that captures the current llm_config
+                # Pass a lambda that captures the current channel_id
                 agent_client = DeepgramAgentClient(
-                    lambda event: self._handle_deepgram_event(event, self.config.llm)
+                    lambda event: self._handle_deepgram_event(event, channel_id)
                 )
 
                 # Store preliminary call state
@@ -373,35 +373,16 @@ class CallControllerService:
         channel = event_data.get('channel', {})
         logger.debug("Channel state changed", channel_id=channel.get('id'), state=channel.get('state'))
 
-    async def _handle_deepgram_event(self, event: dict, llm_config: 'LLMServiceConfig'):
+    async def _handle_deepgram_event(self, event: dict, channel_id: str):
         """Handle incoming events from the Deepgram Agent client."""
-        logger.info("Received event from Deepgram Agent", dg_event=event)
+        logger.info("Received event from Deepgram Agent", dg_event=event, channel_id=channel_id)
         event_type = event.get('type')
-        request_id = event.get('request_id')
-
-        # Find the channel_id associated with this request_id
-        channel_id = None
-        call_info = None
-
-        # No longer need the complex logic for Welcome, just associate the request_id.
-        if event_type == 'Welcome' and request_id:
-            for cid, info in self.active_calls.items():
-                if 'channel_data' in info and info.get('request_id') is None:
-                    self.active_calls[cid]['request_id'] = request_id
-                    logger.info("Associated request_id with call", 
-                                request_id=request_id, call_id=info.get('call_id'))
-                    channel_id = cid
-                    call_info = info
-                    break
-        else:
-            for cid, info in self.active_calls.items():
-                if info.get('request_id') == request_id:
-                    channel_id = cid
-                    call_info = info
-                    break
+        
+        # Directly use the channel_id passed from the client's event handler
+        call_info = self.active_calls.get(channel_id)
         
         if not call_info:
-            logger.warning("Could not find call info for request_id", request_id=request_id)
+            logger.warning("Could not find call info for channel_id", channel_id=channel_id)
             return
 
         # --- START RTP DEBUGGING ---
