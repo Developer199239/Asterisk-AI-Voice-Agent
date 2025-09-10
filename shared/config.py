@@ -209,6 +209,11 @@ class LLMServiceConfig(BaseSettings):
     
     # OpenAI LLM specific settings
     openai_base_url: Optional[str] = Field(default=None, description="OpenAI API base URL")
+    api_key: Optional[str] = Field(
+        alias="OPENAI_API_KEY",
+        default=None,
+        description="OpenAI API key for LLM"
+    )
     model: str = Field(default="gpt-4o", description="Primary LLM model")
     fallback_model: str = Field(default="gpt-3.5-turbo", description="Fallback LLM model")
     temperature: float = Field(default=0.7, description="LLM temperature")

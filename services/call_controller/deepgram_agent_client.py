@@ -19,7 +19,7 @@ class DeepgramAgentClient:
         self.request_id: Optional[str] = None
 
     async def connect(self, deepgram_config: DeepgramConfig, llm_config: LLMConfig):
-        ws_url = f"wss://agent.deepgram.com/v1/agent/converse?encoding=linear16&sample_rate=16000"
+        ws_url = f"wss://agent.deepgram.com/v1/agent/converse"
         headers = {'Authorization': f'Token {deepgram_config.api_key}'}
 
         try:
@@ -40,6 +40,22 @@ class DeepgramAgentClient:
 
     async def _configure_agent(self, deepgram_config: DeepgramConfig, llm_config: LLMConfig):
         """Builds and sends the V1 Settings message to the Deepgram Voice Agent."""
+        llm_config_payload = {
+            "provider": "openai",
+            "model": llm_config.model,
+            "api_key": llm_config.api_key,
+        }
+
+        # Add detailed logging for the LLM configuration
+        logger.debug(
+            "Configuring Deepgram Agent with LLM settings.",
+            provider=llm_config_payload.get("provider"),
+            model=llm_config_payload.get("model"),
+            # Be careful not to log the full key in production.
+            # Here we log the first 5 and last 4 chars for verification.
+            api_key_preview=f"{llm_config.api_key[:5]}...{llm_config.api_key[-4:]}" if llm_config.api_key else "Not Set"
+        )
+
         settings = {
             "type": "Settings",
             "audio": {
@@ -77,8 +93,12 @@ class DeepgramAgentClient:
                 }
             }
         }
+        
+        # Log the entire settings payload for debugging
+        logger.debug("Sending configuration payload to Deepgram.", payload=settings)
+
         await self.websocket.send(json.dumps(settings))
-        logger.debug("Sent agent settings", settings=settings)
+        logger.info("Deepgram agent configured.")
 
     async def speak(self, text: str):
         """Send an inject agent message to the agent."""

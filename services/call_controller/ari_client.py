@@ -126,7 +126,12 @@ class ARIClient:
     async def hangup_channel(self, channel_id: str):
         """Hang up a channel."""
         logger.info("Hanging up channel", channel_id=channel_id)
-        await self.send_command("DELETE", f"channels/{channel_id}")
+        # We add a check here. If the command fails with a 404, we log it
+        # as a debug message instead of an error, as this can happen in race
+        # conditions during cleanup and is not necessarily a critical failure.
+        response = await self.send_command("DELETE", f"channels/{channel_id}")
+        if response and response.get("status") == 404:
+            logger.debug("Channel hangup failed (404), likely already hung up.", channel_id=channel_id)
 
     async def play_media(self, channel_id: str, media_uri: str) -> Optional[Dict[str, Any]]:
         """Play media on a channel."""
@@ -166,7 +171,7 @@ class ARIClient:
     async def create_external_media_channel(self, app_name: str, external_host: str, format: str) -> Optional[Dict[str, Any]]:
         """Create an external media channel for streaming."""
         logger.info("Creating externalMedia channel...", external_host=external_host, format=format)
-        
+
         # This command is unique and uses query parameters, not a JSON body.
         params = {
             "app": app_name,
@@ -176,7 +181,7 @@ class ARIClient:
             "transport": "udp",     # Explicitly state we are using UDP
             "direction": "both"     # We want to send and receive audio
         }
-        
+
         return await self.send_command(
             "POST",
             "channels/externalMedia",

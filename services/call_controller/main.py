@@ -311,50 +311,57 @@ class CallControllerService:
 
 
     async def _cleanup_call(self, channel_id: str):
-        if channel_id in self.active_calls:
-            call_info = self.active_calls[channel_id]
-            
-            # Use a copy of keys to avoid issues with modifying dict during iteration
-            active_channel_ids = list(self.active_calls.keys())
-            
-            # Clean up all related entries from active_calls
-            for key_id in active_channel_ids:
-                if self.active_calls.get(key_id) == call_info:
-                    del self.active_calls[key_id]
+        # Atomically check and remove the call info to prevent race conditions.
+        call_info = self.active_calls.pop(channel_id, None)
 
-            # Hang up the media channel if it exists
-            media_channel_id = call_info.get('media_channel_id')
-            if media_channel_id:
-                logger.info("Hanging up media channel", channel_id=media_channel_id)
-                try:
-                    await self.ari_client.hangup_channel(media_channel_id)
-                except Exception as e:
-                    logger.warning("Could not hang up media channel", channel_id=media_channel_id, error=e)
+        # If the call info was already removed by another event, there's nothing to do.
+        if not call_info:
+            logger.debug("Call cleanup already handled for this channel.", channel_id=channel_id)
+            return
 
-            # Hang up the incoming channel if it exists and is still up
-            incoming_channel_id = call_info.get('channel_data', {}).get('id')
-            if incoming_channel_id and incoming_channel_id != media_channel_id:
-                logger.info("Hanging up incoming channel", channel_id=incoming_channel_id)
-                try:
-                    await self.ari_client.hangup_channel(incoming_channel_id)
-                except Exception as e:
-                    logger.warning("Could not hang up incoming channel", channel_id=incoming_channel_id, error=e)
+        # Now that we've secured the call_info, remove all other references to it.
+        # This prevents other StasisEnd events from triggering another cleanup.
+        active_channel_ids = list(self.active_calls.keys())
+        for key_id in active_channel_ids:
+            if self.active_calls.get(key_id) == call_info:
+                del self.active_calls[key_id]
+        
+        logger.info("Initiating cleanup for call", call_id=call_info.get('call_id'))
 
-            # Destroy the bridge if it exists
-            bridge_id = call_info.get('bridge_id')
-            if bridge_id:
-                logger.info("Destroying bridge", bridge_id=bridge_id)
-                try:
-                    await self.ari_client.destroy_bridge(bridge_id)
-                except Exception as e:
-                    logger.warning("Could not destroy bridge", bridge_id=bridge_id, error=e)
+        # Now, proceed with the cleanup using the secured call_info object.
+        # Hang up the media channel if it exists
+        media_channel_id = call_info.get('media_channel_id')
+        if media_channel_id:
+            logger.info("Hanging up media channel", channel_id=media_channel_id)
+            try:
+                await self.ari_client.hangup_channel(media_channel_id)
+            except Exception as e:
+                logger.warning("Could not hang up media channel", channel_id=media_channel_id, error=e)
 
-            agent_client = call_info.get('agent_client')
-            if agent_client:
-                await agent_client.disconnect()
-                logger.info("Deepgram Agent client disconnected for call", call_id=call_info.get('call_id'))
-            
-            logger.info("Cleaned up all resources for call", call_id=call_info.get('call_id'))
+        # Hang up the incoming channel if it exists and is still up
+        incoming_channel_id = call_info.get('channel_data', {}).get('id')
+        if incoming_channel_id and incoming_channel_id != media_channel_id:
+            logger.info("Hanging up incoming channel", channel_id=incoming_channel_id)
+            try:
+                await self.ari_client.hangup_channel(incoming_channel_id)
+            except Exception as e:
+                logger.warning("Could not hang up incoming channel", channel_id=incoming_channel_id, error=e)
+
+        # Destroy the bridge if it exists
+        bridge_id = call_info.get('bridge_id')
+        if bridge_id:
+            logger.info("Destroying bridge", bridge_id=bridge_id)
+            try:
+                await self.ari_client.destroy_bridge(bridge_id)
+            except Exception as e:
+                logger.warning("Could not destroy bridge", bridge_id=bridge_id, error=e)
+
+        agent_client = call_info.get('agent_client')
+        if agent_client:
+            await agent_client.disconnect()
+            logger.info("Deepgram Agent client disconnected for call", call_id=call_info.get('call_id'))
+        
+        logger.info("Cleaned up all resources for call", call_id=call_info.get('call_id'))
 
 
     async def _handle_dtmf_received(self, event_data: dict):
@@ -401,63 +408,40 @@ class CallControllerService:
             logger.debug("Handling UserStartedSpeaking event")
             # This event may not have a payload, it's just a notification.
 
+        elif event_type == "ConversationText":
+            # This is the final implementation. We simply let the Deepgram agent's
+            # configured LLM handle the response. No action is needed here, as the
+            # agent will automatically generate and send back the AgentAudio.
+            logger.info("User speech transcribed, handing off to LLM.", content=event.get("content"))
+
     async def _forward_audio_to_agent(self, data: bytes, addr: tuple):
         """
         This is the callback for the UDP server. It finds the appropriate
         Deepgram agent client and forwards the audio payload.
         """
-        # --- START RTP DEBUGGING ---
-        # This is the first point of entry for audio from Asterisk.
+        # --- BEGIN RTP DEBUGGING ---
+        # This section can be very noisy. It's useful for debugging RTP packet flow
+        # but can be commented out or set to a lower log level for production.
+        payload_preview = rtp_packet.payload.hex()[:32]
         logger.debug(
-            "RTP packet received from Asterisk",
+            "\ud83c\udfa4 INBOUND RTP Packet Received from Asterisk",
             source_addr=addr,
-            raw_packet_size=len(data)
+            raw_packet_size=len(data),
+            payload_size=len(rtp_packet.payload),
+            rtp_version=rtp_packet.version,
+            rtp_payload_type=rtp_packet.payload_type,
+            rtp_sequence=rtp_packet.sequence_number,
+            rtp_timestamp=rtp_packet.timestamp,
+            rtp_ssrc=rtp_packet.ssrc,
+            payload_preview=payload_preview
         )
         # --- END RTP DEBUGGING ---
 
-        active_agent_client = None
-        # Find the active agent client. This simple approach works for one call at a time.
-        # For multi-call, we'd need a way to map UDP source addr to a call.
-        for call_info in self.active_calls.values():
-            if 'agent_client' in call_info:
-                active_agent_client = call_info['agent_client']
-                break
-
-        if active_agent_client:
-            if len(data) >= 12: # Basic RTP header check
-                # --- START MEANINGFUL DEBUGGING ---
-                header = data[:12]
-                payload = data[12:]
-                version = (header[0] >> 6) & 0b11
-                payload_type = header[1] & 0b01111111
-                sequence_number = struct.unpack('!H', header[2:4])[0]
-                timestamp = struct.unpack('!I', header[4:8])[0]
-                ssrc = struct.unpack('!I', header[8:12])[0]
-                logger.info(
-                    "🎤 INBOUND RTP Packet Received from Asterisk",
-                    source_addr=addr,
-                    raw_packet_size=len(data),
-                    payload_size=len(payload),
-                    rtp_version=version,
-                    rtp_payload_type=payload_type,
-                    rtp_sequence=sequence_number,
-                    rtp_timestamp=timestamp,
-                    rtp_ssrc=ssrc,
-                    payload_preview=payload[:16].hex()
-                )
-                # --- END MEANINGFUL DEBUGGING ---
-                
-                audio_payload = payload # Use the stripped payload
-                
-                logger.debug(
-                    "Forwarding audio payload to Deepgram agent...",
-                    payload_size=len(audio_payload)
-                )
-                await active_agent_client.send_audio(audio_payload)
-            else:
-                logger.warning("Received a packet too small to be RTP", size=len(data), source_addr=addr)
-        else:
-            logger.warning("Received UDP packet but no active agent client", source_addr=addr)
+        # Forward the raw mu-law payload to the Deepgram agent
+        agent_client = call_info.get('agent_client')
+        if agent_client:
+            logger.debug("Forwarding audio payload to Deepgram agent...", payload_size=len(rtp_packet.payload))
+            await agent_client.send_audio(rtp_packet.payload)
 
     async def _play_deepgram_audio(self, channel_id: str, audio_payload_b64: str):
         call_info = self.active_calls.get(channel_id)
@@ -465,7 +449,7 @@ class CallControllerService:
             logger.warning("Could not find call info to play audio for channel", channel_id=channel_id)
             return
 
-        # The payload can now be either base64 string (from AgentAudio JSON) or raw bytes
+        # The payload can now be either base64-encoded string (from AgentAudio JSON) or raw bytes
         audio_payload = audio_payload_b64
         if not audio_payload:
             logger.warning("AgentAudio event received with no data", call_id=call_info.get('call_id'))
