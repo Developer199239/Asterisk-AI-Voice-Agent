@@ -11,9 +11,13 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 import websockets
 import structlog
 
-from shared.config import AsteriskConfig
+from websockets.exceptions import ConnectionClosed
+from websockets.legacy.client import WebSocketClientProtocol
 
-logger = structlog.get_logger(__name__)
+from .config import AsteriskConfig
+from .logging_config import get_logger
+
+logger = get_logger(__name__)
 
 class ARIClient:
     """A client for interacting with the Asterisk REST Interface (ARI)."""
@@ -76,7 +80,7 @@ class ARIClient:
                             asyncio.create_task(handler(event_data))
                 except json.JSONDecodeError:
                     logger.warning("Failed to decode ARI event JSON", message=message)
-        except websockets.exceptions.ConnectionClosed:
+        except ConnectionClosed:
             logger.warning("ARI WebSocket connection closed.")
             self.running = False
         except Exception as e:
