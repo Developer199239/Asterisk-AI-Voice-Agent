@@ -106,8 +106,8 @@ class DeepgramAgentClient:
         while True:
             try:
                 await asyncio.sleep(10)
-                # Use 'not self.websocket.open' which is the correct attribute for checking connection state in the 'websockets' library
-                if self.websocket and self.websocket.open:
+                # The correct way to check if the websocket is open is `not self.websocket.closed`.
+                if self.websocket and not self.websocket.closed:
                     if not self._is_audio_flowing:
                         await self.websocket.send(json.dumps({"type": "KeepAlive"}))
                         logger.debug("Sent KeepAlive message.")

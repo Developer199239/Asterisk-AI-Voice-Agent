@@ -243,6 +243,10 @@ class CallControllerService:
             if not media_channel_response or 'id' not in media_channel_response:
                 raise Exception(f"Failed to create externalMedia channel. Response: {media_channel_response}")
             
+            # --- START RTP DEBUGGING ---
+            logger.debug("Full externalMedia channel response from Asterisk", channel_details=media_channel_response)
+            # --- END RTP DEBUGGING ---
+
             media_channel_id = media_channel_response['id']
             self.active_calls[channel_id]['media_channel_id'] = media_channel_id
             
@@ -250,6 +254,13 @@ class CallControllerService:
             asterisk_rtp_host = "127.0.0.1"
             asterisk_rtp_port = int(media_channel_response["channelvars"]["UNICASTRTP_LOCAL_PORT"])
             self.active_calls[channel_id]['asterisk_rtp_addr'] = (asterisk_rtp_host, asterisk_rtp_port)
+
+            # --- START RTP DEBUGGING ---
+            logger.debug(
+                "Final Asterisk RTP destination address",
+                rtp_addr=self.active_calls[channel_id]['asterisk_rtp_addr']
+            )
+            # --- END RTP DEBUGGING ---
 
             logger.info(
                 "externalMedia channel created",
@@ -388,10 +399,16 @@ class CallControllerService:
             logger.warning("Could not find call info for request_id", request_id=request_id)
             return
 
+        # --- START RTP DEBUGGING ---
+        # Log every event received from Deepgram for full visibility
+        logger.debug("Handling Deepgram event", event_type=event_type)
+        # --- END RTP DEBUGGING ---
+
         if event_type == 'AgentAudio':
-            audio_payload_b64 = event.get("data")
-            if audio_payload_b64:
-                await self._play_deepgram_audio(channel_id, audio_payload_b64)
+            # The 'data' can now be raw bytes directly from the binary message handler
+            audio_payload = event.get("data")
+            if audio_payload:
+                await self._play_deepgram_audio(channel_id, audio_payload)
 
         elif event_type == "UserStartedSpeaking":
             logger.debug("Handling UserStartedSpeaking event")
@@ -402,7 +419,11 @@ class CallControllerService:
         This is the callback for the UDP server. It finds the appropriate
         Deepgram agent client and forwards the audio payload.
         """
-        logger.debug("UDP server received a packet", size=len(data), source_addr=addr)
+        # --- START RTP DEBUGGING ---
+        # This is the first point of entry for audio from Asterisk.
+        logger.debug("RTP packet received from Asterisk", source_addr=addr, size=len(data))
+        # --- END RTP DEBUGGING ---
+
         active_agent_client = None
         # Find the active agent client. This simple approach works for one call at a time.
         # For multi-call, we'd need a way to map UDP source addr to a call.
@@ -443,6 +464,14 @@ class CallControllerService:
             logger.warning("Missing RTP packetizer or Asterisk address for call", call_id=call_info.get('call_id'))
             return
 
+        # --- START RTP DEBUGGING ---
+        logger.debug(
+            "Preparing to send AI audio to Asterisk",
+            destination_addr=asterisk_addr,
+            call_id=call_info.get('call_id')
+        )
+        # --- END RTP DEBUGGING ---
+        
         try:
             # Check if the payload is base64-encoded string and decode if needed
             if isinstance(audio_payload, str):

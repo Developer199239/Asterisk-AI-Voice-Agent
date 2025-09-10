@@ -15,6 +15,8 @@ class UDPServer:
         def __init__(self, on_data: Callable[[bytes, tuple], Coroutine]):
             self.on_data = on_data
             self.transport = None
+            # Get the running event loop in the constructor, which runs in the main thread
+            self.loop = asyncio.get_running_loop()
             super().__init__()
 
         def connection_made(self, transport):
@@ -22,7 +24,8 @@ class UDPServer:
             logger.info("UDP server connection made", transport=transport)
 
         def datagram_received(self, data, addr):
-            asyncio.create_task(self.on_data(data, addr))
+            # Use call_soon_threadsafe to safely schedule the coroutine from the I/O thread
+            self.loop.call_soon_threadsafe(asyncio.create_task, self.on_data(data, addr))
 
         def error_received(self, exc):
             logger.error("UDP server error", exc=exc)
