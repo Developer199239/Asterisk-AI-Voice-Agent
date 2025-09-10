@@ -1,0 +1,158 @@
+---
+description: Development rules and guidelines for the Asterisk AI Voice Agent v3.0 project
+globs: src/**/*.py, *.py, docker-compose.yml, Dockerfile, config/ai-agent.yaml
+alwaysApply: true
+---
+
+# Asterisk AI Voice Agent v3.0 - Development Rules
+
+## Project Overview
+This is an open-source AI Voice Agent that integrates with Asterisk/FreePBX using the Asterisk REST Interface (ARI). It features a **single-container, modular architecture** that allows for plug-and-play AI providers (including local and cloud-based) for real-time, natural conversations.
+
+## Development Workflow
+
+### Test Server Configuration
+- **Server**: `root@voiprnd.nemtclouddispatch.com`
+- **Asterisk Version**: 16+ with FreePBX UI
+- **Docker**: Installed and available
+- **Access**: SSH with root privileges
+
+### Development Process
+1. **Local Development**: All code changes are made locally on the `develop` branch.
+2. **Git Workflow**:
+   - Build and verify locally.
+   - Commit changes to Git.
+   - Push to remote `develop` branch.
+   - Merge to `main` only after thorough server testing.
+3. **Server Testing**:
+   - SSH to test server.
+   - Clone `develop` branch into `/root/Asterisk-Agent-Develop`.
+   - Bring down the main production container if up and bring up the develop container for isolated testing.
+   - Test with Asterisk 16+ environment.
+
+### Code Standards
+- **Python Version**: 3.11+
+- **Async Programming**: Use asyncio for all I/O operations
+- **Type Hints**: Required for all functions and classes
+- **Error Handling**: Comprehensive error handling with logging
+- **Testing**: Unit tests for all components.
+
+### Project Structure
+```
+Asterisk-AI-Voice-Agent/
+├── src/
+│   ├── providers/          # AI provider integrations (Deepgram, Local)
+│   │   ├── base.py         # AIProviderInterface abstract class
+│   │   ├── deepgram.py     # Deepgram provider
+│   │   └── local.py        # Local provider (Vosk, Llama, Piper)
+│   ├── ari_client.py       # ARI WebSocket and HTTP client
+│   ├── config.py           # YAML configuration loader and Pydantic models
+│   ├── engine.py           # Core call orchestration and provider loading
+│   ├── rtp_handler.py      # RTP packetization logic
+│   └── udp_server.py       # UDP server for receiving RTP from Asterisk
+├── config/
+│   └── ai-agent.yaml       # Main configuration file for providers
+├── models/                 # Local AI models (downloaded by script, not in git)
+│   ├── stt/
+│   └── llm/
+│   └── tts/
+├── scripts/
+│   └── download_models.sh  # Script to fetch local AI models
+├── main.py                 # Application entry point
+├── docker-compose.yml      # Single-service orchestration
+├── Dockerfile              # Single container configuration
+└── requirements.txt        # Python dependencies
+```
+
+### Key Technologies
+- **Asterisk Integration**: ARI (Asterisk REST Interface) via custom `ari_client`
+- **AI Providers**:
+    - **Cloud**: Deepgram Voice Agent
+    - **Local STT**: Vosk
+    - **Local LLM**: Llama-cpp-python
+    - **Local TTS**: Piper-tts
+- **Configuration**: YAML (`ai-agent.yaml`) with Pydantic v2 for validation
+- **Audio Processing**: RTP packet handling, ulaw/PCM conversion
+
+### Common Commands
+```bash
+# Download Local AI Models (run once)
+./scripts/download_models.sh
+
+# Local development
+docker-compose up --build
+docker-compose down
+
+# Git workflowctionsview develop 
+git add .
+git commit -m "feat: add feature description"
+git push origin develop
+
+# Server Testing Workflow in /root/Asterisk-Agent-Develop
+# 1. Stop the production container (if running)
+docker-compose -f /root/Asterisk-AI-Voice-Agent/docker-compose.yml down
+
+# 2. Start the development container
+docker-compose up --build -d
+
+# 3. View logs
+docker-compose logs -f
+
+# 4. Stop the development container when finished
+docker-compose down
+
+# 5. Restart the production container
+docker-compose -f /root/Asterisk-AI-Voice-Agent/docker-compose.yml up -d
+
+# 6. Clean up unused Docker images
+docker image prune -f
+```
+
+### Environment Variables
+Configuration is primarily managed in `config/ai-agent.yaml`. The `.env` file is only used for secrets.
+
+- `OPENAI_API_KEY`: Your OpenAI API key.
+- `DEEPGRAM_API_KEY`: Your Deepgram API key.
+- `ASTERISK_HOST`: IP address of your Asterisk server.
+- `ASTERISK_ARI_USERNAME`: ARI username.
+- `ASTERISK_ARI_PASSWORD`: ARI password.
+- `GREETING`: The initial greeting the AI speaks.
+- `AI_ROLE`: The system prompt for the LLM.
+
+### Testing Commands
+```bash
+# Verify ARI connection
+asterisk -rx "ari show app asterisk-ai-voice-agent"
+
+# Check Asterisk status
+asterisk -rx "core show version"
+
+# Monitor Asterisk logs
+tail -f /var/log/asterisk/full
+```
+
+## ARI Integration and Call Handling
+
+### Call Flow
+The new single-container architecture simplifies call handling significantly.
+
+1.  **StasisStart**: A new call enters the `ai-voice-agent` Stasis application.
+    -   The `Engine` receives the event.
+    -   The dialplan argument (e.g., "deepgram" or "local") is used to determine which AI provider to use.
+    -   The `Engine` instantiates the appropriate provider class (e.g., `DeepgramProvider`).
+2.  **Media Setup**:
+    -   The `Engine` answers the call.
+    -   It creates an `externalMedia` channel, which sets up a UDP port for Asterisk to send RTP audio to.
+    -   The incoming channel and the media channel are placed into a bridge.
+3.  **Real-time Conversation**:
+    -   The `UDPServer` receives RTP packets from Asterisk.
+    -   The raw audio payload is forwarded to the active AI provider's `send_audio` method.
+    -   The provider's STT engine transcribes the audio.
+    -   The text is sent to the provider's LLM.
+    -   The LLM's text response is sent to the provider's TTS engine.
+    -   The synthesized audio is received by the `Engine`, packetized into RTP, and sent back to Asterisk via the UDP port.
+4.  **StasisEnd**: When the call hangs up, the `Engine`'s `_cleanup_call` method is triggered.
+    -   The provider's `stop_session` method is called.
+    -   The bridge is destroyed and all channels are hung up.
+
+This entire loop occurs within a single process, eliminating the need for Redis-based inter-service communication and external media proxies like rtpengine.
