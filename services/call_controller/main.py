@@ -469,13 +469,31 @@ class CallControllerService:
             else:
                 raw_audio = audio_payload
 
+            # --- DIAGNOSTIC: Save received audio to a file inside the container ---
+            # Using /app directory to ensure write permissions.
+            deepgram_filename = f"/app/deepgram_output_{call_info.get('channel_data', {}).get('id', 'unknown_channel')}.raw"
+            try:
+                with open(deepgram_filename, "ab") as f:
+                    f.write(raw_audio)
+                logger.debug(f"Saved {len(raw_audio)} bytes to {deepgram_filename}")
+            except Exception as e:
+                logger.error(f"Failed to save diagnostic Deepgram audio file", error=str(e))
+            # --- END DIAGNOSTIC ---
+
             logger.debug("Processing audio from Deepgram", payload_size=len(raw_audio), call_id=call_info.get('call_id'))
 
-            # Deepgram sends audio in chunks. A common size is 640 bytes for 20ms of L16 audio.
-            # We will packetize and send it as is.
             rtp_packet = rtp_packetizer.packetize(raw_audio)
             
-            # --- START RTP DEBUGGING ---
+            # --- DIAGNOSTIC: Save outgoing RTP packet to a file ---
+            rtp_filename = f"/app/container_output_{call_info.get('channel_data', {}).get('id', 'unknown_channel')}.rtp"
+            try:
+                with open(rtp_filename, "ab") as f:
+                    f.write(rtp_packet)
+                logger.debug(f"Saved {len(rtp_packet)} RTP packet bytes to {rtp_filename}")
+            except Exception as e:
+                logger.error(f"Failed to save diagnostic RTP file", error=str(e))
+            # --- END DIAGNOSTIC ---
+            
             logger.debug("Sending RTP packet to Asterisk",
                          destination_addr=asterisk_addr,
                          rtp_sequence=rtp_packetizer.sequence_number,
