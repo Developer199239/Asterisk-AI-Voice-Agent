@@ -480,8 +480,8 @@ class CallControllerService:
                 raw_audio = audio_payload
 
             # --- DIAGNOSTIC: Save received audio to a file ---
-            # Use a unique filename for each call
-            filename = f"/tmp/deepgram_output_{call_info.get('channel_data', {}).get('id', 'unknown_channel')}.raw"
+            # Use a unique filename for each call in the correct Asterisk tmp directory
+            filename = f"/var/spool/asterisk/tmp/deepgram_output_{call_info.get('channel_data', {}).get('id', 'unknown_channel')}.raw"
             try:
                 with open(filename, "ab") as f: # Open in append-binary mode
                     f.write(raw_audio)
