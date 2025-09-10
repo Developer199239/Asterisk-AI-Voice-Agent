@@ -43,6 +43,8 @@ def configure_logging(log_level="INFO", log_to_file=False, log_file_path="servic
         processors=[
             structlog.processors.add_log_level,
             structlog.processors.TimeStamper(fmt="iso"),
+            # Add the processor to format exceptions
+            structlog.processors.format_exc_info,
             structlog.processors.JSONRenderer(),
         ],
         context_class=structlog.threadlocal.wrap_dict(dict),
