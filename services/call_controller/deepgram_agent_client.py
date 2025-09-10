@@ -81,7 +81,7 @@ class DeepgramAgentClient:
         logger.debug("Sent agent settings", settings=settings)
 
     async def speak(self, text: str):
-        """Send a speak command to the agent."""
+        """Send an inject agent message to the agent."""
         if not text:
             logger.warning("Speak command received with empty text.")
             return
@@ -90,16 +90,16 @@ class DeepgramAgentClient:
             logger.warning("Speak command called but websocket is not connected.")
             return
 
-        speak_message = {
-            "type": "Speak",
-            "text": text
+        inject_message = {
+            "type": "InjectAgentMessage",
+            "message": text
         }
         
         try:
-            await self.websocket.send(json.dumps(speak_message))
-            logger.debug("Sent speak command", text=text)
+            await self.websocket.send(json.dumps(inject_message))
+            logger.debug("Sent inject agent message", text=text)
         except websockets.exceptions.ConnectionClosed as e:
-            logger.error("Failed to send speak command: Connection is closed.", exc_info=True, code=e.code, reason=e.reason)
+            logger.error("Failed to send inject agent message: Connection is closed.", exc_info=True, code=e.code, reason=e.reason)
 
     async def _keep_alive(self):
         """Sends a keep-alive message every 10 seconds to maintain the connection."""
@@ -180,9 +180,17 @@ class DeepgramAgentClient:
                 logger.debug("Attempting to send audio chunk to Deepgram...", chunk_size=len(audio_chunk))
                 self._is_audio_flowing = True
                 
-                # Send raw binary audio data directly to Deepgram Voice Agent
-                await self.websocket.send(audio_chunk)
-                logger.debug("Successfully sent raw audio chunk to Deepgram.")
+                # Try PushAudio message format (common in WebSocket audio streaming)
+                import base64
+                audio_b64 = base64.b64encode(audio_chunk).decode('utf-8')
+                
+                push_audio_message = {
+                    "type": "PushAudio",
+                    "audio": audio_b64
+                }
+                
+                await self.websocket.send(json.dumps(push_audio_message))
+                logger.debug("Successfully sent PushAudio message to Deepgram.")
             except websockets.exceptions.ConnectionClosed as e:
                 # This can happen normally at the end of a call.
                 logger.debug("Could not send audio packet: Connection closed.", code=e.code, reason=e.reason)
