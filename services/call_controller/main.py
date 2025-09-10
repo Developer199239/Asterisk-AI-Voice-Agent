@@ -130,7 +130,7 @@ class CallControllerService:
         # The UDPServer now needs the host and port to be explicitly passed to its start method.
         # We'll use a dynamic port to avoid conflicts.
         # Let's define host and port here for clarity.
-        udp_host = "0.0.0.0" # Bind to all interfaces to be reachable from host
+        udp_host = "127.0.0.1" # Bind specifically to localhost for host networking
         udp_port = 0 # 0 means the OS will pick an available port
         self.udp_server_task = asyncio.create_task(self.udp_server.start(udp_host, udp_port))
 
@@ -235,8 +235,8 @@ class CallControllerService:
             logger.info("Creating externalMedia channel...")
             media_channel_response = await self.ari_client.create_external_media_channel(
                 app_name=self.config.asterisk.app_name,
-                # Use the configured host IP so Asterisk, on another machine, can reach us.
-                external_host=f"{self.config.container_host_ip}:{self.udp_server.port}",
+                # For host networking, we must use localhost for inter-process communication.
+                external_host=f"127.0.0.1:{self.udp_server.port}",
                 format="slin16"
             )
             # The response body *is* the channel object, not nested under a 'channel' key.
