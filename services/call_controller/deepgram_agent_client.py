@@ -19,6 +19,11 @@ class DeepgramAgentClient:
 
     async def connect(self, deepgram_config: DeepgramConfig, llm_config: LLMConfig):
         ws_url = f"wss://agent.deepgram.com/v1/agent/converse?encoding=linear16&sample_rate=16000"
+        
+        # --- TEMPORARY DIAGNOSTIC ---
+        logger.info("DIAGNOSTIC: Attempting to connect with Deepgram API Key", key=deepgram_config.api_key)
+        # --- END TEMPORARY DIAGNOSTIC ---
+
         headers = {'Authorization': f'Token {deepgram_config.api_key}'}
 
         try:
