@@ -21,15 +21,6 @@ class RtpPacket:
 
         header = data[:12]
         payload = data[12:]
-
-        # Unpack the first 12 bytes of the header
-        # The format string is:
-        # ! - network byte order (big-endian)
-        # B - unsigned char (1 byte)
-        # B - unsigned char (1 byte)
-        # H - unsigned short (2 bytes)
-        # I - unsigned int (4 bytes)
-        # I - unsigned int (4 bytes)
         first_byte, second_byte, sequence_number, timestamp, ssrc = struct.unpack('!BBHII', header)
 
         version = (first_byte >> 6) & 0b11
@@ -52,3 +43,12 @@ class RtpPacket:
             ssrc=ssrc,
             payload=payload
         )
+
+    def to_bytes(self) -> bytes:
+        """Serializes the RTP packet into bytes for transmission."""
+        first_byte = (self.version << 6) | (self.padding << 5) | (self.extension << 4) | self.csrc_count
+        second_byte = (self.marker << 7) | self.payload_type
+        
+        header = struct.pack('!BBHII', first_byte, second_byte, self.sequence_number, self.timestamp, self.ssrc)
+        
+        return header + self.payload

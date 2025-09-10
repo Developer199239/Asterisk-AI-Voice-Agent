@@ -382,23 +382,20 @@ class CallControllerService:
         channel = event_data.get('channel', {})
         logger.debug("Channel state changed", channel_id=channel.get('id'), state=channel.get('state'))
 
-    async def _handle_deepgram_event(self, event: dict, channel_id: str):
-        """Handle incoming events from the Deepgram Agent client."""
+    async def _handle_deepgram_event(self, event: Dict[str, Any], channel_id: str):
+        """Handle events received from the Deepgram agent."""
         logger.info("Received event from Deepgram Agent", dg_event=event, channel_id=channel_id)
-        event_type = event.get('type')
-        
-        # Directly use the channel_id passed from the client's event handler
+        event_type = event.get("type")
+        logger.debug("Handling Deepgram event", event_type=event_type)
+
         call_info = self.active_calls.get(channel_id)
-        
         if not call_info:
-            logger.warning("Could not find call info for channel_id", channel_id=channel_id)
+            logger.warning("Received Deepgram event for an inactive channel.", channel_id=channel_id)
             return
 
-        # --- START RTP DEBUGGING ---
-        # Log every event received from Deepgram for full visibility
-        logger.debug("Handling Deepgram event", event_type=event_type)
-        # --- END RTP DEBUGGING ---
-
+        # --- BEGIN RTP DEBUGGING ---
+        # This section can be very noisy. It's useful for debugging RTP packet flow
+        # but can be commented out or set to a lower log level for production.
         if event_type == 'AgentAudio':
             # The 'data' can now be raw bytes directly from the binary message handler
             audio_payload = event.get("data")
@@ -461,91 +458,78 @@ class CallControllerService:
                 packet_size=len(data)
             )
 
-    async def _play_deepgram_audio(self, channel_id: str, audio_payload_b64: str):
+    async def _play_deepgram_audio(self, channel_id: str, audio_payload: bytes):
+        """
+        Receives a chunk of audio from Deepgram, packetizes it into RTP packets,
+        and sends it to Asterisk in a real-time stream.
+        """
         call_info = self.active_calls.get(channel_id)
         if not call_info:
-            logger.warning("Could not find call info to play audio for channel", channel_id=channel_id)
+            logger.warning("Attempted to play audio on a channel that is no longer active.", channel_id=channel_id)
             return
 
-        # The payload can now be either base64-encoded string (from AgentAudio JSON) or raw bytes
-        audio_payload = audio_payload_b64
-        if not audio_payload:
-            logger.warning("AgentAudio event received with no data", call_id=call_info.get('call_id'))
+        destination_addr = call_info.get('asterisk_rtp_addr')
+        if not destination_addr:
+            logger.error("No RTP destination address found for channel.", channel_id=channel_id)
             return
 
-        rtp_packetizer = call_info.get('rtp_packetizer')
-        asterisk_addr = call_info.get('asterisk_rtp_addr')
-
-        if not rtp_packetizer or not asterisk_addr:
-            logger.warning("Missing RTP packetizer or Asterisk address for call", call_id=call_info.get('call_id'))
-            return
-
-        # --- START RTP DEBUGGING ---
-        logger.debug(
-            "Preparing to send AI audio to Asterisk",
-            destination_addr=asterisk_addr,
-            call_id=call_info.get('call_id')
-        )
-        # --- END RTP DEBUGGING ---
+        # Use a consistent SSRC for the duration of the call's outbound audio
+        ssrc = call_info.setdefault('ssrc', struct.unpack('!I', os.urandom(4))[0])
         
-        try:
-            # Check if the payload is base64-encoded string and decode if needed
-            if isinstance(audio_payload, str):
-                raw_audio = base64.b64decode(audio_payload)
-            else:
-                raw_audio = audio_payload
+        # Initialize or retrieve sequence number and timestamp
+        sequence_number = call_info.get('sequence_number', struct.unpack('!H', os.urandom(2))[0])
+        timestamp = call_info.get('timestamp', struct.unpack('!I', os.urandom(4))[0])
 
-            # --- DIAGNOSTIC: Save received audio to a file inside the container ---
-            # Using /app directory to ensure write permissions.
-            deepgram_filename = f"/app/deepgram_output_{call_info.get('channel_data', {}).get('id', 'unknown_channel')}.raw"
-            try:
-                with open(deepgram_filename, "ab") as f:
-                    f.write(raw_audio)
-                logger.debug(f"Saved {len(raw_audio)} bytes to {deepgram_filename}")
-            except Exception as e:
-                logger.error(f"Failed to save diagnostic Deepgram audio file", error=str(e))
-            # --- END DIAGNOSTIC ---
+        logger.debug(
+            "Starting audio playback stream to Asterisk.",
+            total_size=len(audio_payload),
+            ssrc=ssrc,
+            initial_seq=sequence_number,
+            initial_ts=timestamp
+        )
 
-            logger.debug("Processing audio from Deepgram", payload_size=len(raw_audio), call_id=call_info.get('call_id'))
+        # Packetization settings for mu-law audio
+        chunk_size = 160  # 20ms of audio at 8000Hz
+        delay = 0.020  # 20ms delay between packets
 
-            rtp_packet = rtp_packetizer.packetize(raw_audio)
+        for i in range(0, len(audio_payload), chunk_size):
+            chunk = audio_payload[i:i+chunk_size]
             
-            # --- START MEANINGFUL DEBUGGING ---
-            logger.info(
-                "🎤 OUTBOUND RTP Packet Prepared for Asterisk",
-                destination_addr=asterisk_addr,
-                rtp_packet_size=len(rtp_packet),
-                payload_size=len(raw_audio),
-                rtp_payload_type=rtp_packet[1] & 0b01111111, # Extract from generated packet
-                rtp_sequence=rtp_packetizer.sequence_number,
-                rtp_timestamp=rtp_packetizer.timestamp,
-                rtp_ssrc=rtp_packetizer.ssrc,
-                payload_preview=raw_audio[:16].hex()
+            # Construct the RTP packet
+            rtp_packet = RtpPacket(
+                version=2,
+                padding=False,
+                extension=False,
+                csrc_count=0,
+                marker=False,  # Marker bit is typically false for audio streams within a talkspurt
+                payload_type=0,  # 0 for PCMU (mu-law)
+                sequence_number=sequence_number,
+                timestamp=timestamp,
+                ssrc=ssrc,
+                payload=chunk
             )
-            # --- END MEANINGFUL DEBUGGING ---
-            
-            # --- DIAGNOSTIC: Save outgoing RTP packet to a file ---
-            rtp_filename = f"/app/container_output_{call_info.get('channel_data', {}).get('id', 'unknown_channel')}.rtp"
-            try:
-                with open(rtp_filename, "ab") as f:
-                    f.write(rtp_packet)
-                logger.debug(f"Saved {len(rtp_packet)} RTP packet bytes to {rtp_filename}")
-            except Exception as e:
-                logger.error(f"Failed to save diagnostic RTP file", error=str(e))
-            # --- END DIAGNOSTIC ---
-            
-            logger.debug("Sending RTP packet to Asterisk",
-                         destination_addr=asterisk_addr,
-                         rtp_sequence=rtp_packetizer.sequence_number,
-                         rtp_timestamp=rtp_packetizer.timestamp,
-                         rtp_ssrc=rtp_packetizer.ssrc,
-                         packet_size=len(rtp_packet))
-            # --- END RTP DEBUGGING ---
-                         
-            await self.udp_server.send(rtp_packet, asterisk_addr)
 
-        except Exception as e:
-            logger.error("Error processing or sending agent audio", error=str(e), call_id=call_info.get('call_id'))
+            # Send the packet
+            self.udp_server.transport.sendto(rtp_packet.to_bytes(), destination_addr)
+            
+            logger.debug(
+                "Sent RTP packet to Asterisk.",
+                seq=sequence_number,
+                ts=timestamp,
+                size=len(chunk)
+            )
+
+            # Increment sequence number and timestamp for the next packet
+            sequence_number = (sequence_number + 1) % 65536  # Sequence number wraps around at 2^16
+            timestamp = (timestamp + chunk_size) % 4294967296 # Timestamp wraps around at 2^32
+
+            # Wait for 20ms before sending the next packet to simulate real-time streaming
+            await asyncio.sleep(delay)
+
+        # Store the last sequence and timestamp for the next playback
+        call_info['sequence_number'] = sequence_number
+        call_info['timestamp'] = timestamp
+        logger.debug("Finished audio playback stream.")
 
 
 async def main():
