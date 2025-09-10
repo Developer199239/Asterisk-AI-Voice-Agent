@@ -461,15 +461,17 @@ class CallControllerService:
 
             # Deepgram sends audio in chunks. A common size is 640 bytes for 20ms of L16 audio.
             # We will packetize and send it as is.
-            rtp_packets = rtp_packetizer.packetize(raw_audio)
+            rtp_packet = rtp_packetizer.packetize(raw_audio)
+            
+            logger.debug("Sending RTP packet to Asterisk",
+                         addr=asterisk_addr_override,
+                         seq=rtp_packetizer.sequence_number,
+                         ts=rtp_packetizer.timestamp,
+                         ssrc=rtp_packetizer.ssrc,
+                         size=len(rtp_packet))
+                         
+            await self.udp_server.send(rtp_packet, asterisk_addr_override)
 
-            for packet in rtp_packets:
-                await self.udp_server.send(packet, asterisk_addr_override)
-            logger.debug(
-                f"Sent {len(rtp_packets)} RTP packets to Asterisk",
-                destination_addr=asterisk_addr_override,
-                total_payload_size=len(raw_audio)
-            )
         except Exception as e:
             logger.error("Error processing or sending agent audio", error=str(e), call_id=call_info.get('call_id'))
 
