@@ -127,7 +127,22 @@ cython_debug/
 /models/
 
 # Cursor
-.cursor/
+.cursor/*
+!.cursor/rules/
 
 # Archives
-Archived/ 
+Archived/
+"Project Requirement Documents"/
+
+# Taskmaster-AI
+.taskmaster/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/ 
