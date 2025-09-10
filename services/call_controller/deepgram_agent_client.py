@@ -180,15 +180,8 @@ class DeepgramAgentClient:
                 logger.debug("Attempting to send audio chunk to Deepgram...", chunk_size=len(audio_chunk))
                 self._is_audio_flowing = True
                 
-                # Deepgram Voice Agent expects audio as base64-encoded text in JSON format
-                import base64
-                audio_b64 = base64.b64encode(audio_chunk).decode('utf-8')
-                audio_message = {
-                    "type": "Audio",
-                    "data": audio_b64
-                }
-                
-                await self.websocket.send(json.dumps(audio_message))
+                # Deepgram Voice Agent expects raw binary audio data, not JSON
+                await self.websocket.send(audio_chunk)
                 logger.debug("Successfully sent audio chunk.")
             except websockets.exceptions.ConnectionClosed as e:
                 # This can happen normally at the end of a call.
