@@ -1,4 +1,4 @@
-ari-py
+ari
 websockets
 aiohttp
 pydantic
