@@ -1,39 +1,22 @@
 version: "3.8"
 
 services:
-  # Redis Message Queue
   redis:
     image: redis:7.2-alpine
-    container_name: asterisk-ai-voice-agent-redis
-    restart: always
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    network_mode: host
+    container_name: redis
+    command: redis-server
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
 
-  # Call Controller Service
-  call_controller:
+  ai-voice-agent:
     build:
       context: .
-      dockerfile: services/call_controller/Dockerfile
-    container_name: asterisk-ai-voice-agent-call_controller
-    # Use host network to allow RTP streams from Asterisk and Redis connection to work seamlessly.
+      dockerfile: Dockerfile
+    container_name: ai-voice-agent
     network_mode: "host"
-    volumes:
-      - shared_audio:/shared/audio
-      - shared_logs:/shared/logs
     env_file:
       - .env
-    environment:
-      - PYTHONUNBUFFERED=1
-      # The host IP is now required for Asterisk to send media back to this container
-      - CONTAINER_HOST_IP=${CONTAINER_HOST_IP}
     depends_on:
       - redis
     restart: unless-stopped
-
-volumes:
-  shared_audio:
-  shared_logs:

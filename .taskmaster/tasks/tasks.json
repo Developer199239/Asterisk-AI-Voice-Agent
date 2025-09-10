@@ -2,394 +2,212 @@
   "master": {
     "tasks": [
       {
-        "id": 36,
-        "title": "Initialize Project Repository and Docker Setup",
-        "description": "Set up the project repository structure and create a multi-stage Dockerfile optimized for voice processing workloads.",
-        "details": "Use the latest Python 3.11+ base image. Structure the repo with src/, config/, and monitoring/ directories. Implement a multi-stage Dockerfile: first stage for building dependencies (e.g., Cythonized audio libs), second for runtime. Ensure host networking is supported for SIP/RTP. Include docker-compose.yml for local development. Reference best practices for container security (e.g., non-root user, minimal image).",
-        "testStrategy": "Build and run the Docker image locally. Validate that all dependencies install and the container starts with correct networking. Run a basic health check endpoint.",
+        "id": 1,
+        "title": "Implement Single Container Architecture with Configuration Management",
+        "description": "Create a unified single-container architecture that consolidates all AI components and implements the configuration-driven system specified in the PRD",
+        "details": "Refactor the current multi-service Docker architecture into a single container as specified in the PRD. Create the src/engine module as the main entry point. Implement the yaml-based configuration system (ai-agent.yaml) with support for local, cloud, and hybrid AI modes. Create configuration templates for different AI engine flavors (local.yaml, cloud.yaml, hybrid.yaml, custom.yaml). Integrate the existing shared/config.py with the new yaml-based configuration structure. Ensure the container can switch between AI providers based on configuration without code changes.",
+        "testStrategy": "Test configuration loading for all AI engine modes. Verify single container can start successfully. Test switching between different configuration files. Validate all environment variables are properly mapped to the new configuration system.",
         "priority": "high",
         "dependencies": [],
         "status": "done",
         "subtasks": [
           {
             "id": 1,
-            "title": "Create Multi-stage Dockerfile",
-            "description": "Create a multi-stage Dockerfile optimized for voice processing workloads with Python 3.11+ base image",
-            "details": "Implement build stage for dependencies and runtime stage for the application. Include audio processing libraries and SIP/RTP support. Ensure host networking compatibility.",
-            "status": "done",
+            "title": "Refactor Multi-Service Architecture to Single Container",
+            "description": "Consolidate the current multi-service Docker architecture (call_controller, stt_service, llm_service, tts_service) into a single unified container architecture as specified in the PRD",
             "dependencies": [],
-            "parentTaskId": 36
+            "details": "Analyze the current docker-compose.yml structure with separate services and Docker containers. Remove the multi-service architecture and create a single container entry point. Update the existing Dockerfile to support the unified architecture. Ensure all service dependencies are properly handled within the single container. Update service discovery and inter-service communication to work within a single process space.",
+            "status": "done",
+            "testStrategy": "Test that the single container starts successfully without Docker Compose dependencies. Verify all previously separate services function correctly within the unified container. Test memory usage stays within expected limits for the consolidated architecture."
+          },
+          {
+            "id": 2,
+            "title": "Create src/engine Module as Main Entry Point",
+            "description": "Develop the src/engine module structure that serves as the main entry point for the unified AI voice agent, replacing the current service-based architecture",
+            "dependencies": [],
+            "details": "Create the src/engine directory structure as referenced in the Dockerfile CMD. Implement the main engine module that orchestrates all AI components (STT, LLM, TTS) within a single process. Integrate the existing call_controller functionality into the engine. Create proper module initialization and service management within the engine. Ensure the engine can handle Asterisk ARI connections, audio processing, and AI provider integrations.",
+            "status": "done",
+            "testStrategy": "Test that 'python -m src.engine' starts successfully. Verify the engine initializes all AI components correctly. Test integration with Asterisk ARI and audio processing pipelines. Validate that all existing functionality from separate services works within the engine."
+          },
+          {
+            "id": 3,
+            "title": "Implement YAML-Based Configuration System (ai-agent.yaml)",
+            "description": "Create a comprehensive YAML-based configuration system that supports local, cloud, and hybrid AI modes, replacing environment variable-only configuration",
+            "dependencies": [],
+            "details": "Design and implement the ai-agent.yaml configuration schema supporting all AI engine modes. Create configuration loading and validation system that integrates with the existing shared/config.py. Implement configuration hot-reload capabilities. Add support for different AI provider configurations (OpenAI, Deepgram, local models). Create configuration validation with proper error messages and fallback handling.",
+            "status": "done",
+            "testStrategy": "Test configuration loading for various YAML structures. Verify validation catches configuration errors appropriately. Test hot-reload functionality updates running services. Validate configuration supports all specified AI provider modes."
+          },
+          {
+            "id": 4,
+            "title": "Create Configuration Templates for AI Engine Flavors",
+            "description": "Develop pre-built configuration templates (local.yaml, cloud.yaml, hybrid.yaml, custom.yaml) for different AI engine deployment scenarios",
+            "dependencies": [],
+            "details": "Create local.yaml template for Vosk STT + Llama LLM + Piper TTS configuration. Develop cloud.yaml template for OpenAI/Deepgram cloud AI services. Build hybrid.yaml template combining local and cloud AI providers. Create custom.yaml template as a starting point for user customization. Include all necessary configuration parameters, model paths, and provider settings in each template. Document configuration options and use cases for each template.",
+            "status": "done",
+            "testStrategy": "Test each template loads and validates correctly. Verify local.yaml template works with local AI stack components. Test cloud.yaml template integrates with cloud AI providers. Validate hybrid.yaml template can switch between local and cloud providers based on configuration."
+          },
+          {
+            "id": 5,
+            "title": "Integrate Existing shared/config.py with YAML Configuration Structure",
+            "description": "Modify and extend the existing shared/config.py module to work seamlessly with the new YAML-based configuration system while maintaining backward compatibility",
+            "dependencies": [],
+            "details": "Extend the existing Pydantic configuration classes in shared/config.py to support YAML configuration loading. Implement configuration merging logic that combines YAML files with environment variables. Maintain backward compatibility with existing environment variable-based configuration. Create configuration precedence system (CLI args > env vars > YAML config > defaults). Update all service configuration classes to work with the unified YAML + environment system. Implement proper configuration validation and error handling.",
+            "status": "done",
+            "testStrategy": "Test that existing environment variable configuration still works. Verify YAML configuration overrides work correctly with proper precedence. Test configuration merging handles edge cases appropriately. Validate that all existing services can load configuration from the unified system. Test error handling for invalid configuration combinations."
           }
         ]
       },
       {
-        "id": 37,
-        "title": "Implement Configuration Manager with Validation and Hot-Reload",
-        "description": "Develop a configuration system supporting JSON files and environment variables, with schema validation and hot-reload capability.",
-        "details": "Use Pydantic v2 for schema validation. Support config/engine.json as the primary config file, with environment variable overrides. Implement hot-reload using watchdog to monitor config changes. Provide clear error messages and validation output. Document all required and optional variables. Ensure secure handling of secrets (e.g., API keys).",
-        "testStrategy": "Unit test config loading, validation, and hot-reload. Simulate config changes and verify live reload without restart.",
+        "id": 2,
+        "title": "Integrate Local AI Stack (Vosk STT, Llama LLM, Piper TTS)",
+        "description": "Implement the complete local AI pipeline with Vosk for speech-to-text, Llama-cpp-python for language modeling, and Piper TTS for text-to-speech",
+        "details": "Install and configure Vosk with the vosk-model-en-us-0.22 model for offline STT. Implement llama-cpp-python integration with support for 7B-13B parameter models (specifically llama-2-7b-chat). Set up Piper TTS with both male (en_US-lessac-medium) and female (en_US-lessac-high) voice options as specified in the PRD. Create AI pipeline classes that can handle the complete local processing chain. Implement proper resource management to ensure models load efficiently and stay within the 2GB memory target. Add configuration options for temperature (0.8), max_tokens, and voice settings (speed: 1.0, pitch: 1.0).",
+        "testStrategy": "Test each AI component individually with sample audio/text. Verify end-to-end local pipeline processing. Benchmark response times to meet <2 second target. Test memory usage stays under 2GB. Validate voice quality and naturalness for both male and female options.",
         "priority": "high",
         "dependencies": [
-          36
-        ],
-        "status": "done",
-        "subtasks": []
-      },
-      {
-        "id": 38,
-        "title": "Develop SIP Client for Asterisk Integration",
-        "description": "Create a SIP client for registering as a PJSIP extension with Asterisk 16+ and handling RTP audio streams.",
-        "details": "Use the latest version of the 'pjsua2' Python bindings (or 'aiosip' if async is preferred). Implement SIP REGISTER, INVITE, BYE flows. Handle digest authentication. Support G.711 µ-law/A-law and G.722 codecs. Implement NAT traversal using externip/localnet or ICE/STUN if needed. Ensure RTP port range is configurable. Reference Asterisk best practices for NAT and firewall traversal[1][3].",
-        "testStrategy": "Integration test with a local Asterisk 16+ instance. Validate registration, call setup, and RTP audio flow. Test NAT traversal scenarios.",
-        "priority": "high",
-        "dependencies": [
-          37
-        ],
-        "status": "done",
-        "subtasks": []
-      },
-      {
-        "id": 39,
-        "title": "Build Audio Processing Engine (VAD, Noise Suppression, Echo Cancellation)",
-        "description": "Implement advanced audio processing including VAD, noise suppression, and echo cancellation for RTP streams.",
-        "details": "Use WebRTC Voice Engine (py-webrtcvad for VAD, rnnoise for noise suppression, speexdsp for echo cancellation). Integrate with the SIP client to process incoming/outgoing audio frames. Support real-time processing with minimal latency. Allow enabling/disabling features via config. Optimize for CPU usage.",
-        "testStrategy": "Unit and integration tests with synthetic and real audio. Measure latency and verify audio quality improvements. Validate toggling features via config.",
-        "priority": "high",
-        "dependencies": [
-          38
+          1
         ],
         "status": "done",
         "subtasks": [
           {
             "id": 1,
-            "title": "Install Audio Processing Dependencies",
-            "description": "Add required Python packages for VAD, noise suppression, and echo cancellation",
-            "details": "Install webrtcvad, rnnoise, speexdsp, and other audio processing libraries. Update requirements.txt and Dockerfile.",
-            "status": "done",
+            "title": "Install and Configure Vosk STT",
+            "description": "Set up Vosk speech-to-text with vosk-model-en-us-0.22 for offline processing",
             "dependencies": [],
-            "parentTaskId": 39
+            "details": "Install vosk-api package and download vosk-model-en-us-0.22 model. Create VoskSTTProvider class implementing STTProviderInterface. Configure audio processing pipeline with proper sample rates and buffering. Implement real-time audio streaming and transcription. Add error handling for audio format issues and model loading failures.",
+            "status": "done",
+            "testStrategy": ""
           },
           {
             "id": 2,
-            "title": "Implement Voice Activity Detection (VAD)",
-            "description": "Create VAD module using webrtcvad for real-time voice detection",
-            "details": "Implement VAD class with configurable sensitivity levels, frame processing, and integration with RTP audio streams.",
-            "status": "done",
+            "title": "Implement Llama-cpp-python Integration",
+            "description": "Set up llama-cpp-python with Llama-2-7b-chat model for local LLM inference",
             "dependencies": [],
-            "parentTaskId": 39
+            "details": "Install llama-cpp-python package with appropriate build flags. Download and configure Llama-2-7b-chat model in GGML format. Create LlamaLLMProvider class implementing LLMProviderInterface. Implement chat completion with proper prompt formatting. Configure inference parameters (temperature: 0.8, max_tokens, context window). Add memory optimization and model loading strategies.",
+            "status": "done",
+            "testStrategy": ""
           },
           {
             "id": 3,
-            "title": "Implement Noise Suppression",
-            "description": "Add noise suppression using rnnoise for cleaner audio",
-            "details": "Create noise suppression module with real-time processing, configurable levels, and integration with audio pipeline.",
-            "status": "done",
+            "title": "Set up Piper TTS with Voice Models",
+            "description": "Configure Piper TTS with male and female voice options for offline text-to-speech",
             "dependencies": [],
-            "parentTaskId": 39
+            "details": "Install piper-tts package and download en_US-lessac-medium (male) and en_US-lessac-high (female) voice models. Create PiperTTSProvider class implementing TTSProviderInterface. Implement voice synthesis with configurable speed (1.0) and pitch (1.0) parameters. Add audio format conversion and streaming capabilities. Implement voice selection logic for male/female options.",
+            "status": "done",
+            "testStrategy": ""
           },
           {
             "id": 4,
-            "title": "Implement Echo Cancellation",
-            "description": "Add echo cancellation using speexdsp for better call quality",
-            "details": "Create echo cancellation module with adaptive filtering, configurable parameters, and real-time processing.",
+            "title": "Create LocalProvider Class",
+            "description": "Implement unified LocalProvider class integrating all local AI components",
+            "dependencies": [
+              "2.1",
+              "2.2",
+              "2.3"
+            ],
+            "details": "Create LocalProvider class implementing AIProviderInterface that orchestrates Vosk, Llama, and Piper components. Implement the complete pipeline: audio input → Vosk STT → Llama LLM → Piper TTS → audio output. Add proper error handling and component state management. Implement configuration loading for local AI settings. Add logging and debugging capabilities for the pipeline.",
             "status": "done",
-            "dependencies": [],
-            "parentTaskId": 39
+            "testStrategy": ""
           },
           {
             "id": 5,
-            "title": "Create Audio Processing Pipeline",
-            "description": "Integrate all audio processing components into a unified pipeline",
-            "details": "Create main audio processing engine that coordinates VAD, noise suppression, and echo cancellation. Add configuration options and performance monitoring.",
+            "title": "Implement Resource Management and Memory Optimization",
+            "description": "Optimize memory usage and resource management to stay within 2GB target",
+            "dependencies": [
+              "2.4"
+            ],
+            "details": "Implement lazy loading for AI models to reduce startup memory. Add model caching and unloading strategies based on usage patterns. Optimize memory allocation for audio buffers and model inference. Implement garbage collection strategies for long-running sessions. Add memory monitoring and alerting when approaching limits. Configure model quantization and compression options.",
             "status": "done",
-            "dependencies": [],
-            "parentTaskId": 39
-          }
-        ]
-      },
-      {
-        "id": 40,
-        "title": "Implement Codec Handler for G.711 and G.722",
-        "description": "Develop a codec handler to negotiate and transcode between supported codecs (G.711 µ-law/A-law, G.722).",
-        "details": "Use the 'pydub' or 'soundfile' library for audio format conversion. Ensure negotiation via SDP during SIP call setup. Support automatic fallback if preferred codec is unavailable. Optimize for real-time transcoding.",
-        "testStrategy": "Unit test codec negotiation and transcoding. Validate with Asterisk using different codec preferences.",
-        "priority": "medium",
-        "dependencies": [
-          39
-        ],
-        "status": "done",
-        "subtasks": []
-      },
-      {
-        "id": 41,
-        "title": "Develop WebSocket Manager for AI Provider Communication",
-        "description": "Create a WebSocket manager for low-latency, real-time communication with AI providers (OpenAI Realtime API as MVP).",
-        "details": "Use 'websockets' (v12+) or 'aiohttp' for async WebSocket connections. Implement connection pooling and automatic reconnection. Support sub-second round-trip latency. Provide hooks for sending/receiving audio and text data. Ensure secure connection (wss://) and provider authentication.",
-        "testStrategy": "Unit and integration tests with OpenAI Realtime API. Measure latency and throughput. Simulate connection drops and verify recovery.",
-        "priority": "high",
-        "dependencies": [
-          40
-        ],
-        "status": "done",
-        "subtasks": []
-      },
-      {
-        "id": 42,
-        "title": "Integrate OpenAI Realtime API for STT/LLM/TTS",
-        "description": "Implement provider integration for OpenAI Realtime API, supporting streaming STT, LLM, and TTS in the call loop.",
-        "details": "Follow OpenAI's latest streaming API docs. Use WebSocket streaming for STT and TTS. Implement per-call context and prompt injection. Support provider-specific voice selection. Handle API errors and rate limits gracefully.",
-        "testStrategy": "Integration test with OpenAI Realtime API. Validate end-to-end call flow: audio in → STT → LLM → TTS → audio out. Test with different voices and prompts.",
-        "priority": "high",
-        "dependencies": [
-          41
-        ],
-        "status": "done",
-        "subtasks": [
-          {
-            "id": 1,
-            "title": "Research OpenAI Realtime API specifications",
-            "description": "Research the latest OpenAI Realtime API documentation, message formats, and WebSocket protocol requirements",
-            "details": "Study the OpenAI Realtime API documentation to understand the WebSocket message format, authentication requirements, and streaming capabilities for STT, LLM, and TTS operations.",
-            "status": "done",
-            "dependencies": [],
-            "parentTaskId": 42
-          },
-          {
-            "id": 2,
-            "title": "Create OpenAI Realtime API client",
-            "description": "Implement the OpenAI Realtime API client class with WebSocket connection management",
-            "details": "Create a client class that handles WebSocket connections to OpenAI's Realtime API, including authentication, message formatting, and connection lifecycle management.",
-            "status": "done",
-            "dependencies": [],
-            "parentTaskId": 42
-          },
-          {
-            "id": 3,
-            "title": "Implement STT streaming integration",
-            "description": "Implement speech-to-text streaming using OpenAI Realtime API",
-            "details": "Implement the speech-to-text functionality that streams audio data to OpenAI's Realtime API and processes the returned transcriptions in real-time.",
-            "status": "done",
-            "dependencies": [],
-            "parentTaskId": 42
-          },
-          {
-            "id": 4,
-            "title": "Implement LLM streaming integration",
-            "description": "Implement large language model streaming using OpenAI Realtime API",
-            "details": "Implement the LLM functionality that sends transcribed text to OpenAI's Realtime API and processes the streaming responses for natural language understanding and generation.",
-            "status": "done",
-            "dependencies": [],
-            "parentTaskId": 42
-          },
-          {
-            "id": 5,
-            "title": "Implement TTS streaming integration",
-            "description": "Implement text-to-speech streaming using OpenAI Realtime API",
-            "details": "Implement the text-to-speech functionality that sends generated text to OpenAI's Realtime API and processes the streaming audio responses for real-time voice output.",
-            "status": "done",
-            "dependencies": [],
-            "parentTaskId": 42
+            "testStrategy": ""
           },
           {
             "id": 6,
-            "title": "Create comprehensive test suite",
-            "description": "Create tests for the complete OpenAI Realtime API integration",
-            "details": "Create comprehensive tests that verify the STT, LLM, and TTS streaming functionality works correctly with the OpenAI Realtime API, including error handling and edge cases.",
-            "status": "done",
+            "title": "Add Configuration Support for Local AI Settings",
+            "description": "Extend configuration system to support local AI parameters and settings",
             "dependencies": [],
-            "parentTaskId": 42
+            "details": "Add local AI configuration sections to config.py and YAML templates. Implement settings for temperature, max_tokens, voice selection, model paths, and performance parameters. Create validation for local AI configuration parameters. Add runtime configuration updates without restart. Implement configuration migration from existing settings. Add documentation for all local AI configuration options.",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 7,
+            "title": "Create Model Downloading and Setup Utilities",
+            "description": "Build utilities for downloading and managing AI models for offline operation",
+            "dependencies": [
+              "2.6"
+            ],
+            "details": "Create model download utility that fetches required models (Vosk, Llama, Piper) from official sources. Implement checksum verification for downloaded models. Add progress tracking and resumable downloads. Create model management commands for updating, cleaning, and verifying models. Implement automatic model setup during first run. Add model version checking and update notifications.",
+            "status": "done",
+            "testStrategy": ""
+          },
+          {
+            "id": 8,
+            "title": "Implement Comprehensive Testing and Performance Validation",
+            "description": "Create testing suite for individual components and end-to-end pipeline performance",
+            "dependencies": [
+              "2.4",
+              "2.5",
+              "2.7"
+            ],
+            "details": "Create unit tests for each AI component (Vosk, Llama, Piper). Implement integration tests for the complete local pipeline. Add performance benchmarks to validate <2 second response time target. Create memory usage tests to verify 2GB limit compliance. Implement audio quality tests for STT accuracy and TTS naturalness. Add load testing for concurrent usage scenarios. Create automated test suite for CI/CD integration.",
+            "status": "done",
+            "testStrategy": ""
           }
         ]
       },
       {
-        "id": 43,
-        "title": "Implement Call Session and Conversation Loop Management",
-        "description": "Develop the core call/session state machine, managing per-call context, provider selection, and conversation flow.",
-        "details": "Model call sessions with unique call-id, timestamps, language, and context. Implement a robust async loop for STT → LLM → TTS cycles. Support per-call instructions and prompt injection. Handle call termination (BYE, timeout). Reference patterns from engine.py and call.py in the original repo.",
-        "testStrategy": "Unit and integration tests simulating multiple concurrent calls. Validate context management and session cleanup.",
+        "id": 3,
+        "title": "Enhance Cloud AI Integration and Hybrid Mode",
+        "description": "Improve existing cloud AI integrations and implement intelligent hybrid mode with automatic fallback mechanisms",
+        "details": "Enhance the existing Deepgram integration and add OpenAI GPT-4o LLM support. Implement OpenAI TTS with voices (Alloy, Nova, Echo) as specified. Create hybrid mode that intelligently switches between local and cloud services based on performance metrics. Implement fallback mechanisms: Local Vosk + Cloud Deepgram for STT, Local Llama + Cloud OpenAI for LLM, Local Piper + Cloud OpenAI for TTS. Add performance monitoring to trigger fallbacks automatically. Ensure the AI provider selection is configuration-driven and can be changed without service restart.",
+        "testStrategy": "Test cloud services individually and in combination. Verify hybrid mode switches appropriately under different scenarios. Test fallback mechanisms by simulating local service failures. Validate configuration changes take effect immediately. Test API key validation and error handling.",
+        "priority": "medium",
+        "dependencies": [
+          1,
+          2
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": 4,
+        "title": "Build Interactive Installation Wizard and Setup Script",
+        "description": "Create the complete interactive installation experience as specified in the PRD with system checks, AI engine selection, and business configuration",
+        "details": "Complete the existing install.sh script to match the PRD specifications exactly. Implement the interactive setup wizard UI as shown in the PRD mockup with system requirements check, Asterisk status verification, port availability check, AI engine selection (Local/Cloud/Hybrid), voice selection (Male/Female), and business configuration (Company Name, AI Role, Greeting). Add Asterisk configuration section with ARI credentials. Include diagnostic mode (--diagnose flag) for troubleshooting. Implement rollback capability and clear error messages with actionable next steps. Ensure the script generates the appropriate configuration files based on user selections.",
+        "testStrategy": "Test installation script on clean system. Verify all user input validation and error handling. Test system requirements detection. Test Asterisk connectivity verification. Validate generated configuration files match user selections. Test rollback functionality.",
         "priority": "high",
         "dependencies": [
-          42
+          1
         ],
-        "status": "done",
-        "subtasks": [
-          {
-            "id": 1,
-            "title": "Implement Call Session Management",
-            "description": "Create call session data structures and management for tracking call state, context, and metadata",
-            "details": "Implement CallSession class with unique call-id, timestamps, language, context, and provider selection. Handle session lifecycle and cleanup.",
-            "status": "done",
-            "dependencies": [],
-            "parentTaskId": 43
-          },
-          {
-            "id": 2,
-            "title": "Implement Conversation Loop",
-            "description": "Create the main conversation loop that handles STT → LLM → TTS cycles",
-            "details": "Implement async conversation loop that processes audio input through STT, sends to LLM, and synthesizes response through TTS. Handle conversation flow and context management.",
-            "status": "done",
-            "dependencies": [],
-            "parentTaskId": 43
-          },
-          {
-            "id": 3,
-            "title": "Integrate Audio Processing Pipeline",
-            "description": "Integrate VAD, noise suppression, echo cancellation, and codec handling into the conversation loop",
-            "details": "Connect the audio processing pipeline to the conversation loop. Handle real-time audio processing, codec negotiation, and audio quality optimization.",
-            "status": "done",
-            "dependencies": [],
-            "parentTaskId": 43
-          },
-          {
-            "id": 4,
-            "title": "Integrate AI Providers",
-            "description": "Connect OpenAI Realtime API handlers (STT, LLM, TTS) to the conversation loop",
-            "details": "Integrate the OpenAI Realtime API client and handlers into the conversation loop. Handle provider selection, error handling, and streaming responses.",
-            "status": "done",
-            "dependencies": [],
-            "parentTaskId": 43
-          },
-          {
-            "id": 5,
-            "title": "Implement Call State Machine",
-            "description": "Create robust call state management with proper call termination handling",
-            "details": "Implement call state machine to handle call lifecycle: ringing, connected, processing, ended. Handle call termination (BYE, timeout) and cleanup. Support per-call instructions and prompt injection.",
-            "status": "done",
-            "dependencies": [],
-            "parentTaskId": 43
-          }
-        ]
+        "status": "pending",
+        "subtasks": []
       },
       {
-        "id": 44,
-        "title": "Add CLI Interface for Configuration and Management",
-        "description": "Create a CLI tool for configuration, validation, and management with help and error reporting.",
-        "details": "Use Typer (v0.12+) for modern CLI development. Implement commands for config validation, environment checks, and starting/stopping the engine. Provide detailed help and error messages. Support interactive setup for first-time users.",
-        "testStrategy": "Unit test CLI commands. Validate error handling and help output. Simulate misconfigurations and verify validation.",
+        "id": 5,
+        "title": "Implement Business Customization Features",
+        "description": "Build the business-specific customization features including custom greetings, role definitions, and voice personality selection",
+        "details": "Implement the business configuration system as specified in the PRD. Create configurable greeting system that allows custom welcome messages. Build AI role definition system that can customize the AI's personality and expertise areas. Implement voice selection between male and female options for both local (Piper) and cloud (OpenAI) TTS. Add business context support for industry-specific knowledge and responses. Create template system for common business types (customer service, technical support, etc.). Implement the escalation keyword system ('agent') and max conversation turns (10) as specified. Add conversation timeout and management features.",
+        "testStrategy": "Test custom greeting playback in real calls. Verify AI personality changes based on role configuration. Test voice selection works for both local and cloud TTS. Test escalation keyword triggers properly. Verify conversation limits and timeouts work correctly. Test business context affects AI responses appropriately.",
         "priority": "medium",
         "dependencies": [
-          37
+          2,
+          3
         ],
-        "status": "done",
+        "status": "pending",
         "subtasks": []
       },
       {
-        "id": 45,
-        "title": "Implement Health Monitoring and Metrics Collection",
-        "description": "Develop health endpoints and metrics collection for system performance, audio quality, and error rates.",
-        "details": "Expose HTTP endpoints for readiness/liveness (using FastAPI or Flask). Collect metrics (latency, error rates, audio quality) using Prometheus client (prometheus_client v0.18+). Support optional Grafana integration. Ensure endpoints are secured (e.g., token auth).",
-        "testStrategy": "Integration test endpoints with Prometheus and Grafana. Simulate failures and verify alerting.",
+        "id": 6,
+        "title": "Optimize Performance and Add Monitoring",
+        "description": "Implement performance optimizations to meet PRD targets and add comprehensive monitoring and health checking",
+        "details": "Optimize the system to meet all PRD performance targets: <2 seconds for AI responses, <500ms audio latency, <2GB memory usage, <80% CPU usage, 99.5% uptime. Implement comprehensive logging system for troubleshooting. Add health checks and status reporting dashboard. Create monitoring for response times, resource usage, and service availability. Implement proper error handling and recovery mechanisms. Add metrics collection for call success rates, conversation quality, and system performance. Optimize audio streaming and processing pipeline for minimal latency. Implement resource pooling and caching where appropriate.",
+        "testStrategy": "Load test the system under various scenarios. Benchmark response times and resource usage. Test monitoring and alerting systems. Verify health checks detect issues correctly. Test system recovery after failures. Validate performance metrics meet all PRD targets under realistic call loads.",
         "priority": "medium",
         "dependencies": [
-          43
-        ],
-        "status": "in-progress",
-        "subtasks": []
-      },
-      {
-        "id": 46,
-        "title": "Implement Security Layer: Encryption, Access Control, and Audit Logging",
-        "description": "Add end-to-end encryption for voice data, role-based access control, and comprehensive audit logging.",
-        "details": "Use TLS for SIP (port 5061) and SRTP for RTP streams[2]. Implement role-based access using JWT or OAuth2 for management endpoints. Log all security events and access attempts. Support GDPR/CCPA/HIPAA compliance via configurable data retention and anonymization.",
-        "testStrategy": "Penetration test SIP/TLS and SRTP setup. Validate access controls and audit logs. Test compliance features (data deletion, anonymization).",
-        "priority": "high",
-        "dependencies": [
-          45
-        ],
-        "status": "pending",
-        "subtasks": []
-      },
-      {
-        "id": 47,
-        "title": "Add Structured Logging and Error Handling",
-        "description": "Implement structured, context-rich logging across all components, with error categorization and traceability.",
-        "details": "Use structlog (v24+) or Python's logging with JSON formatter. Include call/session IDs in all logs. Categorize logs by severity and component. Support log rotation and configurable retention. Integrate with external log collectors (e.g., Loki, ELK stack) if enabled.",
-        "testStrategy": "Unit test log output and error handling. Simulate errors and verify log entries. Validate log ingestion with external systems.",
-        "priority": "medium",
-        "dependencies": [
-          46
-        ],
-        "status": "pending",
-        "subtasks": []
-      },
-      {
-        "id": 48,
-        "title": "Integrate Azure Speech and Deepgram Providers (Phase 2)",
-        "description": "Add support for Azure Speech and Deepgram as alternative AI providers, with automatic fallback and provider selection.",
-        "details": "Implement provider modules using Azure Speech SDK (v1.31+) and Deepgram Python SDK (v3.0+). Support streaming STT/TTS via WebSocket or REST as per provider. Implement fallback logic in provider interface. Allow provider selection via config/env.",
-        "testStrategy": "Integration test with both providers. Simulate provider failures and verify fallback. Validate multi-language support.",
-        "priority": "medium",
-        "dependencies": [
-          43
-        ],
-        "status": "pending",
-        "subtasks": []
-      },
-      {
-        "id": 49,
-        "title": "Implement MCP Tool Integration Layer",
-        "description": "Develop a pluggable tool interface for MCP integrations (e.g., calendar, web automation) with safe defaults.",
-        "details": "Define a generic tool interface in src/mcp_client.py. Support safe execution and sandboxing. Allow enabling/disabling tools via config. Document integration points for custom tools.",
-        "testStrategy": "Unit test tool invocation and sandboxing. Validate safe defaults and error handling.",
-        "priority": "low",
-        "dependencies": [
-          43
-        ],
-        "status": "pending",
-        "subtasks": []
-      },
-      {
-        "id": 50,
-        "title": "Implement Audio Quality Monitoring and Optimization",
-        "description": "Add real-time audio quality monitoring and automatic optimization features.",
-        "details": "Monitor jitter, packet loss, and MOS using pyRTP or custom metrics. Expose quality metrics via Prometheus. Implement auto-tuning for audio processing parameters based on real-time feedback.",
-        "testStrategy": "Integration test with simulated network conditions. Validate metrics and optimization actions.",
-        "priority": "medium",
-        "dependencies": [
-          39,
-          45
-        ],
-        "status": "pending",
-        "subtasks": []
-      },
-      {
-        "id": 51,
-        "title": "Develop Alerting and Notification System",
-        "description": "Implement configurable alerting for system issues, performance degradation, and security events.",
-        "details": "Integrate with Prometheus Alertmanager or custom webhook notifications. Allow configuration of alert thresholds and notification channels (email, Slack, etc.). Ensure alerts are actionable and include context.",
-        "testStrategy": "Simulate alert conditions and verify notifications are sent. Validate alert configuration and suppression.",
-        "priority": "low",
-        "dependencies": [
-          45,
-          47
-        ],
-        "status": "pending",
-        "subtasks": []
-      },
-      {
-        "id": 52,
-        "title": "Implement Comprehensive Documentation and Examples",
-        "description": "Write step-by-step guides, configuration examples, and troubleshooting documentation for all features.",
-        "details": "Use MkDocs or Sphinx for documentation site. Include setup guides for SIP and AudioSocket modes, provider configuration, security, and monitoring. Provide example configs and CLI usage. Document troubleshooting for common issues (NAT, codec, provider errors).",
-        "testStrategy": "Manual review and user testing. Validate all steps with a clean setup. Solicit feedback from beta users.",
-        "priority": "medium",
-        "dependencies": [
-          44,
-          48
-        ],
-        "status": "pending",
-        "subtasks": []
-      },
-      {
-        "id": 53,
-        "title": "Prepare for AudioSocket Integration (Future Enhancement)",
-        "description": "Design and scaffold the AudioSocket client and integration manager for Asterisk 18+ compatibility.",
-        "details": "Create src/audiosocket_client.py and integration_manager.py. Define interfaces for audio streaming via AudioSocket. Ensure backward compatibility with SIP mode. Document requirements for Asterisk 18+ and AudioSocket module.",
-        "testStrategy": "Unit test scaffolding and interface contracts. Validate mode selection logic.",
-        "priority": "low",
-        "dependencies": [
-          38,
-          39
+          2,
+          3,
+          5
         ],
         "status": "pending",
         "subtasks": []
@@ -397,7 +215,7 @@
     ],
     "metadata": {
       "created": "2025-09-05T22:39:53.948Z",
-      "updated": "2025-09-06T03:12:45.769Z",
+      "updated": "2025-09-10T21:16:51.461Z",
       "description": "Tasks for master context"
     }
   },

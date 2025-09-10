@@ -1,0 +1,20 @@
+# config/ai-agent.yaml
+default_provider: "deepgram"
+
+providers:
+  deepgram:
+    api_key: "${DEEPGRAM_API_KEY}"
+    model: "nova-2"
+    tts_model: "aura-asteria-en"
+
+  openai:
+    api_key: "${OPENAI_API_KEY}"
+    model: "gpt-4o"
+    voice: "alloy"
+
+  local:
+    stt_model: "models/stt/vosk-model-small-en-us-0.15"
+    llm_model: "models/llm/llama-2-7b-chat.Q4_K_M.gguf"
+    tts_voice: "models/tts/en_US-lessac-medium.onnx"
+    temperature: 0.8
+    max_tokens: 150

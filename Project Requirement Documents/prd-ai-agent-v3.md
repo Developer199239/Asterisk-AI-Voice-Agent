@@ -1,31 +1,29 @@
-# Asterisk AI Voice Agent v3.0 - Simplified Architecture
+# Asterisk AI Voice Agent v3.0 - Modular Architecture
 ## Product Requirements Document
 
-**Version:** 3.0
-**Date:** September 9, 2025
-**Status:** Draft
-**Target Release:** MVP
+**Version:** 3.1
+**Date:** September 10, 2025
+**Status:** Active Development
+**Target Release:** v3.1
 
 ---
 
 ## 1. Executive Summary
 
 ### 1.1 Project Overview
-The Asterisk AI Voice Agent v3.0 is a simplified, single-container conversational AI system designed specifically for Asterisk administrators and FreePBX users. The system provides natural, high-quality voice conversations through a streamlined architecture that prioritizes ease of deployment, maintenance, and customization.
+The Asterisk AI Voice Agent v3.0 is a simplified, single-container conversational AI system designed specifically for Asterisk administrators and FreePBX users. The system provides natural, high-quality voice conversations through a **modular, provider-based architecture** that prioritizes ease of deployment, maintenance, and customization.
 
 ### 1.2 Key Value Propositions
-- **One-Command Deployment**: Complete setup with a single `./install.sh` command
-- **Self-Contained**: No external cloud dependencies for core functionality
-- **Business-Ready**: Customizable greetings, roles, and voice personalities
-- **Asterisk-Native**: Deep integration with existing Asterisk infrastructure
-- **Cost-Effective**: Local AI models eliminate recurring API costs
+- **One-Command Deployment**: Complete setup with a single `./install.sh` command.
+- **Pluggable AI Providers**: Easily switch between local, cloud, or hybrid AI providers.
+- **Business-Ready**: Customizable greetings, roles, and voice personalities.
+- **Resource Efficient**: A single container handles multiple providers, minimizing resource usage.
+- **Cost-Effective**: Local AI models eliminate recurring API costs.
 
 ### 1.3 Success Metrics
-- **Deployment Time**: < 10 minutes from clone to working system
-- **Uptime**: 99.5% availability
-- **Response Time**: < 2 seconds for AI responses
-- **Audio Quality**: Clear, natural-sounding speech
-- **User Satisfaction**: Easy customization for different business needs
+- **Deployment Time**: < 10 minutes from clone to first call.
+- **Uptime**: 99.5% availability.
+- **Provider Switching**: Ability to test different AI providers by dialing different extensions, with no restart required.
 
 ---
 
@@ -65,49 +63,48 @@ The Asterisk AI Voice Agent v3.0 is a simplified, single-container conversationa
 - **Voice Selection**: Choice between male and female voices
 - **Business Context**: Industry-specific knowledge and responses
 
-### 3.4 AI Engine Options
+### 3.4 AI Provider Options
 - **Local Mode**: Fully offline operation with local AI models
 - **Cloud Mode**: High-quality cloud-based AI services
 - **Hybrid Mode**: Mix of local and cloud services for optimal performance
+- **Dynamic Selection**: Choose the AI provider on a per-call basis via the dialplan.
 
 ---
 
 ## 4. Technical Architecture
 
 ### 4.1 High-Level Architecture
-`
-┌─────────────────────────────────────────────────────────────┐
-│                    Asterisk Server                         │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐ │
-│  │   ARI API   │  │  Stasis App │  │    RTP Engine       │ │
-│  │   (Port     │  │  (Custom    │  │   (Native)          │ │
-│  │    8088)    │  │   Name)     │  │                     │ │
-│  └─────────────┘  └─────────────┘  └─────────────────────┘ │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              │ ARI WebSocket + HTTP
-                              │
-┌─────────────────────────────────────────────────────────────┐
-│                AI Voice Agent Container                    │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐ │
-│  │   ARI       │  │    AI       │  │   Configuration     │ │
-│  │  Client     │  │  Pipeline   │  │    Manager          │ │
-│  │             │  │             │  │                     │ │
-│  │ • Call      │  │ • STT       │  │ • Engine Selection  │ │
-│  │   Control   │  │ • LLM       │  │ • Voice Settings    │ │
-│  │ • Audio     │  │ • TTS       │  │ • Business Rules    │ │
-│  │   Playback  │  │             │  │                     │ │
-│  └─────────────┘  └─────────────┘  └─────────────────────┘ │
-└─────────────────────────────────────────────────────────────┘
-`
+```
+┌──────────────────────────┐      ┌──────────────────────────────────────────────────┐      ┌──────────────────┐
+│      Asterisk Server     │      │         Host Machine / VM (Running Docker)       │      │   AI Provider    │
+│  ┌─────────────────────┐ │      │  ┌────────────────────┐  ┌─────────────────────┐ │      │  (Cloud APIs)    │
+│  │     Stasis App      │ │      │  │ AI Voice Agent     │  │      ./models/      │ │      │ e.g., Deepgram,  │
+│  │ 'ai-voice-agent'    ├─┼──────┼─▶│ (Docker Container) │◀─┼── (Docker Volume)  │ │◀────▶│ OpenAI           │
+│  └─────────────────────┘ │      │  │                    │  │                     │ │      └──────────────────┘
+│ (Sends call to Stasis)   │      │  │ ------------------ │  │ ┌─────────────────┐ │      
+│                          │      │  │   src/engine.py    │  │ │ llama-2-7b.gguf │ │      
+│                          │      │  │ (Orchestrator)     │  │ ├─────────────────┤ │      
+│                          │      │  │ ------------------ │  │ │ vosk-model/     │ │      
+│                          │      │  │   AIProvider-      │  │ ├─────────────────┤ │      
+│                          │      │  │   Interface        │  │ │ piper-voice.onnx│ │      
+│                          │      │  │ ------------------ │  │ └─────────────────┘ │      
+│                          │      │  │ ▶ DeepgramProvider │  │ (Local Model Files) │      
+│                          │      │  │ ▶ OpenAIProvider   │  └─────────────────────┘ │      
+│                          │      │  │ ▶ LocalProvider    │                          │      
+│                          │      │  └────────────────────┘                          │      
+│                          │      └──────────────────────────────────────────────────┘      
+└──────────────────────────┘
+```
 
 ### 4.2 Container Architecture
-- **Single Docker Container**: All AI engines and logic in one container
-- **Modular AI Pipeline**: Pluggable STT, LLM, and TTS components
-- **Configuration-Driven**: Easy switching between different AI engines
-- **Resource Optimized**: Efficient CPU usage for local models
 
-### 4.3 AI Engine Options
+-   **Single Docker Container**: All application logic runs in a single, unified container for simplicity and resource efficiency.
+-   **Modular AI Providers**: The system uses a provider-based architecture, inspired by the OpenSIPS AI Connector. A core `engine.py` orchestrates calls and loads the appropriate AI provider on a per-call basis.
+-   **Provider Abstraction (`AIProviderInterface`)**: All providers (Deepgram, Local, etc.) implement a common abstract base class. This contract ensures the core engine can interact with any provider using a standard set of methods (`start_session`, `send_audio`, `stop_session`), completely decoupling the engine from the specific implementation details of any one AI service.
+-   **Model Management via Docker Volumes**: Large AI model files are **not** part of the Docker image. They are downloaded to a `./models` directory on the host and mounted into the container at runtime using a Docker Volume. This keeps the image size small and allows users to manage models independently of the application.
+-   **Multi-Stage Dockerfile**: The `Dockerfile` will use a multi-stage build process. A `builder` stage will compile dependencies like `llama-cpp-python`, and the final, lightweight `runtime` stage will only copy the necessary compiled artifacts, resulting in a smaller and more secure production image.
+
+### 4.3 AI Providers
 
 #### 4.3.1 Local AI Stack
 - **STT**: Vosk (offline, CPU-optimized)
@@ -118,10 +115,9 @@ The Asterisk AI Voice Agent v3.0 is a simplified, single-container conversationa
   - Female: "en_US-lessac-high" (Friendly, warm)
 
 #### 4.3.2 Cloud AI Stack
-- **STT**: Deepgram (real-time, high accuracy)
-- **LLM**: OpenAI GPT-4o (advanced reasoning)
-- **TTS**: OpenAI TTS (natural, expressive)
-- **Voice Options**: Alloy (neutral), Nova (female), Echo (male)
+- **Provider**: Deepgram Voice Agent (All-in-one STT, LLM, TTS)
+- **Provider**: OpenAI (Separate STT, LLM, TTS services)
+- **Voice Options**: Alloy (neutral), Nova (female), Echo (male) for OpenAI
 
 #### 4.3.3 Hybrid AI Stack
 - **STT**: Local Vosk + Cloud Deepgram fallback
@@ -129,18 +125,12 @@ The Asterisk AI Voice Agent v3.0 is a simplified, single-container conversationa
 - **TTS**: Local Piper + Cloud OpenAI fallback
 - **Intelligent Fallback**: Automatic switching based on performance
 
-### 4.4 Asterisk Integration
-- **ARI WebSocket**: Real-time event handling
-- **ARI HTTP API**: Call control and media playback
-- **Stasis Application**: Custom application name (configurable)
-- **RTP Handling**: Native Asterisk RTP (no external media proxy)
-
 ---
 
 ## 5. User Experience
 
 ### 5.1 Installation Flow
-`bash
+```bash
 # Step 1: Clone Repository
 git clone https://github.com/your-repo/asterisk-ai-voice-agent
 cd asterisk-ai-voice-agent
@@ -150,132 +140,75 @@ cd asterisk-ai-voice-agent
 
 # What happens:
 # 1. System Requirements Check
-# 2. Asterisk Status Verification
+# 2. Asterisk Status & Codec Verification
 # 3. Port Availability Check
-# 4. AI Engine Selection
-# 5. Voice and Personality Setup
+# 4. Local AI Model Download (Optional)
+# 5. AI Provider Configuration
 # 6. Container Build and Deployment
-# 7. Integration Testing
-# 8. Status Dashboard
-`
-
-### 5.2 Interactive Setup Wizard
-`
-┌─────────────────────────────────────────────────────────────┐
-│              Asterisk AI Voice Agent Setup                 │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│  ✓ System Requirements Check                               │
-│  ✓ Asterisk Status: Running (v18.5.0)                     │
-│  ✓ Port 8088: Available                                    │
-│                                                             │
-│  AI Engine Selection:                                       │
-│  [1] Local Mode (Offline, No API costs)                    │
-│  [2] Cloud Mode (High Quality, API costs)                  │
-│  [3] Hybrid Mode (Best of both)                            │
-│                                                             │
-│  Voice Selection:                                           │
-│  [1] Male Voice (Professional)                             │
-│  [2] Female Voice (Friendly)                               │
-│                                                             │
-│  Business Configuration:                                    │
-│  Company Name: [Jugaar LLC                    ]            │
-│  AI Role: [Customer Service Assistant        ]            │
-│  Greeting: [Hello, I'm an AI assistant...    ]            │
-│                                                             │
-│  Asterisk Configuration:                                    │
-│  ARI Username: [AIAgent                    ]               │
-│  ARI Password: [****************            ]               │
-│  Stasis App Name: [ai-voice-agent          ]               │
-│                                                             │
-│  [Continue] [Back] [Exit]                                   │
-└─────────────────────────────────────────────────────────────┘
-`
-
-### 5.3 Error Handling
-- **Clear Error Messages**: Specific, actionable error descriptions
-- **Next Steps Guidance**: Step-by-step resolution instructions
-- **Diagnostic Mode**: `./install.sh --diagnose` for troubleshooting
-- **Rollback Capability**: Easy cleanup and restart
+# 7. Status Dashboard
+```
 
 ---
 
 ## 6. Configuration Management
 
-### 6.1 Configuration File Structure
-`yaml
+### 6.1 Configuration File Structure (`ai-agent.yaml`)
+The system will be configured via a single YAML file, allowing for the definition of multiple AI providers.
+
+```yaml
 # config/ai-agent.yaml
-asterisk:
-  host: "voiprnd.nemtclouddispatch.com"
-  port: 8088
-  username: "AIAgent"
-  password: "c4d5359e2f9ddd394cd6aa116c1c6a96"
-  stasis_app: "ai-voice-agent"
+default_provider: "local"
 
-ai_engine:
-  mode: "local"  # local, cloud, hybrid
-  stt:
-    provider: "vosk"  # vosk, deepgram
-    model: "vosk-model-en-us-0.22"
-  llm:
-    provider: "llama"  # llama, openai
-    model: "llama-2-7b-chat"
-    temperature: 0.8
-  tts:
-    provider: "piper"  # piper, openai
-    voice: "en_US-lessac-medium"  # male
-    # voice: "en_US-lessac-high"  # female
+providers:
+  deepgram:
+    api_key: "${DEEPGRAM_API_KEY}"
+    model: "nova-2"
+    # ... deepgram specific settings
 
-business:
-  company_name: "Jugaar LLC"
-  ai_role: "Customer Service Assistant"
-  greeting: "Hello, I'm an AI assistant for Jugaar LLC. How can I help you today?"
-  escalation_keyword: "agent"
-  max_conversation_turns: 10
+  openai:
+    api_key: "${OPENAI_API_KEY}"
+    model: "gpt-4o"
+    voice: "alloy"
+    # ... openai specific settings
 
-voice:
-  gender: "male"  # male, female
-  speed: 1.0
-  pitch: 1.0
-`
+  local:
+    stt_model: "/app/models/stt/vosk-model..."
+    llm_model: "/app/models/llm/llama-2-7b..."
+    tts_voice: "/app/models/tts/en_US-lessac..."
+    # ... local stack settings
+```
 
-### 6.2 AI Engine Flavors
-- **local.yaml**: Fully offline configuration
-- **cloud.yaml**: Cloud-based services
-- **hybrid.yaml**: Mixed local/cloud approach
-- **custom.yaml**: User-defined configuration
+### 6.2 Provider Selection
+The AI provider for a call is selected by passing an argument from the Asterisk dialplan. This allows for easy A/B testing.
+
+**`extensions_custom.conf` Example:**
+```
+[ai-testing]
+; Dial 1001 for Deepgram
+exten => 1001,1,Stasis(ai-voice-agent,deepgram)
+
+; Dial 1002 for the Local AI
+exten => 1002,1,Stasis(ai-voice-agent,local)
+```
 
 ---
 
 ## 7. Implementation Phases
 
-### 7.1 Phase 1: Core Infrastructure (Week 1-2)
-- [ ] Single container architecture
-- [ ] ARI client implementation
-- [ ] Basic call handling (answer, hangup)
-- [ ] Audio playback functionality
-- [ ] Configuration management system
+### 7.1 Phase 0: Proof of Concept (Completed)
+- [x] **Deepgram Voice Agent Integration**: Established a working end-to-end call flow with Deepgram's all-in-one service.
+- [x] **Core ARI and RTP Handling**: Developed the initial logic for connecting to Asterisk and handling real-time audio.
 
-### 7.2 Phase 2: AI Pipeline (Week 3-4)
-- [ ] Vosk STT integration
-- [ ] Local LLM integration (llama-cpp-python)
-- [ ] Piper TTS integration
-- [ ] Audio streaming from ARI
-- [ ] Basic conversation flow
+### 7.2 Phase 1: Core Architecture Refactor (Current)
+- [ ] **Implement Provider Interface**: Create the `AIProviderInterface` abstract class in `src/providers/base.py`.
+- [ ] **Refactor Deepgram Provider**: Move the existing Deepgram POC code into a modular `src/providers/deepgram.py` that implements the new interface.
+- [ ] **Build Core Engine**: Develop `src/engine.py` to handle call orchestration and dynamic provider loading based on dialplan arguments.
+- [ ] **Update Dockerfile**: Implement a multi-stage build and configure model mounting via volumes.
+- [ ] **Enhance Config System**: Update the configuration manager to support the new YAML structure with multiple providers.
 
-### 7.3 Phase 3: Cloud Integration (Week 5-6)
-- [ ] Deepgram STT integration
-- [ ] OpenAI LLM integration
-- [ ] OpenAI TTS integration
-- [ ] Hybrid mode implementation
-- [ ] Fallback mechanisms
-
-### 7.4 Phase 4: User Experience (Week 7-8)
-- [ ] Installation script
-- [ ] Interactive setup wizard
-- [ ] Error handling and diagnostics
-- [ ] Documentation and examples
-- [ ] Testing and validation
+### 7.3 Phase 2: Local AI Provider (Next)
+- [ ] **Integrate Vosk, Llama, and Piper**: Build the `LocalAIProvider` in `src/providers/local.py`.
+- [ ] **Enhance `install.sh`**: Add the logic to download and manage local model files in the `./models` directory.
 
 ---
 

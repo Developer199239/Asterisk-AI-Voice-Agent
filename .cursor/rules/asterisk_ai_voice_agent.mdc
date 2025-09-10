@@ -1,13 +1,13 @@
 ---
-description: Development rules and guidelines for the Asterisk AI Voice Agent v2.0 project
-globs: services/**/*.py, shared/**/*.py, *.py, docker-compose.yml, Dockerfile
+description: Development rules and guidelines for the Asterisk AI Voice Agent v3.0 project
+globs: src/**/*.py, *.py, docker-compose.yml, Dockerfile, config/ai-agent.yaml
 alwaysApply: true
 ---
 
-# Asterisk AI Voice Agent v2.0 - Development Rules
+# Asterisk AI Voice Agent v3.0 - Development Rules
 
 ## Project Overview
-This is an open-source AI Voice Agent that integrates with Asterisk/FreePBX using the Asterisk REST Interface (ARI) and microservices architecture. The system answers calls using configurable AI providers with real-time conversation capabilities and barge-in support.
+This is an open-source AI Voice Agent that integrates with Asterisk/FreePBX using the Asterisk REST Interface (ARI). It features a **single-container, modular architecture** that allows for plug-and-play AI providers (including local and cloud-based) for real-time, natural conversations.
 
 ## Development Workflow
 
@@ -18,125 +18,66 @@ This is an open-source AI Voice Agent that integrates with Asterisk/FreePBX usin
 - **Access**: SSH with root privileges
 
 ### Development Process
-1. **Local Development**: All code changes are made locally
-2. **Git Workflow**: 
-   - Build locally, test on server
-   - Commit changes to Git
-   - Push to remote repository
+1. **Local Development**: All code changes are made locally on the `develop` branch.
+2. **Git Workflow**:
+   - Build and test locally.
+   - Commit changes to Git.
+   - Push to remote `develop` branch.
+   - Merge to `main` only after thorough server testing.
 3. **Server Testing**:
-   - SSH to test server
-   - Pull latest changes from Git
-   - Test with Asterisk 16+ environment
-   - No changes to Asterisk config on server - ask user to make any changes related to asterisk
+   - SSH to test server.
+   - Pull latest changes from Git.
+   - Test with Asterisk 16+ environment.
 
 ### Code Standards
 - **Python Version**: 3.11+
 - **Async Programming**: Use asyncio for all I/O operations
 - **Type Hints**: Required for all functions and classes
 - **Error Handling**: Comprehensive error handling with logging
-- **Testing**: Unit tests for all components
+- **Testing**: Unit tests for all components.
 
 ### Project Structure
 ```
 Asterisk-AI-Voice-Agent/
-├── services/
-│   ├── call_controller/     # ARI integration & call orchestration
-│   │   ├── main.py         # Service entry point
-│   │   └── __init__.py
-│   ├── stt_service/         # Speech-to-text processing
-│   │   ├── main.py
-│   │   ├── stt_handler.py  # OpenAI Whisper integration
-│   │   ├── realtime_client.py
-│   │   └── __init__.py
-│   ├── llm_service/         # Language model & conversation logic
-│   │   ├── main.py
-│   │   ├── llm_handler.py  # OpenAI GPT integration
-│   │   └── __init__.py
-│   └── tts_service/         # Text-to-speech synthesis
-│       ├── main.py
-│       ├── tts_handler.py  # OpenAI TTS integration
-│       └── __init__.py
-├── shared/
-│   └── audio_processing/    # Reusable audio utilities
-│       ├── codec_handler.py # Audio codec handling
-│       ├── vad.py          # Voice activity detection
-│       └── __init__.py
-├── Project Requirement Documents/
-├── docs/
-├── monitoring/
-├── docker-compose.yml      # Microservices orchestration
-├── Dockerfile              # Container configuration
+├── src/
+│   ├── providers/          # AI provider integrations (Deepgram, Local)
+│   │   ├── base.py         # AIProviderInterface abstract class
+│   │   ├── deepgram.py     # Deepgram provider
+│   │   └── local.py        # Local provider (Vosk, Llama, Piper)
+│   ├── ari_client.py       # ARI WebSocket and HTTP client
+│   ├── config.py           # YAML configuration loader and Pydantic models
+│   ├── engine.py           # Core call orchestration and provider loading
+│   ├── rtp_handler.py      # RTP packetization logic
+│   └── udp_server.py       # UDP server for receiving RTP from Asterisk
+├── config/
+│   └── ai-agent.yaml       # Main configuration file for providers
+├── models/                 # Local AI models (downloaded by script, not in git)
+│   ├── stt/
+│   └── llm/
+│   └── tts/
+├── scripts/
+│   └── download_models.sh  # Script to fetch local AI models
+├── main.py                 # Application entry point
+├── docker-compose.yml      # Single-service orchestration
+├── Dockerfile              # Single container configuration
 └── requirements.txt        # Python dependencies
 ```
 
 ### Key Technologies
-- **Asterisk Integration**: ARI (Asterisk REST Interface) via ari-py
-- **Media Proxy**: rtpengine for RTP stream management
-- **Message Queue**: Redis Pub/Sub for inter-service communication
-- **Audio Processing**: WebRTC VAD, RTP packet parsing
-- **AI Providers**: OpenAI Realtime API, Azure Speech, Deepgram
-- **Configuration**: Pydantic v2 for validation
-- **Monitoring**: FastAPI for health endpoints
-- **Security**: TLS encryption, JWT authentication
-
-### Development Guidelines
-1. **Start with ARI Integration**: Focus on getting ARI WebSocket connection working first
-2. **Test Early and Often**: Use the test server for integration testing
-3. **Audio Quality First**: Ensure clear audio before adding AI features
-4. **Security by Design**: Implement security features from the start
-5. **Documentation**: Keep documentation updated with code changes
-6. **Microservices First**: Design each service as independent and stateless
-
-### Testing Strategy
-**ALL TESTING ON SERVER ONLY - NO LOCAL TESTING**
-1. **Server Unit Tests**: Test individual components on server
-2. **Server Integration Tests**: Test with real Asterisk 16+ environment
-3. **Server Performance Tests**: Measure latency and audio quality on server
-4. **Live Testing**: Use final test command when project is complete
-
-### Deployment Process
-1. **Local Build**: `docker-compose build`
-2. **Git Push**: `git add . && git commit -m "message" && git push`
-3. **Server Deploy**: SSH to server, pull changes, build and test with Asterisk
-4. **Server Testing**: All testing performed on server environment only
-
-### Environment Variables
-- `ASTERISK_HOST`: `voiprnd.nemtclouddispatch.com`
-- `ASTERISK_VERSION`: `16`
-- `ARI_USERNAME`: `AIAgent`
-- `ARI_PASSWORD`: `c4d5359e2f9ddd394cd6aa116c1c6a96`
-- `REDIS_URL`: `redis://redis:6379`
-- `RTPENGINE_HOST`: `rtpengine`
-- `RTPENGINE_PORT`: `2223`
-- `OPENAI_API_KEY`: `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`
-- `DEEPGRAM_API_KEY`: `55f64bf8b7773814ed3840a5d6dd61e512f71d66`
-- `LOG_LEVEL`: `INFO` (DEBUG, INFO, WARN, ERROR)
-- `FALLBACK_LLM_MODEL`: `gpt-3.5-turbo` (optional fallback)
-
-### Testing Configuration
-#### ARI Configuration for Testing
-- **ARI Username**: `AIAgent`
-- **ARI Password**: `c4d5359e2f9ddd394cd6aa116c1c6a96`
-- **Password Type**: `Crypt`
-- **ARI Port**: `8088`
-- **Verification Command**: `asterisk -rx "ari show applications"`
-- **Asterisk Dialpan Configured for stasis app** `[from-ai-agent]
-; Send the call to the Stasis application for the AI Voice Agent
-exten => s,1,NoOp(Entering Stasis application for AI Voice Agent)
-exten => s,n,Stasis(asterisk-ai-voice-agent)
-exten => s,n,Hangup()`
-
-#### API Keys for Testing
-- **OpenAI API Key**: `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`
-- **Deepgram API Key**: `55f64bf8b7773814ed3840a5d6dd61e512f71d66`
-
-#### AI Prompt Configuration
-- **AI Role**: Helpful AI Assistant for Jugaar LLC
-- **Initial Prompt**: "Hello, I am an AI Assistant for Jugaar LLC. How can I help you today."
-- **Instructions**: Answer inbound calls professionally and helpfully
+- **Asterisk Integration**: ARI (Asterisk REST Interface) via custom `ari_client`
+- **AI Providers**:
+    - **Cloud**: Deepgram Voice Agent
+    - **Local STT**: Vosk
+    - **Local LLM**: Llama-cpp-python
+    - **Local TTS**: Piper-tts
+- **Configuration**: YAML (`ai-agent.yaml`) with Pydantic v2 for validation
+- **Audio Processing**: RTP packet handling, ulaw/PCM conversion
 
 ### Common Commands
 ```bash
+# Download Local AI Models (run once)
+./scripts/download_models.sh
+
 # Local development
 docker-compose up --build
 docker-compose down
@@ -144,166 +85,54 @@ docker-compose down
 # Git workflow
 git add .
 git commit -m "feat: add feature description"
-git push origin main
-
-# Server testing
-ssh root@voiprnd.nemtclouddispatch.com
-cd /root/Asterisk-AI-Voice-Agent
-git pull origin main
-docker compose down
-docker system prune -f
-docker-compose up --build
+git push origin develop
 ```
+
+### Environment Variables
+Configuration is primarily managed in `config/ai-agent.yaml`. The `.env` file is only used for secrets.
+
+- `OPENAI_API_KEY`: Your OpenAI API key.
+- `DEEPGRAM_API_KEY`: Your Deepgram API key.
+- `ASTERISK_HOST`: IP address of your Asterisk server.
+- `ASTERISK_ARI_USERNAME`: ARI username.
+- `ASTERISK_ARI_PASSWORD`: ARI password.
+- `GREETING`: The initial greeting the AI speaks.
+- `AI_ROLE`: The system prompt for the LLM.
 
 ### Testing Commands
 ```bash
 # Verify ARI connection
-asterisk -rx "ari show apps"
-asterisk -rx "ari show users"
-asterisk -rx "ari show user AIAgent"
 asterisk -rx "ari show app asterisk-ai-voice-agent"
 
 # Check Asterisk status
 asterisk -rx "core show version"
-asterisk -rx "dialplan show from-ai-agent"
-
-# Test Redis connectivity
-docker exec -it asterisk-ai-voice-agent-redis-1 redis-cli ping
-
-# Test rtpengine status
-curl -f http://rtpengine:2223/status
-
-# Test health endpoints [Need Updates based on new ports]
-curl -f http://localhost:8000/health  # call_controller
-curl -f http://localhost:8001/health  # stt_service
-curl -f http://localhost:8002/health  # llm_service
-curl -f http://localhost:8003/health  # tts_service
 
 # Monitor Asterisk logs
 tail -f /var/log/asterisk/full
 ```
 
-### Final Testing Command
-When the project is complete and ready for live testing, use this command to initiate a test call:
-
-```bash
-# Final test call command for live testing
-asterisk -rx "channel originate SIP/callcentric/13164619284 extension s@ivr-3"
-```
-
-This command will:
-- Originate a call from the Callcentric SIP trunk (13164619284)
-- Route it to extension `s@ivr-3` (which should be configured to use the AI voice agent)
-- Check docker logs and see if call was answered by AI Engine correctly
-
-### Important Notes
-- **No Server Changes**: Never modify code directly on the test server
-- **Asterisk 16+ Focus**: All development targets Asterisk 16+ compatibility
-- **ARI Primary**: Focus on ARI integration, rtpengine for media handling
-- **Real-time Performance**: Sub-second response times are critical
-- **Audio Quality**: Clear audio with noise suppression is essential
-- **Microservices Architecture**: Each service must be independent and stateless
-- **Docker Build Images**: When building new images delete all old unused images to save space
-
-### Troubleshooting
-- **ARI Connection Issues**: Check Asterisk ari.conf, verify credentials
-- **Redis Connection Problems**: Check Redis container status and network connectivity
-- **RTPEngine Issues**: Verify rtpengine container and port configuration
-- **Audio Quality Problems**: Test with different codecs, check network latency
-- **AI Provider Errors**: Verify API keys, check WebSocket connections
-- **Docker Issues**: Ensure proper networking between services
-- **Detailed Log**: For a detailed, ongoing log of troubleshooting steps and resolutions, see the [Troubleshooting Guide](mdc:.taskmaster/docs/Troubleshooting.md).
-
-### Security Considerations
-- **API Keys**: Never commit API keys to Git
-- **Voice Data**: Implement encryption for voice data transmission
-- **Access Control**: Use proper authentication and authorization
-- **Compliance**: Follow GDPR, HIPAA, CCPA requirements
-- **Service Isolation**: Ensure proper network isolation between services
-
-### Performance Targets
-- **Response Time**: <2 seconds for AI responses
-- **Audio Latency**: <500ms for real-time processing
-- **Uptime**: 99.9% availability
-- **CPU Usage**: <80% under normal load
-- **Memory Usage**: <2GB per instance
-- **Barge-in Detection**: <200ms response time
-
 ## ARI Integration and Call Handling
 
-### ARI WebSocket Events
-The call_controller service handles these key ARI events:
+### Call Flow
+The new single-container architecture simplifies call handling significantly.
 
-1. **StasisStart**: New call enters the Stasis application
-   - Extract channel ID and caller ID
-   - Initialize call state management
-   - Configure rtpengine media proxy
+1.  **StasisStart**: A new call enters the `ai-voice-agent` Stasis application.
+    -   The `Engine` receives the event.
+    -   The dialplan argument (e.g., "deepgram" or "local") is used to determine which AI provider to use.
+    -   The `Engine` instantiates the appropriate provider class (e.g., `DeepgramProvider`).
+2.  **Media Setup**:
+    -   The `Engine` answers the call.
+    -   It creates an `externalMedia` channel, which sets up a UDP port for Asterisk to send RTP audio to.
+    -   The incoming channel and the media channel are placed into a bridge.
+3.  **Real-time Conversation**:
+    -   The `UDPServer` receives RTP packets from Asterisk.
+    -   The raw audio payload is forwarded to the active AI provider's `send_audio` method.
+    -   The provider's STT engine transcribes the audio.
+    -   The text is sent to the provider's LLM.
+    -   The LLM's text response is sent to the provider's TTS engine.
+    -   The synthesized audio is received by the `Engine`, packetized into RTP, and sent back to Asterisk via the UDP port.
+4.  **StasisEnd**: When the call hangs up, the `Engine`'s `_cleanup_call` method is triggered.
+    -   The provider's `stop_session` method is called.
+    -   The bridge is destroyed and all channels are hung up.
 
-2. **StasisEnd**: Call leaves the Stasis application
-   - Clean up call resources
-   - Remove from active call tracking
-   - Deallocate rtpengine ports
-
-3. **ChannelDtmfReceived**: User input via DTMF
-   - Process DTMF input for call control
-   - Handle special commands (transfer, hangup)
-
-### Call State Management
-1. **Call Lifecycle States**:
-   - `ringing`: Call received, not yet answered
-   - `answered`: Call answered, RTP established
-   - `listening`: Waiting for user speech
-   - `speaking`: AI is speaking
-   - `ended`: Call terminated, cleanup required
-
-2. **State Transition Rules**:
-   - `ringing` → `answered`: After ARI answer command
-   - `answered` → `listening`: After media setup complete
-   - `listening` → `speaking`: After TTS audio starts
-   - `speaking` → `listening`: After TTS audio ends or barge-in
-   - `*` → `ended`: After hangup or timeout
-
-3. **Call Cleanup**:
-   - Remove from active call registry
-   - Deallocate rtpengine ports
-   - Clean up Redis conversation history
-   - Remove audio files from shared volume
-
-### RTPEngine Media Proxy Integration
-1. **Media Setup**:
-   - Allocate RTP ports via rtpengine HTTP API
-   - Configure media forking to STT service
-   - Handle SDP offer/answer with Asterisk
-
-2. **Audio Stream Management**:
-   - Fork incoming RTP to STT service
-   - Handle playback via ARI channels.play()
-   - Manage barge-in detection and control
-
-3. **Port Management**:
-   - Allocate ports on call start
-   - Deallocate ports on call end
-   - Handle port conflicts and retries
-
-### Redis Message Channels
-The system uses these Redis Pub/Sub channels:
-
-1. **calls:new**: New call notification
-2. **stt:transcription:complete**: Speech-to-text results
-3. **stt:vad:activity**: Voice activity detection events
-4. **llm:response:ready**: AI response ready
-5. **calls:control:play**: Audio playback requests
-6. **calls:control:stop**: Stop current playback (barge-in)
-
-### Barge-in Implementation
-1. **Detection**: STT service monitors VAD during TTS playback
-2. **Notification**: Publishes `stt:vad:activity` with "speaking" status
-3. **Response**: Call controller stops current playback via ARI
-4. **Recovery**: System returns to listening state for new input
-
-### Error Handling and Resilience
-1. **Service Failures**: Each service has fallback mechanisms
-2. **API Timeouts**: Exponential backoff retry with circuit breakers
-3. **Redis Unavailability**: Local fallback responses when possible
-4. **RTPEngine Issues**: Graceful degradation to basic audio handling
-5. **ARI Disconnection**: Automatic reconnection with call state recovery
+This entire loop occurs within a single process, eliminating the need for Redis-based inter-service communication and external media proxies like rtpengine.
