@@ -49,7 +49,7 @@ class DeepgramAgentClient:
                 },
                 "output": {
                     "encoding": "linear16",
-                    "sample_rate": 16000,
+                    "sample_rate": 24000,
                     "container": "none"
                 }
             },
