@@ -140,24 +140,12 @@ class DeepgramAgentClient:
                         if self.request_id:
                             event_data['request_id'] = self.request_id
 
+                        logger.debug("Received JSON message from Deepgram", data=event_data)
                         await self.event_handler(event_data)
                     except json.JSONDecodeError as e:
                         logger.error("Failed to parse JSON message from Deepgram", error=str(e), message=message)
-                elif isinstance(message, bytes):
-                    # Handle binary messages (audio data)
-                    import base64
-                    audio_b64 = base64.b64encode(message).decode('utf-8')
-                    audio_event = {
-                        'type': 'AgentAudio',
-                        'data': audio_b64
-                    }
-                    
-                    # Add the request_id if we have it
-                    if self.request_id:
-                        audio_event['request_id'] = self.request_id
-                    
-                    logger.debug("Received binary audio from Deepgram", size=len(message))
-                    await self.event_handler(audio_event)
+                # Raw binary audio is not expected from the Voice Agent API, it's wrapped in JSON.
+                # Remove the incorrect handling for `isinstance(message, bytes)`.
                 else:
                     logger.warning("Received unknown message type from Deepgram", message_type=type(message))
         except websockets.exceptions.ConnectionClosed as e:
