@@ -1,0 +1,11 @@
+# Task ID: 2
+# Title: Integrate Local AI Stack (Vosk STT, Llama LLM, Piper TTS)
+# Status: pending
+# Dependencies: 1
+# Priority: high
+# Description: Implement the complete local AI pipeline with Vosk for speech-to-text, Llama-cpp-python for language modeling, and Piper TTS for text-to-speech
+# Details:
+Install and configure Vosk with the vosk-model-en-us-0.22 model for offline STT. Implement llama-cpp-python integration with support for 7B-13B parameter models (specifically llama-2-7b-chat). Set up Piper TTS with both male (en_US-lessac-medium) and female (en_US-lessac-high) voice options as specified in the PRD. Create AI pipeline classes that can handle the complete local processing chain. Implement proper resource management to ensure models load efficiently and stay within the 2GB memory target. Add configuration options for temperature (0.8), max_tokens, and voice settings (speed: 1.0, pitch: 1.0).
+
+# Test Strategy:
+Test each AI component individually with sample audio/text. Verify end-to-end local pipeline processing. Benchmark response times to meet <2 second target. Test memory usage stays under 2GB. Validate voice quality and naturalness for both male and female options.

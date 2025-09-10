@@ -1,0 +1,11 @@
+# Task ID: 5
+# Title: Implement Business Customization Features
+# Status: pending
+# Dependencies: 2, 3
+# Priority: medium
+# Description: Build the business-specific customization features including custom greetings, role definitions, and voice personality selection
+# Details:
+Implement the business configuration system as specified in the PRD. Create configurable greeting system that allows custom welcome messages. Build AI role definition system that can customize the AI's personality and expertise areas. Implement voice selection between male and female options for both local (Piper) and cloud (OpenAI) TTS. Add business context support for industry-specific knowledge and responses. Create template system for common business types (customer service, technical support, etc.). Implement the escalation keyword system ('agent') and max conversation turns (10) as specified. Add conversation timeout and management features.
+
+# Test Strategy:
+Test custom greeting playback in real calls. Verify AI personality changes based on role configuration. Test voice selection works for both local and cloud TTS. Test escalation keyword triggers properly. Verify conversation limits and timeouts work correctly. Test business context affects AI responses appropriately.

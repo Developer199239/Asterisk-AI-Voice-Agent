@@ -26,7 +26,8 @@ This is an open-source AI Voice Agent that integrates with Asterisk/FreePBX usin
    - Merge to `main` only after thorough server testing.
 3. **Server Testing**:
    - SSH to test server.
-   - Pull latest changes from Git.
+   - Clone `develop` branch into `/root/Asterisk-Agent-Develop`.
+   - Bring down the main production container and bring up the develop container for isolated testing.
    - Test with Asterisk 16+ environment.
 
 ### Code Standards
@@ -86,6 +87,22 @@ docker-compose down
 git add .
 git commit -m "feat: add feature description"
 git push origin develop
+
+# Server Testing Workflow in /root/Asterisk-Agent-Develop
+# 1. Stop the production container (if running)
+docker-compose -f /root/Asterisk-AI-Voice-Agent/docker-compose.yml down
+
+# 2. Start the development container
+docker-compose up --build -d
+
+# 3. View logs
+docker-compose logs -f
+
+# 4. Stop the development container when finished
+docker-compose down
+
+# 5. Restart the production container
+docker-compose -f /root/Asterisk-AI-Voice-Agent/docker-compose.yml up -d
 ```
 
 ### Environment Variables

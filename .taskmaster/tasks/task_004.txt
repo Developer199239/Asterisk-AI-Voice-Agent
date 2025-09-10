@@ -1,0 +1,11 @@
+# Task ID: 4
+# Title: Build Interactive Installation Wizard and Setup Script
+# Status: pending
+# Dependencies: 1
+# Priority: high
+# Description: Create the complete interactive installation experience as specified in the PRD with system checks, AI engine selection, and business configuration
+# Details:
+Complete the existing install.sh script to match the PRD specifications exactly. Implement the interactive setup wizard UI as shown in the PRD mockup with system requirements check, Asterisk status verification, port availability check, AI engine selection (Local/Cloud/Hybrid), voice selection (Male/Female), and business configuration (Company Name, AI Role, Greeting). Add Asterisk configuration section with ARI credentials. Include diagnostic mode (--diagnose flag) for troubleshooting. Implement rollback capability and clear error messages with actionable next steps. Ensure the script generates the appropriate configuration files based on user selections.
+
+# Test Strategy:
+Test installation script on clean system. Verify all user input validation and error handling. Test system requirements detection. Test Asterisk connectivity verification. Validate generated configuration files match user selections. Test rollback functionality.

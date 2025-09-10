@@ -1,0 +1,88 @@
+version: "3.8"
+
+services:
+  redis-test:
+    image: redis:7.2-alpine
+    container_name: asterisk-ai-voice-agent-redis-test
+    ports:
+      - "6380:6379" # Use a different port for testing
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  call_controller-test:
+    build:
+      context: .
+      dockerfile: services/call_controller/Dockerfile
+    container_name: asterisk-ai-voice-agent-call-controller-test
+    volumes:
+      - pip_cache:/root/.cache/pip
+    depends_on:
+      redis-test:
+        condition: service_healthy
+    environment:
+      - REDIS_URL=redis://redis-test:6379
+      - ASTERISK_HOST=mock-asterisk
+      - RTPENGINE_HOST=mock-rtpengine
+      - OPENAI_API_KEY=test-key
+
+  stt_service-test:
+    build:
+      context: .
+      dockerfile: services/stt_service/Dockerfile
+    container_name: asterisk-ai-voice-agent-stt-test
+    volumes:
+      - pip_cache:/root/.cache/pip
+    depends_on:
+      redis-test:
+        condition: service_healthy
+    environment:
+      - REDIS_URL=redis://redis-test:6379
+      - OPENAI_API_KEY=test-key
+
+  llm_service-test:
+    build:
+      context: .
+      dockerfile: services/llm_service/Dockerfile
+    container_name: asterisk-ai-voice-agent-llm-test
+    volumes:
+      - pip_cache:/root/.cache/pip
+    depends_on:
+      redis-test:
+        condition: service_healthy
+    environment:
+      - REDIS_URL=redis://redis-test:6379
+      - OPENAI_API_KEY=test-key
+
+  tts_service-test:
+    build:
+      context: .
+      dockerfile: services/tts_service/Dockerfile
+    container_name: asterisk-ai-voice-agent-tts-test
+    volumes:
+      - pip_cache:/root/.cache/pip
+    depends_on:
+      redis-test:
+        condition: service_healthy
+    environment:
+      - REDIS_URL=redis://redis-test:6379
+      - OPENAI_API_KEY=test-key
+
+  integration-tester:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    container_name: asterisk-ai-voice-agent-integration-tester
+    volumes:
+      - pip_cache:/root/.cache/pip
+    depends_on:
+      - call_controller-test
+      - stt_service-test
+      - llm_service-test
+      - tts_service-test
+    command: ["pytest", "-v", "tests/integration"]
+
+volumes:
+  pip_cache:

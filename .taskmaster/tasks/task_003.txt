@@ -1,0 +1,11 @@
+# Task ID: 3
+# Title: Enhance Cloud AI Integration and Hybrid Mode
+# Status: pending
+# Dependencies: 1, 2
+# Priority: medium
+# Description: Improve existing cloud AI integrations and implement intelligent hybrid mode with automatic fallback mechanisms
+# Details:
+Enhance the existing Deepgram integration and add OpenAI GPT-4o LLM support. Implement OpenAI TTS with voices (Alloy, Nova, Echo) as specified. Create hybrid mode that intelligently switches between local and cloud services based on performance metrics. Implement fallback mechanisms: Local Vosk + Cloud Deepgram for STT, Local Llama + Cloud OpenAI for LLM, Local Piper + Cloud OpenAI for TTS. Add performance monitoring to trigger fallbacks automatically. Ensure the AI provider selection is configuration-driven and can be changed without service restart.
+
+# Test Strategy:
+Test cloud services individually and in combination. Verify hybrid mode switches appropriately under different scenarios. Test fallback mechanisms by simulating local service failures. Validate configuration changes take effect immediately. Test API key validation and error handling.

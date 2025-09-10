@@ -71,12 +71,18 @@ For a detailed architecture diagram, see the [Product Requirements Document](Pro
 
 ## 🧑‍💻 Development Workflow
 
-1.  **Local Development**: Make code changes in your local environment.
-2.  **Git Workflow**: Commit and push changes to the repository.
-3.  **Server Deployment**: Pull the latest changes on your server and restart the Docker container.
+1.  **Local Development**: Make code changes in your local `develop` branch.
+2.  **Git Workflow**: Commit and push changes to the remote `develop` branch.
+3.  **Server Deployment & Testing**:
+    -   Clone the `develop` branch into `/root/Asterisk-Agent-Develop` on the test server.
+    -   Stop the production container running from the `main` branch.
+    -   Build and run the `develop` branch container for isolated testing.
+    -   Once testing is complete, stop the development container and restart the production container.
 
 ### Test Server
 
+-   **Production Directory**: `/root/Asterisk-AI-Voice-Agent` (runs `main` branch)
+-   **Development Directory**: `/root/Asterisk-Agent-Develop` (runs `develop` branch)
 -   **Server**: `root@voiprnd.nemtclouddispatch.com`
 -   **Asterisk**: 16+ with FreePBX UI.
 -   **Docker**: Available for testing.

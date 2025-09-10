@@ -1,0 +1,53 @@
+{
+	"meta": {
+		"generatedAt": "2025-09-10T21:05:47.343Z",
+		"tasksAnalyzed": 1,
+		"totalTasks": 6,
+		"analysisCount": 5,
+		"thresholdScore": 5,
+		"projectName": "Taskmaster",
+		"usedResearch": false
+	},
+	"complexityAnalysis": [
+		{
+			"taskId": 2,
+			"taskTitle": "Integrate Local AI Stack (Vosk STT, Llama LLM, Piper TTS)",
+			"complexityScore": 9,
+			"recommendedSubtasks": 8,
+			"expansionPrompt": "Break down the local AI integration into specific implementation tasks: 1) Install and configure Vosk with vosk-model-en-us-0.22 for offline STT processing, 2) Implement llama-cpp-python integration with Llama-2-7b-chat model loading and inference, 3) Set up Piper TTS with both male (en_US-lessac-medium) and female (en_US-lessac-high) voice models, 4) Create LocalProvider class implementing AIProviderInterface for the unified AI pipeline, 5) Implement proper resource management and memory optimization to stay within 2GB target, 6) Add configuration support for temperature, max_tokens, and voice settings in config.py and YAML, 7) Create model downloading and setup utilities for offline operation, 8) Implement comprehensive testing for each component and end-to-end pipeline performance.",
+			"reasoning": "This task requires implementing three entirely new AI components (Vosk, Llama, Piper) with no existing local AI infrastructure in the codebase. The current system only has Deepgram cloud integration. Requires new dependencies, model management, memory optimization, and integration with the existing provider architecture. High complexity due to the need for offline model handling, resource constraints, and performance optimization."
+		},
+		{
+			"taskId": 5,
+			"taskTitle": "Implement Business Customization Features",
+			"complexityScore": 6,
+			"recommendedSubtasks": 5,
+			"expansionPrompt": "Implement business customization by extending the existing configuration system: 1) Enhance the config.py and YAML structure to support business-specific settings (custom greetings, AI roles, industry contexts), 2) Extend the LLMConfig class to include role definitions and personality customization, 3) Implement voice selection logic in both local and cloud TTS providers, 4) Create business context injection system for industry-specific knowledge and responses, 5) Add template system for common business types with pre-configured settings and test the customization features in real call scenarios.",
+			"reasoning": "Medium complexity as the basic configuration system exists but needs extension. The greeting system is partially implemented in config.py. Requires extending existing provider architecture to support voice selection and business context. Lower complexity than local AI integration since it builds on existing infrastructure."
+		},
+		{
+			"taskId": 3,
+			"taskTitle": "Enhance Cloud AI Integration and Hybrid Mode",
+			"complexityScore": 7,
+			"recommendedSubtasks": 6,
+			"expansionPrompt": "Enhance cloud AI services and implement hybrid mode: 1) Create OpenAIProvider class implementing AIProviderInterface with GPT-4o LLM support, 2) Implement OpenAI TTS integration with voice options (Alloy, Nova, Echo), 3) Enhance existing Deepgram provider with additional features and error handling, 4) Create HybridProvider class that intelligently switches between local and cloud services, 5) Implement performance monitoring and automatic fallback mechanisms with configurable thresholds, 6) Add comprehensive error handling and recovery for cloud service failures and test hybrid mode switching under various failure scenarios.",
+			"reasoning": "High-medium complexity as it builds on existing Deepgram integration but requires new OpenAI provider, hybrid logic, and fallback mechanisms. The provider architecture exists but needs significant extension for intelligent switching and monitoring. More complex than business features but less than full local AI stack implementation."
+		},
+		{
+			"taskId": 4,
+			"taskTitle": "Build Interactive Installation Wizard and Setup Script",
+			"complexityScore": 5,
+			"recommendedSubtasks": 4,
+			"expansionPrompt": "Complete the installation wizard based on existing install.sh foundation: 1) Enhance the current install.sh script with comprehensive system requirements checking (Docker, ports, dependencies), 2) Implement Asterisk connectivity verification and ARI credential validation, 3) Create interactive UI for AI engine selection (Local/Cloud/Hybrid) with proper configuration generation, 4) Add diagnostic mode (--diagnose flag) and rollback functionality for failed installations, and test the complete installation flow on clean systems.",
+			"reasoning": "Medium complexity as the basic install.sh script exists with configuration setup. Needs enhancement for system checks, validation, and error handling. Lower complexity since it's primarily shell scripting and configuration management rather than complex AI integration. Builds significantly on existing foundation."
+		},
+		{
+			"taskId": 6,
+			"taskTitle": "Optimize Performance and Add Monitoring",
+			"complexityScore": 7,
+			"recommendedSubtasks": 5,
+			"expansionPrompt": "Implement performance optimization and monitoring systems: 1) Add comprehensive performance monitoring and metrics collection for response times, resource usage, and call success rates, 2) Implement health check system and status reporting dashboard building on existing health_check.py, 3) Create performance optimization for memory usage, CPU utilization, and audio latency to meet PRD targets, 4) Implement comprehensive logging and troubleshooting system with structured logs, 5) Add automated performance testing and load testing capabilities to validate system meets all PRD performance targets under realistic conditions.",
+			"reasoning": "High-medium complexity as some monitoring infrastructure exists (health_check.py) but needs significant expansion. Requires performance profiling, optimization across the entire system, and comprehensive monitoring implementation. Complex due to the need to meet specific performance targets and create robust monitoring systems."
+		}
+	]
+}

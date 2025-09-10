@@ -1,0 +1,52 @@
+version: '3.8'
+
+services:
+  # Redis Message Queue
+  redis:
+    image: redis:7.2-alpine
+    container_name: asterisk-ai-voice-agent-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    networks:
+      - ai-voice-network
+
+  # Call Controller Service (Simplified)
+  call_controller:
+    build:
+      context: .
+      dockerfile: services/call_controller/Dockerfile
+    container_name: asterisk-ai-voice-agent-call-controller
+    ports:
+      - "8000:8000"
+    environment:
+      - ASTERISK_HOST=voiprnd.nemtclouddispatch.com
+      - ASTERISK_VERSION=16
+      - ARI_USERNAME=AIAgent
+      - ARI_PASSWORD=c4d5359e2f9ddd394cd6aa116c1c6a96
+      - REDIS_URL=redis://redis:6379
+      - RTPENGINE_HOST=rtpengine
+      - RTPENGINE_PORT=2223
+      - LOG_LEVEL=INFO
+    volumes:
+      - shared_audio:/shared/audio
+      - shared_logs:/shared/logs
+    restart: unless-stopped
+    depends_on:
+      - redis
+    networks:
+      - ai-voice-network
+
+volumes:
+  redis_data:
+    driver: local
+  shared_audio:
+    driver: local
+  shared_logs:
+    driver: local
+
+networks:
+  ai-voice-network:
+    driver: bridge
