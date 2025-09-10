@@ -204,28 +204,32 @@ class CallControllerService:
             await self.ari_client.answer_channel(channel_id)
             logger.info("Channel answered", channel_id=channel_id)
 
-            # Set up and start the Deepgram Agent client
-            # Pass a lambda that captures the current llm_config
-            agent_client = DeepgramAgentClient(
-                lambda event: self._handle_deepgram_event(event, self.config.llm)
-            )
+            # Define a small, dedicated coroutine to handle the connection
+            async def connect_agent():
+                # Pass a lambda that captures the current llm_config
+                agent_client = DeepgramAgentClient(
+                    lambda event: self._handle_deepgram_event(event, self.config.llm)
+                )
 
-            # Store preliminary call state
-            self.active_calls[channel_id] = {
-                "call_id": call_id,
-                "channel_data": channel,
-                "agent_client": agent_client, # Store client immediately
-                "media_channel_id": None,
-                "bridge_id": None,
-                "rtp_packetizer": RTPPacketizer(ssrc=random.randint(0, 4294967295)) # Create packetizer per call
-            }
+                # Store preliminary call state
+                self.active_calls[channel_id] = {
+                    "call_id": call_id,
+                    "channel_data": channel,
+                    "agent_client": agent_client, # Store client immediately
+                    "media_channel_id": None,
+                    "bridge_id": None,
+                    "rtp_packetizer": RTPPacketizer(ssrc=random.randint(0, 4294967295)) # Create packetizer per call
+                }
 
-            await agent_client.connect(self.config.deepgram, self.config.llm)
+                await agent_client.connect(self.config.deepgram, self.config.llm)
 
-            # Send the initial greeting from here, where config is guaranteed to be loaded.
-            await agent_client.speak(self.config.llm.initial_greeting)
+                # Send the initial greeting from here, where config is guaranteed to be loaded.
+                await agent_client.speak(self.config.llm.initial_greeting)
+                logger.info("Deepgram Agent client connected and configured", call_id=call_id)
+                return agent_client
 
-            logger.info("Deepgram Agent client connected", call_id=call_id)
+            # Run the connection in a separate, non-blocking task
+            agent_client = await asyncio.create_task(connect_agent())
 
             # Create the externalMedia channel for two-way audio
             logger.info("Creating externalMedia channel...")
