@@ -224,7 +224,7 @@ class CallControllerService:
                 await agent_client.connect(self.config.deepgram, self.config.llm)
 
                 # Send the initial greeting from here, where config is guaranteed to be loaded.
-                await agent_client.speak(self.config.llm.initial_greeting)
+                # await agent_client.speak(self.config.llm.initial_greeting)
                 logger.info("Deepgram Agent client connected and configured", call_id=call_id)
                 return agent_client
 
@@ -268,6 +268,9 @@ class CallControllerService:
             await self.ari_client.add_channel_to_bridge(bridge_id, channel_id)
             await self.ari_client.add_channel_to_bridge(bridge_id, media_channel_id)
             logger.info("Incoming call and media channel bridged", bridge_id=bridge_id)
+
+            # Now that the audio path is fully established, trigger the initial greeting.
+            await agent_client.speak(self.config.llm.initial_greeting)
 
         except Exception as e:
             logger.error("Error handling StasisStart", channel_id=channel_id, exc_info=True)
