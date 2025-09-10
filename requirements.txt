@@ -10,3 +10,4 @@ vosk
 soundfile
 llama-cpp-python
 piper-tts
+tenacity
