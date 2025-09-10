@@ -24,15 +24,10 @@ services:
     volumes:
       - shared_audio:/shared/audio
       - shared_logs:/shared/logs
+    env_file:
+      - .env
     environment:
       - PYTHONUNBUFFERED=1
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - ASTERISK_HOST=${ASTERISK_HOST:-172.17.0.1}
-      - REDIS_HOST=127.0.0.1
-      - ARI_USERNAME=${ARI_USERNAME}
-      - ARI_PASSWORD=${ARI_PASSWORD}
-      - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
       # The host IP is now required for Asterisk to send media back to this container
       - CONTAINER_HOST_IP=${CONTAINER_HOST_IP}
     depends_on:
