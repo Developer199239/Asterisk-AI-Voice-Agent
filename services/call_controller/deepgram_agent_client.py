@@ -2,6 +2,7 @@ import asyncio
 import json
 import websockets
 from typing import Callable, Optional
+import websockets.exceptions
 
 from structlog import get_logger
 from shared.config import DeepgramConfig, LLMServiceConfig as LLMConfig
@@ -31,7 +32,7 @@ class DeepgramAgentClient:
             asyncio.create_task(self._receive_loop())
             self._keep_alive_task = asyncio.create_task(self._keep_alive())
 
-        except Exception:
+        except Exception as e:
             logger.error("Failed to connect to Deepgram Voice Agent", exc_info=True)
             if self._keep_alive_task:
                 self._keep_alive_task.cancel()
@@ -85,14 +86,20 @@ class DeepgramAgentClient:
             logger.warning("Speak command received with empty text.")
             return
 
-        # Use the correct property to check if the websocket is open
-        if self.websocket and self.websocket.open:
-            speak_message = {
-                "type": "Speak",
-                "text": text
-            }
+        if not self.websocket:
+            logger.warning("Speak command called but websocket is not connected.")
+            return
+
+        speak_message = {
+            "type": "Speak",
+            "text": text
+        }
+        
+        try:
             await self.websocket.send(json.dumps(speak_message))
-            logger.info("Sent Speak message to agent", text=text)
+            logger.debug("Sent speak command", text=text)
+        except websockets.exceptions.ConnectionClosed as e:
+            logger.error("Failed to send speak command: Connection is closed.", exc_info=True, code=e.code, reason=e.reason)
 
     async def _keep_alive(self):
         """Sends a keep-alive message every 10 seconds to maintain the connection."""
@@ -152,10 +159,7 @@ class DeepgramAgentClient:
                 await self.websocket.send(audio_chunk)
                 logger.debug("Successfully sent audio chunk.")
             except websockets.exceptions.ConnectionClosed as e:
-                logger.warning(
-                    "Could not send audio, WebSocket connection was closed.",
-                    code=e.code,
-                    reason=e.reason
-                )
+                # This can happen normally at the end of a call.
+                logger.debug("Could not send audio packet: Connection closed.", code=e.code, reason=e.reason)
             except Exception:
                 logger.error("An unexpected error occurred while sending audio chunk", exc_info=True)
