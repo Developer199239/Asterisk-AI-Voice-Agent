@@ -127,8 +127,7 @@ cython_debug/
 /models/
 
 # Cursor
-.cursor/*
-!.cursor/rules/
+.cursor/
 
 # Archives
 Archived/
