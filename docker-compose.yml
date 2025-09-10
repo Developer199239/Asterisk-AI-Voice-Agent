@@ -19,10 +19,8 @@ services:
       context: .
       dockerfile: services/call_controller/Dockerfile
     container_name: asterisk-ai-voice-agent-call_controller
-    # Expose the UDP port for RTP streams directly.
-    # This maps port 8000 on the host to port 8000 in the container.
-    ports:
-      - "8000:8000/udp"
+    # Use host network to allow RTP streams from Asterisk and Redis connection to work seamlessly.
+    network_mode: "host"
     volumes:
       - shared_audio:/shared/audio
       - shared_logs:/shared/logs
