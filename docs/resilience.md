@@ -1,92 +1,57 @@
-# Resilience and Error Handling
+# Resilience and Error Handling v3.0
 
-This document outlines the resilience and error handling strategies implemented in the Asterisk AI Voice Agent v2.0 to ensure high availability and graceful degradation of service.
+This document outlines the resilience and error handling strategies for the Asterisk AI Voice Agent v3.0.
 
-## 1. Retry Mechanisms
+## 1. AI Provider Resilience
 
-External API calls are susceptible to transient failures. To handle this, we use the `tenacity` library to implement an exponential backoff retry strategy.
+Since the core AI logic is handled by external providers (like Deepgram), the primary resilience strategy involves managing the connection to these services.
 
-- **Library:** `tenacity`
-- **Strategy:** Exponential backoff with jitter.
-- **Configuration:**
-  - **Attempts:** 3-5 retries.
-  - **Wait Time:** Exponentially increasing wait time between retries (e.g., 1s, 2s, 4s, ...).
-- **Services Affected:** `llm_service`, `tts_service`, `stt_service` (for OpenAI API calls).
+### 1.1 Connection Management
 
-### Example: `llm_service` OpenAI Client
+-   **Automatic Reconnection**: The `DeepgramAgentClient` (and future provider clients) will implement automatic reconnection logic with exponential backoff in case the WebSocket connection is dropped.
+-   **Keep-Alive Messages**: The client sends periodic keep-alive messages to prevent the connection from timing out.
 
-```python
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
-from openai import APIConnectionError, RateLimitError, APIStatusError
+### 1.2 Graceful Degradation
 
-@retry(
-    wait=wait_exponential(multiplier=1, min=1, max=10),
-    stop=stop_after_attempt(3),
-    retry=retry_if_exception_type((APIConnectionError, RateLimitError, APIStatusError))
-)
-async def _create_completion_with_retry(...):
-    # ... OpenAI API call ...
-```
+If the AI provider is unavailable, the system will fall back to a basic, scripted response.
 
-## 2. Circuit Breaker Pattern
+-   **Provider Unreachable**: If the initial connection to the provider fails, the call will be handled by a fallback mechanism that plays a pre-recorded message (e.g., "We are currently experiencing technical difficulties. Please call back later.") and then hangs up.
+-   **Mid-call Failure**: If the connection drops during a call, the system will attempt to reconnect. If it fails, it will play the same error message and terminate the call.
 
-To prevent a single failing service from causing a cascade failure across the system, we use the circuit breaker pattern for critical service-to-service communication.
+## 2. Asterisk ARI Connection
 
-- **Library:** `pybreaker`
-- **Strategy:** The circuit breaker monitors for failures. After a certain number of failures, it "opens" and subsequent calls fail immediately without attempting to contact the failing service. After a timeout, it enters a "half-open" state to test if the service has recovered.
-- **Configuration:**
-  - **Max Failures:** 3-5 consecutive failures.
-  - **Reset Timeout:** 30-60 seconds.
-- **Services Affected:**
-  - `shared/redis_client.py`: Protects all Redis publish and subscribe operations.
-  - `services/call_controller/ari_client.py`: Protects all HTTP calls to the Asterisk REST Interface (ARI).
+The connection to the Asterisk server's ARI is critical.
 
-## 3. Fallback Strategies (Graceful Degradation)
+-   **Circuit Breaker**: The `ARIClient` uses a circuit breaker pattern (`pybreaker`). If multiple attempts to connect to ARI fail, the circuit will open, and the service will immediately report itself as unhealthy without flooding the network with connection attempts.
+-   **Health Checks**: The service's `/health` endpoint constantly monitors the ARI connection status.
 
-When a service or its dependencies fail permanently (i.e., retries and circuit breakers have failed), the system gracefully degrades its functionality.
+## 3. Health Checks
 
-- **STT Service Failure:** If the Speech-to-Text service fails to process audio, it publishes an error message to the message queue. This results in the system playing a message like, "I'm sorry, I didn't catch that. Could you please repeat yourself?".
-- **LLM Service Failure:**
-  1.  **Primary to Fallback Model:** The `LLMService` will first attempt to fall back from the primary model (e.g., `gpt-4o`) to a secondary model (e.g., `gpt-3.5-turbo`).
-  2.  **Scripted Responses:** If all LLM models are unavailable, the `LLMService` uses the `FallbackResponseManager` to provide a scripted, generic error response (e.g., "I'm sorry, I'm having some technical difficulties.").
-- **TTS Service Failure:** If the Text-to-Speech service (OpenAI TTS) fails, the `TTSService` falls back to using the Asterisk `SayAlpha` application to read the response aloud.
+The `call_controller` service exposes a `/health` endpoint that provides the overall health of the system.
 
-## 4. Health Checks
+-   **Endpoint**: `http://localhost:15000/health`
+-   **Healthy Response**: `{"status": "healthy", "dependencies": {"ari": "connected", "redis": "connected", "ai_provider": "connected"}}` (HTTP 200)
+-   **Unhealthy Response**: `{"status": "unhealthy", ...}` (HTTP 503)
+-   **Dependency Checks**:
+    -   **ARI**: Is the WebSocket connection to Asterisk active?
+    -   **Redis**: Can we connect to the Redis server?
+    -   **AI Provider**: Is the connection to the selected AI provider active?
 
-Each microservice exposes a standardized `/health` endpoint using FastAPI. This endpoint provides the overall health status of the service and the status of its critical dependencies.
+## 4. Operational Runbook
 
-- **Endpoint:** `/health`
-- **Healthy Response:** `{"status": "healthy", ...}` with HTTP status code 200.
-- **Unhealthy Response:** `{"status": "unhealthy", ...}` with HTTP status code 503.
-- **Dependency Checks:**
-  - `call_controller`: Checks ARI, Redis, and RTPEngine.
-  - `stt_service`: Checks Redis and OpenAI Realtime API.
-  - `llm_service`: Checks Redis and OpenAI API.
-  - `tts_service`: Checks Redis and OpenAI TTS API.
+### Scenario: Service is Unhealthy or in a Restart Loop
 
-## 5. Operational Runbook
-
-### Scenario: `call_controller` is unhealthy
-
-1.  **Symptom:** The `/health` endpoint for the `call_controller` returns a 503 status, or the service is in a restart loop.
-2.  **Check Logs:** `docker-compose logs call_controller`.
-3.  **Potential Causes & Fixes:**
-    - **Cannot connect to ARI:**
-      - Verify Asterisk is running.
-      - Check `ari.conf` and `http.conf` in Asterisk.
-      - Ensure the ARI user and password in `.env` are correct.
-      - Check for network connectivity issues between the Docker container and the Asterisk host.
-    - **Cannot connect to Redis:**
-      - Verify the Redis container is running (`docker-compose ps`).
-      - Check Redis logs (`docker-compose logs redis`).
-
-### Scenario: A specific AI service (STT, LLM, TTS) is unhealthy
-
-1.  **Symptom:** The `/health` endpoint for the service returns a 503 status, or the service is in a restart loop.
-2.  **Check Logs:** `docker-compose logs <service_name>`.
-3.  **Potential Causes & Fixes:**
-    - **OpenAI API Connection Error:**
-      - Verify the `OPENAI_API_KEY` in the `.env` file is correct and has not expired.
-      - Check for network connectivity to `api.openai.com`.
-      - Check the OpenAI status page for outages.
-    - **Invalid Model Error:** The model specified for the service may be incorrect or deprecated. Check the service's client configuration and update the model name.
+1.  **Symptom**: `docker-compose ps` shows the `call_controller` restarting, or the `/health` endpoint returns a 503 error.
+2.  **Check Logs**: `docker-compose logs -f call_controller`.
+3.  **Potential Causes & Fixes**:
+    -   **Cannot connect to ARI**:
+        -   Verify Asterisk is running.
+        -   Check the ARI user, password, and host in your `.env` file.
+        -   Ensure network connectivity between the container and Asterisk.
+    -   **Cannot connect to AI Provider**:
+        -   Verify the API keys in your `.env` file are correct.
+        -   Check for network connectivity to the provider's API endpoint (e.g., `agent.deepgram.com`).
+        -   Check the provider's status page for outages.
+    -   **Cannot connect to Redis**:
+        -   Verify the Redis container is running (`docker-compose ps`).
+        -   Check Redis logs (`docker-compose logs redis`).

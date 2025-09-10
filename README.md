@@ -1,128 +1,106 @@
-# Asterisk AI Voice Agent
+# Asterisk AI Voice Agent v3.0
 
-An open-source AI Voice Agent that integrates with Asterisk/FreePBX using SIP/RTP technology (Asterisk 16+) and answers calls using configurable AI providers.
+An open-source AI Voice Agent that integrates with Asterisk/FreePBX using the Asterisk REST Interface (ARI) and a modular, plug-and-play AI provider architecture.
 
-## Features
+## 🌟 Features
 
-- **SIP/RTP Integration**: Primary integration mode with Asterisk 16+
-- **Advanced Audio Processing**: Voice Activity Detection (VAD), noise suppression, echo cancellation
-- **Multi-provider AI Support**: OpenAI Realtime API (MVP), Azure Speech, Deepgram
-- **Real-time Communication**: WebSocket-based AI provider integration for sub-second response times
-- **Security & Compliance**: Built-in encryption, access controls, and privacy controls
-- **Docker-based Deployment**: Simple containerized deployment with host networking
+- **Modular AI Providers**: Easily switch between different AI providers.
+  - ✅ **Deepgram Voice Agent**: Currently implemented and working.
+  - 🔄 **OpenAI Stack**: In development.
+  - 📋 **Local Models**: Planned for future releases (Vosk, Llama, Piper).
+- **ARI Integration**: Robust integration with Asterisk 16+ using ARI for call control and media streaming.
+- **Real-time Communication**: Low-latency, real-time conversation flow.
+- **Docker-based Deployment**: Simple, single-container deployment using Docker Compose.
+- **Customizable**: Configure business-specific greetings, AI roles, and voice personalities.
 
-## Quick Start
+## 🚀 Quick Start
 
 ### Prerequisites
 
-- **Asterisk 16+** with FreePBX UI
-- **Docker** installed
-- **Python 3.11+** for development
+- **Asterisk 16+** or **FreePBX 15+** with ARI enabled.
+- **Docker** and **Docker Compose** installed.
+- **Git** for cloning the repository.
 
-### Development Setup
+### Installation
 
-1. **Clone the repository**:
-   ```bash
-   git clone https://github.com/haiderjarral/Asterisk-AI-Voice-Agent.git
-   cd Asterisk-AI-Voice-Agent
-   ```
+1.  **Clone the repository**:
+    ```bash
+    git clone https://github.com/your-repo/asterisk-ai-voice-agent.git
+    cd asterisk-ai-voice-agent
+    ```
 
-2. **Set up environment variables**:
-   ```bash
-   cp config/engine.json.example config/engine.json
-   # Edit config/engine.json with your settings
-   ```
+2.  **Run the interactive installation script**:
+    ```bash
+    ./install.sh
+    ```
+    This script will guide you through the configuration process, including setting up your AI provider, Asterisk connection, and business details. It will create a `.env` file with your configuration.
 
-3. **Build and run locally**:
-   ```bash
-   docker-compose up --build
-   ```
+3.  **Start the service**:
+    ```bash
+    docker-compose up --build -d
+    ```
 
-4. **Test with Asterisk**:
-   - Create a PJSIP extension in FreePBX
-   - Configure the extension details in `config/engine.json`
-   - Route a test call to the extension
+For more detailed instructions, see [docs/INSTALLATION.md](docs/INSTALLATION.md).
 
-## Configuration
+## ⚙️ Configuration
+
+The system is configured using a `.env` file in the project root. The `install.sh` script will help you create this file.
 
 ### Required Environment Variables
 
-- `INTEGRATION_MODE`: `sip` (default)
-- `ASTERISK_HOST`: Asterisk server hostname/IP
-- `ASTERISK_VERSION`: `16` (minimum)
-- `SIP_EXTENSION`: PJSIP extension number
-- `SIP_PASSWORD`: Extension password
-- `OPENAI_API_KEY`: OpenAI API key
+- `AI_PROVIDER`: The AI provider to use (`deepgram`, `openai`, `local`).
+- `ASTERISK_HOST`: Your Asterisk server's hostname or IP address.
+- `ASTERISK_ARI_USERNAME`: ARI username.
+- `ASTERISK_ARI_PASSWORD`: ARI password.
+- `CONTAINER_HOST_IP`: The IP address of the server running the Docker container.
+- `OPENAI_API_KEY`: Your OpenAI API key (used by Deepgram and OpenAI providers).
+- `DEEPGRAM_API_KEY`: Your Deepgram API key (if using the `deepgram` provider).
 
-### Optional Environment Variables
+## 🏗️ Project Architecture
 
-- `VAD_ENABLED`: Enable voice activity detection (default: `true`)
-- `NOISE_SUPPRESSION`: Enable noise suppression (default: `true`)
-- `ECHO_CANCELLATION`: Enable echo cancellation (default: `true`)
-- `LOG_LEVEL`: Logging level (`debug`, `info`, `warn`, `error`)
+The application runs in a single Docker container (`call_controller`) and uses Redis for messaging. It connects to Asterisk via ARI and to your chosen AI provider.
 
-## Development Workflow
+```
+┌──────────────────┐      ┌────────────────────┐      ┌──────────────────┐
+│ Asterisk Server  │◀────▶│ AI Voice Agent     │◀────▶│ AI Provider      │
+│ (ARI, RTP)       │      │ (Docker Container) │      │ (Deepgram, etc.) │
+└──────────────────┘      └────────────────────┘      └──────────────────┘
+```
 
-1. **Local Development**: Make changes locally
-2. **Git Push**: Commit and push changes to repository
-3. **Server Testing**: SSH to test server, pull changes, test with Asterisk
+For a detailed architecture diagram, see the [Product Requirements Document](Project%20Requirement%20Documents/prd-ai-agent-v3.md).
+
+## 🧑‍💻 Development Workflow
+
+1.  **Local Development**: Make code changes in your local environment.
+2.  **Git Workflow**: Commit and push changes to the repository.
+3.  **Server Deployment**: Pull the latest changes on your server and restart the Docker container.
 
 ### Test Server
 
-- **Server**: `root@voiprnd.nemtclouddispatch.com`
-- **Asterisk**: 16+ with FreePBX UI
-- **Docker**: Available for testing
+-   **Server**: `root@voiprnd.nemtclouddispatch.com`
+-   **Asterisk**: 16+ with FreePBX UI.
+-   **Docker**: Available for testing.
 
-## Project Structure
+##  roadmap
 
-```
-Asterisk-AI-Voice-Agent/
-├── src/
-│   ├── providers/          # AI provider integrations
-│   ├── security/           # Security and compliance
-│   ├── monitoring/         # Health checks and metrics
-│   ├── sip_client.py       # SIP/RTP integration
-│   ├── audio_processor.py  # Audio processing engine
-│   ├── config_manager.py   # Configuration management
-│   └── engine.py           # Core conversation loop
-├── config/
-│   └── engine.json         # Default configuration
-├── tests/                  # Unit and integration tests
-├── docs/                   # Documentation
-├── scripts/                # Deployment and utility scripts
-├── docker-compose.yml      # Local development
-├── Dockerfile              # Container configuration
-└── requirements.txt        # Python dependencies
-```
+Our development roadmap is structured in phases. See the [Implementation Phases](Project%20Requirement%20Documents/prd-ai-agent-v3.md#7-implementation-phases) in the PRD for details.
 
-## Development Guidelines
+-   ✅ **Phase 1 & 2**: Core Infrastructure & Deepgram POC (Completed)
+-   ▶️ **Phase 3**: Provider Architecture (In Progress)
+-   ⏩ **Phase 4**: Local AI Integration (Next)
 
-1. **Start with SIP Integration**: Focus on getting SIP registration working first
-2. **Test Early and Often**: Use the test server for integration testing
-3. **Audio Quality First**: Ensure clear audio before adding AI features
-4. **Security by Design**: Implement security features from the start
+## 🤝 Contributing
 
-## Performance Targets
+Contributions are welcome! Please feel free to submit a pull request.
 
-- **Response Time**: <2 seconds for AI responses
-- **Audio Latency**: <500ms for real-time processing
-- **Uptime**: 99.9% availability
-- **CPU Usage**: <80% under normal load
+1.  Fork the repository.
+2.  Create a feature branch (`git checkout -b feature/your-feature`).
+3.  Commit your changes (`git commit -m 'Add some feature'`).
+4.  Push to the branch (`git push origin feature/your-feature`).
+5.  Open a pull request.
 
-## Contributing
+## 📄 License
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests for new functionality
-5. Submit a pull request
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## Support
-
-For questions and support, please open an issue on GitHub or contact the development team.
+This project is licensed under the MIT License. See the `LICENSE` file for details.
 
 
