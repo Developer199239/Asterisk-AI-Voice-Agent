@@ -479,6 +479,17 @@ class CallControllerService:
             else:
                 raw_audio = audio_payload
 
+            # --- DIAGNOSTIC: Save received audio to a file ---
+            # Use a unique filename for each call
+            filename = f"/tmp/deepgram_output_{call_info.get('channel_data', {}).get('id', 'unknown_channel')}.raw"
+            try:
+                with open(filename, "ab") as f: # Open in append-binary mode
+                    f.write(raw_audio)
+                logger.debug(f"Saved {len(raw_audio)} bytes to {filename}")
+            except Exception as e:
+                logger.error(f"Failed to save diagnostic audio file", error=str(e))
+            # --- END DIAGNOSTIC ---
+
             logger.debug("Processing audio from Deepgram", payload_size=len(raw_audio), call_id=call_info.get('call_id'))
 
             # Deepgram sends audio in chunks. A common size is 640 bytes for 20ms of L16 audio.
