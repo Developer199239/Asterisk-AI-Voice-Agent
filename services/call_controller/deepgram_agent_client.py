@@ -44,12 +44,12 @@ class DeepgramAgentClient:
             "type": "Settings",
             "audio": {
                 "input": {
-                    "encoding": "linear16",
-                    "sample_rate": 16000
+                    "encoding": "mulaw",
+                    "sample_rate": 8000
                 },
                 "output": {
-                    "encoding": "linear16",
-                    "sample_rate": 24000,
+                    "encoding": "mulaw",
+                    "sample_rate": 8000,
                     "container": "none"
                 }
             },
