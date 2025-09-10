@@ -19,7 +19,7 @@ class DeepgramAgentClient:
         self.request_id: Optional[str] = None
 
     async def connect(self, deepgram_config: DeepgramConfig, llm_config: LLMConfig):
-        ws_url = f"wss://agent.deepgram.com/v1/agent/converse?encoding=linear16&sample_rate=16000"
+        ws_url = f"wss://agent.deepgram.com/agent?encoding=linear16&sample_rate=16000"
         headers = {'Authorization': f'Token {deepgram_config.api_key}'}
 
         try:
@@ -180,17 +180,10 @@ class DeepgramAgentClient:
                 logger.debug("Attempting to send audio chunk to Deepgram...", chunk_size=len(audio_chunk))
                 self._is_audio_flowing = True
                 
-                # Try PushAudio message format (common in WebSocket audio streaming)
-                import base64
-                audio_b64 = base64.b64encode(audio_chunk).decode('utf-8')
-                
-                push_audio_message = {
-                    "type": "PushAudio",
-                    "audio": audio_b64
-                }
-                
-                await self.websocket.send(json.dumps(push_audio_message))
-                logger.debug("Successfully sent PushAudio message to Deepgram.")
+                # Send raw binary audio data directly to Deepgram Voice Agent
+                # Based on official documentation, audio is streamed as binary data
+                await self.websocket.send(audio_chunk)
+                logger.debug("Successfully sent raw audio chunk to Deepgram.")
             except websockets.exceptions.ConnectionClosed as e:
                 # This can happen normally at the end of a call.
                 logger.debug("Could not send audio packet: Connection closed.", code=e.code, reason=e.reason)
