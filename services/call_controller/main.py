@@ -244,7 +244,12 @@ class CallControllerService:
                 raise Exception(f"Failed to create externalMedia channel. Response: {media_channel_response}")
             
             # --- START RTP DEBUGGING ---
-            logger.debug("Full externalMedia channel response from Asterisk", channel_details=media_channel_response)
+            unicast_rtp_info = media_channel_response.get('channelvars', {})
+            logger.debug(
+                "Full externalMedia channel response from Asterisk",
+                channel_details=media_channel_response,
+                unicast_rtp_details=unicast_rtp_info
+            )
             # --- END RTP DEBUGGING ---
 
             media_channel_id = media_channel_response['id']
@@ -421,7 +426,11 @@ class CallControllerService:
         """
         # --- START RTP DEBUGGING ---
         # This is the first point of entry for audio from Asterisk.
-        logger.debug("RTP packet received from Asterisk", source_addr=addr, size=len(data))
+        logger.debug(
+            "RTP packet received from Asterisk",
+            source_addr=addr,
+            raw_packet_size=len(data)
+        )
         # --- END RTP DEBUGGING ---
 
         active_agent_client = None
@@ -496,12 +505,14 @@ class CallControllerService:
             # We will packetize and send it as is.
             rtp_packet = rtp_packetizer.packetize(raw_audio)
             
+            # --- START RTP DEBUGGING ---
             logger.debug("Sending RTP packet to Asterisk",
-                         addr=asterisk_addr,
-                         seq=rtp_packetizer.sequence_number,
-                         ts=rtp_packetizer.timestamp,
-                         ssrc=rtp_packetizer.ssrc,
-                         size=len(rtp_packet))
+                         destination_addr=asterisk_addr,
+                         rtp_sequence=rtp_packetizer.sequence_number,
+                         rtp_timestamp=rtp_packetizer.timestamp,
+                         rtp_ssrc=rtp_packetizer.ssrc,
+                         packet_size=len(rtp_packet))
+            # --- END RTP DEBUGGING ---
                          
             await self.udp_server.send(rtp_packet, asterisk_addr)
 
