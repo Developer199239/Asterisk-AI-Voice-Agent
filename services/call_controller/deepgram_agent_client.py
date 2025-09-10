@@ -80,8 +80,13 @@ class DeepgramAgentClient:
         logger.debug("Sent agent settings", settings=settings)
 
     async def speak(self, text: str):
-        """Sends a Speak message to make the agent talk."""
-        if self.websocket and not self.websocket.closed:
+        """Send a speak command to the agent."""
+        if not text:
+            logger.warning("Speak command received with empty text.")
+            return
+
+        # Use the correct property to check if the websocket is open
+        if self.websocket and self.websocket.open:
             speak_message = {
                 "type": "Speak",
                 "text": text
