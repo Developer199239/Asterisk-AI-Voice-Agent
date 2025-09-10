@@ -430,6 +430,12 @@ class CallControllerService:
             logger.warning("Could not find call info to play audio for channel", channel_id=channel_id)
             return
 
+        # The payload can now be either base64 string (from AgentAudio JSON) or raw bytes
+        audio_payload = audio_payload_b64
+        if not audio_payload:
+            logger.warning("AgentAudio event received with no data", call_id=call_info.get('call_id'))
+            return
+
         rtp_packetizer = call_info.get('rtp_packetizer')
         asterisk_addr = call_info.get('asterisk_rtp_addr')
 
@@ -438,12 +444,20 @@ class CallControllerService:
             return
 
         try:
-            audio_payload = base64.b64decode(audio_payload_b64)
-            logger.debug("Received audio from Deepgram", payload_size=len(audio_payload), call_id=call_info.get('call_id'))
+            # Check if the payload is base64-encoded string and decode if needed
+            if isinstance(audio_payload, str):
+                raw_audio = base64.b64decode(audio_payload)
+            elif isinstance(audio_payload, bytes):
+                raw_audio = audio_payload
+            else:
+                logger.warning("Unknown audio payload type", type=type(audio_payload))
+                return
+
+            logger.debug("Processing audio from Deepgram", payload_size=len(raw_audio), call_id=call_info.get('call_id'))
 
             # Deepgram sends audio in chunks. A common size is 640 bytes for 20ms of L16 audio.
             # We will packetize and send it as is.
-            rtp_packet = rtp_packetizer.packetize(audio_payload)
+            rtp_packet = rtp_packetizer.packetize(raw_audio)
             
             logger.debug("Sending RTP packet to Asterisk",
                          addr=asterisk_addr,

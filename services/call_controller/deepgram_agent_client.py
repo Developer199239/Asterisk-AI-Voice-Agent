@@ -106,8 +106,8 @@ class DeepgramAgentClient:
         while True:
             try:
                 await asyncio.sleep(10)
-                # Use 'not self.websocket.closed' to check connection state
-                if self.websocket and not self.websocket.closed:
+                # Use 'not self.websocket.open' which is the correct attribute for checking connection state in the 'websockets' library
+                if self.websocket and self.websocket.open:
                     if not self._is_audio_flowing:
                         await self.websocket.send(json.dumps({"type": "KeepAlive"}))
                         logger.debug("Sent KeepAlive message.")
@@ -144,8 +144,21 @@ class DeepgramAgentClient:
                         await self.event_handler(event_data)
                     except json.JSONDecodeError as e:
                         logger.error("Failed to parse JSON message from Deepgram", error=str(e), message=message)
-                # Raw binary audio is not expected from the Voice Agent API, it's wrapped in JSON.
-                # Remove the incorrect handling for `isinstance(message, bytes)`.
+                
+                elif isinstance(message, bytes):
+                    # Handle binary messages (raw audio data)
+                    audio_event = {
+                        'type': 'AgentAudio',
+                        'data': message  # Forward the raw bytes directly
+                    }
+                    
+                    # Add the request_id if we have it
+                    if self.request_id:
+                        audio_event['request_id'] = self.request_id
+                    
+                    logger.debug("Received binary audio from Deepgram", size=len(message))
+                    await self.event_handler(audio_event)
+
                 else:
                     logger.warning("Received unknown message type from Deepgram", message_type=type(message))
         except websockets.exceptions.ConnectionClosed as e:
