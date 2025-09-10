@@ -29,6 +29,7 @@ from shared.redis_client import RedisMessageQueue, CallControlMessage, CallNewMe
 from services.call_controller.ari_client import ARIClient
 from shared.udp_server import UDPServer
 from services.call_controller.deepgram_agent_client import DeepgramAgentClient
+from services.call_controller.rtp_packet import RtpPacket
 
 logger = get_logger(__name__)
 
@@ -419,29 +420,46 @@ class CallControllerService:
         This is the callback for the UDP server. It finds the appropriate
         Deepgram agent client and forwards the audio payload.
         """
-        # --- BEGIN RTP DEBUGGING ---
-        # This section can be very noisy. It's useful for debugging RTP packet flow
-        # but can be commented out or set to a lower log level for production.
-        payload_preview = rtp_packet.payload.hex()[:32]
-        logger.debug(
-            "\ud83c\udfa4 INBOUND RTP Packet Received from Asterisk",
-            source_addr=addr,
-            raw_packet_size=len(data),
-            payload_size=len(rtp_packet.payload),
-            rtp_version=rtp_packet.version,
-            rtp_payload_type=rtp_packet.payload_type,
-            rtp_sequence=rtp_packet.sequence_number,
-            rtp_timestamp=rtp_packet.timestamp,
-            rtp_ssrc=rtp_packet.ssrc,
-            payload_preview=payload_preview
-        )
-        # --- END RTP DEBUGGING ---
+        # This simple approach works for one call at a time.
+        # For multi-call, we'd need a way to map UDP source addr to a call.
+        call_info = next(iter(self.active_calls.values()), None)
+        if not call_info:
+            logger.warning("Received UDP packet but no active call.", source_addr=addr)
+            return
 
-        # Forward the raw mu-law payload to the Deepgram agent
-        agent_client = call_info.get('agent_client')
-        if agent_client:
-            logger.debug("Forwarding audio payload to Deepgram agent...", payload_size=len(rtp_packet.payload))
-            await agent_client.send_audio(rtp_packet.payload)
+        try:
+            # --- BEGIN RTP DEBUGGING ---
+            # This section can be very noisy. It's useful for debugging RTP packet flow
+            # but should be set to the DEBUG level for production.
+            rtp_packet = RtpPacket.parse(data)
+            payload_preview = rtp_packet.payload.hex()[:32]
+            logger.debug(
+                "🎤 INBOUND RTP Packet Received from Asterisk",
+                source_addr=addr,
+                raw_packet_size=len(data),
+                payload_size=len(rtp_packet.payload),
+                rtp_version=rtp_packet.version,
+                rtp_payload_type=rtp_packet.payload_type,
+                rtp_sequence=rtp_packet.sequence_number,
+                rtp_timestamp=rtp_packet.timestamp,
+                rtp_ssrc=rtp_packet.ssrc,
+                payload_preview=payload_preview
+            )
+            # --- END RTP DEBUGGING ---
+
+            # Forward the raw mu-law payload to the Deepgram agent
+            agent_client = call_info.get('agent_client')
+            if agent_client:
+                logger.debug("Forwarding audio payload to Deepgram agent...", payload_size=len(rtp_packet.payload))
+                await agent_client.send_audio(rtp_packet.payload)
+                
+        except Exception as e:
+            logger.error(
+                "Error processing RTP packet",
+                exc_info=True,
+                source_addr=addr,
+                packet_size=len(data)
+            )
 
     async def _play_deepgram_audio(self, channel_id: str, audio_payload_b64: str):
         call_info = self.active_calls.get(channel_id)
