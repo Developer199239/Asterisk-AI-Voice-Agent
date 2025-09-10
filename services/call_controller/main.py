@@ -18,6 +18,7 @@ import random
 import struct
 import os
 from typing import Any, Callable, Coroutine, Dict, List
+import audioop
 
 import aiohttp
 import asyncio
@@ -42,14 +43,14 @@ class RTPPacketizer:
     def packetize(self, payload: bytes) -> bytes:
         header = struct.pack('!BBHII',
             0b10000000,  # Version 2, no padding, no extension, no CSRC
-            96,          # Payload Type 96 (Dynamic for slin16)
+            0,           # Payload Type 0 (PCMU/ulaw)
             self.sequence_number,
             self.timestamp,
             self.ssrc
         )
         self.sequence_number = (self.sequence_number + 1) % 65536
-        # slin16 is 2 bytes per sample. Timestamp increases by number of samples.
-        self.timestamp = (self.timestamp + len(payload) // 2) % 4294967296
+        # ulaw is 1 byte per sample. Timestamp increases by number of samples.
+        self.timestamp = (self.timestamp + len(payload)) % 4294967296
         return header + payload
 
 class CallControllerService:
@@ -237,7 +238,7 @@ class CallControllerService:
                 app_name=self.config.asterisk.app_name,
                 # For host networking, we must use localhost for inter-process communication.
                 external_host=f"127.0.0.1:{self.udp_server.port}",
-                format="slin16"
+                format="ulaw"
             )
             # The response body *is* the channel object, not nested under a 'channel' key.
             if not media_channel_response or 'id' not in media_channel_response:
@@ -423,8 +424,31 @@ class CallControllerService:
                 break
 
         if active_agent_client:
-            if len(data) > 12: # Basic RTP header check
-                audio_payload = data[12:]
+            if len(data) >= 12: # Basic RTP header check
+                # --- START MEANINGFUL DEBUGGING ---
+                header = data[:12]
+                payload = data[12:]
+                version = (header[0] >> 6) & 0b11
+                payload_type = header[1] & 0b01111111
+                sequence_number = struct.unpack('!H', header[2:4])[0]
+                timestamp = struct.unpack('!I', header[4:8])[0]
+                ssrc = struct.unpack('!I', header[8:12])[0]
+                logger.info(
+                    "🎤 INBOUND RTP Packet Received from Asterisk",
+                    source_addr=addr,
+                    raw_packet_size=len(data),
+                    payload_size=len(payload),
+                    rtp_version=version,
+                    rtp_payload_type=payload_type,
+                    rtp_sequence=sequence_number,
+                    rtp_timestamp=timestamp,
+                    rtp_ssrc=ssrc,
+                    payload_preview=payload[:16].hex()
+                )
+                # --- END MEANINGFUL DEBUGGING ---
+                
+                audio_payload = payload # Use the stripped payload
+                
                 logger.debug(
                     "Forwarding audio payload to Deepgram agent...",
                     payload_size=len(audio_payload)
@@ -483,6 +507,20 @@ class CallControllerService:
             logger.debug("Processing audio from Deepgram", payload_size=len(raw_audio), call_id=call_info.get('call_id'))
 
             rtp_packet = rtp_packetizer.packetize(raw_audio)
+            
+            # --- START MEANINGFUL DEBUGGING ---
+            logger.info(
+                "🎤 OUTBOUND RTP Packet Prepared for Asterisk",
+                destination_addr=asterisk_addr,
+                rtp_packet_size=len(rtp_packet),
+                payload_size=len(raw_audio),
+                rtp_payload_type=rtp_packet[1] & 0b01111111, # Extract from generated packet
+                rtp_sequence=rtp_packetizer.sequence_number,
+                rtp_timestamp=rtp_packetizer.timestamp,
+                rtp_ssrc=rtp_packetizer.ssrc,
+                payload_preview=raw_audio[:16].hex()
+            )
+            # --- END MEANINGFUL DEBUGGING ---
             
             # --- DIAGNOSTIC: Save outgoing RTP packet to a file ---
             rtp_filename = f"/app/container_output_{call_info.get('channel_data', {}).get('id', 'unknown_channel')}.rtp"
