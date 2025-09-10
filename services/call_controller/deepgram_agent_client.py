@@ -19,7 +19,7 @@ class DeepgramAgentClient:
         self.request_id: Optional[str] = None
 
     async def connect(self, deepgram_config: DeepgramConfig, llm_config: LLMConfig):
-        ws_url = f"wss://agent.deepgram.com/agent?encoding=linear16&sample_rate=16000"
+        ws_url = f"wss://agent.deepgram.com/v1/agent/converse?encoding=linear16&sample_rate=16000"
         headers = {'Authorization': f'Token {deepgram_config.api_key}'}
 
         try:
