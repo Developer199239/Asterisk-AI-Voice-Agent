@@ -328,8 +328,11 @@ class Engine:
         if provider:
             await provider.stop_session()
 
-        # Stop audio streaming
+        # Stop audio streaming (this will clean up the snoop channel)
         await self.ari_client.stop_audio_streaming(channel_id)
+        
+        # Hang up the main channel
+        await self.ari_client.hangup_channel(channel_id)
 
     async def _play_ring_tone(self, channel_id: str, duration: float = 10.0):
         """Play ring tone while models are loading using ARI play_media."""

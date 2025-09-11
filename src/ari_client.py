@@ -348,7 +348,6 @@ class ARIClient:
             os.chmod(temp_file_path, 0o644)  # rw-r--r--
             
             # Force filesystem sync and verify file exists
-            import os
             os.sync()  # Force filesystem sync
             
             # Wait and verify file is accessible
@@ -409,6 +408,9 @@ class ARIClient:
                 
                 # Stop snooping
                 await self.stop_snoop(snoop_channel_id)
+                
+                # Hang up the snoop channel
+                await self.hangup_channel(snoop_channel_id)
                 
                 # Remove from active snoops
                 del self.active_snoops[channel_id]
