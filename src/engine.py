@@ -79,7 +79,7 @@ class Engine:
                 "rtp_packetizer": RTPPacketizer(ssrc=random.randint(0, 4294967295))
             }
             
-            await provider.start_session(self.config.llm.initial_greeting, self.config.llm.system_prompt)
+            await provider.start_session(self.config.llm.initial_greeting, self.config.llm.prompt)
             
             preferred_codec = provider.supported_codecs[0]
             media_channel_response = await self.ari_client.create_external_media_channel(
