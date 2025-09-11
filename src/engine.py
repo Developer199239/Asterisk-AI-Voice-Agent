@@ -116,7 +116,16 @@ class Engine:
                 models_ready = await model_task
                 if models_ready:
                     self.active_calls[channel_id]['models_ready'] = True
-                    ring_task.cancel()  # Stop ring tone
+                    
+                    # Cancel ring tone and wait for it to finish
+                    ring_task.cancel()
+                    try:
+                        await ring_task
+                    except asyncio.CancelledError:
+                        pass
+                    
+                    # Wait a moment to ensure ring tone has stopped
+                    await asyncio.sleep(0.1)
                     
                     # Now speak the greeting
                     if hasattr(provider, 'speak'):
@@ -189,7 +198,7 @@ class Engine:
                         # Convert ulaw audio to RTP packets and send
                         rtp_packet = rtp_packetizer.packetize(audio_data, payload_type=0)
                         await self.udp_server.send_rtp_packet(rtp_packet, asterisk_rtp_addr)
-                        logger.debug(f"Sent RTP packet to {asterisk_rtp_addr}")
+                        logger.debug(f"Sent {len(audio_data)} bytes of ulaw audio to {asterisk_rtp_addr}")
         elif event_type == "Transcription":
             # Handle transcription data
             text = event.get("text", "")
@@ -319,6 +328,7 @@ class Engine:
                     # Packetize and send
                     rtp_packet = rtp_packetizer.packetize(ulaw_data, payload_type=0)
                     await self.udp_server.send_rtp_packet(rtp_packet, asterisk_rtp_addr)
+                    logger.debug(f"Sent ring tone packet ({len(ulaw_data)} bytes) to {asterisk_rtp_addr}")
                     
                 except Exception as audio_error:
                     logger.error("Audio generation error", channel_id=channel_id, error=str(audio_error))

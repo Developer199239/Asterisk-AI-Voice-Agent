@@ -181,7 +181,7 @@ class LocalProvider(AIProviderInterface):
         except Exception as e:
             logger.error(f"TTS synthesis error: {e}")
             # Send silence as a fallback
-            silence = b'\\x7f' * 160
+            silence = b'\x7f' * 160
             await self.on_event({"type": "AgentAudio", "data": silence})
 
 def _resolve_path(path: str) -> str:
