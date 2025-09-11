@@ -27,6 +27,9 @@ class Engine:
             app_name=config.asterisk.app_name
         )
         self.active_calls: Dict[str, Dict[str, Any]] = {}
+        # Audio buffering for better playback quality
+        self.audio_buffers: Dict[str, bytes] = {}
+        self.buffer_size = 1600  # 200ms of audio at 8kHz (1600 bytes of ulaw)
 
         self.setup_event_handlers()
 
@@ -259,15 +262,37 @@ class Engine:
             logger.debug(f"Unhandled provider event: {event_type}")
 
     async def _play_audio_to_channel(self, channel_id: str, audio_data: bytes):
-        """Play audio data to a specific channel using ARI."""
-        import tempfile
-        import os
-        import wave
-        import audioop
-        
+        """Play audio data to a specific channel using ARI with buffering."""
         try:
+            # Add audio data to buffer
+            if channel_id not in self.audio_buffers:
+                self.audio_buffers[channel_id] = b''
+            
+            self.audio_buffers[channel_id] += audio_data
+            
+            # Play buffered audio when we have enough data
+            if len(self.audio_buffers[channel_id]) >= self.buffer_size:
+                await self._flush_audio_buffer(channel_id)
+                
+        except Exception as e:
+            logger.error(f"Error buffering audio for channel {channel_id}: {e}")
+
+    async def _flush_audio_buffer(self, channel_id: str):
+        """Flush the audio buffer and play the accumulated audio."""
+        if channel_id not in self.audio_buffers or not self.audio_buffers[channel_id]:
+            return
+            
+        try:
+            buffered_audio = self.audio_buffers[channel_id]
+            self.audio_buffers[channel_id] = b''  # Clear the buffer
+            
             # Convert ulaw to linear PCM
-            pcm_data = audioop.ulaw2lin(audio_data, 2)  # 16-bit samples
+            import tempfile
+            import os
+            import wave
+            import audioop
+            
+            pcm_data = audioop.ulaw2lin(buffered_audio, 2)  # 16-bit samples
             
             # Create a temporary WAV file
             with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
@@ -282,17 +307,16 @@ class Engine:
             
             # Play the audio file
             await self.ari_client.play_media(channel_id, f"sound:{temp_file_path}")
-            logger.debug(f"Playing audio file: {temp_file_path}")
+            logger.debug(f"Playing buffered audio: {temp_file_path} ({len(buffered_audio)} bytes)")
             
-        except Exception as e:
-            logger.error(f"Error playing audio to channel {channel_id}: {e}")
-        finally:
             # Clean up the temporary file
             try:
-                if 'temp_file_path' in locals():
-                    os.unlink(temp_file_path)
+                os.unlink(temp_file_path)
             except OSError:
                 pass
+                
+        except Exception as e:
+            logger.error(f"Error playing buffered audio for channel {channel_id}: {e}")
 
 
     async def _handle_stasis_end(self, event_data: dict):
@@ -303,6 +327,13 @@ class Engine:
         call_info = self.active_calls.pop(channel_id, None)
         if not call_info:
             return
+        
+        # Flush any remaining audio in the buffer
+        if channel_id in self.audio_buffers and self.audio_buffers[channel_id]:
+            await self._flush_audio_buffer(channel_id)
+        
+        # Clean up audio buffer
+        self.audio_buffers.pop(channel_id, None)
         
         provider = call_info.get('provider')
         if provider:
