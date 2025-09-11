@@ -285,11 +285,13 @@ class Engine:
                 success = await self.ari_client.play_audio_file(channel_id, wav_file_path)
                 
                 if success:
-                    # Schedule cleanup of the audio file
-                    asyncio.create_task(self.ari_client.cleanup_audio_file(wav_file_path))
+                    # Schedule cleanup of the audio file - TEMPORARILY DISABLED FOR TESTING
+                    # asyncio.create_task(self.ari_client.cleanup_audio_file(wav_file_path))
+                    logger.info(f"Audio file created and played successfully: {wav_file_path}")
                 else:
-                    # Clean up immediately if playback failed
-                    await self.ari_client.cleanup_audio_file(wav_file_path, delay=0)
+                    # Clean up immediately if playback failed - TEMPORARILY DISABLED FOR TESTING
+                    # await self.ari_client.cleanup_audio_file(wav_file_path, delay=0)
+                    logger.error(f"Audio playback failed, but keeping file for debugging: {wav_file_path}")
                     
         except Exception as e:
             logger.error(f"Error flushing audio buffer for channel {channel_id}: {e}")
