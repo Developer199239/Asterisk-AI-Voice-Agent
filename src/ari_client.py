@@ -228,7 +228,7 @@ class ARIClient:
                 return None
 
             # Start snooping to capture audio frames
-            await self.start_snoop(snoop_channel['id'])
+            await self.start_snoop(snoop_channel['id'], app_name)
 
             # Store the snoop channel mapping
             self.active_snoops[channel_id] = snoop_channel['id']
@@ -392,11 +392,12 @@ class ARIClient:
             data=data
         )
 
-    async def start_snoop(self, snoop_channel_id: str) -> Optional[Dict[str, Any]]:
+    async def start_snoop(self, snoop_channel_id: str, app_name: str) -> Optional[Dict[str, Any]]:
         """Start snooping on the snoop channel."""
         logger.info("Starting snoop...", snoop_channel_id=snoop_channel_id)
         data = {
-            "spy": "in"  # Specify direction for snooping
+            "spy": "in",  # Specify direction for snooping
+            "app": app_name  # Required: Application name for snooped audio
         }
         return await self.send_command("POST", f"channels/{snoop_channel_id}/snoop", data=data)
 
