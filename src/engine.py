@@ -77,28 +77,37 @@ class Engine:
             # Answer the call immediately to prevent timeout
             await self.ari_client.answer_channel(channel_id)
 
-            # Create snoop channel to capture audio
-            snoop_id = f"snoop_{channel_id}_{uuid.uuid4().hex[:8]}"
-            snoop_response = await self.ari_client.create_snoop_channel(
-                channel_id=channel_id,
+            # Create external media channel for bidirectional audio streaming
+            media_channel_id = f"media_{channel_id}_{uuid.uuid4().hex[:8]}"
+            media_response = await self.ari_client.create_external_media_channel(
+                channel_id=media_channel_id,
                 app_name=self.config.asterisk.app_name,
-                snoop_id=snoop_id
+                external_host="127.0.0.1",
+                external_port=0  # Let Asterisk choose the port
             )
             
-            if not snoop_response or 'id' not in snoop_response:
-                logger.error("Failed to create snoop channel", channel_id=channel_id)
+            if not media_response or 'id' not in media_response:
+                logger.error("Failed to create external media channel", channel_id=channel_id)
                 await self._cleanup_call(channel_id)
                 return
                 
-            snoop_channel_id = snoop_response['id']
+            # Create bridge and add both channels
+            bridge_response = await self.ari_client.create_bridge()
+            if not bridge_response or 'id' not in bridge_response:
+                logger.error("Failed to create bridge", channel_id=channel_id)
+                await self._cleanup_call(channel_id)
+                return
+                
+            bridge_id = bridge_response['id']
             
-            # Start snooping
-            await self.ari_client.start_snoop(snoop_channel_id)
+            # Add both channels to the bridge
+            await self.ari_client.add_channel_to_bridge(bridge_id, channel_id)
+            await self.ari_client.add_channel_to_bridge(bridge_id, media_channel_id)
 
             self.active_calls[channel_id] = {
                 "provider": provider,
-                "snoop_channel_id": snoop_channel_id,
-                "snoop_id": snoop_id,
+                "media_channel_id": media_channel_id,
+                "bridge_id": bridge_id,
                 "models_ready": False
             }
             
@@ -262,64 +271,26 @@ class Engine:
             logger.debug(f"Unhandled provider event: {event_type}")
 
     async def _play_audio_to_channel(self, channel_id: str, audio_data: bytes):
-        """Play audio data to a specific channel using ARI with buffering."""
+        """Stream audio data directly to the external media channel."""
         try:
-            # Add audio data to buffer
-            if channel_id not in self.audio_buffers:
-                self.audio_buffers[channel_id] = b''
-            
-            self.audio_buffers[channel_id] += audio_data
-            
-            # Play buffered audio when we have enough data
-            if len(self.audio_buffers[channel_id]) >= self.buffer_size:
-                await self._flush_audio_buffer(channel_id)
+            call_info = self.active_calls.get(channel_id)
+            if not call_info or 'media_channel_id' not in call_info:
+                logger.error(f"No media channel found for {channel_id}")
+                return
                 
+            media_channel_id = call_info['media_channel_id']
+            
+            # Stream audio directly to the external media channel
+            # This will be handled by the UDP server that receives RTP from Asterisk
+            # For now, we'll use the existing UDP approach but send to the media channel
+            logger.debug(f"Streaming {len(audio_data)} bytes to media channel {media_channel_id}")
+            
+            # TODO: Implement direct RTP streaming to the external media channel
+            # This requires setting up a UDP server to receive RTP from Asterisk
+            # and then forwarding the audio to the media channel
+            
         except Exception as e:
-            logger.error(f"Error buffering audio for channel {channel_id}: {e}")
-
-    async def _flush_audio_buffer(self, channel_id: str):
-        """Flush the audio buffer and play the accumulated audio."""
-        if channel_id not in self.audio_buffers or not self.audio_buffers[channel_id]:
-            return
-            
-        try:
-            buffered_audio = self.audio_buffers[channel_id]
-            self.audio_buffers[channel_id] = b''  # Clear the buffer
-            
-            # Convert ulaw to linear PCM
-            import tempfile
-            import os
-            import wave
-            import audioop
-            
-            pcm_data = audioop.ulaw2lin(buffered_audio, 2)  # 16-bit samples
-            
-            # Create a temporary WAV file in shared directory
-            import os
-            os.makedirs('/tmp/asterisk-audio', exist_ok=True)
-            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False, dir='/tmp/asterisk-audio') as temp_file:
-                temp_file_path = temp_file.name
-                
-            # Write WAV file with proper headers
-            with wave.open(temp_file_path, 'wb') as wav_file:
-                wav_file.setnchannels(1)  # Mono
-                wav_file.setsampwidth(2)  # 16-bit samples
-                wav_file.setframerate(8000)  # 8kHz sample rate
-                wav_file.writeframes(pcm_data)
-            
-            # Play the audio file
-            await self.ari_client.play_media(channel_id, f"sound:{temp_file_path}")
-            logger.debug(f"Playing buffered audio: {temp_file_path} ({len(buffered_audio)} bytes)")
-            
-            # Clean up the temporary file
-            try:
-                os.unlink(temp_file_path)
-            except OSError:
-                pass
-                
-        except Exception as e:
-            logger.error(f"Error playing buffered audio for channel {channel_id}: {e}")
-
+            logger.error(f"Error streaming audio for channel {channel_id}: {e}")
 
     async def _handle_stasis_end(self, event_data: dict):
         channel_id = event_data.get('channel', {}).get('id')

@@ -228,22 +228,35 @@ class ARIClient:
         logger.info("Stopping snoop...", snoop_channel_id=snoop_channel_id)
         return await self.send_command("DELETE", f"channels/{snoop_channel_id}/snoop")
 
-    async def create_external_media_channel(self, app_name: str, external_host: str, format: str) -> Optional[Dict[str, Any]]:
-        """Create an external media channel for streaming."""
-        logger.info("Creating externalMedia channel...", external_host=external_host, format=format)
-
-        # This command is unique and uses query parameters, not a JSON body.
-        params = {
+    async def create_external_media_channel(self, channel_id: str, app_name: str, external_host: str, external_port: int) -> Optional[Dict[str, Any]]:
+        """Create an external media channel for bidirectional audio streaming."""
+        logger.info("Creating external media channel...", channel_id=channel_id, external_host=external_host, external_port=external_port)
+        
+        data = {
             "app": app_name,
             "external_host": external_host,
-            "format": format,
-            "encapsulation": "rtp", # Explicitly state we are using RTP
-            "transport": "udp",     # Explicitly state we are using UDP
-            "direction": "both"     # We want to send and receive audio
+            "external_port": external_port,
+            "format": "ulaw"  # Use ulaw for compatibility
         }
+        
+        return await self.send_command("POST", f"channels/{channel_id}/externalMedia", data=data)
 
-        return await self.send_command(
-            "POST",
-            "channels/externalMedia",
-            params=params
-        )
+    async def create_bridge(self) -> Optional[Dict[str, Any]]:
+        """Create a bridge for connecting channels."""
+        logger.info("Creating bridge...")
+        return await self.send_command("POST", "bridges")
+
+    async def add_channel_to_bridge(self, bridge_id: str, channel_id: str) -> Optional[Dict[str, Any]]:
+        """Add a channel to a bridge."""
+        logger.info("Adding channel to bridge...", bridge_id=bridge_id, channel_id=channel_id)
+        return await self.send_command("POST", f"bridges/{bridge_id}/addChannel", data={"channel": channel_id})
+
+    async def remove_channel_from_bridge(self, bridge_id: str, channel_id: str) -> Optional[Dict[str, Any]]:
+        """Remove a channel from a bridge."""
+        logger.info("Removing channel from bridge...", bridge_id=bridge_id, channel_id=channel_id)
+        return await self.send_command("POST", f"bridges/{bridge_id}/removeChannel", data={"channel": channel_id})
+
+    async def destroy_bridge(self, bridge_id: str) -> Optional[Dict[str, Any]]:
+        """Destroy a bridge."""
+        logger.info("Destroying bridge...", bridge_id=bridge_id)
+        return await self.send_command("DELETE", f"bridges/{bridge_id}")

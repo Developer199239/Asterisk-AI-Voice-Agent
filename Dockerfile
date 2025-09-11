@@ -1,8 +1,20 @@
 # Use an official Python runtime as a parent image
 FROM python:3.11-slim
 
-# Install build-essential for compiling dependencies like llama-cpp-python
-RUN apt-get update && apt-get install -y build-essential
+# Install only essential system packages for the monolithic AI engine
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    gcc \
+    g++ \
+    make \
+    cmake \
+    pkg-config \
+    libffi-dev \
+    libssl-dev \
+    libsndfile1-dev \
+    libasound2-dev \
+    portaudio19-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 # Set the working directory in the container
 WORKDIR /app
