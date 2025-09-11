@@ -115,6 +115,8 @@ class Engine:
                 # Wait for models to be ready
                 models_ready = await model_task
                 if models_ready:
+                    # Wait for all models to actually be loaded and ready
+                    await self._wait_for_models_ready(provider, channel_id, timeout=15.0)
                     self.active_calls[channel_id]['models_ready'] = True
                     
                     # Cancel ring tone and wait for it to finish

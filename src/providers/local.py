@@ -84,6 +84,8 @@ class LocalProvider(AIProviderInterface):
 
     async def start_session(self, initial_greeting: str, system_prompt: str):
         self._initialize_stt()
+        self._initialize_llm()
+        self._initialize_tts()
         self.system_prompt = system_prompt
         if initial_greeting:
             await self.speak(initial_greeting)
