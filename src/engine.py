@@ -82,6 +82,11 @@ class Engine:
             await provider.start_session(self.config.llm.initial_greeting, self.config.llm.prompt)
             
             preferred_codec = provider.supported_codecs[0]
+            # Check if the call still exists (might have been cleaned up due to an error)
+            if channel_id not in self.active_calls:
+                logger.warning(f"Call {channel_id} was cleaned up before media setup, skipping")
+                return
+                
             media_channel_response = await self.ari_client.create_external_media_channel(
                 app_name=self.config.asterisk.app_name,
                 external_host=f"127.0.0.1:{self.udp_server.port}",
