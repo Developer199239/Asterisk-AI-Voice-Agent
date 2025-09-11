@@ -11,13 +11,13 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the application source code and all necessary assets
-COPY src/ /app/src/
-COPY config/ /app/config/
-COPY models/ /app/models/
-COPY main.py /app/
+# COPY src/ /app/src/
+# COPY config/ /app/config/
+# COPY models/ /app/models/
+# COPY main.py /app/
 
 # Create a symlink for the Piper TTS model to resolve loading issue
-RUN ln -s /app/models/tts/en_US-lessac-medium.onnx /app/models/tts/en_US-lessac-medium
+# RUN ln -s /app/models/tts/en_US-lessac-medium.onnx /app/models/tts/en_US-lessac-medium
 
 # Command to run the application
 CMD ["python", "main.py"]

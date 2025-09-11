@@ -17,6 +17,12 @@ services:
     network_mode: "host"
     env_file:
       - .env
+    volumes:
+      - ./models:/app/models:ro
+      - ./src:/app/src
+      - ./config:/app/config
+      - ./main.py:/app/main.py
+      - ./test_piper.py:/app/test_piper.py
     depends_on:
       - redis
     restart: unless-stopped
