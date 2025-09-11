@@ -84,6 +84,9 @@ class LocalProvider(AIProviderInterface):
             # Vosk expects 16-bit PCM, so we need to convert from ulaw
             pcm_audio = audioop.ulaw2lin(audio_chunk, 2)
             
+            # Vosk expects 16kHz, but ulaw from Asterisk is 8kHz, so upsample
+            pcm_audio, _ = audioop.ratecv(pcm_audio, 2, 1, 8000, 16000, None)
+            
             if self.recognizer.AcceptWaveform(pcm_audio):
                 result = json.loads(self.recognizer.Result())
                 if result.get("text"):
