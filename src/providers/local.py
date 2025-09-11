@@ -2,11 +2,13 @@ import json
 import wave
 import audioop
 import os
+import io
+import asyncio
 from vosk import Model, KaldiRecognizer
 from llama_cpp import Llama
 from piper import PiperVoice
 from .base import AIProviderInterface
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from ..config import LocalProviderConfig, LLMConfig
 from ..logging_config import get_logger
 
@@ -73,43 +75,110 @@ class LocalProvider(AIProviderInterface):
         self.on_event = on_event
 
     async def send_audio(self, audio_chunk: bytes):
-        # Vosk expects 16-bit PCM, so we need to convert from ulaw
-        pcm_audio, _ = audioop.ulaw2lin(audio_chunk, 2)
-        if self.recognizer.AcceptWaveform(pcm_audio):
-            result = json.loads(self.recognizer.Result())
-            if result.get("text"):
-                await self.on_event({"type": "Transcription", "text": result["text"]})
-                # Once we have the text, we can send it to the LLM
-                await self._generate_llm_response(result["text"])
+        """Process audio chunk for STT using Vosk."""
+        try:
+            if not self.recognizer:
+                logger.warning("Recognizer not initialized, skipping audio processing")
+                return
+                
+            # Vosk expects 16-bit PCM, so we need to convert from ulaw
+            pcm_audio, _ = audioop.ulaw2lin(audio_chunk, 2)
+            
+            if self.recognizer.AcceptWaveform(pcm_audio):
+                result = json.loads(self.recognizer.Result())
+                if result.get("text"):
+                    logger.debug(f"STT transcription: {result['text']}")
+                    await self.on_event({"type": "Transcription", "text": result["text"]})
+                    # Once we have the text, we can send it to the LLM
+                    await self._generate_llm_response(result["text"])
+        except Exception as e:
+            logger.error(f"Error processing audio chunk: {e}")
+            # Continue processing even if one chunk fails
 
     async def _generate_llm_response(self, text: str):
-        # Create a chat completion request
-        response = self.llm.create_chat_completion(
-            messages=[
-                {"role": "system", "content": self.llm_config.prompt},
-                {"role": "user", "content": text}
-            ],
-            temperature=self.config.temperature,
-            max_tokens=self.config.max_tokens
-        )
-        # Extract the response text and send it as an event
-        if response and response['choices']:
-            response_text = response['choices'][0]['message']['content']
-            await self.on_event({"type": "LLMResponse", "text": response_text})
-            # Once we have the LLM response, we can synthesize the audio
-            await self._synthesize_tts_audio(response_text)
+        """Generate LLM response using local Llama model."""
+        try:
+            logger.debug(f"Generating LLM response for: {text}")
+            
+            # Create a chat completion request
+            response = self.llm.create_chat_completion(
+                messages=[
+                    {"role": "system", "content": self.llm_config.prompt},
+                    {"role": "user", "content": text}
+                ],
+                temperature=self.config.temperature,
+                max_tokens=self.config.max_tokens
+            )
+            
+            # Extract the response text and send it as an event
+            if response and response.get('choices'):
+                response_text = response['choices'][0]['message']['content']
+                logger.debug(f"LLM response: {response_text}")
+                await self.on_event({"type": "LLMResponse", "text": response_text})
+                # Once we have the LLM response, we can synthesize the audio
+                await self._synthesize_tts_audio(response_text)
+            else:
+                logger.warning("No valid LLM response generated")
+                await self.on_event({"type": "LLMResponse", "text": "I'm sorry, I didn't understand that."})
+                
+        except Exception as e:
+            logger.error(f"Error generating LLM response: {e}")
+            # Send a fallback response
+            await self.on_event({"type": "LLMResponse", "text": "I'm having trouble processing that right now."})
 
     async def _synthesize_tts_audio(self, text: str):
-        # Synthesize audio from the text
-        with wave.open("temp_tts.wav", "wb") as wav_file:
-            self.tts_voice.synthesize(text, wav_file)
-        
-        # Read the audio data and convert it to ulaw
-        with wave.open("temp_tts.wav", "rb") as wav_file:
-            pcm_data = wav_file.readframes(wav_file.getnframes())
-            ulaw_data = audioop.lin2ulaw(pcm_data, 2)
-            await self.on_event({"type": "AgentAudio", "data": ulaw_data})
+        """Synthesize TTS audio using in-memory processing for better performance."""
+        try:
+            # Use in-memory buffer instead of temporary file
+            wav_buffer = io.BytesIO()
+            
+            # Synthesize audio directly to buffer
+            with wave.open(wav_buffer, "wb") as wav_file:
+                wav_file.setnchannels(1)  # Mono
+                wav_file.setsampwidth(2)  # 16-bit
+                wav_file.setframerate(22050)  # Piper default sample rate
+                self.tts_voice.synthesize(text, wav_file)
+            
+            # Reset buffer position and read the audio data
+            wav_buffer.seek(0)
+            with wave.open(wav_buffer, "rb") as wav_file:
+                pcm_data = wav_file.readframes(wav_file.getnframes())
+                
+                # Convert from 22050 Hz to 8000 Hz (telephony standard)
+                # Simple downsampling - in production, use proper resampling
+                downsample_factor = 22050 // 8000
+                pcm_data = pcm_data[::downsample_factor]
+                
+                # Convert PCM to ulaw
+                ulaw_data = audioop.lin2ulaw(pcm_data, 2)
+                
+                # Send audio in chunks for better streaming
+                chunk_size = 160  # 20ms at 8kHz
+                for i in range(0, len(ulaw_data), chunk_size):
+                    chunk = ulaw_data[i:i + chunk_size]
+                    if chunk:
+                        await self.on_event({"type": "AgentAudio", "data": chunk})
+                        await asyncio.sleep(0.02)  # 20ms delay between chunks
+                        
+        except Exception as e:
+            logger.error(f"TTS synthesis error: {e}")
+            # Send silence as fallback
+            silence = b'\x7f' * 160  # ulaw silence
+            await self.on_event({"type": "AgentAudio", "data": silence})
+
+    async def speak(self, text: str):
+        """Speak the given text using TTS."""
+        try:
+            logger.debug(f"Speaking: {text}")
+            await self._synthesize_tts_audio(text)
+        except Exception as e:
+            logger.error(f"Error speaking text: {e}")
 
     async def stop_session(self):
-        # To be implemented: clean up local models
-        pass
+        """Clean up resources and reset state."""
+        try:
+            if self.recognizer:
+                self.recognizer = None
+            logger.info("LocalProvider session stopped and resources cleaned up")
+        except Exception as e:
+            logger.error(f"Error during session cleanup: {e}")
