@@ -31,6 +31,6 @@ providers:
   local:
     stt_model: "models/stt/vosk-model-small-en-us-0.15"
     llm_model: "models/llm/llama-2-7b-chat.Q4_K_M.gguf"
-    tts_voice: "models/tts/en_US-lessac-medium"
+    tts_voice: "tts_models/en/ljspeech/tacotron2-DDC"
     temperature: 0.8
     max_tokens: 150

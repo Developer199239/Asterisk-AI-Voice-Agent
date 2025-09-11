@@ -29,6 +29,7 @@ This is an open-source AI Voice Agent that integrates with Asterisk/FreePBX usin
    - Clone `develop` branch into `/root/Asterisk-Agent-Develop`.
    - Bring down the main production container if up and bring up the develop container for isolated testing.
    - Test with Asterisk 16+ environment.
+   - Do not make any changes to asterisk config on server, ask user to do so if needed.
 
 ### Code Standards
 - **Python Version**: 3.11+
@@ -75,37 +76,57 @@ Asterisk-AI-Voice-Agent/
 - **Audio Processing**: RTP packet handling, ulaw/PCM conversion
 
 ### Common Commands
+
+The new Docker volume-based workflow makes development much faster.
+
 ```bash
-# Download Local AI Models (run once)
+# 1. One-Time Setup: Download Local AI Models (run once)
+# This command downloads the large model files, which are mounted into the container.
 ./scripts/download_models.sh
 
-# Local development
-docker-compose up --build
-docker-compose down
-
-# Git workflowctionsview develop 
-git add .
-git commit -m "feat: add feature description"
-git push origin develop
-
-# Server Testing Workflow in /root/Asterisk-Agent-Develop
-# 1. Stop the production container (if running)
-docker-compose -f /root/Asterisk-AI-Voice-Agent/docker-compose.yml down
-
-# 2. Start the development container
+# 2. Initial Build / When Dependencies Change
+# Run this command the first time you set up the project, or after
+# changing requirements.txt or the Dockerfile.
 docker-compose up --build -d
 
-# 3. View logs
+# 3. Rapid Development (Code Changes Only)
+# When you change Python source code in the `src` directory,
+# just restart the container to apply changes instantly. No rebuild needed!
+docker-compose restart
+
+# 4. View Logs
 docker-compose logs -f
 
-# 4. Stop the development container when finished
+# 5. Stop the Application
 docker-compose down
-
-# 5. Restart the production container
-docker-compose -f /root/Asterisk-AI-Voice-Agent/docker-compose.yml up -d
 
 # 6. Clean up unused Docker images
 docker image prune -f
+```
+
+### Server Testing Workflow
+
+The server testing workflow is now significantly faster, eliminating the need for slow rebuilds for simple code changes.
+
+```bash
+# 1. SSH to the test server and navigate to the project directory
+# cd /root/Asterisk-Agent-Develop
+
+# 2. Pull the latest code changes from the develop branch
+git pull origin develop
+
+# 3. Apply the new code instantly by restarting the container
+# This is much faster than a full rebuild.
+docker-compose restart
+
+# 4. Monitor the logs to verify the changes
+docker-compose logs -f
+
+# When testing is complete, you can stop the development container
+# docker-compose down
+
+# And restart the production container if needed
+# docker-compose -f /root/Asterisk-AI-Voice-Agent/docker-compose.yml up -d
 ```
 
 ### Environment Variables
@@ -129,6 +150,9 @@ asterisk -rx "core show version"
 
 # Monitor Asterisk logs
 tail -f /var/log/asterisk/full
+
+#Test call command 
+asterisk -rx "channel originate sip/13164619284@callcentric application s@ivr-3"
 ```
 
 ## ARI Integration and Call Handling

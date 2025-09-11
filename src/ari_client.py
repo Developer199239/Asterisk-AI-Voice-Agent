@@ -105,6 +105,33 @@ class ARIClient:
         self.event_handlers[event_type].append(handler)
         logger.debug("Added event handler", event_type=event_type, handler=handler.__name__)
 
+    async def handle_audio_frame(self, event_data: dict, audio_handler: Callable):
+        """Handle audio frames from snoop channels."""
+        channel = event_data.get('channel', {})
+        channel_id = channel.get('id')
+        audio_data = event_data.get('audio', {})
+        
+        if channel_id and audio_data:
+            # Extract the raw audio data
+            audio_payload = audio_data.get('data')
+            if audio_payload:
+                # Convert from base64 if needed, or handle as raw bytes
+                import base64
+                try:
+                    raw_audio = base64.b64decode(audio_payload)
+                    await audio_handler(channel_id, raw_audio)
+                except Exception as e:
+                    logger.error("Error processing audio frame", error=str(e))
+
+    async def handle_dtmf_received(self, event_data: dict, dtmf_handler: Callable):
+        """Handle DTMF events from snoop channels."""
+        channel = event_data.get('channel', {})
+        channel_id = channel.get('id')
+        digit = event_data.get('digit')
+        
+        if channel_id and digit:
+            await dtmf_handler(channel_id, digit)
+
     async def send_command(self, method: str, resource: str, data: Optional[Dict[str, Any]] = None, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Send a command to the ARI HTTP endpoint."""
         url = f"{self.http_url}/{resource}"
@@ -171,6 +198,32 @@ class ARIClient:
         """Get details for a specific ARI application."""
         logger.debug("Getting details for ARI app", app_name=app_name)
         return await self.send_command("GET", f"applications/{app_name}")
+
+    async def create_snoop_channel(self, channel_id: str, app_name: str, snoop_id: str) -> Optional[Dict[str, Any]]:
+        """Create a snoop channel to capture audio from the main channel."""
+        logger.info("Creating snoop channel...", channel_id=channel_id, snoop_id=snoop_id)
+
+        params = {
+            "app": app_name,
+            "spy": "in",  # Capture incoming audio from the channel
+            "snoopId": snoop_id
+        }
+
+        return await self.send_command(
+            "POST",
+            f"channels/{channel_id}/snoop",
+            params=params
+        )
+
+    async def start_snoop(self, snoop_channel_id: str) -> Optional[Dict[str, Any]]:
+        """Start snooping on the snoop channel."""
+        logger.info("Starting snoop...", snoop_channel_id=snoop_channel_id)
+        return await self.send_command("POST", f"channels/{snoop_channel_id}/snoop")
+
+    async def stop_snoop(self, snoop_channel_id: str) -> Optional[Dict[str, Any]]:
+        """Stop snooping on the snoop channel."""
+        logger.info("Stopping snoop...", snoop_channel_id=snoop_channel_id)
+        return await self.send_command("DELETE", f"channels/{snoop_channel_id}/snoop")
 
     async def create_external_media_channel(self, app_name: str, external_host: str, format: str) -> Optional[Dict[str, Any]]:
         """Create an external media channel for streaming."""
