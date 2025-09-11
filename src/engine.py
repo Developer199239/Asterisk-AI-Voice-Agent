@@ -58,7 +58,8 @@ class Engine:
 
         logger.info("New call received", channel_id=channel_id, caller=channel.get('caller'))
         
-        provider_name = event_data.get('args', [self.config.default_provider])[0]
+        args = event_data.get('args', [])
+        provider_name = args[0] if args else self.config.default_provider
         
         try:
             provider_config_data = self.config.providers[provider_name]
