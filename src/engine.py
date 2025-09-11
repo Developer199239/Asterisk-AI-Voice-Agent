@@ -120,12 +120,12 @@ class Engine:
                     except asyncio.CancelledError:
                         pass
                     
+                    # Play initial greeting now that models are ready
+                    if hasattr(provider, 'play_initial_greeting'):
+                        await provider.play_initial_greeting()
+                    
                     # Wait a moment to ensure ring tone has stopped
                     await asyncio.sleep(0.1)
-                    
-                    # Now speak the greeting
-                    if hasattr(provider, 'speak'):
-                        await provider.speak(self.config.llm.initial_greeting)
                 else:
                     # Models failed to load, hang up
                     logger.error("Failed to load local models", channel_id=channel_id)

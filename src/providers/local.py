@@ -87,8 +87,12 @@ class LocalProvider(AIProviderInterface):
         self._initialize_llm()
         self._initialize_tts()
         self.system_prompt = system_prompt
-        if initial_greeting:
-            await self.speak(initial_greeting)
+        self.initial_greeting = initial_greeting  # Store for later use
+
+    async def play_initial_greeting(self):
+        """Play the initial greeting after models are ready."""
+        if hasattr(self, 'initial_greeting') and self.initial_greeting:
+            await self.speak(self.initial_greeting)
 
     async def stop_session(self):
         self.recognizer = None
