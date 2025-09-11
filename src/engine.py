@@ -139,9 +139,29 @@ class Engine:
 
     async def on_provider_event(self, event: Dict[str, Any]):
         """Callback for providers to send events back to the engine."""
-        # This method will be expanded to handle different event types
-        # from the provider, like transcriptions, agent audio, etc.
-        pass
+        event_type = event.get("type")
+        
+        if event_type == "AgentAudio":
+            # Handle audio data from the provider
+            audio_data = event.get("data")
+            if audio_data:
+                # Find the active call for this audio
+                # For now, we'll send to all active calls
+                for channel_id, call_data in self.active_calls.items():
+                    if "rtp_packetizer" in call_data and "asterisk_rtp_addr" in call_data:
+                        rtp_packetizer = call_data["rtp_packetizer"]
+                        asterisk_rtp_addr = call_data["asterisk_rtp_addr"]
+                        
+                        # Convert ulaw audio to RTP packets and send
+                        rtp_packet = rtp_packetizer.packetize_ulaw(audio_data)
+                        await self.udp_server.send_rtp_packet(rtp_packet, asterisk_rtp_addr)
+                        logger.debug(f"Sent RTP packet to {asterisk_rtp_addr}")
+        elif event_type == "Transcription":
+            # Handle transcription data
+            text = event.get("text", "")
+            logger.info(f"Transcription: {text}")
+        else:
+            logger.debug(f"Unhandled provider event: {event_type}")
 
     async def _handle_ai_event(self, event: Dict[str, Any], channel_id: str):
         event_type = event.get("type")

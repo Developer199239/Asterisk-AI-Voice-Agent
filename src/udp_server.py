@@ -48,6 +48,10 @@ class UDPServer:
             self.transport.sendto(data, addr)
         else:
             logger.warning("UDP transport not available, cannot send data.")
+    
+    async def send_rtp_packet(self, rtp_packet: bytes, addr: tuple):
+        """Send RTP packet to the specified address."""
+        await self.send(rtp_packet, addr)
 
     def stop(self):
         if self.transport:
