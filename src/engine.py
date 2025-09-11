@@ -14,6 +14,7 @@ from .logging_config import get_logger, configure_logging
 from .providers.base import AIProviderInterface
 from .providers.deepgram import DeepgramProvider
 from .providers.local import LocalProvider
+from .pipelines.local_streaming import LocalStreamingPipeline
 
 logger = get_logger(__name__)
 
@@ -31,6 +32,9 @@ class Engine:
         self.audio_buffers: Dict[str, bytes] = {}
         self.buffer_size = 1600  # 200ms of audio at 8kHz (1600 bytes of ulaw)
 
+        # In-memory streaming pipeline (Phase A: STT-only)
+        self.pipeline: LocalStreamingPipeline | None = LocalStreamingPipeline(config)
+
         self.setup_event_handlers()
 
     def setup_event_handlers(self):
@@ -40,6 +44,9 @@ class Engine:
         self.ari_client.on_event('ChannelAudioFrame', self._handle_audio_frame)
 
     async def start(self):
+        # Warm pipeline models first to reduce first-call latency
+        if self.pipeline:
+            await self.pipeline.start()
         await self.ari_client.connect()
         await self.ari_client.start_listening()
 
@@ -48,6 +55,8 @@ class Engine:
             await self._cleanup_call(channel_id)
         if self.ari_client:
             await self.ari_client.disconnect()
+        if self.pipeline:
+            await self.pipeline.stop()
 
     async def _handle_stasis_start(self, event_data: dict):
         channel = event_data.get('channel', {})
@@ -197,10 +206,18 @@ class Engine:
             provider = call_data.get('provider')
             if not provider:
                 return
-                
-            # Send raw audio data to provider for processing
-            await provider.send_audio(audio_data)
-            logger.debug(f"Forwarded {len(audio_data)} bytes of audio to provider")
+
+            # Phase A: feed STT via in-memory pipeline (Vosk+VAD)
+            if self.pipeline:
+                transcript = await self.pipeline.process_stt(audio_data)
+                if transcript:
+                    logger.info("Transcript", text=transcript)
+                    # Use existing provider path to generate LLM response and TTS
+                    await provider._generate_llm_response(transcript)  # uses current TTS AgentAudio events
+            else:
+                # Fallback to legacy provider STT if pipeline not available
+                await provider.send_audio(audio_data)
+                logger.debug(f"Forwarded {len(audio_data)} bytes of audio to provider")
             
         except Exception as e:
             logger.error("Error processing audio frame", error=str(e))
