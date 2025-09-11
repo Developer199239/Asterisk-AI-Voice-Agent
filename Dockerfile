@@ -45,7 +45,7 @@ FROM python:3.11-slim
 RUN apt-get update && apt-get install -y \
     libsndfile1 \
     libasound2 \
-    portaudio19 \
+    libportaudio2 \
     && rm -rf /var/lib/apt/lists/*
 
 # Set a working directory
