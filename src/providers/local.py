@@ -6,7 +6,7 @@ import audioop
 import wave
 import io
 import numpy as np
-from typing import Callable, Dict, Any
+from typing import Callable, Dict, Any, List
 
 from ..config import load_config, _PROJ_DIR
 from .base import AIProviderInterface
@@ -39,6 +39,10 @@ class LocalProvider(AIProviderInterface):
         self.tts = None
         self.is_speaking = False
         logger.info("LocalProvider initialized with lazy-loading models.")
+
+    @property
+    def supported_codecs(self) -> List[str]:
+        return ["ulaw"]
 
     def _initialize_stt(self):
         if not VoskModel or not KaldiRecognizer:
