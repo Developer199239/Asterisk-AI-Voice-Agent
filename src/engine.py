@@ -53,7 +53,7 @@ class Engine:
         if not channel_id:
             return
 
-        if not (channel.get('name', '').startswith("SIP/") or channel.get('name', '').startswith("PJSIP/")):
+        if not (channel.get('name', '').startswith("SIP/") or channel.get('name', '').startswith("PJSIP/") or channel.get('name', '').startswith("Local/")):
             return
 
         logger.info("New call received", channel_id=channel_id, caller=channel.get('caller'))
