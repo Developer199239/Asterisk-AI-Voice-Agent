@@ -5,6 +5,10 @@ Focuses on robust connection and logging to debug startup issues.
 
 import asyncio
 import json
+import os
+import tempfile
+import wave
+import audioop
 from typing import Dict, Any, Optional, Callable, List
 import aiohttp
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
@@ -32,6 +36,8 @@ class ARIClient:
         self.http_session: Optional[aiohttp.ClientSession] = None
         self.running = False
         self.event_handlers: Dict[str, List[Callable]] = {}
+        self.active_snoops: Dict[str, str] = {}  # channel_id -> snoop_channel_id
+        self.audio_frame_handler: Optional[Callable] = None
 
     def on_event(self, event_type: str, handler: Callable):
         """Alias for add_event_handler for backward compatibility."""
@@ -75,6 +81,15 @@ class ARIClient:
                 try:
                     event_data = json.loads(message)
                     event_type = event_data.get("type")
+                    
+                    # Handle audio frames from snoop channels
+                    if event_type == "ChannelAudioFrame":
+                        channel = event_data.get('channel', {})
+                        channel_id = channel.get('id')
+                        if channel_id in self.active_snoops.values():
+                            asyncio.create_task(self._on_audio_frame(channel, event_data))
+                    
+                    # Handle other events
                     if event_type and event_type in self.event_handlers:
                         for handler in self.event_handlers[event_type]:
                             asyncio.create_task(handler(event_data))
@@ -199,6 +214,118 @@ class ARIClient:
         logger.debug("Getting details for ARI app", app_name=app_name)
         return await self.send_command("GET", f"applications/{app_name}")
 
+    async def start_audio_streaming(self, channel_id: str, app_name: str) -> Optional[str]:
+        """Start audio streaming using snoop channel - replaces externalMedia logic."""
+        try:
+            # Create a unique ID for the snoop channel
+            snoop_id = f"snoop_{channel_id}"
+
+            # Command Asterisk to create the snoop channel
+            snoop_channel = await self.create_snoop_channel(channel_id, app_name, snoop_id)
+            
+            if not snoop_channel or 'id' not in snoop_channel:
+                logger.error("Failed to create snoop channel", channel_id=channel_id)
+                return None
+
+            # Start snooping to capture audio frames
+            await self.start_snoop(snoop_channel['id'])
+
+            # Store the snoop channel mapping
+            self.active_snoops[channel_id] = snoop_channel['id']
+            logger.info(f"Snoop channel {snoop_channel['id']} created for {channel_id}")
+
+            return snoop_channel['id']
+
+        except Exception as e:
+            logger.error(f"Failed to start audio streaming for {channel_id}: {e}")
+            return None
+
+    async def _on_audio_frame(self, channel, event):
+        """Handles incoming raw audio frames from the snoop channel."""
+        try:
+            # Extract audio data from the event
+            if 'frame' in event and 'data' in event['frame']:
+                audio_data = event['frame']['data']
+                
+                # Forward to the registered audio frame handler
+                if self.audio_frame_handler:
+                    await self.audio_frame_handler(audio_data)
+                else:
+                    logger.debug(f"Received audio frame but no handler registered: {len(audio_data)} bytes")
+            else:
+                logger.debug("Received audio frame event without data")
+                
+        except Exception as e:
+            logger.error(f"Error handling audio frame: {e}")
+
+    def set_audio_frame_handler(self, handler: Callable):
+        """Set the handler for incoming audio frames."""
+        self.audio_frame_handler = handler
+
+    async def play_audio_file(self, channel_id: str, file_path: str) -> bool:
+        """Play an audio file to the specified channel."""
+        try:
+            if not os.path.exists(file_path):
+                logger.error(f"Audio file not found: {file_path}")
+                return False
+
+            # Use ARI to play the file
+            result = await self.send_command(
+                "POST",
+                f"channels/{channel_id}/play",
+                data={"media": f"sound:{file_path}"}
+            )
+            
+            if result:
+                logger.info(f"Playing audio file {file_path} on channel {channel_id}")
+                return True
+            else:
+                logger.error(f"Failed to play audio file {file_path}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error playing audio file {file_path}: {e}")
+            return False
+
+    async def create_audio_file_from_ulaw(self, ulaw_data: bytes, sample_rate: int = 8000) -> str:
+        """Convert ulaw audio data to a WAV file and return the file path."""
+        try:
+            # Convert ulaw to linear PCM
+            pcm_data = audioop.ulaw2lin(ulaw_data, 2)  # 2 bytes per sample (16-bit)
+            
+            # Create temporary WAV file in shared volume
+            temp_file = tempfile.NamedTemporaryFile(
+                suffix='.wav',
+                dir='/tmp/asterisk-audio',
+                delete=False
+            )
+            temp_file_path = temp_file.name
+            temp_file.close()
+            
+            # Write WAV file
+            with wave.open(temp_file_path, 'wb') as wav_file:
+                wav_file.setnchannels(1)  # Mono
+                wav_file.setsampwidth(2)  # 2 bytes per sample (16-bit)
+                wav_file.setframerate(sample_rate)
+                wav_file.writeframes(pcm_data)
+            
+            logger.debug(f"Created WAV file: {temp_file_path} ({len(pcm_data)} bytes)")
+            return temp_file_path
+            
+        except Exception as e:
+            logger.error(f"Error creating audio file from ulaw: {e}")
+            return ""
+
+    async def cleanup_audio_file(self, file_path: str, delay: float = 5.0):
+        """Clean up an audio file after a delay."""
+        try:
+            await asyncio.sleep(delay)
+            if os.path.exists(file_path):
+                os.unlink(file_path)
+                logger.debug(f"Cleaned up audio file: {file_path}")
+        except Exception as e:
+            logger.error(f"Error cleaning up audio file {file_path}: {e}")
+
     async def create_snoop_channel(self, channel_id: str, app_name: str, snoop_id: str) -> Optional[Dict[str, Any]]:
         """Create a snoop channel to capture audio from the main channel."""
         logger.info("Creating snoop channel...", channel_id=channel_id, snoop_id=snoop_id)
@@ -222,6 +349,28 @@ class ARIClient:
             "spy": "in"  # Specify direction for snooping
         }
         return await self.send_command("POST", f"channels/{snoop_channel_id}/snoop", data=data)
+
+    async def stop_audio_streaming(self, channel_id: str) -> bool:
+        """Stop audio streaming and clean up snoop channel."""
+        try:
+            if channel_id in self.active_snoops:
+                snoop_channel_id = self.active_snoops[channel_id]
+                
+                # Stop snooping
+                await self.stop_snoop(snoop_channel_id)
+                
+                # Remove from active snoops
+                del self.active_snoops[channel_id]
+                
+                logger.info(f"Stopped audio streaming for channel {channel_id}")
+                return True
+            else:
+                logger.warning(f"No active snoop found for channel {channel_id}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error stopping audio streaming for {channel_id}: {e}")
+            return False
 
     async def stop_snoop(self, snoop_channel_id: str) -> Optional[Dict[str, Any]]:
         """Stop snooping on the snoop channel."""

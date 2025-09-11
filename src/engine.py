@@ -77,37 +77,23 @@ class Engine:
             # Answer the call immediately to prevent timeout
             await self.ari_client.answer_channel(channel_id)
 
-            # Create external media channel for bidirectional audio streaming
-            media_channel_id = f"media_{channel_id}_{uuid.uuid4().hex[:8]}"
-            media_response = await self.ari_client.create_external_media_channel(
-                channel_id=media_channel_id,
-                app_name=self.config.asterisk.app_name,
-                external_host="127.0.0.1",
-                external_port=0  # Let Asterisk choose the port
+            # Start audio streaming using snoop channel
+            snoop_channel_id = await self.ari_client.start_audio_streaming(
+                channel_id, 
+                self.config.asterisk.app_name
             )
             
-            if not media_response or 'id' not in media_response:
-                logger.error("Failed to create external media channel", channel_id=channel_id)
+            if not snoop_channel_id:
+                logger.error("Failed to start audio streaming", channel_id=channel_id)
                 await self._cleanup_call(channel_id)
                 return
-                
-            # Create bridge and add both channels
-            bridge_response = await self.ari_client.create_bridge()
-            if not bridge_response or 'id' not in bridge_response:
-                logger.error("Failed to create bridge", channel_id=channel_id)
-                await self._cleanup_call(channel_id)
-                return
-                
-            bridge_id = bridge_response['id']
-            
-            # Add both channels to the bridge
-            await self.ari_client.add_channel_to_bridge(bridge_id, channel_id)
-            await self.ari_client.add_channel_to_bridge(bridge_id, media_channel_id)
+
+            # Set up audio frame handler for this call
+            self.ari_client.set_audio_frame_handler(self._handle_audio_frame)
 
             self.active_calls[channel_id] = {
                 "provider": provider,
-                "media_channel_id": media_channel_id,
-                "bridge_id": bridge_id,
+                "snoop_channel_id": snoop_channel_id,
                 "models_ready": False
             }
             
@@ -190,43 +176,34 @@ class Engine:
 
         raise ValueError(f"Provider '{provider_name}' does not have a creation rule.")
 
-    async def _handle_audio_frame(self, event_data: dict):
-        """Handle audio frames from snoop channels."""
-        channel = event_data.get('channel', {})
-        channel_id = channel.get('id')
-        
-        # Find the main channel this snoop belongs to
-        main_channel_id = None
-        for main_id, call_data in self.active_calls.items():
-            if call_data.get('snoop_channel_id') == channel_id:
-                main_channel_id = main_id
-                break
+    async def _handle_audio_frame(self, audio_data: bytes):
+        """Handle raw audio frames from snoop channels."""
+        try:
+            # Find the active call (assuming single call for now)
+            # In a multi-call scenario, we'd need to track which snoop belongs to which call
+            active_channel_id = None
+            for channel_id, call_data in self.active_calls.items():
+                if call_data.get('snoop_channel_id'):
+                    active_channel_id = channel_id
+                    break
+                    
+            if not active_channel_id:
+                return
                 
-        if not main_channel_id:
-            return
+            call_data = self.active_calls.get(active_channel_id)
+            if not call_data:
+                return
+                
+            provider = call_data.get('provider')
+            if not provider:
+                return
+                
+            # Send raw audio data to provider for processing
+            await provider.send_audio(audio_data)
+            logger.debug(f"Forwarded {len(audio_data)} bytes of audio to provider")
             
-        call_data = self.active_calls.get(main_channel_id)
-        if not call_data:
-            return
-            
-        provider = call_data.get('provider')
-        if not provider:
-            return
-            
-        # Extract audio data from the event
-        audio_data = event_data.get('audio', {})
-        if audio_data:
-            # The audio data should be in the 'data' field as base64
-            audio_payload = audio_data.get('data')
-            if audio_payload:
-                try:
-                    # Decode base64 audio data
-                    raw_audio = base64.b64decode(audio_payload)
-                    # Send to provider for processing
-                    await provider.send_audio(raw_audio)
-                    logger.debug(f"Forwarded {len(raw_audio)} bytes of audio to provider")
-                except Exception as e:
-                    logger.error("Error processing audio frame", error=str(e))
+        except Exception as e:
+            logger.error("Error processing audio frame", error=str(e))
 
     async def _handle_dtmf_received(self, event_data: dict):
         """Handle DTMF events from snoop channels."""
@@ -271,26 +248,51 @@ class Engine:
             logger.debug(f"Unhandled provider event: {event_type}")
 
     async def _play_audio_to_channel(self, channel_id: str, audio_data: bytes):
-        """Stream audio data directly to the external media channel."""
+        """Play audio data using file playback approach."""
         try:
             call_info = self.active_calls.get(channel_id)
-            if not call_info or 'media_channel_id' not in call_info:
-                logger.error(f"No media channel found for {channel_id}")
+            if not call_info:
+                logger.error(f"No call info found for {channel_id}")
                 return
                 
-            media_channel_id = call_info['media_channel_id']
+            # Add audio data to buffer
+            if channel_id not in self.audio_buffers:
+                self.audio_buffers[channel_id] = b""
+                
+            self.audio_buffers[channel_id] += audio_data
             
-            # Stream audio directly to the external media channel
-            # This will be handled by the UDP server that receives RTP from Asterisk
-            # For now, we'll use the existing UDP approach but send to the media channel
-            logger.debug(f"Streaming {len(audio_data)} bytes to media channel {media_channel_id}")
-            
-            # TODO: Implement direct RTP streaming to the external media channel
-            # This requires setting up a UDP server to receive RTP from Asterisk
-            # and then forwarding the audio to the media channel
-            
+            # If buffer is full enough, flush it
+            if len(self.audio_buffers[channel_id]) >= self.buffer_size:
+                await self._flush_audio_buffer(channel_id)
+                
         except Exception as e:
-            logger.error(f"Error streaming audio for channel {channel_id}: {e}")
+            logger.error(f"Error playing audio for channel {channel_id}: {e}")
+
+    async def _flush_audio_buffer(self, channel_id: str):
+        """Flush the audio buffer and play the accumulated audio."""
+        try:
+            if channel_id not in self.audio_buffers or not self.audio_buffers[channel_id]:
+                return
+                
+            audio_data = self.audio_buffers[channel_id]
+            self.audio_buffers[channel_id] = b""
+            
+            # Create WAV file from ulaw data
+            wav_file_path = await self.ari_client.create_audio_file_from_ulaw(audio_data)
+            
+            if wav_file_path:
+                # Play the WAV file
+                success = await self.ari_client.play_audio_file(channel_id, wav_file_path)
+                
+                if success:
+                    # Schedule cleanup of the audio file
+                    asyncio.create_task(self.ari_client.cleanup_audio_file(wav_file_path))
+                else:
+                    # Clean up immediately if playback failed
+                    await self.ari_client.cleanup_audio_file(wav_file_path, delay=0)
+                    
+        except Exception as e:
+            logger.error(f"Error flushing audio buffer for channel {channel_id}: {e}")
 
     async def _handle_stasis_end(self, event_data: dict):
         channel_id = event_data.get('channel', {}).get('id')
@@ -312,14 +314,8 @@ class Engine:
         if provider:
             await provider.stop_session()
 
-        # Stop and cleanup snoop channel
-        snoop_channel_id = call_info.get('snoop_channel_id')
-        if snoop_channel_id:
-            try:
-                await self.ari_client.stop_snoop(snoop_channel_id)
-                await self.ari_client.hangup_channel(snoop_channel_id)
-            except Exception as e:
-                logger.debug("Error cleaning up snoop channel", error=str(e))
+        # Stop audio streaming
+        await self.ari_client.stop_audio_streaming(channel_id)
 
     async def _play_ring_tone(self, channel_id: str, duration: float = 10.0):
         """Play ring tone while models are loading using ARI play_media."""
