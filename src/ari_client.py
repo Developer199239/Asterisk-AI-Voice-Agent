@@ -263,23 +263,49 @@ class ARIClient:
         self.audio_frame_handler = handler
 
     async def play_audio_file(self, channel_id: str, file_path: str) -> bool:
-        """Play an audio file to the specified channel."""
+        """Play an audio file to the specified channel with enhanced error handling."""
         try:
-            # Wait a bit more to ensure file is available and readable
             import time
-            for i in range(5):  # Try up to 5 times
-                if os.path.exists(file_path) and os.access(file_path, os.R_OK):
-                    break
+            start_time = time.time()
+            
+            # Enhanced file verification with detailed logging
+            for attempt in range(15):  # Try up to 15 times (1.5 seconds total)
+                if os.path.exists(file_path):
+                    if os.access(file_path, os.R_OK):
+                        file_size = os.path.getsize(file_path)
+                        if file_size > 0:
+                            logger.debug(f"File verified: {file_path} ({file_size} bytes) - attempt {attempt + 1}")
+                            break
+                        else:
+                            logger.warning(f"File exists but is empty: {file_path} - attempt {attempt + 1}")
+                    else:
+                        logger.warning(f"File exists but not readable: {file_path} (permissions: {oct(os.stat(file_path).st_mode)[-3:]}) - attempt {attempt + 1}")
+                else:
+                    logger.warning(f"File not found: {file_path} - attempt {attempt + 1}")
+                
                 time.sleep(0.1)  # 100ms delay
             
+            # Final verification
             if not os.path.exists(file_path):
-                logger.error(f"Audio file not found after retries: {file_path}")
+                logger.error(f"Audio file not found after 15 attempts: {file_path}")
                 return False
             
             if not os.access(file_path, os.R_OK):
                 logger.error(f"Audio file not readable: {file_path} (permissions: {oct(os.stat(file_path).st_mode)[-3:]})")
                 return False
 
+            file_size = os.path.getsize(file_path)
+            if file_size == 0:
+                logger.error(f"Audio file is empty: {file_path}")
+                return False
+
+            # Set channel variable for debugging
+            await self.send_command(
+                "POST",
+                f"channels/{channel_id}/variable",
+                data={"variable": "AUDIO_FILE_PATH", "value": file_path}
+            )
+            
             # Use ARI to play the file
             result = await self.send_command(
                 "POST",
@@ -287,11 +313,12 @@ class ARIClient:
                 data={"media": f"sound:{file_path}"}
             )
             
+            elapsed_time = (time.time() - start_time) * 1000  # milliseconds
             if result:
-                logger.info(f"Playing audio file {file_path} on channel {channel_id}")
+                logger.info(f"Playing audio file {file_path} ({file_size} bytes) on channel {channel_id} - took {elapsed_time:.1f}ms")
                 return True
             else:
-                logger.error(f"Failed to play audio file {file_path}")
+                logger.error(f"Failed to play audio file {file_path} after {elapsed_time:.1f}ms")
                 return False
                 
         except Exception as e:
@@ -304,14 +331,11 @@ class ARIClient:
             # Convert ulaw to linear PCM
             pcm_data = audioop.ulaw2lin(ulaw_data, 2)  # 2 bytes per sample (16-bit)
             
-            # Create temporary WAV file in shared volume
-            temp_file = tempfile.NamedTemporaryFile(
-                suffix='.wav',
-                dir='/tmp/asterisk-audio',
-                delete=False
-            )
-            temp_file_path = temp_file.name
-            temp_file.close()
+            # Create timestamped filename for better debugging
+            import time
+            timestamp = int(time.time() * 1000)  # milliseconds
+            filename = f"audio_{timestamp}_{len(pcm_data)}.wav"
+            temp_file_path = f"/tmp/asterisk-audio/{filename}"
             
             # Write WAV file
             with wave.open(temp_file_path, 'wb') as wav_file:
@@ -323,12 +347,21 @@ class ARIClient:
             # Set proper permissions for Asterisk to read the file
             os.chmod(temp_file_path, 0o644)  # rw-r--r--
             
-            # Ensure file is fully written and synced
-            import time
-            time.sleep(0.1)  # 100ms delay to ensure file sync
+            # Force filesystem sync and verify file exists
+            import os
+            os.sync()  # Force filesystem sync
             
-            logger.debug(f"Created WAV file: {temp_file_path} ({len(pcm_data)} bytes)")
-            return temp_file_path
+            # Wait and verify file is accessible
+            for attempt in range(10):  # Try up to 10 times (1 second total)
+                if os.path.exists(temp_file_path) and os.access(temp_file_path, os.R_OK):
+                    file_size = os.path.getsize(temp_file_path)
+                    if file_size > 0:
+                        logger.debug(f"Created WAV file: {temp_file_path} ({file_size} bytes) - attempt {attempt + 1}")
+                        return temp_file_path
+                time.sleep(0.1)  # 100ms delay
+            
+            logger.error(f"Failed to create accessible WAV file after 10 attempts: {temp_file_path}")
+            return ""
             
         except Exception as e:
             logger.error(f"Error creating audio file from ulaw: {e}")

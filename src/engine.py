@@ -275,23 +275,35 @@ class Engine:
                 return
                 
             audio_data = self.audio_buffers[channel_id]
+            buffer_size = len(audio_data)
             self.audio_buffers[channel_id] = b""
+            
+            logger.debug(f"Flushing audio buffer for channel {channel_id}: {buffer_size} bytes")
             
             # Create WAV file from ulaw data
             wav_file_path = await self.ari_client.create_audio_file_from_ulaw(audio_data)
             
             if wav_file_path:
+                # Set additional channel variables for debugging
+                await self.ari_client.send_command(
+                    "POST",
+                    f"channels/{channel_id}/variable",
+                    data={"variable": "AUDIO_BUFFER_SIZE", "value": str(buffer_size)}
+                )
+                
                 # Play the WAV file
                 success = await self.ari_client.play_audio_file(channel_id, wav_file_path)
                 
                 if success:
                     # Schedule cleanup of the audio file - TEMPORARILY DISABLED FOR TESTING
                     # asyncio.create_task(self.ari_client.cleanup_audio_file(wav_file_path))
-                    logger.info(f"Audio file created and played successfully: {wav_file_path}")
+                    logger.info(f"Audio file created and played successfully: {wav_file_path} (buffer: {buffer_size} bytes)")
                 else:
                     # Clean up immediately if playback failed - TEMPORARILY DISABLED FOR TESTING
                     # await self.ari_client.cleanup_audio_file(wav_file_path, delay=0)
-                    logger.error(f"Audio playback failed, but keeping file for debugging: {wav_file_path}")
+                    logger.error(f"Audio playback failed, but keeping file for debugging: {wav_file_path} (buffer: {buffer_size} bytes)")
+            else:
+                logger.error(f"Failed to create WAV file from {buffer_size} bytes of audio data")
                     
         except Exception as e:
             logger.error(f"Error flushing audio buffer for channel {channel_id}: {e}")
