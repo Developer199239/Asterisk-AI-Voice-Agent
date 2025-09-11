@@ -147,8 +147,21 @@ class LocalProvider(AIProviderInterface):
             
             # Reset buffer position and read the audio data
             wav_buffer.seek(0)
+            
+            # More detailed logging
+            raw_wav_size = len(wav_buffer.getvalue())
+            logger.debug(f"Raw WAV buffer size after synthesis: {raw_wav_size} bytes")
+
+            if raw_wav_size <= 44:  # WAV header is 44 bytes, so anything <= is empty
+                logger.warning("TTS synthesis produced an empty or invalid WAV file.")
+                # Send silence and exit early
+                silence = b'\x7f' * 160
+                await self.on_event({"type": "AgentAudio", "data": silence})
+                return
+
             with wave.open(wav_buffer, "rb") as wav_file:
                 pcm_data = wav_file.readframes(wav_file.getnframes())
+                logger.debug(f"Read {len(pcm_data)} bytes of PCM data from WAV buffer.")
                 
                 # Convert from 22050 Hz to 8000 Hz (telephony standard)
                 # Simple downsampling - in production, use proper resampling
@@ -157,6 +170,7 @@ class LocalProvider(AIProviderInterface):
                 
                 # Convert PCM to ulaw
                 ulaw_data = audioop.lin2ulaw(pcm_data, 2)
+                logger.debug(f"Converted PCM to {len(ulaw_data)} bytes of ulaw data.")
                 
                 # Send audio in chunks for better streaming
                 chunk_size = 160  # 20ms at 8kHz
