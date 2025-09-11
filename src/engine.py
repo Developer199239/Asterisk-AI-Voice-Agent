@@ -2,6 +2,7 @@ import asyncio
 import os
 import random
 import signal
+import struct
 import uuid
 import audioop
 from typing import Dict, Any
@@ -302,18 +303,29 @@ class Engine:
                     ring_cycle = (sample_time % 6.0)
                     if ring_cycle < 2.0:  # Ring on
                         amplitude = 0.3 * (1.0 if ring_cycle < 1.0 else 0.5)  # Fade in/out
-                        sample = int(amplitude * 32767 * (0.5 * (1 + (sample_time * frequency * 2 * 3.14159) % (2 * 3.14159))))
+                        # Generate sine wave and clamp to valid 16-bit range
+                        sine_value = 0.5 * (1 + (sample_time * frequency * 2 * 3.14159) % (2 * 3.14159))
+                        sample = int(amplitude * 16000 * sine_value)  # Reduced amplitude
+                        sample = max(-32768, min(32767, sample))  # Clamp to 16-bit range
                     else:  # Ring off
                         sample = 0
                     samples.append(sample)
                 
-                # Convert to ulaw
-                pcm_data = bytes(samples)
-                ulaw_data = audioop.lin2ulaw(pcm_data, 2)
-                
-                # Packetize and send
-                rtp_packet = rtp_packetizer.packetize(ulaw_data, payload_type=0)
-                await self.udp_server.send_rtp_packet(rtp_packet, asterisk_rtp_addr)
+                try:
+                    # Convert to ulaw - need to pack as 16-bit little-endian
+                    pcm_data = struct.pack('<' + 'h' * len(samples), *samples)
+                    ulaw_data = audioop.lin2ulaw(pcm_data, 2)
+                    
+                    # Packetize and send
+                    rtp_packet = rtp_packetizer.packetize(ulaw_data, payload_type=0)
+                    await self.udp_server.send_rtp_packet(rtp_packet, asterisk_rtp_addr)
+                    
+                except Exception as audio_error:
+                    logger.error("Audio generation error", channel_id=channel_id, error=str(audio_error))
+                    # Continue with silence if audio generation fails
+                    silence_data = b'\x00' * chunk_size
+                    rtp_packet = rtp_packetizer.packetize(silence_data, payload_type=0)
+                    await self.udp_server.send_rtp_packet(rtp_packet, asterisk_rtp_addr)
                 
                 await asyncio.sleep(0.02)  # 20ms delay
                 
