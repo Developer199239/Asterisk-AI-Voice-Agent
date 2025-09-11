@@ -79,7 +79,7 @@ class Engine:
                 "rtp_packetizer": RTPPacketizer(ssrc=random.randint(0, 4294967295))
             }
             
-            await provider.start_session(channel_id, lambda event: self._handle_ai_event(event, channel_id))
+            await provider.start_session(self.config.llm.initial_greeting, self.config.llm.system_prompt)
             
             preferred_codec = provider.supported_codecs[0]
             media_channel_response = await self.ari_client.create_external_media_channel(
@@ -99,9 +99,6 @@ class Engine:
             
             await self.ari_client.add_channel_to_bridge(bridge_id, channel_id)
             await self.ari_client.add_channel_to_bridge(bridge_id, media_channel_id)
-
-            if hasattr(provider, 'speak'):
-                await provider.speak(self.config.llm.initial_greeting)
 
         except Exception as e:
             logger.error("Error handling StasisStart", channel_id=channel_id, exc_info=True)
