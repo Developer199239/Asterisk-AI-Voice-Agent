@@ -1,224 +1,179 @@
-import json
-import wave
-import audioop
-import os
-import io
 import asyncio
-from vosk import Model, KaldiRecognizer
-from llama_cpp import Llama
-from piper import PiperVoice
+import json
+import logging
+import os
+import audioop
+import wave
+import io
+import numpy as np
+from typing import Callable, Dict, Any
+
+from ..config import load_config, _PROJ_DIR
 from .base import AIProviderInterface
-from typing import List, Optional, Dict, Any
-from ..config import LocalProviderConfig, LLMConfig
-from ..logging_config import get_logger
 
-# Determine the absolute path to the project root from this file's location
-_PROJ_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+try:
+    from vosk import Model as VoskModel, KaldiRecognizer
+except ImportError:
+    VoskModel = None
+    KaldiRecognizer = None
 
-logger = get_logger(__name__)
+try:
+    from llama_cpp import Llama
+except ImportError:
+    Llama = None
+
+try:
+    from TTS.api import TTS
+except ImportError:
+    TTS = None
+
+logger = logging.getLogger(__name__)
 
 class LocalProvider(AIProviderInterface):
-    """
-    Local AI Provider.
-    Orchestrates local STT, LLM, and TTS models.
-    """
-    
-    @property
-    def supported_codecs(self) -> List[str]:
-        """Returns a list of supported codec names, in order of preference."""
-        return ["ulaw", "pcm"]
-    
-    def __init__(self, config: LocalProviderConfig, llm_config: LLMConfig):
-        self.config = config
-        self.llm_config = llm_config
-        self.on_event: Optional[callable] = None
-        self.recognizer: Optional[KaldiRecognizer] = None
-
-        # Resolve model paths to be absolute
-        self._stt_model_path = self._resolve_path(self.config.stt_model)
-        self._llm_model_path = self._resolve_path(self.config.llm_model)
-        self._tts_voice_path = self._resolve_path(self.config.tts_voice)
-
-        # Lazy-loaded models
-        self._stt_model: Optional[Model] = None
-        self._llm: Optional[Llama] = None
-        self._tts_voice: Optional[PiperVoice] = None
+    def __init__(self, on_event: Callable[[Dict[str, Any]], None]):
+        super().__init__(on_event)
+        self.config = load_config().providers.local
+        self.stt_model = None
+        self.recognizer = None
+        self.llm = None
+        self.tts = None
+        self.is_speaking = False
         logger.info("LocalProvider initialized with lazy-loading models.")
 
-    def _resolve_path(self, path: str) -> str:
-        """Resolves a path to be absolute, relative to the project root."""
-        if not os.path.isabs(path):
-            return os.path.join(_PROJ_DIR, path)
-        return path
-
-    @property
-    def stt_model(self) -> Model:
-        if self._stt_model is None:
-            logger.debug(f"Loading STT model from: {self._stt_model_path}")
-            self._stt_model = Model(self._stt_model_path)
-        return self._stt_model
-
-    @property
-    def llm(self) -> Llama:
-        if self._llm is None:
-            logger.debug(f"Loading LLM model from: {self._llm_model_path}")
-            self._llm = Llama(model_path=self._llm_model_path, n_ctx=2048, verbose=False)
-        return self._llm
-
-    @property
-    def tts_voice(self) -> PiperVoice:
-        if self._tts_voice is None:
-            logger.debug(f"Loading TTS voice from: {self._tts_voice_path}")
-            self._tts_voice = PiperVoice.load(self._tts_voice_path)
-        return self._tts_voice
-
-    async def start_session(self, call_id: str, on_event: callable):
-        # Initialize Vosk recognizer for 16kHz since we upsample from 8kHz
+    def _initialize_stt(self):
+        if not VoskModel or not KaldiRecognizer:
+            logger.error("Vosk is not installed. Please install it with 'pip install vosk'")
+            return
+        if not self.stt_model:
+            model_path = _resolve_path(self.config.stt_model)
+            logger.debug(f"Loading STT model from: {model_path}")
+            if not os.path.exists(model_path):
+                logger.error(f"STT model path does not exist: {model_path}")
+                return
+            self.stt_model = VoskModel(model_path)
         self.recognizer = KaldiRecognizer(self.stt_model, 16000)
-        self.on_event = on_event
 
-    async def send_audio(self, audio_chunk: bytes):
-        """Process audio chunk for STT using Vosk."""
-        try:
-            if not self.recognizer:
-                logger.warning("Recognizer not initialized, skipping audio processing")
+    def _initialize_llm(self):
+        if not Llama:
+            logger.error("llama-cpp-python is not installed. Please install it with 'pip install llama-cpp-python'")
+            return
+        if not self.llm:
+            model_path = _resolve_path(self.config.llm_model)
+            logger.debug(f"Loading LLM model from: {model_path}")
+            if not os.path.exists(model_path):
+                logger.error(f"LLM model path does not exist: {model_path}")
                 return
-                
-            # Vosk expects 16-bit PCM, so we need to convert from ulaw
-            pcm_audio = audioop.ulaw2lin(audio_chunk, 2)
-            
-            # Vosk expects 16kHz, but ulaw from Asterisk is 8kHz, so upsample
-            pcm_audio, _ = audioop.ratecv(pcm_audio, 2, 1, 8000, 16000, None)
-            
-            if self.recognizer.AcceptWaveform(pcm_audio):
-                result = json.loads(self.recognizer.Result())
-                if result.get("text"):
-                    logger.debug(f"STT transcription: {result['text']}")
-                    await self.on_event({"type": "Transcription", "text": result["text"]})
-                    # Once we have the text, we can send it to the LLM
-                    await self._generate_llm_response(result["text"])
-        except Exception as e:
-            logger.error(f"Error processing audio chunk: {e}")
-            # Continue processing even if one chunk fails
+            self.llm = Llama(model_path=model_path, n_ctx=2048, verbose=False)
 
-    async def _generate_llm_response(self, text: str):
-        """Generate LLM response using local Llama model."""
-        try:
-            logger.debug(f"Generating LLM response for: {text}")
-            
-            # Create a chat completion request
-            response = self.llm.create_chat_completion(
-                messages=[
-                    {"role": "system", "content": self.llm_config.prompt},
-                    {"role": "user", "content": text}
-                ],
-                temperature=self.config.temperature,
-                max_tokens=self.config.max_tokens
-            )
-            
-            # Extract the response text and send it as an event
-            if response and response.get('choices'):
-                response_text = response['choices'][0]['message']['content']
-                logger.debug(f"LLM response: {response_text}")
-                await self.on_event({"type": "LLMResponse", "text": response_text})
-                # Once we have the LLM response, we can synthesize the audio
-                await self._synthesize_tts_audio(response_text)
-            else:
-                logger.warning("No valid LLM response generated")
-                await self.on_event({"type": "LLMResponse", "text": "I'm sorry, I didn't understand that."})
-                
-        except Exception as e:
-            logger.error(f"Error generating LLM response: {e}")
-            # Send a fallback response
-            await self.on_event({"type": "LLMResponse", "text": "I'm having trouble processing that right now."})
-
-    async def _synthesize_tts_audio(self, text: str):
-        """Synthesize TTS audio using in-memory processing for better performance."""
-        try:
-            # Use in-memory buffer instead of temporary file
-            wav_buffer = io.BytesIO()
-            
-            # Synthesize audio directly to buffer
-            with wave.open(wav_buffer, "wb") as wav_file:
-                wav_file.setnchannels(1)  # Mono
-                wav_file.setsampwidth(2)  # 16-bit
-                wav_file.setframerate(22050)  # Piper default sample rate
-                self.tts_voice.synthesize(text, wav_file)
-            
-            # Reset buffer position and read the audio data
-            wav_buffer.seek(0)
-            
-            # More detailed logging
-            raw_wav_size = len(wav_buffer.getvalue())
-            logger.debug(f"Raw WAV buffer size after synthesis: {raw_wav_size} bytes")
-
-            if raw_wav_size <= 44:  # WAV header is 44 bytes, so anything <= is empty
-                logger.warning("TTS synthesis produced an empty or invalid WAV file.")
-                # Send silence and exit early
-                silence = b'\x7f' * 160
-                await self.on_event({"type": "AgentAudio", "data": silence})
+    def _initialize_tts(self):
+        if self.tts is None:
+            if TTS is None:
+                logger.error("TTS library not installed. Please install it with 'pip install TTS'")
                 return
+            try:
+                model_name = self.config.tts_voice
+                logger.debug(f"Loading TTS model by name: {model_name}")
+                self.tts = TTS(model_name=model_name)
+                logger.info("TTS model loaded successfully.")
+            except Exception as e:
+                logger.error(f"Error loading TTS model: {e}")
 
-            with wave.open(wav_buffer, "rb") as wav_file:
-                pcm_data = wav_file.readframes(wav_file.getnframes())
-                logger.debug(f"Read {len(pcm_data)} bytes of PCM data from WAV buffer.")
-                
-                # Convert from 22050 Hz to 8000 Hz (telephony standard)
-                # Simple downsampling - in production, use proper resampling
-                downsample_factor = 22050 // 8000
-                pcm_data = pcm_data[::downsample_factor]
-                
-                # Convert PCM to ulaw
-                ulaw_data = audioop.lin2ulaw(pcm_data, 2)
-                logger.debug(f"Converted PCM to {len(ulaw_data)} bytes of ulaw data.")
-                
-                # Send audio in chunks for better streaming
-                chunk_size = 160  # 20ms at 8kHz
-                for i in range(0, len(ulaw_data), chunk_size):
-                    chunk = ulaw_data[i:i + chunk_size]
-                    if chunk:
-                        await self.on_event({"type": "AgentAudio", "data": chunk})
-                        await asyncio.sleep(0.02)  # 20ms delay between chunks
-                        
-        except Exception as e:
-            logger.error(f"TTS synthesis error: {e}")
-            # Send silence as fallback
-            silence = b'\x7f' * 160  # ulaw silence
-            await self.on_event({"type": "AgentAudio", "data": silence})
-
-    async def speak(self, text: str):
-        """Speak the given text using TTS."""
-        try:
-            logger.debug(f"Speaking: {text}")
-            if not self.on_event:
-                logger.warning("No event handler set, TTS audio will not be sent")
-                return
-            await self._synthesize_tts_audio(text)
-        except Exception as e:
-            logger.error(f"Error speaking text: {e}")
+    async def start_session(self, initial_greeting: str, system_prompt: str):
+        self._initialize_stt()
+        self.system_prompt = system_prompt
+        if initial_greeting:
+            await self.speak(initial_greeting)
 
     async def stop_session(self):
-        """Clean up resources and reset state."""
+        self.recognizer = None
+        self.llm = None  # Release LLM model
+        self.tts = None  # Release TTS model
+        logger.info("LocalProvider session stopped and resources cleaned up")
+
+    async def send_audio(self, audio_chunk: bytes):
+        if not self.recognizer:
+            return
+
+        pcm_audio = audioop.ulaw2lin(audio_chunk, 2)
+        pcm_audio, _ = audioop.ratecv(pcm_audio, 2, 1, 8000, 16000, None)
+
+        if self.recognizer.AcceptWaveform(pcm_audio):
+            result = json.loads(self.recognizer.Result())
+            if result.get("text"):
+                logger.debug(f"STT transcription: {result['text']}")
+                await self.on_event({"type": "Transcription", "text": result["text"]})
+                await self._generate_llm_response(result["text"])
+
+    async def _generate_llm_response(self, text: str):
+        if not self.llm:
+            self._initialize_llm()
+        if not self.llm:
+            logger.error("LLM not initialized, cannot generate response.")
+            return
+
+        logger.debug(f"Generating LLM response for: {text}")
+        
+        # Simple prompt structure
+        full_prompt = f"{self.system_prompt}\n\nUser: {text}\nAssistant:"
+        
         try:
-            if self.recognizer:
-                self.recognizer = None
-            logger.info("LocalProvider session stopped and resources cleaned up")
+            output = self.llm(
+                full_prompt,
+                max_tokens=self.config.max_tokens,
+                temperature=self.config.temperature,
+                stop=["User:", "\n"],
+                echo=False
+            )
+            response_text = output['choices'][0]['text'].strip()
+            logger.debug(f"LLM response: {response_text}")
+            await self.speak(response_text)
         except Exception as e:
-            logger.error(f"Error during session cleanup: {e}")
-    
-    def get_provider_info(self) -> Dict[str, Any]:
-        """Get information about the provider and its capabilities."""
-        return {
-            "name": "LocalProvider",
-            "type": "local",
-            "supported_codecs": self.supported_codecs,
-            "stt_model": self.config.stt_model,
-            "llm_model": self.config.llm_model,
-            "tts_voice": self.config.tts_voice,
-            "temperature": self.config.temperature,
-            "max_tokens": self.config.max_tokens
-        }
-    
-    def is_ready(self) -> bool:
-        """Check if the provider is ready to process audio."""
-        return self.recognizer is not None and self.on_event is not None
+            logger.error(f"Error generating LLM response: {e}")
+
+    async def speak(self, text: str):
+        if not self.tts:
+            self._initialize_tts()
+        if not self.tts:
+            logger.error("TTS not initialized, cannot speak.")
+            return
+            
+        self.is_speaking = True
+        logger.debug(f"Speaking: {text}")
+        await self._synthesize_tts_audio(text)
+        self.is_speaking = False
+
+    async def _synthesize_tts_audio(self, text: str):
+        """Synthesize TTS audio using Coqui TTS."""
+        try:
+            # TTS.tts() returns a list of integers (waveform)
+            wav_data = self.tts.tts(text=text, speaker=self.tts.speakers[0] if self.tts.is_multi_speaker else None, language=self.tts.languages[0] if self.tts.is_multi_lingual else None)
+            
+            # Convert list of ints to a numpy array of 16-bit integers
+            pcm_data = np.array(wav_data, dtype=np.int16)
+            
+            # The TTS model outputs at its own sample rate (e.g., 22050Hz). We need to resample to 8000Hz for Asterisk.
+            tts_sample_rate = self.tts.synthesizer.output_sample_rate
+            pcm_data_resampled, _ = audioop.ratecv(pcm_data.tobytes(), 2, 1, tts_sample_rate, 8000, None)
+            
+            # Convert the 16-bit linear PCM back to 8-bit ulaw.
+            ulaw_data = audioop.lin2ulaw(pcm_data_resampled, 2)
+            
+            logger.debug(f"Synthesized {len(ulaw_data)} bytes of ulaw audio.")
+
+            chunk_size = 160  # 20ms at 8kHz
+            for i in range(0, len(ulaw_data), chunk_size):
+                chunk = ulaw_data[i:i + chunk_size]
+                if chunk:
+                    await self.on_event({"type": "AgentAudio", "data": chunk})
+                    await asyncio.sleep(0.02)
+
+        except Exception as e:
+            logger.error(f"TTS synthesis error: {e}")
+            # Send silence as a fallback
+            silence = b'\\x7f' * 160
+            await self.on_event({"type": "AgentAudio", "data": silence})
+
+def _resolve_path(path: str) -> str:
+    if os.path.isabs(path):
+        return path
+    return os.path.join(_PROJ_DIR, path)

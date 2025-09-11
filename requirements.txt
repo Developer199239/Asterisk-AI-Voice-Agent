@@ -1,13 +1,15 @@
-ari
-websockets
-aiohttp
-pydantic
-pydantic_settings
-structlog
-redis
-PyYAML
-vosk
-soundfile
-llama-cpp-python
-piper-tts
-tenacity
+ari==0.1.3
+websockets==15.0.1
+aiohttp==3.12.15
+pydantic==2.11.7
+pydantic_settings==2.10.1
+structlog==25.4.0
+redis==6.4.0
+PyYAML==6.0.2
+vosk==0.3.45
+soundfile==0.13.1
+llama-cpp-python==0.3.16
+torch==2.5.1 --index-url https://download.pytorch.org/whl/cpu
+torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cpu
+TTS
+tenacity==9.1.2
