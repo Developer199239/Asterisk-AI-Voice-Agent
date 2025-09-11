@@ -22,6 +22,12 @@ class LocalProvider(AIProviderInterface):
     Local AI Provider.
     Orchestrates local STT, LLM, and TTS models.
     """
+    
+    @property
+    def supported_codecs(self) -> List[str]:
+        """Returns a list of supported codec names, in order of preference."""
+        return ["ulaw", "pcm"]
+    
     def __init__(self, config: LocalProviderConfig, llm_config: LLMConfig):
         self.config = config
         self.llm_config = llm_config
@@ -65,10 +71,6 @@ class LocalProvider(AIProviderInterface):
             logger.debug(f"Loading TTS voice from: {self._tts_voice_path}")
             self._tts_voice = PiperVoice.load(self._tts_voice_path)
         return self._tts_voice
-
-    @property
-    def supported_codecs(self) -> List[str]:
-        return ["ulaw", "slin16"]
 
     async def start_session(self, call_id: str, on_event: callable):
         self.recognizer = KaldiRecognizer(self.stt_model, 8000)
@@ -188,3 +190,20 @@ class LocalProvider(AIProviderInterface):
             logger.info("LocalProvider session stopped and resources cleaned up")
         except Exception as e:
             logger.error(f"Error during session cleanup: {e}")
+    
+    def get_provider_info(self) -> Dict[str, Any]:
+        """Get information about the provider and its capabilities."""
+        return {
+            "name": "LocalProvider",
+            "type": "local",
+            "supported_codecs": self.supported_codecs,
+            "stt_model": self.config.stt_model,
+            "llm_model": self.config.llm_model,
+            "tts_voice": self.config.tts_voice,
+            "temperature": self.config.temperature,
+            "max_tokens": self.config.max_tokens
+        }
+    
+    def is_ready(self) -> bool:
+        """Check if the provider is ready to process audio."""
+        return self.recognizer is not None and self.on_event is not None

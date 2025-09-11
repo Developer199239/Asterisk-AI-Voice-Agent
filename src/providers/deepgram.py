@@ -1,7 +1,7 @@
 import asyncio
 import json
 import websockets
-from typing import Callable, Optional, List
+from typing import Callable, Optional, List, Dict, Any
 import websockets.exceptions
 
 from structlog import get_logger
@@ -125,3 +125,17 @@ class DeepgramProvider(AIProviderInterface):
             await self.websocket.send(json.dumps(inject_message))
         except websockets.exceptions.ConnectionClosed as e:
             logger.error("Failed to send inject agent message: Connection is closed.", exc_info=True, code=e.code, reason=e.reason)
+    
+    def get_provider_info(self) -> Dict[str, Any]:
+        """Get information about the provider and its capabilities."""
+        return {
+            "name": "DeepgramProvider",
+            "type": "cloud",
+            "supported_codecs": self.supported_codecs,
+            "model": self.config.model,
+            "tts_model": self.config.tts_model
+        }
+    
+    def is_ready(self) -> bool:
+        """Check if the provider is ready to process audio."""
+        return self.websocket is not None and self.event_handler is not None
