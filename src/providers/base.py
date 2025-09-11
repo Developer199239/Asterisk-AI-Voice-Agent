@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import List
+from typing import List, Callable, Dict, Any
 
 class AIProviderInterface(ABC):
     """
@@ -7,6 +7,8 @@ class AIProviderInterface(ABC):
 
     This class defines the contract that all AI provider implementations must follow.
     """
+    def __init__(self, on_event: Callable[[Dict[str, Any]], None]):
+        self.on_event = on_event
 
     @property
     @abstractmethod

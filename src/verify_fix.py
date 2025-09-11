@@ -18,11 +18,11 @@ async def main():
         engine = Engine(config=config)
         print('SUCCESS: Engine instantiated.')
 
+        # This test is now simpler, as the on_provider_event handler is part of the Engine
         print('\nStep 2: Simulating provider creation for \'local\'...')
-        # This is the line that was failing
         provider_config_data = config.providers.get('local')
         provider = engine._create_provider('local', provider_config_data)
-        print('SUCCESS: _create_provider call for \'local\' did not raise a TypeError.')
+        print('SUCCESS: _create_provider call for \'local\' did not raise an error.')
 
         print(f'\nStep 3: Checking the created provider type...')
         assert isinstance(provider, LocalProvider)

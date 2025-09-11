@@ -123,13 +123,12 @@ class Engine:
         # Each provider might have a different constructor signature.
         # We handle that here.
         if provider_name == "deepgram":
-            return DeepgramProvider(provider_config_data, self.config.llm)
+            return DeepgramProvider(provider_config_data, self.config.llm, self.on_provider_event)
         elif provider_name == "local":
-            # The LocalProvider only needs the on_event handler.
             return LocalProvider(self.on_provider_event)
 
         # Fallback for any future providers that might follow a simple pattern
-        return provider_class(self.on_provider_event)
+        raise ValueError(f"Provider '{provider_name}' does not have a creation rule.")
 
     async def on_provider_event(self, event: Dict[str, Any]):
         """Callback for providers to send events back to the engine."""

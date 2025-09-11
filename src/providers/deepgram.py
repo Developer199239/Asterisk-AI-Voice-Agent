@@ -11,21 +11,20 @@ from .base import AIProviderInterface
 logger = get_logger(__name__)
 
 class DeepgramProvider(AIProviderInterface):
-    def __init__(self, config: DeepgramProviderConfig, llm_config: LLMConfig):
+    def __init__(self, config: DeepgramProviderConfig, llm_config: LLMConfig, on_event: Callable[[Dict[str, Any]], None]):
+        super().__init__(on_event)
         self.config = config
         self.llm_config = llm_config
         self.websocket: Optional[websockets.WebSocketClientProtocol] = None
         self._keep_alive_task: Optional[asyncio.Task] = None
         self._is_audio_flowing = False
         self.request_id: Optional[str] = None
-        self.event_handler: Optional[Callable] = None
 
     @property
     def supported_codecs(self) -> List[str]:
         return ["ulaw"]
 
-    async def start_session(self, call_id: str, on_event: callable):
-        self.event_handler = on_event
+    async def start_session(self, call_id: str):
         ws_url = f"wss://agent.deepgram.com/v1/agent/converse"
         headers = {'Authorization': f'Token {self.config.api_key}'}
 
