@@ -294,8 +294,10 @@ class Engine:
             
             pcm_data = audioop.ulaw2lin(buffered_audio, 2)  # 16-bit samples
             
-            # Create a temporary WAV file
-            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
+            # Create a temporary WAV file in shared directory
+            import os
+            os.makedirs('/tmp/asterisk-audio', exist_ok=True)
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False, dir='/tmp/asterisk-audio') as temp_file:
                 temp_file_path = temp_file.name
                 
             # Write WAV file with proper headers
