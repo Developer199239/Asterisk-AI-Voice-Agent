@@ -82,7 +82,7 @@ class LocalProvider(AIProviderInterface):
                 return
                 
             # Vosk expects 16-bit PCM, so we need to convert from ulaw
-            pcm_audio, _ = audioop.ulaw2lin(audio_chunk, 2)
+            pcm_audio, _, _ = audioop.ulaw2lin(audio_chunk, 2)
             
             if self.recognizer.AcceptWaveform(pcm_audio):
                 result = json.loads(self.recognizer.Result())
@@ -170,6 +170,9 @@ class LocalProvider(AIProviderInterface):
         """Speak the given text using TTS."""
         try:
             logger.debug(f"Speaking: {text}")
+            if not self.on_event:
+                logger.warning("No event handler set, TTS audio will not be sent")
+                return
             await self._synthesize_tts_audio(text)
         except Exception as e:
             logger.error(f"Error speaking text: {e}")
