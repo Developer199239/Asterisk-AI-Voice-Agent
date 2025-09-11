@@ -20,7 +20,7 @@ async def main():
 
         print('\nStep 2: Simulating provider creation for \'local\'...')
         # This is the line that was failing
-        provider_config_data = config.providers.local
+        provider_config_data = config.providers.get('local')
         provider = engine._create_provider('local', provider_config_data)
         print('SUCCESS: _create_provider call for \'local\' did not raise a TypeError.')
 

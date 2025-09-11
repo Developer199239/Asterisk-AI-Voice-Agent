@@ -62,7 +62,9 @@ class Engine:
         provider_name = args[0] if args else self.config.default_provider
         
         try:
-            provider_config_data = self.config.providers[provider_name]
+            provider_config_data = self.config.providers.get(provider_name)
+            if not provider_config_data:
+                raise ValueError(f"Provider '{provider_name}' not found in configuration.")
             provider = self._create_provider(provider_name, provider_config_data)
         except (KeyError, ValueError) as e:
             logger.error(f"Failed to create provider: {e}")
