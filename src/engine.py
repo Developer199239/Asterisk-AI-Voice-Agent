@@ -260,27 +260,37 @@ class Engine:
 
     async def _play_audio_to_channel(self, channel_id: str, audio_data: bytes):
         """Play audio data to a specific channel using ARI."""
-        # For now, we'll use the play_media method with a temporary file
-        # In a production system, you might want to use a more sophisticated approach
-        # like streaming the audio data directly
-        
-        # Create a temporary file with the audio data
         import tempfile
         import os
+        import wave
+        import audioop
         
-        with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
-            # Convert ulaw to wav format (simplified)
-            # In practice, you'd want proper audio format conversion
-            temp_file.write(audio_data)
-            temp_file_path = temp_file.name
-            
         try:
+            # Convert ulaw to linear PCM
+            pcm_data = audioop.ulaw2lin(audio_data, 2)  # 16-bit samples
+            
+            # Create a temporary WAV file
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
+                temp_file_path = temp_file.name
+                
+            # Write WAV file with proper headers
+            with wave.open(temp_file_path, 'wb') as wav_file:
+                wav_file.setnchannels(1)  # Mono
+                wav_file.setsampwidth(2)  # 16-bit samples
+                wav_file.setframerate(8000)  # 8kHz sample rate
+                wav_file.writeframes(pcm_data)
+            
             # Play the audio file
             await self.ari_client.play_media(channel_id, f"sound:{temp_file_path}")
+            logger.debug(f"Playing audio file: {temp_file_path}")
+            
+        except Exception as e:
+            logger.error(f"Error playing audio to channel {channel_id}: {e}")
         finally:
             # Clean up the temporary file
             try:
-                os.unlink(temp_file_path)
+                if 'temp_file_path' in locals():
+                    os.unlink(temp_file_path)
             except OSError:
                 pass
 
