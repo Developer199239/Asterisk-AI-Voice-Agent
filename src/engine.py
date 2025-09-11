@@ -3,6 +3,7 @@ import os
 import random
 import signal
 import uuid
+import audioop
 from typing import Dict, Any
 
 from .ari_client import ARIClient
@@ -72,21 +73,17 @@ class Engine:
             return
 
         try:
+            # Answer the call immediately to prevent timeout
             await self.ari_client.answer_channel(channel_id)
 
             self.active_calls[channel_id] = {
                 "provider": provider,
-                "rtp_packetizer": RTPPacketizer(ssrc=random.randint(0, 4294967295))
+                "rtp_packetizer": RTPPacketizer(ssrc=random.randint(0, 4294967295)),
+                "models_ready": False
             }
             
-            await provider.start_session("", self.config.llm.prompt)  # Don't speak yet
-            
+            # Set up media immediately
             preferred_codec = provider.supported_codecs[0]
-            # Check if the call still exists (might have been cleaned up due to an error)
-            if channel_id not in self.active_calls:
-                logger.warning(f"Call {channel_id} was cleaned up before media setup, skipping")
-                return
-                
             media_channel_response = await self.ari_client.create_external_media_channel(
                 app_name=self.config.asterisk.app_name,
                 external_host=f"127.0.0.1:{self.udp_server.port}",
@@ -105,13 +102,49 @@ class Engine:
             await self.ari_client.add_channel_to_bridge(bridge_id, channel_id)
             await self.ari_client.add_channel_to_bridge(bridge_id, media_channel_id)
             
-            # Now that media setup is complete, speak the initial greeting
-            if hasattr(provider, 'speak'):
-                await provider.speak(self.config.llm.initial_greeting)
+            # Handle different providers
+            if provider_name == "local":
+                # For local provider, start ring tone and load models in background
+                logger.info("Starting ring tone for local provider", channel_id=channel_id)
+                ring_task = asyncio.create_task(self._play_ring_tone(channel_id, duration=15.0))
+                
+                # Load models in background
+                model_task = asyncio.create_task(self._load_local_models(provider, channel_id))
+                
+                # Wait for models to be ready
+                models_ready = await model_task
+                if models_ready:
+                    self.active_calls[channel_id]['models_ready'] = True
+                    ring_task.cancel()  # Stop ring tone
+                    
+                    # Now speak the greeting
+                    if hasattr(provider, 'speak'):
+                        await provider.speak(self.config.llm.initial_greeting)
+                else:
+                    # Models failed to load, hang up
+                    logger.error("Failed to load local models", channel_id=channel_id)
+                    await self._cleanup_call(channel_id)
+                    
+            else:
+                # For Deepgram, start session immediately (no ring needed)
+                await provider.start_session("", self.config.llm.prompt)
+                
+                # Speak the greeting
+                if hasattr(provider, 'speak'):
+                    await provider.speak(self.config.llm.initial_greeting)
 
         except Exception as e:
             logger.error("Error handling StasisStart", channel_id=channel_id, exc_info=True)
             await self._cleanup_call(channel_id)
+
+    async def _load_local_models(self, provider, channel_id: str):
+        """Load local models and return True when ready."""
+        try:
+            await provider.start_session("", self.config.llm.prompt)
+            return True
+        except Exception as e:
+            logger.error("Failed to load local models", channel_id=channel_id, error=str(e))
+            return False
 
     def _create_provider(self, provider_name: str, provider_config_data: Any) -> AIProviderInterface:
         logger.debug(f"Creating provider: {provider_name}")
@@ -153,7 +186,7 @@ class Engine:
                         asterisk_rtp_addr = call_data["asterisk_rtp_addr"]
                         
                         # Convert ulaw audio to RTP packets and send
-                        rtp_packet = rtp_packetizer.packetize_ulaw(audio_data)
+                        rtp_packet = rtp_packetizer.packetize(audio_data, payload_type=0)
                         await self.udp_server.send_rtp_packet(rtp_packet, asterisk_rtp_addr)
                         logger.debug(f"Sent RTP packet to {asterisk_rtp_addr}")
         elif event_type == "Transcription":
@@ -227,6 +260,80 @@ class Engine:
             try:
                 await self.ari_client.destroy_bridge(bridge_id)
             except Exception: pass
+
+    async def _play_ring_tone(self, channel_id: str, duration: float = 10.0):
+        """Play ring tone while models are loading."""
+        call_data = self.active_calls.get(channel_id)
+        if not call_data:
+            return
+            
+        rtp_packetizer = call_data.get('rtp_packetizer')
+        asterisk_rtp_addr = call_data.get('asterisk_rtp_addr')
+        
+        if not rtp_packetizer or not asterisk_rtp_addr:
+            return
+            
+        logger.info("Starting ring tone", channel_id=channel_id, duration=duration)
+        
+        # Generate ring tone (440Hz sine wave)
+        sample_rate = 8000
+        frequency = 440  # A4 note
+        chunk_size = 160  # 20ms at 8kHz
+        samples_per_chunk = chunk_size
+        
+        start_time = asyncio.get_event_loop().time()
+        
+        try:
+            while (asyncio.get_event_loop().time() - start_time) < duration:
+                # Check if models are ready
+                if call_data.get('models_ready', False):
+                    logger.info("Models ready, stopping ring tone", channel_id=channel_id)
+                    break
+                    
+                # Generate sine wave chunk
+                chunk_duration = samples_per_chunk / sample_rate
+                t = asyncio.get_event_loop().time() - start_time
+                
+                # Create sine wave samples
+                samples = []
+                for i in range(samples_per_chunk):
+                    sample_time = t + (i / sample_rate)
+                    # Ring pattern: 2 seconds on, 4 seconds off
+                    ring_cycle = (sample_time % 6.0)
+                    if ring_cycle < 2.0:  # Ring on
+                        amplitude = 0.3 * (1.0 if ring_cycle < 1.0 else 0.5)  # Fade in/out
+                        sample = int(amplitude * 32767 * (0.5 * (1 + (sample_time * frequency * 2 * 3.14159) % (2 * 3.14159))))
+                    else:  # Ring off
+                        sample = 0
+                    samples.append(sample)
+                
+                # Convert to ulaw
+                pcm_data = bytes(samples)
+                ulaw_data = audioop.lin2ulaw(pcm_data, 2)
+                
+                # Packetize and send
+                rtp_packet = rtp_packetizer.packetize(ulaw_data, payload_type=0)
+                await self.udp_server.send_rtp_packet(rtp_packet, asterisk_rtp_addr)
+                
+                await asyncio.sleep(0.02)  # 20ms delay
+                
+        except asyncio.CancelledError:
+            logger.info("Ring tone cancelled", channel_id=channel_id)
+        except Exception as e:
+            logger.error("Error playing ring tone", channel_id=channel_id, error=str(e))
+
+    async def _wait_for_models_ready(self, provider, channel_id: str, timeout: float = 15.0):
+        """Wait for local models to be ready."""
+        start_time = asyncio.get_event_loop().time()
+        
+        while (asyncio.get_event_loop().time() - start_time) < timeout:
+            if hasattr(provider, 'is_ready') and provider.is_ready():
+                logger.info("Local models ready", channel_id=channel_id)
+                return True
+            await asyncio.sleep(0.1)
+            
+        logger.warning("Models not ready within timeout", channel_id=channel_id, timeout=timeout)
+        return False
 
 async def main():
     configure_logging(log_level=os.getenv("LOG_LEVEL", "DEBUG"))

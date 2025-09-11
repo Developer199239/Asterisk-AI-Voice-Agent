@@ -94,6 +94,13 @@ class LocalProvider(AIProviderInterface):
         self.tts = None  # Release TTS model
         logger.info("LocalProvider session stopped and resources cleaned up")
 
+    def is_ready(self) -> bool:
+        """Check if all models are loaded and ready."""
+        return (self.stt_model is not None and 
+                self.recognizer is not None and 
+                self.llm is not None and 
+                self.tts is not None)
+
     async def send_audio(self, audio_chunk: bytes):
         if not self.recognizer:
             return
