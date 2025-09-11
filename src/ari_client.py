@@ -220,16 +220,19 @@ class ARIClient:
             # Create a unique ID for the snoop channel
             snoop_id = f"snoop_{channel_id}"
 
-            # Command Asterisk to create and start the snoop channel
+            # Command Asterisk to create the snoop channel
             snoop_channel = await self.create_snoop_channel(channel_id, app_name, snoop_id)
             
             if not snoop_channel or 'id' not in snoop_channel:
                 logger.error("Failed to create snoop channel", channel_id=channel_id)
                 return None
 
+            # Start snooping to capture audio frames
+            await self.start_snoop(snoop_channel['id'], app_name)
+
             # Store the snoop channel mapping
             self.active_snoops[channel_id] = snoop_channel['id']
-            logger.info(f"Snoop channel {snoop_channel['id']} created and started for {channel_id}")
+            logger.info(f"Snoop channel {snoop_channel['id']} created for {channel_id}")
 
             return snoop_channel['id']
 
@@ -378,18 +381,25 @@ class ARIClient:
         logger.info("Creating snoop channel...", channel_id=channel_id, snoop_id=snoop_id)
 
         data = {
-            "channelId": channel_id,  # The ID of the channel we want to listen to
             "app": app_name,
-            "snoopId": snoop_id,
-            "spy": "in"  # We want to listen to the audio coming IN from the caller
+            "spy": "in",  # Capture incoming audio from the channel
+            "snoopId": snoop_id
         }
 
         return await self.send_command(
             "POST",
-            "channels/snoopChannel",
+            f"channels/{channel_id}/snoop",
             data=data
         )
 
+    async def start_snoop(self, snoop_channel_id: str, app_name: str) -> Optional[Dict[str, Any]]:
+        """Start snooping on the snoop channel."""
+        logger.info("Starting snoop...", snoop_channel_id=snoop_channel_id)
+        data = {
+            "spy": "in",  # Specify direction for snooping
+            "app": app_name  # Required: Application name for snooped audio
+        }
+        return await self.send_command("POST", f"channels/{snoop_channel_id}/snoop", data=data)
 
     async def stop_audio_streaming(self, channel_id: str) -> bool:
         """Stop audio streaming and clean up snoop channel."""
