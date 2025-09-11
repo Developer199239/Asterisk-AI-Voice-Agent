@@ -1,6 +1,6 @@
 # config/ai-agent.yaml
 # Default provider to use if not specified in the dialplan
-default_provider: "deepgram"
+default_provider: "local"
 
 # Asterisk connection settings (will be overridden by environment variables)
 asterisk:
