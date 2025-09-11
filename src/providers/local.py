@@ -8,7 +8,7 @@ import io
 import numpy as np
 from typing import Callable, Dict, Any, List
 
-from ..config import load_config, _PROJ_DIR
+from ..config import load_config, _PROJ_DIR, LocalProviderConfig
 from .base import AIProviderInterface
 
 try:
