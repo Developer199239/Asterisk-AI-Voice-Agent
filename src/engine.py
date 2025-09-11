@@ -123,11 +123,12 @@ class Engine:
         # Each provider might have a different constructor signature.
         # We handle that here.
         if provider_name == "deepgram":
-            return DeepgramProvider(provider_config_data, self.config.llm, self.on_provider_event)
+            provider_config = DeepgramProviderConfig(**provider_config_data)
+            return DeepgramProvider(provider_config, self.config.llm, self.on_provider_event)
         elif provider_name == "local":
-            return LocalProvider(self.on_provider_event)
+            provider_config = LocalProviderConfig(**provider_config_data)
+            return LocalProvider(provider_config, self.on_provider_event)
 
-        # Fallback for any future providers that might follow a simple pattern
         raise ValueError(f"Provider '{provider_name}' does not have a creation rule.")
 
     async def on_provider_event(self, event: Dict[str, Any]):

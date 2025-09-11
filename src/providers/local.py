@@ -30,9 +30,9 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 class LocalProvider(AIProviderInterface):
-    def __init__(self, on_event: Callable[[Dict[str, Any]], None]):
+    def __init__(self, config: LocalProviderConfig, on_event: Callable[[Dict[str, Any]], None]):
         super().__init__(on_event)
-        self.config = load_config().providers.local
+        self.config = config
         self.stt_model = None
         self.recognizer = None
         self.llm = None

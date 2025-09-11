@@ -21,6 +21,8 @@ async def main():
         # This test is now simpler, as the on_provider_event handler is part of the Engine
         print('\nStep 2: Simulating provider creation for \'local\'...')
         provider_config_data = config.providers.get('local')
+        if not provider_config_data:
+            raise ValueError("Provider 'local' not found in config for verification")
         provider = engine._create_provider('local', provider_config_data)
         print('SUCCESS: _create_provider call for \'local\' did not raise an error.')
 
