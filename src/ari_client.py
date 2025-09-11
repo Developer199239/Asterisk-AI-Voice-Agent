@@ -203,7 +203,7 @@ class ARIClient:
         """Create a snoop channel to capture audio from the main channel."""
         logger.info("Creating snoop channel...", channel_id=channel_id, snoop_id=snoop_id)
 
-        params = {
+        data = {
             "app": app_name,
             "spy": "in",  # Capture incoming audio from the channel
             "snoopId": snoop_id
@@ -212,13 +212,16 @@ class ARIClient:
         return await self.send_command(
             "POST",
             f"channels/{channel_id}/snoop",
-            params=params
+            data=data
         )
 
     async def start_snoop(self, snoop_channel_id: str) -> Optional[Dict[str, Any]]:
         """Start snooping on the snoop channel."""
         logger.info("Starting snoop...", snoop_channel_id=snoop_channel_id)
-        return await self.send_command("POST", f"channels/{snoop_channel_id}/snoop")
+        data = {
+            "spy": "in"  # Specify direction for snooping
+        }
+        return await self.send_command("POST", f"channels/{snoop_channel_id}/snoop", data=data)
 
     async def stop_snoop(self, snoop_channel_id: str) -> Optional[Dict[str, Any]]:
         """Stop snooping on the snoop channel."""
