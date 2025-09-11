@@ -82,7 +82,7 @@ class LocalProvider(AIProviderInterface):
                 return
                 
             # Vosk expects 16-bit PCM, so we need to convert from ulaw
-            pcm_audio, _, _ = audioop.ulaw2lin(audio_chunk, 2)
+            pcm_audio = audioop.ulaw2lin(audio_chunk, 2)
             
             if self.recognizer.AcceptWaveform(pcm_audio):
                 result = json.loads(self.recognizer.Result())
