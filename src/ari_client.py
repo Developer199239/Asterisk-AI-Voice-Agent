@@ -265,15 +265,19 @@ class ARIClient:
     async def play_audio_file(self, channel_id: str, file_path: str) -> bool:
         """Play an audio file to the specified channel."""
         try:
-            # Wait a bit more to ensure file is available
+            # Wait a bit more to ensure file is available and readable
             import time
-            for i in range(3):  # Try up to 3 times
-                if os.path.exists(file_path):
+            for i in range(5):  # Try up to 5 times
+                if os.path.exists(file_path) and os.access(file_path, os.R_OK):
                     break
-                time.sleep(0.05)  # 50ms delay
+                time.sleep(0.1)  # 100ms delay
             
             if not os.path.exists(file_path):
                 logger.error(f"Audio file not found after retries: {file_path}")
+                return False
+            
+            if not os.access(file_path, os.R_OK):
+                logger.error(f"Audio file not readable: {file_path} (permissions: {oct(os.stat(file_path).st_mode)[-3:]})")
                 return False
 
             # Use ARI to play the file
@@ -315,6 +319,9 @@ class ARIClient:
                 wav_file.setsampwidth(2)  # 2 bytes per sample (16-bit)
                 wav_file.setframerate(sample_rate)
                 wav_file.writeframes(pcm_data)
+            
+            # Set proper permissions for Asterisk to read the file
+            os.chmod(temp_file_path, 0o644)  # rw-r--r--
             
             # Ensure file is fully written and synced
             import time
