@@ -105,15 +105,35 @@ class Engine:
             logger.error("Error handling StasisStart", channel_id=channel_id, exc_info=True)
             await self._cleanup_call(channel_id)
 
-    def _create_provider(self, name: str, config_data: Dict) -> AIProviderInterface:
-        if name == 'deepgram':
-            provider_config = DeepgramProviderConfig(**config_data)
-            return DeepgramProvider(provider_config, self.config.llm)
-        elif name == 'local':
-            provider_config = LocalProviderConfig(**config_data)
-            return LocalProvider(provider_config, self.config.llm)
-        else:
-            raise ValueError(f"Unknown provider: {name}")
+    def _create_provider(self, provider_name: str, provider_config_data: Any) -> AIProviderInterface:
+        logger.debug(f"Creating provider: {provider_name}")
+        
+        provider_map = {
+            "deepgram": DeepgramProvider,
+            "local": LocalProvider
+        }
+
+        provider_class = provider_map.get(provider_name)
+        
+        if not provider_class:
+            raise ValueError(f"Unknown provider: {provider_name}")
+
+        # Each provider might have a different constructor signature.
+        # We handle that here.
+        if provider_name == "deepgram":
+            return DeepgramProvider(provider_config_data, self.config.llm)
+        elif provider_name == "local":
+            # The LocalProvider only needs the on_event handler.
+            return LocalProvider(self.on_provider_event)
+
+        # Fallback for any future providers that might follow a simple pattern
+        return provider_class(self.on_provider_event)
+
+    async def on_provider_event(self, event: Dict[str, Any]):
+        """Callback for providers to send events back to the engine."""
+        # This method will be expanded to handle different event types
+        # from the provider, like transcriptions, agent audio, etc.
+        pass
 
     async def _handle_ai_event(self, event: Dict[str, Any], channel_id: str):
         event_type = event.get("type")
