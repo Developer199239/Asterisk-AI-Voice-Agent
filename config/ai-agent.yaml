@@ -1,6 +1,22 @@
 # config/ai-agent.yaml
+# Default provider to use if not specified in the dialplan
 default_provider: "deepgram"
 
+# Asterisk connection settings (will be overridden by environment variables)
+asterisk:
+  host: "your_asterisk_host"
+  username: "your_ari_username"
+  password: "your_ari_password"
+  app_name: "asterisk-ai-voice-agent"
+
+# Global LLM settings (will be overridden by environment variables)
+llm:
+  initial_greeting: "Hello, how can I help you today?"
+  prompt: "You are a friendly and helpful assistant."
+  model: "gpt-4o"
+  api_key: "${OPENAI_API_KEY}" # Example of using env var substitution
+
+# Provider-specific configurations
 providers:
   deepgram:
     api_key: "${DEEPGRAM_API_KEY}"

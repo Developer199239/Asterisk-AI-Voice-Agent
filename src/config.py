@@ -65,6 +65,22 @@ def load_config(path: str = "config/ai-agent.yaml") -> AppConfig:
         
         config_data = yaml.safe_load(config_str_expanded)
 
+        # Manually construct and inject the Asterisk and LLM configs from environment variables.
+        # This keeps secrets out of the YAML file and aligns with the Pydantic model.
+        config_data['asterisk'] = {
+            "host": os.getenv("ASTERISK_HOST"),
+            "username": os.getenv("ASTERISK_ARI_USERNAME"),
+            "password": os.getenv("ASTERISK_ARI_PASSWORD"),
+            "app_name": "asterisk-ai-voice-agent"
+        }
+        
+        config_data['llm'] = {
+            "initial_greeting": os.getenv("GREETING", "Hello, how can I help you?"),
+            "prompt": os.getenv("AI_ROLE", "You are a helpful assistant."),
+            "model": "gpt-4o",
+            "api_key": os.getenv("OPENAI_API_KEY")
+        }
+
         return AppConfig(**config_data)
     except FileNotFoundError:
         # Re-raise with a more informative error message
