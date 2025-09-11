@@ -46,6 +46,7 @@ RUN apt-get update && apt-get install -y \
     libsndfile1 \
     libasound2 \
     libportaudio2 \
+    libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Set a working directory
