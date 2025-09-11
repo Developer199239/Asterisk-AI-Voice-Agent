@@ -10,6 +10,11 @@ import yaml
 from pydantic import BaseModel, Field
 from typing import Dict, Any, Optional
 
+# Determine the absolute path to the project root from this file's location
+# This makes the config loading independent of the current working directory.
+_PROJ_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
 class AsteriskConfig(BaseModel):
     host: str
     port: int = Field(default=8088)
@@ -47,28 +52,23 @@ class AppConfig(BaseModel):
     llm: LLMConfig
 
 def load_config(path: str = "config/ai-agent.yaml") -> AppConfig:
-    with open(path, 'r') as f:
-        config_str = f.read()
+    # If the provided path is not absolute, resolve it relative to the project root.
+    if not os.path.isabs(path):
+        path = os.path.join(_PROJ_DIR, path)
 
-    # Substitute environment variables
-    config_str_expanded = os.path.expandvars(config_str)
-    
-    config_data = yaml.safe_load(config_str_expanded)
+    try:
+        with open(path, 'r') as f:
+            config_str = f.read()
 
-    # Manually wire in some config for now until we fully move to YAML
-    # This is a temporary step to keep the POC working
-    config_data['asterisk'] = {
-        "host": os.getenv("ASTERISK_HOST"),
-        "username": os.getenv("ASTERISK_ARI_USERNAME"),
-        "password": os.getenv("ASTERISK_ARI_PASSWORD"),
-        "app_name": "asterisk-ai-voice-agent"
-    }
-    
-    config_data['llm'] = {
-        "initial_greeting": os.getenv("GREETING", "Hello, how can I help you?"),
-        "prompt": os.getenv("AI_ROLE", "You are a helpful assistant."),
-        "model": "gpt-4o",
-        "api_key": os.getenv("OPENAI_API_KEY")
-    }
+        # Substitute environment variables
+        config_str_expanded = os.path.expandvars(config_str)
+        
+        config_data = yaml.safe_load(config_str_expanded)
 
-    return AppConfig(**config_data)
+        return AppConfig(**config_data)
+    except FileNotFoundError:
+        # Re-raise with a more informative error message
+        raise FileNotFoundError(f"Configuration file not found at the resolved path: {path}")
+    except yaml.YAMLError as e:
+        # Re-raise with a more informative error message
+        raise yaml.YAMLError(f"Error parsing YAML file at {path}: {e}")

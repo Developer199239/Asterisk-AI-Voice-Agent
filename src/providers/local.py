@@ -1,12 +1,19 @@
 import json
 import wave
 import audioop
+import os
 from vosk import Model, KaldiRecognizer
 from llama_cpp import Llama
 from piper import PiperVoice
 from .base import AIProviderInterface
 from typing import List, Optional
 from ..config import LocalProviderConfig, LLMConfig
+from ..logging_config import get_logger
+
+# Determine the absolute path to the project root from this file's location
+_PROJ_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+logger = get_logger(__name__)
 
 class LocalProvider(AIProviderInterface):
     """
@@ -16,26 +23,45 @@ class LocalProvider(AIProviderInterface):
     def __init__(self, config: LocalProviderConfig, llm_config: LLMConfig):
         self.config = config
         self.llm_config = llm_config
+        self.on_event: Optional[callable] = None
+        self.recognizer: Optional[KaldiRecognizer] = None
+
+        # Resolve model paths to be absolute
+        self._stt_model_path = self._resolve_path(self.config.stt_model)
+        self._llm_model_path = self._resolve_path(self.config.llm_model)
+        self._tts_voice_path = self._resolve_path(self.config.tts_voice)
+
+        # Lazy-loaded models
         self._stt_model: Optional[Model] = None
         self._llm: Optional[Llama] = None
         self._tts_voice: Optional[PiperVoice] = None
+        logger.info("LocalProvider initialized with lazy-loading models.")
+
+    def _resolve_path(self, path: str) -> str:
+        """Resolves a path to be absolute, relative to the project root."""
+        if not os.path.isabs(path):
+            return os.path.join(_PROJ_DIR, path)
+        return path
 
     @property
     def stt_model(self) -> Model:
         if self._stt_model is None:
-            self._stt_model = Model(self.config.stt_model)
+            logger.debug(f"Loading STT model from: {self._stt_model_path}")
+            self._stt_model = Model(self._stt_model_path)
         return self._stt_model
 
     @property
     def llm(self) -> Llama:
         if self._llm is None:
-            self._llm = Llama(model_path=self.config.llm_model, n_ctx=2048)
+            logger.debug(f"Loading LLM model from: {self._llm_model_path}")
+            self._llm = Llama(model_path=self._llm_model_path, n_ctx=2048, verbose=False)
         return self._llm
 
     @property
     def tts_voice(self) -> PiperVoice:
         if self._tts_voice is None:
-            self._tts_voice = PiperVoice.load(self.config.tts_voice)
+            logger.debug(f"Loading TTS voice from: {self._tts_voice_path}")
+            self._tts_voice = PiperVoice.load(self._tts_voice_path)
         return self._tts_voice
 
     @property
