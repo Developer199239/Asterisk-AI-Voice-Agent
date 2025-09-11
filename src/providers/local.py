@@ -73,7 +73,8 @@ class LocalProvider(AIProviderInterface):
         return self._tts_voice
 
     async def start_session(self, call_id: str, on_event: callable):
-        self.recognizer = KaldiRecognizer(self.stt_model, 8000)
+        # Initialize Vosk recognizer for 16kHz since we upsample from 8kHz
+        self.recognizer = KaldiRecognizer(self.stt_model, 16000)
         self.on_event = on_event
 
     async def send_audio(self, audio_chunk: bytes):
