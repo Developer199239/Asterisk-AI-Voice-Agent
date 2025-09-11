@@ -16,5 +16,8 @@ COPY config/ /app/config/
 COPY models/ /app/models/
 COPY main.py /app/
 
+# Create a symlink for the Piper TTS model to resolve loading issue
+RUN ln -s /app/models/tts/en_US-lessac-medium.onnx /app/models/tts/en_US-lessac-medium
+
 # Command to run the application
 CMD ["python", "main.py"]
