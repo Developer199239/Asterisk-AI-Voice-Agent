@@ -24,10 +24,11 @@ class Engine:
     def __init__(self, config: AppConfig):
         self.config = config
         self.ari_client = ARIClient(
-            username=config.asterisk.ari_username,
-            password=config.asterisk.ari_password,
-            base_url=f"http://{config.asterisk.ari_host}:{config.asterisk.ari_port}/ari",
-            app_name=config.asterisk.ari_app_name
+            host=config.asterisk.host,
+            port=config.asterisk.port,
+            username=config.asterisk.username,
+            password=config.asterisk.password,
+            on_event=self._on_ari_event
         )
         self.providers: Dict[str, AIProviderInterface] = {}
         self.active_calls: Dict[str, Dict[str, Any]] = {}
