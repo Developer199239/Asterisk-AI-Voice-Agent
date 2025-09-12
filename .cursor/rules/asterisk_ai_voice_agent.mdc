@@ -23,13 +23,46 @@ This is an open-source AI Voice Agent that integrates with Asterisk/FreePBX usin
    - Build and verify locally.
    - Commit changes to Git.
    - Push to remote `develop` branch.
-   - Merge to `main` only after thorough server testing.
 3. **Server Testing**:
    - SSH to test server.
    - Clone `develop` branch into `/root/Asterisk-Agent-Develop`.
    - Bring down the main production container if up and bring up the develop container for isolated testing.
    - Test with Asterisk 16+ environment.
    - Do not make any changes to asterisk config on server, ask user to do so if needed.
+
+### Docker Development Workflow (CRITICAL)
+
+**NEVER rebuild the Docker image for code changes.** Use the volume-based workflow:
+
+1. **For dependency changes only**: `docker-compose up --build -d`
+2. **For code changes**: `docker-compose restart` (instant)
+3. **View logs**: `docker-compose logs -f`
+
+**Key Principles:**
+- Source code is mounted as volumes, not copied into the image
+- Only rebuild when `requirements.txt` or `Dockerfile` changes
+- Use `docker-compose restart` for all Python code changes
+- This reduces deployment time from 15 minutes to under 10 seconds
+
+**Development Commands:**
+```bash
+# Initial setup (run once)
+./scripts/download_models.sh
+docker-compose up --build -d
+
+# Daily development (code changes)
+docker-compose restart
+docker-compose logs -f
+
+# Cleanup
+docker-compose down
+```
+
+**Volume-Based Development:**
+- **Source Code**: Mount `./src`, `./config`, `./main.py` as volumes
+- **Models**: Mount `./models` directory for AI models
+- **No Rebuilds**: Use `docker-compose restart` for code changes
+- **Build Only**: When `requirements.txt` or `Dockerfile` changes
 
 ### Code Standards
 - **Python Version**: 3.11+
@@ -61,7 +94,7 @@ Asterisk-AI-Voice-Agent/
 │   └── download_models.sh  # Script to fetch local AI models
 ├── main.py                 # Application entry point
 ├── docker-compose.yml      # Single-service orchestration
-├── Dockerfile              # Single container configuration
+├── Dockerfile              # Multi-stage optimized container
 └── requirements.txt        # Python dependencies
 ```
 
@@ -77,56 +110,41 @@ Asterisk-AI-Voice-Agent/
 
 ### Common Commands
 
-The new Docker volume-based workflow makes development much faster.
+**Fast Development Workflow (OPTIMIZED):**
 
 ```bash
-# 1. One-Time Setup: Download Local AI Models (run once)
-# This command downloads the large model files, which are mounted into the container.
+# 1. One-Time Setup: Download Local AI Models
 ./scripts/download_models.sh
 
-# 2. Initial Build / When Dependencies Change
-# Run this command the first time you set up the project, or after
-# changing requirements.txt or the Dockerfile.
+# 2. Initial Build (only when dependencies change)
 docker-compose up --build -d
 
-# 3. Rapid Development (Code Changes Only)
-# When you change Python source code in the `src` directory,
-# just restart the container to apply changes instantly. No rebuild needed!
+# 3. Code Changes (INSTANT - use this for all Python changes)
 docker-compose restart
 
 # 4. View Logs
 docker-compose logs -f
 
-# 5. Stop the Application
+# 5. Stop Application
 docker-compose down
 
-# 6. Clean up unused Docker images
+# 6. Clean up
 docker image prune -f
 ```
 
-### Server Testing Workflow
-
-The server testing workflow is now significantly faster, eliminating the need for slow rebuilds for simple code changes.
+**Server Testing Workflow (UPDATED):**
 
 ```bash
-# 1. SSH to the test server and navigate to the project directory
-# cd /root/Asterisk-Agent-Develop
-
-# 2. Pull the latest code changes from the develop branch
+# On test server: /root/Asterisk-Agent-Develop
 git pull origin develop
-
-# 3. Apply the new code instantly by restarting the container
-# This is much faster than a full rebuild.
-docker-compose restart
-
-# 4. Monitor the logs to verify the changes
+docker-compose restart  # Instant code updates
 docker-compose logs -f
 
-# When testing is complete, you can stop the development container
-# docker-compose down
+# When testing complete
+docker-compose down
 
-# And restart the production container if needed
-# docker-compose -f /root/Asterisk-AI-Voice-Agent/docker-compose.yml up -d
+# Restart production if needed
+docker-compose -f /root/Asterisk-AI-Voice-Agent/docker-compose.yml up -d
 ```
 
 ### Environment Variables
@@ -151,7 +169,7 @@ asterisk -rx "core show version"
 # Monitor Asterisk logs
 tail -f /var/log/asterisk/full
 
-#Test call command 
+# Test call command 
 asterisk -rx "channel originate sip/13164619284@callcentric application s@ivr-3"
 ```
 
@@ -180,3 +198,25 @@ The new single-container architecture simplifies call handling significantly.
     -   The bridge is destroyed and all channels are hung up.
 
 This entire loop occurs within a single process, eliminating the need for Redis-based inter-service communication and external media proxies like rtpengine.
+
+## Docker Optimization Rules
+
+### Multi-Stage Dockerfile Requirements
+- **Stage 1 (builder)**: Use `python:3.11` for building dependencies
+- **Stage 2 (final)**: Use `python:3.11-slim` for runtime
+- **Layer Caching**: Copy `requirements.txt` before source code
+- **Security**: Run as non-root user (`appuser`)
+- **Virtual Environment**: Use `/opt/venv` for dependency isolation
+
+### Volume-Based Development
+- **Source Code**: Mount `./src`, `./config`, `./main.py` as volumes
+- **Models**: Mount `./models` directory for AI models
+- **No Rebuilds**: Use `docker-compose restart` for code changes
+- **Build Only**: When `requirements.txt` or `Dockerfile` changes
+
+### Performance Targets
+- **Initial Build**: ~15 minutes (acceptable, happens once)
+- **Code Changes**: <10 seconds (99% improvement)
+- **Dependency Changes**: ~15 minutes (only when needed)
+
+This workflow ensures maximum developer productivity while maintaining production-ready container images.

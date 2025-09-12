@@ -38,6 +38,7 @@ class LocalProvider(AIProviderInterface):
         self.llm = None
         self.tts = None
         self.is_speaking = False
+        self._models_loaded = False
         logger.info("LocalProvider initialized with lazy-loading models.")
 
     @property
@@ -106,6 +107,22 @@ class LocalProvider(AIProviderInterface):
                 self.recognizer is not None and 
                 self.llm is not None and 
                 self.tts is not None)
+
+    async def preload_models(self):
+        """Pre-load all models to avoid delays during calls."""
+        if self._models_loaded:
+            return
+            
+        logger.info("Pre-loading all local models...")
+        self._initialize_stt()
+        self._initialize_llm()
+        self._initialize_tts()
+        
+        if self.is_ready():
+            self._models_loaded = True
+            logger.info("All local models pre-loaded successfully.")
+        else:
+            logger.error("Failed to pre-load some models.")
 
     async def send_audio(self, audio_chunk: bytes):
         if not self.recognizer:

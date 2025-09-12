@@ -44,6 +44,14 @@ class Engine:
         self.ari_client.on_event('ChannelAudioFrame', self._handle_audio_frame)
 
     async def start(self):
+        # Pre-load local models to avoid delays during calls
+        if self.config.default_provider == "local":
+            logger.info("Pre-loading local models...")
+            local_config = LocalProviderConfig(**self.config.providers["local"])
+            temp_provider = LocalProvider(local_config, self.on_provider_event)
+            await temp_provider.preload_models()
+            logger.info("Local models pre-loaded successfully.")
+        
         # Warm pipeline models first to reduce first-call latency
         if self.pipeline:
             await self.pipeline.start()
@@ -115,11 +123,9 @@ class Engine:
                 # Load models in background
                 model_task = asyncio.create_task(self._load_local_models(provider, channel_id))
                 
-                # Wait for models to be ready
+                # Models should already be pre-loaded, so we can immediately play greeting
                 models_ready = await model_task
                 if models_ready:
-                    # Wait for all models to actually be loaded and ready
-                    await self._wait_for_models_ready(provider, channel_id, timeout=15.0)
                     self.active_calls[channel_id]['models_ready'] = True
                     
                     # Cancel ring tone and wait for it to finish
@@ -129,7 +135,7 @@ class Engine:
                     except asyncio.CancelledError:
                         pass
                     
-                    # Play initial greeting now that models are ready
+                    # Play initial greeting immediately
                     if hasattr(provider, 'play_initial_greeting'):
                         await provider.play_initial_greeting()
                     
@@ -155,6 +161,7 @@ class Engine:
     async def _load_local_models(self, provider, channel_id: str):
         """Load local models and return True when ready."""
         try:
+            # Models should already be pre-loaded, just start the session
             await provider.start_session("", self.config.llm.prompt)
             return True
         except Exception as e:
@@ -378,18 +385,6 @@ class Engine:
         except Exception as e:
             logger.error("Error playing ring tone", channel_id=channel_id, error=str(e))
 
-    async def _wait_for_models_ready(self, provider, channel_id: str, timeout: float = 15.0):
-        """Wait for local models to be ready."""
-        start_time = asyncio.get_event_loop().time()
-        
-        while (asyncio.get_event_loop().time() - start_time) < timeout:
-            if hasattr(provider, 'is_ready') and provider.is_ready():
-                logger.info("Local models ready", channel_id=channel_id)
-                return True
-            await asyncio.sleep(0.1)
-            
-        logger.warning("Models not ready within timeout", channel_id=channel_id, timeout=timeout)
-        return False
 
 async def main():
     configure_logging(log_level=os.getenv("LOG_LEVEL", "DEBUG"))

@@ -1,29 +1,30 @@
-version: "3.8"
+version: '3.8'
 
 services:
-  redis:
-    image: redis:7.2-alpine
-    container_name: redis
-    command: redis-server
-    ports:
-      - "6379:6379"
-    restart: unless-stopped
-
-  ai-voice-agent:
+  ai-agent:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: ai-voice-agent
-    network_mode: "host"
-    env_file:
-      - .env
+    container_name: asterisk_ai_voice_agent
+    
+    # Volume mounts for instant code changes
     volumes:
-      - ./models:/app/models:ro
       - ./src:/app/src
       - ./config:/app/config
       - ./main.py:/app/main.py
-      - ./test_piper.py:/app/test_piper.py
-      - /tmp/asterisk-audio:/tmp/asterisk-audio
-    depends_on:
-      - redis
+      - ./models:/app/models  # Mount models directory
+    
+    # Environment variables
+    environment:
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1
+    
+    # Keep container running for development
+    tty: true
+    stdin_open: true
+    
+    # Restart policy
     restart: unless-stopped
+    
+    # Network mode for Asterisk communication
+    network_mode: "host"
