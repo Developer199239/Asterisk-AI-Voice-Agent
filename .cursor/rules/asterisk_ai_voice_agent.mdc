@@ -129,6 +129,7 @@ docker-compose logs -f
 docker-compose down
 
 # 6. Clean up
+df -h
 docker image prune -f
 ```
 
@@ -137,15 +138,14 @@ docker image prune -f
 ```bash
 # On test server: /root/Asterisk-Agent-Develop
 git pull origin develop
+docker-compose build --no-cache
 docker-compose restart  # Instant code updates
 docker-compose logs -f
 
 # When testing complete
 docker-compose down
 
-# Restart production if needed
-docker-compose -f /root/Asterisk-AI-Voice-Agent/docker-compose.yml up -d
-```
+
 
 ### Environment Variables
 Configuration is primarily managed in `config/ai-agent.yaml`. The `.env` file is only used for secrets.
@@ -153,10 +153,10 @@ Configuration is primarily managed in `config/ai-agent.yaml`. The `.env` file is
 - `OPENAI_API_KEY`: Your OpenAI API key.
 - `DEEPGRAM_API_KEY`: Your Deepgram API key.
 - `ASTERISK_HOST`: IP address of your Asterisk server.
-- `ASTERISK_ARI_USERNAME`: ARI username.
-- `ASTERISK_ARI_PASSWORD`: ARI password.
-- `GREETING`: The initial greeting the AI speaks.
-- `AI_ROLE`: The system prompt for the LLM.
+- `ASTERISK_ARI_USERNAME`: AIAgent
+- `ASTERISK_ARI_PASSWORD`: AiAgent+2025?
+- `GREETING`: Hello ! I am an AI Voice Assistant.
+- `AI_ROLE`: You are an AI voice assistant for answering calls for Jugaaar LLC.
 
 ### Testing Commands
 ```bash
