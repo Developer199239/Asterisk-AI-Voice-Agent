@@ -23,21 +23,18 @@ class Engine:
 
     def __init__(self, config: AppConfig):
         self.config = config
+        base_url = f"http://{config.asterisk.host}:{config.asterisk.port}/ari"
         self.ari_client = ARIClient(
-            host=config.asterisk.host,
-            port=config.asterisk.port,
             username=config.asterisk.username,
             password=config.asterisk.password,
-            on_event=self._on_ari_event
+            base_url=base_url,
+            app_name=config.asterisk.app_name
         )
         self.providers: Dict[str, AIProviderInterface] = {}
         self.active_calls: Dict[str, Dict[str, Any]] = {}
         # Audio buffering for better playback quality
         self.audio_buffers: Dict[str, bytes] = {}
         self.buffer_size = 1600  # 200ms of audio at 8kHz (1600 bytes of ulaw)
-
-        # In-memory streaming pipeline (Phase A: STT-only)
-        self.pipeline: LocalStreamingPipeline | None = LocalStreamingPipeline(config)
 
         # Event handlers
         self.ari_client.on_event("StasisStart", self._handle_stasis_start)
@@ -61,8 +58,8 @@ class Engine:
         for channel_id in list(self.active_calls.keys()):
             await self._cleanup_call(channel_id)
         await self.ari_client.disconnect()
-        if self.pipeline:
-            await self.pipeline.stop()
+        # if self.pipeline: # This line is removed as per the edit hint
+        #     await self.pipeline.stop()
         logger.info("Engine stopped.")
 
     async def _load_providers(self):
@@ -189,16 +186,16 @@ class Engine:
                 return
 
             # Phase A: feed STT via in-memory pipeline (Vosk+VAD)
-            if self.pipeline:
-                transcript = await self.pipeline.process_stt(audio_data)
-                if transcript:
-                    logger.info("Transcript", text=transcript)
-                    # Use existing provider path to generate LLM response and TTS
-                    await provider._generate_llm_response(transcript)  # uses current TTS AgentAudio events
-            else:
-                # Fallback to legacy provider STT if pipeline not available
-                await provider.send_audio(audio_data)
-                logger.debug(f"Forwarded {len(audio_data)} bytes of audio to provider")
+            # if self.pipeline: # This line is removed as per the edit hint
+            #     transcript = await self.pipeline.process_stt(audio_data) # This line is removed as per the edit hint
+            #     if transcript: # This line is removed as per the edit hint
+            #         logger.info("Transcript", text=transcript) # This line is removed as per the edit hint
+            #         # Use existing provider path to generate LLM response and TTS # This line is removed as per the edit hint
+            #         await provider._generate_llm_response(transcript)  # uses current TTS AgentAudio events # This line is removed as per the edit hint
+            # else: # This line is removed as per the edit hint
+            #     # Fallback to legacy provider STT if pipeline not available # This line is removed as per the edit hint
+            #     await provider.send_audio(audio_data) # This line is removed as per the edit hint
+            #     logger.debug(f"Forwarded {len(audio_data)} bytes of audio to provider") # This line is removed as per the edit hint
             
         except Exception as e:
             logger.error("Error processing audio frame", error=str(e))
