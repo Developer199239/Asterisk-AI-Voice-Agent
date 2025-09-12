@@ -45,6 +45,10 @@ class Engine:
         self.ari_client.on_event("ChannelDtmfReceived", self._handle_dtmf_received)
         # self.ari_client.on_event("ChannelAudioFrame", self._handle_audio_frame) # We will get audio from UDP server
 
+    async def _on_ari_event(self, event: Dict[str, Any]):
+        """Default event handler for unhandled ARI events."""
+        logger.debug("Received unhandled ARI event", event_type=event.get("type"), event=event)
+
     async def start(self):
         """Connect to ARI and start the engine."""
         await self._load_providers()
