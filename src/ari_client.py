@@ -14,6 +14,7 @@ import aiohttp
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 import websockets
 import structlog
+from urllib.parse import quote
 
 from websockets.exceptions import ConnectionClosed
 from websockets.legacy.client import WebSocketClientProtocol
@@ -31,7 +32,9 @@ class ARIClient:
         self.password = password
         self.http_url = base_url
         ws_host = base_url.replace("http://", "").split('/')[0]
-        self.ws_url = f"ws://{ws_host}/ari/events?api_key={username}:{password}&app={app_name}"
+        safe_username = quote(username)
+        safe_password = quote(password)
+        self.ws_url = f"ws://{ws_host}/ari/events?api_key={safe_username}:{safe_password}&app={app_name}"
         self.websocket: Optional[websockets.WebSocketClientProtocol] = None
         self.http_session: Optional[aiohttp.ClientSession] = None
         self.running = False
