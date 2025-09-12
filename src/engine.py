@@ -69,7 +69,6 @@ class Engine:
                 if name == "local":
                     config = LocalProviderConfig(**provider_config_data)
                     provider = LocalProvider(config, self.on_provider_event)
-                    await provider.preload_models()  # Pre-load models at startup
                     self.providers[name] = provider
                 elif name == "deepgram":
                     # Initialize other providers here
