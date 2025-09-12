@@ -19,7 +19,7 @@ class LocalProvider(AIProviderInterface):
         super().__init__(on_event)
         self.config = config
         self.websocket: Optional[websockets.WebSocketClientProtocol] = None
-        self.ws_url = "ws://local-ai-server:8765"
+        self.ws_url = "ws://127.0.0.1:8765"
         self._listener_task: Optional[asyncio.Task] = None
 
     @property
