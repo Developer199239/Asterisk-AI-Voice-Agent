@@ -103,7 +103,7 @@ class Engine:
 
             # This now uses externalMedia and bridging
             media_channel_id = await self.ari_client.start_audio_streaming(
-                channel_id, self.config.asterisk.ari_app_name
+                channel_id, self.config.asterisk.app_name
             )
             
             if not media_channel_id:
@@ -304,7 +304,7 @@ class Engine:
         if channel_id in self.active_calls:
             provider = self.active_calls[channel_id].get("provider")
             if provider:
-                await provider.stop_session(channel_id)
+                await provider.stop_session()
             
             await self.ari_client.stop_audio_streaming(channel_id)
             
