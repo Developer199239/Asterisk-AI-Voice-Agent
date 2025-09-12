@@ -118,7 +118,8 @@ class Engine:
             await provider.start_session(channel_id)
             
             # Play initial greeting now that models are pre-loaded
-            await provider.play_initial_greeting(channel_id)
+            if hasattr(provider, 'play_initial_greeting'):
+                await provider.play_initial_greeting(channel_id)
 
         except Exception as e:
             logger.error("Error during StasisStart handling", channel_id=channel_id, exc_info=True)
