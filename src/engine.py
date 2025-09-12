@@ -96,7 +96,7 @@ class Engine:
             await self.ari_client.hangup_channel(channel_id)
             return
 
-        self.active_calls[channel_id] = provider
+        self.active_calls[channel_id] = {"provider": provider}
         
         try:
             await self.ari_client.answer_channel(channel_id)
@@ -112,10 +112,7 @@ class Engine:
                 return
 
             # Store media channel info for cleanup
-            self.active_calls[channel_id] = {
-                "provider": provider,
-                "media_channel_id": media_channel_id
-            }
+            self.active_calls[channel_id]["media_channel_id"] = media_channel_id
 
             # Start the provider's session, which sets up audio handlers
             await provider.start_session(channel_id)
