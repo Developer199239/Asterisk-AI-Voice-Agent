@@ -1,27 +1,33 @@
 version: '3.8'
 
 services:
-  ai-agent:
+  ai-engine:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: asterisk_ai_voice_agent
-    
-    # Volume mounts for instant code changes
+    container_name: ai_engine
     volumes:
-      - ./models:/app/models  # Mount models directory
-    
-    # Environment variables
+      - ./src:/app/src
+      - ./main.py:/app/main.py
+      - ./config:/app/config
     environment:
       - PYTHONPATH=/app
       - PYTHONUNBUFFERED=1
-    
-    # Keep container running for development
     tty: true
     stdin_open: true
-    
-    # Restart policy
     restart: unless-stopped
-    
-    # Network mode for Asterisk communication
+    network_mode: "host"
+
+  local-ai-server:
+    build:
+      context: ./local_ai_server
+      dockerfile: Dockerfile
+    container_name: local_ai_server
+    volumes:
+      - ./models:/app/models
+    environment:
+      - PYTHONUNBUFFERED=1
+    tty: true
+    stdin_open: true
+    restart: unless-stopped
     network_mode: "host"

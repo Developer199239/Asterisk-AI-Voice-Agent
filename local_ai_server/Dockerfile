@@ -10,14 +10,19 @@ ENV PATH="/opt/venv/bin:$PATH"
 # Copy requirements first for optimal caching
 COPY requirements.txt .
 
-# Install dependencies (this layer will be cached)
+# Install dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
 # --- Stage 2: Final Runtime Image ---
 FROM python:3.11-slim
 
-# No special runtime dependencies needed for the lean engine
-# System dependencies are now in the local_ai_server Dockerfile
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    libsndfile1 \
+    libasound2 \
+    libportaudio2 \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
@@ -29,9 +34,7 @@ USER appuser
 COPY --from=builder /opt/venv /opt/venv
 
 # Copy application source code
-COPY --chown=appuser:appuser src/ ./src
-COPY --chown=appuser:appuser config/ ./config
-COPY --chown=appuser:appuser main.py ./
+COPY --chown=appuser:appuser . .
 
 # Set PATH for virtual environment
 ENV PATH="/opt/venv/bin:$PATH"
