@@ -10,8 +10,8 @@ VOSK_MODEL_URL="https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.
 VOSK_MODEL_DIR_NAME="vosk-model-small-en-us-0.15"
 VOSK_MODEL_ZIP_NAME="vosk-model.zip"
 
-LLAMA_MODEL_URL="https://huggingface.co/TheBloke/Llama-2-7B-Chat-GGUF/resolve/main/llama-2-7b-chat.Q4_K_M.gguf"
-LLAMA_MODEL_NAME="llama-2-7b-chat.Q4_K_M.gguf"
+LLAMA_MODEL_URL="https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf"
+LLAMA_MODEL_PATH="models/llm/TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf"
 
 PIPER_VOICE_URL="https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx"
 PIPER_VOICE_NAME="en_US-lessac-medium.onnx"
@@ -37,11 +37,13 @@ else
   echo "Vosk model already exists. Skipping download."
 fi
 
-if [ ! -f "$LLM_MODELS_DIR/$LLAMA_MODEL_NAME" ]; then
-  echo "Downloading Llama model..."
-  curl -L "$LLAMA_MODEL_URL" -o "$LLM_MODELS_DIR/$LLAMA_MODEL_NAME"
+echo "Downloading Llama model..."
+LLAMA_MODEL_URL="https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf"
+LLAMA_MODEL_PATH="models/llm/TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf"
+if [ ! -f "$LLAMA_MODEL_PATH" ]; then
+    curl -L -o "$LLAMA_MODEL_PATH" "$LLAMA_MODEL_URL"
 else
-  echo "Llama model already exists. Skipping download."
+    echo "Llama model already exists. Skipping download."
 fi
 
 if [ ! -f "$TTS_MODELS_DIR/$PIPER_VOICE_NAME" ]; then

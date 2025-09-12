@@ -22,7 +22,7 @@ class LocalAIServer:
         logging.info("Pre-loading AI models...")
         # These paths will be inside the container, mounted from the host
         stt_model_path = "/app/models/stt/vosk-model-small-en-us-0.15"
-        llm_model_path = "/app/models/llm/llama-2-7b-chat.Q4_K_M.gguf"
+        llm_model_path = "/app/models/llm/TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf"
         
         if not os.path.exists(stt_model_path):
             raise FileNotFoundError(f"STT model not found at {stt_model_path}")
