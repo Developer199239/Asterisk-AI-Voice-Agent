@@ -6,9 +6,9 @@ Focuses on robust connection and logging to debug startup issues.
 import asyncio
 import json
 import os
-import tempfile
-import wave
+import uuid
 import audioop
+import wave
 from typing import Dict, Any, Optional, Callable, List
 import aiohttp
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
@@ -39,8 +39,8 @@ class ARIClient:
         self.http_session: Optional[aiohttp.ClientSession] = None
         self.running = False
         self.event_handlers: Dict[str, List[Callable]] = {}
-        self.active_snoops: Dict[str, str] = {}  # channel_id -> snoop_channel_id (legacy)
-        self.active_media_channels: Dict[str, Dict[str, str]] = {}  # channel_id -> {media_channel_id, bridge_id}
+        self.active_snoops: Dict[str, str] = {}
+        self.active_playbacks: Dict[str, str] = {}
         self.audio_frame_handler: Optional[Callable] = None
 
     def on_event(self, event_type: str, handler: Callable):
@@ -81,6 +81,9 @@ class ARIClient:
 
         logger.info("Starting ARI event listener.")
         try:
+            # Subscribe to playback finished events
+            self.add_event_handler("PlaybackFinished", self._on_playback_finished)
+
             async for message in self.websocket:
                 try:
                     event_data = json.loads(message)
@@ -90,12 +93,18 @@ class ARIClient:
                     if event_type == "ChannelAudioFrame":
                         channel = event_data.get('channel', {})
                         channel_id = channel.get('id')
+                        logger.debug("ChannelAudioFrame received", channel_id=channel_id, active_snoops=list(self.active_snoops.values()))
+                        # Check if this is a snoop channel we're monitoring
                         if channel_id in self.active_snoops.values():
+                            logger.debug("Processing audio frame for snoop channel", channel_id=channel_id)
                             asyncio.create_task(self._on_audio_frame(channel, event_data))
+                        else:
+                            logger.debug("Ignoring audio frame from non-snoop channel", channel_id=channel_id)
                     
                     # Handle other events
                     if event_type and event_type in self.event_handlers:
                         for handler in self.event_handlers[event_type]:
+                            # Call the handler with just the event data
                             asyncio.create_task(handler(event_data))
                 except json.JSONDecodeError:
                     logger.warning("Failed to decode ARI event JSON", message=message)
@@ -188,94 +197,119 @@ class ARIClient:
         logger.info("Playing media on channel", channel_id=channel_id, media_uri=media_uri)
         return await self.send_command("POST", f"channels/{channel_id}/play", data={"media": media_uri})
 
-    async def create_bridge(self) -> Optional[Dict[str, Any]]:
-        """Create a new bridge."""
-        logger.info("Creating a new bridge")
-        return await self.send_command("POST", "bridges")
-
-    async def add_channel_to_bridge(self, bridge_id: str, channel_id: str):
-        """Add a channel to a bridge."""
-        logger.info("Adding channel to bridge", channel_id=channel_id, bridge_id=bridge_id)
-        await self.send_command("POST", f"bridges/{bridge_id}/addChannel", data={"channel": channel_id})
-
-    async def destroy_bridge(self, bridge_id: str):
-        """Destroy a bridge."""
-        logger.info("Destroying bridge", bridge_id=bridge_id)
-        await self.send_command("DELETE", f"bridges/{bridge_id}")
-
-    async def list_channels(self) -> List[Dict[str, Any]]:
-        """List all active channels."""
-        logger.debug("Listing all channels")
-        return await self.send_command("GET", "channels")
-
-    async def list_bridges(self) -> List[Dict[str, Any]]:
-        """List all active bridges."""
-        logger.debug("Listing all bridges")
-        return await self.send_command("GET", "bridges")
-
-    async def get_app(self, app_name: str) -> Optional[Dict[str, Any]]:
-        """Get details for a specific ARI application."""
-        logger.debug("Getting details for ARI app", app_name=app_name)
-        return await self.send_command("GET", f"applications/{app_name}")
-
-    async def start_audio_streaming(self, channel_id: str, app_name: str) -> Optional[str]:
-        """Start audio streaming using an external media channel and a bridge."""
+    async def start_audio_snoop(self, channel_id: str, app_name: str):
+        """Creates a snoop channel to get a direct raw audio stream from Asterisk."""
         try:
-            logger.info("Starting audio streaming...", channel_id=channel_id)
-            # Create a bridge
-            bridge = await self.create_bridge()
-            if not bridge or 'id' not in bridge:
-                logger.error("Failed to create bridge", channel_id=channel_id)
+            snoop_id = f"snoop_{channel_id}"
+            result = await self.send_command(
+                "POST",
+                f"channels/{channel_id}/snoop",
+                params={
+                    "app": app_name, 
+                    "snoopId": snoop_id, 
+                    "spy": "in",
+                    "options": "audioframe"  # Explicitly request audio frames
+                }
+            )
+            # ARI snoop command returns a channel object, not a status code
+            if result and result.get("id"):
+                # Store the actual snoop channel ID from ARI, not our generated snoop_id
+                actual_snoop_id = result.get("id")
+                self.active_snoops[channel_id] = actual_snoop_id
+                
+                # Set the snoop channel to use a specific audio format for better compatibility
+                try:
+                    # Set the snoop channel to use slin16 (16-bit PCM 16kHz) format to match PJSIP config
+                    await self.send_command("POST", f"channels/{actual_snoop_id}/setChannelVar", 
+                                          params={"variable": "CHANNEL(audionativeformat)", "value": "slin16"})
+                    logger.debug("Set audio format for snoop channel", snoop_channel_id=actual_snoop_id)
+                except Exception as e:
+                    logger.warning("Failed to set audio format for snoop channel", snoop_channel_id=actual_snoop_id, error=str(e))
+                
+                logger.info("Snoop channel created successfully", channel_id=channel_id, snoop_id=snoop_id, snoop_channel_id=actual_snoop_id)
+                return actual_snoop_id
+            else:
+                logger.error("Failed to create snoop channel", channel_id=channel_id, result=result)
                 return None
-            bridge_id = bridge['id']
-
-            # Create an external media channel
-            media_channel = await self.create_external_media_channel(app_name, bridge_id)
-            if not media_channel or 'id' not in media_channel:
-                logger.error("Failed to create external media channel", channel_id=channel_id)
-                await self.destroy_bridge(bridge_id) # Cleanup bridge
-                return None
-            media_channel_id = media_channel['id']
-
-            # Add both channels to the bridge
-            await self.add_channel_to_bridge(bridge_id, channel_id)
-            await self.add_channel_to_bridge(bridge_id, media_channel_id)
-            
-            # Store the active channels for cleanup
-            self.active_media_channels[channel_id] = {
-                "media_channel_id": media_channel_id,
-                "bridge_id": bridge_id
-            }
-            
-            logger.info("External media channel and bridge created successfully.",
-                        channel_id=channel_id, media_channel_id=media_channel_id, bridge_id=bridge_id)
-            return media_channel_id
-
         except Exception as e:
-            logger.error("Failed to start audio streaming", channel_id=channel_id, exc_info=True)
+            logger.error("Failed to create snoop channel", channel_id=channel_id, error=str(e), exc_info=True)
             return None
+
+    async def play_audio_response(self, channel_id: str, audio_data: bytes):
+        """Saves TTS audio to shared media directory and commands Asterisk to play it."""
+        unique_filename = f"response-{uuid.uuid4()}.wav"
+        # Use the shared media directory that's mounted to the host
+        container_path = f"/mnt/asterisk_media/ai-generated/{unique_filename}"
+        asterisk_media_uri = f"sound:ai-generated/{unique_filename.replace('.wav', '')}"
+
+        try:
+            os.makedirs(os.path.dirname(container_path), exist_ok=True)
+            with open(container_path, "wb") as f:
+                f.write(audio_data)
+
+            playback = await self.play_media(channel_id, asterisk_media_uri)
+            if playback and 'id' in playback:
+                self.active_playbacks[playback['id']] = container_path
+                logger.info(f"Playing audio file: {unique_filename} on channel {channel_id}")
+        except Exception as e:
+            logger.error("Failed to play audio file", channel_id=channel_id, error=str(e), exc_info=True)
+
+    async def _on_playback_finished(self, client, event):
+        """Event handler for cleaning up audio files immediately after use."""
+        playback_id = event.get("playback", {}).get("id")
+        file_path = self.active_playbacks.pop(playback_id, None)
+        if file_path and os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+                logger.debug("Successfully deleted audio file", file_path=file_path)
+            except OSError:
+                logger.error("Error deleting audio file", file_path=file_path, exc_info=True)
 
     async def _on_audio_frame(self, channel, event):
         """Handles incoming raw audio frames from the snoop channel."""
         try:
-            # Extract audio data from the event
-            if 'frame' in event and 'data' in event['frame']:
-                audio_data = event['frame']['data']
+            logger.debug("Processing audio frame", channel_id=channel.get('id'), event_keys=list(event.keys()))
+            # Get the audio frame data
+            frame_data = event.get("frame", {})
+            audio_payload = frame_data.get("data", "")
+            
+            # Log frame format information
+            frame_format = frame_data.get("format", "unknown")
+            frame_samples = frame_data.get("samples", 0)
+            logger.debug("Audio frame details", format=frame_format, samples=frame_samples, payload_length=len(audio_payload))
+            
+            if audio_payload:
+                # Decode base64 audio data
+                import base64
+                audio_data = base64.b64decode(audio_payload)
+                logger.debug("Decoded audio data", bytes=len(audio_data), format=frame_format)
                 
-                # Forward to the registered audio frame handler
+                # Forward to the audio frame handler
                 if self.audio_frame_handler:
                     await self.audio_frame_handler(audio_data)
+                    logger.debug("Forwarded audio frame to handler")
                 else:
-                    logger.debug(f"Received audio frame but no handler registered: {len(audio_data)} bytes")
+                    logger.debug(f"Received audio frame but no handler set: {len(audio_data)} bytes")
             else:
-                logger.debug("Received audio frame event without data")
-                
+                logger.debug("Received audio frame with no data")
         except Exception as e:
-            logger.error(f"Error handling audio frame: {e}")
+            logger.error("Error processing audio frame", error=str(e), exc_info=True)
 
     def set_audio_frame_handler(self, handler: Callable):
         """Set the handler for incoming audio frames."""
         self.audio_frame_handler = handler
+
+    async def stop_audio_snoop(self, channel_id: str):
+        """Stop snooping on a channel."""
+        snoop_id = self.active_snoops.pop(channel_id, None)
+        if snoop_id:
+            try:
+                await self.send_command("DELETE", f"channels/{snoop_id}")
+                logger.info("Snoop channel stopped", channel_id=channel_id, snoop_id=snoop_id)
+            except Exception as e:
+                logger.error("Failed to stop snoop channel", channel_id=channel_id, snoop_id=snoop_id, error=str(e))
+        else:
+            logger.debug("No active snoop found for channel", channel_id=channel_id)
 
     async def play_audio_file(self, channel_id: str, file_path: str) -> bool:
         """Play an audio file to the specified channel with enhanced error handling."""
