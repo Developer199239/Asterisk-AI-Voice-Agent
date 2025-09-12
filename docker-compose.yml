@@ -6,6 +6,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: ai_engine
+    user: "root"
     volumes:
       - ./src:/app/src
       - ./main.py:/app/main.py
