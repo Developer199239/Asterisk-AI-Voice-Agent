@@ -18,15 +18,19 @@ from .pipelines.local_streaming import LocalStreamingPipeline
 
 logger = get_logger(__name__)
 
+
 class Engine:
+    """The main application engine."""
+
     def __init__(self, config: AppConfig):
         self.config = config
         self.ari_client = ARIClient(
-            username=config.asterisk.username,
-            password=config.asterisk.password,
-            base_url=f"http://{config.asterisk.host}:{config.asterisk.port}/ari",
-            app_name=config.asterisk.app_name
+            username=config.asterisk.ari_username,
+            password=config.asterisk.ari_password,
+            base_url=f"http://{config.asterisk.ari_host}:{config.asterisk.ari_port}/ari",
+            app_name=config.asterisk.ari_app_name
         )
+        self.providers: Dict[str, AIProviderInterface] = {}
         self.active_calls: Dict[str, Dict[str, Any]] = {}
         # Audio buffering for better playback quality
         self.audio_buffers: Dict[str, bytes] = {}
@@ -35,127 +39,93 @@ class Engine:
         # In-memory streaming pipeline (Phase A: STT-only)
         self.pipeline: LocalStreamingPipeline | None = LocalStreamingPipeline(config)
 
-        self.setup_event_handlers()
-
-    def setup_event_handlers(self):
-        self.ari_client.on_event('StasisStart', self._handle_stasis_start)
-        self.ari_client.on_event('StasisEnd', self._handle_stasis_end)
-        self.ari_client.on_event('ChannelDtmfReceived', self._handle_dtmf_received)
-        self.ari_client.on_event('ChannelAudioFrame', self._handle_audio_frame)
+        # Event handlers
+        self.ari_client.on_event("StasisStart", self._handle_stasis_start)
+        self.ari_client.on_event("StasisEnd", self._handle_stasis_end)
+        self.ari_client.on_event("ChannelDtmfReceived", self._handle_dtmf_received)
+        # self.ari_client.on_event("ChannelAudioFrame", self._handle_audio_frame) # We will get audio from UDP server
 
     async def start(self):
-        # Pre-load local models to avoid delays during calls
-        if self.config.default_provider == "local":
-            logger.info("Pre-loading local models...")
-            local_config = LocalProviderConfig(**self.config.providers["local"])
-            temp_provider = LocalProvider(local_config, self.on_provider_event)
-            await temp_provider.preload_models()
-            logger.info("Local models pre-loaded successfully.")
-        
-        # Warm pipeline models first to reduce first-call latency
-        if self.pipeline:
-            await self.pipeline.start()
+        """Connect to ARI and start the engine."""
+        await self._load_providers()
         await self.ari_client.connect()
-        await self.ari_client.start_listening()
+        asyncio.create_task(self.ari_client.start_listening())
+        logger.info("Engine started and listening for calls.")
 
     async def stop(self):
+        """Disconnect from ARI and stop the engine."""
         for channel_id in list(self.active_calls.keys()):
             await self._cleanup_call(channel_id)
-        if self.ari_client:
-            await self.ari_client.disconnect()
+        await self.ari_client.disconnect()
         if self.pipeline:
             await self.pipeline.stop()
+        logger.info("Engine stopped.")
 
-    async def _handle_stasis_start(self, event_data: dict):
-        channel = event_data.get('channel', {})
-        channel_id = channel.get('id')
-        if not channel_id:
-            return
+    async def _load_providers(self):
+        """Load and initialize AI providers from the configuration."""
+        logger.info("Loading AI providers...")
+        for name, provider_config_data in self.config.providers.items():
+            try:
+                if name == "local":
+                    config = LocalProviderConfig(**provider_config_data)
+                    provider = LocalProvider(config, self.on_provider_event)
+                    await provider.preload_models()  # Pre-load models at startup
+                    self.providers[name] = provider
+                elif name == "deepgram":
+                    # Initialize other providers here
+                    pass
+                logger.info(f"Provider '{name}' loaded successfully.")
+            except Exception as e:
+                logger.error(f"Failed to load provider '{name}'", exc_info=True)
 
-        if not (channel.get('name', '').startswith("SIP/") or channel.get('name', '').startswith("PJSIP/") or channel.get('name', '').startswith("Local/")):
-            return
-
-        logger.info("New call received", channel_id=channel_id, caller=channel.get('caller'))
+    async def _handle_stasis_start(self, event: dict):
+        """Handle a new call entering the Stasis application."""
+        channel_id = event["channel"]["id"]
+        caller_info = event["channel"]["caller"]
+        logger.info(
+            "New call received",
+            channel_id=channel_id,
+            caller={"name": caller_info["name"], "number": caller_info["number"]},
+        )
         
-        args = event_data.get('args', [])
+        args = event.get('args', [])
         provider_name = args[0] if args else self.config.default_provider
-        
-        try:
-            provider_config_data = self.config.providers.get(provider_name)
-            if not provider_config_data:
-                raise ValueError(f"Provider '{provider_name}' not found in configuration.")
-            provider = self._create_provider(provider_name, provider_config_data)
-        except (KeyError, ValueError) as e:
-            logger.error(f"Failed to create provider: {e}")
+        provider = self.providers.get(provider_name)
+
+        if not provider:
+            logger.error(f"Provider '{provider_name}' not found for channel {channel_id}.")
             await self.ari_client.hangup_channel(channel_id)
             return
 
+        self.active_calls[channel_id] = provider
+        
         try:
-            # Answer the call immediately to prevent timeout
             await self.ari_client.answer_channel(channel_id)
 
-            # Start audio streaming using snoop channel
-            snoop_channel_id = await self.ari_client.start_audio_streaming(
-                channel_id, 
-                self.config.asterisk.app_name
+            # This now uses externalMedia and bridging
+            media_channel_id = await self.ari_client.start_audio_streaming(
+                channel_id, self.config.asterisk.ari_app_name
             )
             
-            if not snoop_channel_id:
+            if not media_channel_id:
                 logger.error("Failed to start audio streaming", channel_id=channel_id)
                 await self._cleanup_call(channel_id)
                 return
 
-            # Set up audio frame handler for this call
-            self.ari_client.set_audio_frame_handler(self._handle_audio_frame)
-
+            # Store media channel info for cleanup
             self.active_calls[channel_id] = {
                 "provider": provider,
-                "snoop_channel_id": snoop_channel_id,
-                "models_ready": False
+                "media_channel_id": media_channel_id
             }
+
+            # Start the provider's session, which sets up audio handlers
+            await provider.start_session(channel_id)
             
-            # Handle different providers
-            if provider_name == "local":
-                # For local provider, start ring tone and load models in background
-                logger.info("Starting ring tone for local provider", channel_id=channel_id)
-                ring_task = asyncio.create_task(self._play_ring_tone(channel_id, duration=15.0))
-                
-                # Load models in background
-                model_task = asyncio.create_task(self._load_local_models(provider, channel_id))
-                
-                # Models should already be pre-loaded, so we can immediately play greeting
-                models_ready = await model_task
-                if models_ready:
-                    self.active_calls[channel_id]['models_ready'] = True
-                    
-                    # Cancel ring tone and wait for it to finish
-                    ring_task.cancel()
-                    try:
-                        await ring_task
-                    except asyncio.CancelledError:
-                        pass
-                    
-                    # Play initial greeting immediately
-                    if hasattr(provider, 'play_initial_greeting'):
-                        await provider.play_initial_greeting()
-                    
-                    # Wait a moment to ensure ring tone has stopped
-                    await asyncio.sleep(0.1)
-                else:
-                    # Models failed to load, hang up
-                    logger.error("Failed to load local models", channel_id=channel_id)
-                    await self._cleanup_call(channel_id)
-                    
-            else:
-                # For Deepgram, start session immediately (no ring needed)
-                await provider.start_session("", self.config.llm.prompt)
-                
-                # Speak the greeting
-                if hasattr(provider, 'speak'):
-                    await provider.speak(self.config.llm.initial_greeting)
+            # Play initial greeting now that models are pre-loaded
+            await provider.play_initial_greeting(channel_id)
 
         except Exception as e:
-            logger.error("Error handling StasisStart", channel_id=channel_id, exc_info=True)
+            logger.error("Error during StasisStart handling", channel_id=channel_id, exc_info=True)
             await self._cleanup_call(channel_id)
 
     async def _load_local_models(self, provider, channel_id: str):
@@ -272,25 +242,21 @@ class Engine:
             logger.debug(f"Unhandled provider event: {event_type}")
 
     async def _play_audio_to_channel(self, channel_id: str, audio_data: bytes):
-        """Play audio data using file playback approach."""
+        """Convert audio data to a temp WAV file and play it to the channel."""
+        if not audio_data:
+            logger.warning("No audio data to play.", channel_id=channel_id)
+            return
+
         try:
-            call_info = self.active_calls.get(channel_id)
-            if not call_info:
-                logger.error(f"No call info found for {channel_id}")
-                return
-                
-            # Add audio data to buffer
-            if channel_id not in self.audio_buffers:
-                self.audio_buffers[channel_id] = b""
-                
-            self.audio_buffers[channel_id] += audio_data
-            
-            # If buffer is full enough, flush it
-            if len(self.audio_buffers[channel_id]) >= self.buffer_size:
-                await self._flush_audio_buffer(channel_id)
-                
+            # Create a temporary WAV file from the raw audio data (assuming it's ulaw)
+            temp_file_path = await self.ari_client.create_audio_file_from_ulaw(audio_data)
+
+            if temp_file_path:
+                await self.ari_client.play_audio_file(channel_id, temp_file_path)
+                # Schedule cleanup of the temp file
+                asyncio.create_task(self.ari_client.cleanup_audio_file(temp_file_path, delay=2.0))
         except Exception as e:
-            logger.error(f"Error playing audio for channel {channel_id}: {e}")
+            logger.error("Failed to play audio to channel", channel_id=channel_id, exc_info=True)
 
     async def _flush_audio_buffer(self, channel_id: str):
         """Flush the audio buffer and play the accumulated audio."""
@@ -333,57 +299,37 @@ class Engine:
             logger.error(f"Error flushing audio buffer for channel {channel_id}: {e}")
 
     async def _handle_stasis_end(self, event_data: dict):
+        """Handle a call leaving the Stasis application."""
         channel_id = event_data.get('channel', {}).get('id')
         await self._cleanup_call(channel_id)
 
     async def _cleanup_call(self, channel_id: str):
-        call_info = self.active_calls.pop(channel_id, None)
-        if not call_info:
-            return
-        
-        # Flush any remaining audio in the buffer
-        if channel_id in self.audio_buffers and self.audio_buffers[channel_id]:
-            await self._flush_audio_buffer(channel_id)
-        
-        # Clean up audio buffer
-        self.audio_buffers.pop(channel_id, None)
-        
-        provider = call_info.get('provider')
-        if provider:
-            await provider.stop_session()
-
-        # Stop audio streaming (this will clean up the snoop channel)
-        await self.ari_client.stop_audio_streaming(channel_id)
-        
-        # Hang up the main channel
-        await self.ari_client.hangup_channel(channel_id)
-
-    async def _play_ring_tone(self, channel_id: str, duration: float = 10.0):
-        """Play ring tone while models are loading using ARI play_media."""
-        call_data = self.active_calls.get(channel_id)
-        if not call_data:
-            return
+        """Cleanup resources associated with a call."""
+        if channel_id in self.active_calls:
+            provider = self.active_calls[channel_id].get("provider")
+            if provider:
+                await provider.stop_session(channel_id)
             
+            await self.ari_client.stop_audio_streaming(channel_id)
+            
+            del self.active_calls[channel_id]
+            logger.debug("Call resources cleaned up", channel_id=channel_id)
+        else:
+            logger.debug("No active call found for cleanup", channel_id=channel_id)
+
+    async def _play_ring_tone(self, channel_id: str, duration: float = 15.0):
+        """Play a ringing tone to the channel."""
         logger.info("Starting ring tone", channel_id=channel_id, duration=duration)
-        
-        # Use Asterisk's built-in ring tone
         try:
-            # Play a ring tone using Asterisk's built-in sounds
             await self.ari_client.play_media(channel_id, "tone:ring")
-            
-            # Wait for the duration or until models are ready
-            start_time = asyncio.get_event_loop().time()
-            while (asyncio.get_event_loop().time() - start_time) < duration:
-                # Check if models are ready
-                if call_data.get('models_ready', False):
-                    logger.info("Models ready, stopping ring tone", channel_id=channel_id)
-                    break
-                await asyncio.sleep(0.1)
-                
+            await asyncio.sleep(duration)
         except asyncio.CancelledError:
             logger.info("Ring tone cancelled", channel_id=channel_id)
+            # Explicitly stop the playback
+            # This requires a playback ID, which complicates things.
+            # For now, we rely on hanging up or answering to stop it.
         except Exception as e:
-            logger.error("Error playing ring tone", channel_id=channel_id, error=str(e))
+            logger.error("Error playing ring tone", channel_id=channel_id, exc_info=True)
 
 
 async def main():

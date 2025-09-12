@@ -9,9 +9,6 @@ services:
     
     # Volume mounts for instant code changes
     volumes:
-      - ./src:/app/src
-      - ./config:/app/config
-      - ./main.py:/app/main.py
       - ./models:/app/models  # Mount models directory
     
     # Environment variables

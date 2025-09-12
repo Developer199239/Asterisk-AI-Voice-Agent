@@ -43,7 +43,7 @@ class LLMConfig(BaseModel):
     initial_greeting: str = "Hello, I am an AI Assistant for Jugaar LLC. How can I help you today."
     prompt: str = "You are a helpful AI assistant."
     model: str = "gpt-4o"
-    api_key: str
+    api_key: Optional[str] = None
 
 class AppConfig(BaseModel):
     default_provider: str

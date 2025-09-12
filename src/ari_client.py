@@ -36,7 +36,8 @@ class ARIClient:
         self.http_session: Optional[aiohttp.ClientSession] = None
         self.running = False
         self.event_handlers: Dict[str, List[Callable]] = {}
-        self.active_snoops: Dict[str, str] = {}  # channel_id -> snoop_channel_id
+        self.active_snoops: Dict[str, str] = {}  # channel_id -> snoop_channel_id (legacy)
+        self.active_media_channels: Dict[str, Dict[str, str]] = {}  # channel_id -> {media_channel_id, bridge_id}
         self.audio_frame_handler: Optional[Callable] = None
 
     def on_event(self, event_type: str, handler: Callable):
@@ -215,29 +216,40 @@ class ARIClient:
         return await self.send_command("GET", f"applications/{app_name}")
 
     async def start_audio_streaming(self, channel_id: str, app_name: str) -> Optional[str]:
-        """Start audio streaming using snoop channel - replaces externalMedia logic."""
+        """Start audio streaming using an external media channel and a bridge."""
         try:
-            # Create a unique ID for the snoop channel
-            snoop_id = f"snoop_{channel_id}"
-
-            # Command Asterisk to create the snoop channel
-            snoop_channel = await self.create_snoop_channel(channel_id, app_name, snoop_id)
-            
-            if not snoop_channel or 'id' not in snoop_channel:
-                logger.error("Failed to create snoop channel", channel_id=channel_id)
+            logger.info("Starting audio streaming...", channel_id=channel_id)
+            # Create a bridge
+            bridge = await self.create_bridge()
+            if not bridge or 'id' not in bridge:
+                logger.error("Failed to create bridge", channel_id=channel_id)
                 return None
+            bridge_id = bridge['id']
 
-            # Start snooping to capture audio frames
-            await self.start_snoop(snoop_channel['id'], app_name)
+            # Create an external media channel
+            media_channel = await self.create_external_media_channel(app_name, bridge_id)
+            if not media_channel or 'id' not in media_channel:
+                logger.error("Failed to create external media channel", channel_id=channel_id)
+                await self.destroy_bridge(bridge_id) # Cleanup bridge
+                return None
+            media_channel_id = media_channel['id']
 
-            # Store the snoop channel mapping
-            self.active_snoops[channel_id] = snoop_channel['id']
-            logger.info(f"Snoop channel {snoop_channel['id']} created for {channel_id}")
-
-            return snoop_channel['id']
+            # Add both channels to the bridge
+            await self.add_channel_to_bridge(bridge_id, channel_id)
+            await self.add_channel_to_bridge(bridge_id, media_channel_id)
+            
+            # Store the active channels for cleanup
+            self.active_media_channels[channel_id] = {
+                "media_channel_id": media_channel_id,
+                "bridge_id": bridge_id
+            }
+            
+            logger.info("External media channel and bridge created successfully.",
+                        channel_id=channel_id, media_channel_id=media_channel_id, bridge_id=bridge_id)
+            return media_channel_id
 
         except Exception as e:
-            logger.error(f"Failed to start audio streaming for {channel_id}: {e}")
+            logger.error("Failed to start audio streaming", channel_id=channel_id, exc_info=True)
             return None
 
     async def _on_audio_frame(self, channel, event):
@@ -376,90 +388,37 @@ class ARIClient:
         except Exception as e:
             logger.error(f"Error cleaning up audio file {file_path}: {e}")
 
-    async def create_snoop_channel(self, channel_id: str, app_name: str, snoop_id: str) -> Optional[Dict[str, Any]]:
-        """Create a snoop channel to capture audio from the main channel."""
-        logger.info("Creating snoop channel...", channel_id=channel_id, snoop_id=snoop_id)
-
-        data = {
-            "app": app_name,
-            "spy": "in",  # Capture incoming audio from the channel
-            "snoopId": snoop_id
-        }
-
-        return await self.send_command(
-            "POST",
-            f"channels/{channel_id}/snoop",
-            data=data
-        )
-
-    async def start_snoop(self, snoop_channel_id: str, app_name: str) -> Optional[Dict[str, Any]]:
-        """Start snooping on the snoop channel."""
-        logger.info("Starting snoop...", snoop_channel_id=snoop_channel_id)
-        data = {
-            "spy": "in",  # Specify direction for snooping
-            "app": app_name  # Required: Application name for snooped audio
-        }
-        return await self.send_command("POST", f"channels/{snoop_channel_id}/snoop", data=data)
-
     async def stop_audio_streaming(self, channel_id: str) -> bool:
-        """Stop audio streaming and clean up snoop channel."""
+        """Stop audio streaming and clean up media channel and bridge."""
+        media_info = self.active_media_channels.pop(channel_id, None)
+        if not media_info:
+            logger.warning("No active media channel found to stop for channel.", channel_id=channel_id)
+            return True # Not a failure if it's already gone
+
+        media_channel_id = media_info['media_channel_id']
+        bridge_id = media_info['bridge_id']
+        logger.info("Stopping audio streaming and cleaning up resources...",
+                    channel_id=channel_id, media_channel_id=media_channel_id, bridge_id=bridge_id)
+        
         try:
-            if channel_id in self.active_snoops:
-                snoop_channel_id = self.active_snoops[channel_id]
-                
-                # Stop snooping
-                await self.stop_snoop(snoop_channel_id)
-                
-                # Hang up the snoop channel
-                await self.hangup_channel(snoop_channel_id)
-                
-                # Remove from active snoops
-                del self.active_snoops[channel_id]
-                
-                logger.info(f"Stopped audio streaming for channel {channel_id}")
-                return True
-            else:
-                logger.warning(f"No active snoop found for channel {channel_id}")
-                return False
-                
+            # We don't need to remove channels from the bridge, just destroy it
+            await self.destroy_bridge(bridge_id)
+            # Hanging up the original channel is handled by StasisEnd
+            await self.hangup_channel(media_channel_id)
+            logger.info("Successfully cleaned up bridge and media channel.", bridge_id=bridge_id, media_channel_id=media_channel_id)
+            return True
         except Exception as e:
-            logger.error(f"Error stopping audio streaming for {channel_id}: {e}")
+            logger.error("Error during audio streaming cleanup", exc_info=True)
             return False
 
-    async def stop_snoop(self, snoop_channel_id: str) -> Optional[Dict[str, Any]]:
-        """Stop snooping on the snoop channel."""
-        logger.info("Stopping snoop...", snoop_channel_id=snoop_channel_id)
-        return await self.send_command("DELETE", f"channels/{snoop_channel_id}/snoop")
-
-    async def create_external_media_channel(self, channel_id: str, app_name: str, external_host: str, external_port: int) -> Optional[Dict[str, Any]]:
-        """Create an external media channel for bidirectional audio streaming."""
-        logger.info("Creating external media channel...", channel_id=channel_id, external_host=external_host, external_port=external_port)
-        
-        data = {
+    async def create_external_media_channel(self, app_name: str, channel_id: str) -> Optional[Dict[str, Any]]:
+        """Create an external media channel."""
+        # Note: external_host will be the address of our UDP server
+        # This needs to be coordinated with the UDP server's configuration
+        params = {
             "app": app_name,
-            "external_host": external_host,
-            "external_port": external_port,
-            "format": "ulaw"  # Use ulaw for compatibility
+            "channelId": channel_id,
+            "external_host": "127.0.0.1:5060", # Placeholder, should be configured
+            "format": "ulaw"
         }
-        
-        return await self.send_command("POST", f"channels/{channel_id}/externalMedia", data=data)
-
-    async def create_bridge(self) -> Optional[Dict[str, Any]]:
-        """Create a bridge for connecting channels."""
-        logger.info("Creating bridge...")
-        return await self.send_command("POST", "bridges")
-
-    async def add_channel_to_bridge(self, bridge_id: str, channel_id: str) -> Optional[Dict[str, Any]]:
-        """Add a channel to a bridge."""
-        logger.info("Adding channel to bridge...", bridge_id=bridge_id, channel_id=channel_id)
-        return await self.send_command("POST", f"bridges/{bridge_id}/addChannel", data={"channel": channel_id})
-
-    async def remove_channel_from_bridge(self, bridge_id: str, channel_id: str) -> Optional[Dict[str, Any]]:
-        """Remove a channel from a bridge."""
-        logger.info("Removing channel from bridge...", bridge_id=bridge_id, channel_id=channel_id)
-        return await self.send_command("POST", f"bridges/{bridge_id}/removeChannel", data={"channel": channel_id})
-
-    async def destroy_bridge(self, bridge_id: str) -> Optional[Dict[str, Any]]:
-        """Destroy a bridge."""
-        logger.info("Destroying bridge...", bridge_id=bridge_id)
-        return await self.send_command("DELETE", f"bridges/{bridge_id}")
+        return await self.send_command("POST", "channels/externalMedia", params=params)
