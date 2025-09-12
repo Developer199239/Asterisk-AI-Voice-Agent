@@ -14,7 +14,6 @@ from .logging_config import get_logger, configure_logging
 from .providers.base import AIProviderInterface
 from .providers.deepgram import DeepgramProvider
 from .providers.local import LocalProvider
-from .pipelines.local_streaming import LocalStreamingPipeline
 
 logger = get_logger(__name__)
 
