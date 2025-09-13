@@ -365,7 +365,11 @@ class Engine:
             del self.active_calls[channel_id]
             logger.debug("Call resources cleaned up", channel_id=channel_id)
         else:
-            logger.debug("No active call found for cleanup", channel_id=channel_id)
+            # Check if this is a snoop channel trying to clean up
+            if channel_id.startswith("snoop_"):
+                logger.debug("Snoop channel cleanup attempted for non-active call", channel_id=channel_id)
+            else:
+                logger.debug("No active call found for cleanup", channel_id=channel_id)
 
     async def _play_ring_tone(self, channel_id: str, duration: float = 15.0):
         """Play a ringing tone to the channel."""

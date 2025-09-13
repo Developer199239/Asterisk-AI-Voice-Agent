@@ -360,14 +360,14 @@ class ARIClient:
         snoop_id = self.active_snoops.pop(channel_id, None)
         if snoop_id:
             try:
-                await self.send_command("DELETE", f"channels/{snoop_id}")
-                logger.info("Snoop channel stopped", channel_id=channel_id, snoop_id=snoop_id)
-            except Exception as e:
-                # Check if the error is because the channel no longer exists (404)
-                if "404" in str(e) or "Channel not found" in str(e):
+                result = await self.send_command("DELETE", f"channels/{snoop_id}")
+                # Check if the command returned an error status
+                if isinstance(result, dict) and result.get("status") == 404:
                     logger.debug("Snoop channel already destroyed", channel_id=channel_id, snoop_id=snoop_id)
                 else:
-                    logger.error("Failed to stop snoop channel", channel_id=channel_id, snoop_id=snoop_id, error=str(e))
+                    logger.info("Snoop channel stopped", channel_id=channel_id, snoop_id=snoop_id)
+            except Exception as e:
+                logger.error("Failed to stop snoop channel", channel_id=channel_id, snoop_id=snoop_id, error=str(e))
         else:
             logger.debug("No active snoop found for channel", channel_id=channel_id)
 
