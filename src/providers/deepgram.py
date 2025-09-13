@@ -30,7 +30,7 @@ class DeepgramProvider(AIProviderInterface):
 
         try:
             logger.info("Connecting to Deepgram Voice Agent...", url=ws_url)
-            self.websocket = await websockets.connect(ws_url, additional_headers=headers)
+            self.websocket = await websockets.connect(ws_url, extra_headers=list(headers.items()))
             logger.info("✅ Successfully connected to Deepgram Voice Agent.")
 
             await self._configure_agent()
@@ -53,6 +53,7 @@ class DeepgramProvider(AIProviderInterface):
                 "output": { "encoding": "mulaw", "sample_rate": 8000, "container": "none" }
             },
             "agent": {
+                "greeting": "Hello, I am an AI Assistant for Jugaar LLC. How can I help you today.",
                 "language": "en",
                 "listen": { "provider": { "type": "deepgram", "model": self.config.model, "smart_format": True } },
                 "think": { "provider": { "type": "open_ai", "model": self.llm_config.model }, "prompt": self.llm_config.prompt },
@@ -103,14 +104,14 @@ class DeepgramProvider(AIProviderInterface):
                 if isinstance(message, str):
                     try:
                         event_data = json.loads(message)
-                        if self.event_handler:
-                            await self.event_handler(event_data)
+                        if self.on_event:
+                            await self.on_event(event_data)
                     except json.JSONDecodeError:
                         logger.error("Failed to parse JSON message from Deepgram", message=message)
                 elif isinstance(message, bytes):
                     audio_event = {'type': 'AgentAudio', 'data': message}
-                    if self.event_handler:
-                        await self.event_handler(audio_event)
+                    if self.on_event:
+                        await self.on_event(audio_event)
         except websockets.exceptions.ConnectionClosed as e:
             logger.warning("Deepgram Voice Agent connection closed", reason=str(e))
         except Exception:
