@@ -270,9 +270,9 @@ class ARIClient:
                 file_size = os.path.getsize(container_path)
                 logger.debug("File created successfully", path=container_path, size=file_size)
                 
-                # Add a small delay to ensure filesystem sync before sending playback command
+                # Add a delay to ensure filesystem sync before sending playback command
                 import asyncio
-                await asyncio.sleep(0.1)  # 100ms delay for filesystem sync
+                await asyncio.sleep(0.5)  # 500ms delay for filesystem sync
                 logger.debug("Filesystem sync delay completed", path=container_path)
 
             playback = await self.play_media(channel_id, asterisk_media_uri)
