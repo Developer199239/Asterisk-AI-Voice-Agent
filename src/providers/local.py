@@ -46,6 +46,24 @@ class LocalProvider(AIProviderInterface):
             except Exception:
                 logger.error("An unexpected error occurred while sending audio chunk", exc_info=True)
 
+    async def play_initial_greeting(self, call_id: str):
+        """Play an initial greeting message to the caller."""
+        try:
+            # Send a greeting message to the local AI server
+            greeting_message = {
+                "type": "greeting",
+                "call_id": call_id,
+                "message": "Hello! I'm your AI assistant. How can I help you today?"
+            }
+            
+            if self.websocket:
+                await self.websocket.send(json.dumps(greeting_message))
+                logger.info("Sent greeting message to Local AI Server", call_id=call_id)
+            else:
+                logger.warning("Cannot send greeting: WebSocket not connected", call_id=call_id)
+        except Exception as e:
+            logger.error("Failed to send greeting message", call_id=call_id, error=str(e), exc_info=True)
+
     async def stop_session(self):
         if self._listener_task:
             self._listener_task.cancel()
@@ -60,9 +78,9 @@ class LocalProvider(AIProviderInterface):
             async for message in self.websocket:
                 # The local AI server will send back raw audio bytes for TTS
                 if isinstance(message, bytes):
-                    audio_event = {'type': 'ProviderAudio', 'data': message}
-                    if self.event_handler:
-                        await self.event_handler(audio_event)
+                    audio_event = {'type': 'AgentAudio', 'data': message}
+                    if self.on_event:
+                        await self.on_event(audio_event)
                 else:
                     logger.warning("Received non-binary message from Local AI Server", message=message)
         except websockets.exceptions.ConnectionClosed as e:

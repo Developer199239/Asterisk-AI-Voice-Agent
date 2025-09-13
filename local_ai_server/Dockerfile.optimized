@@ -1,0 +1,50 @@
+# Multi-stage build for minimal Local AI Server
+FROM python:3.11-slim as builder
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create virtual environment
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Copy minimal requirements
+COPY requirements_minimal.txt /tmp/requirements.txt
+
+# Install only what we need
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
+
+# Final stage - minimal runtime
+FROM python:3.11-slim
+
+# Install only runtime dependencies
+RUN apt-get update && apt-get install -y \
+    espeak-ng \
+    libsndfile1 \
+    libasound2 \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy virtual environment from builder
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Set working directory
+WORKDIR /app
+
+# Copy application files
+COPY main.py .
+COPY lightweight_tts.py .
+
+# Create models directory
+RUN mkdir -p /app/models
+
+# Expose port
+EXPOSE 8765
+
+# Run the application
+CMD ["python", "main.py"]

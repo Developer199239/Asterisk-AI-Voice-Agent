@@ -7,7 +7,7 @@ alwaysApply: true
 # Asterisk AI Voice Agent v3.0 - Development Rules
 
 ## Project Overview
-This is an open-source AI Voice Agent that integrates with Asterisk/FreePBX using the Asterisk REST Interface (ARI). It features a **single-container, modular architecture** that allows for plug-and-play AI providers (including local and cloud-based) for real-time, natural conversations.
+This is an open-source AI Voice Agent that integrates with Asterisk/FreePBX using the Asterisk REST Interface (ARI). It features a **two-container, modular architecture** that uses Asterisk's native **Snoop/Playback** capabilities for robust media handling.
 
 ## Development Workflow
 
@@ -16,207 +16,136 @@ This is an open-source AI Voice Agent that integrates with Asterisk/FreePBX usin
 - **Asterisk Version**: 16+ with FreePBX UI
 - **Docker**: Installed and available
 - **Access**: SSH with root privileges
+- **Shared Media Directory**: A `tmpfs` (RAM disk) is mounted at `/mnt/asterisk_media` for high-performance, temporary audio file storage.
 
 ### Development Process
 1. **Local Development**: All code changes are made locally on the `develop` branch.
-2. **Git Workflow**:
+2. **Git Workflow**: 
    - Build and verify locally.
    - Commit changes to Git.
    - Push to remote `develop` branch.
 3. **Server Testing**:
    - SSH to test server.
-   - Clone `develop` branch into `/root/Asterisk-Agent-Develop`.
-   - Bring down the main production container if up and bring up the develop container for isolated testing.
-   - Test with Asterisk 16+ environment.
-   - Do not make any changes to asterisk config on server, ask user to do so if needed.
+   - `git pull` the latest changes into `/root/Asterisk-Agent-Develop`.
+   - Use `docker-compose restart` for code changes or `docker-compose up --build -d` for dependency changes.
 
 ### Docker Development Workflow (CRITICAL)
 
-**NEVER rebuild the Docker image for code changes.** Use the volume-based workflow:
+**NEVER rebuild the Docker image for code changes in the `ai-engine`.** Use the volume-based workflow:
 
 1. **For dependency changes only**: `docker-compose up --build -d`
-2. **For code changes**: `docker-compose restart` (instant)
+2. **For `ai-engine` code changes**: `docker-compose restart ai-engine` (instant)
 3. **View logs**: `docker-compose logs -f`
-
-**Key Principles:**
-- Source code is mounted as volumes, not copied into the image
-- Only rebuild when `requirements.txt` or `Dockerfile` changes
-- Use `docker-compose restart` for all Python code changes
-- This reduces deployment time from 15 minutes to under 10 seconds
-
-**Development Commands:**
-```bash
-# Initial setup (run once)
-./scripts/download_models.sh
-docker-compose up --build -d
-
-# Daily development (code changes)
-docker-compose restart
-docker-compose logs -f
-
-# Cleanup
-docker-compose down
-```
-
-**Volume-Based Development:**
-- **Source Code**: Mount `./src`, `./config`, `./main.py` as volumes
-- **Models**: Mount `./models` directory for AI models
-- **No Rebuilds**: Use `docker-compose restart` for code changes
-- **Build Only**: When `requirements.txt` or `Dockerfile` changes
-
-### Code Standards
-- **Python Version**: 3.11+
-- **Async Programming**: Use asyncio for all I/O operations
-- **Type Hints**: Required for all functions and classes
-- **Error Handling**: Comprehensive error handling with logging
-- **Testing**: Unit tests for all components.
 
 ### Project Structure
 ```
 Asterisk-AI-Voice-Agent/
 ├── src/
-│   ├── providers/          # AI provider integrations (Deepgram, Local)
+│   ├── providers/          # AI provider integrations
 │   │   ├── base.py         # AIProviderInterface abstract class
 │   │   ├── deepgram.py     # Deepgram provider
-│   │   └── local.py        # Local provider (Vosk, Llama, Piper)
-│   ├── ari_client.py       # ARI WebSocket and HTTP client
-│   ├── config.py           # YAML configuration loader and Pydantic models
-│   ├── engine.py           # Core call orchestration and provider loading
-│   ├── rtp_handler.py      # RTP packetization logic
-│   └── udp_server.py       # UDP server for receiving RTP from Asterisk
+│   │   └── local.py        # Local provider (WebSocket client)
+│   ├── ari_client.py       # ARI client using Snoop/Playback
+│   ├── config.py           # YAML configuration loader
+│   └── engine.py           # Core call orchestration
+├── local_ai_server/        # Standalone server for local AI models
+│   ├── Dockerfile
+│   ├── main.py
+│   └── requirements.txt
 ├── config/
-│   └── ai-agent.yaml       # Main configuration file for providers
-├── models/                 # Local AI models (downloaded by script, not in git)
-│   ├── stt/
-│   └── llm/
-│   └── tts/
+│   └── ai-agent.yaml       # Main configuration file
+├── models/                 # Local AI models (mounted to local-ai-server)
 ├── scripts/
-│   └── download_models.sh  # Script to fetch local AI models
-├── main.py                 # Application entry point
-├── docker-compose.yml      # Single-service orchestration
-├── Dockerfile              # Multi-stage optimized container
-└── requirements.txt        # Python dependencies
+│   └── download_models.sh
+├── main.py                 # Application entry point for ai-engine
+├── docker-compose.yml      # Two-service orchestration
+├── Dockerfile              # Dockerfile for ai-engine
+└── requirements.txt        # Dependencies for ai-engine
 ```
 
 ### Key Technologies
-- **Asterisk Integration**: ARI (Asterisk REST Interface) via custom `ari_client`
-- **AI Providers**:
-    - **Cloud**: Deepgram Voice Agent
-    - **Local STT**: Vosk
-    - **Local LLM**: Llama-cpp-python
-    - **Local TTS**: Piper-tts
-- **Configuration**: YAML (`ai-agent.yaml`) with Pydantic v2 for validation
-- **Audio Processing**: RTP packet handling, ulaw/PCM conversion
-
-### Common Commands
-
-**Fast Development Workflow (OPTIMIZED):**
-
-```bash
-# 1. One-Time Setup: Download Local AI Models
-./scripts/download_models.sh
-
-# 2. Initial Build (only when dependencies change)
-docker-compose up --build -d
-
-# 3. Code Changes (INSTANT - use this for all Python changes)
-docker-compose restart
-
-# 4. View Logs
-docker-compose logs -f
-
-# 5. Stop Application
-docker-compose down
-
-# 6. Clean up
-df -h
-docker image prune -f
-```
-
-**Server Testing Workflow (UPDATED):**
-
-```bash
-# On test server: /root/Asterisk-Agent-Develop
-git pull origin develop
-docker-compose build --no-cache
-docker-compose restart  # Instant code updates
-docker-compose logs -f
-
-# When testing complete
-docker-compose down
-
-
+- **Asterisk Integration**: ARI via a custom `ari_client` implementing the Snoop/Playback model.
+- **Audio Processing**: All real-time media (RTP) is handled natively by Asterisk. The application controls media flow via ARI commands.
 
 ### Environment Variables
 Configuration is primarily managed in `config/ai-agent.yaml`. The `.env` file is only used for secrets.
 
-- `OPENAI_API_KEY`: Your OpenAI API key.
-- `DEEPGRAM_API_KEY`: Your Deepgram API key.
 - `ASTERISK_HOST`: IP address of your Asterisk server.
 - `ASTERISK_ARI_USERNAME`: AIAgent
 - `ASTERISK_ARI_PASSWORD`: AiAgent+2025?
-- `GREETING`: Hello ! I am an AI Voice Assistant.
-- `AI_ROLE`: You are an AI voice assistant for answering calls for Jugaaar LLC.
-
-### Testing Commands
-```bash
-# Verify ARI connection
-asterisk -rx "ari show app asterisk-ai-voice-agent"
-
-# Check Asterisk status
-asterisk -rx "core show version"
-
-# Monitor Asterisk logs
-tail -f /var/log/asterisk/full
-
-# Test call command 
-asterisk -rx "channel originate sip/13164619284@callcentric application s@ivr-3"
-```
+- And other provider-specific API keys.
 
 ## ARI Integration and Call Handling
 
-### Call Flow
-The new single-container architecture simplifies call handling significantly.
+### Call Flow: Snoop/Playback Model
+
+The new architecture simplifies the media path by leveraging Asterisk's native capabilities, treating our application as a pure controller.
 
 1.  **StasisStart**: A new call enters the `ai-voice-agent` Stasis application.
-    -   The `Engine` receives the event.
-    -   The dialplan argument (e.g., "deepgram" or "local") is used to determine which AI provider to use.
-    -   The `Engine` instantiates the appropriate provider class (e.g., `DeepgramProvider`).
-2.  **Media Setup**:
-    -   The `Engine` answers the call.
-    -   It creates an `externalMedia` channel, which sets up a UDP port for Asterisk to send RTP audio to.
-    -   The incoming channel and the media channel are placed into a bridge.
+    -   The `Engine` receives the event, determines the provider, and answers the call.
+2.  **Media Setup (Audio Input)**:
+    -   The `AriClient` creates a **snoop channel** on the incoming call. This provides a direct, raw audio stream of the caller's media via ARI WebSocket events (`ChannelAudioFrame`).
 3.  **Real-time Conversation**:
-    -   The `UDPServer` receives RTP packets from Asterisk.
-    -   The raw audio payload is forwarded to the active AI provider's `send_audio` method.
-    -   The provider's STT engine transcribes the audio.
-    -   The text is sent to the provider's LLM.
-    -   The LLM's text response is sent to the provider's TTS engine.
-    -   The synthesized audio is received by the `Engine`, packetized into RTP, and sent back to Asterisk via the UDP port.
-4.  **StasisEnd**: When the call hangs up, the `Engine`'s `_cleanup_call` method is triggered.
-    -   The provider's `stop_session` method is called.
-    -   The bridge is destroyed and all channels are hung up.
+    -   The `AriClient` receives audio frames and forwards them to the active AI provider (e.g., the `local-ai-server`).
+    -   The provider processes the audio (STT -> LLM -> TTS).
+4.  **Media Setup (Audio Output)**:
+    -   The provider sends the synthesized TTS audio (as a `.wav` byte stream) back to the `ai-engine`.
+    -   The `AriClient` writes this audio to a unique file in the shared RAM-based directory (`/mnt/asterisk_media`).
+    -   It sends a `channels.play` command to Asterisk, telling it to play the sound file.
+5.  **Cleanup**:
+    -   The `AriClient` listens for the `PlaybackFinished` event from Asterisk.
+    -   The event handler immediately deletes the audio file from the shared directory.
+6.  **StasisEnd**: When the call hangs up, the `Engine` cleans up any remaining resources.
 
-This entire loop occurs within a single process, eliminating the need for Redis-based inter-service communication and external media proxies like rtpengine.
+This model eliminates the need for a UDP server and manual RTP handling, resulting in a more stable and simplified system.
 
-## Docker Optimization Rules
+## Testing and Verification
 
-### Multi-Stage Dockerfile Requirements
-- **Stage 1 (builder)**: Use `python:3.11` for building dependencies
-- **Stage 2 (final)**: Use `python:3.11-slim` for runtime
-- **Layer Caching**: Copy `requirements.txt` before source code
-- **Security**: Run as non-root user (`appuser`)
-- **Virtual Environment**: Use `/opt/venv` for dependency isolation
+### Comprehensive Test Suite
 
-### Volume-Based Development
-- **Source Code**: Mount `./src`, `./config`, `./main.py` as volumes
-- **Models**: Mount `./models` directory for AI models
-- **No Rebuilds**: Use `docker-compose restart` for code changes
-- **Build Only**: When `requirements.txt` or `Dockerfile` changes
+The project includes a comprehensive test suite designed to systematically verify each component of the two-container architecture.
 
-### Performance Targets
-- **Initial Build**: ~15 minutes (acceptable, happens once)
-- **Code Changes**: <10 seconds (99% improvement)
-- **Dependency Changes**: ~15 minutes (only when needed)
+#### Test Files
+- **`test_local_ai_server.py`**: Tests the Local AI Server container (STT, LLM, TTS functionality)
+- **`test_ai_engine.py`**: Tests the AI Engine container (ARI connectivity, audio playback)
+- **`test_integration.py`**: Tests end-to-end integration between containers
 
-This workflow ensures maximum developer productivity while maintaining production-ready container images.
+#### Test Execution Workflow
+
+1. **Pre-Deployment Testing**:
+   ```bash
+   # Test Local AI Server
+   docker exec local_ai_server python /app/test_local_ai_server.py
+   
+   # Test AI Engine
+   docker exec ai_engine python /app/test_ai_engine.py
+   
+   # Test Integration
+   docker exec ai_engine python /app/test_integration.py
+   ```
+
+2. **Live Call Testing**:
+   - Monitor logs during test calls
+   - Verify greeting audio playback
+   - Test real-time conversation flow
+
+#### Test Results Documentation
+- All test results are documented in `docs/Individual-Tests.md`
+- Test files are deployed to server for live testing
+- Regular test execution ensures system reliability
+
+### Critical Testing Points
+
+- **TTS Functionality**: Must generate audio for greetings and responses
+- **WebSocket Communication**: Must maintain stable connection between containers
+- **ARI Integration**: Must properly create snoop channels and handle audio frames
+- **Audio Playback**: Must successfully play generated audio to callers
+
+### Troubleshooting Guide
+
+When issues arise:
+1. Run individual component tests to isolate problems
+2. Check container logs for specific error messages
+3. Verify model loading and initialization
+4. Test WebSocket connectivity between containers
+5. Validate ARI commands and responses

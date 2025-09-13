@@ -11,6 +11,8 @@ services:
       - ./src:/app/src
       - ./main.py:/app/main.py
       - ./config:/app/config
+      - /mnt/asterisk_media:/mnt/asterisk_media
+      - /var/lib/asterisk/sounds:/var/lib/asterisk/sounds
     env_file:
       - .env
     environment:

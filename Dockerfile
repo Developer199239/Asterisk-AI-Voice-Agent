@@ -16,8 +16,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # --- Stage 2: Final Runtime Image ---
 FROM python:3.11-slim
 
-# No special runtime dependencies needed for the lean engine
-# System dependencies are now in the local_ai_server Dockerfile
+# Install sox for audio format conversion
+RUN apt-get update && apt-get install -y sox && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 

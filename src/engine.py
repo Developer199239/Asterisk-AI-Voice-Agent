@@ -41,6 +41,20 @@ class Engine:
         self.ari_client.on_event("StasisEnd", self._handle_stasis_end)
         self.ari_client.on_event("ChannelDtmfReceived", self._handle_dtmf_received)
 
+    async def on_rtp_packet(self, packet: bytes, addr: tuple):
+        """Handle incoming RTP packets from the UDP server."""
+        # This is a simplified handler. A real implementation would parse RTP headers
+        # to map the audio to the correct call based on SSRC or other identifiers.
+        # For now, we assume a single active call and forward audio to its provider.
+        if self.active_calls:
+            channel_id = list(self.active_calls.keys())[0]
+            call_data = self.active_calls[channel_id]
+            provider = call_data.get("provider")
+            if provider:
+                # The first 12 bytes of an RTP packet are the header. The rest is payload.
+                audio_payload = packet[12:]
+                await provider.send_audio(audio_payload)
+
     async def _on_ari_event(self, event: Dict[str, Any]):
         """Default event handler for unhandled ARI events."""
         logger.debug("Received unhandled ARI event", event_type=event.get("type"), event=event)
@@ -79,7 +93,17 @@ class Engine:
 
     async def _handle_stasis_start(self, event: dict):
         """Handle a new call entering the Stasis application."""
+        # Debug: Log the full event structure
+        logger.debug("StasisStart event received", event_data=event)
+        
         channel_id = event["channel"]["id"]
+        channel_name = event["channel"]["name"]
+        
+        # CRITICAL: Ignore snoop channels to prevent infinite loops
+        if channel_name.startswith("Snoop/"):
+            logger.debug("Ignoring snoop channel", channel_id=channel_id, channel_name=channel_name)
+            return
+            
         caller_info = event["channel"]["caller"]
         logger.info(
             "New call received",
@@ -101,25 +125,33 @@ class Engine:
         try:
             await self.ari_client.answer_channel(channel_id)
 
-            # This now uses externalMedia and bridging
-            media_channel_id = await self.ari_client.start_audio_streaming(
-                channel_id, self.config.asterisk.app_name
-            )
+            # Create snoop channel for audio capture
+            snoop_id = await self.ari_client.start_audio_snoop(channel_id, self.config.asterisk.app_name)
             
-            if not media_channel_id:
-                logger.error("Failed to start audio streaming", channel_id=channel_id)
+            if not snoop_id:
+                logger.error("Failed to create snoop channel", channel_id=channel_id)
                 await self._cleanup_call(channel_id)
                 return
 
-            # Store media channel info for cleanup
-            self.active_calls[channel_id]["media_channel_id"] = media_channel_id
+            # Store snoop channel info for cleanup
+            self.active_calls[channel_id]["snoop_channel_id"] = snoop_id
+
+            # Set up audio frame handler for this call
+            self.ari_client.set_audio_frame_handler(self._handle_audio_frame)
+            logger.debug("Audio frame handler set", channel_id=channel_id)
 
             # Start the provider's session, which sets up audio handlers
+            logger.debug("Starting provider session", channel_id=channel_id, provider=provider_name)
             await provider.start_session(channel_id)
+            logger.debug("Provider session started successfully", channel_id=channel_id)
             
             # Play initial greeting now that models are pre-loaded
             if hasattr(provider, 'play_initial_greeting'):
+                logger.debug("Playing initial greeting", channel_id=channel_id)
                 await provider.play_initial_greeting(channel_id)
+                logger.debug("Initial greeting played", channel_id=channel_id)
+            else:
+                logger.debug("Provider does not have play_initial_greeting method", channel_id=channel_id)
 
         except Exception as e:
             logger.error("Error during StasisStart handling", channel_id=channel_id, exc_info=True)
@@ -171,30 +203,25 @@ class Engine:
                     break
                     
             if not active_channel_id:
+                logger.debug("No active call found for audio frame")
                 return
                 
             call_data = self.active_calls.get(active_channel_id)
             if not call_data:
+                logger.debug("No call data found for active channel")
                 return
                 
             provider = call_data.get('provider')
             if not provider:
+                logger.debug("No provider found for active call")
                 return
 
-            # Phase A: feed STT via in-memory pipeline (Vosk+VAD)
-            # if self.pipeline: # This line is removed as per the edit hint
-            #     transcript = await self.pipeline.process_stt(audio_data) # This line is removed as per the edit hint
-            #     if transcript: # This line is removed as per the edit hint
-            #         logger.info("Transcript", text=transcript) # This line is removed as per the edit hint
-            #         # Use existing provider path to generate LLM response and TTS # This line is removed as per the edit hint
-            #         await provider._generate_llm_response(transcript)  # uses current TTS AgentAudio events # This line is removed as per the edit hint
-            # else: # This line is removed as per the edit hint
-            #     # Fallback to legacy provider STT if pipeline not available # This line is removed as per the edit hint
-            #     await provider.send_audio(audio_data) # This line is removed as per the edit hint
-            #     logger.debug(f"Forwarded {len(audio_data)} bytes of audio to provider") # This line is removed as per the edit hint
+            # Forward audio data to the provider for STT processing
+            await provider.send_audio(audio_data)
+            logger.debug(f"Forwarded {len(audio_data)} bytes of audio to provider for channel {active_channel_id}")
             
         except Exception as e:
-            logger.error("Error processing audio frame", error=str(e))
+            logger.error("Error processing audio frame", error=str(e), exc_info=True)
 
     async def _handle_dtmf_received(self, event_data: dict):
         """Handle DTMF events from snoop channels."""
@@ -229,8 +256,10 @@ class Engine:
                 # For now, we'll send to all active calls
                 # In a more sophisticated implementation, we'd track which call this audio belongs to
                 for channel_id, call_data in self.active_calls.items():
-                    await self._play_audio_to_channel(channel_id, audio_data)
-                    logger.debug(f"Sent {len(audio_data)} bytes of ulaw audio to channel {channel_id}")
+                    # Play audio on the main call channel, not the snoop channel
+                    # The snoop channel is for receiving audio, the main channel is for playing audio
+                    await self.ari_client.play_audio_response(channel_id, audio_data)
+                    logger.debug(f"Sent {len(audio_data)} bytes of audio to call channel {channel_id}")
         elif event_type == "Transcription":
             # Handle transcription data
             text = event.get("text", "")
@@ -307,7 +336,8 @@ class Engine:
             if provider:
                 await provider.stop_session()
             
-            await self.ari_client.stop_audio_streaming(channel_id)
+            # Stop snoop channel
+            await self.ari_client.stop_audio_snoop(channel_id)
             
             del self.active_calls[channel_id]
             logger.debug("Call resources cleaned up", channel_id=channel_id)

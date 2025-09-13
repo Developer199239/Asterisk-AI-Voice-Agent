@@ -8,7 +8,7 @@ from typing import Optional
 from websockets.server import serve
 from vosk import Model as VoskModel, KaldiRecognizer
 from llama_cpp import Llama
-from TTS.api import TTS
+from lightweight_tts import LightweightTTS
 
 logging.basicConfig(level=logging.INFO)
 
@@ -16,7 +16,7 @@ class LocalAIServer:
     def __init__(self):
         self.stt_model: Optional[VoskModel] = None
         self.llm_model: Optional[Llama] = None
-        self.tts_model: Optional[TTS] = None
+        self.tts_model: Optional[LightweightTTS] = None
 
     async def initialize_models(self):
         logging.info("Pre-loading AI models...")
@@ -31,7 +31,7 @@ class LocalAIServer:
 
         self.stt_model = VoskModel(stt_model_path)
         self.llm_model = Llama(model_path=llm_model_path, n_ctx=2048)
-        self.tts_model = TTS(model_name="tts_models/en/ljspeech/tacotron2-DDC", progress_bar=False)
+        self.tts_model = LightweightTTS()
         logging.info("All models loaded successfully")
 
     async def process_stt(self, audio_data: bytes) -> str:
@@ -51,7 +51,7 @@ class LocalAIServer:
     async def process_tts(self, text: str) -> bytes:
         # Placeholder for TTS processing
         if self.tts_model:
-            wav_bytes = self.tts_model.tts_to_wav(text)
+            wav_bytes = self.tts_model.tts(text)
             return wav_bytes
         return b""
 
@@ -72,11 +72,20 @@ class LocalAIServer:
                     
                     audio_response = await self.process_tts(llm_response)
                     
-                    response = {
-                        "type": "audio_response",
-                        "data": base64.b64encode(audio_response).decode("utf-8")
-                    }
-                    await websocket.send(json.dumps(response))
+                    # Send audio response as binary data
+                    await websocket.send(audio_response)
+                elif data.get("type") == "greeting":
+                    # Handle greeting message - generate TTS for the greeting
+                    greeting_text = data.get("message", "Hello! I'm your AI assistant. How can I help you today?")
+                    call_id = data.get("call_id", "unknown")
+                    logging.info(f"Processing greeting for call {call_id}: {greeting_text}")
+                    
+                    # Generate TTS audio for the greeting
+                    audio_response = await self.process_tts(greeting_text)
+                    
+                    # Send the greeting audio back as binary data
+                    await websocket.send(audio_response)
+                    logging.info(f"Sent greeting audio for call {call_id}")
                 else:
                     logging.warning(f"Unknown message type: {data.get('type')}")
         except Exception as e:
