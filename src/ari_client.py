@@ -237,33 +237,70 @@ class ARIClient:
 
     async def play_audio_response(self, channel_id: str, audio_data: bytes):
         """Saves TTS audio to shared media directory and commands Asterisk to play it."""
-        unique_filename = f"response-{uuid.uuid4()}.wav"
-        # Use the shared media directory that's mounted to the host
-        container_path = f"/mnt/asterisk_media/ai-generated/{unique_filename}"
-        asterisk_media_uri = f"sound:ai-generated/{unique_filename.replace('.wav', '')}"
+        unique_filename = f"response-{uuid.uuid4()}.ulaw"
+        # Use the shared RAM space for high-performance audio file storage
+        # Put files directly in the cache directory root (no subdirectory)
+        container_path = f"/mnt/asterisk_media/{unique_filename}"
+        # Use the symlinked path that Asterisk can access
+        asterisk_media_uri = f"sound:ai-generated/{unique_filename}"
 
         try:
-            os.makedirs(os.path.dirname(container_path), exist_ok=True)
+            # Convert WAV data to ulaw format using proper mu-law encoding
+            ulaw_data = await self._convert_wav_to_ulaw(audio_data)
+            if not ulaw_data:
+                logger.error("Failed to convert WAV to ulaw format")
+                return
+            
+            # No need to create directory since we're putting files directly in /mnt/asterisk_media
+            logger.debug("Writing ulaw audio file directly to cache directory", path=container_path)
+            
+            logger.debug("Writing ulaw audio file", path=container_path, size=len(ulaw_data))
             with open(container_path, "wb") as f:
-                f.write(audio_data)
+                f.write(ulaw_data)
+            
+            # Audio converted to ulaw format at 8000 Hz for Asterisk compatibility
+            logger.debug("Ulaw audio file written (converted from WAV to ulaw at 8000 Hz)", path=container_path)
+            
+            # Change ownership to asterisk user so Asterisk can read the file
+            # Use hardcoded UID/GID since pwd.getpwnam doesn't work in container
+            try:
+                asterisk_uid = 995  # asterisk user UID
+                asterisk_gid = 995  # asterisk group GID
+                os.chown(container_path, asterisk_uid, asterisk_gid)
+                logger.debug("Changed file ownership to asterisk user", path=container_path, uid=asterisk_uid, gid=asterisk_gid)
+            except Exception as e:
+                logger.warning("Failed to change file ownership", path=container_path, error=str(e))
+            
+            logger.debug("Verifying file creation", path=container_path, exists=os.path.exists(container_path))
+            if os.path.exists(container_path):
+                file_size = os.path.getsize(container_path)
+                logger.debug("File created successfully", path=container_path, size=file_size)
 
             playback = await self.play_media(channel_id, asterisk_media_uri)
             if playback and 'id' in playback:
                 self.active_playbacks[playback['id']] = container_path
                 logger.info(f"Playing audio file: {unique_filename} on channel {channel_id}")
+            else:
+                logger.error("Failed to get playback ID", playback=playback)
         except Exception as e:
             logger.error("Failed to play audio file", channel_id=channel_id, error=str(e), exc_info=True)
 
-    async def _on_playback_finished(self, client, event):
-        """Event handler for cleaning up audio files immediately after use."""
+    async def _on_playback_finished(self, event):
+        """Event handler for cleaning up audio files after a short delay."""
         playback_id = event.get("playback", {}).get("id")
         file_path = self.active_playbacks.pop(playback_id, None)
-        if file_path and os.path.exists(file_path):
-            try:
-                os.remove(file_path)
-                logger.debug("Successfully deleted audio file", file_path=file_path)
-            except OSError:
-                logger.error("Error deleting audio file", file_path=file_path, exc_info=True)
+        if file_path:
+            # TEMPORARILY DISABLED: Keep files for testing
+            logger.debug("TEMPORARILY KEEPING FILE FOR TESTING", file_path=file_path)
+            # Add a delay to ensure Asterisk has finished with the file
+            # import asyncio
+            # await asyncio.sleep(2.0)
+            # if os.path.exists(file_path):
+            #     try:
+            #         os.remove(file_path)
+            #         logger.debug("Successfully deleted audio file", file_path=file_path)
+            #     except OSError:
+            #         logger.error("Error deleting audio file", file_path=file_path, exc_info=True)
 
     async def _on_audio_frame(self, channel, event):
         """Handles incoming raw audio frames from the snoop channel."""
@@ -307,7 +344,11 @@ class ARIClient:
                 await self.send_command("DELETE", f"channels/{snoop_id}")
                 logger.info("Snoop channel stopped", channel_id=channel_id, snoop_id=snoop_id)
             except Exception as e:
-                logger.error("Failed to stop snoop channel", channel_id=channel_id, snoop_id=snoop_id, error=str(e))
+                # Check if the error is because the channel no longer exists (404)
+                if "404" in str(e) or "Channel not found" in str(e):
+                    logger.debug("Snoop channel already destroyed", channel_id=channel_id, snoop_id=snoop_id)
+                else:
+                    logger.error("Failed to stop snoop channel", channel_id=channel_id, snoop_id=snoop_id, error=str(e))
         else:
             logger.debug("No active snoop found for channel", channel_id=channel_id)
 
@@ -414,6 +455,66 @@ class ARIClient:
         except Exception as e:
             logger.error(f"Error creating audio file from ulaw: {e}")
             return ""
+
+    async def _convert_wav_to_ulaw(self, wav_data: bytes) -> bytes:
+        """Convert WAV data to ulaw format using proper mu-law encoding."""
+        import tempfile
+        import subprocess
+        
+        try:
+            # Create temporary files for conversion
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_wav:
+                temp_wav_path = temp_wav.name
+                temp_wav.write(wav_data)
+            
+            with tempfile.NamedTemporaryFile(suffix='.ulaw', delete=False) as temp_ulaw:
+                temp_ulaw_path = temp_ulaw.name
+            
+            # Use sox to convert WAV to ulaw with proper mu-law encoding
+            # This matches the successful conversion we tested: sox input.wav -r 8000 -c 1 -e mu-law -t raw output.ulaw
+            sox_cmd = [
+                'sox',
+                temp_wav_path,           # Input WAV file
+                '-r', '8000',           # Sample rate: 8000 Hz
+                '-c', '1',              # Mono channel
+                '-e', 'mu-law',         # mu-law encoding
+                '-t', 'raw',            # Raw format
+                temp_ulaw_path          # Output ulaw file
+            ]
+            
+            logger.debug("Converting WAV to ulaw using sox with mu-law encoding")
+            result = subprocess.run(sox_cmd, capture_output=True, text=True, timeout=30)
+            
+            if result.returncode != 0:
+                logger.error(f"sox conversion failed: {result.stderr}")
+                return b""
+            
+            # Read the converted ulaw data
+            if os.path.exists(temp_ulaw_path):
+                with open(temp_ulaw_path, 'rb') as f:
+                    ulaw_data = f.read()
+                
+                logger.debug(f"Successfully converted WAV to ulaw: {len(wav_data)} bytes -> {len(ulaw_data)} bytes")
+                return ulaw_data
+            else:
+                logger.error("sox conversion failed - output file not created")
+                return b""
+                
+        except subprocess.TimeoutExpired:
+            logger.error("sox conversion timed out after 30 seconds")
+            return b""
+        except Exception as e:
+            logger.error(f"Error converting WAV to ulaw: {e}")
+            return b""
+        finally:
+            # Clean up temporary files
+            try:
+                if 'temp_wav_path' in locals() and os.path.exists(temp_wav_path):
+                    os.unlink(temp_wav_path)
+                if 'temp_ulaw_path' in locals() and os.path.exists(temp_ulaw_path):
+                    os.unlink(temp_ulaw_path)
+            except Exception as e:
+                logger.warning(f"Failed to clean up temporary files: {e}")
 
     async def cleanup_audio_file(self, file_path: str, delay: float = 5.0):
         """Clean up an audio file after a delay."""
