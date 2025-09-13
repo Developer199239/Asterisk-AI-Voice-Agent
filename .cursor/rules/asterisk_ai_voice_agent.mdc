@@ -89,8 +89,8 @@ The new architecture simplifies the media path by leveraging Asterisk's native c
     -   The `AriClient` receives audio frames and forwards them to the active AI provider (e.g., the `local-ai-server`).
     -   The provider processes the audio (STT -> LLM -> TTS).
 4.  **Media Setup (Audio Output)**:
-    -   The provider sends the synthesized TTS audio (as a `.wav` byte stream) back to the `ai-engine`.
-    -   The `AriClient` writes this audio to a unique file in the shared RAM-based directory (`/mnt/asterisk_media`).
+    -   The provider sends the synthesized TTS audio (as a `ulaw` byte stream) back to the `ai-engine`.
+    -   The `AriClient` writes this audio to a unique file in the shared RAM-based directory (`/mnt/asterisk_media/ai-generated`).
     -   It sends a `channels.play` command to Asterisk, telling it to play the sound file.
 5.  **Cleanup**:
     -   The `AriClient` listens for the `PlaybackFinished` event from Asterisk.
@@ -143,9 +143,36 @@ The project includes a comprehensive test suite designed to systematically verif
 
 ### Troubleshooting Guide
 
+#### Systematic Troubleshooting Methodology (Established September 2025)
+
+**Core Principle**: "Break it down step by step, each iteration till we reach the correct way to fix this permanently."
+
+**Step-by-Step Process**:
+1. **Isolate the Problem**: Test individual components in isolation
+2. **Verify Each Step**: Don't assume anything works until verified
+3. **Use Direct Testing**: Test from inside containers when possible
+4. **Check Asterisk Logs**: Always verify actual playback success, not just command acceptance
+5. **Document Findings**: Log each discovery with timestamps
+
+**Critical Discovery - Asterisk File Extension Handling**:
+- **Root Cause**: Asterisk automatically appends file extensions to `sound:` URIs
+- **Issue**: `sound:ai-generated/response-xxx.ulaw` becomes `response-xxx.ulaw.ulaw`
+- **Solution**: Remove `.ulaw` extension from URI: `sound:ai-generated/response-xxx`
+- **Impact**: This affects ALL audio playback, not just AI-generated files
+
+**Troubleshooting Tools**:
+- **Direct ARI Testing**: Create test scripts inside containers to test ARI commands directly
+- **File Verification**: Check file creation, permissions, and format
+- **Asterisk Log Analysis**: Monitor `/var/log/asterisk/full` for actual playback events
+- **Symlink Verification**: Ensure proper symlink setup for file access
+- **Format Validation**: Verify audio format compatibility with Asterisk
+
 When issues arise:
 1. Run individual component tests to isolate problems
 2. Check container logs for specific error messages
 3. Verify model loading and initialization
 4. Test WebSocket connectivity between containers
 5. Validate ARI commands and responses
+6. **Check Asterisk logs for actual playback success**
+7. **Verify file extension handling in URIs**
+8. **Test direct ARI playback commands from inside containers**

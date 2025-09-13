@@ -29,31 +29,28 @@ The Asterisk AI Voice Agent v3.0 is a single-container, multi-provider architect
          │ 5. Answer Channel     │                       │                       │
          │◄──────────────────────┤                       │                       │
          │                       │                       │                       │
-         │ 6. Create External Media Channel              │                       │
+         │ 6. Create Snoop Channel                       │                       │
          │◄──────────────────────┤                       │                       │
          │                       │                       │                       │
-         │ 7. Create Bridge      │                       │                       │
-         │◄──────────────────────┤                       │                       │
-         │                       │                       │                       │
-         │ 8. Add Channels to Bridge                     │                       │
-         │◄──────────────────────┤                       │                       │
-         │                       │                       │                       │
-         │ 9. RTP Audio Stream   │                       │                       │
+         │ 7. Audio Frame Events │                       │                       │
          ├──────────────────────►│                       │                       │
          │                       │                       │                       │
-         │                       │ 10. Forward to Deepgram                       │
+         │                       │ 8. Forward to Deepgram                       │
          │                       ├──────────────────────►│                       │
          │                       │                       │                       │
-         │                       │                       │ 11. STT + LLM + TTS   │
+         │                       │                       │ 9. STT + LLM + TTS   │
          │                       │                       ├──────────────────────►│
          │                       │                       │                       │
-         │                       │ 12. Audio Response    │                       │
+         │                       │ 10. Audio Response    │                       │
          │                       │◄──────────────────────┤                       │
          │                       │                       │                       │
-         │ 13. RTP Audio Stream  │                       │                       │
+         │ 11. Save Audio File   │                       │                       │
          │◄──────────────────────┤                       │                       │
          │                       │                       │                       │
-         │ 14. Call Complete     │                       │                       │
+         │ 12. Play Audio File   │                       │                       │
+         │◄──────────────────────┤                       │                       │
+         │                       │                       │                       │
+         │ 13. Call Complete     │                       │                       │
          ├──────────────────────►│                       │                       │
          │                       │                       │                       │
 ```
@@ -62,8 +59,8 @@ The Asterisk AI Voice Agent v3.0 is a single-container, multi-provider architect
 
 ```
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   ASTERISK      │    │   AI AGENT      │    │   LOCAL MODELS  │    │   RTP HANDLER   │
-│   (PJSIP/SIP)   │    │   ENGINE        │    │   (Vosk/Llama)  │    │   (Packetizer)  │
+│   ASTERISK      │    │   AI AGENT      │    │   LOCAL AI      │    │   SHARED MEDIA  │
+│   (PJSIP/SIP)   │    │   ENGINE        │    │   SERVER        │    │   DIRECTORY     │
 └─────────────────┘    └─────────────────┘    └─────────────────┘    └─────────────────┘
          │                       │                       │                       │
          │ 1. Incoming Call     │                       │                       │
@@ -75,46 +72,40 @@ The Asterisk AI Voice Agent v3.0 is a single-container, multi-provider architect
          │                       │ 3. Create LocalProvider                       │
          │                       ├──────────────────────►│                       │
          │                       │                       │                       │
-         │                       │ 4. Load STT/LLM/TTS Models                    │
+         │                       │ 4. Connect to Local AI Server                 │
          │                       ├──────────────────────►│                       │
          │                       │                       │                       │
          │ 5. Answer Channel     │                       │                       │
          │◄──────────────────────┤                       │                       │
          │                       │                       │                       │
-         │ 6. Create External Media Channel              │                       │
+         │ 6. Create Snoop Channel                       │                       │
          │◄──────────────────────┤                       │                       │
          │                       │                       │                       │
-         │ 7. Create Bridge      │                       │                       │
-         │◄──────────────────────┤                       │                       │
-         │                       │                       │                       │
-         │ 8. Add Channels to Bridge                     │                       │
-         │◄──────────────────────┤                       │                       │
-         │                       │                       │                       │
-         │ 9. RTP Audio Stream   │                       │                       │
+         │ 7. Audio Frame Events │                       │                       │
          ├──────────────────────►│                       │                       │
          │                       │                       │                       │
-         │                       │ 10. Forward to LocalProvider                  │
+         │                       │ 8. Forward Audio to Local AI Server           │
          │                       ├──────────────────────►│                       │
          │                       │                       │                       │
-         │                       │ 11. STT Processing    │                       │
+         │                       │                       │ 9. STT Processing    │
+         │                       │                       ├──────────────────────►│
+         │                       │                       │                       │
+         │                       │                       │ 10. LLM Processing   │
+         │                       │                       ├──────────────────────►│
+         │                       │                       │                       │
+         │                       │                       │ 11. TTS Synthesis    │
+         │                       │                       ├──────────────────────►│
+         │                       │                       │                       │
+         │                       │ 12. Audio Response    │                       │
          │                       │◄──────────────────────┤                       │
          │                       │                       │                       │
-         │                       │ 12. LLM Processing    │                       │
-         │                       │◄──────────────────────┤                       │
-         │                       │                       │                       │
-         │                       │ 13. TTS Synthesis     │                       │
-         │                       │◄──────────────────────┤                       │
-         │                       │                       │                       │
-         │                       │ 14. AgentAudio Event  │                       │
-         │                       │◄──────────────────────┤                       │
-         │                       │                       │                       │
-         │                       │ 15. RTP Packetization │                       │
-         │                       ├──────────────────────►│                       │
-         │                       │                       │                       │
-         │ 16. RTP Audio Stream  │                       │                       │
+         │ 13. Save Audio File   │                       │                       │
          │◄──────────────────────┤                       │                       │
          │                       │                       │                       │
-         │ 17. Call Complete     │                       │                       │
+         │ 14. Play Audio File   │                       │                       │
+         │◄──────────────────────┤                       │                       │
+         │                       │                       │                       │
+         │ 15. Call Complete     │                       │                       │
          ├──────────────────────►│                       │                       │
          │                       │                       │                       │
 ```
@@ -181,22 +172,20 @@ src/
 │       ├── speak()              # Text → TTS → AgentAudio events
 │       └── _synthesize_tts_audio() # TTS synthesis
 │
-├── ari_client.py                # Asterisk REST Interface client
-├── udp_server.py                # UDP server for RTP handling
-├── rtp_handler.py               # RTPPacketizer class
-└── rtp_packet.py                # RtpPacket parsing/serialization
+├── ari_client.py                # Asterisk REST Interface client with Snoop/Playback
+└── config.py                    # Configuration management
 ```
 
 ## Critical Differences
 
 | **Aspect** | **Deepgram Provider** | **Local Provider** |
 |------------|----------------------|-------------------|
-| **Audio Direction** | Bidirectional WebSocket | Unidirectional RTP |
+| **Audio Direction** | Bidirectional WebSocket | WebSocket to Local AI Server |
 | **STT Processing** | Cloud-based | Local Vosk model |
 | **LLM Processing** | Cloud OpenAI | Local Llama model |
-| **TTS Processing** | Cloud Deepgram | Local Coqui TTS |
-| **Audio Format** | Pre-packetized from cloud | Raw ulaw requiring packetization |
-| **Event Flow** | WebSocket → on_event() | TTS → on_event() → RTP packetization |
+| **TTS Processing** | Cloud Deepgram | Local LightweightTTS (espeak-ng) |
+| **Audio Format** | Pre-packetized from cloud | Raw ulaw → WAV conversion |
+| **Event Flow** | WebSocket → on_event() | WebSocket → STT/LLM/TTS → on_event() |
 | **Dependencies** | Internet + API keys | Local model files |
 | **Loading Time** | ~1-2 seconds | ~5-10 seconds |
 | **Ring Mechanism** | Not needed | Required for UX |
