@@ -359,6 +359,9 @@ class Engine:
             # Stop snoop channel
             await self.ari_client.stop_audio_snoop(channel_id)
             
+            # Clean up any remaining audio files for this call
+            await self.ari_client.cleanup_call_files(channel_id)
+            
             del self.active_calls[channel_id]
             logger.debug("Call resources cleaned up", channel_id=channel_id)
         else:

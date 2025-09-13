@@ -6,6 +6,7 @@ Focuses on robust connection and logging to debug startup issues.
 import asyncio
 import json
 import os
+import time
 import uuid
 import audioop
 import wave
@@ -287,17 +288,38 @@ class ARIClient:
         playback_id = event.get("playback", {}).get("id")
         file_path = self.active_playbacks.pop(playback_id, None)
         if file_path:
-            # TEMPORARILY DISABLED: Keep files for testing
-            logger.debug("TEMPORARILY KEEPING FILE FOR TESTING", file_path=file_path)
             # Add a delay to ensure Asterisk has finished with the file
-            # import asyncio
-            # await asyncio.sleep(2.0)
-            # if os.path.exists(file_path):
-            #     try:
-            #         os.remove(file_path)
-            #         logger.debug("Successfully deleted audio file", file_path=file_path)
-            #     except OSError:
-            #         logger.error("Error deleting audio file", file_path=file_path, exc_info=True)
+            import asyncio
+            await asyncio.sleep(2.0)
+            if os.path.exists(file_path):
+                try:
+                    os.remove(file_path)
+                    logger.debug("Successfully deleted audio file", file_path=file_path)
+                except OSError:
+                    logger.error("Error deleting audio file", file_path=file_path, exc_info=True)
+
+    async def cleanup_call_files(self, channel_id: str):
+        """Clean up any remaining audio files for a specific call."""
+        import os
+        import glob
+        
+        # Clean up any files that might be associated with this call
+        # Look for files in the ai-generated directory that might be orphaned
+        ai_generated_dir = "/mnt/asterisk_media/ai-generated"
+        if os.path.exists(ai_generated_dir):
+            # Find any files that might be associated with this call
+            # This is a safety net for files that weren't cleaned up by playback_finished
+            pattern = os.path.join(ai_generated_dir, "response-*.ulaw")
+            files = glob.glob(pattern)
+            
+            for file_path in files:
+                try:
+                    # Check if file is older than 30 seconds (safety check)
+                    if os.path.getmtime(file_path) < (time.time() - 30):
+                        os.remove(file_path)
+                        logger.debug("Cleaned up orphaned audio file", file_path=file_path)
+                except OSError as e:
+                    logger.debug("Could not clean up file", file_path=file_path, error=str(e))
 
     async def _on_audio_frame(self, channel, event):
         """Handles incoming raw audio frames from the snoop channel."""
