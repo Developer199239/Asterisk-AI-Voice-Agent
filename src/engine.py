@@ -84,12 +84,32 @@ class Engine:
                     config = LocalProviderConfig(**provider_config_data)
                     provider = LocalProvider(config, self.on_provider_event)
                     self.providers[name] = provider
+                    logger.info(f"Provider '{name}' loaded successfully.")
                 elif name == "deepgram":
-                    # Initialize other providers here
-                    pass
-                logger.info(f"Provider '{name}' loaded successfully.")
+                    # Deepgram provider requires both Deepgram and OpenAI API keys
+                    deepgram_config = DeepgramProviderConfig(**provider_config_data)
+                    
+                    # Validate OpenAI dependency for Deepgram
+                    if not self.config.llm.api_key:
+                        logger.error(f"Deepgram provider requires OpenAI API key in LLM config")
+                        continue
+                    
+                    provider = DeepgramProvider(deepgram_config, self.config.llm, self.on_provider_event)
+                    self.providers[name] = provider
+                    logger.info(f"Provider '{name}' loaded successfully with OpenAI LLM dependency.")
+                else:
+                    logger.warning(f"Unknown provider type: {name}")
+                    continue
+                    
             except Exception as e:
-                logger.error(f"Failed to load provider '{name}'", exc_info=True)
+                logger.error(f"Failed to load provider '{name}': {e}", exc_info=True)
+        
+        # Validate that default provider is available
+        if self.config.default_provider not in self.providers:
+            available_providers = list(self.providers.keys())
+            logger.error(f"Default provider '{self.config.default_provider}' not available. Available providers: {available_providers}")
+        else:
+            logger.info(f"Default provider '{self.config.default_provider}' is available and ready.")
 
     async def _handle_stasis_start(self, event: dict):
         """Handle a new call entering the Stasis application."""

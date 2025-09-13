@@ -169,16 +169,14 @@ node_modules/
 # Task files
 # tasks.json
 # tasks/ 
-.cursor/rules/asterisk_ai_voice_agent.mdc
 .cursor/rules/cursor_rules.mdc
 .cursor/rules/self_improve.mdc
-.cursor/rules/asterisk_ai_voice_agent.mdc
-.cursor/rules/asterisk_ai_voice_agent.mdc
 .cursor/rules/taskmaster/dev_workflow.mdc
 Project Requirement Documents/prd-ai-agent-v3.md
 .cursor/rules/taskmaster/taskmaster.mdc
-.cursor/rules/asterisk_ai_voice_agent.mdc
-.cursor/rules/asterisk_ai_voice_agent.mdc
-.cursor/rules/asterisk_ai_voice_agent.mdc
-.cursor/rules/asterisk_ai_voice_agent.mdc
-.cursor/rules/asterisk_ai_voice_agent.mdc
+
+# Development test files
+playback_*.py
+simple_*.py
+snoop_*.py
+test_piper.py
