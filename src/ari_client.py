@@ -242,7 +242,8 @@ class ARIClient:
         # Put files in the ai-generated subdirectory to match the symlink
         container_path = f"/mnt/asterisk_media/ai-generated/{unique_filename}"
         # Use the symlinked path that Asterisk can access
-        asterisk_media_uri = f"sound:ai-generated/{unique_filename}"
+        # Remove .ulaw extension since Asterisk adds it automatically
+        asterisk_media_uri = f"sound:ai-generated/{unique_filename[:-5]}"
 
         try:
             # TTS now generates ulaw data directly, no conversion needed
@@ -270,10 +271,7 @@ class ARIClient:
                 file_size = os.path.getsize(container_path)
                 logger.debug("File created successfully", path=container_path, size=file_size)
                 
-                # Add a delay to ensure filesystem sync before sending playback command
-                import asyncio
-                await asyncio.sleep(0.5)  # 500ms delay for filesystem sync
-                logger.debug("Filesystem sync delay completed", path=container_path)
+                # File is ready for playback
 
             playback = await self.play_media(channel_id, asterisk_media_uri)
             if playback and 'id' in playback:
