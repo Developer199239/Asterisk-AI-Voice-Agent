@@ -22,21 +22,21 @@ class LightweightTTS:
         
     def tts(self, text: str) -> bytes:
         """
-        Convert text to speech using espeak-ng with direct 8000 Hz output for Asterisk compatibility
+        Convert text to speech using espeak-ng with direct ulaw output for Asterisk compatibility
         
         Args:
             text: Text to convert to speech
             
         Returns:
-            bytes: WAV audio data at 8000 Hz sample rate
+            bytes: ulaw audio data at 8000 Hz sample rate
         """
         try:
             # Create temporary file for output
-            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
+            with tempfile.NamedTemporaryFile(suffix='.ulaw', delete=False) as temp_file:
                 temp_path = temp_file.name
             
-            # Use espeak-ng to generate WAV file, then convert to 8000 Hz with sox
-            espeak_temp = temp_path.replace('.wav', '_espeak.wav')
+            # Use espeak-ng to generate WAV file, then convert to ulaw with sox
+            espeak_temp = temp_path.replace('.ulaw', '_espeak.wav')
             
             espeak_cmd = [
                 'espeak-ng',
@@ -53,10 +53,12 @@ class LightweightTTS:
                 espeak_temp,                # Input file from espeak-ng
                 '-r', '8000',               # Sample rate: 8000 Hz
                 '-c', '1',                  # Mono channel
-                temp_path                   # Output as WAV file
+                '-e', 'mu-law',             # mu-law encoding
+                '-t', 'raw',                # Raw format
+                temp_path                   # Output as ulaw file
             ]
             
-            logger.debug(f"Running espeak-ng + sox pipeline for 8000 Hz output")
+            logger.debug(f"Running espeak-ng + sox pipeline for ulaw output at 8000 Hz")
             
             # Execute espeak-ng first
             espeak_result = subprocess.run(espeak_cmd, capture_output=True, text=True, timeout=30)
@@ -76,7 +78,7 @@ class LightweightTTS:
             if os.path.exists(espeak_temp):
                 os.unlink(espeak_temp)
             
-            # Read the generated WAV file
+            # Read the generated ulaw file
             if os.path.exists(temp_path):
                 with open(temp_path, 'rb') as f:
                     audio_data = f.read()
@@ -84,7 +86,7 @@ class LightweightTTS:
                 # Clean up temporary file
                 os.unlink(temp_path)
                 
-                logger.debug(f"Generated TTS audio at 8000 Hz: {len(audio_data)} bytes")
+                logger.debug(f"Generated TTS audio as ulaw at 8000 Hz: {len(audio_data)} bytes")
                 return audio_data
             else:
                 logger.error("TTS pipeline did not generate output file")

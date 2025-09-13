@@ -245,21 +245,15 @@ class ARIClient:
         asterisk_media_uri = f"sound:ai-generated/{unique_filename}"
 
         try:
-            # Convert WAV data to ulaw format using proper mu-law encoding
-            ulaw_data = await self._convert_wav_to_ulaw(audio_data)
-            if not ulaw_data:
-                logger.error("Failed to convert WAV to ulaw format")
-                return
-            
-            # No need to create directory since we're putting files directly in /mnt/asterisk_media
+            # TTS now generates ulaw data directly, no conversion needed
             logger.debug("Writing ulaw audio file directly to cache directory", path=container_path)
             
-            logger.debug("Writing ulaw audio file", path=container_path, size=len(ulaw_data))
+            logger.debug("Writing ulaw audio file", path=container_path, size=len(audio_data))
             with open(container_path, "wb") as f:
-                f.write(ulaw_data)
+                f.write(audio_data)
             
-            # Audio converted to ulaw format at 8000 Hz for Asterisk compatibility
-            logger.debug("Ulaw audio file written (converted from WAV to ulaw at 8000 Hz)", path=container_path)
+            # Audio generated as ulaw format at 8000 Hz for Asterisk compatibility
+            logger.debug("Ulaw audio file written (generated as ulaw at 8000 Hz)", path=container_path)
             
             # Change ownership to asterisk user so Asterisk can read the file
             # Use hardcoded UID/GID since pwd.getpwnam doesn't work in container
@@ -456,65 +450,6 @@ class ARIClient:
             logger.error(f"Error creating audio file from ulaw: {e}")
             return ""
 
-    async def _convert_wav_to_ulaw(self, wav_data: bytes) -> bytes:
-        """Convert WAV data to ulaw format using proper mu-law encoding."""
-        import tempfile
-        import subprocess
-        
-        try:
-            # Create temporary files for conversion
-            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_wav:
-                temp_wav_path = temp_wav.name
-                temp_wav.write(wav_data)
-            
-            with tempfile.NamedTemporaryFile(suffix='.ulaw', delete=False) as temp_ulaw:
-                temp_ulaw_path = temp_ulaw.name
-            
-            # Use sox to convert WAV to ulaw with proper mu-law encoding
-            # This matches the successful conversion we tested: sox input.wav -r 8000 -c 1 -e mu-law -t raw output.ulaw
-            sox_cmd = [
-                'sox',
-                temp_wav_path,           # Input WAV file
-                '-r', '8000',           # Sample rate: 8000 Hz
-                '-c', '1',              # Mono channel
-                '-e', 'mu-law',         # mu-law encoding
-                '-t', 'raw',            # Raw format
-                temp_ulaw_path          # Output ulaw file
-            ]
-            
-            logger.debug("Converting WAV to ulaw using sox with mu-law encoding")
-            result = subprocess.run(sox_cmd, capture_output=True, text=True, timeout=30)
-            
-            if result.returncode != 0:
-                logger.error(f"sox conversion failed: {result.stderr}")
-                return b""
-            
-            # Read the converted ulaw data
-            if os.path.exists(temp_ulaw_path):
-                with open(temp_ulaw_path, 'rb') as f:
-                    ulaw_data = f.read()
-                
-                logger.debug(f"Successfully converted WAV to ulaw: {len(wav_data)} bytes -> {len(ulaw_data)} bytes")
-                return ulaw_data
-            else:
-                logger.error("sox conversion failed - output file not created")
-                return b""
-                
-        except subprocess.TimeoutExpired:
-            logger.error("sox conversion timed out after 30 seconds")
-            return b""
-        except Exception as e:
-            logger.error(f"Error converting WAV to ulaw: {e}")
-            return b""
-        finally:
-            # Clean up temporary files
-            try:
-                if 'temp_wav_path' in locals() and os.path.exists(temp_wav_path):
-                    os.unlink(temp_wav_path)
-                if 'temp_ulaw_path' in locals() and os.path.exists(temp_ulaw_path):
-                    os.unlink(temp_ulaw_path)
-            except Exception as e:
-                logger.warning(f"Failed to clean up temporary files: {e}")
 
     async def cleanup_audio_file(self, file_path: str, delay: float = 5.0):
         """Clean up an audio file after a delay."""
