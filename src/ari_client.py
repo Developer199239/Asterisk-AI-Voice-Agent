@@ -220,9 +220,9 @@ class ARIClient:
                 
                 # Set the snoop channel to use a specific audio format for better compatibility
                 try:
-                    # Set the snoop channel to use slin16 (16-bit PCM 16kHz) format to match PJSIP config
+                    # Set the snoop channel to use ulaw (8-bit mu-law 8kHz) format to match our TTS output
                     await self.send_command("POST", f"channels/{actual_snoop_id}/setChannelVar", 
-                                          params={"variable": "CHANNEL(audionativeformat)", "value": "slin16"})
+                                          params={"variable": "CHANNEL(audionativeformat)", "value": "ulaw"})
                     logger.debug("Set audio format for snoop channel", snoop_channel_id=actual_snoop_id)
                 except Exception as e:
                     logger.warning("Failed to set audio format for snoop channel", snoop_channel_id=actual_snoop_id, error=str(e))
