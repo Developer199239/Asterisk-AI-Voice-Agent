@@ -239,14 +239,14 @@ class ARIClient:
         """Saves TTS audio to shared media directory and commands Asterisk to play it."""
         unique_filename = f"response-{uuid.uuid4()}.ulaw"
         # Use the shared RAM space for high-performance audio file storage
-        # Put files directly in the cache directory root (no subdirectory)
-        container_path = f"/mnt/asterisk_media/{unique_filename}"
+        # Put files in the ai-generated subdirectory to match the symlink
+        container_path = f"/mnt/asterisk_media/ai-generated/{unique_filename}"
         # Use the symlinked path that Asterisk can access
         asterisk_media_uri = f"sound:ai-generated/{unique_filename}"
 
         try:
             # TTS now generates ulaw data directly, no conversion needed
-            logger.debug("Writing ulaw audio file directly to cache directory", path=container_path)
+            logger.debug("Writing ulaw audio file to ai-generated subdirectory", path=container_path)
             
             logger.debug("Writing ulaw audio file", path=container_path, size=len(audio_data))
             with open(container_path, "wb") as f:
