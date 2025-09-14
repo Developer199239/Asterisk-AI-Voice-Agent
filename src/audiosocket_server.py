@@ -42,14 +42,16 @@ class AudioSocketServer:
     async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         peer = writer.get_extra_info('peername')
         conn_id = uuid.uuid4().hex[:12]
-        self._connections[conn_id] = {
-            "reader": reader,
-            "writer": writer,
-            "peer": peer,
-            # AudioSocket protocol typically sends a text header first; parse once
-            "header_pending": True,
-            "header_buf": bytearray(),
-        }
+            self._connections[conn_id] = {
+                "reader": reader,
+                "writer": writer,
+                "peer": peer,
+                # AudioSocket protocol typically sends a text header first; parse once
+                "header_pending": True,
+                "header_buf": bytearray(),
+                "format": None,   # e.g., 'ulaw' or 'slin16'
+                "rate": 8000,     # default sample rate
+            }
         logger.info("AudioSocket connection accepted", peer=peer, conn_id=conn_id)
         # Announce new connection for assignment by engine
         try:
@@ -84,7 +86,37 @@ class AudioSocketServer:
                                     break
                             if end != -1:
                                 # Drop header and forward remainder
+                                header_bytes = raw[:end]
                                 payload = raw[end:]
+                                # Parse header for format if available
+                                try:
+                                    header_text = header_bytes.decode(errors='ignore')
+                                    # Look for a line like: Format: slin16@8000 or ulaw@8000
+                                    fmt = None
+                                    rate = 8000
+                                    for line in header_text.splitlines():
+                                        if 'Format:' in line or 'format' in line:
+                                            _, val = line.split(':', 1)
+                                            val = val.strip()
+                                            if '@' in val:
+                                                fmt_part, rate_part = val.split('@', 1)
+                                                fmt = fmt_part.strip().lower()
+                                                try:
+                                                    rate = int(rate_part.strip())
+                                                except Exception:
+                                                    rate = 8000
+                                            else:
+                                                fmt = val.strip().lower()
+                                            break
+                                    if not fmt:
+                                        # Best-effort guess based on content
+                                        fmt = 'ulaw'
+                                    conn["format"] = fmt
+                                    conn["rate"] = rate
+                                except Exception:
+                                    # Default
+                                    conn["format"] = conn.get("format") or 'ulaw'
+                                    conn["rate"] = conn.get("rate") or 8000
                                 conn["header_pending"] = False
                                 conn["header_buf"] = bytearray()  # free
                                 if payload:
@@ -141,3 +173,18 @@ class AudioSocketServer:
             pass
         finally:
             self._connections.pop(conn_id, None)
+
+    async def send_audio(self, conn_id: str, data: bytes):
+        """Send downstream audio bytes to a specific AudioSocket connection."""
+        conn = self._connections.get(conn_id)
+        if not conn:
+            return
+        writer: asyncio.StreamWriter = conn.get("writer")
+        try:
+            writer.write(data)
+            await writer.drain()
+        except Exception:
+            logger.debug("Error sending audio to AudioSocket", conn_id=conn_id, exc_info=True)
+
+    def get_connection_info(self, conn_id: str) -> Dict[str, Any]:
+        return dict(self._connections.get(conn_id, {}))

@@ -248,7 +248,10 @@ class Engine:
                     self.active_calls[channel_id] = {"provider": provider}
             # One-time test playback to confirm audio path
             try:
-                await self.ari_client.play_media(channel_id, "sound:demo-congrats")
+                if self.config.audio_transport == 'audiosocket':
+                    await self._send_test_tone_over_socket(conn_id)
+                else:
+                    await self.ari_client.play_media(channel_id, "sound:demo-congrats")
             except Exception:
                 logger.debug("Test playback failed or unavailable", channel_id=channel_id, exc_info=True)
             # Start provider session and optional greeting
@@ -418,13 +421,39 @@ class Engine:
             # Handle audio data from the provider - now we need to play it back
             audio_data = event.get("data")
             if audio_data:
-                # For now, we'll send to all active calls
-                # In a more sophisticated implementation, we'd track which call this audio belongs to
-                for channel_id, call_data in self.active_calls.items():
-                    # Play audio on the main call channel, not the snoop channel
-                    # The snoop channel is for receiving audio, the main channel is for playing audio
-                    await self.ari_client.play_audio_response(channel_id, audio_data)
-                    logger.debug(f"Sent {len(audio_data)} bytes of audio to call channel {channel_id}")
+                # Prefer streaming over AudioSocket when transport is audiosocket
+                if self.config.audio_transport == 'audiosocket':
+                    for channel_id, call_data in self.active_calls.items():
+                        conn_id = self.channel_to_conn.get(channel_id)
+                        if not conn_id:
+                            continue
+                        # Determine negotiated format
+                        fmt = 'ulaw'
+                        rate = 8000
+                        try:
+                            info = self.audiosocket_server.get_connection_info(conn_id)
+                            if info.get('format'):
+                                fmt = info['format']
+                            if info.get('rate'):
+                                rate = int(info['rate'])
+                        except Exception:
+                            pass
+                        try:
+                            out_bytes = audio_data
+                            if fmt.startswith('slin'):
+                                # Convert ulaw->linear16
+                                out_bytes = audioop.ulaw2lin(audio_data, 2)
+                            # Send downstream over socket
+                            await self.audiosocket_server.send_audio(conn_id, out_bytes)
+                            logger.debug("Streamed provider audio over AudioSocket", channel_id=channel_id, bytes=len(out_bytes), fmt=fmt, rate=rate)
+                        except Exception:
+                            logger.debug("Error streaming audio over AudioSocket; falling back to ARI", exc_info=True)
+                            await self.ari_client.play_audio_response(channel_id, audio_data)
+                else:
+                    # Legacy: file-based playback via ARI
+                    for channel_id, call_data in self.active_calls.items():
+                        await self.ari_client.play_audio_response(channel_id, audio_data)
+                        logger.debug(f"Sent {len(audio_data)} bytes of audio to call channel {channel_id}")
         elif event_type == "Transcription":
             # Handle transcription data
             text = event.get("text", "")
@@ -535,6 +564,43 @@ class Engine:
                 logger.debug("Snoop channel cleanup attempted for non-active call", channel_id=channel_id)
             else:
                 logger.debug("No active call found for cleanup", channel_id=channel_id)
+
+    async def _send_test_tone_over_socket(self, conn_id: str, ms: int = 300):
+        """Send a short test tone over AudioSocket to verify downstream audio path."""
+        try:
+            # Determine negotiated format if available
+            fmt = 'ulaw'
+            rate = 8000
+            try:
+                info = self.audiosocket_server.get_connection_info(conn_id)
+                if info.get('format'):
+                    fmt = info['format']
+                if info.get('rate'):
+                    rate = int(info['rate'])
+            except Exception:
+                pass
+            duration_sec = ms / 1000.0
+            freq = 440.0
+            import math
+            if fmt.startswith('slin'):
+                samples = int(rate * duration_sec)
+                pcm = bytearray()
+                for n in range(samples):
+                    val = int(0.2 * 32767 * math.sin(2 * math.pi * freq * (n / rate)))
+                    pcm.extend(val.to_bytes(2, 'little', signed=True))
+                await self.audiosocket_server.send_audio(conn_id, bytes(pcm))
+            else:
+                true_rate = rate if rate else 8000
+                samples = int(true_rate * duration_sec)
+                pcm = bytearray()
+                for n in range(samples):
+                    val = int(0.2 * 32767 * math.sin(2 * math.pi * freq * (n / true_rate)))
+                    pcm.extend(val.to_bytes(2, 'little', signed=True))
+                ulaw_bytes = audioop.lin2ulaw(bytes(pcm), 2)
+                await self.audiosocket_server.send_audio(conn_id, ulaw_bytes)
+            logger.info("Sent test tone over AudioSocket", conn_id=conn_id, fmt=fmt, rate=rate, ms=ms)
+        except Exception:
+            logger.debug("Error sending test tone", exc_info=True)
 
     async def _play_ring_tone(self, channel_id: str, duration: float = 15.0):
         """Play a ringing tone to the channel."""
