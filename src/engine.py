@@ -160,13 +160,19 @@ class Engine:
             bridge_id = await self.ari_client.create_bridge("mixing")
             if bridge_id:
                 # Add both the main channel and snoop channel to the bridge
+                logger.info("Adding main channel to bridge", channel_id=channel_id, bridge_id=bridge_id)
                 await self.ari_client.add_channel_to_bridge(bridge_id, channel_id)
+                
+                logger.info("Adding snoop channel to bridge", snoop_id=snoop_id, bridge_id=bridge_id)
                 await self.ari_client.add_channel_to_bridge(bridge_id, snoop_id)
                 
                 # Store bridge info for cleanup
                 self.active_calls[channel_id]["bridge_id"] = bridge_id
                 
-                logger.info("✅ Bridge created and channels added", 
+                # Small delay to ensure bridge is fully established
+                await asyncio.sleep(0.1)
+                
+                logger.info("✅ Bridge created and both channels added successfully", 
                           channel_id=channel_id, 
                           snoop_id=snoop_id, 
                           bridge_id=bridge_id)
@@ -175,9 +181,9 @@ class Engine:
                 await self._cleanup_call(channel_id)
                 return
 
-            # Set up audio frame handler for this call
+            # Set up audio frame handler for this call (after bridge is established)
             self.ari_client.set_audio_frame_handler(self._handle_audio_frame)
-            logger.debug("Audio frame handler set", channel_id=channel_id)
+            logger.info("✅ Audio frame handler set after bridge establishment", channel_id=channel_id)
 
             # Start the provider's session, which sets up audio handlers
             logger.debug("Starting provider session", channel_id=channel_id, provider=provider_name)
@@ -232,6 +238,7 @@ class Engine:
 
     async def _handle_audio_frame(self, audio_data: bytes):
         """Handle raw audio frames from snoop channels."""
+        logger.info("🎤 AUDIO FRAME RECEIVED!", audio_size=len(audio_data))
         try:
             # Find the active call (assuming single call for now)
             # In a multi-call scenario, we'd need to track which snoop belongs to which call
@@ -242,7 +249,7 @@ class Engine:
                     break
                     
             if not active_channel_id:
-                logger.debug("No active call found for audio frame")
+                logger.warning("No active call found for audio frame")
                 return
                 
             call_data = self.active_calls.get(active_channel_id)
