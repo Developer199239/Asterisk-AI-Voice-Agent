@@ -42,16 +42,16 @@ class AudioSocketServer:
     async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         peer = writer.get_extra_info('peername')
         conn_id = uuid.uuid4().hex[:12]
-            self._connections[conn_id] = {
-                "reader": reader,
-                "writer": writer,
-                "peer": peer,
-                # AudioSocket protocol typically sends a text header first; parse once
-                "header_pending": True,
-                "header_buf": bytearray(),
-                "format": None,   # e.g., 'ulaw' or 'slin16'
-                "rate": 8000,     # default sample rate
-            }
+        self._connections[conn_id] = {
+            "reader": reader,
+            "writer": writer,
+            "peer": peer,
+            # AudioSocket protocol typically sends a text header first; parse once
+            "header_pending": True,
+            "header_buf": bytearray(),
+            "format": None,   # e.g., 'ulaw' or 'slin16'
+            "rate": 8000,     # default sample rate
+        }
         logger.info("AudioSocket connection accepted", peer=peer, conn_id=conn_id)
         # Announce new connection for assignment by engine
         try:
