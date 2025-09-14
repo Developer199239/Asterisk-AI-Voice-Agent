@@ -35,6 +35,7 @@ class Engine:
         self.active_calls: Dict[str, Dict[str, Any]] = {}
         self.conn_to_channel: Dict[str, str] = {}
         self.channel_to_conn: Dict[str, str] = {}
+        self.pending_channel_for_bind: Optional[str] = None
         # Audio buffering for better playback quality
         self.audio_buffers: Dict[str, bytes] = {}
         self.buffer_size = 1600  # 200ms of audio at 8kHz (1600 bytes of ulaw)
@@ -76,7 +77,7 @@ class Engine:
             host = os.getenv("AUDIOSOCKET_HOST", "127.0.0.1")
             port = int(os.getenv("AUDIOSOCKET_PORT", "8090"))
             # Wire on_audio callback to route chunks to provider
-            self.audiosocket_server = AudioSocketServer(host=host, port=port, on_audio=self._on_audiosocket_audio)
+            self.audiosocket_server = AudioSocketServer(host=host, port=port, on_audio=self._on_audiosocket_audio, on_accept=self._on_audiosocket_accept)
             asyncio.create_task(self.audiosocket_server.start())
         await self.ari_client.connect()
         asyncio.create_task(self.ari_client.start_listening())
@@ -283,8 +284,28 @@ class Engine:
                     conn_id = None
                 if conn_id:
                     await self._bind_connection_to_channel(conn_id, channel_id, self.config.default_provider)
+                else:
+                    # Remember channel; will bind on next accept
+                    self.pending_channel_for_bind = channel_id
         except Exception:
             logger.debug("Error in ChannelVarset handler", exc_info=True)
+
+    def _on_audiosocket_accept(self, conn_id: str):
+        """Attempt immediate bind on accept if a channel is pending."""
+        try:
+            channel_id = self.pending_channel_for_bind
+            if not channel_id:
+                return
+            if channel_id in self.channel_to_conn:
+                self.pending_channel_for_bind = None
+                return
+            # Fire-and-forget binding task
+            asyncio.get_event_loop().create_task(
+                self._bind_connection_to_channel(conn_id, channel_id, self.config.default_provider)
+            )
+            self.pending_channel_for_bind = None
+        except Exception:
+            logger.debug("Error in on_accept binder", exc_info=True)
 
     async def _load_local_models(self, provider, channel_id: str):
         """Load local models and return True when ready."""

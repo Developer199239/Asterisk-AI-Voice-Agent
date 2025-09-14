@@ -17,10 +17,13 @@ class AudioSocketServer:
     in the streaming phase (downstream_mode == 'stream').
     """
 
-    def __init__(self, host: str = "127.0.0.1", port: int = 8090, on_audio: Optional[Callable[[str, bytes], None]] = None):
+    def __init__(self, host: str = "127.0.0.1", port: int = 8090,
+                 on_audio: Optional[Callable[[str, bytes], None]] = None,
+                 on_accept: Optional[Callable[[str], None]] = None):
         self.host = host
         self.port = port
         self.on_audio = on_audio
+        self.on_accept = on_accept
         self._server: Optional[asyncio.base_events.Server] = None
         self._connections: Dict[str, Dict[str, Any]] = {}
         self._new_conn_queue: asyncio.Queue = asyncio.Queue()
@@ -53,6 +56,12 @@ class AudioSocketServer:
             self._new_conn_queue.put_nowait(conn_id)
         except asyncio.QueueFull:
             logger.warning("New connection queue full; connection may not be assignable", conn_id=conn_id)
+        # Notify accept callback to allow immediate pairing
+        try:
+            if self.on_accept:
+                self.on_accept(conn_id)
+        except Exception:
+            logger.debug("on_accept handler error", exc_info=True)
         try:
             while True:
                 data = await reader.read(4096)
