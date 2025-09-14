@@ -71,9 +71,10 @@ class Engine:
 
         # Prepare AudioSocket server scaffold (non-invasive for current release)
         if self.config.audio_transport == "audiosocket":
+            host = os.getenv("AUDIOSOCKET_HOST", "127.0.0.1")
             port = int(os.getenv("AUDIOSOCKET_PORT", "8090"))
             # Wire on_audio callback to route chunks to provider
-            self.audiosocket_server = AudioSocketServer(port=port, on_audio=self._on_audiosocket_audio)
+            self.audiosocket_server = AudioSocketServer(host=host, port=port, on_audio=self._on_audiosocket_audio)
             asyncio.create_task(self.audiosocket_server.start())
         await self.ari_client.connect()
         asyncio.create_task(self.ari_client.start_listening())

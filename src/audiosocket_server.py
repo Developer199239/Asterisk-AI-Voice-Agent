@@ -17,7 +17,7 @@ class AudioSocketServer:
     in the streaming phase (downstream_mode == 'stream').
     """
 
-    def __init__(self, host: str = "0.0.0.0", port: int = 8090, on_audio: Optional[Callable[[str, bytes], None]] = None):
+    def __init__(self, host: str = "127.0.0.1", port: int = 8090, on_audio: Optional[Callable[[str, bytes], None]] = None):
         self.host = host
         self.port = port
         self.on_audio = on_audio
