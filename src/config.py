@@ -47,7 +47,7 @@ class LLMConfig(BaseModel):
 
 class StreamingTimeouts(BaseModel):
     provider_ms: int = 15000
-    handshake_ms: int = 5000
+    handshake_ms: int = 15000
 
 class StreamingBargeIn(BaseModel):
     enabled: bool = False

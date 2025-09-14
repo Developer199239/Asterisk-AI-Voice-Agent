@@ -28,7 +28,8 @@ Add the following context to your `extensions_custom.conf` file:
 exten => s,1,NoOp(Starting AI Voice Agent with AudioSocket)
  same => n,Set(AUDIOSOCKET_HOST=127.0.0.1)
  same => n,Set(AUDIOSOCKET_PORT=8090)
- same => n,AudioSocket(${AUDIOSOCKET_HOST}:${AUDIOSOCKET_PORT},ulaw)
+ same => n,Set(AUDIOSOCKET_UUID=${UNIQUEID})
+ same => n,AudioSocket(${AUDIOSOCKET_UUID},${AUDIOSOCKET_HOST}:${AUDIOSOCKET_PORT},ulaw)
  same => n,Stasis(asterisk-ai-voice-agent)
  same => n,Hangup()
 ```

@@ -39,7 +39,14 @@ class AudioSocketServer:
     async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         peer = writer.get_extra_info('peername')
         conn_id = uuid.uuid4().hex[:12]
-        self._connections[conn_id] = {"reader": reader, "writer": writer, "peer": peer}
+        self._connections[conn_id] = {
+            "reader": reader,
+            "writer": writer,
+            "peer": peer,
+            # AudioSocket protocol typically sends a text header first; parse once
+            "header_pending": True,
+            "header_buf": bytearray(),
+        }
         logger.info("AudioSocket connection accepted", peer=peer, conn_id=conn_id)
         # Announce new connection for assignment by engine
         try:
@@ -53,7 +60,35 @@ class AudioSocketServer:
                     break
                 if self.on_audio:
                     try:
-                        self.on_audio(conn_id, data)
+                        conn = self._connections.get(conn_id)
+                        if conn and conn.get("header_pending"):
+                            # Accumulate until we detect header terminator (\r\n\r\n or \n\n)
+                            buf: bytearray = conn["header_buf"]
+                            buf.extend(data)
+                            raw = bytes(buf)
+                            # Find header end
+                            end = -1
+                            for delim in (b"\r\n\r\n", b"\n\n"):
+                                idx = raw.find(delim)
+                                if idx != -1:
+                                    end = idx + len(delim)
+                                    break
+                            if end != -1:
+                                # Drop header and forward remainder
+                                payload = raw[end:]
+                                conn["header_pending"] = False
+                                conn["header_buf"] = bytearray()  # free
+                                if payload:
+                                    self.on_audio(conn_id, payload)
+                                continue
+                            # Safety: if header grows too large, assume no header and pass through
+                            if len(raw) > 2048:
+                                conn["header_pending"] = False
+                                conn["header_buf"] = bytearray()
+                                self.on_audio(conn_id, raw)
+                            # else keep accumulating
+                        else:
+                            self.on_audio(conn_id, data)
                     except Exception:
                         # Non-fatal
                         logger.debug("on_audio handler error", exc_info=True)

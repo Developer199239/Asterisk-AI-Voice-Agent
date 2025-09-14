@@ -35,7 +35,8 @@ This document captures how I (the agent) work most effectively on this repo. It 
 exten => s,1,NoOp(Starting AI Voice Agent with AudioSocket)
  same => n,Set(AUDIOSOCKET_HOST=127.0.0.1)
  same => n,Set(AUDIOSOCKET_PORT=8090)
- same => n,AudioSocket(${AUDIOSOCKET_HOST}:${AUDIOSOCKET_PORT},ulaw)
+ same => n,Set(AUDIOSOCKET_UUID=${UNIQUEID})
+ same => n,AudioSocket(${AUDIOSOCKET_UUID},${AUDIOSOCKET_HOST}:${AUDIOSOCKET_PORT},ulaw)
  same => n,Stasis(asterisk-ai-voice-agent)
  same => n,Hangup()
 ```
@@ -129,4 +130,3 @@ If no connection arrives in time, the engine will fall back to legacy snoop (log
 ## Security Notes
 - Keep API keys and ARI credentials strictly in `.env` (never commit them).
 - Restrict AudioSocket listener to `127.0.0.1` when engine and Asterisk are co‑located; otherwise secure the path appropriately.
-
