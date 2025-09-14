@@ -231,7 +231,7 @@ class ARIClient:
                 try:
                     await self.send_command("POST", f"channels/{actual_snoop_id}/setChannelVar", 
                                           params={"variable": "CHANNEL(audioframe)", "value": "true"})
-                    logger.info("✅ Enabled audio frame generation for snoop channel", snoop_channel_id=actual_snoop_id)
+                    logger.debug("Enabled audio frame generation for snoop channel", snoop_channel_id=actual_snoop_id)
                 except Exception as e:
                     logger.warning("Failed to enable audio frames for snoop channel", snoop_channel_id=actual_snoop_id, error=str(e))
                 

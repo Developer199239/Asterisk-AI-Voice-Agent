@@ -183,7 +183,7 @@ class Engine:
 
             # Set up audio frame handler for this call (after bridge is established)
             self.ari_client.set_audio_frame_handler(self._handle_audio_frame)
-            logger.info("✅ Audio frame handler set after bridge establishment", channel_id=channel_id)
+            logger.debug("Audio frame handler set after bridge establishment", channel_id=channel_id)
 
             # Start the provider's session, which sets up audio handlers
             logger.debug("Starting provider session", channel_id=channel_id, provider=provider_name)
@@ -238,7 +238,6 @@ class Engine:
 
     async def _handle_audio_frame(self, audio_data: bytes):
         """Handle raw audio frames from snoop channels."""
-        logger.info("🎤 AUDIO FRAME RECEIVED!", audio_size=len(audio_data))
         try:
             # Find the active call (assuming single call for now)
             # In a multi-call scenario, we'd need to track which snoop belongs to which call
