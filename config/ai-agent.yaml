@@ -2,6 +2,12 @@
 # Default provider to use if not specified in the dialplan
 default_provider: "local"
 
+# Audio transport controls
+# - audio_transport: 'audiosocket' (recommended) | 'legacy'
+# - downstream_mode: 'file' (current default) | 'stream' (next phase)
+audio_transport: "audiosocket"
+downstream_mode: "file"
+
 # Asterisk connection settings (will be overridden by environment variables)
 asterisk:
   host: "your_asterisk_host"
@@ -15,6 +21,20 @@ llm:
   prompt: "You are a friendly and helpful assistant."
   model: "gpt-4o"
   api_key: "${OPENAI_API_KEY}" # Example of using env var substitution
+
+# Streaming settings (used when downstream_mode == 'stream')
+streaming:
+  sample_rate_hz: 16000      # PCM16 sample rate for providers that require conversion
+  chunk_duration_ms: 20      # Audio chunk size
+  jitter_buffer_ms: 120      # Downstream jitter buffer target
+  keepalive_ms: 10000        # Gateway/provider heartbeat interval
+  timeouts:
+    provider_ms: 15000       # Provider operation timeout
+    handshake_ms: 5000       # AudioSocket handshake timeout
+  barge_in:
+    enabled: false           # Enable in streaming mode to support barge-in
+    vad_threshold_db: -30    # Voice activity threshold
+    min_speech_ms: 200       # Minimum speech duration to trigger barge-in
 
 # Provider-specific configurations
 providers:

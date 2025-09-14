@@ -1,20 +1,123 @@
-# FreePBX Integration Guide (Manual Multi-Instance Method)
+# FreePBX Integration Guide (AudioSocket Architecture)
 
-**Note:** This document describes a manual, advanced setup for running multiple, isolated instances of the AI Voice Agent to connect with different AI providers. The officially recommended method is to use the built-in provider selection mechanism. This guide is provided for power-users and for reference.
+**Note:** This document describes the integration of the AI Voice Agent with FreePBX using the new AudioSocket architecture. This provides reliable real-time audio capture and requires dialplan modifications to enable AudioSocket functionality.
 
 ## 1. Overview
 
-This guide explains how to run three separate instances of the AI Voice Agent container, each configured for a different AI provider (Deepgram, OpenAI, Local), and how to route calls to them from FreePBX.
+This guide explains how to integrate the AI Voice Agent with FreePBX using the AudioSocket architecture. The AudioSocket feature provides reliable real-time audio capture by establishing a TCP connection between Asterisk and the AI Engine container.
 
 ## 2. Prerequisites
 
--   A working FreePBX installation.
--   Docker and Docker Compose installed on the same server.
--   The AI Voice Agent project cloned to a directory (e.g., `/root/Asterisk-AI-Voice-Agent`).
+-   A working FreePBX installation with Asterisk 16+ or FreePBX 15+
+-   AudioSocket module support (app_audiosocket.so) - usually included in standard Asterisk builds
+-   Docker and Docker Compose installed on the same server
+-   The AI Voice Agent project cloned to a directory (e.g., `/root/Asterisk-AI-Voice-Agent`)
+-   Port 8090 available for AudioSocket TCP connections
 
-## 3. Configuration
+## 3. AudioSocket Dialplan Configuration
 
-### Step 3.1: Create Separate Configuration Files
+### Step 3.1: Create AudioSocket Dialplan Context
+
+The AudioSocket architecture requires a specific dialplan context that first establishes the AudioSocket connection, then hands control to the Stasis application.
+
+Add the following context to your `extensions_custom.conf` file:
+
+```ini
+[ai-voice-agent]
+; AudioSocket + Stasis application for AI Voice Agent
+exten => s,1,NoOp(Starting AI Voice Agent with AudioSocket)
+ same => n,Set(AUDIOSOCKET_HOST=127.0.0.1)
+ same => n,Set(AUDIOSOCKET_PORT=8090)
+ same => n,AudioSocket(${AUDIOSOCKET_HOST}:${AUDIOSOCKET_PORT},ulaw)
+ same => n,Stasis(asterisk-ai-voice-agent)
+ same => n,Hangup()
+```
+
+### Step 3.2: Alternative Multi-Provider Configuration
+
+If you want to use different providers, you can create separate contexts:
+
+```ini
+[ai-voice-agent-deepgram]
+; Deepgram provider with AudioSocket
+exten => s,1,NoOp(Starting Deepgram AI with AudioSocket)
+ same => n,Set(AUDIOSOCKET_HOST=127.0.0.1)
+ same => n,Set(AUDIOSOCKET_PORT=8090)
+ same => n,AudioSocket(${AUDIOSOCKET_HOST}:${AUDIOSOCKET_PORT},ulaw)
+ same => n,Stasis(asterisk-ai-voice-agent,deepgram)
+ same => n,Hangup()
+
+[ai-voice-agent-local]
+; Local provider with AudioSocket
+exten => s,1,NoOp(Starting Local AI with AudioSocket)
+ same => n,Set(AUDIOSOCKET_HOST=127.0.0.1)
+ same => n,Set(AUDIOSOCKET_PORT=8090)
+ same => n,AudioSocket(${AUDIOSOCKET_HOST}:${AUDIOSOCKET_PORT},ulaw)
+ same => n,Stasis(asterisk-ai-voice-agent,local)
+ same => n,Hangup()
+```
+
+### Step 3.3: Reload Dialplan
+
+After adding the dialplan context, reload it from the Asterisk CLI:
+
+```bash
+asterisk -rx "dialplan reload"
+```
+
+## 4. Container Configuration
+
+### Step 4.1: Update Docker Compose for AudioSocket
+
+Ensure your `docker-compose.yml` exposes port 8090 for AudioSocket:
+
+```yaml
+version: '3.8'
+
+services:
+  ai-engine:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ai_engine
+    user: "root"
+    ports:
+      - "8090:8090"  # AudioSocket port
+    volumes:
+      - ./src:/app/src
+      - ./main.py:/app/main.py
+      - ./config:/app/config
+      - /mnt/asterisk_media:/mnt/asterisk_media
+      - /var/lib/asterisk/sounds:/var/lib/asterisk/sounds
+    env_file:
+      - .env
+    environment:
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1
+      - AUDIOSOCKET_PORT=8090
+    tty: true
+    stdin_open: true
+    restart: unless-stopped
+    network_mode: "host"
+
+  local-ai-server:
+    build:
+      context: ./local_ai_server
+      dockerfile: Dockerfile
+    container_name: local_ai_server
+    volumes:
+      - ./models:/app/models
+    environment:
+      - PYTHONUNBUFFERED=1
+    tty: true
+    stdin_open: true
+    restart: unless-stopped
+    network_mode: "host"
+```
+
+## 5. Configuration
+
+### Step 5.1: Create Separate Configuration Files
 
 Create three separate `.env` files, one for each provider.
 
@@ -94,6 +197,10 @@ docker-compose -f docker-compose.local.yml up -d
 ```
 
 You should now have three separate AI agent containers running.
+
+## 6. Optional: ExternalMedia RTP Bridging
+
+AudioSocket is the recommended and default transport for upstream audio. If your deployment requires RTP/SRTP interop, you can explore Asterisk `ExternalMedia` to bridge RTP to/from an external gateway. This is optional and not required for the standard setup. Ensure proper NAT, port ranges, and jitter buffer tuning if you enable this path.
 
 ## 5. FreePBX Configuration
 

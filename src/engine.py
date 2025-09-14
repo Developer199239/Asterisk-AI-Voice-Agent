@@ -6,12 +6,13 @@ import struct
 import uuid
 import audioop
 import base64
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 from .ari_client import ARIClient
 from .config import AppConfig, load_config, DeepgramProviderConfig, LocalProviderConfig
 from .logging_config import get_logger, configure_logging
 from .providers.base import AIProviderInterface
+from .audiosocket_server import AudioSocketServer
 from .providers.deepgram import DeepgramProvider
 from .providers.local import LocalProvider
 
@@ -32,9 +33,12 @@ class Engine:
         )
         self.providers: Dict[str, AIProviderInterface] = {}
         self.active_calls: Dict[str, Dict[str, Any]] = {}
+        self.conn_to_channel: Dict[str, str] = {}
+        self.channel_to_conn: Dict[str, str] = {}
         # Audio buffering for better playback quality
         self.audio_buffers: Dict[str, bytes] = {}
         self.buffer_size = 1600  # 200ms of audio at 8kHz (1600 bytes of ulaw)
+        self.audiosocket_server: Any = None
 
         # Event handlers
         self.ari_client.on_event("StasisStart", self._handle_stasis_start)
@@ -62,6 +66,15 @@ class Engine:
     async def start(self):
         """Connect to ARI and start the engine."""
         await self._load_providers()
+        # Log transport and downstream modes
+        logger.info("Runtime modes", audio_transport=self.config.audio_transport, downstream_mode=self.config.downstream_mode)
+
+        # Prepare AudioSocket server scaffold (non-invasive for current release)
+        if self.config.audio_transport == "audiosocket":
+            port = int(os.getenv("AUDIOSOCKET_PORT", "8090"))
+            # Wire on_audio callback to route chunks to provider
+            self.audiosocket_server = AudioSocketServer(port=port, on_audio=self._on_audiosocket_audio)
+            asyncio.create_task(self.audiosocket_server.start())
         await self.ari_client.connect()
         asyncio.create_task(self.ari_client.start_listening())
         logger.info("Engine started and listening for calls.")
@@ -71,6 +84,9 @@ class Engine:
         for channel_id in list(self.active_calls.keys()):
             await self._cleanup_call(channel_id)
         await self.ari_client.disconnect()
+        # Stop AudioSocket server if running
+        if hasattr(self, 'audiosocket_server') and self.audiosocket_server:
+            await self.audiosocket_server.stop()
         # if self.pipeline: # This line is removed as per the edit hint
         #     await self.pipeline.stop()
         logger.info("Engine stopped.")
@@ -145,45 +161,63 @@ class Engine:
         try:
             await self.ari_client.answer_channel(channel_id)
 
-            # PROVEN ARCHITECTURE: Create snoop channel for audio capture
-            snoop_id = await self.ari_client.start_audio_snoop(channel_id, self.config.asterisk.app_name)
-            
-            if not snoop_id:
-                logger.error("Failed to create snoop channel", channel_id=channel_id)
-                await self._cleanup_call(channel_id)
-                return
+            if self.config.audio_transport == "audiosocket":
+                logger.info("Using AudioSocket for upstream capture; awaiting connection", channel_id=channel_id)
+                # Await an AudioSocket connection and bind it to this channel
+                handshake_s = (self.config.streaming.timeouts.handshake_ms if self.config.streaming else 5000) / 1000.0
+                conn_id: Optional[str] = None
+                try:
+                    conn_id = await self.audiosocket_server.await_connection(timeout=handshake_s)
+                except Exception:
+                    conn_id = None
 
-            # Store snoop channel info for cleanup
-            self.active_calls[channel_id]["snoop_channel_id"] = snoop_id
-
-            # CRITICAL: Create mixing bridge and add BOTH channels (architect's solution)
-            bridge_id = await self.ari_client.create_bridge("mixing")
-            if bridge_id:
-                # Add both the main channel and snoop channel to the bridge
-                logger.info("Adding main channel to bridge", channel_id=channel_id, bridge_id=bridge_id)
-                await self.ari_client.add_channel_to_bridge(bridge_id, channel_id)
-                
-                logger.info("Adding snoop channel to bridge", snoop_id=snoop_id, bridge_id=bridge_id)
-                await self.ari_client.add_channel_to_bridge(bridge_id, snoop_id)
-                
-                # Store bridge info for cleanup
-                self.active_calls[channel_id]["bridge_id"] = bridge_id
-                
-                # Small delay to ensure bridge is fully established
-                await asyncio.sleep(0.1)
-                
-                logger.info("✅ Bridge created and both channels added successfully", 
-                          channel_id=channel_id, 
-                          snoop_id=snoop_id, 
-                          bridge_id=bridge_id)
+                if not conn_id:
+                    logger.warning("No AudioSocket connection within timeout; falling back to legacy snoop", channel_id=channel_id)
+                else:
+                    self.conn_to_channel[conn_id] = channel_id
+                    self.channel_to_conn[channel_id] = conn_id
+                    logger.info("AudioSocket connection bound to channel", channel_id=channel_id, conn_id=conn_id)
+                    # Continue without creating snoop
+                    snoop_fallback_needed = False
+                    # Start provider session
+                    logger.debug("Starting provider session", channel_id=channel_id, provider=provider_name)
+                    await provider.start_session(channel_id)
+                    logger.debug("Provider session started successfully", channel_id=channel_id)
+                    # Initial greeting
+                    if hasattr(provider, 'play_initial_greeting'):
+                        logger.debug("Playing initial greeting", channel_id=channel_id)
+                        await provider.play_initial_greeting(channel_id)
+                        logger.debug("Initial greeting played", channel_id=channel_id)
+                    else:
+                        logger.debug("Provider does not have play_initial_greeting method", channel_id=channel_id)
+                    return
             else:
-                logger.error("Failed to create bridge", channel_id=channel_id)
-                await self._cleanup_call(channel_id)
-                return
+                # Legacy capture via ARI snoop
+                snoop_id = await self.ari_client.start_audio_snoop(channel_id, self.config.asterisk.app_name)
+                if not snoop_id:
+                    logger.error("Failed to create snoop channel", channel_id=channel_id)
+                    await self._cleanup_call(channel_id)
+                    return
 
-            # Set up audio frame handler for this call (after bridge is established)
-            self.ari_client.set_audio_frame_handler(self._handle_audio_frame)
-            logger.debug("Audio frame handler set after bridge establishment", channel_id=channel_id)
+                # Store snoop channel info for cleanup
+                self.active_calls[channel_id]["snoop_channel_id"] = snoop_id
+
+                # Create mixing bridge and add BOTH channels
+                bridge_id = await self.ari_client.create_bridge("mixing")
+                if bridge_id:
+                    await self.ari_client.add_channel_to_bridge(bridge_id, channel_id)
+                    await self.ari_client.add_channel_to_bridge(bridge_id, snoop_id)
+                    self.active_calls[channel_id]["bridge_id"] = bridge_id
+                    await asyncio.sleep(0.1)
+                    logger.info("✅ Bridge created and channels added", channel_id=channel_id, bridge_id=bridge_id)
+                else:
+                    logger.error("Failed to create bridge", channel_id=channel_id)
+                    await self._cleanup_call(channel_id)
+                    return
+
+                # Set up audio frame handler for this call (after bridge is established)
+                self.ari_client.set_audio_frame_handler(self._handle_audio_frame)
+                logger.debug("Audio frame handler set after bridge establishment", channel_id=channel_id)
 
             # Start the provider's session, which sets up audio handlers
             logger.debug("Starting provider session", channel_id=channel_id, provider=provider_name)
@@ -290,6 +324,21 @@ class Engine:
                 if provider and hasattr(provider, 'handle_dtmf'):
                     await provider.handle_dtmf(digit)
 
+    def _on_audiosocket_audio(self, conn_id: str, audio_data: bytes):
+        """Route inbound AudioSocket audio to the mapped provider for that connection."""
+        try:
+            channel_id = self.conn_to_channel.get(conn_id)
+            if not channel_id:
+                return
+            call_data = self.active_calls.get(channel_id)
+            if not call_data:
+                return
+            provider = call_data.get('provider')
+            if provider:
+                asyncio.create_task(provider.send_audio(audio_data))
+        except Exception:
+            logger.debug("Error routing AudioSocket audio", exc_info=True)
+
     async def on_provider_event(self, event: Dict[str, Any]):
         """Callback for providers to send events back to the engine."""
         event_type = event.get("type")
@@ -381,9 +430,19 @@ class Engine:
             provider = call_data.get("provider")
             if provider:
                 await provider.stop_session()
+            # Close bound AudioSocket connection if any
+            conn_id = self.channel_to_conn.pop(channel_id, None)
+            if conn_id:
+                self.conn_to_channel.pop(conn_id, None)
+                if hasattr(self, 'audiosocket_server') and self.audiosocket_server:
+                    try:
+                        await self.audiosocket_server.close_connection(conn_id)
+                    except Exception:
+                        logger.debug("Error closing AudioSocket connection", conn_id=conn_id, exc_info=True)
             
             # Stop snoop channel
-            await self.ari_client.stop_audio_snoop(channel_id)
+            if self.config.audio_transport != "audiosocket":
+                await self.ari_client.stop_audio_snoop(channel_id)
             
             # Clean up bridge if it exists
             bridge_id = call_data.get("bridge_id")

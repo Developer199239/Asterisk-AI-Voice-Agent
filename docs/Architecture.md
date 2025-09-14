@@ -2,43 +2,45 @@
 
 ## System Overview
 
-The Asterisk AI Voice Agent v3.0 is a single-container, multi-provider architecture that supports both cloud-based (Deepgram) and local AI models for real-time voice conversations.
+The Asterisk AI Voice Agent v3.0 is a **two-container, modular conversational AI system** that enables **real-time, two-way voice conversations** through Asterisk/FreePBX systems. It uses Asterisk's **AudioSocket** feature for reliable real-time audio capture and **file-based playback** for robust media handling.
+
+Note: In the current release, downstream audio is delivered via file-based playback for maximum robustness. A full‑duplex streaming TTS path is planned as a next phase and will be gated by feature flags.
 
 ## Architecture Diagrams
 
-### 1. DEEPGRAM PROVIDER CALL FLOW 🌐
+### 1. AUDIOSOCKET CALL FLOW 🎯
 
 ```
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   ASTERISK      │    │   AI AGENT      │    │   DEEPGRAM      │    │   OPENAI        │
-│   (PJSIP/SIP)   │    │   ENGINE        │    │   CLOUD         │    │   CLOUD         │
+│   ASTERISK      │    │   AI ENGINE     │    │   LOCAL AI      │    │   SHARED MEDIA  │
+│   (PJSIP/SIP)   │    │   CONTAINER     │    │   SERVER        │    │   DIRECTORY     │
 └─────────────────┘    └─────────────────┘    └─────────────────┘    └─────────────────┘
          │                       │                       │                       │
          │ 1. Incoming Call     │                       │                       │
          ├──────────────────────►│                       │                       │
          │                       │                       │                       │
-         │ 2. StasisStart Event │                       │                       │
+         │ 2. AudioSocket Stream│                       │                       │
          ├──────────────────────►│                       │                       │
          │                       │                       │                       │
-         │                       │ 3. Create DeepgramProvider                    │
-         │                       ├──────────────────────►│                       │
-         │                       │                       │                       │
-         │                       │ 4. WebSocket Connect  │                       │
-         │                       ├──────────────────────►│                       │
-         │                       │                       │                       │
-         │ 5. Answer Channel     │                       │                       │
-         │◄──────────────────────┤                       │                       │
-         │                       │                       │                       │
-         │ 6. Create Snoop Channel                       │                       │
-         │◄──────────────────────┤                       │                       │
-         │                       │                       │                       │
-         │ 7. Audio Frame Events │                       │                       │
+         │ 3. StasisStart Event │                       │                       │
          ├──────────────────────►│                       │                       │
          │                       │                       │                       │
-         │                       │ 8. Forward to Deepgram                       │
+         │ 4. Answer Channel     │                       │                       │
+         │◄──────────────────────┤                       │                       │
+         │                       │                       │                       │
+         │ 5. Real-time Audio    │                       │                       │
+         ├──────────────────────►│                       │                       │
+         │                       │                       │                       │
+         │                       │ 6. Forward to Local AI Server                 │
          │                       ├──────────────────────►│                       │
          │                       │                       │                       │
-         │                       │                       │ 9. STT + LLM + TTS   │
+         │                       │                       │ 7. STT Processing    │
+         │                       │                       ├──────────────────────►│
+         │                       │                       │                       │
+         │                       │                       │ 8. LLM Processing    │
+         │                       │                       ├──────────────────────►│
+         │                       │                       │                       │
+         │                       │                       │ 9. TTS Synthesis     │
          │                       │                       ├──────────────────────►│
          │                       │                       │                       │
          │                       │ 10. Audio Response    │                       │
@@ -55,94 +57,71 @@ The Asterisk AI Voice Agent v3.0 is a single-container, multi-provider architect
          │                       │                       │                       │
 ```
 
-### 2. LOCAL PROVIDER CALL FLOW 🏠
+### 2. DEEPGRAM PROVIDER CALL FLOW 🌐
 
 ```
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   ASTERISK      │    │   AI AGENT      │    │   LOCAL AI      │    │   SHARED MEDIA  │
-│   (PJSIP/SIP)   │    │   ENGINE        │    │   SERVER        │    │   DIRECTORY     │
+│   ASTERISK      │    │   AI ENGINE     │    │   DEEPGRAM      │    │   OPENAI        │
+│   (PJSIP/SIP)   │    │   CONTAINER     │    │   CLOUD         │    │   CLOUD         │
 └─────────────────┘    └─────────────────┘    └─────────────────┘    └─────────────────┘
          │                       │                       │                       │
          │ 1. Incoming Call     │                       │                       │
          ├──────────────────────►│                       │                       │
          │                       │                       │                       │
-         │ 2. StasisStart Event │                       │                       │
+         │ 2. AudioSocket Stream│                       │                       │
          ├──────────────────────►│                       │                       │
          │                       │                       │                       │
-         │                       │ 3. Create LocalProvider                       │
-         │                       ├──────────────────────►│                       │
-         │                       │                       │                       │
-         │                       │ 4. Connect to Local AI Server                 │
-         │                       ├──────────────────────►│                       │
-         │                       │                       │                       │
-         │ 5. Answer Channel     │                       │                       │
-         │◄──────────────────────┤                       │                       │
-         │                       │                       │                       │
-         │ 6. Create Snoop Channel                       │                       │
-         │◄──────────────────────┤                       │                       │
-         │                       │                       │                       │
-         │ 7. Audio Frame Events │                       │                       │
+         │ 3. StasisStart Event │                       │                       │
          ├──────────────────────►│                       │                       │
          │                       │                       │                       │
-         │                       │ 8. Forward Audio to Local AI Server           │
+         │ 4. Answer Channel     │                       │                       │
+         │◄──────────────────────┤                       │                       │
+         │                       │                       │                       │
+         │ 5. Real-time Audio    │                       │                       │
+         ├──────────────────────►│                       │                       │
+         │                       │                       │                       │
+         │                       │ 6. Forward to Deepgram                       │
          │                       ├──────────────────────►│                       │
          │                       │                       │                       │
-         │                       │                       │ 9. STT Processing    │
+         │                       │                       │ 7. STT + LLM + TTS   │
          │                       │                       ├──────────────────────►│
          │                       │                       │                       │
-         │                       │                       │ 10. LLM Processing   │
-         │                       │                       ├──────────────────────►│
-         │                       │                       │                       │
-         │                       │                       │ 11. TTS Synthesis    │
-         │                       │                       ├──────────────────────►│
-         │                       │                       │                       │
-         │                       │ 12. Audio Response    │                       │
+         │                       │ 8. Audio Response    │                       │
          │                       │◄──────────────────────┤                       │
          │                       │                       │                       │
-         │ 13. Save Audio File   │                       │                       │
+         │ 9. Save Audio File   │                       │                       │
          │◄──────────────────────┤                       │                       │
          │                       │                       │                       │
-         │ 14. Play Audio File   │                       │                       │
+         │ 10. Play Audio File  │                       │                       │
          │◄──────────────────────┤                       │                       │
          │                       │                       │                       │
-         │ 15. Call Complete     │                       │                       │
+         │ 11. Call Complete    │                       │                       │
          ├──────────────────────►│                       │                       │
          │                       │                       │                       │
 ```
 
-### 3. RING MECHANISM FLOW 🔔
+### 3. AUDIOSOCKET SERVER ARCHITECTURE 🎧
 
 ```
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   ASTERISK      │    │   AI AGENT      │    │   LOCAL MODELS  │
-│   (PJSIP/SIP)   │    │   ENGINE        │    │   (Loading)     │
+│   ASTERISK      │    │   AI ENGINE     │    │   PROVIDER      │
+│   AudioSocket   │    │   AudioSocket   │    │   SYSTEM        │
+│   (Port 8090)   │    │   Server        │    │                 │
 └─────────────────┘    └─────────────────┘    └─────────────────┘
          │                       │                       │
-         │ 1. Incoming Call     │                       │
+         │ 1. TCP Connection     │                       │
          ├──────────────────────►│                       │
          │                       │                       │
-         │ 2. StasisStart Event │                       │
+         │ 2. Raw Audio Stream   │                       │
          ├──────────────────────►│                       │
          │                       │                       │
-         │ 3. Answer Immediately│                       │
-         │◄──────────────────────┤                       │
-         │                       │                       │
-         │ 4. Start Ring Tone   │                       │
-         │◄──────────────────────┤                       │
-         │                       │                       │
-         │ 5. Load Models (Background)                   │
+         │                       │ 3. Process Audio      │
          │                       ├──────────────────────►│
          │                       │                       │
-         │ 6. Ring Continues... │                       │
-         │◄──────────────────────┤                       │
-         │                       │                       │
-         │ 7. Models Ready       │                       │
+         │                       │ 4. AI Response        │
          │                       │◄──────────────────────┤
          │                       │                       │
-         │ 8. Stop Ring          │                       │
-         │◄──────────────────────┤                       │
-         │                       │                       │
-         │ 9. Play Greeting      │                       │
+         │ 5. File Playback      │                       │
          │◄──────────────────────┤                       │
          │                       │                       │
 ```
@@ -154,62 +133,166 @@ src/
 ├── engine.py                    # 🎯 MAIN ORCHESTRATOR
 │   ├── _handle_stasis_start()   # Entry point for all calls
 │   ├── _create_provider()       # Factory for Deepgram/Local providers
-│   ├── on_provider_event()      # ⚠️ CRITICAL: Handles AgentAudio events
-│   ├── _play_ring_tone()        # 🔔 NEW: Ring mechanism
-│   └── _play_ai_audio()         # Legacy method (unused)
+│   ├── on_provider_event()      # Handles AgentAudio events
+│   └── _play_ai_audio()         # File-based audio playback
+│
+├── audiosocket_server.py        # 🎧 NEW: AudioSocket TCP Server
+│   ├── start_server()           # Start TCP server on port 8090
+│   ├── handle_connection()      # Handle per-call TCP connections
+│   ├── process_audio_stream()   # Real-time audio processing
+│   └── forward_to_provider()    # Send audio to AI providers
 │
 ├── providers/
 │   ├── base.py                  # AIProviderInterface abstract class
 │   ├── deepgram.py              # 🌐 CLOUD PROVIDER
 │   │   ├── start_session()      # WebSocket connection to Deepgram
-│   │   ├── send_audio()         # Forward RTP → WebSocket
+│   │   ├── send_audio()         # Forward AudioSocket → WebSocket
 │   │   ├── _receive_loop()      # WebSocket → AgentAudio events
 │   │   └── speak()              # Inject text to Deepgram
 │   │
 │   └── local.py                 # 🏠 LOCAL PROVIDER
 │       ├── start_session()      # Load STT/LLM/TTS models
-│       ├── send_audio()         # RTP → STT processing
+│       ├── send_audio()         # AudioSocket → STT processing
 │       ├── speak()              # Text → TTS → AgentAudio events
 │       └── _synthesize_tts_audio() # TTS synthesis
 │
-├── ari_client.py                # Asterisk REST Interface client with Snoop/Playback
+├── ari_client.py                # Asterisk REST Interface client
 └── config.py                    # Configuration management
 ```
 
 ## Critical Differences
 
-| **Aspect** | **Deepgram Provider** | **Local Provider** |
-|------------|----------------------|-------------------|
-| **Audio Direction** | Bidirectional WebSocket | WebSocket to Local AI Server |
-| **STT Processing** | Cloud-based | Local Vosk model |
-| **LLM Processing** | Cloud OpenAI | Local Llama model |
-| **TTS Processing** | Cloud Deepgram | Local LightweightTTS (espeak-ng) |
-| **Audio Format** | Pre-packetized from cloud | Raw ulaw → WAV conversion |
-| **Event Flow** | WebSocket → on_event() | WebSocket → STT/LLM/TTS → on_event() |
-| **Dependencies** | Internet + API keys | Local model files |
-| **Loading Time** | ~1-2 seconds | ~5-10 seconds |
-| **Ring Mechanism** | Not needed | Required for UX |
+| **Aspect** | **AudioSocket Architecture** | **Previous Snoop Architecture** |
+|------------|------------------------------|----------------------------------|
+| **Audio Input** | TCP stream via AudioSocket | ARI ChannelAudioFrame events |
+| **Reliability** | Guaranteed real-time stream | Unreliable event-based system |
+| **Asterisk Config** | Requires dialplan modification | No dialplan changes needed |
+| **Connection Type** | Persistent TCP per call | WebSocket event subscription |
+| **Audio Format** | Raw ulaw stream | Base64 encoded frames |
+| **Error Handling** | Connection-based recovery | Event-based error handling |
+| **Performance** | Lower latency, higher throughput | Higher latency, event overhead |
 
-## Ring Mechanism Implementation
+## AudioSocket Integration
 
-The ring mechanism addresses the delay in local model loading by:
+### Call Flow: AudioSocket Model
 
-1. **Immediate Answer**: Answer the call immediately to prevent timeout
-2. **Ring Tone**: Play a standard ring tone while models load in background
-3. **Model Loading**: Load STT/LLM/TTS models asynchronously
-4. **Seamless Transition**: Stop ring and play greeting when models are ready
-5. **Provider Detection**: Only apply to Local provider, skip for Deepgram
+The new architecture provides a guaranteed media path by leveraging Asterisk's AudioSocket feature, treating our application as a pure controller.
 
-## Unified Provider Interface
+1. **Call Initiation**: A new call enters a dialplan context that first calls the `AudioSocket()` application, then the `Stasis()` application.
+2. **Audio Stream Starts**: Asterisk establishes a TCP connection to the `AudioSocketServer` running inside the `ai-engine` and immediately begins streaming raw audio.
+3. **StasisStart**: The `Engine` receives the `StasisStart` event via ARI, determines the provider, and answers the call.
+4. **Real-time Conversation**:
+   - The `AudioSocketServer` receives raw audio chunks and forwards them to the active AI provider.
+   - The provider processes the audio (STT -> LLM -> TTS).
+5. **Media Playback**:
+   - The provider sends the synthesized TTS audio back to the `ai-engine`.
+   - The `AriClient` writes this audio to a unique file in the shared directory.
+   - It sends a `channels.play` command to Asterisk, telling it to play the sound file.
+6. **Cleanup**:
+   - The `AriClient` listens for the `PlaybackFinished` event from Asterisk.
+   - The event handler immediately deletes the audio file from the shared directory.
 
-Both providers implement the same interface:
+This model is the most robust and performant, avoiding the unreliable `ChannelAudioFrame` events and the complexity of manual RTP handling.
+
+### Optional: ExternalMedia RTP Bridging
+In deployments that require RTP/SRTP interop, an optional path using Asterisk `ExternalMedia` may be enabled to bridge media via RTP. This is not required for the default AudioSocket architecture and should be considered only when standards-based RTP interop is necessary.
+
+## Next Phase: Streaming TTS over AudioSocket Gateway
+To further reduce latency and enable true barge‑in, the next phase will introduce downstream streaming back to Asterisk via the same AudioSocket gateway.
+
+- Transport: full‑duplex streaming (ulaw/slinear ↔ PCM16) without file writes in steady state
+- Barge‑in: detect inbound speech during playback and cancel/attenuate TTS
+- Reliability: heartbeats, timeouts, reconnection with exponential backoff
+- Observability: latency/jitter, queue depths, underruns/overruns, reconnect counters
+
+This capability will be guarded by configuration flags so the system can fall back to the legacy file‑based playback path when needed.
+
+## Real-Time Conversation Management
+
+### AudioSocket Server Pattern
+The core of two-way audio functionality is the `AudioSocketServer` class that manages the TCP connection and audio streaming:
+
 ```python
-class AIProviderInterface:
-    async def start_session()     # Initialize provider
-    async def send_audio()        # Process incoming audio
-    async def speak()             # Generate outgoing audio
-    async def stop_session()      # Cleanup resources
-    async def is_ready()          # Check if provider is ready
+class AudioSocketServer:
+    def __init__(self, port: int = 8090):
+        self.port = port
+        self.active_connections = {}  # Per-call connection management
+        self.provider_manager = None
+    
+    async def start_server(self):
+        # Start TCP server on specified port
+        # Handle incoming connections from Asterisk
+    
+    async def handle_connection(self, reader, writer):
+        # Process real-time audio stream
+        # Forward to active AI provider
+        # Manage connection lifecycle
 ```
 
-The beauty of this architecture: The engine doesn't need to know whether it's talking to Deepgram or Local - it just calls the same methods and handles the same `AgentAudio` events!
+### State Management
+Each call maintains its own state with explicit transitions:
+- **Connecting**: Establishing AudioSocket TCP connection
+- **Streaming**: Receiving real-time audio from caller
+- **Processing**: STT → LLM → TTS pipeline execution
+- **Speaking**: Playing TTS audio to caller
+- **Idle**: Waiting for next input
+
+### Connection Management
+- **Per-call Isolation**: Each call gets its own TCP connection
+- **Connection Pooling**: Manage multiple concurrent connections
+- **Error Recovery**: Automatic reconnection on connection loss
+- **Resource Cleanup**: Ensure connections are closed on call end
+
+### Performance Targets
+- **Audio Latency**: < 200ms (AudioSocket advantage)
+- **End-to-End Response**: < 2 seconds
+- **Streaming STT**: Partial results for faster response
+- **Parallel Processing**: Overlap LLM and TTS stages where possible
+
+## Testing and Verification
+
+### AudioSocket Testing
+- **Connection Testing**: Verify TCP server starts and accepts connections
+- **Audio Stream Testing**: Test real-time audio processing
+- **Provider Integration**: Test audio forwarding to AI providers
+- **Error Handling**: Test connection loss and recovery scenarios
+
+### Critical Testing Points
+- **AudioSocket Server**: Must start and accept connections on port 8090
+- **TCP Connection Management**: Must handle multiple concurrent calls
+- **Audio Format Handling**: Must process ulaw audio correctly
+- **Provider Integration**: Must forward audio to correct provider
+- **File Playback**: Must successfully play generated audio to callers
+- **Connection Cleanup**: Must properly close connections on call end
+
+## Troubleshooting Guide
+
+### AudioSocket-Specific Issues
+
+**Connection Refused**:
+- Check if AudioSocket server is running on port 8090
+- Verify Asterisk dialplan has correct AudioSocket configuration
+- Check firewall settings for port 8090
+
+**Audio Not Received**:
+- Verify AudioSocket connection is established
+- Check audio format compatibility (ulaw)
+- Monitor AudioSocket server logs for errors
+
+**Connection Drops**:
+- Implement connection retry logic
+- Check network stability between Asterisk and container
+- Monitor connection pool management
+
+**Performance Issues**:
+- Monitor TCP connection overhead
+- Check audio buffer management
+- Verify provider processing speed
+
+When issues arise:
+1. Check AudioSocket server logs for connection status
+2. Verify Asterisk dialplan configuration
+3. Test TCP connectivity to port 8090
+4. Monitor audio stream processing
+5. Check provider integration and response times
+6. Verify file-based playback functionality

@@ -7,15 +7,15 @@ alwaysApply: true
 # Asterisk AI Voice Agent v3.0 - Development Rules
 
 ## Project Overview
-This is an open-source AI Voice Agent that integrates with Asterisk/FreePBX using the Asterisk REST Interface (ARI). It features a **two-container, modular architecture** that uses Asterisk's native **Snoop/Playback** capabilities for robust media handling.
+This is an open-source AI Voice Agent that integrates with Asterisk/FreePBX using the Asterisk REST Interface (ARI). It features a **two-container, modular architecture** that uses Asterisk's native **AudioSocket** feature for reliable real-time audio capture and **file-based playback** for robust media handling.
 
 ## Development Workflow
 
 ### Test Server Configuration
-- **Server**: `root@voiprnd.nemtclouddispatch.com`
+- **Server**: <internal test host>
 - **Asterisk Version**: 16+ with FreePBX UI
 - **Docker**: Installed and available
-- **Access**: SSH with root privileges
+- **Access**: SSH with appropriate privileges
 - **Shared Media Directory**: A `tmpfs` (RAM disk) is mounted at `/mnt/asterisk_media` for high-performance, temporary audio file storage.
 
 ### Development Process
@@ -26,6 +26,7 @@ This is an open-source AI Voice Agent that integrates with Asterisk/FreePBX usin
    - Push to remote `develop` branch.
 3. **Server Testing**:
    - SSH to test server.
+   - For isoloated tests scp file to the server and then to the container
    - `git pull` the latest changes into `/root/Asterisk-Agent-Develop`.
    - Use `docker-compose restart` for code changes or `docker-compose up --build -d` for dependency changes.
 
@@ -45,7 +46,8 @@ Asterisk-AI-Voice-Agent/
 │   │   ├── base.py         # AIProviderInterface abstract class
 │   │   ├── deepgram.py     # Deepgram provider
 │   │   └── local.py        # Local provider (WebSocket client)
-│   ├── ari_client.py       # ARI client using Snoop/Playback
+│   ├── ari_client.py       # ARI client for call control and playback
+│   ├── audiosocket_server.py # NEW: TCP server for receiving AudioSocket stream
 │   ├── config.py           # YAML configuration loader
 │   └── engine.py           # Core call orchestration
 ├── local_ai_server/        # Standalone server for local AI models
@@ -64,40 +66,101 @@ Asterisk-AI-Voice-Agent/
 ```
 
 ### Key Technologies
-- **Asterisk Integration**: ARI via a custom `ari_client` implementing the Snoop/Playback model.
-- **Audio Processing**: All real-time media (RTP) is handled natively by Asterisk. The application controls media flow via ARI commands.
+- **Asterisk Integration**: ARI for call control and **AudioSocket** for real-time audio capture.
+- **Audio Processing**: All real-time media (RTP) is handled natively by Asterisk. The application receives a raw audio stream via TCP and commands media playback via ARI.
+- **Conversation Management**: Asyncio-based AudioSocket server for real-time two-way audio conversations.
+- **Provider Isolation**: Independent AI providers (Local, Deepgram, OpenAI) with configuration-based switching.
+
+### Current Implementation Status
+- **✅ COMPLETED**: Two-container architecture, provider system, one-way audio (greeting playback)
+- **✅ COMPLETED**: Local AI Server, Deepgram provider, provider switching, file management
+- **🚧 IN PROGRESS**: Two-way audio conversation (real-time STT → LLM → TTS pipeline)
+- **📋 PLANNED**: OpenAI provider, production readiness, installation automation
 
 ### Environment Variables
 Configuration is primarily managed in `config/ai-agent.yaml`. The `.env` file is only used for secrets.
 
 - `ASTERISK_HOST`: IP address of your Asterisk server.
-- `ASTERISK_ARI_USERNAME`: AIAgent
-- `ASTERISK_ARI_PASSWORD`: AiAgent+2025?
-- And other provider-specific API keys.
+- `ASTERISK_ARI_USERNAME`: <your_ari_user>
+- `ASTERISK_ARI_PASSWORD`: <your_ari_password>
+- Provider-specific API keys (e.g., `DEEPGRAM_API_KEY`, `OPENAI_API_KEY`).
+
+Key flags (documented in `config/ai-agent.yaml`):
+- `audio_transport`: `audiosocket` (recommended) | `legacy`
+- `downstream_mode`: `file` (current default) | `stream` (next phase)
 
 ## ARI Integration and Call Handling
 
-### Call Flow: Snoop/Playback Model
+### Call Flow: AudioSocket/Playback Model
 
-The new architecture simplifies the media path by leveraging Asterisk's native capabilities, treating our application as a pure controller.
+The new architecture provides a guaranteed media path by leveraging Asterisk's AudioSocket feature, treating our application as a pure controller.
 
-1.  **StasisStart**: A new call enters the `ai-voice-agent` Stasis application.
-    -   The `Engine` receives the event, determines the provider, and answers the call.
-2.  **Media Setup (Audio Input)**:
-    -   The `AriClient` creates a **snoop channel** on the incoming call. This provides a direct, raw audio stream of the caller's media via ARI WebSocket events (`ChannelAudioFrame`).
-3.  **Real-time Conversation**:
-    -   The `AriClient` receives audio frames and forwards them to the active AI provider (e.g., the `local-ai-server`).
-    -   The provider processes the audio (STT -> LLM -> TTS).
-4.  **Media Setup (Audio Output)**:
-    -   The provider sends the synthesized TTS audio (as a `ulaw` byte stream) back to the `ai-engine`.
-    -   The `AriClient` writes this audio to a unique file in the shared RAM-based directory (`/mnt/asterisk_media/ai-generated`).
+1.  **Call Initiation**: A new call enters a dialplan context that first calls the `AudioSocket()` application, then the `Stasis()` application.
+2.  **Audio Stream Starts**: Asterisk establishes a TCP connection to the `AudioSocketServer` running inside the `ai-engine` and immediately begins streaming raw audio.
+3.  **StasisStart**: The `Engine` receives the `StasisStart` event via ARI, determines the provider, and answers the call.
+4.  **Real-time Conversation**:
+    -   The `AudioSocketServer` receives raw audio chunks and forwards them to the active AI provider.
+    -   The provider processes the audio (STT -> LLM -> TTS) with interruption handling and barge-in detection.
+5.  **Media Playback**:
+    -   The provider sends the synthesized TTS audio back to the `ai-engine`.
+    -   The `AriClient` writes this audio to a unique file in the shared directory.
     -   It sends a `channels.play` command to Asterisk, telling it to play the sound file.
-5.  **Cleanup**:
+6.  **Cleanup**:
     -   The `AriClient` listens for the `PlaybackFinished` event from Asterisk.
     -   The event handler immediately deletes the audio file from the shared directory.
-6.  **StasisEnd**: When the call hangs up, the `Engine` cleans up any remaining resources.
 
-This model eliminates the need for a UDP server and manual RTP handling, resulting in a more stable and simplified system.
+This model is the most robust and performant, avoiding the unreliable `ChannelAudioFrame` events and the complexity of manual RTP handling.
+
+## Real-Time Conversation Management
+
+### AudioSocket Server Pattern
+The core of two-way audio functionality is the `AudioSocketServer` class that manages the TCP connection and audio streaming:
+
+```python
+class AudioSocketServer:
+    def __init__(self, port: int = 8090):
+        self.port = port
+        self.active_connections = {}  # Per-call connection management
+        self.provider_manager = None
+    
+    async def start_server(self):
+        # Start TCP server on specified port
+        # Handle incoming connections from Asterisk
+    
+    async def handle_connection(self, reader, writer):
+        # Process real-time audio stream
+        # Forward to active AI provider
+        # Manage connection lifecycle
+```
+
+### State Management
+Each call maintains its own state with explicit transitions:
+- **Connecting**: Establishing AudioSocket TCP connection
+- **Streaming**: Receiving real-time audio from caller
+- **Processing**: STT → LLM → TTS pipeline execution
+- **Speaking**: Playing TTS audio to caller
+- **Idle**: Waiting for next input
+
+### Connection Management
+- **Per-call Isolation**: Each call gets its own TCP connection
+- **Connection Pooling**: Manage multiple concurrent connections
+- **Error Recovery**: Automatic reconnection on connection loss
+- **Resource Cleanup**: Ensure connections are closed on call end
+
+### Performance Targets (Current)
+- Conversational latency optimized via tmpfs and minimal I/O
+- End-to-End Response: target P95 < 2 seconds
+
+### Next Phase: Streaming TTS (Feature-Flagged)
+- Full‑duplex streaming over AudioSocket; barge‑in support
+- Add jitter buffers and downstream backpressure
+- Keep legacy file playback as fallback
+
+### Concurrency Patterns
+- **Per-call Isolation**: Each call gets its own AudioSocket connection
+- **Task Registry**: Track all asyncio tasks per call for coordinated cancellation
+- **Connection Management**: Use asyncio for TCP connection handling
+- **Resource Cleanup**: Ensure all connections and tasks are cleaned up on call end
 
 ## Testing and Verification
 
@@ -136,10 +199,14 @@ The project includes a comprehensive test suite designed to systematically verif
 
 ### Critical Testing Points
 
-- **TTS Functionality**: Must generate audio for greetings and responses
-- **WebSocket Communication**: Must maintain stable connection between containers
-- **ARI Integration**: Must properly create snoop channels and handle audio frames
-- **Audio Playback**: Must successfully play generated audio to callers
+- **AudioSocket Server**: Must start and accept connections on port 8090
+- **TCP Connection Management**: Must handle multiple concurrent calls
+- **Audio Format Handling**: Must process ulaw audio correctly
+- **Provider Integration**: Must forward audio to correct provider
+- **File Playback**: Must successfully play generated audio to callers
+- **Connection Cleanup**: Must properly close connections on call end
+- **Pipeline Orchestration**: Must coordinate STT → LLM → TTS flow with proper error handling
+- **Provider Isolation**: Changes to one provider must not impact others
 
 ### Troubleshooting Guide
 
@@ -160,7 +227,14 @@ The project includes a comprehensive test suite designed to systematically verif
 - **Solution**: Remove `.ulaw` extension from URI: `sound:ai-generated/response-xxx`
 - **Impact**: This affects ALL audio playback, not just AI-generated files
 
-**Troubleshooting Tools**:
+**AudioSocket-Specific Troubleshooting**:
+- **Connection Testing**: Verify AudioSocket server is running on port 8090
+- **Dialplan Verification**: Check Asterisk dialplan has correct AudioSocket configuration
+- **TCP Connectivity**: Test connection from Asterisk to container
+- **Audio Stream Analysis**: Monitor raw audio data flow
+- **Connection Management**: Check per-call connection handling
+
+**General Troubleshooting Tools**:
 - **Direct ARI Testing**: Create test scripts inside containers to test ARI commands directly
 - **File Verification**: Check file creation, permissions, and format
 - **Asterisk Log Analysis**: Monitor `/var/log/asterisk/full` for actual playback events
@@ -168,11 +242,11 @@ The project includes a comprehensive test suite designed to systematically verif
 - **Format Validation**: Verify audio format compatibility with Asterisk
 
 When issues arise:
-1. Run individual component tests to isolate problems
-2. Check container logs for specific error messages
-3. Verify model loading and initialization
-4. Test WebSocket connectivity between containers
-5. Validate ARI commands and responses
-6. **Check Asterisk logs for actual playback success**
-7. **Verify file extension handling in URIs**
-8. **Test direct ARI playback commands from inside containers**
+1. Check AudioSocket server logs for connection status
+2. Verify Asterisk dialplan configuration
+3. Test TCP connectivity to port 8090
+4. Monitor audio stream processing
+5. Check provider integration and response times
+6. Verify file-based playback functionality
+7. Run individual component tests to isolate problems
+8. Check container logs for specific error messages

@@ -96,25 +96,28 @@ After starting the service, you can check that it is running correctly.
 docker-compose ps
 ```
 
-You should see the `call_controller` and `redis` containers running.
+You should see the `ai-engine` and `local-ai-server` containers running.
 
 ### Check Container Logs
 
 ```bash
-docker-compose logs -f call_controller
+docker-compose logs -f ai-engine
 ```
 
-Look for a message indicating a successful connection to the Asterisk ARI.
+Look for a message indicating a successful connection to the Asterisk ARI and that the AudioSocket listener is ready on port 8090.
 
-### Make a Test Call
+### Make a Test Call (AudioSocket + Stasis)
 
-Route a call in your Asterisk dialplan to the Stasis application name you configured (default is `asterisk-ai-voice-agent`). The AI should answer the call.
+Use an AudioSocket-first dialplan so Asterisk streams raw audio to the agent before handing control to the Stasis app.
 
 **Example Dialplan (`extensions.conf`):**
 
 ```
 [from-internal]
 exten => 1234,1,NoOp(Sending call to AI Voice Agent)
+ same => n,Set(AUDIOSOCKET_HOST=127.0.0.1)
+ same => n,Set(AUDIOSOCKET_PORT=8090)
+ same => n,AudioSocket(${AUDIOSOCKET_HOST}:${AUDIOSOCKET_PORT},ulaw)
  same => n,Stasis(asterisk-ai-voice-agent)
  same => n,Hangup()
 ```
@@ -127,8 +130,10 @@ exten => 1234,1,NoOp(Sending call to AI Voice Agent)
     -   Check your `ari.conf` and `http.conf` in Asterisk.
 -   **AI does not respond**:
     -   Check that your API keys in the `.env` file are correct.
-    -   View the container logs (`docker-compose logs -f call_controller`) for any API errors from the provider.
+    -   View the container logs (`docker-compose logs -f ai-engine`) for any provider/API errors.
 -   **Audio Quality Issues**:
-    -   Ensure the `CONTAINER_HOST_IP` in your `.env` file is set to the correct external IP address of your server so Asterisk can send RTP traffic back to the container.
+    -   Confirm AudioSocket is connected (see Asterisk CLI and `ai-engine` logs).
+    -   Use a tmpfs for media files (e.g., `/mnt/asterisk_media`) to minimize I/O latency for file-based playback.
+    -   Verify you are not appending file extensions to ARI `sound:` URIs (Asterisk will add them automatically).
 
 For more advanced troubleshooting, refer to the project's main `README.md` or open an issue in the repository.

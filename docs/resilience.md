@@ -27,22 +27,22 @@ The connection to the Asterisk server's ARI is critical.
 
 ## 3. Health Checks
 
-The `call_controller` service exposes a `/health` endpoint that provides the overall health of the system.
+The `ai-engine` can expose a `/health` endpoint that provides the overall health of the system.
 
--   **Endpoint**: `http://localhost:15000/health`
--   **Healthy Response**: `{"status": "healthy", "dependencies": {"ari": "connected", "redis": "connected", "ai_provider": "connected"}}` (HTTP 200)
+-   **Endpoint**: `http://localhost:15000/health` (if implemented)
+-   **Healthy Response**: `{"status": "healthy", "dependencies": {"ari": "connected", "audiosocket": "listening", "ai_provider": "connected"}}` (HTTP 200)
 -   **Unhealthy Response**: `{"status": "unhealthy", ...}` (HTTP 503)
 -   **Dependency Checks**:
     -   **ARI**: Is the WebSocket connection to Asterisk active?
-    -   **Redis**: Can we connect to the Redis server?
+    -   **AudioSocket**: Is the TCP listener accepting connections and are per‑call sessions healthy?
     -   **AI Provider**: Is the connection to the selected AI provider active?
 
 ## 4. Operational Runbook
 
 ### Scenario: Service is Unhealthy or in a Restart Loop
 
-1.  **Symptom**: `docker-compose ps` shows the `call_controller` restarting, or the `/health` endpoint returns a 503 error.
-2.  **Check Logs**: `docker-compose logs -f call_controller`.
+1.  **Symptom**: `docker-compose ps` shows the `ai-engine` restarting, or the `/health` endpoint returns a 503 error.
+2.  **Check Logs**: `docker-compose logs -f ai-engine`.
 3.  **Potential Causes & Fixes**:
     -   **Cannot connect to ARI**:
         -   Verify Asterisk is running.
@@ -52,6 +52,16 @@ The `call_controller` service exposes a `/health` endpoint that provides the ove
         -   Verify the API keys in your `.env` file are correct.
         -   Check for network connectivity to the provider's API endpoint (e.g., `agent.deepgram.com`).
         -   Check the provider's status page for outages.
-    -   **Cannot connect to Redis**:
-        -   Verify the Redis container is running (`docker-compose ps`).
-        -   Check Redis logs (`docker-compose logs redis`).
+    -   **AudioSocket listener issues**:
+        -   Verify the listener is bound to the correct port (default 8090).
+        -   Check Asterisk dialplan and module status: `module show like audiosocket`.
+        -   Inspect per‑call session handling and cleanup.
+
+## 5. AudioSocket Session Resilience
+
+-   **Handshake & Keepalive**: Implement heartbeats to detect dead TCP sessions promptly.
+-   **Timeouts**: Use operation timeouts to prevent hangs during provider or I/O operations.
+-   **Reconnection**: Exponential backoff on provider reconnects; fail fast on repeated errors.
+-   **Graceful Shutdown**: Ensure per‑call resources are cleaned up when the channel ends.
+
+Note: In the current release, downstream audio uses file‑based playback for robustness. Streaming TTS (full‑duplex) will add jitter buffers, downstream backpressure, and barge‑in handling in the next phase.

@@ -8,7 +8,7 @@ An open-source AI Voice Agent that integrates with Asterisk/FreePBX using the As
   - ✅ **Deepgram Voice Agent**: Fully implemented for a powerful cloud-based solution.
   - ✅ **Local AI Server**: A dedicated container that runs local models (Vosk for STT, Llama for LLM, and Piper for TTS) for full control and privacy.
 - **High-Performance Architecture**: A lean `ai-engine` for call control and a separate `local-ai-server` for heavy AI processing ensures stability and scalability.
-- **Real-time Communication**: Low-latency conversation flow achieved via direct WebSocket communication between the engine and the AI servers.
+- **Real-time Communication**: AudioSocket upstream capture from Asterisk with ARI-commanded file-based playback; engine↔AI servers use WebSocket.
 - **Docker-based Deployment**: Simple, two-service orchestration using Docker Compose.
 - **Customizable**: Configure greetings, AI roles, and voice personalities in a simple YAML file.
 
@@ -76,7 +76,7 @@ The application is split into two Docker containers for performance and scalabil
                          └─────────────────┘
 ```
 
-This separation ensures that the resource-intensive AI models do not impact the real-time call handling performance of the `ai-engine`.
+This separation ensures that the resource-intensive AI models do not impact the real-time call handling performance of the `ai-engine`. Downstream audio is currently delivered via file-based playback for robustness; streaming TTS is planned as a next phase.
 
 ## 🧑‍💻 Development Workflow
 
@@ -113,5 +113,3 @@ Contributions are welcome! Please feel free to submit a pull request.
 ## 📄 License
 
 This project is licensed under the MIT License. See the `LICENSE` file for details.
-
-

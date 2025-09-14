@@ -45,11 +45,31 @@ class LLMConfig(BaseModel):
     model: str = "gpt-4o"
     api_key: Optional[str] = None
 
+class StreamingTimeouts(BaseModel):
+    provider_ms: int = 15000
+    handshake_ms: int = 5000
+
+class StreamingBargeIn(BaseModel):
+    enabled: bool = False
+    vad_threshold_db: int = -30
+    min_speech_ms: int = 200
+
+class StreamingConfig(BaseModel):
+    sample_rate_hz: int = 16000
+    chunk_duration_ms: int = 20
+    jitter_buffer_ms: int = 120
+    keepalive_ms: int = 10000
+    timeouts: StreamingTimeouts = Field(default_factory=StreamingTimeouts)
+    barge_in: StreamingBargeIn = Field(default_factory=StreamingBargeIn)
+
 class AppConfig(BaseModel):
     default_provider: str
     providers: Dict[str, Any]
     asterisk: AsteriskConfig
     llm: LLMConfig
+    audio_transport: str = Field(default="audiosocket")  # 'audiosocket' | 'legacy'
+    downstream_mode: str = Field(default="file")  # 'file' | 'stream'
+    streaming: Optional[StreamingConfig] = Field(default_factory=StreamingConfig)
 
 def load_config(path: str = "config/ai-agent.yaml") -> AppConfig:
     # If the provided path is not absolute, resolve it relative to the project root.
@@ -80,6 +100,12 @@ def load_config(path: str = "config/ai-agent.yaml") -> AppConfig:
             "model": "gpt-4o",
             "api_key": os.getenv("OPENAI_API_KEY")
         }
+
+        # Defaults for new flags if not present in YAML
+        config_data.setdefault('audio_transport', os.getenv('AUDIO_TRANSPORT', 'audiosocket'))
+        config_data.setdefault('downstream_mode', os.getenv('DOWNSTREAM_MODE', 'file'))
+        if 'streaming' not in config_data:
+            config_data['streaming'] = {}
 
         return AppConfig(**config_data)
     except FileNotFoundError:

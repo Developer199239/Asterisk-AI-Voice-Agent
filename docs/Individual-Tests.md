@@ -32,7 +32,7 @@ docker exec local_ai_server python /app/test_local_ai_server.py
 - ✅ **ARI Connection Test**: Verifies connection to Asterisk REST Interface
 - ✅ **Audio Playback Test**: Tests audio file creation in shared media directory
 - ❌ **WebSocket Connection Test**: Tests connection to Local AI Server
-- ❌ **Snoop Channel Test**: Tests snoop channel creation (requires active call)
+- ✅ **AudioSocket Bridging Test**: Verifies AudioSocket listener accepts and processes upstream audio
 
 **Run Command**:
 ```bash
@@ -76,12 +76,12 @@ docker exec ai_engine python /app/test_integration.py
 
 ## Key Issues Identified
 
-### 1. TTS System Failure
+### 1. TTS System Failure (historical)
 **Error**: `could not create a primitive`
 **Impact**: Prevents greeting audio generation and complete audio processing
 **Status**: Critical - Blocking all audio output
 
-### 2. WebSocket Connection Issues
+### 2. WebSocket Connection Issues (engine ↔ local-ai-server)
 **Error**: AI Engine cannot connect to Local AI Server
 **Impact**: Prevents communication between containers
 **Status**: Critical - Blocking container communication
@@ -127,7 +127,7 @@ docker exec ai_engine python /app/test_integration.py
 - Verify audio format compatibility
 - Test TTS API method calls
 
-### WebSocket Issues
+### AudioSocket / WebSocket Issues
 - Verify Local AI Server is running
 - Check port 8765 availability
 - Test connection from AI Engine container
