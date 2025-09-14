@@ -145,7 +145,7 @@ class Engine:
         try:
             await self.ari_client.answer_channel(channel_id)
 
-            # Create snoop channel for audio capture
+            # PROVEN ARCHITECTURE: Create snoop channel for audio capture
             snoop_id = await self.ari_client.start_audio_snoop(channel_id, self.config.asterisk.app_name)
             
             if not snoop_id:
@@ -155,6 +155,25 @@ class Engine:
 
             # Store snoop channel info for cleanup
             self.active_calls[channel_id]["snoop_channel_id"] = snoop_id
+
+            # CRITICAL: Create mixing bridge and add BOTH channels (architect's solution)
+            bridge_id = await self.ari_client.create_bridge("mixing")
+            if bridge_id:
+                # Add both the main channel and snoop channel to the bridge
+                await self.ari_client.add_channel_to_bridge(bridge_id, channel_id)
+                await self.ari_client.add_channel_to_bridge(bridge_id, snoop_id)
+                
+                # Store bridge info for cleanup
+                self.active_calls[channel_id]["bridge_id"] = bridge_id
+                
+                logger.info("✅ Bridge created and channels added", 
+                          channel_id=channel_id, 
+                          snoop_id=snoop_id, 
+                          bridge_id=bridge_id)
+            else:
+                logger.error("Failed to create bridge", channel_id=channel_id)
+                await self._cleanup_call(channel_id)
+                return
 
             # Set up audio frame handler for this call
             self.ari_client.set_audio_frame_handler(self._handle_audio_frame)
@@ -352,12 +371,22 @@ class Engine:
     async def _cleanup_call(self, channel_id: str):
         """Cleanup resources associated with a call."""
         if channel_id in self.active_calls:
-            provider = self.active_calls[channel_id].get("provider")
+            call_data = self.active_calls[channel_id]
+            provider = call_data.get("provider")
             if provider:
                 await provider.stop_session()
             
             # Stop snoop channel
             await self.ari_client.stop_audio_snoop(channel_id)
+            
+            # Clean up bridge if it exists
+            bridge_id = call_data.get("bridge_id")
+            if bridge_id:
+                try:
+                    await self.ari_client.send_command("DELETE", f"bridges/{bridge_id}")
+                    logger.debug("Bridge destroyed", bridge_id=bridge_id)
+                except Exception as e:
+                    logger.warning("Failed to destroy bridge", bridge_id=bridge_id, error=str(e))
             
             # Clean up any remaining audio files for this call
             await self.ari_client.cleanup_call_files(channel_id)

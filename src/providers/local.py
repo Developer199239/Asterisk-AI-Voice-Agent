@@ -39,8 +39,14 @@ class LocalProvider(AIProviderInterface):
     async def send_audio(self, audio_chunk: bytes):
         if self.websocket:
             try:
-                # The local AI server expects raw bytes, not JSON frames
-                await self.websocket.send(audio_chunk)
+                # The local AI server expects JSON messages with type and base64 encoded data
+                import base64
+                audio_message = {
+                    "type": "audio",
+                    "data": base64.b64encode(audio_chunk).decode('utf-8')
+                }
+                await self.websocket.send(json.dumps(audio_message))
+                logger.debug("Sent audio chunk to Local AI Server", audio_size=len(audio_chunk))
             except websockets.exceptions.ConnectionClosed as e:
                 logger.debug("Could not send audio packet: Connection closed.", code=e.code, reason=e.reason)
             except Exception:

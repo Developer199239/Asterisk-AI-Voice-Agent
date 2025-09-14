@@ -35,7 +35,7 @@ class ARIClient:
         ws_host = base_url.replace("http://", "").split('/')[0]
         safe_username = quote(username)
         safe_password = quote(password)
-        self.ws_url = f"ws://{ws_host}/ari/events?api_key={safe_username}:{safe_password}&app={app_name}"
+        self.ws_url = f"ws://{ws_host}/ari/events?api_key={safe_username}:{safe_password}&app={app_name}&subscribeAll=true&subscribe=ChannelAudioFrame"
         self.websocket: Optional[websockets.WebSocketClientProtocol] = None
         self.http_session: Optional[aiohttp.ClientSession] = None
         self.running = False
@@ -207,9 +207,9 @@ class ARIClient:
                 f"channels/{channel_id}/snoop",
                 params={
                     "app": app_name, 
-                    "snoopId": snoop_id, 
+                    "snoop_id": snoop_id, 
                     "spy": "in",
-                    "options": "audioframe"  # Explicitly request audio frames
+                    "whisper": "none"
                 }
             )
             # ARI snoop command returns a channel object, not a status code
@@ -227,6 +227,14 @@ class ARIClient:
                 except Exception as e:
                     logger.warning("Failed to set audio format for snoop channel", snoop_channel_id=actual_snoop_id, error=str(e))
                 
+                # CRITICAL: Enable audio frame generation for the snoop channel
+                try:
+                    await self.send_command("POST", f"channels/{actual_snoop_id}/setChannelVar", 
+                                          params={"variable": "CHANNEL(audioframe)", "value": "true"})
+                    logger.info("✅ Enabled audio frame generation for snoop channel", snoop_channel_id=actual_snoop_id)
+                except Exception as e:
+                    logger.warning("Failed to enable audio frames for snoop channel", snoop_channel_id=actual_snoop_id, error=str(e))
+                
                 logger.info("Snoop channel created successfully", channel_id=channel_id, snoop_id=snoop_id, snoop_channel_id=actual_snoop_id)
                 return actual_snoop_id
             else:
@@ -235,6 +243,48 @@ class ARIClient:
         except Exception as e:
             logger.error("Failed to create snoop channel", channel_id=channel_id, error=str(e), exc_info=True)
             return None
+
+    async def create_bridge(self, bridge_type: str = "mixing") -> Optional[str]:
+        """Create a new bridge for channel mixing."""
+        try:
+            response = await self.send_command(
+                "POST",
+                "bridges",
+                data={
+                    "type": bridge_type,
+                    "name": f"bridge_{uuid.uuid4().hex[:8]}"
+                }
+            )
+            
+            if response.get("id"):
+                logger.info("Bridge created", bridge_id=response["id"], bridge_type=bridge_type)
+                return response["id"]
+            else:
+                logger.error("Failed to create bridge", response=response)
+                return None
+                
+        except Exception as e:
+            logger.error("Error creating bridge", error=str(e))
+            return None
+
+    async def add_channel_to_bridge(self, bridge_id: str, channel_id: str) -> bool:
+        """Add a channel to a bridge."""
+        try:
+            response = await self.send_command(
+                "POST",
+                f"bridges/{bridge_id}/addChannel",
+                data={"channel": channel_id}
+            )
+            
+            logger.info("Channel added to bridge", bridge_id=bridge_id, channel_id=channel_id)
+            return True
+            
+        except Exception as e:
+            logger.error("Error adding channel to bridge", 
+                        bridge_id=bridge_id, 
+                        channel_id=channel_id, 
+                        error=str(e))
+            return False
 
     async def play_audio_response(self, channel_id: str, audio_data: bytes):
         """Saves TTS audio to shared media directory and commands Asterisk to play it."""
