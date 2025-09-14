@@ -112,6 +112,13 @@ class AudioSocketServer:
         except asyncio.TimeoutError:
             return None
 
+    def try_get_connection_nowait(self) -> Optional[str]:
+        """Non-blocking fetch of next pending connection id, if any."""
+        try:
+            return self._new_conn_queue.get_nowait()
+        except asyncio.QueueEmpty:
+            return None
+
     async def close_connection(self, conn_id: str):
         """Close a specific connection by ID."""
         conn = self._connections.get(conn_id)

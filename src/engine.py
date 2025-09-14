@@ -44,6 +44,8 @@ class Engine:
         self.ari_client.on_event("StasisStart", self._handle_stasis_start)
         self.ari_client.on_event("StasisEnd", self._handle_stasis_end)
         self.ari_client.on_event("ChannelDtmfReceived", self._handle_dtmf_received)
+        # Bind AudioSocket connections robustly using variable events
+        self.ari_client.on_event("ChannelVarset", self._handle_channel_varset)
 
     async def on_rtp_packet(self, packet: bytes, addr: tuple):
         """Handle incoming RTP packets from the UDP server."""
@@ -164,34 +166,26 @@ class Engine:
 
             if self.config.audio_transport == "audiosocket":
                 logger.info("Using AudioSocket for upstream capture; awaiting connection", channel_id=channel_id)
-                # Await an AudioSocket connection and bind it to this channel
-                handshake_s = (self.config.streaming.timeouts.handshake_ms if self.config.streaming else 5000) / 1000.0
+                # First try immediate bind if a connection is already pending
                 conn_id: Optional[str] = None
-                try:
-                    conn_id = await self.audiosocket_server.await_connection(timeout=handshake_s)
-                except Exception:
-                    conn_id = None
-
+                if hasattr(self, 'audiosocket_server') and self.audiosocket_server:
+                    try:
+                        conn_id = self.audiosocket_server.try_get_connection_nowait()
+                    except Exception:
+                        conn_id = None
                 if not conn_id:
-                    logger.warning("No AudioSocket connection within timeout; falling back to legacy snoop", channel_id=channel_id)
-                else:
-                    self.conn_to_channel[conn_id] = channel_id
-                    self.channel_to_conn[channel_id] = conn_id
-                    logger.info("AudioSocket connection bound to channel", channel_id=channel_id, conn_id=conn_id)
-                    # Continue without creating snoop
-                    snoop_fallback_needed = False
-                    # Start provider session
-                    logger.debug("Starting provider session", channel_id=channel_id, provider=provider_name)
-                    await provider.start_session(channel_id)
-                    logger.debug("Provider session started successfully", channel_id=channel_id)
-                    # Initial greeting
-                    if hasattr(provider, 'play_initial_greeting'):
-                        logger.debug("Playing initial greeting", channel_id=channel_id)
-                        await provider.play_initial_greeting(channel_id)
-                        logger.debug("Initial greeting played", channel_id=channel_id)
-                    else:
-                        logger.debug("Provider does not have play_initial_greeting method", channel_id=channel_id)
+                    # Await an AudioSocket connection and bind it to this channel
+                    handshake_s = (self.config.streaming.timeouts.handshake_ms if self.config.streaming else 5000) / 1000.0
+                    try:
+                        conn_id = await self.audiosocket_server.await_connection(timeout=handshake_s)
+                    except Exception:
+                        conn_id = None
+
+                if conn_id:
+                    await self._bind_connection_to_channel(conn_id, channel_id, provider_name)
                     return
+                else:
+                    logger.warning("No AudioSocket connection within timeout; falling back to legacy snoop", channel_id=channel_id)
             else:
                 # Legacy capture via ARI snoop
                 snoop_id = await self.ari_client.start_audio_snoop(channel_id, self.config.asterisk.app_name)
@@ -236,6 +230,61 @@ class Engine:
         except Exception as e:
             logger.error("Error during StasisStart handling", channel_id=channel_id, exc_info=True)
             await self._cleanup_call(channel_id)
+
+    async def _bind_connection_to_channel(self, conn_id: str, channel_id: str, provider_name: str):
+        """Bind an accepted AudioSocket connection to a Stasis channel and start provider.
+
+        Plays a one-time test prompt to validate audio path, then proceeds with provider flow.
+        """
+        try:
+            self.conn_to_channel[conn_id] = channel_id
+            self.channel_to_conn[channel_id] = conn_id
+            logger.info("AudioSocket connection bound to channel", channel_id=channel_id, conn_id=conn_id)
+            provider = self.active_calls.get(channel_id, {}).get('provider')
+            if not provider:
+                provider = self.providers.get(provider_name)
+                if provider:
+                    self.active_calls[channel_id] = {"provider": provider}
+            # One-time test playback to confirm audio path
+            try:
+                await self.ari_client.play_media(channel_id, "sound:demo-congrats")
+            except Exception:
+                logger.debug("Test playback failed or unavailable", channel_id=channel_id, exc_info=True)
+            # Start provider session and optional greeting
+            if provider:
+                logger.debug("Starting provider session", channel_id=channel_id, provider=provider_name)
+                await provider.start_session(channel_id)
+                logger.debug("Provider session started successfully", channel_id=channel_id)
+                if hasattr(provider, 'play_initial_greeting'):
+                    logger.debug("Playing initial greeting", channel_id=channel_id)
+                    await provider.play_initial_greeting(channel_id)
+                    logger.debug("Initial greeting played", channel_id=channel_id)
+        except Exception:
+            logger.error("Error binding connection to channel", channel_id=channel_id, conn_id=conn_id, exc_info=True)
+
+    async def _handle_channel_varset(self, event_data: dict):
+        """Bind any pending AudioSocket connection when AUDIOSOCKET_UUID variable is set."""
+        try:
+            variable = event_data.get('variable') or event_data.get('name')
+            if variable != 'AUDIOSOCKET_UUID':
+                return
+            channel = event_data.get('channel', {})
+            channel_id = channel.get('id')
+            if not channel_id:
+                return
+            if channel_id in self.channel_to_conn:
+                return
+            # Bind any already-accepted connection
+            if hasattr(self, 'audiosocket_server') and self.audiosocket_server:
+                conn_id = None
+                try:
+                    conn_id = self.audiosocket_server.try_get_connection_nowait()
+                except Exception:
+                    conn_id = None
+                if conn_id:
+                    await self._bind_connection_to_channel(conn_id, channel_id, self.config.default_provider)
+        except Exception:
+            logger.debug("Error in ChannelVarset handler", exc_info=True)
 
     async def _load_local_models(self, provider, channel_id: str):
         """Load local models and return True when ready."""
