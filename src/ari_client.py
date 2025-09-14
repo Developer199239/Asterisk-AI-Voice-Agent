@@ -288,6 +288,14 @@ class ARIClient:
 
     async def play_audio_response(self, channel_id: str, audio_data: bytes):
         """Saves TTS audio to shared media directory and commands Asterisk to play it."""
+        logger.info("Starting audio playback process", channel_id=channel_id, audio_size=len(audio_data))
+        
+        # CRITICAL: Validate channel before attempting playback
+        logger.debug("Validating channel before playback", channel_id=channel_id)
+        if not await self.validate_channel_for_playback(channel_id):
+            logger.warning("Channel validation failed - skipping audio playback", channel_id=channel_id)
+            return
+        
         unique_filename = f"response-{uuid.uuid4()}.ulaw"
         # Use the shared RAM space for high-performance audio file storage
         # Put files in the ai-generated subdirectory to match the symlink
@@ -323,13 +331,19 @@ class ARIClient:
                 logger.debug("File created successfully", path=container_path, size=file_size)
                 
                 # File is ready for playback
+                logger.debug("Attempting to play media", channel_id=channel_id, media_uri=asterisk_media_uri)
 
             playback = await self.play_media(channel_id, asterisk_media_uri)
             if playback and 'id' in playback:
                 self.active_playbacks[playback['id']] = container_path
-                logger.info(f"Playing audio file: {unique_filename} on channel {channel_id}")
+                logger.info("Audio playback initiated successfully", 
+                          channel_id=channel_id, 
+                          filename=unique_filename, 
+                          playback_id=playback['id'])
             else:
-                logger.error("Failed to get playback ID", playback=playback)
+                logger.error("Failed to initiate audio playback", 
+                           channel_id=channel_id, 
+                           playback_response=playback)
         except Exception as e:
             logger.error("Failed to play audio file", channel_id=channel_id, error=str(e), exc_info=True)
 
@@ -570,3 +584,62 @@ class ARIClient:
             "format": "ulaw"
         }
         return await self.send_command("POST", "channels/externalMedia", params=params)
+
+    async def is_channel_active(self, channel_id: str) -> bool:
+        """Check if a channel is still active and in Stasis application."""
+        try:
+            # Try to get channel information from ARI
+            result = await self.send_command("GET", f"channels/{channel_id}")
+            if result and result.get("id") == channel_id:
+                # Channel exists, now check if it's in our Stasis app
+                state = result.get("state", "")
+                logger.debug("Channel status check", 
+                           channel_id=channel_id, 
+                           state=state,
+                           exists=True)
+                return state in ["Up", "Ring", "Ringing", "Dialing"]
+            else:
+                logger.debug("Channel not found in ARI", 
+                           channel_id=channel_id,
+                           result=result)
+                return False
+        except Exception as e:
+            logger.debug("Error checking channel status", 
+                        channel_id=channel_id, 
+                        error=str(e))
+            return False
+
+    async def validate_channel_for_playback(self, channel_id: str) -> bool:
+        """Validate that a channel is ready for audio playback."""
+        try:
+            # First check if channel is active
+            if not await self.is_channel_active(channel_id):
+                logger.warning("Channel validation failed: channel not active", 
+                             channel_id=channel_id)
+                return False
+            
+            # Additional check: try to get channel info to ensure it's accessible
+            result = await self.send_command("GET", f"channels/{channel_id}")
+            if not result:
+                logger.warning("Channel validation failed: cannot retrieve channel info", 
+                             channel_id=channel_id)
+                return False
+            
+            # Check if channel is in the correct state for playback
+            state = result.get("state", "")
+            if state not in ["Up"]:
+                logger.warning("Channel validation failed: not in correct state for playback", 
+                             channel_id=channel_id, 
+                             state=state)
+                return False
+            
+            logger.debug("Channel validation successful", 
+                        channel_id=channel_id, 
+                        state=state)
+            return True
+            
+        except Exception as e:
+            logger.warning("Channel validation failed: exception occurred", 
+                         channel_id=channel_id, 
+                         error=str(e))
+            return False

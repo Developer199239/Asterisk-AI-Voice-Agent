@@ -44,6 +44,7 @@ class Engine:
         # Event handlers
         self.ari_client.on_event("StasisStart", self._handle_stasis_start)
         self.ari_client.on_event("StasisEnd", self._handle_stasis_end)
+        self.ari_client.on_event("ChannelDestroyed", self._handle_channel_destroyed)
         self.ari_client.on_event("ChannelDtmfReceived", self._handle_dtmf_received)
         # Bind AudioSocket connections robustly using variable events
         self.ari_client.on_event("ChannelVarset", self._handle_channel_varset)
@@ -248,7 +249,8 @@ class Engine:
                     self.active_calls[channel_id] = {"provider": provider}
             # One-time test playback to confirm audio path
             try:
-                if self.config.audio_transport == 'audiosocket':
+                # Only send over AudioSocket in streaming mode; otherwise use ARI demo tone
+                if self.config.audio_transport == 'audiosocket' and self.config.downstream_mode == 'stream':
                     await self._send_test_tone_over_socket(conn_id)
                 else:
                     await self.ari_client.play_media(channel_id, "sound:demo-congrats")
@@ -421,8 +423,8 @@ class Engine:
             # Handle audio data from the provider - now we need to play it back
             audio_data = event.get("data")
             if audio_data:
-                # Prefer streaming over AudioSocket when transport is audiosocket
-                if self.config.audio_transport == 'audiosocket':
+                # Prefer streaming over AudioSocket only when explicitly enabled
+                if self.config.audio_transport == 'audiosocket' and self.config.downstream_mode == 'stream':
                     for channel_id, call_data in self.active_calls.items():
                         conn_id = self.channel_to_conn.get(channel_id)
                         if not conn_id:
@@ -450,7 +452,7 @@ class Engine:
                             logger.debug("Error streaming audio over AudioSocket; falling back to ARI", exc_info=True)
                             await self.ari_client.play_audio_response(channel_id, audio_data)
                 else:
-                    # Legacy: file-based playback via ARI
+                    # File-based playback via ARI (default path)
                     for channel_id, call_data in self.active_calls.items():
                         await self.ari_client.play_audio_response(channel_id, audio_data)
                         logger.debug(f"Sent {len(audio_data)} bytes of audio to call channel {channel_id}")
@@ -523,42 +525,72 @@ class Engine:
         channel_id = event_data.get('channel', {}).get('id')
         await self._cleanup_call(channel_id)
 
+    async def _handle_channel_destroyed(self, event_data: dict):
+        """Handle a channel being destroyed (caller hung up)."""
+        channel_id = event_data.get('channel', {}).get('id')
+        cause = event_data.get('cause', 'unknown')
+        cause_txt = event_data.get('cause_txt', 'unknown')
+        
+        logger.info("Channel destroyed event received", 
+                   channel_id=channel_id, 
+                   cause=cause, 
+                   cause_txt=cause_txt)
+        
+        # Immediately remove from active calls to prevent playback attempts
+        if channel_id in self.active_calls:
+            logger.debug("Channel was active - cleaning up immediately", channel_id=channel_id)
+            await self._cleanup_call(channel_id)
+        else:
+            logger.debug("Channel was not in active calls", channel_id=channel_id)
+
     async def _cleanup_call(self, channel_id: str):
         """Cleanup resources associated with a call."""
+        logger.debug("Starting call cleanup", channel_id=channel_id)
+        
         if channel_id in self.active_calls:
             call_data = self.active_calls[channel_id]
+            logger.debug("Call found in active calls", channel_id=channel_id, call_data_keys=list(call_data.keys()))
+            
             provider = call_data.get("provider")
             if provider:
+                logger.debug("Stopping provider session", channel_id=channel_id)
                 await provider.stop_session()
+                
             # Close bound AudioSocket connection if any
             conn_id = self.channel_to_conn.pop(channel_id, None)
             if conn_id:
+                logger.debug("Closing AudioSocket connection", channel_id=channel_id, conn_id=conn_id)
                 self.conn_to_channel.pop(conn_id, None)
                 if hasattr(self, 'audiosocket_server') and self.audiosocket_server:
                     try:
                         await self.audiosocket_server.close_connection(conn_id)
+                        logger.debug("AudioSocket connection closed", conn_id=conn_id)
                     except Exception:
                         logger.debug("Error closing AudioSocket connection", conn_id=conn_id, exc_info=True)
             
             # Stop snoop channel
             if self.config.audio_transport != "audiosocket":
+                logger.debug("Stopping audio snoop", channel_id=channel_id)
                 await self.ari_client.stop_audio_snoop(channel_id)
             
             # Clean up bridge if it exists
             bridge_id = call_data.get("bridge_id")
             if bridge_id:
+                logger.debug("Destroying bridge", channel_id=channel_id, bridge_id=bridge_id)
                 try:
                     await self.ari_client.send_command("DELETE", f"bridges/{bridge_id}")
-                    logger.debug("Bridge destroyed", bridge_id=bridge_id)
+                    logger.debug("Bridge destroyed successfully", bridge_id=bridge_id)
                 except Exception as e:
                     logger.warning("Failed to destroy bridge", bridge_id=bridge_id, error=str(e))
             
             # Clean up any remaining audio files for this call
+            logger.debug("Cleaning up audio files", channel_id=channel_id)
             await self.ari_client.cleanup_call_files(channel_id)
             
             del self.active_calls[channel_id]
-            logger.debug("Call resources cleaned up", channel_id=channel_id)
+            logger.info("Call resources cleaned up successfully", channel_id=channel_id)
         else:
+            logger.debug("Channel not found in active calls", channel_id=channel_id)
             # Check if this is a snoop channel trying to clean up
             if channel_id.startswith("snoop_"):
                 logger.debug("Snoop channel cleanup attempted for non-active call", channel_id=channel_id)
