@@ -47,12 +47,19 @@ class AudioSocketServer:
             "writer": writer,
             "peer": peer,
             # AudioSocket protocol typically sends a text header first; parse once
-            "header_pending": True,
+            "header_pending": False,
             "header_buf": bytearray(),
-            "format": None,   # e.g., 'ulaw' or 'slin16'
-            "rate": 8000,     # default sample rate
+            "format": 'ulaw',
+            "rate": 8000,
         }
         logger.info("AudioSocket connection accepted", peer=peer, conn_id=conn_id)
+        # Send protocol header to Asterisk to declare downstream format
+        try:
+            header = b"AudioSocket/1.0\r\nFormat: ulaw@8000\r\n\r\n"
+            writer.write(header)
+            await writer.drain()
+        except Exception:
+            logger.debug("Error sending AudioSocket header", exc_info=True)
         # Announce new connection for assignment by engine
         try:
             self._new_conn_queue.put_nowait(conn_id)
@@ -72,64 +79,7 @@ class AudioSocketServer:
                 if self.on_audio:
                     try:
                         conn = self._connections.get(conn_id)
-                        if conn and conn.get("header_pending"):
-                            # Accumulate until we detect header terminator (\r\n\r\n or \n\n)
-                            buf: bytearray = conn["header_buf"]
-                            buf.extend(data)
-                            raw = bytes(buf)
-                            # Find header end
-                            end = -1
-                            for delim in (b"\r\n\r\n", b"\n\n"):
-                                idx = raw.find(delim)
-                                if idx != -1:
-                                    end = idx + len(delim)
-                                    break
-                            if end != -1:
-                                # Drop header and forward remainder
-                                header_bytes = raw[:end]
-                                payload = raw[end:]
-                                # Parse header for format if available
-                                try:
-                                    header_text = header_bytes.decode(errors='ignore')
-                                    # Look for a line like: Format: slin16@8000 or ulaw@8000
-                                    fmt = None
-                                    rate = 8000
-                                    for line in header_text.splitlines():
-                                        if 'Format:' in line or 'format' in line:
-                                            _, val = line.split(':', 1)
-                                            val = val.strip()
-                                            if '@' in val:
-                                                fmt_part, rate_part = val.split('@', 1)
-                                                fmt = fmt_part.strip().lower()
-                                                try:
-                                                    rate = int(rate_part.strip())
-                                                except Exception:
-                                                    rate = 8000
-                                            else:
-                                                fmt = val.strip().lower()
-                                            break
-                                    if not fmt:
-                                        # Best-effort guess based on content
-                                        fmt = 'ulaw'
-                                    conn["format"] = fmt
-                                    conn["rate"] = rate
-                                except Exception:
-                                    # Default
-                                    conn["format"] = conn.get("format") or 'ulaw'
-                                    conn["rate"] = conn.get("rate") or 8000
-                                conn["header_pending"] = False
-                                conn["header_buf"] = bytearray()  # free
-                                if payload:
-                                    self.on_audio(conn_id, payload)
-                                continue
-                            # Safety: if header grows too large, assume no header and pass through
-                            if len(raw) > 2048:
-                                conn["header_pending"] = False
-                                conn["header_buf"] = bytearray()
-                                self.on_audio(conn_id, raw)
-                            # else keep accumulating
-                        else:
-                            self.on_audio(conn_id, data)
+                        self.on_audio(conn_id, data)
                     except Exception:
                         # Non-fatal
                         logger.debug("on_audio handler error", exc_info=True)
