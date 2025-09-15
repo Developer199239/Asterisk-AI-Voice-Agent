@@ -40,6 +40,8 @@ class Engine:
         self.audio_buffers: Dict[str, bytes] = {}
         self.buffer_size = 1600  # 200ms of audio at 8kHz (1600 bytes of ulaw)
         self.audiosocket_server: Any = None
+        # Snoop channel tracking for AudioSocket + ARI integration
+        self.snoop_channels: Dict[str, str] = {}
 
         # Event handlers
         self.ari_client.on_event("StasisStart", self._handle_stasis_start)
@@ -169,6 +171,23 @@ class Engine:
         
         try:
             await self.ari_client.answer_channel(channel_id)
+
+            # Create snoop channel for AudioSocket + ARI integration
+            try:
+                snoop_channel = await self.ari_client.create_snoop_channel(
+                    channel_id=channel_id,
+                    snoop_id=f"snoop-{channel_id}",
+                    spy="whisper",
+                    app=self.config.asterisk.app_name
+                )
+                self.snoop_channels[channel_id] = snoop_channel.id
+                logger.info("Created snoop channel for AudioSocket integration", 
+                           channel_id=channel_id, snoop_channel_id=snoop_channel.id)
+            except Exception as e:
+                logger.error("Failed to create snoop channel", 
+                           channel_id=channel_id, error=str(e), exc_info=True)
+                await self._cleanup_call(channel_id)
+                return
 
             if self.config.audio_transport == "audiosocket":
                 if audiosocket_uuid:
@@ -606,11 +625,11 @@ class Engine:
                                 logger.debug("Streamed provider audio over AudioSocket", channel_id=channel_id, bytes=len(out_bytes), fmt=fmt, rate=rate)
                             except Exception:
                                 logger.debug("Error streaming audio over AudioSocket; falling back to ARI", exc_info=True)
-                                await self.ari_client.play_audio_response(channel_id, audio_data)
+                                await self._play_audio_via_snoop(channel_id, audio_data)
                     else:
                         # File-based playback via ARI (default path)
                         for channel_id, call_data in self.active_calls.items():
-                            await self.ari_client.play_audio_response(channel_id, audio_data)
+                            await self._play_audio_via_snoop(channel_id, audio_data)
                             logger.debug(f"Sent {len(audio_data)} bytes of audio to call channel {channel_id}")
                             
                             # Update conversation state after playing response
@@ -757,6 +776,18 @@ class Engine:
                 except Exception as e:
                     logger.warning("Failed to destroy bridge", bridge_id=bridge_id, error=str(e))
             
+            # Clean up snoop channel if it exists
+            snoop_channel_id = self.snoop_channels.pop(channel_id, None)
+            if snoop_channel_id:
+                logger.debug("Hanging up snoop channel", channel_id=channel_id, snoop_channel_id=snoop_channel_id)
+                try:
+                    await self.ari_client.hangup_channel(snoop_channel_id)
+                    logger.debug("Snoop channel hung up successfully", snoop_channel_id=snoop_channel_id)
+                except Exception as e:
+                    logger.warning("Failed to hang up snoop channel", 
+                                 snoop_channel_id=snoop_channel_id, 
+                                 error=str(e))
+            
             # Clean up any remaining audio files for this call
             logger.debug("Cleaning up audio files", channel_id=channel_id)
             await self.ari_client.cleanup_call_files(channel_id)
@@ -821,6 +852,30 @@ class Engine:
             # For now, we rely on hanging up or answering to stop it.
         except Exception as e:
             logger.error("Error playing ring tone", channel_id=channel_id, exc_info=True)
+
+    async def _play_audio_via_snoop(self, channel_id: str, audio_data: bytes):
+        """Play audio via snoop channel to avoid interrupting AudioSocket capture."""
+        snoop_channel_id = self.snoop_channels.get(channel_id)
+        if not snoop_channel_id:
+            logger.error("No snoop channel found for playback", channel_id=channel_id)
+            # Fallback to direct channel playback
+            await self.ari_client.play_audio_response(channel_id, audio_data)
+            return
+
+        logger.info("Playing audio via snoop channel", 
+                   channel_id=channel_id, 
+                   snoop_channel_id=snoop_channel_id,
+                   audio_size=len(audio_data))
+        
+        try:
+            await self.ari_client.play_audio_response(snoop_channel_id, audio_data)
+        except Exception as e:
+            logger.error("Failed to play audio via snoop channel, falling back to direct playback",
+                        channel_id=channel_id, 
+                        snoop_channel_id=snoop_channel_id,
+                        error=str(e), exc_info=True)
+            # Fallback to direct channel playback
+            await self.ari_client.play_audio_response(channel_id, audio_data)
 
 
 async def main():
