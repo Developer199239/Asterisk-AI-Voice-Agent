@@ -86,6 +86,18 @@ class LocalAIServer:
                     # Send the greeting audio back as binary data
                     await websocket.send(audio_response)
                     logging.info(f"Sent greeting audio for call {call_id}")
+                elif data.get("type") == "timeout_greeting":
+                    # Handle timeout greeting message - generate TTS for "Are you still there?"
+                    timeout_text = data.get("message", "Are you still there? I'm here and ready to help.")
+                    call_id = data.get("call_id", "unknown")
+                    logging.info(f"Processing timeout greeting for call {call_id}: {timeout_text}")
+                    
+                    # Generate TTS audio for the timeout greeting
+                    audio_response = await self.process_tts(timeout_text)
+                    
+                    # Send the timeout greeting audio back as binary data
+                    await websocket.send(audio_response)
+                    logging.info(f"Sent timeout greeting audio for call {call_id}")
                 else:
                     logging.warning(f"Unknown message type: {data.get('type')}")
         except Exception as e:

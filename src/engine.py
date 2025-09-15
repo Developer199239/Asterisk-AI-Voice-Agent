@@ -384,51 +384,129 @@ class Engine:
             logger.error("Error processing audio frame", error=str(e), exc_info=True)
 
     async def _handle_conversation_audio(self, channel_id: str, audio_data: bytes, call_data: dict, provider):
-        """Handle audio during conversation phase with buffering and silence detection."""
+        """Handle audio during conversation phase with VAD and timeout detection."""
         try:
             # Initialize audio buffer if not exists
             if 'audio_buffer' not in call_data:
                 call_data['audio_buffer'] = b''
                 call_data['last_audio_time'] = asyncio.get_event_loop().time()
                 call_data['silence_start_time'] = None
+                call_data['timeout_task'] = None
             
-            # Add audio to buffer
-            call_data['audio_buffer'] += audio_data
-            call_data['last_audio_time'] = asyncio.get_event_loop().time()
-            
-            # Simple silence detection: if we have enough audio (2 seconds worth) or 3 seconds of silence
             current_time = asyncio.get_event_loop().time()
-            buffer_duration = len(call_data['audio_buffer']) / 1000  # Rough estimate: 1000 bytes per second for ulaw@8kHz
             
-            # Send audio to provider if we have enough (2 seconds) or if we've been silent for 3 seconds
-            should_send = False
-            if buffer_duration >= 2.0:  # 2 seconds of audio
-                should_send = True
-                logger.debug("Sending audio: buffer duration reached", channel_id=channel_id, duration=buffer_duration)
-            elif current_time - call_data['last_audio_time'] >= 3.0:  # 3 seconds of silence
-                should_send = True
-                logger.debug("Sending audio: silence timeout reached", channel_id=channel_id, silence_duration=current_time - call_data['last_audio_time'])
+            # Simple VAD: check audio energy level
+            has_voice = self._detect_voice_activity(audio_data)
             
-            if should_send and call_data['audio_buffer']:
-                # Send buffered audio to provider for STT→LLM→TTS processing
-                logger.info("Sending buffered audio to provider for conversation", 
-                           channel_id=channel_id, 
-                           buffer_size=len(call_data['audio_buffer']),
-                           duration=buffer_duration)
-                
-                await provider.send_audio(call_data['audio_buffer'])
-                
-                # Clear buffer and reset timing
-                call_data['audio_buffer'] = b''
+            if has_voice:
+                # Voice detected - add to buffer and update timing
+                call_data['audio_buffer'] += audio_data
                 call_data['last_audio_time'] = current_time
                 call_data['silence_start_time'] = None
                 
-                # Change state to processing while we wait for response
-                call_data['conversation_state'] = 'processing'
-                logger.debug("Changed conversation state to processing", channel_id=channel_id)
+                # Cancel any existing timeout task
+                if call_data.get('timeout_task') and not call_data['timeout_task'].done():
+                    call_data['timeout_task'].cancel()
+                
+                # Start new timeout task for silence detection
+                call_data['timeout_task'] = asyncio.create_task(
+                    self._handle_silence_timeout(channel_id, call_data, provider)
+                )
+                
+                logger.debug("Voice detected, buffering audio", channel_id=channel_id, buffer_size=len(call_data['audio_buffer']))
+            else:
+                # No voice detected - update silence timing
+                if call_data['silence_start_time'] is None:
+                    call_data['silence_start_time'] = current_time
+                
+                # If we have buffered audio and been silent for 1 second, send it
+                if call_data['audio_buffer'] and (current_time - call_data['silence_start_time']) >= 1.0:
+                    await self._send_buffered_audio(channel_id, call_data, provider)
             
         except Exception as e:
             logger.error("Error handling conversation audio", channel_id=channel_id, error=str(e), exc_info=True)
+
+    def _detect_voice_activity(self, audio_data: bytes) -> bool:
+        """Simple VAD based on audio energy level."""
+        try:
+            import audioop
+            
+            # Convert ulaw to linear for energy calculation
+            linear_data = audioop.ulaw2lin(audio_data, 2)
+            
+            # Calculate RMS (Root Mean Square) energy
+            rms = audioop.rms(linear_data, 2)
+            
+            # Simple threshold-based VAD (adjust threshold as needed)
+            voice_threshold = 500  # This may need tuning based on actual audio levels
+            
+            return rms > voice_threshold
+        except Exception as e:
+            logger.error("Error in VAD detection", error=str(e), exc_info=True)
+            # Fallback: assume voice if we can't detect
+            return True
+
+    async def _handle_silence_timeout(self, channel_id: str, call_data: dict, provider):
+        """Handle silence timeout - play 'Are you still there?' greeting."""
+        try:
+            # Wait for 10 seconds of silence
+            await asyncio.sleep(10.0)
+            
+            # Check if we're still in listening state and have been silent
+            if (call_data.get('conversation_state') == 'listening' and 
+                call_data.get('silence_start_time') and 
+                call_data['audio_buffer']):
+                
+                logger.info("Silence timeout reached, playing 'Are you still there?'", channel_id=channel_id)
+                
+                # Change state to processing
+                call_data['conversation_state'] = 'processing'
+                
+                # Send timeout greeting to provider
+                timeout_message = {
+                    "type": "timeout_greeting",
+                    "call_id": channel_id,
+                    "message": "Are you still there? I'm here and ready to help."
+                }
+                
+                if hasattr(provider, 'websocket') and provider.websocket:
+                    import json
+                    await provider.websocket.send(json.dumps(timeout_message))
+                    logger.info("Sent timeout greeting to Local AI Server", call_id=channel_id)
+                
+        except asyncio.CancelledError:
+            # Timeout was cancelled (voice detected), this is normal
+            logger.debug("Silence timeout cancelled", channel_id=channel_id)
+        except Exception as e:
+            logger.error("Error in silence timeout handler", channel_id=channel_id, error=str(e), exc_info=True)
+
+    async def _send_buffered_audio(self, channel_id: str, call_data: dict, provider):
+        """Send buffered audio to provider for processing."""
+        try:
+            if not call_data['audio_buffer']:
+                return
+                
+            logger.info("Sending buffered audio to provider for conversation", 
+                       channel_id=channel_id, 
+                       buffer_size=len(call_data['audio_buffer']))
+            
+            await provider.send_audio(call_data['audio_buffer'])
+            
+            # Clear buffer and reset timing
+            call_data['audio_buffer'] = b''
+            call_data['last_audio_time'] = asyncio.get_event_loop().time()
+            call_data['silence_start_time'] = None
+            
+            # Cancel timeout task
+            if call_data.get('timeout_task') and not call_data['timeout_task'].done():
+                call_data['timeout_task'].cancel()
+            
+            # Change state to processing while we wait for response
+            call_data['conversation_state'] = 'processing'
+            logger.debug("Changed conversation state to processing", channel_id=channel_id)
+            
+        except Exception as e:
+            logger.error("Error sending buffered audio", channel_id=channel_id, error=str(e), exc_info=True)
 
     async def _handle_dtmf_received(self, event_data: dict):
         """Handle DTMF events from channels."""
@@ -463,62 +541,66 @@ class Engine:
 
     async def on_provider_event(self, event: Dict[str, Any]):
         """Callback for providers to send events back to the engine."""
-        event_type = event.get("type")
-        
-        if event_type == "AgentAudio":
-            # Handle audio data from the provider - now we need to play it back
-            audio_data = event.get("data")
-            if audio_data:
-                # Prefer streaming over AudioSocket only when explicitly enabled
-                if self.config.audio_transport == 'audiosocket' and self.config.downstream_mode == 'stream':
-                    for channel_id, call_data in self.active_calls.items():
-                        conn_id = self.channel_to_conn.get(channel_id)
-                        if not conn_id:
-                            continue
-                        # Determine negotiated format
-                        fmt = 'ulaw'
-                        rate = 8000
-                        try:
-                            info = self.audiosocket_server.get_connection_info(conn_id)
-                            if info.get('format'):
-                                fmt = info['format']
-                            if info.get('rate'):
-                                rate = int(info['rate'])
-                        except Exception:
-                            pass
-                        try:
-                            out_bytes = audio_data
-                            if fmt.startswith('slin'):
-                                # Convert ulaw->linear16
-                                out_bytes = audioop.ulaw2lin(audio_data, 2)
-                            # Send downstream over socket
-                            await self.audiosocket_server.send_audio(conn_id, out_bytes)
-                            logger.debug("Streamed provider audio over AudioSocket", channel_id=channel_id, bytes=len(out_bytes), fmt=fmt, rate=rate)
-                        except Exception:
-                            logger.debug("Error streaming audio over AudioSocket; falling back to ARI", exc_info=True)
+        try:
+            event_type = event.get("type")
+            logger.debug("Received provider event", event_type=event_type, event_keys=list(event.keys()))
+            
+            if event_type == "AgentAudio":
+                # Handle audio data from the provider - now we need to play it back
+                audio_data = event.get("data")
+                if audio_data:
+                    # Prefer streaming over AudioSocket only when explicitly enabled
+                    if self.config.audio_transport == 'audiosocket' and self.config.downstream_mode == 'stream':
+                        for channel_id, call_data in self.active_calls.items():
+                            conn_id = self.channel_to_conn.get(channel_id)
+                            if not conn_id:
+                                continue
+                            # Determine negotiated format
+                            fmt = 'ulaw'
+                            rate = 8000
+                            try:
+                                info = self.audiosocket_server.get_connection_info(conn_id)
+                                if info.get('format'):
+                                    fmt = info['format']
+                                if info.get('rate'):
+                                    rate = int(info['rate'])
+                            except Exception:
+                                pass
+                            try:
+                                out_bytes = audio_data
+                                if fmt.startswith('slin'):
+                                    # Convert ulaw->linear16
+                                    out_bytes = audioop.ulaw2lin(audio_data, 2)
+                                # Send downstream over socket
+                                await self.audiosocket_server.send_audio(conn_id, out_bytes)
+                                logger.debug("Streamed provider audio over AudioSocket", channel_id=channel_id, bytes=len(out_bytes), fmt=fmt, rate=rate)
+                            except Exception:
+                                logger.debug("Error streaming audio over AudioSocket; falling back to ARI", exc_info=True)
+                                await self.ari_client.play_audio_response(channel_id, audio_data)
+                    else:
+                        # File-based playback via ARI (default path)
+                        for channel_id, call_data in self.active_calls.items():
                             await self.ari_client.play_audio_response(channel_id, audio_data)
-                else:
-                    # File-based playback via ARI (default path)
-                    for channel_id, call_data in self.active_calls.items():
-                        await self.ari_client.play_audio_response(channel_id, audio_data)
-                        logger.debug(f"Sent {len(audio_data)} bytes of audio to call channel {channel_id}")
-                        
-                        # Update conversation state after playing response
-                        conversation_state = call_data.get('conversation_state')
-                        if conversation_state == 'greeting':
-                            # First response after greeting - transition to listening
-                            call_data['conversation_state'] = 'listening'
-                            logger.info("Greeting completed, now listening for conversation", channel_id=channel_id)
-                        elif conversation_state == 'processing':
-                            # Response to user input - transition back to listening
-                            call_data['conversation_state'] = 'listening'
-                            logger.info("Response played, listening for next user input", channel_id=channel_id)
-        elif event_type == "Transcription":
-            # Handle transcription data
-            text = event.get("text", "")
-            logger.info(f"Transcription: {text}")
-        else:
-            logger.debug(f"Unhandled provider event: {event_type}")
+                            logger.debug(f"Sent {len(audio_data)} bytes of audio to call channel {channel_id}")
+                            
+                            # Update conversation state after playing response
+                            conversation_state = call_data.get('conversation_state')
+                            if conversation_state == 'greeting':
+                                # First response after greeting - transition to listening
+                                call_data['conversation_state'] = 'listening'
+                                logger.info("Greeting completed, now listening for conversation", channel_id=channel_id)
+                            elif conversation_state == 'processing':
+                                # Response to user input - transition back to listening
+                                call_data['conversation_state'] = 'listening'
+                                logger.info("Response played, listening for next user input", channel_id=channel_id)
+            elif event_type == "Transcription":
+                # Handle transcription data
+                text = event.get("text", "")
+                logger.info(f"Transcription: {text}")
+            else:
+                logger.debug(f"Unhandled provider event: {event_type}")
+        except Exception as e:
+            logger.error("Error in provider event handler", event_type=event.get("type"), error=str(e), exc_info=True)
 
     async def _play_audio_to_channel(self, channel_id: str, audio_data: bytes):
         """Convert audio data to a temp WAV file and play it to the channel."""
