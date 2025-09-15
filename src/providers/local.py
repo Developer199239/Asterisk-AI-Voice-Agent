@@ -21,6 +21,8 @@ class LocalProvider(AIProviderInterface):
         self.websocket: Optional[websockets.WebSocketClientProtocol] = None
         self.ws_url = "ws://127.0.0.1:8765"
         self._listener_task: Optional[asyncio.Task] = None
+        self._sender_task: Optional[asyncio.Task] = None
+        self._send_queue: asyncio.Queue = asyncio.Queue(maxsize=200)
         self._active_call_id: Optional[str] = None
         self.input_mode: str = 'mulaw8k'  # or 'pcm16_8k'
 
@@ -28,51 +30,99 @@ class LocalProvider(AIProviderInterface):
     def supported_codecs(self) -> List[str]:
         return ["ulaw"]
 
+    async def _connect_ws(self):
+        # Use conservative client settings; server will drive pings if needed
+        return await websockets.connect(
+            self.ws_url,
+            ping_interval=None,         # disable client pings to avoid false timeouts
+            ping_timeout=None,
+            close_timeout=10,
+            max_size=None
+        )
+
+    async def _reconnect(self):
+        backoff = [1, 2, 5, 10]
+        for delay in backoff + [10, 10, 10]:
+            try:
+                logger.info("Reconnecting to Local AI Server...", url=self.ws_url, delay=delay)
+                self.websocket = await self._connect_ws()
+                logger.info("✅ Reconnected to Local AI Server.")
+                # Restart listener and sender loops
+                if self._listener_task is None or self._listener_task.done():
+                    self._listener_task = asyncio.create_task(self._receive_loop())
+                if self._sender_task is None or self._sender_task.done():
+                    self._sender_task = asyncio.create_task(self._send_loop())
+                return True
+            except Exception:
+                logger.warning("Reconnect attempt failed", exc_info=True)
+                await asyncio.sleep(delay)
+        return False
+
     async def start_session(self, call_id: str):
         try:
-            # Tune websocket keepalives to avoid ping timeouts under load
-            ping_interval = 20
-            ping_timeout = 20
-            close_timeout = 10
-            logger.info("Connecting to Local AI Server...", url=self.ws_url,
-                        ping_interval=ping_interval, ping_timeout=ping_timeout, close_timeout=close_timeout)
-            self.websocket = await websockets.connect(
-                self.ws_url,
-                ping_interval=ping_interval,
-                ping_timeout=ping_timeout,
-                close_timeout=close_timeout,
-                max_size=None
-            )
+            logger.info("Connecting to Local AI Server...", url=self.ws_url)
+            self.websocket = await self._connect_ws()
             logger.info("✅ Successfully connected to Local AI Server.")
             self._active_call_id = call_id
             self._listener_task = asyncio.create_task(self._receive_loop())
+            self._sender_task = asyncio.create_task(self._send_loop())
         except Exception:
             logger.error("Failed to connect to Local AI Server", exc_info=True)
             raise
 
     async def send_audio(self, audio_chunk: bytes):
-        if self.websocket:
-            try:
-                # Convert upstream to PCM16@16000 for the local server STT
-                import audioop
-                if self.input_mode == 'pcm16_8k':
-                    pcm8k = audio_chunk
-                else:
-                    pcm8k = audioop.ulaw2lin(audio_chunk, 2)
-                pcm16k, _ = audioop.ratecv(pcm8k, 2, 1, 8000, 16000, None)
+        # Enqueue for sender loop; drop if queue is full to avoid backpressure explosions
+        try:
+            await self._send_queue.put(audio_chunk)
+        except Exception:
+            logger.debug("Send queue put failed", exc_info=True)
 
-                audio_message = {
-                    "type": "audio",
-                    "data": base64.b64encode(pcm16k).decode('utf-8')
-                }
-                await self.websocket.send(json.dumps(audio_message))
-                logger.debug("WS send ok", in_bytes=len(audio_chunk), pcm8k=len(pcm8k), pcm16k=len(pcm16k))
-            except websockets.exceptions.ConnectionClosed as e:
-                logger.warning("WebSocket connection closed during audio send", code=e.code, reason=e.reason)
-                raise
-            except Exception as e:
-                logger.error("Error converting/sending audio to Local AI Server", error=str(e), exc_info=True)
-                raise
+    async def _send_loop(self):
+        BATCH_MS = 20  # send cadence ~50fps
+        while True:
+            try:
+                # Wait for first chunk
+                chunk = await self._send_queue.get()
+                if chunk is None:
+                    continue
+                # Coalesce additional chunks available now (non-blocking)
+                batch = [chunk]
+                try:
+                    while True:
+                        batch.append(self._send_queue.get_nowait())
+                except asyncio.QueueEmpty:
+                    pass
+
+                # Convert and send one aggregated message
+                import audioop
+                # Concatenate at 8k then resample once
+                if self.input_mode == 'pcm16_8k':
+                    pcm8k = b"".join(batch)
+                else:
+                    pcm8k = b"".join(audioop.ulaw2lin(b, 2) for b in batch)
+                pcm16k, _ = audioop.ratecv(pcm8k, 2, 1, 8000, 16000, None)
+                msg = json.dumps({"type": "audio", "data": base64.b64encode(pcm16k).decode('utf-8')})
+                try:
+                    await self.websocket.send(msg)
+                    logger.debug("WS batch send", frames=len(batch), in_bytes=sum(len(b) for b in batch), pcm8k=len(pcm8k), pcm16k=len(pcm16k))
+                except websockets.exceptions.ConnectionClosed as e:
+                    logger.warning("WebSocket closed during send, attempting reconnect", code=getattr(e, 'code', None), reason=getattr(e, 'reason', None))
+                    ok = await self._reconnect()
+                    if ok:
+                        try:
+                            await self.websocket.send(msg)
+                            logger.debug("WS resend after reconnect ok", frames=len(batch))
+                        except Exception:
+                            logger.error("WS resend failed after reconnect", exc_info=True)
+                except Exception:
+                    logger.error("WS send error", exc_info=True)
+                # Pace the loop
+                await asyncio.sleep(BATCH_MS / 1000.0)
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                logger.error("Sender loop error", exc_info=True)
+                await asyncio.sleep(0.1)
 
     def set_input_mode(self, mode: str):
         # mode: 'mulaw8k' or 'pcm16_8k'

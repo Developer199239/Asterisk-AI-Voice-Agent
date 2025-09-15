@@ -27,7 +27,7 @@ streaming:
   sample_rate_hz: 16000      # PCM16 sample rate for providers that require conversion
   chunk_duration_ms: 20      # Audio chunk size
   jitter_buffer_ms: 120      # Downstream jitter buffer target
-  keepalive_ms: 10000        # Gateway/provider heartbeat interval
+  keepalive_ms: 2000         # Gateway/provider heartbeat interval (reduced to keep AudioSocket alive)
   timeouts:
     provider_ms: 15000       # Provider operation timeout
     handshake_ms: 5000       # AudioSocket handshake timeout
