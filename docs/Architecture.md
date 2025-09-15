@@ -6,6 +6,37 @@ The Asterisk AI Voice Agent v3.0 is a **two-container, modular conversational AI
 
 Note: In the current release, downstream audio is delivered via file-based playback for maximum robustness. A full‑duplex streaming TTS path is planned as a next phase and will be gated by feature flags.
 
+## Recent Progress and Current State
+
+- AudioSocket capture via Local media‑fork is working end‑to‑end:
+  - Dialplan originates `Local/<uuid_ext>@ai-agent-media-fork/n`.
+  - Dialplan generates a canonical hyphenated UUID for the AudioSocket app and passes only `host:port` (no codec arg) to avoid port parsing issues on Asterisk 18.
+  - The Stasis app binds the accepted AudioSocket connection to the original caller channel using the `AUDIOSOCKET_UUID` varset from the dialplan.
+- Downstream playback is stable using bridge file playback; initial “demo‑congrats” and provider greeting confirmed audible.
+- Upstream codec alignment fixed:
+  - Asterisk delivers PCM16@8k over AudioSocket for this build.
+  - Engine now sets the Local provider upstream input mode to `pcm16_8k` on bind (and on headless accept), ensuring STT receives valid PCM16 and transcripts are produced.
+
+### Known Constraints
+
+- AudioSocket app on this Asterisk requires canonical UUID (36‑char with hyphens). Non‑canonical or newline‑tainted values are rejected.
+- The AudioSocket app on this build expects two arguments only: `UUID, host:port`. Supplying a third codec argument causes service resolution to fail.
+- A stale Stasis app (`standalone-local-test`) generates noisy “missed message” logs; removal/disable recommended.
+
+## Next Steps
+
+- Observability
+  - Add concise logging around inbound AudioSocket TLV framing (first chunk sizes, inferred format) and provider input mode decisions.
+  - Optional health endpoint from `ai-engine` reporting ARI status, AudioSocket listener, and provider readiness.
+- Robustness
+  - Guard binder path with additional sanity checks and timeouts; surface bind success/fail in logs.
+  - Handle websocket reconnects to `local-ai-server` with backoff; propagate status to engine logs.
+- Streaming TTS (feature‑flagged)
+  - Implement `downstream_mode=stream` to return agent audio over AudioSocket, with jitter buffer and barge‑in.
+  - Keep file fallback for reliability.
+- Cleanup
+  - Remove/disable the stale `standalone-local-test` Stasis app in Asterisk to reduce log clutter.
+
 ## Architecture Diagrams
 
 ### 1. AUDIOSOCKET CALL FLOW 🎯

@@ -315,6 +315,13 @@ class Engine:
                 provider = self.providers.get(provider_name)
                 if provider:
                     self.active_calls[channel_id] = {"provider": provider}
+            # Hint upstream audio format for providers: AudioSocket delivers PCM16@8k by default
+            try:
+                if provider and hasattr(provider, 'set_input_mode'):
+                    provider.set_input_mode('pcm16_8k')
+                    logger.info("Set provider upstream input mode", channel_id=channel_id, conn_id=conn_id, mode='pcm16_8k', provider=provider_name)
+            except Exception:
+                logger.debug("Could not set provider input mode on bind", channel_id=channel_id, conn_id=conn_id, exc_info=True)
             # One-time test playback to confirm audio path
             try:
                 # Only send over AudioSocket in streaming mode; otherwise use ARI demo tone
