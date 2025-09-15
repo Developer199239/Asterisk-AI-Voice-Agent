@@ -153,7 +153,8 @@ class Engine:
         )
         
         args = event.get('args', [])
-        provider_name = args[0] if args else self.config.default_provider
+        audiosocket_uuid = args[0] if args else None
+        provider_name = self.config.default_provider
         provider = self.providers.get(provider_name)
 
         if not provider:
@@ -167,7 +168,7 @@ class Engine:
             await self.ari_client.answer_channel(channel_id)
 
             if self.config.audio_transport == "audiosocket":
-                logger.info("Using AudioSocket for upstream capture; awaiting connection", channel_id=channel_id)
+                logger.info("Using AudioSocket for upstream capture; awaiting connection", channel_id=channel_id, audiosocket_uuid=audiosocket_uuid)
                 # First try immediate bind if a connection is already pending
                 conn_id: Optional[str] = None
                 if hasattr(self, 'audiosocket_server') and self.audiosocket_server:
