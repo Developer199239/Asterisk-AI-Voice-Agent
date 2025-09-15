@@ -153,8 +153,15 @@ class Engine:
         )
         
         args = event.get('args', [])
-        audiosocket_uuid = args[0] if args else None
-        provider_name = self.config.default_provider
+        # If args[0] looks like a UUID (contains hyphens), it's the AudioSocket UUID
+        # Otherwise, it's the provider name (legacy behavior)
+        if args and len(args[0]) > 30 and '-' in args[0]:
+            audiosocket_uuid = args[0]
+            provider_name = args[1] if len(args) > 1 else self.config.default_provider
+        else:
+            audiosocket_uuid = None
+            provider_name = args[0] if args else self.config.default_provider
+        
         provider = self.providers.get(provider_name)
 
         if not provider:
