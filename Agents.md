@@ -41,6 +41,54 @@ exten => s,1,NoOp(Starting AI Voice Agent with AudioSocket)
  same => n,Hangup()
 ```
 
+## Active Contexts & Usage (Server)
+- Entry context (`from-ai-agent`): hands call directly to `Stasis(asterisk-ai-voice-agent)`.
+- Media-fork context (`ai-agent-media-fork`): originated by the engine to start AudioSocket.
+  - Generates canonical UUID and calls `AudioSocket(UUID, host:port)`
+  - Sets `AUDIOSOCKET_UUID=${EXTEN}` to trigger engine binder to map the socket to the original caller channel.
+  - Minimal `s` extension keeps the Local ;1 leg alive.
+
+Current server snippet (working):
+```
+[from-ai-agent]
+exten => s,1,NoOp(Handing call directly to Stasis for AI processing)
+ same => n,Stasis(asterisk-ai-voice-agent)
+ same => n,Hangup()
+
+[ai-agent-media-fork]
+exten => _X.,1,NoOp(Local channel starting AudioSocket for ${EXTEN})
+ same => n,Answer()
+ same => n,Set(AUDIOSOCKET_HOST=127.0.0.1)
+ same => n,Set(AUDIOSOCKET_PORT=8090)
+ same => n,Set(AUDIOSOCKET_UUID=${EXTEN})
+ same => n,Set(AS_UUID_RAW=${SHELL(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen 2>/dev/null)})
+ same => n,Set(AS_UUID=${TOUPPER(${FILTER(0-9A-Fa-f-,${AS_UUID_RAW})})})
+ same => n,ExecIf($[${LEN(${AS_UUID})} != 36]?Set(AS_UUID=${TOUPPER(${FILTER(0-9A-Fa-f-,${SHELL(uuidgen 2>/dev/null)})})}))
+ same => n,NoOp(AS_UUID=${AS_UUID} LEN=${LEN(${AS_UUID})})
+ same => n,AudioSocket(${AS_UUID},${AUDIOSOCKET_HOST}:${AUDIOSOCKET_PORT})
+ same => n,Hangup()
+
+; keep ;1 leg alive
+exten => s,1,NoOp(Local)
+ same => n,Wait(60)
+ same => n,Hangup()
+```
+
+## Runtime Context — Quick Checks Before Each Test
+- Health: `curl http://127.0.0.1:15000/health` → `ari_connected`, `audiosocket_listening`, `active_calls`, providers’ readiness.
+- Engine logs (tail): `docker-compose logs -f ai-engine`
+  - Expect: `AudioSocket server listening`, `AudioSocket connection bound to channel`, `Set provider upstream input mode ... pcm16_8k`.
+  - First inbound chunks: `AudioSocket inbound chunk bytes=... first8=...`.
+- Asterisk logs:
+  - Confirm Local originate and `AudioSocket(UUID,127.0.0.1:8090)` (no parse errors).
+  - No `getaddrinfo(..., "8090,ulaw")` errors — use host:port only.
+
+## Next Moves — At A Glance
+- Two-way audio: Confirm transcripts appear in `local-ai-server` logs after you speak.
+  - If empty, verify engine shows `pcm16_8k` set and inbound chunk sizes align (~320 bytes typical for 20ms PCM16@8k).
+- Stability: Keepalive is enabled from engine to avoid AudioSocket idle timeouts.
+- Streaming phase: When ready, enable `downstream_mode=stream` (feature-flag) to return TTS over AudioSocket; keep file fallback.
+
 ## Common Commands
 - Build & run locally (both services): `docker-compose up -d --build`
 - Logs (engine): `docker-compose logs -f ai-engine`

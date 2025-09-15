@@ -50,6 +50,8 @@ class Engine:
         self.uuidext_to_channel: Dict[str, str] = {}
         # Debug counter for inbound AudioSocket audio frames per connection
         self._audio_rx_debug: Dict[str, int] = {}
+        # Keepalive tasks per AudioSocket connection
+        self._keepalive_tasks: Dict[str, asyncio.Task] = {}
         # Health server runner
         self._health_runner: Optional[web.AppRunner] = None
 
@@ -339,6 +341,17 @@ class Engine:
                     logger.info("Set provider upstream input mode", channel_id=channel_id, conn_id=conn_id, mode='pcm16_8k', provider=provider_name)
             except Exception:
                 logger.debug("Could not set provider input mode on bind", channel_id=channel_id, conn_id=conn_id, exc_info=True)
+
+            # Start AudioSocket keepalive task to prevent idle timeouts in Asterisk app
+            try:
+                if conn_id in self._keepalive_tasks:
+                    t = self._keepalive_tasks.pop(conn_id, None)
+                    if t and not t.done():
+                        t.cancel()
+                self._keepalive_tasks[conn_id] = asyncio.create_task(self._audiosocket_keepalive(conn_id))
+                logger.debug("Started AudioSocket keepalive", conn_id=conn_id)
+            except Exception:
+                logger.debug("Failed to start keepalive task", channel_id=channel_id, conn_id=conn_id, exc_info=True)
             # One-time test playback to confirm audio path
             try:
                 # Only send over AudioSocket in streaming mode; otherwise use ARI demo tone
@@ -469,6 +482,13 @@ class Engine:
                 if provider:
                     asyncio.get_event_loop().create_task(provider.stop_session())
                 logger.info("Headless session cleaned up", conn_id=conn_id)
+            # Cancel keepalive task if running
+            try:
+                t = self._keepalive_tasks.pop(conn_id, None)
+                if t and not t.done():
+                    t.cancel()
+            except Exception:
+                logger.debug("Keepalive cancel failed", conn_id=conn_id, exc_info=True)
         except Exception:
             logger.debug("Error cleaning up headless session", conn_id=conn_id, exc_info=True)
 
@@ -793,6 +813,31 @@ class Engine:
         await site.start()
         logger.info("Health endpoint started", host=os.getenv('HEALTH_HOST', '0.0.0.0'), port=os.getenv('HEALTH_PORT', '15000'))
 
+    async def _audiosocket_keepalive(self, conn_id: str):
+        """Periodically send a short PCM16@8k silence frame to keep AudioSocket alive."""
+        try:
+            try:
+                interval_ms = int(getattr(self.config.streaming, 'keepalive_ms', 10000))
+            except Exception:
+                interval_ms = 10000
+            # Prepare a 20ms silence frame at 8k mono, PCM16LE (320 bytes)
+            rate = 8000
+            chunk_ms = 20
+            samples = int(rate * (chunk_ms / 1000.0))
+            silence = b"\x00\x00" * samples
+            while True:
+                await asyncio.sleep(max(0.05, interval_ms / 1000.0))
+                try:
+                    if conn_id not in self.conn_to_channel and conn_id not in self.headless_sessions:
+                        break
+                    await self.audiosocket_server.send_audio(conn_id, silence)
+                except Exception:
+                    logger.debug("Keepalive send failed", conn_id=conn_id, exc_info=True)
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.debug("Keepalive task error", conn_id=conn_id, exc_info=True)
+
     async def on_provider_event(self, event: Dict[str, Any]):
         """Callback for providers to send events back to the engine."""
         try:
@@ -981,6 +1026,13 @@ class Engine:
             if conn_id:
                 logger.debug("Closing AudioSocket connection", channel_id=channel_id, conn_id=conn_id)
                 self.conn_to_channel.pop(conn_id, None)
+                # Cancel keepalive task early
+                try:
+                    t = self._keepalive_tasks.pop(conn_id, None)
+                    if t and not t.done():
+                        t.cancel()
+                except Exception:
+                    logger.debug("Keepalive cancel failed during cleanup", conn_id=conn_id, exc_info=True)
                 if hasattr(self, 'audiosocket_server') and self.audiosocket_server:
                     try:
                         await self.audiosocket_server.close_connection(conn_id)
