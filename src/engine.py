@@ -215,6 +215,9 @@ class Engine:
             await provider.start_session(channel_id)
             logger.debug("Provider session started successfully", channel_id=channel_id)
             
+            # Initialize conversation state
+            self.active_calls[channel_id]['conversation_state'] = 'greeting'
+            
             # Play initial greeting now that models are pre-loaded
             if hasattr(provider, 'play_initial_greeting'):
                 logger.debug("Playing initial greeting", channel_id=channel_id)
@@ -364,12 +367,68 @@ class Engine:
                 logger.debug("No provider found for active call")
                 return
 
-            # Forward audio data to the provider for STT processing
-            await provider.send_audio(audio_data)
-            logger.debug(f"Forwarded {len(audio_data)} bytes of audio to provider for channel {active_channel_id}")
+            # Check conversation state
+            conversation_state = call_data.get('conversation_state', 'greeting')
+            
+            if conversation_state == 'greeting':
+                # During greeting phase, ignore incoming audio
+                logger.debug("Ignoring audio during greeting phase", channel_id=active_channel_id)
+                return
+            elif conversation_state == 'listening':
+                # During listening phase, buffer audio for conversation
+                await self._handle_conversation_audio(active_channel_id, audio_data, call_data, provider)
+            else:
+                logger.debug("Unknown conversation state", state=conversation_state, channel_id=active_channel_id)
             
         except Exception as e:
             logger.error("Error processing audio frame", error=str(e), exc_info=True)
+
+    async def _handle_conversation_audio(self, channel_id: str, audio_data: bytes, call_data: dict, provider):
+        """Handle audio during conversation phase with buffering and silence detection."""
+        try:
+            # Initialize audio buffer if not exists
+            if 'audio_buffer' not in call_data:
+                call_data['audio_buffer'] = b''
+                call_data['last_audio_time'] = asyncio.get_event_loop().time()
+                call_data['silence_start_time'] = None
+            
+            # Add audio to buffer
+            call_data['audio_buffer'] += audio_data
+            call_data['last_audio_time'] = asyncio.get_event_loop().time()
+            
+            # Simple silence detection: if we have enough audio (2 seconds worth) or 3 seconds of silence
+            current_time = asyncio.get_event_loop().time()
+            buffer_duration = len(call_data['audio_buffer']) / 1000  # Rough estimate: 1000 bytes per second for ulaw@8kHz
+            
+            # Send audio to provider if we have enough (2 seconds) or if we've been silent for 3 seconds
+            should_send = False
+            if buffer_duration >= 2.0:  # 2 seconds of audio
+                should_send = True
+                logger.debug("Sending audio: buffer duration reached", channel_id=channel_id, duration=buffer_duration)
+            elif current_time - call_data['last_audio_time'] >= 3.0:  # 3 seconds of silence
+                should_send = True
+                logger.debug("Sending audio: silence timeout reached", channel_id=channel_id, silence_duration=current_time - call_data['last_audio_time'])
+            
+            if should_send and call_data['audio_buffer']:
+                # Send buffered audio to provider for STT→LLM→TTS processing
+                logger.info("Sending buffered audio to provider for conversation", 
+                           channel_id=channel_id, 
+                           buffer_size=len(call_data['audio_buffer']),
+                           duration=buffer_duration)
+                
+                await provider.send_audio(call_data['audio_buffer'])
+                
+                # Clear buffer and reset timing
+                call_data['audio_buffer'] = b''
+                call_data['last_audio_time'] = current_time
+                call_data['silence_start_time'] = None
+                
+                # Change state to processing while we wait for response
+                call_data['conversation_state'] = 'processing'
+                logger.debug("Changed conversation state to processing", channel_id=channel_id)
+            
+        except Exception as e:
+            logger.error("Error handling conversation audio", channel_id=channel_id, error=str(e), exc_info=True)
 
     async def _handle_dtmf_received(self, event_data: dict):
         """Handle DTMF events from channels."""
@@ -443,6 +502,17 @@ class Engine:
                     for channel_id, call_data in self.active_calls.items():
                         await self.ari_client.play_audio_response(channel_id, audio_data)
                         logger.debug(f"Sent {len(audio_data)} bytes of audio to call channel {channel_id}")
+                        
+                        # Update conversation state after playing response
+                        conversation_state = call_data.get('conversation_state')
+                        if conversation_state == 'greeting':
+                            # First response after greeting - transition to listening
+                            call_data['conversation_state'] = 'listening'
+                            logger.info("Greeting completed, now listening for conversation", channel_id=channel_id)
+                        elif conversation_state == 'processing':
+                            # Response to user input - transition back to listening
+                            call_data['conversation_state'] = 'listening'
+                            logger.info("Response played, listening for next user input", channel_id=channel_id)
         elif event_type == "Transcription":
             # Handle transcription data
             text = event.get("text", "")
@@ -570,8 +640,12 @@ class Engine:
             logger.debug("Cleaning up audio files", channel_id=channel_id)
             await self.ari_client.cleanup_call_files(channel_id)
             
-            del self.active_calls[channel_id]
-            logger.info("Call resources cleaned up successfully", channel_id=channel_id)
+            # Remove from active calls (with safety check for race conditions)
+            if channel_id in self.active_calls:
+                del self.active_calls[channel_id]
+                logger.info("Call resources cleaned up successfully", channel_id=channel_id)
+            else:
+                logger.debug("Channel already removed from active calls", channel_id=channel_id)
         else:
             logger.debug("Channel not found in active calls", channel_id=channel_id)
             logger.debug("No active call found for cleanup", channel_id=channel_id)
