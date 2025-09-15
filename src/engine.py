@@ -9,6 +9,7 @@ import base64
 from typing import Dict, Any, Optional
 
 from .ari_client import ARIClient
+from aiohttp import web
 from .config import AppConfig, load_config, DeepgramProviderConfig, LocalProviderConfig
 from .logging_config import get_logger, configure_logging
 from .providers.base import AIProviderInterface
@@ -47,6 +48,10 @@ class Engine:
         self.local_channels: Dict[str, str] = {}  # channel_id -> local_channel_id
         # Map our synthesized UUID extension to the real ARI caller channel id
         self.uuidext_to_channel: Dict[str, str] = {}
+        # Debug counter for inbound AudioSocket audio frames per connection
+        self._audio_rx_debug: Dict[str, int] = {}
+        # Health server runner
+        self._health_runner: Optional[web.AppRunner] = None
 
         # Event handlers
         self.ari_client.on_event("StasisStart", self._handle_stasis_start)
@@ -90,6 +95,12 @@ class Engine:
                                                        on_accept=self._on_audiosocket_accept,
                                                        on_close=self._on_audiosocket_close)
             asyncio.create_task(self.audiosocket_server.start())
+
+        # Start lightweight health endpoint
+        try:
+            asyncio.create_task(self._start_health_server())
+        except Exception:
+            logger.debug("Health server failed to start", exc_info=True)
         await self.ari_client.connect()
         asyncio.create_task(self.ari_client.start_listening())
         logger.info("Engine started and listening for calls.")
@@ -102,6 +113,12 @@ class Engine:
         # Stop AudioSocket server if running
         if hasattr(self, 'audiosocket_server') and self.audiosocket_server:
             await self.audiosocket_server.stop()
+        # Stop health server
+        try:
+            if self._health_runner:
+                await self._health_runner.cleanup()
+        except Exception:
+            logger.debug("Health server cleanup error", exc_info=True)
         # if self.pipeline: # This line is removed as per the edit hint
         #     await self.pipeline.stop()
         logger.info("Engine stopped.")
@@ -713,6 +730,19 @@ class Engine:
     def _on_audiosocket_audio(self, conn_id: str, audio_data: bytes):
         """Route inbound AudioSocket audio to the mapped provider for that connection."""
         try:
+            # Debug: log first few inbound chunks per connection to infer upstream format/flow
+            try:
+                count = self._audio_rx_debug.get(conn_id, 0) + 1
+                if count <= 8:
+                    preview = audio_data[:8]
+                    logger.debug("AudioSocket inbound chunk",
+                                 conn_id=conn_id,
+                                 bytes=len(audio_data),
+                                 first8=preview.hex(" "),
+                                 multiple_of_2=(len(audio_data) % 2 == 0))
+                self._audio_rx_debug[conn_id] = count
+            except Exception:
+                pass
             channel_id = self.conn_to_channel.get(conn_id)
             if channel_id:
                 call_data = self.active_calls.get(channel_id)
@@ -731,6 +761,37 @@ class Engine:
                     asyncio.create_task(provider.send_audio(audio_data))
         except Exception:
             logger.debug("Error routing AudioSocket audio", exc_info=True)
+
+    async def _start_health_server(self):
+        """Start a minimal health endpoint exposing engine status."""
+        async def handle_health(request):
+            try:
+                providers = {}
+                for name, prov in self.providers.items():
+                    ready = False
+                    try:
+                        if hasattr(prov, 'is_ready'):
+                            ready = bool(prov.is_ready())
+                    except Exception:
+                        ready = False
+                    providers[name] = {"ready": ready}
+                data = {
+                    "ari_connected": bool(self.ari_client and self.ari_client.running),
+                    "audiosocket_listening": bool(getattr(self, 'audiosocket_server', None) and getattr(self.audiosocket_server, '_server', None)),
+                    "active_calls": len(self.active_calls),
+                    "providers": providers,
+                }
+                return web.json_response(data)
+            except Exception:
+                return web.json_response({"error": "health handler failed"}, status=500)
+
+        app = web.Application()
+        app.router.add_get('/health', handle_health)
+        self._health_runner = web.AppRunner(app)
+        await self._health_runner.setup()
+        site = web.TCPSite(self._health_runner, host=os.getenv('HEALTH_HOST', '0.0.0.0'), port=int(os.getenv('HEALTH_PORT', '15000')))
+        await site.start()
+        logger.info("Health endpoint started", host=os.getenv('HEALTH_HOST', '0.0.0.0'), port=os.getenv('HEALTH_PORT', '15000'))
 
     async def on_provider_event(self, event: Dict[str, Any]):
         """Callback for providers to send events back to the engine."""

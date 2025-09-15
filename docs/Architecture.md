@@ -16,6 +16,18 @@ Note: In the current release, downstream audio is delivered via file-based playb
 - Upstream codec alignment fixed:
   - Asterisk delivers PCM16@8k over AudioSocket for this build.
   - Engine now sets the Local provider upstream input mode to `pcm16_8k` on bind (and on headless accept), ensuring STT receives valid PCM16 and transcripts are produced.
+  - Added lightweight inbound audio diagnostics (first chunk sizes/preview) to validate flow during bring‑up and troubleshooting.
+
+### Health Endpoint
+
+- A minimal health endpoint is available from the `ai-engine` (default `0.0.0.0:15000/health`). It reports:
+  - `ari_connected`: ARI WebSocket/HTTP status
+  - `audiosocket_listening`: whether the AudioSocket TCP server is active
+  - `active_calls`: number of tracked calls
+  - `providers`: readiness flags per provider
+  
+Configure via env:
+- `HEALTH_HOST` (default `0.0.0.0`), `HEALTH_PORT` (default `15000`).
 
 ### Known Constraints
 
