@@ -40,7 +40,6 @@ class ARIClient:
         self.http_session: Optional[aiohttp.ClientSession] = None
         self.running = False
         self.event_handlers: Dict[str, List[Callable]] = {}
-        self.active_snoops: Dict[str, str] = {}
         self.active_playbacks: Dict[str, str] = {}
         self.audio_frame_handler: Optional[Callable] = None
 
@@ -90,17 +89,12 @@ class ARIClient:
                     event_data = json.loads(message)
                     event_type = event_data.get("type")
                     
-                    # Handle audio frames from snoop channels
+                    # Handle audio frames from AudioSocket connections
                     if event_type == "ChannelAudioFrame":
                         channel = event_data.get('channel', {})
                         channel_id = channel.get('id')
-                        logger.debug("ChannelAudioFrame received", channel_id=channel_id, active_snoops=list(self.active_snoops.values()))
-                        # Check if this is a snoop channel we're monitoring
-                        if channel_id in self.active_snoops.values():
-                            logger.debug("Processing audio frame for snoop channel", channel_id=channel_id)
-                            asyncio.create_task(self._on_audio_frame(channel, event_data))
-                        else:
-                            logger.debug("Ignoring audio frame from non-snoop channel", channel_id=channel_id)
+                        logger.debug("ChannelAudioFrame received", channel_id=channel_id)
+                        asyncio.create_task(self._on_audio_frame(channel, event_data))
                     
                     # Handle other events
                     if event_type and event_type in self.event_handlers:
@@ -198,51 +192,6 @@ class ARIClient:
         logger.info("Playing media on channel", channel_id=channel_id, media_uri=media_uri)
         return await self.send_command("POST", f"channels/{channel_id}/play", data={"media": media_uri})
 
-    async def start_audio_snoop(self, channel_id: str, app_name: str):
-        """Creates a snoop channel to get a direct raw audio stream from Asterisk."""
-        try:
-            snoop_id = f"snoop_{channel_id}"
-            result = await self.send_command(
-                "POST",
-                f"channels/{channel_id}/snoop",
-                params={
-                    "app": app_name, 
-                    "snoop_id": snoop_id, 
-                    "spy": "in",
-                    "whisper": "none"
-                }
-            )
-            # ARI snoop command returns a channel object, not a status code
-            if result and result.get("id"):
-                # Store the actual snoop channel ID from ARI, not our generated snoop_id
-                actual_snoop_id = result.get("id")
-                self.active_snoops[channel_id] = actual_snoop_id
-                
-                # Set the snoop channel to use a specific audio format for better compatibility
-                try:
-                    # Set the snoop channel to use ulaw (8-bit mu-law 8kHz) format to match our TTS output
-                    await self.send_command("POST", f"channels/{actual_snoop_id}/setChannelVar", 
-                                          params={"variable": "CHANNEL(audionativeformat)", "value": "ulaw"})
-                    logger.debug("Set audio format for snoop channel", snoop_channel_id=actual_snoop_id)
-                except Exception as e:
-                    logger.warning("Failed to set audio format for snoop channel", snoop_channel_id=actual_snoop_id, error=str(e))
-                
-                # CRITICAL: Enable audio frame generation for the snoop channel
-                try:
-                    await self.send_command("POST", f"channels/{actual_snoop_id}/setChannelVar", 
-                                          params={"variable": "CHANNEL(audioframe)", "value": "true"})
-                    logger.debug("Enabled audio frame generation for snoop channel", snoop_channel_id=actual_snoop_id)
-                except Exception as e:
-                    logger.warning("Failed to enable audio frames for snoop channel", snoop_channel_id=actual_snoop_id, error=str(e))
-                
-                logger.info("Snoop channel created successfully", channel_id=channel_id, snoop_id=snoop_id, snoop_channel_id=actual_snoop_id)
-                return actual_snoop_id
-            else:
-                logger.error("Failed to create snoop channel", channel_id=channel_id, result=result)
-                return None
-        except Exception as e:
-            logger.error("Failed to create snoop channel", channel_id=channel_id, error=str(e), exc_info=True)
-            return None
 
     async def create_bridge(self, bridge_type: str = "mixing") -> Optional[str]:
         """Create a new bridge for channel mixing."""
@@ -284,6 +233,37 @@ class ARIClient:
                         bridge_id=bridge_id, 
                         channel_id=channel_id, 
                         error=str(e))
+            return False
+
+    async def create_audiosocket_connection(self, channel_id: str, audiosocket_uuid: str, host: str = "127.0.0.1", port: int = 8090) -> bool:
+        """Create AudioSocket connection via ARI after Stasis takes control."""
+        try:
+            # Set channel variables for AudioSocket
+            await self.send_command("POST", f"channels/{channel_id}/setChannelVar", 
+                                 params={"variable": "AUDIOSOCKET_UUID", "value": audiosocket_uuid})
+            await self.send_command("POST", f"channels/{channel_id}/setChannelVar", 
+                                 params={"variable": "AUDIOSOCKET_HOST", "value": host})
+            await self.send_command("POST", f"channels/{channel_id}/setChannelVar", 
+                                 params={"variable": "AUDIOSOCKET_PORT", "value": str(port)})
+            
+            # Execute AudioSocket application via ARI
+            # We need to create a new dialplan context that only has the AudioSocket command
+            await self.send_command("POST", f"channels/{channel_id}/continueInDialplan", 
+                                 params={"context": "audiosocket-only", "extension": "s", "priority": 1})
+            
+            logger.info("AudioSocket connection initiated via ARI", 
+                       channel_id=channel_id, 
+                       audiosocket_uuid=audiosocket_uuid,
+                       host=host, 
+                       port=port)
+            return True
+            
+        except Exception as e:
+            logger.error("Failed to create AudioSocket via ARI", 
+                        channel_id=channel_id, 
+                        audiosocket_uuid=audiosocket_uuid,
+                        error=str(e), 
+                        exc_info=True)
             return False
 
     async def play_audio_response(self, channel_id: str, audio_data: bytes):
@@ -419,21 +399,6 @@ class ARIClient:
         """Set the handler for incoming audio frames."""
         self.audio_frame_handler = handler
 
-    async def stop_audio_snoop(self, channel_id: str):
-        """Stop snooping on a channel."""
-        snoop_id = self.active_snoops.pop(channel_id, None)
-        if snoop_id:
-            try:
-                result = await self.send_command("DELETE", f"channels/{snoop_id}")
-                # Check if the command returned an error status
-                if isinstance(result, dict) and result.get("status") == 404:
-                    logger.debug("Snoop channel already destroyed", channel_id=channel_id, snoop_id=snoop_id)
-                else:
-                    logger.info("Snoop channel stopped", channel_id=channel_id, snoop_id=snoop_id)
-            except Exception as e:
-                logger.error("Failed to stop snoop channel", channel_id=channel_id, snoop_id=snoop_id, error=str(e))
-        else:
-            logger.debug("No active snoop found for channel", channel_id=channel_id)
 
     async def play_audio_file(self, channel_id: str, file_path: str) -> bool:
         """Play an audio file to the specified channel with enhanced error handling."""

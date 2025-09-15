@@ -73,9 +73,9 @@ exten => s,1,NoOp(Starting AI Voice Agent with AudioSocket)
 - Shared media dir: `/mnt/asterisk_media/ai-generated/`.
 
 ## Deploy (Server) — Runbook
-Assumptions: repo at `/root/Asterisk-Agent-Develop`, branch `develop`.
+Assumptions: server `root@voiprnd.nemtclouddispatch.com`, repo at `/root/Asterisk-Agent-Develop`, branch `develop`.
 ```
-ssh root@<server> \
+ssh root@voiprnd.nemtclouddispatch.com \
   'cd /root/Asterisk-Agent-Develop && \
    git checkout develop && git pull && \
    docker-compose up -d --build ai-engine local-ai-server && \

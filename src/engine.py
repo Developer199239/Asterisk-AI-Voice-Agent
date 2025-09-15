@@ -140,10 +140,6 @@ class Engine:
         channel_id = event["channel"]["id"]
         channel_name = event["channel"]["name"]
         
-        # CRITICAL: Ignore snoop channels to prevent infinite loops
-        if channel_name.startswith("Snoop/"):
-            logger.debug("Ignoring snoop channel", channel_id=channel_id, channel_name=channel_name)
-            return
             
         caller_info = event["channel"]["caller"]
         logger.info(
@@ -175,54 +171,44 @@ class Engine:
             await self.ari_client.answer_channel(channel_id)
 
             if self.config.audio_transport == "audiosocket":
-                logger.info("Using AudioSocket for upstream capture; awaiting connection", channel_id=channel_id, audiosocket_uuid=audiosocket_uuid)
-                # First try immediate bind if a connection is already pending
-                conn_id: Optional[str] = None
-                if hasattr(self, 'audiosocket_server') and self.audiosocket_server:
-                    try:
-                        conn_id = self.audiosocket_server.try_get_connection_nowait()
-                    except Exception:
+                if audiosocket_uuid:
+                    logger.info("Creating AudioSocket connection via ARI", channel_id=channel_id, audiosocket_uuid=audiosocket_uuid)
+                    
+                    # Create AudioSocket connection via ARI
+                    success = await self.ari_client.create_audiosocket_connection(
+                        channel_id=channel_id,
+                        audiosocket_uuid=audiosocket_uuid,
+                        host="127.0.0.1",
+                        port=8090
+                    )
+                    
+                    if success:
+                        logger.info("AudioSocket connection created successfully", channel_id=channel_id)
+                        
+                        # Wait a moment for AudioSocket connection to establish
+                        await asyncio.sleep(1.0)
+                        
+                        # Try to bind the connection
                         conn_id = None
-                if not conn_id:
-                    # Await an AudioSocket connection and bind it to this channel
-                    handshake_s = (self.config.streaming.timeouts.handshake_ms if self.config.streaming else 5000) / 1000.0
-                    try:
-                        conn_id = await self.audiosocket_server.await_connection(timeout=handshake_s)
-                    except Exception:
-                        conn_id = None
-
-                if conn_id:
-                    await self._bind_connection_to_channel(conn_id, channel_id, provider_name)
-                    return
+                        if hasattr(self, 'audiosocket_server') and self.audiosocket_server:
+                            try:
+                                conn_id = self.audiosocket_server.try_get_connection_nowait()
+                            except Exception:
+                                conn_id = None
+                        
+                        if conn_id:
+                            await self._bind_connection_to_channel(conn_id, channel_id, provider_name)
+                            return
+                        else:
+                            logger.warning("AudioSocket created but no connection available yet", channel_id=channel_id)
+                    else:
+                        logger.error("Failed to create AudioSocket connection via ARI", channel_id=channel_id)
+                        await self._cleanup_call(channel_id)
+                        return
                 else:
-                    logger.warning("No AudioSocket connection within timeout; falling back to legacy snoop", channel_id=channel_id)
-            else:
-                # Legacy capture via ARI snoop
-                snoop_id = await self.ari_client.start_audio_snoop(channel_id, self.config.asterisk.app_name)
-                if not snoop_id:
-                    logger.error("Failed to create snoop channel", channel_id=channel_id)
+                    logger.error("No AudioSocket UUID provided", channel_id=channel_id)
                     await self._cleanup_call(channel_id)
                     return
-
-                # Store snoop channel info for cleanup
-                self.active_calls[channel_id]["snoop_channel_id"] = snoop_id
-
-                # Create mixing bridge and add BOTH channels
-                bridge_id = await self.ari_client.create_bridge("mixing")
-                if bridge_id:
-                    await self.ari_client.add_channel_to_bridge(bridge_id, channel_id)
-                    await self.ari_client.add_channel_to_bridge(bridge_id, snoop_id)
-                    self.active_calls[channel_id]["bridge_id"] = bridge_id
-                    await asyncio.sleep(0.1)
-                    logger.info("✅ Bridge created and channels added", channel_id=channel_id, bridge_id=bridge_id)
-                else:
-                    logger.error("Failed to create bridge", channel_id=channel_id)
-                    await self._cleanup_call(channel_id)
-                    return
-
-                # Set up audio frame handler for this call (after bridge is established)
-                self.ari_client.set_audio_frame_handler(self._handle_audio_frame)
-                logger.debug("Audio frame handler set after bridge establishment", channel_id=channel_id)
 
             # Start the provider's session, which sets up audio handlers
             logger.debug("Starting provider session", channel_id=channel_id, provider=provider_name)
@@ -355,15 +341,14 @@ class Engine:
         raise ValueError(f"Provider '{provider_name}' does not have a creation rule.")
 
     async def _handle_audio_frame(self, audio_data: bytes):
-        """Handle raw audio frames from snoop channels."""
+        """Handle raw audio frames from AudioSocket connections."""
         try:
             # Find the active call (assuming single call for now)
-            # In a multi-call scenario, we'd need to track which snoop belongs to which call
+            # For AudioSocket, we can use any active call since there should only be one
             active_channel_id = None
             for channel_id, call_data in self.active_calls.items():
-                if call_data.get('snoop_channel_id'):
-                    active_channel_id = channel_id
-                    break
+                active_channel_id = channel_id
+                break
                     
             if not active_channel_id:
                 logger.warning("No active call found for audio frame")
@@ -387,26 +372,20 @@ class Engine:
             logger.error("Error processing audio frame", error=str(e), exc_info=True)
 
     async def _handle_dtmf_received(self, event_data: dict):
-        """Handle DTMF events from snoop channels."""
+        """Handle DTMF events from channels."""
         channel = event_data.get('channel', {})
         channel_id = channel.get('id')
         digit = event_data.get('digit')
         
-        # Find the main channel this snoop belongs to
-        main_channel_id = None
-        for main_id, call_data in self.active_calls.items():
-            if call_data.get('snoop_channel_id') == channel_id:
-                main_channel_id = main_id
-                break
-                
-        if main_channel_id and digit:
-            logger.info(f"DTMF received: {digit}", channel_id=main_channel_id)
+        if channel_id and digit:
+            logger.info(f"DTMF received: {digit}", channel_id=channel_id)
             # Forward DTMF to provider if it supports it
-            call_data = self.active_calls.get(main_channel_id)
-            if call_data:
-                provider = call_data.get('provider')
-                if provider and hasattr(provider, 'handle_dtmf'):
-                    await provider.handle_dtmf(digit)
+            if channel_id in self.active_calls:
+                call_data = self.active_calls.get(channel_id)
+                if call_data:
+                    provider = call_data.get('provider')
+                    if provider and hasattr(provider, 'handle_dtmf'):
+                        await provider.handle_dtmf(digit)
 
     def _on_audiosocket_audio(self, conn_id: str, audio_data: bytes):
         """Route inbound AudioSocket audio to the mapped provider for that connection."""
@@ -576,10 +555,6 @@ class Engine:
                     except Exception:
                         logger.debug("Error closing AudioSocket connection", conn_id=conn_id, exc_info=True)
             
-            # Stop snoop channel
-            if self.config.audio_transport != "audiosocket":
-                logger.debug("Stopping audio snoop", channel_id=channel_id)
-                await self.ari_client.stop_audio_snoop(channel_id)
             
             # Clean up bridge if it exists
             bridge_id = call_data.get("bridge_id")
@@ -599,11 +574,7 @@ class Engine:
             logger.info("Call resources cleaned up successfully", channel_id=channel_id)
         else:
             logger.debug("Channel not found in active calls", channel_id=channel_id)
-            # Check if this is a snoop channel trying to clean up
-            if channel_id.startswith("snoop_"):
-                logger.debug("Snoop channel cleanup attempted for non-active call", channel_id=channel_id)
-            else:
-                logger.debug("No active call found for cleanup", channel_id=channel_id)
+            logger.debug("No active call found for cleanup", channel_id=channel_id)
 
     async def _send_test_tone_over_socket(self, conn_id: str, ms: int = 300):
         """Send a short test tone over AudioSocket to verify downstream audio path."""

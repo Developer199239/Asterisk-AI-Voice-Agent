@@ -39,18 +39,23 @@ class LocalProvider(AIProviderInterface):
     async def send_audio(self, audio_chunk: bytes):
         if self.websocket:
             try:
-                # The local AI server expects JSON messages with type and base64 encoded data
-                import base64
+                # Convert upstream ulaw@8000 to PCM16@16000 for the local server STT
+                # 1) mu-law (8kHz) -> PCM16 (8kHz)
+                import audioop
+                pcm8k = audioop.ulaw2lin(audio_chunk, 2)
+                # 2) Resample PCM16 8kHz -> 16kHz
+                pcm16k, _ = audioop.ratecv(pcm8k, 2, 1, 8000, 16000, None)
+
                 audio_message = {
                     "type": "audio",
-                    "data": base64.b64encode(audio_chunk).decode('utf-8')
+                    "data": base64.b64encode(pcm16k).decode('utf-8')
                 }
                 await self.websocket.send(json.dumps(audio_message))
-                logger.debug("Sent audio chunk to Local AI Server", audio_size=len(audio_chunk))
+                logger.debug("Sent converted audio to Local AI Server", in_bytes=len(audio_chunk), out_bytes=len(pcm16k))
             except websockets.exceptions.ConnectionClosed as e:
                 logger.debug("Could not send audio packet: Connection closed.", code=e.code, reason=e.reason)
             except Exception:
-                logger.error("An unexpected error occurred while sending audio chunk", exc_info=True)
+                logger.error("Error converting/sending audio to Local AI Server", exc_info=True)
 
     async def play_initial_greeting(self, call_id: str):
         """Play an initial greeting message to the caller."""

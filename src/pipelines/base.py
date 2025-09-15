@@ -41,7 +41,7 @@ class AudioPipeline(ABC):
     async def process_stt(self, audio_chunk: bytes) -> Optional[str]:
         """Process an incoming audio chunk and return a transcript if utterance ended.
 
-        - Input chunks should be raw ulaw or PCM bytes as produced by our snoop
+        - Input chunks should be raw ulaw or PCM bytes as produced by our AudioSocket
           channel handler. Implementations may resample/convert as needed.
         - Should buffer internally and use VAD/end-of-speech detection.
         - Return a non-empty string only when a full utterance is recognized;
