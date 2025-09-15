@@ -437,13 +437,18 @@ class Engine:
             # Calculate RMS (Root Mean Square) energy
             rms = audioop.rms(linear_data, 2)
             
-            # Simple threshold-based VAD (adjust threshold as needed)
-            voice_threshold = 500  # This may need tuning based on actual audio levels
+            # Lower threshold for better sensitivity to phone audio
+            # Phone audio typically has lower energy levels than studio recordings
+            voice_threshold = 200  # Reduced from 500 based on testing
             
-            return rms > voice_threshold
+            has_voice = rms > voice_threshold
+            if has_voice:
+                logger.debug("Voice activity detected", rms=rms, threshold=voice_threshold)
+            
+            return has_voice
         except Exception as e:
             logger.error("Error in VAD detection", error=str(e), exc_info=True)
-            # Fallback: assume voice if we can't detect
+            # Fallback: assume voice if we can't detect (conservative approach)
             return True
 
     async def _handle_silence_timeout(self, channel_id: str, call_data: dict, provider):
@@ -484,12 +489,15 @@ class Engine:
         """Send buffered audio to provider for processing."""
         try:
             if not call_data['audio_buffer']:
+                logger.debug("No audio buffer to send", channel_id=channel_id)
                 return
                 
-            logger.info("Sending buffered audio to provider for conversation", 
+            logger.info("Sending buffered audio to provider for STT→LLM→TTS processing", 
                        channel_id=channel_id, 
-                       buffer_size=len(call_data['audio_buffer']))
+                       buffer_size=len(call_data['audio_buffer']),
+                       buffer_duration_estimate=f"{len(call_data['audio_buffer']) / 1000:.1f}s")
             
+            # Send audio to provider (this may take time for long responses)
             await provider.send_audio(call_data['audio_buffer'])
             
             # Clear buffer and reset timing
@@ -503,10 +511,42 @@ class Engine:
             
             # Change state to processing while we wait for response
             call_data['conversation_state'] = 'processing'
-            logger.debug("Changed conversation state to processing", channel_id=channel_id)
+            logger.info("Audio sent to provider, waiting for STT→LLM→TTS response", channel_id=channel_id)
+            
+            # Start a timeout task for provider response (30 seconds for long TTS generation)
+            call_data['provider_timeout_task'] = asyncio.create_task(
+                self._handle_provider_timeout(channel_id, call_data)
+            )
             
         except Exception as e:
-            logger.error("Error sending buffered audio", channel_id=channel_id, error=str(e), exc_info=True)
+            logger.error("Error sending buffered audio to provider", channel_id=channel_id, error=str(e), exc_info=True)
+            # Reset state to listening on error to allow retry
+            call_data['conversation_state'] = 'listening'
+
+    async def _handle_provider_timeout(self, channel_id: str, call_data: dict):
+        """Handle timeout waiting for provider response."""
+        try:
+            # Wait for 30 seconds for provider response
+            await asyncio.sleep(30.0)
+            
+            # Check if we're still waiting for a response
+            if call_data.get('conversation_state') == 'processing':
+                logger.warning("Provider response timeout - no audio received within 30 seconds", channel_id=channel_id)
+                
+                # Reset to listening state to allow user to try again
+                call_data['conversation_state'] = 'listening'
+                
+                # Cancel any pending timeout tasks
+                if call_data.get('timeout_task') and not call_data['timeout_task'].done():
+                    call_data['timeout_task'].cancel()
+                
+                logger.info("Reset to listening state after provider timeout", channel_id=channel_id)
+                
+        except asyncio.CancelledError:
+            # Timeout was cancelled (response received), this is normal
+            logger.debug("Provider timeout cancelled - response received", channel_id=channel_id)
+        except Exception as e:
+            logger.error("Error in provider timeout handler", channel_id=channel_id, error=str(e), exc_info=True)
 
     async def _handle_dtmf_received(self, event_data: dict):
         """Handle DTMF events from channels."""
@@ -593,12 +633,21 @@ class Engine:
                                 # Response to user input - transition back to listening
                                 call_data['conversation_state'] = 'listening'
                                 logger.info("Response played, listening for next user input", channel_id=channel_id)
+                                
+                                # Cancel provider timeout task since we got a response
+                                if call_data.get('provider_timeout_task') and not call_data['provider_timeout_task'].done():
+                                    call_data['provider_timeout_task'].cancel()
+                                    logger.debug("Cancelled provider timeout task - response received", channel_id=channel_id)
             elif event_type == "Transcription":
                 # Handle transcription data
                 text = event.get("text", "")
-                logger.info(f"Transcription: {text}")
+                logger.info("Received transcription from provider", text=text, text_length=len(text))
+            elif event_type == "Error":
+                # Handle provider errors
+                error_msg = event.get("message", "Unknown provider error")
+                logger.error("Provider reported error", error=error_msg, event=event)
             else:
-                logger.debug(f"Unhandled provider event: {event_type}")
+                logger.debug("Unhandled provider event", event_type=event_type, event_keys=list(event.keys()))
         except Exception as e:
             logger.error("Error in provider event handler", event_type=event.get("type"), error=str(e), exc_info=True)
 

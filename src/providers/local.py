@@ -51,11 +51,14 @@ class LocalProvider(AIProviderInterface):
                     "data": base64.b64encode(pcm16k).decode('utf-8')
                 }
                 await self.websocket.send(json.dumps(audio_message))
-                logger.debug("Sent converted audio to Local AI Server", in_bytes=len(audio_chunk), out_bytes=len(pcm16k))
+                logger.info("Sent converted audio to Local AI Server for STT→LLM→TTS processing", 
+                           in_bytes=len(audio_chunk), out_bytes=len(pcm16k))
             except websockets.exceptions.ConnectionClosed as e:
-                logger.debug("Could not send audio packet: Connection closed.", code=e.code, reason=e.reason)
-            except Exception:
-                logger.error("Error converting/sending audio to Local AI Server", exc_info=True)
+                logger.warning("WebSocket connection closed during audio send", code=e.code, reason=e.reason)
+                raise
+            except Exception as e:
+                logger.error("Error converting/sending audio to Local AI Server", error=str(e), exc_info=True)
+                raise
 
     async def play_initial_greeting(self, call_id: str):
         """Play an initial greeting message to the caller."""
