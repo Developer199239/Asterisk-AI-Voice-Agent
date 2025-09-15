@@ -54,14 +54,8 @@ class AudioSocketServer:
         }
         logger.info("AudioSocket connection accepted", peer=peer, conn_id=conn_id)
         
-        # Send AudioSocket protocol header to Asterisk
-        try:
-            header = b"AudioSocket/1.0\r\nFormat: ulaw@8000\r\n\r\n"
-            writer.write(header)
-            await writer.drain()
-            logger.debug("Sent AudioSocket protocol header", conn_id=conn_id)
-        except Exception as e:
-            logger.warning("Failed to send AudioSocket protocol header", conn_id=conn_id, error=str(e))
+        # AudioSocket connection established - ready to receive audio data
+        logger.debug("AudioSocket connection ready for audio data", conn_id=conn_id)
         
         # Announce new connection for assignment by engine
         try:
