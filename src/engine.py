@@ -168,20 +168,16 @@ class Engine:
 
             # Originate Local channel to run our media fork dialplan
             # Pass the original channel_id as a variable for AudioSocket to use
-            # Use correct Local channel syntax; '/n' prevents optimization (optional)
-            local_endpoint = "Local/s@ai-agent-media-fork/n"
-            # ARI expects query params; variables passed as variables[NAME]=VALUE
-            # For originate, ARI requires either app or extension+context+priority.
-            # We use the dialplan path here (extension/context/priority)
-            # Pass channel variables using ARI's 'variables' query parameter as CSV name=value pairs
-            # Include both 'bridged_channel' (used by dialplan) and 'AUDIOSOCKET_UUID' for safety
-            vars_csv = f"bridged_channel={channel_id},AUDIOSOCKET_UUID={channel_id}"
+            # Use Local pattern with UUID in the extension so dialplan can read it via ${EXTEN}
+            uuid_ext = (channel_id or "").replace('.', '-')
+            local_endpoint = f"Local/{uuid_ext}@ai-agent-media-fork/n"
+            # ARI requires extension/context/priority; keep them even though Local has them embedded
+            # No need to pass variables; dialplan derives AUDIOSOCKET_UUID from ${EXTEN}
             orig_params = [
                 ("endpoint", local_endpoint),
                 ("extension", "s"),
                 ("context", "ai-agent-media-fork"),
                 ("priority", "1"),
-                ("variables", vars_csv),
                 ("timeout", "30"),
             ]
             logger.info("Originating Local channel for AudioSocket", endpoint=local_endpoint, bridged_channel=channel_id)
