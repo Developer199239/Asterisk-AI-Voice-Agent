@@ -69,6 +69,16 @@ def configure_logging(log_level="INFO", log_to_file=False, log_file_path="servic
         file_handler.setFormatter(logging.Formatter("%(message)s"))
         root_logger.addHandler(file_handler)
 
+    # Reduce noisy third-party loggers
+    try:
+        logging.getLogger('websockets').setLevel(logging.WARNING)
+        logging.getLogger('websockets.client').setLevel(logging.WARNING)
+        logging.getLogger('websockets.protocol').setLevel(logging.WARNING)
+        logging.getLogger('aiohttp').setLevel(logging.WARNING)
+        logging.getLogger('asyncio').setLevel(logging.WARNING)
+    except Exception:
+        pass
+
 def get_logger(name: str):
     """Get a structlog logger."""
     return structlog.get_logger(name)

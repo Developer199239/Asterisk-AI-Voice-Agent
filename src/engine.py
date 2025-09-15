@@ -211,7 +211,7 @@ class Engine:
 
             local_channel_id = None
             attempts = 0
-            max_attempts = 2  # Try originate up to twice for better diagnostics
+            max_attempts = 1  # Enforce single Local originate per call
             last_response: Any = None
             while attempts < max_attempts and not local_channel_id:
                 attempts += 1
@@ -326,6 +326,17 @@ class Engine:
         Plays a one-time test prompt to validate audio path, then proceeds with provider flow.
         """
         try:
+            # If a connection is already bound to this channel, reject extras to avoid idle sockets
+            existing = self.channel_to_conn.get(channel_id)
+            if existing and existing != conn_id:
+                logger.info("Rejecting extra AudioSocket connection for already-bound channel",
+                            channel_id=channel_id, existing_conn=existing, new_conn=conn_id)
+                try:
+                    await self.audiosocket_server.close_connection(conn_id)
+                except Exception:
+                    logger.debug("Error closing extra AudioSocket connection", conn_id=conn_id, exc_info=True)
+                return
+
             self.conn_to_channel[conn_id] = channel_id
             self.channel_to_conn[channel_id] = conn_id
             logger.info("AudioSocket connection bound to channel", channel_id=channel_id, conn_id=conn_id)
@@ -748,7 +759,7 @@ class Engine:
                 count = self._audio_rx_debug.get(conn_id, 0) + 1
                 if count <= 8:
                     preview = audio_data[:8]
-                    logger.debug("AudioSocket inbound chunk",
+                    logger.info("AudioSocket inbound chunk",
                                  conn_id=conn_id,
                                  bytes=len(audio_data),
                                  first8=preview.hex(" "),
@@ -818,6 +829,12 @@ class Engine:
             chunk_ms = 20
             samples = int(rate * (chunk_ms / 1000.0))
             silence = b"\x00\x00" * samples
+            # Send one immediately upon bind to avoid initial idle gap
+            try:
+                await self.audiosocket_server.send_audio(conn_id, silence)
+                logger.debug("Sent initial AudioSocket keepalive", conn_id=conn_id, bytes=len(silence))
+            except Exception:
+                logger.debug("Initial keepalive send failed", conn_id=conn_id, exc_info=True)
             while True:
                 await asyncio.sleep(max(0.05, interval_ms / 1000.0))
                 try:
@@ -1157,7 +1174,7 @@ class Engine:
 
 
 async def main():
-    configure_logging(log_level=os.getenv("LOG_LEVEL", "DEBUG"))
+    configure_logging(log_level=os.getenv("LOG_LEVEL", "INFO"))
     config = load_config()
     engine = Engine(config)
 
