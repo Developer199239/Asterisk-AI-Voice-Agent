@@ -45,6 +45,8 @@ class Engine:
         # Bridge and Local channel tracking for Local Channel Bridge pattern
         self.bridges: Dict[str, str] = {}  # channel_id -> bridge_id
         self.local_channels: Dict[str, str] = {}  # channel_id -> local_channel_id
+        # Map our synthesized UUID extension to the real ARI caller channel id
+        self.uuidext_to_channel: Dict[str, str] = {}
 
         # Event handlers
         self.ari_client.on_event("StasisStart", self._handle_stasis_start)
@@ -170,6 +172,12 @@ class Engine:
             # Pass the original channel_id as a variable for AudioSocket to use
             # Use Local pattern with UUID in the extension so dialplan can read it via ${EXTEN}
             uuid_ext = (channel_id or "").replace('.', '-')
+            # Map synthesized UUID to the real caller channel for later binder lookup
+            try:
+                if uuid_ext:
+                    self.uuidext_to_channel[uuid_ext] = channel_id
+            except Exception:
+                logger.debug("Could not map uuid_ext to channel id", uuid_ext=uuid_ext, channel_id=channel_id, exc_info=True)
             local_endpoint = f"Local/{uuid_ext}@ai-agent-media-fork/n"
             # ARI requires extension/context/priority; keep them even though Local has them embedded
             # No need to pass variables; dialplan derives AUDIOSOCKET_UUID from ${EXTEN}
@@ -190,8 +198,7 @@ class Engine:
                 attempts += 1
                 try:
                     last_response = await self.ari_client.send_command("POST", "channels", params=orig_params)
-                    if isinstance(last_response, dict):
-                        local_channel_id = last_response.get('id')
+                    # Not all Asterisk builds return the created channel id here; prefer discovery loop below
                     logger.debug("Local channel originate response", attempt=attempts, response=last_response)
                 except Exception:
                     logger.error("Local channel originate failed", attempt=attempts, exc_info=True)
@@ -206,17 +213,36 @@ class Engine:
                        local_channel_id=local_channel_id, 
                        channel_id=channel_id)
 
-            # Wait briefly for Local channel to exist and be usable before bridging
-            exists = False
-            for i in range(10):  # up to ~1s total
-                info = await self.ari_client.send_command("GET", f"channels/{local_channel_id}")
-                exists = bool(info and isinstance(info, dict) and info.get('id') == local_channel_id)
-                logger.debug("Waiting for Local channel presence", attempt=i+1, exists=exists, local_channel_id=local_channel_id)
-                if exists:
-                    break
+            # Discover Local leg by name since id may not be returned by originate
+            discovered = False
+            for i in range(20):  # up to ~2s total
+                chan_list = await self.ari_client.send_command("GET", "channels")
+                try:
+                    candidates = []
+                    if isinstance(chan_list, list):
+                        for c in chan_list:
+                            name = (c or {}).get('name', '')
+                            if name.startswith(f"Local/{uuid_ext}@ai-agent-media-fork"):
+                                candidates.append(c)
+                    if candidates:
+                        # Prefer the ;1 leg
+                        chosen = None
+                        for c in candidates:
+                            if c.get('name', '').endswith(';1'):
+                                chosen = c
+                                break
+                        if not chosen:
+                            chosen = candidates[0]
+                        local_channel_id = chosen.get('id')
+                        discovered = True
+                        logger.info("Discovered Local channel", uuid_ext=uuid_ext, local_channel_id=local_channel_id, local_name=chosen.get('name'))
+                        break
+                except Exception:
+                    logger.debug("Error scanning channels for Local leg", exc_info=True)
+                logger.debug("Waiting for Local channel presence", attempt=i+1, uuid_ext=uuid_ext, found=discovered)
                 await asyncio.sleep(0.1)
-            if not exists:
-                logger.error("Local channel did not appear in time", local_channel_id=local_channel_id)
+            if not discovered or not local_channel_id:
+                logger.error("Local channel did not appear in time", uuid_ext=uuid_ext)
                 raise RuntimeError("Local channel not present for bridging")
 
             # Add both the original caller and the new local channel to the bridge with retries and diagnostics
@@ -320,8 +346,16 @@ class Engine:
             variable = event_data.get('variable') or event_data.get('name')
             if variable != 'AUDIOSOCKET_UUID':
                 return
-            # Extract target (original) channel id from the variable value
-            target_channel_id = event_data.get('value') or event_data.get('newvalue')
+            # Extract synthesized UUID or target (original) channel id from the variable value
+            raw_val = event_data.get('value') or event_data.get('newvalue')
+            target_channel_id = raw_val
+            # If value is a synthesized uuid_ext (contains '-' from our mapping), resolve to real channel id
+            try:
+                if raw_val and raw_val in getattr(self, 'uuidext_to_channel', {}):
+                    target_channel_id = self.uuidext_to_channel.get(raw_val)
+                    logger.debug("Resolved uuid_ext to channel id", uuid_ext=raw_val, channel_id=target_channel_id)
+            except Exception:
+                logger.debug("Could not resolve uuid_ext mapping", uuid_ext=raw_val, exc_info=True)
             if not target_channel_id:
                 # Fallback to using the event channel id, but log it for diagnostics
                 channel = event_data.get('channel', {})
@@ -898,6 +932,15 @@ class Engine:
                     logger.warning("Failed to hang up local channel", 
                                  local_channel_id=local_channel_id, 
                                  error=str(e))
+
+            # Clean up uuid_ext mapping
+            try:
+                # Remove any uuid_ext that maps to this channel_id
+                for k, v in list(self.uuidext_to_channel.items()):
+                    if v == channel_id:
+                        self.uuidext_to_channel.pop(k, None)
+            except Exception:
+                logger.debug("Error cleaning uuidext mapping", channel_id=channel_id, exc_info=True)
             
             # Clean up bridge if it exists
             bridge_id = self.bridges.pop(channel_id, None)
