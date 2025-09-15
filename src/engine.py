@@ -173,12 +173,15 @@ class Engine:
             # ARI expects query params; variables passed as variables[NAME]=VALUE
             # For originate, ARI requires either app or extension+context+priority.
             # We use the dialplan path here (extension/context/priority)
+            # Pass channel variables using ARI's 'variables' query parameter as CSV name=value pairs
+            # Include both 'bridged_channel' (used by dialplan) and 'AUDIOSOCKET_UUID' for safety
+            vars_csv = f"bridged_channel={channel_id},AUDIOSOCKET_UUID={channel_id}"
             orig_params = [
                 ("endpoint", local_endpoint),
                 ("extension", "s"),
                 ("context", "ai-agent-media-fork"),
                 ("priority", "1"),
-                ("variables[bridged_channel]", channel_id),
+                ("variables", vars_csv),
                 ("timeout", "30"),
             ]
             logger.info("Originating Local channel for AudioSocket", endpoint=local_endpoint, bridged_channel=channel_id)
