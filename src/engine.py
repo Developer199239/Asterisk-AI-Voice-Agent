@@ -170,8 +170,13 @@ class Engine:
             # Pass the original channel_id as a variable for AudioSocket to use
             local_endpoint = "Local/s@ai-agent-media-fork,n"
             # ARI expects query params; variables passed as variables[NAME]=VALUE
+            # For originate, ARI requires either app or extension+context+priority.
+            # We use the dialplan path here (extension/context/priority)
             orig_params = [
                 ("endpoint", local_endpoint),
+                ("extension", "s"),
+                ("context", "ai-agent-media-fork"),
+                ("priority", "1"),
                 ("variables[bridged_channel]", channel_id),
                 ("timeout", "30"),
             ]
@@ -306,16 +311,27 @@ class Engine:
             logger.error("Error binding connection to channel", channel_id=channel_id, conn_id=conn_id, exc_info=True)
 
     async def _handle_channel_varset(self, event_data: dict):
-        """Bind any pending AudioSocket connection when AUDIOSOCKET_UUID variable is set."""
+        """Bind any pending AudioSocket connection when AUDIOSOCKET_UUID variable is set.
+
+        In the Local media-fork pattern, the var is set on the Local channel, but its value
+        contains the original caller channel_id. We must bind the AudioSocket to that original channel.
+        """
         try:
             variable = event_data.get('variable') or event_data.get('name')
             if variable != 'AUDIOSOCKET_UUID':
                 return
-            channel = event_data.get('channel', {})
-            channel_id = channel.get('id')
-            if not channel_id:
+            # Extract target (original) channel id from the variable value
+            target_channel_id = event_data.get('value') or event_data.get('newvalue')
+            if not target_channel_id:
+                # Fallback to using the event channel id, but log it for diagnostics
+                channel = event_data.get('channel', {})
+                fallback_id = channel.get('id')
+                logger.warning("AUDIOSOCKET_UUID varset missing value; falling back to event channel id",
+                               event_channel_id=fallback_id)
+                target_channel_id = fallback_id
+            if not target_channel_id:
                 return
-            if channel_id in self.channel_to_conn:
+            if target_channel_id in self.channel_to_conn:
                 return
             # Bind any already-accepted connection
             if hasattr(self, 'audiosocket_server') and self.audiosocket_server:
@@ -325,10 +341,11 @@ class Engine:
                 except Exception:
                     conn_id = None
                 if conn_id:
-                    await self._bind_connection_to_channel(conn_id, channel_id, self.config.default_provider)
+                    await self._bind_connection_to_channel(conn_id, target_channel_id, self.config.default_provider)
                 else:
                     # Remember channel; will bind on next accept
-                    self.pending_channel_for_bind = channel_id
+                    self.pending_channel_for_bind = target_channel_id
+            logger.info("ChannelVarset bound or queued", variable=variable, target_channel_id=target_channel_id)
         except Exception:
             logger.debug("Error in ChannelVarset handler", exc_info=True)
 
