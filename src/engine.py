@@ -168,7 +168,8 @@ class Engine:
 
             # Originate Local channel to run our media fork dialplan
             # Pass the original channel_id as a variable for AudioSocket to use
-            local_endpoint = "Local/s@ai-agent-media-fork,n"
+            # Use correct Local channel syntax; '/n' prevents optimization (optional)
+            local_endpoint = "Local/s@ai-agent-media-fork/n"
             # ARI expects query params; variables passed as variables[NAME]=VALUE
             # For originate, ARI requires either app or extension+context+priority.
             # We use the dialplan path here (extension/context/priority)
