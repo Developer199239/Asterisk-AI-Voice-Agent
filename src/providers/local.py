@@ -30,12 +30,23 @@ class LocalProvider(AIProviderInterface):
 
     async def start_session(self, call_id: str):
         try:
-            logger.info("Connecting to Local AI Server...", url=self.ws_url)
-            self.websocket = await websockets.connect(self.ws_url)
+            # Tune websocket keepalives to avoid ping timeouts under load
+            ping_interval = 20
+            ping_timeout = 20
+            close_timeout = 10
+            logger.info("Connecting to Local AI Server...", url=self.ws_url,
+                        ping_interval=ping_interval, ping_timeout=ping_timeout, close_timeout=close_timeout)
+            self.websocket = await websockets.connect(
+                self.ws_url,
+                ping_interval=ping_interval,
+                ping_timeout=ping_timeout,
+                close_timeout=close_timeout,
+                max_size=None
+            )
             logger.info("✅ Successfully connected to Local AI Server.")
             self._active_call_id = call_id
             self._listener_task = asyncio.create_task(self._receive_loop())
-        except Exception as e:
+        except Exception:
             logger.error("Failed to connect to Local AI Server", exc_info=True)
             raise
 
@@ -55,8 +66,7 @@ class LocalProvider(AIProviderInterface):
                     "data": base64.b64encode(pcm16k).decode('utf-8')
                 }
                 await self.websocket.send(json.dumps(audio_message))
-                logger.info("Sent converted audio to Local AI Server for STT→LLM→TTS processing", 
-                           in_bytes=len(audio_chunk), out_bytes=len(pcm16k))
+                logger.debug("WS send ok", in_bytes=len(audio_chunk), pcm8k=len(pcm8k), pcm16k=len(pcm16k))
             except websockets.exceptions.ConnectionClosed as e:
                 logger.warning("WebSocket connection closed during audio send", code=e.code, reason=e.reason)
                 raise

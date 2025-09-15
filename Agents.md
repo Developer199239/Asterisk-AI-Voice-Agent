@@ -6,11 +6,17 @@ This document captures how I (the agent) work most effectively on this repo. It 
 - Primary: Implement AudioSocket‑first upstream capture with file‑based playback downstream; stabilize for testing on the server.
 - Next phase (feature‑flagged): Streaming TTS over AudioSocket with barge‑in, jitter buffers, keepalives, telemetry.
 
-## Architecture Snapshot (Current)
+## Architecture Snapshot (Current) — Runtime Contexts (Always Current)
 - Two containers: `ai-engine` (ARI + AudioSocket) and `local-ai-server` (models).
 - Upstream (caller → engine): AudioSocket TCP into the engine.
 - Downstream (engine → caller): ARI file playback via tmpfs for low I/O latency.
 - Providers: pluggable via `src/providers/*` (local, deepgram, etc.).
+
+Active contexts and call path (server):
+- `ivr-3` (example) → `from-ai-agent` → Stasis(asterisk-ai-voice-agent)
+- Engine originates `Local/<exten>@ai-agent-media-fork/n` to start AudioSocket
+- `ai-agent-media-fork` generates canonical UUID, calls `AudioSocket(UUID, host:port)`, sets `AUDIOSOCKET_UUID=${EXTEN}` for binder
+- Engine binds socket to caller channel; sets upstream input mode `pcm16_8k`; provider greets immediately (no demo tone)
 
 ## Feature Flags & Config
 - `audio_transport`: `audiosocket` (default) | `legacy` (fallback to ARI snoop).

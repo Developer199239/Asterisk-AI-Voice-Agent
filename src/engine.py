@@ -352,15 +352,8 @@ class Engine:
                 logger.debug("Started AudioSocket keepalive", conn_id=conn_id)
             except Exception:
                 logger.debug("Failed to start keepalive task", channel_id=channel_id, conn_id=conn_id, exc_info=True)
-            # One-time test playback to confirm audio path
-            try:
-                # Only send over AudioSocket in streaming mode; otherwise use ARI demo tone
-                if self.config.audio_transport == 'audiosocket' and self.config.downstream_mode == 'stream':
-                    await self._send_test_tone_over_socket(conn_id)
-                else:
-                    await self.ari_client.play_media(channel_id, "sound:demo-congrats")
-            except Exception:
-                logger.debug("Test playback failed or unavailable", channel_id=channel_id, exc_info=True)
+            # Remove demo-congrats/test tone; rely on provider greeting to start the dialog
+            logger.debug("Skipping demo test playback; provider greeting will start the dialog", channel_id=channel_id)
             # Start provider session and optional greeting
             if provider:
                 logger.debug("Starting provider session", channel_id=channel_id, provider=provider_name)
