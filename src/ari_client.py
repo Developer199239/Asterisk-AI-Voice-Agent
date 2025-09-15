@@ -158,6 +158,14 @@ class ARIClient:
     async def send_command(self, method: str, resource: str, data: Optional[Dict[str, Any]] = None, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Send a command to the ARI HTTP endpoint."""
         url = f"{self.http_url}/{resource}"
+        
+        # Handle channelVars specially - they need to be in the JSON body, not query params
+        if params and "channelVars" in params:
+            channel_vars = params.pop("channelVars")
+            if data is None:
+                data = {}
+            data["channelVars"] = channel_vars
+        
         try:
             async with self.http_session.request(method, url, json=data, params=params) as response:
                 if response.status >= 400:
@@ -224,10 +232,21 @@ class ARIClient:
                 f"bridges/{bridge_id}/addChannel",
                 data={"channel": channel_id}
             )
-            
-            logger.info("Channel added to bridge", bridge_id=bridge_id, channel_id=channel_id)
+
+            # send_command returns {"status": 204} for No Content on success
+            status = response.get("status") if isinstance(response, dict) else None
+            if status is not None:
+                if 200 <= int(status) < 300:
+                    logger.info("Channel added to bridge", bridge_id=bridge_id, channel_id=channel_id, status=status)
+                    return True
+                else:
+                    logger.error("Failed to add channel to bridge", bridge_id=bridge_id, channel_id=channel_id, status=status, response=response)
+                    return False
+
+            # If no explicit status was returned, assume success and log response for traceability
+            logger.info("Channel add-to-bridge response without status; assuming success", bridge_id=bridge_id, channel_id=channel_id, response=response)
             return True
-            
+
         except Exception as e:
             logger.error("Error adding channel to bridge", 
                         bridge_id=bridge_id, 

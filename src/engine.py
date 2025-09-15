@@ -169,30 +169,78 @@ class Engine:
             # Originate Local channel to run our media fork dialplan
             # Pass the original channel_id as a variable for AudioSocket to use
             local_endpoint = "Local/s@ai-agent-media-fork,n"
-            params = {
-                "endpoint": local_endpoint,
-                "context": "ai-agent-media-fork",
-                "extension": "s",
-                "priority": 1,
-                "variables": {"bridged_channel": channel_id}
-            }
-            
-            local_channel_response = await self.ari_client.send_command("POST", "channels", params=params)
-            local_channel_id = local_channel_response.get('id') if isinstance(local_channel_response, dict) else None
-            
+            # ARI expects query params; variables passed as variables[NAME]=VALUE
+            orig_params = [
+                ("endpoint", local_endpoint),
+                ("variables[bridged_channel]", channel_id),
+                ("timeout", "30"),
+            ]
+            logger.info("Originating Local channel for AudioSocket", endpoint=local_endpoint, bridged_channel=channel_id)
+
+            local_channel_id = None
+            attempts = 0
+            max_attempts = 2  # Try originate up to twice for better diagnostics
+            last_response: Any = None
+            while attempts < max_attempts and not local_channel_id:
+                attempts += 1
+                try:
+                    last_response = await self.ari_client.send_command("POST", "channels", params=orig_params)
+                    if isinstance(last_response, dict):
+                        local_channel_id = last_response.get('id')
+                    logger.debug("Local channel originate response", attempt=attempts, response=last_response)
+                except Exception:
+                    logger.error("Local channel originate failed", attempt=attempts, exc_info=True)
+                if not local_channel_id:
+                    await asyncio.sleep(0.2)
+
             if not local_channel_id:
+                logger.error("Failed to originate Local channel after retries", response=last_response)
                 raise RuntimeError("Failed to originate Local channel")
+
             logger.info("Originated Local channel for AudioSocket", 
                        local_channel_id=local_channel_id, 
                        channel_id=channel_id)
 
-            # Add both the original caller and the new local channel to the bridge
-            await self.ari_client.add_channel_to_bridge(bridge_id, channel_id)
-            await self.ari_client.add_channel_to_bridge(bridge_id, local_channel_id)
-            logger.info("Added channels to bridge", 
-                       bridge_id=bridge_id, 
-                       channel_id=channel_id, 
-                       local_channel_id=local_channel_id)
+            # Wait briefly for Local channel to exist and be usable before bridging
+            exists = False
+            for i in range(10):  # up to ~1s total
+                info = await self.ari_client.send_command("GET", f"channels/{local_channel_id}")
+                exists = bool(info and isinstance(info, dict) and info.get('id') == local_channel_id)
+                logger.debug("Waiting for Local channel presence", attempt=i+1, exists=exists, local_channel_id=local_channel_id)
+                if exists:
+                    break
+                await asyncio.sleep(0.1)
+            if not exists:
+                logger.error("Local channel did not appear in time", local_channel_id=local_channel_id)
+                raise RuntimeError("Local channel not present for bridging")
+
+            # Add both the original caller and the new local channel to the bridge with retries and diagnostics
+            async def _bridge_add_with_retries(b_id: str, ch_id: str, label: str) -> bool:
+                for j in range(5):  # up to ~1.25s with backoff
+                    ok = await self.ari_client.add_channel_to_bridge(b_id, ch_id)
+                    logger.debug("Bridge add attempt", bridge_id=b_id, channel_id=ch_id, label=label, attempt=j+1, success=ok)
+                    if ok:
+                        return True
+                    await asyncio.sleep(0.25)
+                return False
+
+            # Ensure caller is on the bridge (idempotent)
+            ok_caller = await _bridge_add_with_retries(bridge_id, channel_id, "caller")
+            ok_local = await _bridge_add_with_retries(bridge_id, local_channel_id, "local")
+
+            # Snapshot bridge state for debugging
+            bridge_info = await self.ari_client.send_command("GET", f"bridges/{bridge_id}")
+            bridge_channels = []
+            try:
+                if isinstance(bridge_info, dict):
+                    bridge_channels = bridge_info.get('channels', []) or []
+            except Exception:
+                pass
+            logger.info("Bridge state after add attempts", bridge_id=bridge_id, ok_caller=ok_caller, ok_local=ok_local, channels=bridge_channels)
+
+            if not (ok_caller and ok_local):
+                logger.error("Failed to add one or more channels to bridge", bridge_id=bridge_id, channel_id=channel_id, local_channel_id=local_channel_id)
+                raise RuntimeError("Bridge add failed for Local pattern")
 
             # Store the bridge and local channel IDs for later use and cleanup
             self.bridges[channel_id] = bridge_id
