@@ -42,8 +42,9 @@ class Engine:
         self.audiosocket_server: Any = None
         # Headless sessions for AudioSocket-only mode (no ARI channel)
         self.headless_sessions: Dict[str, Dict[str, Any]] = {}
-        # Snoop channel tracking for AudioSocket + ARI integration
-        self.snoop_channels: Dict[str, str] = {}
+        # Bridge and Local channel tracking for Local Channel Bridge pattern
+        self.bridges: Dict[str, str] = {}  # channel_id -> bridge_id
+        self.local_channels: Dict[str, str] = {}  # channel_id -> local_channel_id
 
         # Event handlers
         self.ari_client.on_event("StasisStart", self._handle_stasis_start)
@@ -140,99 +141,76 @@ class Engine:
             logger.info(f"Default provider '{self.config.default_provider}' is available and ready.")
 
     async def _handle_stasis_start(self, event: dict):
-        """Handle a new call entering the Stasis application."""
-        # Debug: Log the full event structure
+        """Handle a new call entering Stasis using Local Channel Bridge pattern."""
         logger.debug("StasisStart event received", event_data=event)
-        
-        channel_id = event["channel"]["id"]
-        channel_name = event["channel"]["name"]
-        
-            
-        caller_info = event["channel"]["caller"]
-        logger.info(
-            "New call received",
-            channel_id=channel_id,
-            caller={"name": caller_info["name"], "number": caller_info["number"]},
-        )
-        
-        args = event.get('args', [])
-        # If args[0] looks like a UUID (contains hyphens), it's the AudioSocket UUID
-        # Otherwise, it's the provider name (legacy behavior)
-        if args and len(args[0]) > 30 and '-' in args[0]:
-            audiosocket_uuid = args[0]
-            provider_name = args[1] if len(args) > 1 else self.config.default_provider
-        else:
-            audiosocket_uuid = None
-            provider_name = args[0] if args else self.config.default_provider
-        
-        provider = self.providers.get(provider_name)
+        channel = event.get('channel', {})
+        channel_id = channel.get('id')
+        caller_info = channel.get('caller', {})
+        logger.info("New call received", channel_id=channel_id,
+                    caller={"name": caller_info.get("name"), "number": caller_info.get("number")})
 
+        provider = self.providers.get(self.config.default_provider)
         if not provider:
-            logger.error(f"Provider '{provider_name}' not found for channel {channel_id}.")
+            logger.error("Default provider not found", provider=self.config.default_provider)
             await self.ari_client.hangup_channel(channel_id)
             return
 
-        self.active_calls[channel_id] = {"provider": provider}
-        
         try:
+            # Answer the channel
             await self.ari_client.answer_channel(channel_id)
+            logger.info("Channel answered", channel_id=channel_id)
 
-            # Create snoop channel for AudioSocket + ARI integration
-            try:
-                snoop_channel = await self.ari_client.create_snoop_channel(
-                    channel_id=channel_id,
-                    snoop_id=f"snoop-{channel_id}",
-                    spy="whisper",
-                    app=self.config.asterisk.app_name
-                )
-                self.snoop_channels[channel_id] = snoop_channel.id
-                logger.info("Created snoop channel for AudioSocket integration", 
-                           channel_id=channel_id, snoop_channel_id=snoop_channel.id)
-            except Exception as e:
-                logger.error("Failed to create snoop channel", 
-                           channel_id=channel_id, error=str(e), exc_info=True)
-                await self._cleanup_call(channel_id)
-                return
+            # Create a new mixing bridge
+            bridge_id = await self.ari_client.create_bridge(bridge_type="mixing")
+            if not bridge_id:
+                raise RuntimeError("Failed to create mixing bridge")
+            logger.info("Created bridge", bridge_id=bridge_id, channel_id=channel_id)
 
-            if self.config.audio_transport == "audiosocket":
-                if audiosocket_uuid:
-                    logger.info("Waiting for AudioSocket connection established by dialplan", 
-                               channel_id=channel_id, audiosocket_uuid=audiosocket_uuid)
-                    
-                    # Wait up to 10 seconds for the AudioSocket connection to be established by dialplan
-                    for attempt in range(20):  # 20 attempts * 0.5s = 10 seconds
-                        await asyncio.sleep(0.5)
-                        
-                        conn_id = None
-                        if hasattr(self, 'audiosocket_server') and self.audiosocket_server:
-                            try:
-                                conn_id = self.audiosocket_server.try_get_connection_nowait()
-                            except Exception:
-                                conn_id = None
-                        
-                        if conn_id:
-                            logger.info("AudioSocket connection found, binding to channel", 
-                                       channel_id=channel_id, conn_id=conn_id)
-                            await self._bind_connection_to_channel(conn_id, channel_id, provider_name)
-                            return
-                    
-                    logger.error("AudioSocket connection not established within 10 seconds", channel_id=channel_id)
-                    await self._cleanup_call(channel_id)
-                    return
-                else:
-                    logger.error("No AudioSocket UUID provided", channel_id=channel_id)
-                    await self._cleanup_call(channel_id)
-                    return
+            # Originate Local channel to run our media fork dialplan
+            # Pass the original channel_id as a variable for AudioSocket to use
+            local_endpoint = "Local/s@ai-agent-media-fork,n"
+            params = {
+                "endpoint": local_endpoint,
+                "context": "ai-agent-media-fork",
+                "extension": "s",
+                "priority": 1,
+                "variables": {"bridged_channel": channel_id}
+            }
+            
+            local_channel_response = await self.ari_client.send_command("POST", "channels", params=params)
+            local_channel_id = local_channel_response.get('id') if isinstance(local_channel_response, dict) else None
+            
+            if not local_channel_id:
+                raise RuntimeError("Failed to originate Local channel")
+            logger.info("Originated Local channel for AudioSocket", 
+                       local_channel_id=local_channel_id, 
+                       channel_id=channel_id)
 
-            # Start the provider's session, which sets up audio handlers
-            logger.debug("Starting provider session", channel_id=channel_id, provider=provider_name)
+            # Add both the original caller and the new local channel to the bridge
+            await self.ari_client.add_channel_to_bridge(bridge_id, channel_id)
+            await self.ari_client.add_channel_to_bridge(bridge_id, local_channel_id)
+            logger.info("Added channels to bridge", 
+                       bridge_id=bridge_id, 
+                       channel_id=channel_id, 
+                       local_channel_id=local_channel_id)
+
+            # Store the bridge and local channel IDs for later use and cleanup
+            self.bridges[channel_id] = bridge_id
+            self.local_channels[channel_id] = local_channel_id
+
+            # Initialize the provider pipeline
+            self.active_calls[channel_id] = {
+                "provider": provider,
+                "conversation_state": "greeting",
+                "bridge_id": bridge_id,
+                "local_channel_id": local_channel_id
+            }
+
+            # Start provider session
             await provider.start_session(channel_id)
-            logger.debug("Provider session started successfully", channel_id=channel_id)
-            
-            # Initialize conversation state
-            self.active_calls[channel_id]['conversation_state'] = 'greeting'
-            
-            # Play initial greeting now that models are pre-loaded
+            logger.info("Provider session started", channel_id=channel_id, provider=self.config.default_provider)
+
+            # Play initial greeting
             if hasattr(provider, 'play_initial_greeting'):
                 logger.debug("Playing initial greeting", channel_id=channel_id)
                 await provider.play_initial_greeting(channel_id)
@@ -241,7 +219,7 @@ class Engine:
                 logger.debug("Provider does not have play_initial_greeting method", channel_id=channel_id)
 
         except Exception as e:
-            logger.error("Error during StasisStart handling", channel_id=channel_id, exc_info=True)
+            logger.error("Failed Local Channel Bridge setup", channel_id=channel_id, error=str(e), exc_info=True)
             await self._cleanup_call(channel_id)
 
     async def _bind_connection_to_channel(self, conn_id: str, channel_id: str, provider_name: str):
@@ -309,6 +287,7 @@ class Engine:
     def _on_audiosocket_accept(self, conn_id: str):
         """Bind to pending ARI channel or start a headless session on accept."""
         try:
+            logger.info("on_accept invoked", conn_id=conn_id, pending_channel=self.pending_channel_for_bind)
             channel_id = self.pending_channel_for_bind
             if not channel_id:
                 # Start headless provider session (AudioSocket-only)
@@ -317,7 +296,19 @@ class Engine:
                 if not provider:
                     logger.error("Default provider not found for headless session", provider=provider_name)
                     return
+                logger.info("No pending ARI channel; starting headless session", conn_id=conn_id)
+                # Hint input mode for local provider (PCM16 8k from AudioSocket)
+                try:
+                    if hasattr(provider, 'set_input_mode'):
+                        provider.set_input_mode('pcm16_8k')
+                except Exception:
+                    logger.debug("Could not set provider input mode", exc_info=True)
                 asyncio.get_event_loop().create_task(self._start_headless_session(conn_id, provider))
+                # Send a short test tone over socket to confirm downstream path
+                try:
+                    asyncio.get_event_loop().create_task(self._send_test_tone_over_socket(conn_id, ms=1200))
+                except Exception:
+                    logger.debug("Could not schedule test tone", conn_id=conn_id, exc_info=True)
                 return
             if channel_id in self.channel_to_conn:
                 self.pending_channel_for_bind = None
@@ -652,25 +643,12 @@ class Engine:
                         # Headless session routing: call_id equals conn_id
                         if call_id and call_id in self.headless_sessions:
                             conn_id = call_id
-                            fmt = 'ulaw'
                             rate = 8000
-                            try:
-                                info = self.audiosocket_server.get_connection_info(conn_id)
-                                if info.get('format'):
-                                    fmt = info['format']
-                                if info.get('rate'):
-                                    rate = int(info['rate'])
-                            except Exception:
-                                pass
-                            out_bytes = audio_data
-                            try:
-                                if fmt.startswith('slin'):
-                                    out_bytes = audioop.ulaw2lin(audio_data, 2)
-                            except Exception:
-                                pass
+                            # Convert provider ulaw TTS to PCM16LE@8k for AudioSocket
+                            out_bytes = audioop.ulaw2lin(audio_data, 2)
                             try:
                                 await self.audiosocket_server.send_audio(conn_id, out_bytes)
-                                logger.debug("Streamed provider audio over AudioSocket (headless)", conn_id=conn_id, bytes=len(out_bytes), fmt=fmt, rate=rate)
+                                logger.info("Streamed provider audio over AudioSocket (headless)", conn_id=conn_id, bytes=len(out_bytes), fmt='slin16', rate=rate)
                                 # Update headless state
                                 hs = self.headless_sessions.get(conn_id, {})
                                 if hs.get('conversation_state') in ('greeting', 'processing'):
@@ -705,9 +683,9 @@ class Engine:
                                     logger.debug("Error streaming audio over AudioSocket; falling back to ARI", exc_info=True)
                                     await self._play_audio_via_snoop(channel_id, audio_data)
                     else:
-                        # File-based playback via ARI (default path)
+                        # File-based playback via ARI (default path) - use bridge playback
                         for channel_id, call_data in self.active_calls.items():
-                            await self._play_audio_via_snoop(channel_id, audio_data)
+                            await self._play_audio_via_bridge(channel_id, audio_data)
                             logger.debug(f"Sent {len(audio_data)} bytes of audio to call channel {channel_id}")
                             
                             # Update conversation state after playing response
@@ -844,8 +822,20 @@ class Engine:
                         logger.debug("Error closing AudioSocket connection", conn_id=conn_id, exc_info=True)
             
             
+            # Clean up local channel if it exists
+            local_channel_id = self.local_channels.pop(channel_id, None)
+            if local_channel_id:
+                logger.debug("Hanging up local channel", channel_id=channel_id, local_channel_id=local_channel_id)
+                try:
+                    await self.ari_client.hangup_channel(local_channel_id)
+                    logger.debug("Local channel hung up successfully", local_channel_id=local_channel_id)
+                except Exception as e:
+                    logger.warning("Failed to hang up local channel", 
+                                 local_channel_id=local_channel_id, 
+                                 error=str(e))
+            
             # Clean up bridge if it exists
-            bridge_id = call_data.get("bridge_id")
+            bridge_id = self.bridges.pop(channel_id, None)
             if bridge_id:
                 logger.debug("Destroying bridge", channel_id=channel_id, bridge_id=bridge_id)
                 try:
@@ -853,18 +843,6 @@ class Engine:
                     logger.debug("Bridge destroyed successfully", bridge_id=bridge_id)
                 except Exception as e:
                     logger.warning("Failed to destroy bridge", bridge_id=bridge_id, error=str(e))
-            
-            # Clean up snoop channel if it exists
-            snoop_channel_id = self.snoop_channels.pop(channel_id, None)
-            if snoop_channel_id:
-                logger.debug("Hanging up snoop channel", channel_id=channel_id, snoop_channel_id=snoop_channel_id)
-                try:
-                    await self.ari_client.hangup_channel(snoop_channel_id)
-                    logger.debug("Snoop channel hung up successfully", snoop_channel_id=snoop_channel_id)
-                except Exception as e:
-                    logger.warning("Failed to hang up snoop channel", 
-                                 snoop_channel_id=snoop_channel_id, 
-                                 error=str(e))
             
             # Clean up any remaining audio files for this call
             logger.debug("Cleaning up audio files", channel_id=channel_id)
@@ -881,39 +859,19 @@ class Engine:
             logger.debug("No active call found for cleanup", channel_id=channel_id)
 
     async def _send_test_tone_over_socket(self, conn_id: str, ms: int = 300):
-        """Send a short test tone over AudioSocket to verify downstream audio path."""
+        """Send a short test tone over AudioSocket (PCM16LE@8k framed) to verify downstream."""
         try:
-            # Determine negotiated format if available
-            fmt = 'ulaw'
             rate = 8000
-            try:
-                info = self.audiosocket_server.get_connection_info(conn_id)
-                if info.get('format'):
-                    fmt = info['format']
-                if info.get('rate'):
-                    rate = int(info['rate'])
-            except Exception:
-                pass
             duration_sec = ms / 1000.0
             freq = 440.0
             import math
-            if fmt.startswith('slin'):
-                samples = int(rate * duration_sec)
-                pcm = bytearray()
-                for n in range(samples):
-                    val = int(0.2 * 32767 * math.sin(2 * math.pi * freq * (n / rate)))
-                    pcm.extend(val.to_bytes(2, 'little', signed=True))
-                await self.audiosocket_server.send_audio(conn_id, bytes(pcm))
-            else:
-                true_rate = rate if rate else 8000
-                samples = int(true_rate * duration_sec)
-                pcm = bytearray()
-                for n in range(samples):
-                    val = int(0.2 * 32767 * math.sin(2 * math.pi * freq * (n / true_rate)))
-                    pcm.extend(val.to_bytes(2, 'little', signed=True))
-                ulaw_bytes = audioop.lin2ulaw(bytes(pcm), 2)
-                await self.audiosocket_server.send_audio(conn_id, ulaw_bytes)
-            logger.info("Sent test tone over AudioSocket", conn_id=conn_id, fmt=fmt, rate=rate, ms=ms)
+            samples = int(rate * duration_sec)
+            pcm = bytearray()
+            for n in range(samples):
+                val = int(0.2 * 32767 * math.sin(2 * math.pi * freq * (n / rate)))
+                pcm.extend(val.to_bytes(2, 'little', signed=True))
+            await self.audiosocket_server.send_audio(conn_id, bytes(pcm))
+            logger.info("Sent test tone over AudioSocket", conn_id=conn_id, fmt='slin16', rate=rate, ms=ms)
         except Exception:
             logger.debug("Error sending test tone", exc_info=True)
 
@@ -931,26 +889,47 @@ class Engine:
         except Exception as e:
             logger.error("Error playing ring tone", channel_id=channel_id, exc_info=True)
 
-    async def _play_audio_via_snoop(self, channel_id: str, audio_data: bytes):
-        """Play audio via snoop channel to avoid interrupting AudioSocket capture."""
-        snoop_channel_id = self.snoop_channels.get(channel_id)
-        if not snoop_channel_id:
-            logger.error("No snoop channel found for playback", channel_id=channel_id)
+    async def _play_audio_via_bridge(self, channel_id: str, audio_data: bytes):
+        """Play audio via bridge to avoid interrupting AudioSocket capture."""
+        bridge_id = self.bridges.get(channel_id)
+        if not bridge_id:
+            logger.error("No bridge found for playback", channel_id=channel_id)
             # Fallback to direct channel playback
             await self.ari_client.play_audio_response(channel_id, audio_data)
             return
 
-        logger.info("Playing audio via snoop channel", 
+        logger.info("Playing audio via bridge", 
                    channel_id=channel_id, 
-                   snoop_channel_id=snoop_channel_id,
+                   bridge_id=bridge_id,
                    audio_size=len(audio_data))
         
         try:
-            await self.ari_client.play_audio_response(snoop_channel_id, audio_data)
+            # Save audio to temporary file and play on bridge
+            unique_filename = f"response-{uuid.uuid4()}.ulaw"
+            container_path = f"/mnt/asterisk_media/ai-generated/{unique_filename}"
+            asterisk_media_uri = f"sound:ai-generated/{unique_filename[:-5]}"
+
+            # Write audio file
+            with open(container_path, "wb") as f:
+                f.write(audio_data)
+            
+            # Change ownership to asterisk user
+            try:
+                asterisk_uid = 995
+                asterisk_gid = 995
+                os.chown(container_path, asterisk_uid, asterisk_gid)
+            except Exception as e:
+                logger.warning("Failed to change file ownership", path=container_path, error=str(e))
+
+            # Play on bridge
+            await self.ari_client.send_command("POST", f"bridges/{bridge_id}/play", 
+                                             data={"media": asterisk_media_uri})
+            logger.info("Audio played on bridge successfully", bridge_id=bridge_id, media_uri=asterisk_media_uri)
+            
         except Exception as e:
-            logger.error("Failed to play audio via snoop channel, falling back to direct playback",
+            logger.error("Failed to play audio via bridge, falling back to direct playback",
                         channel_id=channel_id, 
-                        snoop_channel_id=snoop_channel_id,
+                        bridge_id=bridge_id,
                         error=str(e), exc_info=True)
             # Fallback to direct channel playback
             await self.ari_client.play_audio_response(channel_id, audio_data)

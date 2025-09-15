@@ -48,15 +48,16 @@ class AudioSocketServer:
             "reader": reader,
             "writer": writer,
             "peer": peer,
-            # AudioSocket protocol typically sends a text header first; parse once
-            "header_pending": False,
+            # Expect an initial AudioSocket/1.0 header from Asterisk
+            "header_pending": True,
             "header_buf": bytearray(),
+            "out_buf": bytearray(),
             "format": 'ulaw',
             "rate": 8000,
         }
         logger.info("AudioSocket connection accepted", peer=peer, conn_id=conn_id)
         
-        # AudioSocket connection established - ready to receive audio data
+        # AudioSocket connection established - ready to receive/send raw ulaw frames
         logger.debug("AudioSocket connection ready for audio data", conn_id=conn_id)
         
         # Announce new connection for assignment by engine
@@ -75,13 +76,38 @@ class AudioSocketServer:
                 data = await reader.read(4096)
                 if not data:
                     break
-                if self.on_audio:
+                conn = self._connections.get(conn_id)
+                if not conn:
+                    continue
+                buf: bytearray = conn.get("in_buf") or bytearray()
+                buf.extend(data)
+                conn["in_buf"] = buf
+                # Parse TLV frames: type(1) len(2 big-endian) payload
+                while True:
+                    if len(buf) < 3:
+                        break
+                    ftype = buf[0]
+                    flen = (buf[1] << 8) | buf[2]
+                    if len(buf) < 3 + flen:
+                        break
+                    payload = bytes(buf[3:3+flen])
+                    del buf[:3+flen]
                     try:
-                        conn = self._connections.get(conn_id)
-                        self.on_audio(conn_id, data)
+                        if ftype == 0x01 and flen == 16:
+                            conn['uuid'] = payload
+                            logger.info("Received UUID from client", conn_id=conn_id)
+                        elif ftype == 0x10 and flen > 0:
+                            if self.on_audio:
+                                self.on_audio(conn_id, payload)
+                        elif ftype == 0x00:
+                            logger.info("Terminate received from client", conn_id=conn_id)
+                            raise asyncio.CancelledError()
+                        elif ftype == 0xFF:
+                            logger.warning("Error packet received from client", conn_id=conn_id)
+                        else:
+                            logger.debug("Unknown TLV type", conn_id=conn_id, ftype=hex(ftype), flen=flen)
                     except Exception:
-                        # Non-fatal
-                        logger.debug("on_audio handler error", exc_info=True)
+                        logger.debug("Error handling TLV frame", conn_id=conn_id, exc_info=True)
         except asyncio.CancelledError:
             pass
         except Exception:
@@ -130,13 +156,15 @@ class AudioSocketServer:
             self._connections.pop(conn_id, None)
 
     async def send_audio(self, conn_id: str, data: bytes):
-        """Send downstream audio bytes to a specific AudioSocket connection."""
+        """Send downstream audio (PCM16LE@8k) framed as TLV type 0x10."""
         conn = self._connections.get(conn_id)
         if not conn:
             return
         writer: asyncio.StreamWriter = conn.get("writer")
         try:
-            writer.write(data)
+            flen = len(data)
+            header = bytes([0x10, (flen >> 8) & 0xFF, flen & 0xFF])
+            writer.write(header + data)
             await writer.drain()
         except Exception:
             logger.debug("Error sending audio to AudioSocket", conn_id=conn_id, exc_info=True)

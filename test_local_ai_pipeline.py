@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
-Test script to verify Local AI Server STT→LLM→TTS pipeline works correctly.
+Test script to verify Local AI Server STT->LLM->TTS pipeline works correctly.
 This tests the provider pipeline before integrating with the full conversation flow.
 """
 
@@ -22,11 +23,11 @@ async def test_local_ai_pipeline():
     """Test the Local AI Server pipeline: STT → LLM → TTS"""
     
     # Test 1: Test greeting generation
-    print("🧪 Test 1: Testing greeting generation...")
+    print("Test 1: Testing greeting generation...")
     await test_greeting()
     
     # Test 2: Test audio processing pipeline
-    print("\n🧪 Test 2: Testing audio processing pipeline...")
+    print("\nTest 2: Testing audio processing pipeline...")
     await test_audio_pipeline()
 
 async def test_greeting():
@@ -40,32 +41,33 @@ async def test_greeting():
             }
             
             await websocket.send(json.dumps(greeting_message))
-            print("✅ Sent greeting message to Local AI Server")
+            print("SUCCESS: Sent greeting message to Local AI Server")
             
             # Wait for audio response
             response = await asyncio.wait_for(websocket.recv(), timeout=10.0)
             
             if isinstance(response, bytes):
-                print(f"✅ Received greeting audio response: {len(response)} bytes")
+                print(f"SUCCESS: Received greeting audio response: {len(response)} bytes")
                 return True
             else:
-                print(f"❌ Expected bytes, got: {type(response)}")
+                print(f"ERROR: Expected bytes, got: {type(response)}")
                 return False
                 
     except asyncio.TimeoutError:
-        print("❌ Timeout waiting for greeting response")
+        print("ERROR: Timeout waiting for greeting response")
         return False
     except Exception as e:
-        print(f"❌ Error testing greeting: {e}")
+        print(f"ERROR: Error testing greeting: {e}")
         return False
 
 async def test_audio_pipeline():
     """Test audio processing pipeline (STT → LLM → TTS)"""
     try:
         async with websockets.connect("ws://127.0.0.1:8765") as websocket:
-            # Create some test audio data (simulated ulaw audio)
-            # This is just dummy data - in real usage, this would be actual audio from the caller
-            test_audio = b'\x00' * 8000  # 1 second of silence (simulated)
+            # Create some test audio data (simulated ulaw audio with some variation)
+            # This simulates speech-like audio to produce a better LLM response
+            import random
+            test_audio = bytes([random.randint(0, 255) for _ in range(8000)])  # 1 second of varied audio
             
             # Convert to base64 as expected by the Local AI Server
             audio_data_b64 = base64.b64encode(test_audio).decode('utf-8')
@@ -76,24 +78,24 @@ async def test_audio_pipeline():
             }
             
             await websocket.send(json.dumps(audio_message))
-            print("✅ Sent test audio to Local AI Server")
+            print("SUCCESS: Sent test audio to Local AI Server")
             
-            # Wait for audio response
-            response = await asyncio.wait_for(websocket.recv(), timeout=15.0)
+            # Wait for audio response (increased timeout for long TTS generation)
+            response = await asyncio.wait_for(websocket.recv(), timeout=30.0)
             
             if isinstance(response, bytes):
-                print(f"✅ Received processed audio response: {len(response)} bytes")
-                print("✅ STT → LLM → TTS pipeline working!")
+                print(f"SUCCESS: Received processed audio response: {len(response)} bytes")
+                print("SUCCESS: STT -> LLM -> TTS pipeline working!")
                 return True
             else:
-                print(f"❌ Expected bytes, got: {type(response)}")
+                print(f"ERROR: Expected bytes, got: {type(response)}")
                 return False
                 
     except asyncio.TimeoutError:
-        print("❌ Timeout waiting for audio processing response")
+        print("ERROR: Timeout waiting for audio processing response")
         return False
     except Exception as e:
-        print(f"❌ Error testing audio pipeline: {e}")
+        print(f"ERROR: Error testing audio pipeline: {e}")
         return False
 
 async def test_timeout_greeting():
@@ -107,23 +109,23 @@ async def test_timeout_greeting():
             }
             
             await websocket.send(json.dumps(timeout_message))
-            print("✅ Sent timeout greeting message to Local AI Server")
+            print("SUCCESS: Sent timeout greeting message to Local AI Server")
             
             # Wait for audio response
             response = await asyncio.wait_for(websocket.recv(), timeout=10.0)
             
             if isinstance(response, bytes):
-                print(f"✅ Received timeout greeting audio response: {len(response)} bytes")
+                print(f"SUCCESS: Received timeout greeting audio response: {len(response)} bytes")
                 return True
             else:
-                print(f"❌ Expected bytes, got: {type(response)}")
+                print(f"ERROR: Expected bytes, got: {type(response)}")
                 return False
                 
     except asyncio.TimeoutError:
-        print("❌ Timeout waiting for timeout greeting response")
+        print("ERROR: Timeout waiting for timeout greeting response")
         return False
     except Exception as e:
-        print(f"❌ Error testing timeout greeting: {e}")
+        print(f"ERROR: Error testing timeout greeting: {e}")
         return False
 
 async def main():

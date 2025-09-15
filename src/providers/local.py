@@ -22,6 +22,7 @@ class LocalProvider(AIProviderInterface):
         self.ws_url = "ws://127.0.0.1:8765"
         self._listener_task: Optional[asyncio.Task] = None
         self._active_call_id: Optional[str] = None
+        self.input_mode: str = 'mulaw8k'  # or 'pcm16_8k'
 
     @property
     def supported_codecs(self) -> List[str]:
@@ -41,11 +42,12 @@ class LocalProvider(AIProviderInterface):
     async def send_audio(self, audio_chunk: bytes):
         if self.websocket:
             try:
-                # Convert upstream ulaw@8000 to PCM16@16000 for the local server STT
-                # 1) mu-law (8kHz) -> PCM16 (8kHz)
+                # Convert upstream to PCM16@16000 for the local server STT
                 import audioop
-                pcm8k = audioop.ulaw2lin(audio_chunk, 2)
-                # 2) Resample PCM16 8kHz -> 16kHz
+                if self.input_mode == 'pcm16_8k':
+                    pcm8k = audio_chunk
+                else:
+                    pcm8k = audioop.ulaw2lin(audio_chunk, 2)
                 pcm16k, _ = audioop.ratecv(pcm8k, 2, 1, 8000, 16000, None)
 
                 audio_message = {
@@ -61,6 +63,10 @@ class LocalProvider(AIProviderInterface):
             except Exception as e:
                 logger.error("Error converting/sending audio to Local AI Server", error=str(e), exc_info=True)
                 raise
+
+    def set_input_mode(self, mode: str):
+        # mode: 'mulaw8k' or 'pcm16_8k'
+        self.input_mode = mode
 
     async def play_initial_greeting(self, call_id: str):
         """Play an initial greeting message to the caller."""

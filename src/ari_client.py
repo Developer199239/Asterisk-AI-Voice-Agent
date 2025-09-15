@@ -235,34 +235,6 @@ class ARIClient:
                         error=str(e))
             return False
 
-    async def create_snoop_channel(self, channel_id: str, snoop_id: str, spy: str = "whisper", app: str = "asterisk-ai-voice-agent"):
-        """Create a snoop channel to spy on the given channel."""
-        try:
-            response = await self.send_command("POST", "channels/snoopChannel",
-                params={
-                    "channelId": channel_id,
-                    "snoopId": snoop_id,
-                    "spy": spy,
-                    "app": app
-                }
-            )
-            
-            if response and "id" in response:
-                logger.info("Snoop channel created successfully", 
-                           channel_id=channel_id, 
-                           snoop_id=snoop_id,
-                           snoop_channel_id=response["id"])
-                return response
-            else:
-                raise Exception(f"Invalid response from snoop channel creation: {response}")
-                
-        except Exception as e:
-            logger.error("Failed to create snoop channel", 
-                        channel_id=channel_id, 
-                        snoop_id=snoop_id,
-                        error=str(e), 
-                        exc_info=True)
-            raise
 
     async def play_audio_response(self, channel_id: str, audio_data: bytes):
         """Saves TTS audio to shared media directory and commands Asterisk to play it."""
