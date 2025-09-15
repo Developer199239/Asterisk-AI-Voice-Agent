@@ -235,36 +235,6 @@ class ARIClient:
                         error=str(e))
             return False
 
-    async def create_audiosocket_connection(self, channel_id: str, audiosocket_uuid: str, host: str = "127.0.0.1", port: int = 8090) -> bool:
-        """Create AudioSocket connection via ARI after Stasis takes control."""
-        try:
-            # Set channel variables for AudioSocket
-            await self.send_command("POST", f"channels/{channel_id}/setChannelVar", 
-                                 params={"variable": "AUDIOSOCKET_UUID", "value": audiosocket_uuid})
-            await self.send_command("POST", f"channels/{channel_id}/setChannelVar", 
-                                 params={"variable": "AUDIOSOCKET_HOST", "value": host})
-            await self.send_command("POST", f"channels/{channel_id}/setChannelVar", 
-                                 params={"variable": "AUDIOSOCKET_PORT", "value": str(port)})
-            
-            # Execute AudioSocket application via ARI
-            # We need to create a new dialplan context that only has the AudioSocket command
-            await self.send_command("POST", f"channels/{channel_id}/continueInDialplan", 
-                                 params={"context": "audiosocket-only", "extension": "s", "priority": 1})
-            
-            logger.info("AudioSocket connection initiated via ARI", 
-                       channel_id=channel_id, 
-                       audiosocket_uuid=audiosocket_uuid,
-                       host=host, 
-                       port=port)
-            return True
-            
-        except Exception as e:
-            logger.error("Failed to create AudioSocket via ARI", 
-                        channel_id=channel_id, 
-                        audiosocket_uuid=audiosocket_uuid,
-                        error=str(e), 
-                        exc_info=True)
-            return False
 
     async def play_audio_response(self, channel_id: str, audio_data: bytes):
         """Saves TTS audio to shared media directory and commands Asterisk to play it."""

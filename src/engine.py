@@ -172,23 +172,13 @@ class Engine:
 
             if self.config.audio_transport == "audiosocket":
                 if audiosocket_uuid:
-                    logger.info("Creating AudioSocket connection via ARI", channel_id=channel_id, audiosocket_uuid=audiosocket_uuid)
+                    logger.info("Waiting for AudioSocket connection established by dialplan", 
+                               channel_id=channel_id, audiosocket_uuid=audiosocket_uuid)
                     
-                    # Create AudioSocket connection via ARI
-                    success = await self.ari_client.create_audiosocket_connection(
-                        channel_id=channel_id,
-                        audiosocket_uuid=audiosocket_uuid,
-                        host="127.0.0.1",
-                        port=8090
-                    )
-                    
-                    if success:
-                        logger.info("AudioSocket connection created successfully", channel_id=channel_id)
+                    # Wait up to 10 seconds for the AudioSocket connection to be established by dialplan
+                    for attempt in range(20):  # 20 attempts * 0.5s = 10 seconds
+                        await asyncio.sleep(0.5)
                         
-                        # Wait a moment for AudioSocket connection to establish
-                        await asyncio.sleep(1.0)
-                        
-                        # Try to bind the connection
                         conn_id = None
                         if hasattr(self, 'audiosocket_server') and self.audiosocket_server:
                             try:
@@ -197,14 +187,14 @@ class Engine:
                                 conn_id = None
                         
                         if conn_id:
+                            logger.info("AudioSocket connection found, binding to channel", 
+                                       channel_id=channel_id, conn_id=conn_id)
                             await self._bind_connection_to_channel(conn_id, channel_id, provider_name)
                             return
-                        else:
-                            logger.warning("AudioSocket created but no connection available yet", channel_id=channel_id)
-                    else:
-                        logger.error("Failed to create AudioSocket connection via ARI", channel_id=channel_id)
-                        await self._cleanup_call(channel_id)
-                        return
+                    
+                    logger.error("AudioSocket connection not established within 10 seconds", channel_id=channel_id)
+                    await self._cleanup_call(channel_id)
+                    return
                 else:
                     logger.error("No AudioSocket UUID provided", channel_id=channel_id)
                     await self._cleanup_call(channel_id)
