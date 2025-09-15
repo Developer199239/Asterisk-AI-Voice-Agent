@@ -21,6 +21,7 @@ class LocalProvider(AIProviderInterface):
         self.websocket: Optional[websockets.WebSocketClientProtocol] = None
         self.ws_url = "ws://127.0.0.1:8765"
         self._listener_task: Optional[asyncio.Task] = None
+        self._active_call_id: Optional[str] = None
 
     @property
     def supported_codecs(self) -> List[str]:
@@ -31,6 +32,7 @@ class LocalProvider(AIProviderInterface):
             logger.info("Connecting to Local AI Server...", url=self.ws_url)
             self.websocket = await websockets.connect(self.ws_url)
             logger.info("✅ Successfully connected to Local AI Server.")
+            self._active_call_id = call_id
             self._listener_task = asyncio.create_task(self._receive_loop())
         except Exception as e:
             logger.error("Failed to connect to Local AI Server", exc_info=True)
@@ -92,7 +94,7 @@ class LocalProvider(AIProviderInterface):
             async for message in self.websocket:
                 # The local AI server will send back raw audio bytes for TTS
                 if isinstance(message, bytes):
-                    audio_event = {'type': 'AgentAudio', 'data': message}
+                    audio_event = {'type': 'AgentAudio', 'data': message, 'call_id': self._active_call_id}
                     if self.on_event:
                         await self.on_event(audio_event)
                 else:

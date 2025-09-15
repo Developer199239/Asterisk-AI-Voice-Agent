@@ -19,11 +19,13 @@ class AudioSocketServer:
 
     def __init__(self, host: str = "127.0.0.1", port: int = 8090,
                  on_audio: Optional[Callable[[str, bytes], None]] = None,
-                 on_accept: Optional[Callable[[str], None]] = None):
+                 on_accept: Optional[Callable[[str], None]] = None,
+                 on_close: Optional[Callable[[str], None]] = None):
         self.host = host
         self.port = port
         self.on_audio = on_audio
         self.on_accept = on_accept
+        self.on_close = on_close
         self._server: Optional[asyncio.base_events.Server] = None
         self._connections: Dict[str, Dict[str, Any]] = {}
         self._new_conn_queue: asyncio.Queue = asyncio.Queue()
@@ -92,6 +94,12 @@ class AudioSocketServer:
                 pass
             self._connections.pop(conn_id, None)
             logger.info("AudioSocket connection closed", peer=peer, conn_id=conn_id)
+            # Notify close callback for cleanup
+            try:
+                if self.on_close:
+                    self.on_close(conn_id)
+            except Exception:
+                logger.debug("on_close handler error", exc_info=True)
 
     async def await_connection(self, timeout: Optional[float] = None) -> Optional[str]:
         """Wait for the next incoming connection and return its conn_id."""

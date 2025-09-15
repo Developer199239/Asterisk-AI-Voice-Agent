@@ -40,6 +40,8 @@ class Engine:
         self.audio_buffers: Dict[str, bytes] = {}
         self.buffer_size = 1600  # 200ms of audio at 8kHz (1600 bytes of ulaw)
         self.audiosocket_server: Any = None
+        # Headless sessions for AudioSocket-only mode (no ARI channel)
+        self.headless_sessions: Dict[str, Dict[str, Any]] = {}
         # Snoop channel tracking for AudioSocket + ARI integration
         self.snoop_channels: Dict[str, str] = {}
 
@@ -80,7 +82,10 @@ class Engine:
             host = os.getenv("AUDIOSOCKET_HOST", "127.0.0.1")
             port = int(os.getenv("AUDIOSOCKET_PORT", "8090"))
             # Wire on_audio callback to route chunks to provider
-            self.audiosocket_server = AudioSocketServer(host=host, port=port, on_audio=self._on_audiosocket_audio, on_accept=self._on_audiosocket_accept)
+            self.audiosocket_server = AudioSocketServer(host=host, port=port,
+                                                       on_audio=self._on_audiosocket_audio,
+                                                       on_accept=self._on_audiosocket_accept,
+                                                       on_close=self._on_audiosocket_close)
             asyncio.create_task(self.audiosocket_server.start())
         await self.ari_client.connect()
         asyncio.create_task(self.ari_client.start_listening())
@@ -302,10 +307,17 @@ class Engine:
             logger.debug("Error in ChannelVarset handler", exc_info=True)
 
     def _on_audiosocket_accept(self, conn_id: str):
-        """Attempt immediate bind on accept if a channel is pending."""
+        """Bind to pending ARI channel or start a headless session on accept."""
         try:
             channel_id = self.pending_channel_for_bind
             if not channel_id:
+                # Start headless provider session (AudioSocket-only)
+                provider_name = self.config.default_provider
+                provider = self.providers.get(provider_name)
+                if not provider:
+                    logger.error("Default provider not found for headless session", provider=provider_name)
+                    return
+                asyncio.get_event_loop().create_task(self._start_headless_session(conn_id, provider))
                 return
             if channel_id in self.channel_to_conn:
                 self.pending_channel_for_bind = None
@@ -317,6 +329,34 @@ class Engine:
             self.pending_channel_for_bind = None
         except Exception:
             logger.debug("Error in on_accept binder", exc_info=True)
+
+    async def _start_headless_session(self, conn_id: str, provider: AIProviderInterface):
+        """Start provider session without ARI channel; stream via AudioSocket."""
+        try:
+            logger.info("Starting headless session", conn_id=conn_id)
+            await provider.start_session(conn_id)
+            self.headless_sessions[conn_id] = {"provider": provider, "conversation_state": "greeting"}
+            # Optional initial greeting
+            if hasattr(provider, 'play_initial_greeting'):
+                try:
+                    await provider.play_initial_greeting(conn_id)
+                    logger.debug("Headless initial greeting requested", conn_id=conn_id)
+                except Exception:
+                    logger.debug("Headless initial greeting failed", conn_id=conn_id, exc_info=True)
+        except Exception:
+            logger.error("Failed to start headless session", conn_id=conn_id, exc_info=True)
+
+    def _on_audiosocket_close(self, conn_id: str):
+        """Cleanup headless session when AudioSocket closes."""
+        try:
+            session = self.headless_sessions.pop(conn_id, None)
+            if session:
+                provider = session.get('provider')
+                if provider:
+                    asyncio.get_event_loop().create_task(provider.stop_session())
+                logger.info("Headless session cleaned up", conn_id=conn_id)
+        except Exception:
+            logger.debug("Error cleaning up headless session", conn_id=conn_id, exc_info=True)
 
     async def _load_local_models(self, provider, channel_id: str):
         """Load local models and return True when ready."""
@@ -577,14 +617,21 @@ class Engine:
         """Route inbound AudioSocket audio to the mapped provider for that connection."""
         try:
             channel_id = self.conn_to_channel.get(conn_id)
-            if not channel_id:
-                return
-            call_data = self.active_calls.get(channel_id)
-            if not call_data:
-                return
-            provider = call_data.get('provider')
-            if provider:
-                asyncio.create_task(provider.send_audio(audio_data))
+            if channel_id:
+                call_data = self.active_calls.get(channel_id)
+                if not call_data:
+                    return
+                provider = call_data.get('provider')
+                if provider:
+                    asyncio.create_task(provider.send_audio(audio_data))
+            else:
+                # Headless mapping by conn_id
+                session = self.headless_sessions.get(conn_id)
+                if not session:
+                    return
+                provider = session.get('provider')
+                if provider:
+                    asyncio.create_task(provider.send_audio(audio_data))
         except Exception:
             logger.debug("Error routing AudioSocket audio", exc_info=True)
 
@@ -597,14 +644,14 @@ class Engine:
             if event_type == "AgentAudio":
                 # Handle audio data from the provider - now we need to play it back
                 audio_data = event.get("data")
+                call_id = event.get("call_id")
                 if audio_data:
                     # Prefer streaming over AudioSocket only when explicitly enabled
                     if self.config.audio_transport == 'audiosocket' and self.config.downstream_mode == 'stream':
-                        for channel_id, call_data in self.active_calls.items():
-                            conn_id = self.channel_to_conn.get(channel_id)
-                            if not conn_id:
-                                continue
-                            # Determine negotiated format
+                        sent = False
+                        # Headless session routing: call_id equals conn_id
+                        if call_id and call_id in self.headless_sessions:
+                            conn_id = call_id
                             fmt = 'ulaw'
                             rate = 8000
                             try:
@@ -615,17 +662,48 @@ class Engine:
                                     rate = int(info['rate'])
                             except Exception:
                                 pass
+                            out_bytes = audio_data
                             try:
-                                out_bytes = audio_data
                                 if fmt.startswith('slin'):
-                                    # Convert ulaw->linear16
                                     out_bytes = audioop.ulaw2lin(audio_data, 2)
-                                # Send downstream over socket
-                                await self.audiosocket_server.send_audio(conn_id, out_bytes)
-                                logger.debug("Streamed provider audio over AudioSocket", channel_id=channel_id, bytes=len(out_bytes), fmt=fmt, rate=rate)
                             except Exception:
-                                logger.debug("Error streaming audio over AudioSocket; falling back to ARI", exc_info=True)
-                                await self._play_audio_via_snoop(channel_id, audio_data)
+                                pass
+                            try:
+                                await self.audiosocket_server.send_audio(conn_id, out_bytes)
+                                logger.debug("Streamed provider audio over AudioSocket (headless)", conn_id=conn_id, bytes=len(out_bytes), fmt=fmt, rate=rate)
+                                # Update headless state
+                                hs = self.headless_sessions.get(conn_id, {})
+                                if hs.get('conversation_state') in ('greeting', 'processing'):
+                                    hs['conversation_state'] = 'listening'
+                                sent = True
+                            except Exception:
+                                logger.debug("Error streaming headless audio over AudioSocket", exc_info=True)
+                        if not sent:
+                            for channel_id, call_data in self.active_calls.items():
+                                conn_id = self.channel_to_conn.get(channel_id)
+                                if not conn_id:
+                                    continue
+                                # Determine negotiated format
+                                fmt = 'ulaw'
+                                rate = 8000
+                                try:
+                                    info = self.audiosocket_server.get_connection_info(conn_id)
+                                    if info.get('format'):
+                                        fmt = info['format']
+                                    if info.get('rate'):
+                                        rate = int(info['rate'])
+                                except Exception:
+                                    pass
+                                try:
+                                    out_bytes = audio_data
+                                    if fmt.startswith('slin'):
+                                        out_bytes = audioop.ulaw2lin(audio_data, 2)
+                                    # Send downstream over socket
+                                    await self.audiosocket_server.send_audio(conn_id, out_bytes)
+                                    logger.debug("Streamed provider audio over AudioSocket", channel_id=channel_id, bytes=len(out_bytes), fmt=fmt, rate=rate)
+                                except Exception:
+                                    logger.debug("Error streaming audio over AudioSocket; falling back to ARI", exc_info=True)
+                                    await self._play_audio_via_snoop(channel_id, audio_data)
                     else:
                         # File-based playback via ARI (default path)
                         for channel_id, call_data in self.active_calls.items():
