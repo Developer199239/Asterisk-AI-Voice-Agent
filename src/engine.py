@@ -39,6 +39,15 @@ class AudioFrameProcessor:
             self.buffer = self.buffer[self.frame_bytes:]
             frames.append(frame)
         
+        # Debug frame processing
+        if len(frames) > 0:
+            logger.debug("🎤 AVR FrameProcessor - Frames Generated",
+                        input_bytes=len(audio_data),
+                        buffer_before=len(self.buffer) + (len(frames) * self.frame_bytes),
+                        buffer_after=len(self.buffer),
+                        frames_generated=len(frames),
+                        frame_size=self.frame_bytes)
+        
         return frames
     
     def flush(self) -> bytes:
@@ -62,13 +71,17 @@ class VoiceActivityDetector:
             self.silence_frames = 0
             if not self.is_speaking:
                 self.is_speaking = True
-                logger.debug("🎤 Speech started", energy=audio_energy)
+                logger.debug("🎤 AVR VAD - Speech Started", 
+                           energy=f"{audio_energy:.4f}", 
+                           threshold=f"{self.speech_threshold:.4f}")
             return True
         else:
             self.silence_frames += 1
             if self.is_speaking and self.silence_frames >= self.max_silence_frames:
                 self.is_speaking = False
-                logger.debug("🎤 Speech ended", silence_frames=self.silence_frames)
+                logger.debug("🎤 AVR VAD - Speech Ended", 
+                           silence_frames=self.silence_frames,
+                           max_silence=self.max_silence_frames)
             return self.silence_frames < self.max_silence_frames
 
 
@@ -487,6 +500,12 @@ class Engine:
             # Initialize frame processor and VAD for this connection
             self.frame_processors[conn_id] = AudioFrameProcessor()
             self.vad_detectors[conn_id] = VoiceActivityDetector()
+            logger.info("🎤 AVR Frame Processing - Components Initialized",
+                       conn_id=conn_id,
+                       frame_size=160,
+                       frame_bytes=320,
+                       speech_threshold=0.1,
+                       max_silence_frames=10)
             channel_id = self.pending_channel_for_bind
             if not channel_id:
                 # Start headless provider session (AudioSocket-only)
@@ -818,44 +837,91 @@ class Engine:
     def _on_audiosocket_audio(self, conn_id: str, audio_data: bytes):
         """Route inbound AudioSocket audio using frame-based processing to prevent voice queue backlog."""
         try:
+            # Enhanced debugging for frame processing implementation
+            count = self._audio_rx_debug.get(conn_id, 0) + 1
+            self._audio_rx_debug[conn_id] = count
+            
+            # Log every chunk for first 10, then every 50th
+            if count <= 10 or count % 50 == 0:
+                logger.info("🎤 AVR Frame Processing - Audio Chunk Received",
+                           conn_id=conn_id,
+                           bytes=len(audio_data),
+                           chunk_number=count,
+                           has_frame_processor=conn_id in self.frame_processors,
+                           has_vad_detector=conn_id in self.vad_detectors)
+            
             # Get frame processor and VAD for this connection
             frame_processor = self.frame_processors.get(conn_id)
             vad_detector = self.vad_detectors.get(conn_id)
             
             if not frame_processor or not vad_detector:
-                logger.warning("🚨 No frame processor or VAD found for connection", conn_id=conn_id)
+                logger.warning("🚨 AVR Frame Processing - Missing Components", 
+                              conn_id=conn_id,
+                              has_frame_processor=frame_processor is not None,
+                              has_vad_detector=vad_detector is not None,
+                              available_processors=list(self.frame_processors.keys()),
+                              available_vads=list(self.vad_detectors.keys()))
                 return
             
             # Convert ulaw to PCM16 for frame processing
             try:
                 pcm_data = audioop.ulaw2lin(audio_data, 2)
+                if count <= 10 or count % 50 == 0:
+                    logger.info("🎤 AVR Frame Processing - Audio Converted",
+                               conn_id=conn_id,
+                               ulaw_bytes=len(audio_data),
+                               pcm_bytes=len(pcm_data),
+                               chunk_number=count)
             except Exception as e:
-                logger.error("Failed to convert ulaw to PCM16", error=str(e), exc_info=True)
+                logger.error("🚨 AVR Frame Processing - Conversion Failed", 
+                            conn_id=conn_id, error=str(e), exc_info=True)
                 return
             
             # Process audio into frames
             frames = frame_processor.process_audio(pcm_data)
             
+            if count <= 10 or count % 50 == 0:
+                logger.info("🎤 AVR Frame Processing - Frames Generated",
+                           conn_id=conn_id,
+                           input_bytes=len(pcm_data),
+                           frames_generated=len(frames),
+                           frame_size=frame_processor.frame_bytes,
+                           chunk_number=count)
+            
             # Process each frame
-            for frame in frames:
+            speech_frames = 0
+            silence_frames = 0
+            
+            for frame_idx, frame in enumerate(frames):
                 # Calculate energy for VAD
                 audio_energy = self._calculate_frame_energy(frame)
                 
                 # Only process if speech detected
                 if vad_detector.is_speech(audio_energy):
+                    speech_frames += 1
                     # Route frame to appropriate provider
                     self._route_audio_frame(conn_id, frame, audio_energy)
                 else:
+                    silence_frames += 1
                     # Log silence frames occasionally
-                    if self._audio_rx_debug.get(conn_id, 0) % 100 == 0:
-                        logger.debug("🎤 Silence frame skipped", 
-                                     conn_id=conn_id, energy=f"{audio_energy:.4f}")
+                    if count % 100 == 0:
+                        logger.debug("🎤 AVR Frame Processing - Silence Frame Skipped", 
+                                     conn_id=conn_id, 
+                                     frame_idx=frame_idx,
+                                     energy=f"{audio_energy:.4f}",
+                                     chunk_number=count)
             
-            # Update debug counter
-            self._audio_rx_debug[conn_id] = self._audio_rx_debug.get(conn_id, 0) + 1
+            # Log frame processing summary
+            if count <= 10 or count % 50 == 0:
+                logger.info("🎤 AVR Frame Processing - Summary",
+                           conn_id=conn_id,
+                           total_frames=len(frames),
+                           speech_frames=speech_frames,
+                           silence_frames=silence_frames,
+                           chunk_number=count)
             
         except Exception as e:
-            logger.error("🚨 Error in frame-based audio processing", 
+            logger.error("🚨 AVR Frame Processing - Error", 
                          conn_id=conn_id, error=str(e), exc_info=True)
     
     def _calculate_frame_energy(self, frame: bytes) -> float:
@@ -876,35 +942,39 @@ class Engine:
             if channel_id:
                 call_data = self.active_calls.get(channel_id)
                 if not call_data:
-                    logger.warning("🚨 Audio frame received but no active call data found", 
+                    logger.warning("🚨 AVR Frame Routing - No Active Call Data", 
                                    conn_id=conn_id, channel_id=channel_id)
                     return
                 provider = call_data.get('provider')
                 if provider:
-                    logger.debug("🎯 Routing frame to provider", 
+                    logger.debug("🎯 AVR Frame Routing - To Provider", 
                                  conn_id=conn_id, channel_id=channel_id, 
-                                 provider=type(provider).__name__, energy=f"{audio_energy:.4f}")
+                                 provider=type(provider).__name__, 
+                                 energy=f"{audio_energy:.4f}",
+                                 frame_bytes=len(frame))
                     asyncio.create_task(provider.send_audio(frame))
                 else:
-                    logger.warning("🚨 Audio frame received but no provider found", 
+                    logger.warning("🚨 AVR Frame Routing - No Provider Found", 
                                    conn_id=conn_id, channel_id=channel_id)
             else:
                 # Headless mapping by conn_id
                 session = self.headless_sessions.get(conn_id)
                 if not session:
-                    logger.warning("🚨 Audio frame received but no headless session found", 
+                    logger.warning("🚨 AVR Frame Routing - No Headless Session", 
                                    conn_id=conn_id)
                     return
                 provider = session.get('provider')
                 if provider:
-                    logger.debug("🎯 Routing frame to headless provider", 
-                                 conn_id=conn_id, provider=type(provider).__name__, energy=f"{audio_energy:.4f}")
+                    logger.debug("🎯 AVR Frame Routing - To Headless Provider", 
+                                 conn_id=conn_id, provider=type(provider).__name__, 
+                                 energy=f"{audio_energy:.4f}",
+                                 frame_bytes=len(frame))
                     asyncio.create_task(provider.send_audio(frame))
                 else:
-                    logger.warning("🚨 Audio frame received but no headless provider found", 
+                    logger.warning("🚨 AVR Frame Routing - No Headless Provider", 
                                    conn_id=conn_id)
         except Exception as e:
-            logger.error("🚨 Error routing audio frame", 
+            logger.error("🚨 AVR Frame Routing - Error", 
                          conn_id=conn_id, error=str(e), exc_info=True)
 
     async def _start_health_server(self):
