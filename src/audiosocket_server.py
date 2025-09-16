@@ -82,6 +82,35 @@ class AudioSocketServer:
                 buf: bytearray = conn.get("in_buf") or bytearray()
                 buf.extend(data)
                 conn["in_buf"] = buf
+                
+                # Handle initial AudioSocket protocol header
+                if conn.get("header_pending", True):
+                    header_buf = conn.get("header_buf", bytearray())
+                    header_buf.extend(data)
+                    conn["header_buf"] = header_buf
+                    
+                    # Look for AudioSocket/1.0 header
+                    header_str = header_buf.decode('utf-8', errors='ignore')
+                    if "AudioSocket/1.0" in header_str:
+                        logger.info("Received AudioSocket protocol header", conn_id=conn_id, header=header_str.strip())
+                        conn["header_pending"] = False
+                        # Remove header from buffer
+                        header_end = header_str.find("AudioSocket/1.0") + len("AudioSocket/1.0")
+                        if header_end < len(header_buf):
+                            remaining = header_buf[header_end:]
+                            conn["in_buf"] = remaining
+                            buf = remaining
+                        else:
+                            conn["in_buf"] = bytearray()
+                            buf = bytearray()
+                    elif len(header_buf) > 100:  # Prevent infinite header search
+                        logger.warning("AudioSocket header not found, proceeding anyway", conn_id=conn_id)
+                        conn["header_pending"] = False
+                        conn["in_buf"] = header_buf
+                        buf = header_buf
+                    else:
+                        continue  # Keep waiting for header
+                
                 # Parse TLV frames: type(1) len(2 big-endian) payload
                 while True:
                     if len(buf) < 3:
