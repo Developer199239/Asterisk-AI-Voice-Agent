@@ -45,16 +45,20 @@ class Engine:
     def _setup_providers(self):
         """Initialize AI providers."""
         try:
+            # Create event callback for providers
+            def on_provider_event(event_data: Dict[str, Any]):
+                logger.info("Provider event", event=event_data)
+            
             # Local provider
             if self.config.providers.get('local', {}).get('enabled', False):
                 local_config = self.config.providers['local']
-                self.providers['local'] = LocalProvider(local_config)
+                self.providers['local'] = LocalProvider(local_config, on_provider_event)
                 logger.info("Local provider initialized")
             
             # Deepgram provider
             if self.config.providers.get('deepgram', {}).get('enabled', False):
                 deepgram_config = self.config.providers['deepgram']
-                self.providers['deepgram'] = DeepgramProvider(deepgram_config)
+                self.providers['deepgram'] = DeepgramProvider(deepgram_config, on_provider_event)
                 logger.info("Deepgram provider initialized")
                 
             logger.info("Providers setup complete", 
