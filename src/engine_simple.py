@@ -81,7 +81,7 @@ class Engine:
             self.ari_client.add_event_handler("ChannelDestroyed", self._handle_channel_destroyed)
             
             # Start ARI event processing
-            await self.ari_client.start_event_processing()
+            asyncio.create_task(self.ari_client.start_listening())
             logger.info("ARI event processing started")
             
             self.running = True
