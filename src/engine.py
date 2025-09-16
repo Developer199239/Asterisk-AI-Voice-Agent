@@ -116,6 +116,9 @@ class Engine:
         self.local_channels: Dict[str, str] = {}  # channel_id -> local_channel_id
         # Map our synthesized UUID extension to the real ARI caller channel id
         self.uuidext_to_channel: Dict[str, str] = {}
+        # NEW: Caller channel tracking for dual StasisStart handling
+        self.caller_channels: Dict[str, Dict[str, Any]] = {}  # caller_channel_id -> call_data
+        self.pending_local_channels: Dict[str, str] = {}  # local_channel_id -> caller_channel_id
         # Debug counter for inbound AudioSocket audio frames per connection
         self._audio_rx_debug: Dict[str, int] = {}
         # Keepalive tasks per AudioSocket connection
@@ -229,182 +232,238 @@ class Engine:
         else:
             logger.info(f"Default provider '{self.config.default_provider}' is available and ready.")
 
+    def _is_caller_channel(self, channel: dict) -> bool:
+        """Check if this is a caller channel (SIP, PJSIP, etc.)"""
+        channel_name = channel.get('name', '')
+        return any(channel_name.startswith(prefix) for prefix in ['SIP/', 'PJSIP/', 'DAHDI/', 'IAX2/'])
+
+    def _is_local_channel(self, channel: dict) -> bool:
+        """Check if this is a Local channel"""
+        channel_name = channel.get('name', '')
+        return channel_name.startswith('Local/')
+
+    def _find_caller_for_local(self, local_channel_id: str) -> Optional[str]:
+        """Find the caller channel that corresponds to this Local channel."""
+        # Check if we have a pending Local channel mapping
+        if local_channel_id in self.pending_local_channels:
+            return self.pending_local_channels[local_channel_id]
+        
+        # Fallback: search through caller channels
+        for caller_id, call_data in self.caller_channels.items():
+            if call_data.get('local_channel_id') == local_channel_id:
+                return caller_id
+        
+        return None
+
     async def _handle_stasis_start(self, event: dict):
-        """Handle a new call entering Stasis using Local Channel Bridge pattern."""
+        """Handle StasisStart events for both caller and Local channels."""
         logger.debug("StasisStart event received", event_data=event)
         channel = event.get('channel', {})
         channel_id = channel.get('id')
-        caller_info = channel.get('caller', {})
         
-        # Check if this is a Local channel (already processed)
-        if channel_id in self.local_channels.values():
-            logger.debug("Ignoring Local channel StasisStart", channel_id=channel_id)
-            return
+        if self._is_caller_channel(channel):
+            # This is the caller channel entering Stasis
+            await self._handle_caller_stasis_start(channel_id, channel)
+        elif self._is_local_channel(channel):
+            # This is the Local channel entering Stasis
+            await self._handle_local_stasis_start(channel_id, channel)
+        else:
+            logger.warning("Unknown channel type in StasisStart", 
+                          channel_id=channel_id, 
+                          channel_name=channel.get('name'))
+
+    async def _handle_caller_stasis_start(self, caller_channel_id: str, channel: dict):
+        """Handle caller channel entering Stasis."""
+        caller_info = channel.get('caller', {})
+        logger.info("Caller channel entered Stasis", 
+                    channel_id=caller_channel_id,
+                    caller_name=caller_info.get('name'),
+                    caller_number=caller_info.get('number'))
         
         # Check if call is already in progress
-        if channel_id in self.active_calls:
-            logger.warning("Call already in progress", channel_id=channel_id)
-            return
-            
-        logger.info("New call received", channel_id=channel_id,
-                    caller={"name": caller_info.get("name"), "number": caller_info.get("number")})
-
-        provider = self.providers.get(self.config.default_provider)
-        if not provider:
-            logger.error("Default provider not found", provider=self.config.default_provider)
-            await self.ari_client.hangup_channel(channel_id)
+        if caller_channel_id in self.caller_channels:
+            logger.warning("Caller already in progress", channel_id=caller_channel_id)
             return
         
         try:
-            # Answer the channel
-            await self.ari_client.answer_channel(channel_id)
-            logger.info("Channel answered", channel_id=channel_id)
+            # Answer the caller
+            await self.ari_client.answer_channel(caller_channel_id)
+            logger.info("Caller channel answered", channel_id=caller_channel_id)
+            
+            # Store caller info
+            self.caller_channels[caller_channel_id] = {
+                "status": "waiting_for_local",
+                "channel": channel,
+                "local_channel_id": None,
+                "bridge_id": None
+            }
+            
+            # Originate Local channel
+            await self._originate_local_channel(caller_channel_id)
+            
+        except Exception as e:
+            logger.error("Failed to handle caller StasisStart", 
+                        caller_channel_id=caller_channel_id, 
+                        error=str(e), exc_info=True)
+            await self._cleanup_call(caller_channel_id)
 
-            # Create a new mixing bridge
+    async def _handle_local_stasis_start(self, local_channel_id: str, channel: dict):
+        """Handle Local channel entering Stasis."""
+        logger.info("Local channel entered Stasis", 
+                    channel_id=local_channel_id,
+                    channel_name=channel.get('name'))
+        
+        try:
+            # Find the caller this Local channel belongs to
+            caller_channel_id = self._find_caller_for_local(local_channel_id)
+            if not caller_channel_id:
+                logger.error("No caller found for Local channel", local_channel_id=local_channel_id)
+                await self.ari_client.hangup_channel(local_channel_id)
+                return
+            
+            # Update caller info with Local channel ID
+            if caller_channel_id in self.caller_channels:
+                self.caller_channels[caller_channel_id]["local_channel_id"] = local_channel_id
+                self.local_channels[caller_channel_id] = local_channel_id
+            
+            # Create bridge and connect channels
+            await self._create_bridge_and_connect(caller_channel_id, local_channel_id)
+            
+        except Exception as e:
+            logger.error("Failed to handle Local StasisStart", 
+                        local_channel_id=local_channel_id, 
+                        error=str(e), exc_info=True)
+            # Clean up both channels
+            caller_channel_id = self._find_caller_for_local(local_channel_id)
+            if caller_channel_id:
+                await self._cleanup_call(caller_channel_id)
+            await self.ari_client.hangup_channel(local_channel_id)
+
+    async def _originate_local_channel(self, caller_channel_id: str):
+        """Originate Local channel for AudioSocket."""
+        local_endpoint = f"Local/{caller_channel_id}@ai-agent-media-fork/n"
+        
+        orig_params = {
+            "endpoint": local_endpoint,
+            "extension": caller_channel_id,
+            "context": "ai-agent-media-fork",
+            "priority": "1",
+            "timeout": "30",
+            "app": self.config.asterisk.app_name,
+        }
+        
+        logger.info("Originating Local channel", 
+                    endpoint=local_endpoint, 
+                    caller_channel_id=caller_channel_id)
+        
+        try:
+            response = await self.ari_client.send_command("POST", "channels", params=orig_params)
+            if response and response.get("id"):
+                local_channel_id = response["id"]
+                # Store pending mapping
+                self.pending_local_channels[local_channel_id] = caller_channel_id
+                logger.info("Local channel originated", 
+                           local_channel_id=local_channel_id, 
+                           caller_channel_id=caller_channel_id)
+            else:
+                raise RuntimeError("Failed to originate Local channel")
+        except Exception as e:
+            logger.error("Local channel originate failed", 
+                        caller_channel_id=caller_channel_id, 
+                        error=str(e), exc_info=True)
+            raise
+
+    async def _create_bridge_and_connect(self, caller_channel_id: str, local_channel_id: str):
+        """Create bridge and connect both channels."""
+        try:
+            # Create mixing bridge
             bridge_id = await self.ari_client.create_bridge(bridge_type="mixing")
             if not bridge_id:
                 raise RuntimeError("Failed to create mixing bridge")
-            logger.info("Created bridge", bridge_id=bridge_id, channel_id=channel_id)
+            
+            logger.info("Bridge created", bridge_id=bridge_id, 
+                       caller_channel_id=caller_channel_id, 
+                       local_channel_id=local_channel_id)
+            
+            # Add both channels to bridge
+            caller_success = await self.ari_client.add_channel_to_bridge(bridge_id, caller_channel_id)
+            local_success = await self.ari_client.add_channel_to_bridge(bridge_id, local_channel_id)
+            
+            if not caller_success:
+                logger.error("Failed to add caller channel to bridge", 
+                            bridge_id=bridge_id, caller_channel_id=caller_channel_id)
+                raise RuntimeError("Failed to add caller channel to bridge")
+            
+            if not local_success:
+                logger.error("Failed to add Local channel to bridge", 
+                            bridge_id=bridge_id, local_channel_id=local_channel_id)
+                raise RuntimeError("Failed to add Local channel to bridge")
+            
+            # Store bridge info
+            self.bridges[caller_channel_id] = bridge_id
+            if caller_channel_id in self.caller_channels:
+                self.caller_channels[caller_channel_id]["bridge_id"] = bridge_id
+                self.caller_channels[caller_channel_id]["status"] = "connected"
+            
+            logger.info("Channels successfully bridged", 
+                       bridge_id=bridge_id, 
+                       caller_channel_id=caller_channel_id, 
+                       local_channel_id=local_channel_id)
+            
+            # Start provider session and bind AudioSocket
+            await self._start_provider_session(caller_channel_id, local_channel_id)
+            
+        except Exception as e:
+            logger.error("Failed to create bridge and connect channels", 
+                        caller_channel_id=caller_channel_id, 
+                        local_channel_id=local_channel_id, 
+                        error=str(e), exc_info=True)
+            await self._cleanup_call(caller_channel_id)
 
-            # Originate Local channel to run our media fork dialplan
-            # Use a simple extension pattern since dialplan will generate proper UUID
-            local_endpoint = f"Local/{channel_id}@ai-agent-media-fork/n"
-            # ARI requires extension/context/priority; keep them even though Local has them embedded
-            # No need to pass variables; dialplan derives AUDIOSOCKET_UUID from ${EXTEN}
-            orig_params = {
-                "endpoint": local_endpoint,
-                "extension": channel_id,  # Use channel ID as extension
-                "context": "ai-agent-media-fork",
-                "priority": "1",
-                "timeout": "30",
-                "app": self.config.asterisk.app_name,  # Add Stasis application to Local channel
-            }
-            logger.info("Originating Local channel for AudioSocket", endpoint=local_endpoint, bridged_channel=channel_id)
-
-            local_channel_id = None
-            attempts = 0
-            max_attempts = 1  # Enforce single Local originate per call
-            last_response: Any = None
-            while attempts < max_attempts and not local_channel_id:
-                attempts += 1
-                try:
-                    last_response = await self.ari_client.send_command("POST", "channels", params=orig_params)
-                    # Extract channel ID from response if available
-                    if last_response and isinstance(last_response, dict) and last_response.get("id"):
-                        local_channel_id = last_response["id"]
-                        logger.info("Local channel ID from ARI response", local_channel_id=local_channel_id, response=last_response)
-                    else:
-                        logger.debug("Local channel originate response", attempt=attempts, response=last_response)
-                except Exception:
-                    logger.error("Local channel originate failed", attempt=attempts, exc_info=True)
-                if not local_channel_id:
-                    await asyncio.sleep(0.2)
-
-            if not local_channel_id:
-                logger.error("Failed to originate Local channel after retries", response=last_response)
-                raise RuntimeError("Failed to originate Local channel")
-
-            logger.info("Originated Local channel for AudioSocket", 
-                       local_channel_id=local_channel_id, 
-                       channel_id=channel_id)
-
-            # Discover Local leg by name since id may not be returned by originate
-            discovered = False
-            for i in range(20):  # up to ~2s total
-                chan_list = await self.ari_client.send_command("GET", "channels")
-                try:
-                    candidates = []
-                    if isinstance(chan_list, list):
-                        logger.debug("Channel discovery scan", attempt=i+1, total_channels=len(chan_list), channel_id=channel_id)
-                        for c in chan_list:
-                            name = (c or {}).get('name', '')
-                            state = (c or {}).get('state', '')
-                            logger.debug("Checking channel", name=name, state=state, channel_id=channel_id)
-                            if name.startswith(f"Local/{channel_id}@ai-agent-media-fork"):
-                                candidates.append(c)
-                                logger.info("Found matching Local channel", name=name, state=state, channel_id=channel_id)
-                    if candidates:
-                        # Prefer the ;1 leg
-                        chosen = None
-                        for c in candidates:
-                            if c.get('name', '').endswith(';1'):
-                                chosen = c
-                                break
-                        if not chosen:
-                            chosen = candidates[0]
-                        local_channel_id = chosen.get('id')
-                        discovered = True
-                        logger.info("Discovered Local channel", channel_id=channel_id, local_channel_id=local_channel_id, local_name=chosen.get('name'))
-                        break
-                except Exception:
-                    logger.debug("Error scanning channels for Local leg", exc_info=True)
-                logger.debug("Waiting for Local channel presence", attempt=i+1, channel_id=channel_id, found=discovered)
-                await asyncio.sleep(0.1)
-            if not discovered or not local_channel_id:
-                logger.error("Local channel did not appear in time", channel_id=channel_id)
-                raise RuntimeError("Local channel not present for bridging")
-
-            # Add both the original caller and the new local channel to the bridge with retries and diagnostics
-            async def _bridge_add_with_retries(b_id: str, ch_id: str, label: str) -> bool:
-                for j in range(5):  # up to ~1.25s with backoff
-                    ok = await self.ari_client.add_channel_to_bridge(b_id, ch_id)
-                    logger.debug("Bridge add attempt", bridge_id=b_id, channel_id=ch_id, label=label, attempt=j+1, success=ok)
-                    if ok:
-                        return True
-                    await asyncio.sleep(0.25)
-                return False
-
-            # Only add the Local channel to the bridge. The caller channel is already
-            # linked to the Local channel by Asterisk.
-            ok_local = await _bridge_add_with_retries(bridge_id, local_channel_id, "local")
-
-            # Snapshot bridge state for debugging
-            bridge_info = await self.ari_client.send_command("GET", f"bridges/{bridge_id}")
-            bridge_channels = []
-            try:
-                if isinstance(bridge_info, dict):
-                    bridge_channels = bridge_info.get('channels', []) or []
-            except Exception:
-                pass
-            logger.info("Bridge state after add attempts", bridge_id=bridge_id, ok_local=ok_local, channels=bridge_channels)
-
-            if not ok_local:
-                logger.error("Failed to add local channel to bridge", bridge_id=bridge_id, channel_id=channel_id, local_channel_id=local_channel_id)
-                raise RuntimeError("Bridge add failed for Local pattern")
-
-            # Store the bridge and local channel IDs for later use and cleanup
-            self.bridges[channel_id] = bridge_id
-            self.local_channels[channel_id] = local_channel_id
-
-            # Initialize the provider pipeline using Local channel ID for Stasis operations
-            # Store both caller and Local channel IDs for proper mapping
+    async def _start_provider_session(self, caller_channel_id: str, local_channel_id: str):
+        """Start provider session and bind AudioSocket."""
+        try:
+            # Get provider
+            provider = self.providers.get(self.config.default_provider)
+            if not provider:
+                logger.error("Default provider not found", provider=self.config.default_provider)
+                return
+            
+            # Start provider session
+            await provider.start_session(local_channel_id)
+            
+            # Store in active calls
+            bridge_id = self.caller_channels.get(caller_channel_id, {}).get("bridge_id")
             self.active_calls[local_channel_id] = {
                 "provider": provider,
                 "conversation_state": "greeting",
                 "bridge_id": bridge_id,
                 "local_channel_id": local_channel_id,
-                "caller_channel_id": channel_id  # Store original caller channel for reference
+                "caller_channel_id": caller_channel_id
             }
             
-            # Also store reverse mapping for DTMF and other caller events
-            self.active_calls[channel_id] = {
+            # Also store reverse mapping for DTMF
+            self.active_calls[caller_channel_id] = {
                 "provider": provider,
-                "conversation_state": "greeting", 
+                "conversation_state": "greeting",
                 "bridge_id": bridge_id,
                 "local_channel_id": local_channel_id,
-                "caller_channel_id": channel_id
+                "caller_channel_id": caller_channel_id
             }
-
-            # Start provider session using Local channel ID (which is in Stasis)
-            await provider.start_session(local_channel_id)
-            logger.info("Provider session started", channel_id=local_channel_id, provider=self.config.default_provider)
             
-            # Initial greeting will be played when AudioSocket connects
-            # This prevents multiple greetings from being played
-
+            logger.info("Provider session started", 
+                       local_channel_id=local_channel_id, 
+                       caller_channel_id=caller_channel_id,
+                       provider=self.config.default_provider)
+            
+            # AudioSocket will bind automatically via ChannelVarset
+            logger.info("Ready for AudioSocket binding", local_channel_id=local_channel_id)
+            
         except Exception as e:
-            logger.error("Failed Local Channel Bridge setup", channel_id=channel_id, error=str(e), exc_info=True)
-            await self._cleanup_call(channel_id)
+            logger.error("Failed to start provider session", 
+                        local_channel_id=local_channel_id, 
+                        caller_channel_id=caller_channel_id,
+                        error=str(e), exc_info=True)
 
     async def _bind_connection_to_channel(self, conn_id: str, channel_id: str, provider_name: str):
         """Bind an accepted AudioSocket connection to a Stasis channel and start provider.
@@ -1290,6 +1349,26 @@ class Engine:
             logger.debug("Cleaning up audio files", channel_id=channel_id)
             await self.ari_client.cleanup_call_files(channel_id)
             
+            # Clean up new caller channel tracking
+            if channel_id in self.caller_channels:
+                caller_data = self.caller_channels.pop(channel_id, None)
+                if caller_data:
+                    local_channel_id = caller_data.get('local_channel_id')
+                    if local_channel_id:
+                        # Clean up pending mapping
+                        self.pending_local_channels.pop(local_channel_id, None)
+                        logger.debug("Cleaned up caller channel data", 
+                                   caller_channel_id=channel_id, 
+                                   local_channel_id=local_channel_id)
+            
+            # Clean up pending Local channel mappings
+            for local_id, caller_id in list(self.pending_local_channels.items()):
+                if caller_id == channel_id:
+                    self.pending_local_channels.pop(local_id, None)
+                    logger.debug("Cleaned up pending Local channel mapping", 
+                               local_channel_id=local_id, 
+                               caller_channel_id=caller_id)
+
             # Remove from active calls (with safety check for race conditions)
             if channel_id in self.active_calls:
                 del self.active_calls[channel_id]
