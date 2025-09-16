@@ -26,7 +26,6 @@ class Engine:
             base_url=f"http://{config.asterisk.host}:{config.asterisk.port}",
             app_name=config.asterisk.app_name
         )
-        self.audiosocket_server = AudioSocketServer(port=8090)  # Default AudioSocket port
         self.providers: Dict[str, AIProviderInterface] = {}
         self.active_calls: Dict[str, Dict[str, Any]] = {}  # channel_id -> call_data
         self.uuid_to_channel: Dict[str, str] = {}  # uuid -> channel_id
@@ -36,21 +35,26 @@ class Engine:
         self._setup_providers()
         
         # Setup AudioSocket callbacks
-        self.audiosocket_server.set_audio_callback(self._on_audiosocket_audio)
-        self.audiosocket_server.set_connection_callback(self._on_audiosocket_connection)
-        self.audiosocket_server.set_disconnection_callback(self._on_audiosocket_disconnection)
+        self.audiosocket_server = AudioSocketServer(
+            port=8090,
+            on_audio=self._on_audiosocket_audio,
+            on_accept=self._on_audiosocket_connection,
+            on_close=self._on_audiosocket_disconnection
+        )
 
     def _setup_providers(self):
         """Initialize AI providers."""
         try:
             # Local provider
-            if self.config.providers.local.enabled:
-                self.providers['local'] = LocalProvider(self.config.providers.local)
+            if self.config.providers.get('local', {}).get('enabled', False):
+                local_config = self.config.providers['local']
+                self.providers['local'] = LocalProvider(local_config)
                 logger.info("Local provider initialized")
             
             # Deepgram provider
-            if self.config.providers.deepgram.enabled:
-                self.providers['deepgram'] = DeepgramProvider(self.config.providers.deepgram)
+            if self.config.providers.get('deepgram', {}).get('enabled', False):
+                deepgram_config = self.config.providers['deepgram']
+                self.providers['deepgram'] = DeepgramProvider(deepgram_config)
                 logger.info("Deepgram provider initialized")
                 
             logger.info("Providers setup complete", 
@@ -68,8 +72,8 @@ class Engine:
             logger.info("ARI connected successfully")
             
             # Start AudioSocket server
-            await self.audiosocket_server.start_server()
-            logger.info(f"AudioSocket server listening on port {self.config.audiosocket.port}")
+            await self.audiosocket_server.start()
+            logger.info(f"AudioSocket server listening on port 8090")
             
             # Setup ARI event handlers
             self.ari_client.set_event_handler("StasisStart", self._handle_stasis_start)
@@ -93,7 +97,7 @@ class Engine:
         self.running = False
         
         # Stop AudioSocket server
-        await self.audiosocket_server.stop_server()
+        await self.audiosocket_server.stop()
         
         # Disconnect ARI
         await self.ari_client.disconnect()
