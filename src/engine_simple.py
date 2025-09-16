@@ -20,7 +20,12 @@ class Engine:
     
     def __init__(self, config: AppConfig):
         self.config = config
-        self.ari_client = ARIClient(config.asterisk)
+        self.ari_client = ARIClient(
+            username=config.asterisk.username,
+            password=config.asterisk.password,
+            base_url=config.asterisk.base_url,
+            app_name=config.asterisk.app_name
+        )
         self.audiosocket_server = AudioSocketServer(port=config.audiosocket.port)
         self.providers: Dict[str, AIProviderInterface] = {}
         self.active_calls: Dict[str, Dict[str, Any]] = {}  # channel_id -> call_data
