@@ -199,14 +199,15 @@ class Engine:
                 logger.debug("Could not map uuid_ext to channel id", uuid_ext=uuid_ext, channel_id=channel_id, exc_info=True)
             local_endpoint = f"Local/{uuid_ext}@ai-agent-media-fork/n"
             # ARI requires extension/context/priority; keep them even though Local has them embedded
-            # No need to pass variables; dialplan derives AUDIOSOCKET_UUID from ${EXTEN}
-            orig_params = [
-                ("endpoint", local_endpoint),
-                ("extension", "s"),
-                ("context", "ai-agent-media-fork"),
-                ("priority", "1"),
-                ("timeout", "30"),
-            ]
+            # Pass bridged_channel variable to Local channel for proper Stasis application context
+            orig_params = {
+                "endpoint": local_endpoint,
+                "extension": "s",
+                "context": "ai-agent-media-fork",
+                "priority": "1",
+                "timeout": "30",
+                "channelVars": {"bridged_channel": channel_id}
+            }
             logger.info("Originating Local channel for AudioSocket", endpoint=local_endpoint, bridged_channel=channel_id)
 
             local_channel_id = None
