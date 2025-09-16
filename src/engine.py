@@ -270,7 +270,7 @@ class Engine:
             # No need to pass variables; dialplan derives AUDIOSOCKET_UUID from ${EXTEN}
             orig_params = {
                 "endpoint": local_endpoint,
-                "extension": "s",
+                "extension": uuid_ext,  # Use the UUID extension to match _X. pattern
                 "context": "ai-agent-media-fork",
                 "priority": "1",
                 "timeout": "30",
