@@ -63,17 +63,42 @@ class LocalAIServer:
                 if data.get("type") == "audio":
                     audio_data = base64.b64decode(data["data"])
                     
+                    # Enhanced debugging for audio processing
+                    logging.info(f"🎵 Received audio for STT processing: {len(audio_data)} bytes")
+                    
+                    # Calculate audio energy for debugging
+                    if len(audio_data) >= 2:
+                        import struct
+                        try:
+                            samples = struct.unpack(f'<{len(audio_data)//2}h', audio_data)
+                            audio_energy = sum(sample * sample for sample in samples) / len(samples)
+                            audio_energy = (audio_energy ** 0.5) / 32768.0  # Normalize to 0-1
+                            logging.info(f"🎵 Audio energy: {audio_energy:.4f}")
+                        except Exception as e:
+                            logging.debug(f"Could not calculate audio energy: {e}")
+                    
                     # Full pipeline
+                    logging.info("🔄 Starting STT processing...")
                     transcript = await self.process_stt(audio_data)
-                    logging.info(f"Transcript: {transcript}")
+                    logging.info(f"📝 STT Transcript: '{transcript}'")
                     
-                    llm_response = await self.process_llm(transcript)
-                    logging.info(f"LLM Response: {llm_response}")
-                    
-                    audio_response = await self.process_tts(llm_response)
-                    
-                    # Send audio response as binary data
-                    await websocket.send(audio_response)
+                    if transcript.strip():  # Only process if we have actual speech
+                        logging.info("🔄 Starting LLM processing...")
+                        llm_response = await self.process_llm(transcript)
+                        logging.info(f"🤖 LLM Response: '{llm_response}'")
+                        
+                        if llm_response.strip():  # Only generate TTS if we have a response
+                            logging.info("🔄 Starting TTS processing...")
+                            audio_response = await self.process_tts(llm_response)
+                            logging.info(f"🔊 Generated TTS audio: {len(audio_response)} bytes")
+                            
+                            # Send audio response as binary data
+                            await websocket.send(audio_response)
+                            logging.info("📤 Sent TTS audio response to client")
+                        else:
+                            logging.info("🤖 LLM returned empty response, skipping TTS")
+                    else:
+                        logging.info("📝 No speech detected in audio, skipping LLM/TTS")
                 elif data.get("type") == "greeting":
                     # Handle greeting message - generate TTS for the greeting
                     greeting_text = data.get("message", "Hello! I'm your AI assistant. How can I help you today?")

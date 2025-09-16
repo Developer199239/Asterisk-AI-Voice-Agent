@@ -199,15 +199,14 @@ class Engine:
                 logger.debug("Could not map uuid_ext to channel id", uuid_ext=uuid_ext, channel_id=channel_id, exc_info=True)
             local_endpoint = f"Local/{uuid_ext}@ai-agent-media-fork/n"
             # ARI requires extension/context/priority; keep them even though Local has them embedded
-            # Pass bridged_channel variable to Local channel for proper Stasis application context
-            orig_params = {
-                "endpoint": local_endpoint,
-                "extension": "s",
-                "context": "ai-agent-media-fork",
-                "priority": "1",
-                "timeout": "30",
-                "channelVars": {"bridged_channel": channel_id}
-            }
+            # No need to pass variables; dialplan derives AUDIOSOCKET_UUID from ${EXTEN}
+            orig_params = [
+                ("endpoint", local_endpoint),
+                ("extension", "s"),
+                ("context", "ai-agent-media-fork"),
+                ("priority", "1"),
+                ("timeout", "30"),
+            ]
             logger.info("Originating Local channel for AudioSocket", endpoint=local_endpoint, bridged_channel=channel_id)
 
             local_channel_id = None
@@ -755,37 +754,74 @@ class Engine:
     def _on_audiosocket_audio(self, conn_id: str, audio_data: bytes):
         """Route inbound AudioSocket audio to the mapped provider for that connection."""
         try:
-            # Debug: log first few inbound chunks per connection to infer upstream format/flow
+            # Enhanced debugging: log audio capture details
             try:
                 count = self._audio_rx_debug.get(conn_id, 0) + 1
-                if count <= 8:
+                if count <= 20:  # Increased from 8 to 20 for more debugging
                     preview = audio_data[:8]
-                    logger.info("AudioSocket inbound chunk",
+                    # Calculate audio energy for VAD detection
+                    audio_energy = 0
+                    if len(audio_data) >= 2:
+                        # Calculate RMS energy for PCM16 audio
+                        import struct
+                        try:
+                            samples = struct.unpack(f'<{len(audio_data)//2}h', audio_data)
+                            audio_energy = sum(sample * sample for sample in samples) / len(samples)
+                            audio_energy = (audio_energy ** 0.5) / 32768.0  # Normalize to 0-1
+                        except:
+                            audio_energy = 0
+                    
+                    logger.info("🎤 AudioSocket inbound chunk",
                                  conn_id=conn_id,
                                  bytes=len(audio_data),
                                  first8=preview.hex(" "),
-                                 multiple_of_2=(len(audio_data) % 2 == 0))
+                                 multiple_of_2=(len(audio_data) % 2 == 0),
+                                 audio_energy=f"{audio_energy:.4f}",
+                                 chunk_number=count)
+                elif count % 50 == 0:  # Log every 50th chunk after initial 20
+                    logger.debug("🎤 AudioSocket continuing",
+                                 conn_id=conn_id,
+                                 bytes=len(audio_data),
+                                 chunk_number=count)
                 self._audio_rx_debug[conn_id] = count
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Error in audio debug logging", exc_info=True)
+            
+            # Route audio to appropriate provider
             channel_id = self.conn_to_channel.get(conn_id)
             if channel_id:
                 call_data = self.active_calls.get(channel_id)
                 if not call_data:
+                    logger.warning("🚨 Audio received but no active call data found", 
+                                   conn_id=conn_id, channel_id=channel_id)
                     return
                 provider = call_data.get('provider')
                 if provider:
+                    logger.debug("🎯 Routing audio to provider", 
+                                 conn_id=conn_id, channel_id=channel_id, 
+                                 provider=type(provider).__name__)
                     asyncio.create_task(provider.send_audio(audio_data))
+                else:
+                    logger.warning("🚨 Audio received but no provider found", 
+                                   conn_id=conn_id, channel_id=channel_id)
             else:
                 # Headless mapping by conn_id
                 session = self.headless_sessions.get(conn_id)
                 if not session:
+                    logger.warning("🚨 Audio received but no headless session found", 
+                                   conn_id=conn_id)
                     return
                 provider = session.get('provider')
                 if provider:
+                    logger.debug("🎯 Routing audio to headless provider", 
+                                 conn_id=conn_id, provider=type(provider).__name__)
                     asyncio.create_task(provider.send_audio(audio_data))
-        except Exception:
-            logger.debug("Error routing AudioSocket audio", exc_info=True)
+                else:
+                    logger.warning("🚨 Audio received but no headless provider found", 
+                                   conn_id=conn_id)
+        except Exception as e:
+            logger.error("🚨 Error routing AudioSocket audio", 
+                         conn_id=conn_id, error=str(e), exc_info=True)
 
     async def _start_health_server(self):
         """Start a minimal health endpoint exposing engine status."""
