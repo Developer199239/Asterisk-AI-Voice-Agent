@@ -274,6 +274,7 @@ class Engine:
                 "context": "ai-agent-media-fork",
                 "priority": "1",
                 "timeout": "30",
+                "app": self.config.asterisk.app_name,  # Add Stasis application to Local channel
             }
             logger.info("Originating Local channel for AudioSocket", endpoint=local_endpoint, bridged_channel=channel_id)
 

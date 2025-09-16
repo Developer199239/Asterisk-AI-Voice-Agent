@@ -57,19 +57,9 @@ class AudioSocketServer:
         }
         logger.info("AudioSocket connection accepted", peer=peer, conn_id=conn_id)
         
-        # Send UUID packet immediately after connection (AudioSocket protocol requirement)
-        try:
-            import struct
-            # Create UUID packet: type(0x01) + length(16) + 16-byte UUID
-            uuid_bytes = conn_id.encode()[:16].ljust(16, b'\x00')  # Pad to 16 bytes
-            uuid_packet = struct.pack('>BH', 0x01, 16) + uuid_bytes
-            writer.write(uuid_packet)
-            await writer.drain()
-            logger.info("Sent UUID packet to Asterisk", conn_id=conn_id, uuid_bytes=len(uuid_bytes))
-        except Exception as e:
-            logger.error("Failed to send UUID packet", conn_id=conn_id, error=str(e), exc_info=True)
-        
         # AudioSocket connection established - ready to receive/send raw ulaw frames
+        # Note: Do NOT send UUID packet immediately - this causes "non-audio AudioSocket message" warnings
+        # The UUID will be sent by Asterisk when it's ready
         logger.debug("AudioSocket connection ready for audio data", conn_id=conn_id)
         
         # Announce new connection for assignment by engine
@@ -136,17 +126,18 @@ class AudioSocketServer:
                     try:
                         if ftype == 0x01 and flen == 16:
                             conn['uuid'] = payload
-                            logger.info("Received UUID from client", conn_id=conn_id)
+                            logger.info("Received UUID from Asterisk", conn_id=conn_id, uuid=payload.hex())
                         elif ftype == 0x10 and flen > 0:
+                            # Audio data - route to provider
                             if self.on_audio:
                                 self.on_audio(conn_id, payload)
                         elif ftype == 0x00:
-                            logger.info("Terminate received from client", conn_id=conn_id)
+                            logger.info("Terminate received from Asterisk", conn_id=conn_id)
                             raise asyncio.CancelledError()
                         elif ftype == 0xFF:
-                            logger.warning("Error packet received from client", conn_id=conn_id)
+                            logger.warning("Error packet received from Asterisk", conn_id=conn_id)
                         else:
-                            logger.debug("Unknown TLV type", conn_id=conn_id, ftype=hex(ftype), flen=flen)
+                            logger.debug("Unknown TLV type from Asterisk", conn_id=conn_id, ftype=hex(ftype), flen=flen)
                     except Exception:
                         logger.debug("Error handling TLV frame", conn_id=conn_id, exc_info=True)
         except asyncio.CancelledError:
