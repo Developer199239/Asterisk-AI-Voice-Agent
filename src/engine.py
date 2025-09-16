@@ -285,8 +285,12 @@ class Engine:
                 attempts += 1
                 try:
                     last_response = await self.ari_client.send_command("POST", "channels", params=orig_params)
-                    # Not all Asterisk builds return the created channel id here; prefer discovery loop below
-                    logger.debug("Local channel originate response", attempt=attempts, response=last_response)
+                    # Extract channel ID from response if available
+                    if last_response and isinstance(last_response, dict) and last_response.get("id"):
+                        local_channel_id = last_response["id"]
+                        logger.info("Local channel ID from ARI response", local_channel_id=local_channel_id, response=last_response)
+                    else:
+                        logger.debug("Local channel originate response", attempt=attempts, response=last_response)
                 except Exception:
                     logger.error("Local channel originate failed", attempt=attempts, exc_info=True)
                 if not local_channel_id:
@@ -307,10 +311,14 @@ class Engine:
                 try:
                     candidates = []
                     if isinstance(chan_list, list):
+                        logger.debug("Channel discovery scan", attempt=i+1, total_channels=len(chan_list), uuid_ext=uuid_ext)
                         for c in chan_list:
                             name = (c or {}).get('name', '')
+                            state = (c or {}).get('state', '')
+                            logger.debug("Checking channel", name=name, state=state, uuid_ext=uuid_ext)
                             if name.startswith(f"Local/{uuid_ext}@ai-agent-media-fork"):
                                 candidates.append(c)
+                                logger.info("Found matching Local channel", name=name, state=state, uuid_ext=uuid_ext)
                     if candidates:
                         # Prefer the ;1 leg
                         chosen = None
