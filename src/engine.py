@@ -439,15 +439,19 @@ class Engine:
             logger.debug("Skipping demo test playback; provider greeting will start the dialog", channel_id=channel_id)
             # Start provider session and optional greeting
             if provider:
-                logger.debug("Starting provider session", channel_id=channel_id, provider=provider_name)
-                await provider.start_session(channel_id)
-                logger.debug("Provider session started successfully", channel_id=channel_id)
-                
-                # Play initial greeting only when AudioSocket connects
-                if hasattr(provider, 'play_initial_greeting'):
-                    logger.info("🔊 GREETING - Playing initial greeting", channel_id=channel_id)
-                    await provider.play_initial_greeting(channel_id)
-                    logger.info("🔊 GREETING - Played successfully", channel_id=channel_id)
+                # Check if provider session already exists for this channel
+                if channel_id in self.active_calls and self.active_calls[channel_id].get('provider'):
+                    logger.debug("Provider session already exists, skipping", channel_id=channel_id)
+                else:
+                    logger.debug("Starting provider session", channel_id=channel_id, provider=provider_name)
+                    await provider.start_session(channel_id)
+                    logger.debug("Provider session started successfully", channel_id=channel_id)
+                    
+                    # Play initial greeting only when AudioSocket connects
+                    if hasattr(provider, 'play_initial_greeting'):
+                        logger.info("🔊 GREETING - Playing initial greeting", channel_id=channel_id)
+                        await provider.play_initial_greeting(channel_id)
+                        logger.info("🔊 GREETING - Played successfully", channel_id=channel_id)
         except Exception:
             logger.error("Error binding connection to channel", channel_id=channel_id, conn_id=conn_id, exc_info=True)
 
@@ -832,6 +836,12 @@ class Engine:
     def _on_audiosocket_audio(self, conn_id: str, audio_data: bytes):
         """Route inbound AudioSocket audio using frame-based processing to prevent voice queue backlog."""
         try:
+            # Check if call is still active
+            channel_id = self.conn_to_channel.get(conn_id)
+            if not channel_id or channel_id not in self.active_calls:
+                logger.debug("Audio received for inactive call, ignoring", conn_id=conn_id, channel_id=channel_id)
+                return
+            
             # Track audio chunks for debugging
             count = self._audio_rx_debug.get(conn_id, 0) + 1
             self._audio_rx_debug[conn_id] = count

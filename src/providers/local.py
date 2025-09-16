@@ -60,12 +60,22 @@ class LocalProvider(AIProviderInterface):
 
     async def start_session(self, call_id: str):
         try:
+            # Check if already connected
+            if self.websocket and not self.websocket.closed:
+                logger.debug("WebSocket already connected, reusing connection", call_id=call_id)
+                self._active_call_id = call_id
+                return
+            
             logger.info("Connecting to Local AI Server...", url=self.ws_url)
             self.websocket = await self._connect_ws()
             logger.info("✅ Successfully connected to Local AI Server.")
             self._active_call_id = call_id
-            self._listener_task = asyncio.create_task(self._receive_loop())
-            self._sender_task = asyncio.create_task(self._send_loop())
+            
+            # Start tasks only if not already running
+            if not self._listener_task or self._listener_task.done():
+                self._listener_task = asyncio.create_task(self._receive_loop())
+            if not self._sender_task or self._sender_task.done():
+                self._sender_task = asyncio.create_task(self._send_loop())
         except Exception:
             logger.error("Failed to connect to Local AI Server", exc_info=True)
             raise
