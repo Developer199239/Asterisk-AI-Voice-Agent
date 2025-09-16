@@ -23,7 +23,7 @@ class Engine:
         self.ari_client = ARIClient(
             username=config.asterisk.username,
             password=config.asterisk.password,
-            base_url=config.asterisk.base_url,
+            base_url=f"http://{config.asterisk.host}:{config.asterisk.port}",
             app_name=config.asterisk.app_name
         )
         self.audiosocket_server = AudioSocketServer(port=config.audiosocket.port)
