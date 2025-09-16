@@ -762,13 +762,16 @@ class Engine:
                     # Calculate audio energy for VAD detection
                     audio_energy = 0
                     if len(audio_data) >= 2:
-                        # Calculate RMS energy for PCM16 audio
+                        # Convert ulaw to PCM16 first, then calculate energy
                         import struct
                         try:
-                            samples = struct.unpack(f'<{len(audio_data)//2}h', audio_data)
+                            # Convert ulaw audio to PCM16 for energy calculation
+                            pcm_data = audioop.ulaw2lin(audio_data, 2)
+                            samples = struct.unpack(f'<{len(pcm_data)//2}h', pcm_data)
                             audio_energy = sum(sample * sample for sample in samples) / len(samples)
                             audio_energy = (audio_energy ** 0.5) / 32768.0  # Normalize to 0-1
-                        except:
+                        except Exception as e:
+                            logger.debug("Error calculating audio energy", error=str(e))
                             audio_energy = 0
                     
                     logger.info("🎤 AudioSocket inbound chunk",
@@ -800,7 +803,14 @@ class Engine:
                     logger.debug("🎯 Routing audio to provider", 
                                  conn_id=conn_id, channel_id=channel_id, 
                                  provider=type(provider).__name__)
-                    asyncio.create_task(provider.send_audio(audio_data))
+                    # Convert ulaw to PCM16 before sending to provider
+                    try:
+                        pcm_data = audioop.ulaw2lin(audio_data, 2)
+                        asyncio.create_task(provider.send_audio(pcm_data))
+                    except Exception as e:
+                        logger.error("Failed to convert audio for provider", error=str(e))
+                        # Fallback: send original data
+                        asyncio.create_task(provider.send_audio(audio_data))
                 else:
                     logger.warning("🚨 Audio received but no provider found", 
                                    conn_id=conn_id, channel_id=channel_id)
@@ -815,7 +825,14 @@ class Engine:
                 if provider:
                     logger.debug("🎯 Routing audio to headless provider", 
                                  conn_id=conn_id, provider=type(provider).__name__)
-                    asyncio.create_task(provider.send_audio(audio_data))
+                    # Convert ulaw to PCM16 before sending to provider
+                    try:
+                        pcm_data = audioop.ulaw2lin(audio_data, 2)
+                        asyncio.create_task(provider.send_audio(pcm_data))
+                    except Exception as e:
+                        logger.error("Failed to convert audio for headless provider", error=str(e))
+                        # Fallback: send original data
+                        asyncio.create_task(provider.send_audio(audio_data))
                 else:
                     logger.warning("🚨 Audio received but no headless provider found", 
                                    conn_id=conn_id)
@@ -1166,9 +1183,12 @@ class Engine:
 
     async def _play_audio_via_bridge(self, channel_id: str, audio_data: bytes):
         """Play audio via bridge to avoid interrupting AudioSocket capture."""
+        # High-visibility debugging to verify method is called
+        logger.info(f"✅✅✅ _play_audio_via_bridge successfully called for channel {channel_id} ✅✅✅")
+        
         bridge_id = self.bridges.get(channel_id)
         if not bridge_id:
-            logger.error("No bridge found for playback", channel_id=channel_id)
+            logger.error("❌❌❌ No bridge found for channel {channel_id} ❌❌❌")
             # Fallback to direct channel playback
             await self.ari_client.play_audio_response(channel_id, audio_data)
             return
