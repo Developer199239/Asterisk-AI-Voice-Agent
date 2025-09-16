@@ -235,6 +235,17 @@ class Engine:
         channel = event.get('channel', {})
         channel_id = channel.get('id')
         caller_info = channel.get('caller', {})
+        
+        # Check if this is a Local channel (already processed)
+        if channel_id in self.local_channels.values():
+            logger.debug("Ignoring Local channel StasisStart", channel_id=channel_id)
+            return
+        
+        # Check if call is already in progress
+        if channel_id in self.active_calls:
+            logger.warning("Call already in progress", channel_id=channel_id)
+            return
+            
         logger.info("New call received", channel_id=channel_id,
                     caller={"name": caller_info.get("name"), "number": caller_info.get("number")})
 
@@ -256,21 +267,13 @@ class Engine:
             logger.info("Created bridge", bridge_id=bridge_id, channel_id=channel_id)
 
             # Originate Local channel to run our media fork dialplan
-            # Pass the original channel_id as a variable for AudioSocket to use
-            # Use Local pattern with UUID in the extension so dialplan can read it via ${EXTEN}
-            uuid_ext = (channel_id or "").replace('.', '-')
-            # Map synthesized UUID to the real caller channel for later binder lookup
-            try:
-                if uuid_ext:
-                    self.uuidext_to_channel[uuid_ext] = channel_id
-            except Exception:
-                logger.debug("Could not map uuid_ext to channel id", uuid_ext=uuid_ext, channel_id=channel_id, exc_info=True)
-            local_endpoint = f"Local/{uuid_ext}@ai-agent-media-fork/n"
+            # Use a simple extension pattern since dialplan will generate proper UUID
+            local_endpoint = f"Local/{channel_id}@ai-agent-media-fork/n"
             # ARI requires extension/context/priority; keep them even though Local has them embedded
             # No need to pass variables; dialplan derives AUDIOSOCKET_UUID from ${EXTEN}
             orig_params = {
                 "endpoint": local_endpoint,
-                "extension": uuid_ext,  # Use the UUID extension to match _X. pattern
+                "extension": channel_id,  # Use channel ID as extension
                 "context": "ai-agent-media-fork",
                 "priority": "1",
                 "timeout": "30",
@@ -312,14 +315,14 @@ class Engine:
                 try:
                     candidates = []
                     if isinstance(chan_list, list):
-                        logger.debug("Channel discovery scan", attempt=i+1, total_channels=len(chan_list), uuid_ext=uuid_ext)
+                        logger.debug("Channel discovery scan", attempt=i+1, total_channels=len(chan_list), channel_id=channel_id)
                         for c in chan_list:
                             name = (c or {}).get('name', '')
                             state = (c or {}).get('state', '')
-                            logger.debug("Checking channel", name=name, state=state, uuid_ext=uuid_ext)
-                            if name.startswith(f"Local/{uuid_ext}@ai-agent-media-fork"):
+                            logger.debug("Checking channel", name=name, state=state, channel_id=channel_id)
+                            if name.startswith(f"Local/{channel_id}@ai-agent-media-fork"):
                                 candidates.append(c)
-                                logger.info("Found matching Local channel", name=name, state=state, uuid_ext=uuid_ext)
+                                logger.info("Found matching Local channel", name=name, state=state, channel_id=channel_id)
                     if candidates:
                         # Prefer the ;1 leg
                         chosen = None
@@ -331,14 +334,14 @@ class Engine:
                             chosen = candidates[0]
                         local_channel_id = chosen.get('id')
                         discovered = True
-                        logger.info("Discovered Local channel", uuid_ext=uuid_ext, local_channel_id=local_channel_id, local_name=chosen.get('name'))
+                        logger.info("Discovered Local channel", channel_id=channel_id, local_channel_id=local_channel_id, local_name=chosen.get('name'))
                         break
                 except Exception:
                     logger.debug("Error scanning channels for Local leg", exc_info=True)
-                logger.debug("Waiting for Local channel presence", attempt=i+1, uuid_ext=uuid_ext, found=discovered)
+                logger.debug("Waiting for Local channel presence", attempt=i+1, channel_id=channel_id, found=discovered)
                 await asyncio.sleep(0.1)
             if not discovered or not local_channel_id:
-                logger.error("Local channel did not appear in time", uuid_ext=uuid_ext)
+                logger.error("Local channel did not appear in time", channel_id=channel_id)
                 raise RuntimeError("Local channel not present for bridging")
 
             # Add both the original caller and the new local channel to the bridge with retries and diagnostics
@@ -351,8 +354,8 @@ class Engine:
                     await asyncio.sleep(0.25)
                 return False
 
-            # Ensure caller is on the bridge (idempotent)
-            ok_caller = await _bridge_add_with_retries(bridge_id, channel_id, "caller")
+            # Only add the Local channel to the bridge. The caller channel is already
+            # linked to the Local channel by Asterisk.
             ok_local = await _bridge_add_with_retries(bridge_id, local_channel_id, "local")
 
             # Snapshot bridge state for debugging
@@ -363,27 +366,38 @@ class Engine:
                     bridge_channels = bridge_info.get('channels', []) or []
             except Exception:
                 pass
-            logger.info("Bridge state after add attempts", bridge_id=bridge_id, ok_caller=ok_caller, ok_local=ok_local, channels=bridge_channels)
+            logger.info("Bridge state after add attempts", bridge_id=bridge_id, ok_local=ok_local, channels=bridge_channels)
 
-            if not (ok_caller and ok_local):
-                logger.error("Failed to add one or more channels to bridge", bridge_id=bridge_id, channel_id=channel_id, local_channel_id=local_channel_id)
+            if not ok_local:
+                logger.error("Failed to add local channel to bridge", bridge_id=bridge_id, channel_id=channel_id, local_channel_id=local_channel_id)
                 raise RuntimeError("Bridge add failed for Local pattern")
 
             # Store the bridge and local channel IDs for later use and cleanup
             self.bridges[channel_id] = bridge_id
             self.local_channels[channel_id] = local_channel_id
 
-            # Initialize the provider pipeline
-            self.active_calls[channel_id] = {
+            # Initialize the provider pipeline using Local channel ID for Stasis operations
+            # Store both caller and Local channel IDs for proper mapping
+            self.active_calls[local_channel_id] = {
                 "provider": provider,
                 "conversation_state": "greeting",
                 "bridge_id": bridge_id,
-                "local_channel_id": local_channel_id
+                "local_channel_id": local_channel_id,
+                "caller_channel_id": channel_id  # Store original caller channel for reference
+            }
+            
+            # Also store reverse mapping for DTMF and other caller events
+            self.active_calls[channel_id] = {
+                "provider": provider,
+                "conversation_state": "greeting", 
+                "bridge_id": bridge_id,
+                "local_channel_id": local_channel_id,
+                "caller_channel_id": channel_id
             }
 
-            # Start provider session
-            await provider.start_session(channel_id)
-            logger.info("Provider session started", channel_id=channel_id, provider=self.config.default_provider)
+            # Start provider session using Local channel ID (which is in Stasis)
+            await provider.start_session(local_channel_id)
+            logger.info("Provider session started", channel_id=local_channel_id, provider=self.config.default_provider)
             
             # Initial greeting will be played when AudioSocket connects
             # This prevents multiple greetings from being played
@@ -458,34 +472,33 @@ class Engine:
     async def _handle_channel_varset(self, event_data: dict):
         """Bind any pending AudioSocket connection when AUDIOSOCKET_UUID variable is set.
 
-        In the Local media-fork pattern, the var is set on the Local channel, but its value
-        contains the original caller channel_id. We must bind the AudioSocket to that original channel.
+        The dialplan now generates a proper UUID, so we bind the AudioSocket to the Local channel.
         """
         try:
             variable = event_data.get('variable') or event_data.get('name')
             if variable != 'AUDIOSOCKET_UUID':
                 return
-            # Extract synthesized UUID or target (original) channel id from the variable value
-            raw_val = event_data.get('value') or event_data.get('newvalue')
-            target_channel_id = raw_val
-            # If value is a synthesized uuid_ext (contains '-' from our mapping), resolve to real channel id
-            try:
-                if raw_val and raw_val in getattr(self, 'uuidext_to_channel', {}):
-                    target_channel_id = self.uuidext_to_channel.get(raw_val)
-                    logger.debug("Resolved uuid_ext to channel id", uuid_ext=raw_val, channel_id=target_channel_id)
-            except Exception:
-                logger.debug("Could not resolve uuid_ext mapping", uuid_ext=raw_val, exc_info=True)
-            if not target_channel_id:
-                # Fallback to using the event channel id, but log it for diagnostics
-                channel = event_data.get('channel', {})
-                fallback_id = channel.get('id')
-                logger.warning("AUDIOSOCKET_UUID varset missing value; falling back to event channel id",
-                               event_channel_id=fallback_id)
-                target_channel_id = fallback_id
-            if not target_channel_id:
+            
+            # Get the Local channel ID from the event
+            channel = event_data.get('channel', {})
+            local_channel_id = channel.get('id')
+            if not local_channel_id:
                 return
-            if target_channel_id in self.channel_to_conn:
+                
+            # Find the corresponding caller channel ID
+            caller_channel_id = None
+            for caller_id, call_data in self.active_calls.items():
+                if call_data.get('local_channel_id') == local_channel_id:
+                    caller_channel_id = caller_id
+                    break
+            
+            if not caller_channel_id:
+                logger.warning("No caller channel found for Local channel", local_channel_id=local_channel_id)
                 return
+                
+            if local_channel_id in self.channel_to_conn:
+                return
+                
             # Bind any already-accepted connection
             if hasattr(self, 'audiosocket_server') and self.audiosocket_server:
                 conn_id = None
@@ -494,11 +507,11 @@ class Engine:
                 except Exception:
                     conn_id = None
                 if conn_id:
-                    await self._bind_connection_to_channel(conn_id, target_channel_id, self.config.default_provider)
+                    await self._bind_connection_to_channel(conn_id, local_channel_id, self.config.default_provider)
                 else:
                     # Remember channel; will bind on next accept
-                    self.pending_channel_for_bind = target_channel_id
-            logger.info("ChannelVarset bound or queued", variable=variable, target_channel_id=target_channel_id)
+                    self.pending_channel_for_bind = local_channel_id
+            logger.info("ChannelVarset bound or queued", variable=variable, target_channel_id=local_channel_id)
         except Exception:
             logger.debug("Error in ChannelVarset handler", exc_info=True)
 
@@ -826,8 +839,7 @@ class Engine:
         if channel_id and digit:
             logger.info(f"DTMF received: {digit}", channel_id=channel_id)
             # Forward DTMF to provider if it supports it
-            if channel_id in self.active_calls:
-                call_data = self.active_calls.get(channel_id)
+            call_data = self.active_calls.get(channel_id)  # ✅ Move outside if block
             if call_data:
                 provider = call_data.get('provider')
                 if provider and hasattr(provider, 'handle_dtmf'):
@@ -1248,6 +1260,12 @@ class Engine:
                     logger.warning("Failed to hang up local channel", 
                                  local_channel_id=local_channel_id, 
                                  error=str(e))
+            
+            # Stop any ongoing Local channel discovery loop
+            discovery_task = call_data.get('discovery_task')
+            if discovery_task and not discovery_task.done():
+                discovery_task.cancel()
+                logger.debug("Cancelled Local channel discovery task", channel_id=channel_id)
 
             # Clean up uuid_ext mapping
             try:
@@ -1278,6 +1296,20 @@ class Engine:
                 logger.info("Call resources cleaned up successfully", channel_id=channel_id)
             else:
                 logger.debug("Channel already removed from active calls", channel_id=channel_id)
+            
+            # Also clean up the other channel ID if it exists
+            call_data = self.active_calls.get(channel_id)
+            if call_data:
+                local_channel_id = call_data.get('local_channel_id')
+                caller_channel_id = call_data.get('caller_channel_id')
+                
+                if local_channel_id and local_channel_id != channel_id and local_channel_id in self.active_calls:
+                    del self.active_calls[local_channel_id]
+                    logger.debug("Removed Local channel from active calls", channel_id=local_channel_id)
+                
+                if caller_channel_id and caller_channel_id != channel_id and caller_channel_id in self.active_calls:
+                    del self.active_calls[caller_channel_id]
+                    logger.debug("Removed caller channel from active calls", channel_id=caller_channel_id)
         else:
             logger.debug("Channel not found in active calls", channel_id=channel_id)
             logger.debug("No active call found for cleanup", channel_id=channel_id)
