@@ -76,9 +76,9 @@ class Engine:
             logger.info(f"AudioSocket server listening on port 8090")
             
             # Setup ARI event handlers
-            self.ari_client.set_event_handler("StasisStart", self._handle_stasis_start)
-            self.ari_client.set_event_handler("StasisEnd", self._handle_stasis_end)
-            self.ari_client.set_event_handler("ChannelDestroyed", self._handle_channel_destroyed)
+            self.ari_client.add_event_handler("StasisStart", self._handle_stasis_start)
+            self.ari_client.add_event_handler("StasisEnd", self._handle_stasis_end)
+            self.ari_client.add_event_handler("ChannelDestroyed", self._handle_channel_destroyed)
             
             # Start ARI event processing
             await self.ari_client.start_event_processing()
