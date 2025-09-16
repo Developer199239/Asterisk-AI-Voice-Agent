@@ -58,7 +58,7 @@ class ARIClient:
         try:
             # First, test HTTP connection to ensure ARI is available
             self.http_session = aiohttp.ClientSession(auth=aiohttp.BasicAuth(self.username, self.password))
-            async with self.http_session.get(f"{self.http_url}/asterisk/info") as response:
+            async with self.http_session.get(f"{self.http_url}/ari/asterisk/info") as response:
                 if response.status != 200:
                     raise ConnectionError(f"Failed to connect to ARI HTTP endpoint. Status: {response.status}")
                 logger.info("Successfully connected to ARI HTTP endpoint.")
