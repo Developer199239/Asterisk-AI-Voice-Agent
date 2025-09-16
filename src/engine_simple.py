@@ -26,7 +26,7 @@ class Engine:
             base_url=f"http://{config.asterisk.host}:{config.asterisk.port}",
             app_name=config.asterisk.app_name
         )
-        self.audiosocket_server = AudioSocketServer(port=config.audiosocket.port)
+        self.audiosocket_server = AudioSocketServer(port=8090)  # Default AudioSocket port
         self.providers: Dict[str, AIProviderInterface] = {}
         self.active_calls: Dict[str, Dict[str, Any]] = {}  # channel_id -> call_data
         self.uuid_to_channel: Dict[str, str] = {}  # uuid -> channel_id
