@@ -243,7 +243,7 @@ class Engine:
             logger.error("Default provider not found", provider=self.config.default_provider)
             await self.ari_client.hangup_channel(channel_id)
             return
-
+        
         try:
             # Answer the channel
             await self.ari_client.answer_channel(channel_id)
@@ -384,14 +384,9 @@ class Engine:
             # Start provider session
             await provider.start_session(channel_id)
             logger.info("Provider session started", channel_id=channel_id, provider=self.config.default_provider)
-
-            # Play initial greeting
-            if hasattr(provider, 'play_initial_greeting'):
-                logger.debug("Playing initial greeting", channel_id=channel_id)
-                await provider.play_initial_greeting(channel_id)
-                logger.debug("Initial greeting played", channel_id=channel_id)
-            else:
-                logger.debug("Provider does not have play_initial_greeting method", channel_id=channel_id)
+            
+            # Initial greeting will be played when AudioSocket connects
+            # This prevents multiple greetings from being played
 
         except Exception as e:
             logger.error("Failed Local Channel Bridge setup", channel_id=channel_id, error=str(e), exc_info=True)
@@ -447,10 +442,12 @@ class Engine:
                 logger.debug("Starting provider session", channel_id=channel_id, provider=provider_name)
                 await provider.start_session(channel_id)
                 logger.debug("Provider session started successfully", channel_id=channel_id)
+                
+                # Play initial greeting only when AudioSocket connects
                 if hasattr(provider, 'play_initial_greeting'):
-                    logger.debug("Playing initial greeting", channel_id=channel_id)
+                    logger.info("🔊 GREETING - Playing initial greeting", channel_id=channel_id)
                     await provider.play_initial_greeting(channel_id)
-                    logger.debug("Initial greeting played", channel_id=channel_id)
+                    logger.info("🔊 GREETING - Played successfully", channel_id=channel_id)
         except Exception:
             logger.error("Error binding connection to channel", channel_id=channel_id, conn_id=conn_id, exc_info=True)
 
@@ -509,12 +506,7 @@ class Engine:
             # Initialize frame processor and VAD for this connection
             self.frame_processors[conn_id] = AudioFrameProcessor()
             self.vad_detectors[conn_id] = VoiceActivityDetector()
-            logger.info("🎤 AVR Frame Processing - Components Initialized",
-                       conn_id=conn_id,
-                       frame_size=160,
-                       frame_bytes=320,
-                       speech_threshold=0.1,
-                       max_silence_frames=10)
+            logger.debug("Audio processing components initialized", conn_id=conn_id)
             channel_id = self.pending_channel_for_bind
             if not channel_id:
                 # Start headless provider session (AudioSocket-only)
@@ -554,13 +546,8 @@ class Engine:
             logger.info("Starting headless session", conn_id=conn_id)
             await provider.start_session(conn_id)
             self.headless_sessions[conn_id] = {"provider": provider, "conversation_state": "greeting"}
-            # Optional initial greeting
-            if hasattr(provider, 'play_initial_greeting'):
-                try:
-                    await provider.play_initial_greeting(conn_id)
-                    logger.debug("Headless initial greeting requested", conn_id=conn_id)
-                except Exception:
-                    logger.debug("Headless initial greeting failed", conn_id=conn_id, exc_info=True)
+            # Initial greeting will be played when AudioSocket connects
+            # This prevents multiple greetings from being played
         except Exception:
             logger.error("Failed to start headless session", conn_id=conn_id, exc_info=True)
 
@@ -629,8 +616,8 @@ class Engine:
             # For AudioSocket, we can use any active call since there should only be one
             active_channel_id = None
             for channel_id, call_data in self.active_calls.items():
-                active_channel_id = channel_id
-                break
+                    active_channel_id = channel_id
+                    break
                     
             if not active_channel_id:
                 logger.warning("No active call found for audio frame")
@@ -708,21 +695,20 @@ class Engine:
     def _detect_voice_activity(self, audio_data: bytes) -> bool:
         """Simple VAD based on audio energy level."""
         try:
-            import audioop
+            import struct
             
-            # Convert ulaw to linear for energy calculation
-            linear_data = audioop.ulaw2lin(audio_data, 2)
-            
+            # AudioSocket sends PCM16LE@8kHz directly - no conversion needed
             # Calculate RMS (Root Mean Square) energy
-            rms = audioop.rms(linear_data, 2)
+            samples = struct.unpack(f'<{len(audio_data)//2}h', audio_data)
+            rms = sum(sample * sample for sample in samples) / len(samples)
+            rms = (rms ** 0.5) / 32768.0  # Normalize to 0-1
             
             # Lower threshold for better sensitivity to phone audio
-            # Phone audio typically has lower energy levels than studio recordings
-            voice_threshold = 200  # Reduced from 500 based on testing
+            voice_threshold = 0.01  # Normalized threshold
             
             has_voice = rms > voice_threshold
             if has_voice:
-                logger.debug("Voice activity detected", rms=rms, threshold=voice_threshold)
+                logger.debug("Voice activity detected", rms=f"{rms:.4f}", threshold=voice_threshold)
             
             return has_voice
         except Exception as e:
@@ -838,21 +824,21 @@ class Engine:
             # Forward DTMF to provider if it supports it
             if channel_id in self.active_calls:
                 call_data = self.active_calls.get(channel_id)
-                if call_data:
-                    provider = call_data.get('provider')
-                    if provider and hasattr(provider, 'handle_dtmf'):
-                        await provider.handle_dtmf(digit)
+            if call_data:
+                provider = call_data.get('provider')
+                if provider and hasattr(provider, 'handle_dtmf'):
+                    await provider.handle_dtmf(digit)
 
     def _on_audiosocket_audio(self, conn_id: str, audio_data: bytes):
         """Route inbound AudioSocket audio using frame-based processing to prevent voice queue backlog."""
         try:
-            # Enhanced debugging for frame processing implementation
+            # Track audio chunks for debugging
             count = self._audio_rx_debug.get(conn_id, 0) + 1
             self._audio_rx_debug[conn_id] = count
             
-            # Log every chunk for first 10, then every 50th
+            # Enhanced debugging for first 10 chunks, then every 50th
             if count <= 10 or count % 50 == 0:
-                logger.info("🎤 AVR Frame Processing - Audio Chunk Received",
+                logger.info("🎤 AUDIO CAPTURE - Chunk Received",
                            conn_id=conn_id,
                            bytes=len(audio_data),
                            chunk_number=count,
@@ -872,29 +858,17 @@ class Engine:
                               available_vads=list(self.vad_detectors.keys()))
                 return
             
-            # Convert ulaw to PCM16 for frame processing
-            try:
-                pcm_data = audioop.ulaw2lin(audio_data, 2)
-                if count <= 10 or count % 50 == 0:
-                    logger.info("🎤 AVR Frame Processing - Audio Converted",
-                               conn_id=conn_id,
-                               ulaw_bytes=len(audio_data),
-                               pcm_bytes=len(pcm_data),
-                               chunk_number=count)
-            except Exception as e:
-                logger.error("🚨 AVR Frame Processing - Conversion Failed", 
-                            conn_id=conn_id, error=str(e), exc_info=True)
-                return
+            # AudioSocket sends PCM16LE@8kHz directly - no conversion needed
+            pcm_data = audio_data
             
             # Process audio into frames
             frames = frame_processor.process_audio(pcm_data)
             
             if count <= 10 or count % 50 == 0:
-                logger.info("🎤 AVR Frame Processing - Frames Generated",
+                logger.info("🎤 AUDIO PROCESSING - Frames Generated",
                            conn_id=conn_id,
                            input_bytes=len(pcm_data),
                            frames_generated=len(frames),
-                           frame_size=frame_processor.frame_bytes,
                            chunk_number=count)
             
             # Process each frame
@@ -922,7 +896,7 @@ class Engine:
             
             # Log frame processing summary
             if count <= 10 or count % 50 == 0:
-                logger.info("🎤 AVR Frame Processing - Summary",
+                logger.info("🎤 AUDIO PROCESSING - Summary",
                            conn_id=conn_id,
                            total_frames=len(frames),
                            speech_frames=speech_frames,
@@ -951,39 +925,30 @@ class Engine:
             if channel_id:
                 call_data = self.active_calls.get(channel_id)
                 if not call_data:
-                    logger.warning("🚨 AVR Frame Routing - No Active Call Data", 
+                    logger.warning("No active call data for audio frame", 
                                    conn_id=conn_id, channel_id=channel_id)
                     return
                 provider = call_data.get('provider')
                 if provider:
-                    logger.debug("🎯 AVR Frame Routing - To Provider", 
-                                 conn_id=conn_id, channel_id=channel_id, 
-                                 provider=type(provider).__name__, 
-                                 energy=f"{audio_energy:.4f}",
-                                 frame_bytes=len(frame))
                     asyncio.create_task(provider.send_audio(frame))
                 else:
-                    logger.warning("🚨 AVR Frame Routing - No Provider Found", 
+                    logger.warning("No provider found for audio frame", 
                                    conn_id=conn_id, channel_id=channel_id)
             else:
                 # Headless mapping by conn_id
                 session = self.headless_sessions.get(conn_id)
                 if not session:
-                    logger.warning("🚨 AVR Frame Routing - No Headless Session", 
+                    logger.warning("No headless session for audio frame", 
                                    conn_id=conn_id)
                     return
                 provider = session.get('provider')
                 if provider:
-                    logger.debug("🎯 AVR Frame Routing - To Headless Provider", 
-                                 conn_id=conn_id, provider=type(provider).__name__, 
-                                 energy=f"{audio_energy:.4f}",
-                                 frame_bytes=len(frame))
                     asyncio.create_task(provider.send_audio(frame))
                 else:
-                    logger.warning("🚨 AVR Frame Routing - No Headless Provider", 
+                    logger.warning("No headless provider for audio frame", 
                                    conn_id=conn_id)
         except Exception as e:
-            logger.error("🚨 AVR Frame Routing - Error", 
+            logger.error("Error routing audio frame", 
                          conn_id=conn_id, error=str(e), exc_info=True)
 
     async def _start_health_server(self):
@@ -1066,8 +1031,8 @@ class Engine:
                         if call_id and call_id in self.headless_sessions:
                             conn_id = call_id
                             rate = 8000
-                            # Convert provider ulaw TTS to PCM16LE@8k for AudioSocket
-                            out_bytes = audioop.ulaw2lin(audio_data, 2)
+                            # AudioSocket expects PCM16LE@8k - no conversion needed
+                            out_bytes = audio_data
                             try:
                                 await self.audiosocket_server.send_audio(conn_id, out_bytes)
                                 logger.info("Streamed provider audio over AudioSocket (headless)", conn_id=conn_id, bytes=len(out_bytes), fmt='slin16', rate=rate)
@@ -1095,36 +1060,35 @@ class Engine:
                                 except Exception:
                                     pass
                                 try:
+                                    # AudioSocket expects PCM16LE@8k - no conversion needed
                                     out_bytes = audio_data
-                                    if fmt.startswith('slin'):
-                                        out_bytes = audioop.ulaw2lin(audio_data, 2)
                                     # Send downstream over socket
                                     await self.audiosocket_server.send_audio(conn_id, out_bytes)
                                     logger.debug("Streamed provider audio over AudioSocket", channel_id=channel_id, bytes=len(out_bytes), fmt=fmt, rate=rate)
                                 except Exception:
                                     logger.debug("Error streaming audio over AudioSocket; falling back to ARI", exc_info=True)
                                     await self._play_audio_via_snoop(channel_id, audio_data)
-                    else:
-                        # File-based playback via ARI (default path) - use bridge playback
-                        for channel_id, call_data in self.active_calls.items():
-                            await self._play_audio_via_bridge(channel_id, audio_data)
-                            logger.debug(f"Sent {len(audio_data)} bytes of audio to call channel {channel_id}")
+                else:
+                    # File-based playback via ARI (default path) - use bridge playback
+                    for channel_id, call_data in self.active_calls.items():
+                        await self._play_audio_via_bridge(channel_id, audio_data)
+                        logger.info(f"🔊 AUDIO OUTPUT - Sent {len(audio_data)} bytes to call channel {channel_id}")
+                        
+                        # Update conversation state after playing response
+                        conversation_state = call_data.get('conversation_state')
+                        if conversation_state == 'greeting':
+                            # First response after greeting - transition to listening
+                            call_data['conversation_state'] = 'listening'
+                            logger.info("Greeting completed, now listening for conversation", channel_id=channel_id)
+                        elif conversation_state == 'processing':
+                            # Response to user input - transition back to listening
+                            call_data['conversation_state'] = 'listening'
+                            logger.info("Response played, listening for next user input", channel_id=channel_id)
                             
-                            # Update conversation state after playing response
-                            conversation_state = call_data.get('conversation_state')
-                            if conversation_state == 'greeting':
-                                # First response after greeting - transition to listening
-                                call_data['conversation_state'] = 'listening'
-                                logger.info("Greeting completed, now listening for conversation", channel_id=channel_id)
-                            elif conversation_state == 'processing':
-                                # Response to user input - transition back to listening
-                                call_data['conversation_state'] = 'listening'
-                                logger.info("Response played, listening for next user input", channel_id=channel_id)
-                                
-                                # Cancel provider timeout task since we got a response
-                                if call_data.get('provider_timeout_task') and not call_data['provider_timeout_task'].done():
-                                    call_data['provider_timeout_task'].cancel()
-                                    logger.debug("Cancelled provider timeout task - response received", channel_id=channel_id)
+                            # Cancel provider timeout task since we got a response
+                            if call_data.get('provider_timeout_task') and not call_data['provider_timeout_task'].done():
+                                call_data['provider_timeout_task'].cancel()
+                                logger.debug("Cancelled provider timeout task - response received", channel_id=channel_id)
             elif event_type == "Transcription":
                 # Handle transcription data
                 text = event.get("text", "")
@@ -1225,6 +1189,18 @@ class Engine:
         if channel_id in self.active_calls:
             call_data = self.active_calls[channel_id]
             logger.debug("Call found in active calls", channel_id=channel_id, call_data_keys=list(call_data.keys()))
+            
+            # Cancel any pending timeout tasks
+            timeout_task = call_data.get('timeout_task')
+            if timeout_task and not timeout_task.done():
+                timeout_task.cancel()
+                logger.debug("Cancelled timeout task", channel_id=channel_id)
+            
+            # Cancel provider timeout task
+            provider_timeout_task = call_data.get('provider_timeout_task')
+            if provider_timeout_task and not provider_timeout_task.done():
+                provider_timeout_task.cancel()
+                logger.debug("Cancelled provider timeout task", channel_id=channel_id)
             
             provider = call_data.get("provider")
             if provider:

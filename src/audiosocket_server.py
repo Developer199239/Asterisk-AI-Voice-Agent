@@ -52,7 +52,7 @@ class AudioSocketServer:
             "header_pending": True,
             "header_buf": bytearray(),
             "out_buf": bytearray(),
-            "format": 'ulaw',
+            "format": 'slin16le',  # AudioSocket sends PCM16LE@8kHz directly
             "rate": 8000,
         }
         logger.info("AudioSocket connection accepted", peer=peer, conn_id=conn_id)

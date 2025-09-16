@@ -72,22 +72,9 @@ class LocalProvider(AIProviderInterface):
 
     async def send_audio(self, audio_chunk: bytes):
         """Send audio chunk to Local AI Server for STT processing."""
-        # Enhanced debugging for audio flow
         try:
-            # Calculate audio energy for debugging
-            audio_energy = 0
-            if len(audio_chunk) >= 2:
-                import struct
-                try:
-                    samples = struct.unpack(f'<{len(audio_chunk)//2}h', audio_chunk)
-                    audio_energy = sum(sample * sample for sample in samples) / len(samples)
-                    audio_energy = (audio_energy ** 0.5) / 32768.0  # Normalize to 0-1
-                except:
-                    audio_energy = 0
-            
-            logger.debug("🎵 Sending audio to Local AI Server",
+            logger.info("🎵 PROVIDER INPUT - Sending to Local AI Server",
                          bytes=len(audio_chunk),
-                         audio_energy=f"{audio_energy:.4f}",
                          queue_size=self._send_queue.qsize(),
                          input_mode=self.input_mode)
             
@@ -95,7 +82,7 @@ class LocalProvider(AIProviderInterface):
             await self._send_queue.put(audio_chunk)
             
         except Exception as e:
-            logger.error("🚨 Failed to enqueue audio for Local AI Server", 
+            logger.error("Failed to enqueue audio for Local AI Server", 
                          error=str(e), bytes=len(audio_chunk), exc_info=True)
 
     async def _send_loop(self):
@@ -123,36 +110,32 @@ class LocalProvider(AIProviderInterface):
                     pcm8k = b"".join(audioop.ulaw2lin(b, 2) for b in batch)
                 pcm16k, _ = audioop.ratecv(pcm8k, 2, 1, 8000, 16000, None)
                 
-                # Enhanced debugging for audio processing
+                # Process audio batch for STT
                 total_bytes = sum(len(b) for b in batch)
-                logger.debug("🔄 Processing audio batch for STT",
+                logger.info("🔄 PROVIDER BATCH - Processing for STT",
                              frames=len(batch),
                              total_bytes=total_bytes,
-                             pcm8k_bytes=len(pcm8k),
-                             pcm16k_bytes=len(pcm16k),
                              input_mode=self.input_mode)
                 
                 msg = json.dumps({"type": "audio", "data": base64.b64encode(pcm16k).decode('utf-8')})
                 try:
                     await self.websocket.send(msg)
-                    logger.debug("📤 WS batch send successful", 
+                    logger.debug("WebSocket batch send successful", 
                                  frames=len(batch), 
-                                 in_bytes=total_bytes, 
-                                 pcm8k=len(pcm8k), 
-                                 pcm16k=len(pcm16k))
+                                 in_bytes=total_bytes)
                 except websockets.exceptions.ConnectionClosed as e:
-                    logger.warning("🔌 WebSocket closed during send, attempting reconnect", 
+                    logger.warning("WebSocket closed during send, attempting reconnect", 
                                    code=getattr(e, 'code', None), 
                                    reason=getattr(e, 'reason', None))
                     ok = await self._reconnect()
                     if ok:
                         try:
                             await self.websocket.send(msg)
-                            logger.debug("📤 WS resend after reconnect successful", frames=len(batch))
+                            logger.debug("WebSocket resend after reconnect successful", frames=len(batch))
                         except Exception as e:
-                            logger.error("🚨 WS resend failed after reconnect", error=str(e), exc_info=True)
+                            logger.error("WebSocket resend failed after reconnect", error=str(e), exc_info=True)
                 except Exception as e:
-                    logger.error("🚨 WS send error", error=str(e), exc_info=True)
+                    logger.error("WebSocket send error", error=str(e), exc_info=True)
                 # Pace the loop
                 await asyncio.sleep(BATCH_MS / 1000.0)
             except asyncio.CancelledError:
