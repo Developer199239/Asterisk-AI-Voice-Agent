@@ -6,7 +6,7 @@ import struct
 import uuid
 import audioop
 import base64
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 from .ari_client import ARIClient
 from aiohttp import web
@@ -18,6 +18,58 @@ from .providers.deepgram import DeepgramProvider
 from .providers.local import LocalProvider
 
 logger = get_logger(__name__)
+
+class AudioFrameProcessor:
+    """Processes audio in 20ms frames to prevent voice queue backlog."""
+    
+    def __init__(self, frame_size: int = 160):  # 20ms at 8kHz = 160 samples
+        self.frame_size = frame_size
+        self.buffer = bytearray()
+        self.frame_bytes = frame_size * 2  # 2 bytes per sample (PCM16)
+    
+    def process_audio(self, audio_data: bytes) -> List[bytes]:
+        """Process audio data and return complete frames."""
+        # Accumulate audio in buffer
+        self.buffer.extend(audio_data)
+        
+        # Extract complete frames
+        frames = []
+        while len(self.buffer) >= self.frame_bytes:
+            frame = bytes(self.buffer[:self.frame_bytes])
+            self.buffer = self.buffer[self.frame_bytes:]
+            frames.append(frame)
+        
+        return frames
+    
+    def flush(self) -> bytes:
+        """Flush remaining audio in buffer."""
+        remaining = bytes(self.buffer)
+        self.buffer = bytearray()
+        return remaining
+
+class VoiceActivityDetector:
+    """Simple VAD to reduce unnecessary audio processing."""
+    
+    def __init__(self, speech_threshold: float = 0.1, silence_frames: int = 10):
+        self.speech_threshold = speech_threshold
+        self.max_silence_frames = silence_frames
+        self.silence_frames = 0
+        self.is_speaking = False
+    
+    def is_speech(self, audio_energy: float) -> bool:
+        """Determine if audio contains speech."""
+        if audio_energy > self.speech_threshold:
+            self.silence_frames = 0
+            if not self.is_speaking:
+                self.is_speaking = True
+                logger.debug("🎤 Speech started", energy=audio_energy)
+            return True
+        else:
+            self.silence_frames += 1
+            if self.is_speaking and self.silence_frames >= self.max_silence_frames:
+                self.is_speaking = False
+                logger.debug("🎤 Speech ended", silence_frames=self.silence_frames)
+            return self.silence_frames < self.max_silence_frames
 
 
 class Engine:
@@ -45,6 +97,9 @@ class Engine:
         self.headless_sessions: Dict[str, Dict[str, Any]] = {}
         # Bridge and Local channel tracking for Local Channel Bridge pattern
         self.bridges: Dict[str, str] = {}  # channel_id -> bridge_id
+        # Frame processing and VAD for optimized audio handling
+        self.frame_processors: Dict[str, AudioFrameProcessor] = {}  # conn_id -> processor
+        self.vad_detectors: Dict[str, VoiceActivityDetector] = {}  # conn_id -> VAD
         self.local_channels: Dict[str, str] = {}  # channel_id -> local_channel_id
         # Map our synthesized UUID extension to the real ARI caller channel id
         self.uuidext_to_channel: Dict[str, str] = {}
@@ -428,6 +483,10 @@ class Engine:
         """Bind to pending ARI channel or start a headless session on accept."""
         try:
             logger.info("on_accept invoked", conn_id=conn_id, pending_channel=self.pending_channel_for_bind)
+            
+            # Initialize frame processor and VAD for this connection
+            self.frame_processors[conn_id] = AudioFrameProcessor()
+            self.vad_detectors[conn_id] = VoiceActivityDetector()
             channel_id = self.pending_channel_for_bind
             if not channel_id:
                 # Start headless provider session (AudioSocket-only)
@@ -486,6 +545,11 @@ class Engine:
                 if provider:
                     asyncio.get_event_loop().create_task(provider.stop_session())
                 logger.info("Headless session cleaned up", conn_id=conn_id)
+            
+            # Clean up frame processor and VAD
+            self.frame_processors.pop(conn_id, None)
+            self.vad_detectors.pop(conn_id, None)
+            
             # Cancel keepalive task if running
             try:
                 t = self._keepalive_tasks.pop(conn_id, None)
@@ -752,92 +816,95 @@ class Engine:
                         await provider.handle_dtmf(digit)
 
     def _on_audiosocket_audio(self, conn_id: str, audio_data: bytes):
-        """Route inbound AudioSocket audio to the mapped provider for that connection."""
+        """Route inbound AudioSocket audio using frame-based processing to prevent voice queue backlog."""
         try:
-            # Enhanced debugging: log audio capture details
-            try:
-                count = self._audio_rx_debug.get(conn_id, 0) + 1
-                if count <= 20:  # Increased from 8 to 20 for more debugging
-                    preview = audio_data[:8]
-                    # Calculate audio energy for VAD detection
-                    audio_energy = 0
-                    if len(audio_data) >= 2:
-                        # Convert ulaw to PCM16 first, then calculate energy
-                        import struct
-                        try:
-                            # Convert ulaw audio to PCM16 for energy calculation
-                            pcm_data = audioop.ulaw2lin(audio_data, 2)
-                            samples = struct.unpack(f'<{len(pcm_data)//2}h', pcm_data)
-                            audio_energy = sum(sample * sample for sample in samples) / len(samples)
-                            audio_energy = (audio_energy ** 0.5) / 32768.0  # Normalize to 0-1
-                        except Exception as e:
-                            logger.debug("Error calculating audio energy", error=str(e))
-                            audio_energy = 0
-                    
-                    logger.info("🎤 AudioSocket inbound chunk",
-                                 conn_id=conn_id,
-                                 bytes=len(audio_data),
-                                 first8=preview.hex(" "),
-                                 multiple_of_2=(len(audio_data) % 2 == 0),
-                                 audio_energy=f"{audio_energy:.4f}",
-                                 chunk_number=count)
-                elif count % 50 == 0:  # Log every 50th chunk after initial 20
-                    logger.debug("🎤 AudioSocket continuing",
-                                 conn_id=conn_id,
-                                 bytes=len(audio_data),
-                                 chunk_number=count)
-                self._audio_rx_debug[conn_id] = count
-            except Exception as e:
-                logger.debug("Error in audio debug logging", exc_info=True)
+            # Get frame processor and VAD for this connection
+            frame_processor = self.frame_processors.get(conn_id)
+            vad_detector = self.vad_detectors.get(conn_id)
             
+            if not frame_processor or not vad_detector:
+                logger.warning("🚨 No frame processor or VAD found for connection", conn_id=conn_id)
+                return
+            
+            # Convert ulaw to PCM16 for frame processing
+            try:
+                pcm_data = audioop.ulaw2lin(audio_data, 2)
+            except Exception as e:
+                logger.error("Failed to convert ulaw to PCM16", error=str(e), exc_info=True)
+                return
+            
+            # Process audio into frames
+            frames = frame_processor.process_audio(pcm_data)
+            
+            # Process each frame
+            for frame in frames:
+                # Calculate energy for VAD
+                audio_energy = self._calculate_frame_energy(frame)
+                
+                # Only process if speech detected
+                if vad_detector.is_speech(audio_energy):
+                    # Route frame to appropriate provider
+                    self._route_audio_frame(conn_id, frame, audio_energy)
+                else:
+                    # Log silence frames occasionally
+                    if self._audio_rx_debug.get(conn_id, 0) % 100 == 0:
+                        logger.debug("🎤 Silence frame skipped", 
+                                     conn_id=conn_id, energy=f"{audio_energy:.4f}")
+            
+            # Update debug counter
+            self._audio_rx_debug[conn_id] = self._audio_rx_debug.get(conn_id, 0) + 1
+            
+        except Exception as e:
+            logger.error("🚨 Error in frame-based audio processing", 
+                         conn_id=conn_id, error=str(e), exc_info=True)
+    
+    def _calculate_frame_energy(self, frame: bytes) -> float:
+        """Calculate audio energy for a single frame."""
+        try:
+            import struct
+            samples = struct.unpack(f'<{len(frame)//2}h', frame)
+            energy = sum(sample * sample for sample in samples) / len(samples)
+            return (energy ** 0.5) / 32768.0  # Normalize to 0-1
+        except Exception:
+            return 0.0
+    
+    def _route_audio_frame(self, conn_id: str, frame: bytes, audio_energy: float):
+        """Route a single audio frame to the appropriate provider."""
+        try:
             # Route audio to appropriate provider
             channel_id = self.conn_to_channel.get(conn_id)
             if channel_id:
                 call_data = self.active_calls.get(channel_id)
                 if not call_data:
-                    logger.warning("🚨 Audio received but no active call data found", 
+                    logger.warning("🚨 Audio frame received but no active call data found", 
                                    conn_id=conn_id, channel_id=channel_id)
                     return
                 provider = call_data.get('provider')
                 if provider:
-                    logger.debug("🎯 Routing audio to provider", 
+                    logger.debug("🎯 Routing frame to provider", 
                                  conn_id=conn_id, channel_id=channel_id, 
-                                 provider=type(provider).__name__)
-                    # Convert ulaw to PCM16 before sending to provider
-                    try:
-                        pcm_data = audioop.ulaw2lin(audio_data, 2)
-                        asyncio.create_task(provider.send_audio(pcm_data))
-                    except Exception as e:
-                        logger.error("Failed to convert audio for provider", error=str(e))
-                        # Fallback: send original data
-                        asyncio.create_task(provider.send_audio(audio_data))
+                                 provider=type(provider).__name__, energy=f"{audio_energy:.4f}")
+                    asyncio.create_task(provider.send_audio(frame))
                 else:
-                    logger.warning("🚨 Audio received but no provider found", 
+                    logger.warning("🚨 Audio frame received but no provider found", 
                                    conn_id=conn_id, channel_id=channel_id)
             else:
                 # Headless mapping by conn_id
                 session = self.headless_sessions.get(conn_id)
                 if not session:
-                    logger.warning("🚨 Audio received but no headless session found", 
+                    logger.warning("🚨 Audio frame received but no headless session found", 
                                    conn_id=conn_id)
                     return
                 provider = session.get('provider')
                 if provider:
-                    logger.debug("🎯 Routing audio to headless provider", 
-                                 conn_id=conn_id, provider=type(provider).__name__)
-                    # Convert ulaw to PCM16 before sending to provider
-                    try:
-                        pcm_data = audioop.ulaw2lin(audio_data, 2)
-                        asyncio.create_task(provider.send_audio(pcm_data))
-                    except Exception as e:
-                        logger.error("Failed to convert audio for headless provider", error=str(e))
-                        # Fallback: send original data
-                        asyncio.create_task(provider.send_audio(audio_data))
+                    logger.debug("🎯 Routing frame to headless provider", 
+                                 conn_id=conn_id, provider=type(provider).__name__, energy=f"{audio_energy:.4f}")
+                    asyncio.create_task(provider.send_audio(frame))
                 else:
-                    logger.warning("🚨 Audio received but no headless provider found", 
+                    logger.warning("🚨 Audio frame received but no headless provider found", 
                                    conn_id=conn_id)
         except Exception as e:
-            logger.error("🚨 Error routing AudioSocket audio", 
+            logger.error("🚨 Error routing audio frame", 
                          conn_id=conn_id, error=str(e), exc_info=True)
 
     async def _start_health_server(self):
