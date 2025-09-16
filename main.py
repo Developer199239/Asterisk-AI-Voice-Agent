@@ -1,5 +1,5 @@
 import asyncio
-from src.engine_simple import main
+from src.engine import main
 
 if __name__ == "__main__":
     try:

@@ -26,17 +26,50 @@ This is an open-source AI Voice Agent that integrates with Asterisk/FreePBX usin
    - Push to remote `develop` branch.
 3. **Server Testing**:
    - SSH to test server.
-   - For isoloated tests scp file to the server and then to the container
+   - For isolated tests scp file to the server and then to the container
    - `git pull` the latest changes into `/root/Asterisk-Agent-Develop`.
-   - Use `docker-compose restart` for code changes or `docker-compose up --build -d` for dependency changes.
+   - **ALWAYS use `docker-compose up --build -d` for code changes** (rebuilds image with new code)
+   - **NEVER use `docker-compose restart`** (uses old image without new code)
 
-### Docker Development Workflow (CRITICAL)
+### Docker Development Workflow (CRITICAL - UPDATED)
 
-**NEVER rebuild the Docker image for code changes in the `ai-engine`.** Use the volume-based workflow:
+**ALWAYS rebuild the Docker image for ANY code changes in the `ai-engine`.** The previous volume-based workflow was incorrect:
 
-1. **For dependency changes only**: `docker-compose up --build -d`
-2. **For `ai-engine` code changes**: `docker-compose restart ai-engine` (instant)
-3. **View logs**: `docker-compose logs -f`
+1. **For ALL code changes**: `docker-compose up --build -d ai-engine` (rebuilds image with new code)
+2. **For dependency changes**: `docker-compose up --build -d` (rebuilds all services)
+3. **View logs**: `docker-compose logs -f ai-engine`
+4. **Clear logs before testing**: `docker-compose logs --tail=0 ai-engine` (start fresh)
+
+### Log Management (CRITICAL)
+
+**ALWAYS clear container logs before testing to start with a clean slate:**
+
+1. **Before each test call**: Clear logs to avoid confusion from previous runs
+2. **Clear AI Engine logs**: `docker-compose logs --tail=0 ai-engine`
+3. **Clear Local AI Server logs**: `docker-compose logs --tail=0 local-ai-server`
+4. **Clear Asterisk logs**: `ssh root@voiprnd.nemtclouddispatch.com 'tail -f /var/log/asterisk/full' > /dev/null 2>&1 &'`
+
+**Why this matters**: Old logs can mask new issues and make debugging confusing.
+
+### Deployment Workflow Lessons Learned (CRITICAL)
+
+**Common Mistake**: Using `docker-compose restart` instead of `docker-compose up --build -d`
+
+**What happens with `restart`**:
+- Container restarts with the **existing image**
+- **New code changes are NOT included**
+- Container runs **old code** even after Git pull
+- **Debugging becomes impossible** because logs show old behavior
+
+**What happens with `up --build -d`**:
+- Docker **rebuilds the image** with new code
+- Container runs with **updated code**
+- **Logs reflect actual current behavior**
+- **Debugging works correctly**
+
+**Memory Aid**: 
+- `restart` = "restart with old image" ❌
+- `up --build -d` = "rebuild and start with new code" ✅
 
 ### Project Structure
 ```
@@ -250,3 +283,35 @@ When issues arise:
 6. Verify file-based playback functionality
 7. Run individual component tests to isolate problems
 8. Check container logs for specific error messages
+
+## Quick Reference Commands
+
+### Deployment Commands
+```bash
+# Deploy code changes (ALWAYS use this)
+ssh root@voiprnd.nemtclouddispatch.com 'cd /root/Asterisk-Agent-Develop && git pull && docker-compose up --build -d ai-engine'
+
+# Clear logs before testing
+ssh root@voiprnd.nemtclouddispatch.com 'cd /root/Asterisk-Agent-Develop && docker-compose logs --tail=0 ai-engine'
+
+# View live logs
+ssh root@voiprnd.nemtclouddispatch.com 'cd /root/Asterisk-Agent-Develop && docker-compose logs -f ai-engine'
+```
+
+### Testing Commands
+```bash
+# Test ARI commands
+ssh root@voiprnd.nemtclouddispatch.com 'cd /root/Asterisk-Agent-Develop && docker-compose exec ai-engine python /app/test_ari_commands.py'
+
+# Check container status
+ssh root@voiprnd.nemtclouddispatch.com 'cd /root/Asterisk-Agent-Develop && docker-compose ps'
+```
+
+### Debugging Commands
+```bash
+# Check Asterisk logs
+ssh root@voiprnd.nemtclouddispatch.com 'tail -f /var/log/asterisk/full | grep -i "ai-voice-agent\|audiosocket\|stasis"'
+
+# Check container health
+ssh root@voiprnd.nemtclouddispatch.com 'cd /root/Asterisk-Agent-Develop && docker-compose logs --tail=20 ai-engine'
+```

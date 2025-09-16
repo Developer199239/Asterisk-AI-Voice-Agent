@@ -256,24 +256,97 @@ class Engine:
         return None
 
     async def _handle_stasis_start(self, event: dict):
-        """Handle StasisStart events for both caller and Local channels."""
-        logger.debug("StasisStart event received", event_data=event)
+        """Handle StasisStart events - Hybrid ARI approach with single handler."""
+        logger.info("🎯 HYBRID ARI - StasisStart event received", event_data=event)
         channel = event.get('channel', {})
         channel_id = channel.get('id')
+        channel_name = channel.get('name', '')
+        
+        logger.info("🎯 HYBRID ARI - Channel analysis", 
+                   channel_id=channel_id,
+                   channel_name=channel_name,
+                   is_caller=self._is_caller_channel(channel),
+                   is_local=self._is_local_channel(channel))
         
         if self._is_caller_channel(channel):
-            # This is the caller channel entering Stasis
-            await self._handle_caller_stasis_start(channel_id, channel)
+            # This is the caller channel entering Stasis - MAIN FLOW
+            logger.info("🎯 HYBRID ARI - Processing caller channel", channel_id=channel_id)
+            await self._handle_caller_stasis_start_hybrid(channel_id, channel)
         elif self._is_local_channel(channel):
-            # This is the Local channel entering Stasis
-            await self._handle_local_stasis_start(channel_id, channel)
+            # This is the Local channel entering Stasis - SHOULD NOT HAPPEN in hybrid approach
+            logger.warning("🎯 HYBRID ARI - Local channel entered Stasis (unexpected)", 
+                          channel_id=channel_id,
+                          channel_name=channel_name)
+            # In hybrid approach, Local channel should NOT enter Stasis
+            # Just log and continue - the bridge should already be created
         else:
-            logger.warning("Unknown channel type in StasisStart", 
+            logger.warning("🎯 HYBRID ARI - Unknown channel type in StasisStart", 
                           channel_id=channel_id, 
-                          channel_name=channel.get('name'))
+                          channel_name=channel_name)
+
+    async def _handle_caller_stasis_start_hybrid(self, caller_channel_id: str, channel: dict):
+        """Handle caller channel entering Stasis - Hybrid ARI approach."""
+        caller_info = channel.get('caller', {})
+        logger.info("🎯 HYBRID ARI - Caller channel entered Stasis", 
+                    channel_id=caller_channel_id,
+                    caller_name=caller_info.get('name'),
+                    caller_number=caller_info.get('number'))
+        
+        # Check if call is already in progress
+        if caller_channel_id in self.caller_channels:
+            logger.warning("🎯 HYBRID ARI - Caller already in progress", channel_id=caller_channel_id)
+            return
+        
+        try:
+            # Step 1: Answer the caller
+            logger.info("🎯 HYBRID ARI - Step 1: Answering caller channel", channel_id=caller_channel_id)
+            await self.ari_client.answer_channel(caller_channel_id)
+            logger.info("🎯 HYBRID ARI - Step 1: ✅ Caller channel answered", channel_id=caller_channel_id)
+            
+            # Step 2: Create bridge immediately
+            logger.info("🎯 HYBRID ARI - Step 2: Creating bridge immediately", channel_id=caller_channel_id)
+            bridge_id = await self.ari_client.create_bridge(bridge_type="mixing")
+            if not bridge_id:
+                raise RuntimeError("Failed to create mixing bridge")
+            logger.info("🎯 HYBRID ARI - Step 2: ✅ Bridge created", 
+                       channel_id=caller_channel_id, 
+                       bridge_id=bridge_id)
+            
+            # Step 3: Add caller to bridge
+            logger.info("🎯 HYBRID ARI - Step 3: Adding caller to bridge", 
+                       channel_id=caller_channel_id, 
+                       bridge_id=bridge_id)
+            caller_success = await self.ari_client.add_channel_to_bridge(bridge_id, caller_channel_id)
+            if not caller_success:
+                raise RuntimeError("Failed to add caller channel to bridge")
+            logger.info("🎯 HYBRID ARI - Step 3: ✅ Caller added to bridge", 
+                       channel_id=caller_channel_id, 
+                       bridge_id=bridge_id)
+            
+            # Step 4: Store caller info with bridge
+            self.caller_channels[caller_channel_id] = {
+                "status": "bridge_ready",
+                "channel": channel,
+                "local_channel_id": None,
+                "bridge_id": bridge_id
+            }
+            self.bridges[caller_channel_id] = bridge_id
+            logger.info("🎯 HYBRID ARI - Step 4: ✅ Caller info stored", 
+                       channel_id=caller_channel_id, 
+                       bridge_id=bridge_id)
+            
+            # Step 5: Originate Local channel with minimal dialplan
+            logger.info("🎯 HYBRID ARI - Step 5: Originating Local channel", channel_id=caller_channel_id)
+            await self._originate_local_channel_hybrid(caller_channel_id)
+            
+        except Exception as e:
+            logger.error("🎯 HYBRID ARI - Failed to handle caller StasisStart", 
+                        caller_channel_id=caller_channel_id, 
+                        error=str(e), exc_info=True)
+            await self._cleanup_call(caller_channel_id)
 
     async def _handle_caller_stasis_start(self, caller_channel_id: str, channel: dict):
-        """Handle caller channel entering Stasis."""
+        """Handle caller channel entering Stasis - LEGACY (kept for reference)."""
         caller_info = channel.get('caller', {})
         logger.info("Caller channel entered Stasis", 
                     channel_id=caller_channel_id,
@@ -339,8 +412,77 @@ class Engine:
                 await self._cleanup_call(caller_channel_id)
             await self.ari_client.hangup_channel(local_channel_id)
 
+    async def _originate_local_channel_hybrid(self, caller_channel_id: str):
+        """Originate Local channel for AudioSocket - Hybrid ARI approach."""
+        # Generate UUID for AudioSocket binding
+        audio_uuid = str(uuid.uuid4())
+        local_endpoint = f"Local/{audio_uuid}@ai-audiosocket/n"
+        
+        orig_params = {
+            "endpoint": local_endpoint,
+            "extension": audio_uuid,  # Use UUID as extension for AudioSocket binding
+            "context": "ai-audiosocket",  # Minimal dialplan context
+            "priority": "1",
+            "timeout": "30",
+            # NO app parameter - Local channel doesn't enter Stasis
+        }
+        
+        logger.info("🎯 HYBRID ARI - Originating Local channel", 
+                    endpoint=local_endpoint, 
+                    caller_channel_id=caller_channel_id,
+                    audio_uuid=audio_uuid)
+        
+        try:
+            response = await self.ari_client.send_command("POST", "channels", params=orig_params)
+            if response and response.get("id"):
+                local_channel_id = response["id"]
+                # Store mapping for AudioSocket binding
+                self.pending_local_channels[local_channel_id] = caller_channel_id
+                self.uuidext_to_channel[audio_uuid] = caller_channel_id
+                logger.info("🎯 HYBRID ARI - Local channel originated", 
+                           local_channel_id=local_channel_id, 
+                           caller_channel_id=caller_channel_id,
+                           audio_uuid=audio_uuid)
+                
+                # Add Local channel to existing bridge
+                if caller_channel_id in self.caller_channels:
+                    bridge_id = self.caller_channels[caller_channel_id]["bridge_id"]
+                    logger.info("🎯 HYBRID ARI - Adding Local channel to bridge", 
+                               local_channel_id=local_channel_id,
+                               bridge_id=bridge_id)
+                    local_success = await self.ari_client.add_channel_to_bridge(bridge_id, local_channel_id)
+                    if local_success:
+                        logger.info("🎯 HYBRID ARI - ✅ Local channel added to bridge", 
+                                   local_channel_id=local_channel_id,
+                                   bridge_id=bridge_id)
+                        # Update caller info
+                        self.caller_channels[caller_channel_id]["local_channel_id"] = local_channel_id
+                        self.caller_channels[caller_channel_id]["status"] = "connected"
+                        self.local_channels[caller_channel_id] = local_channel_id
+                        
+                        # Start provider session
+                        await self._start_provider_session_hybrid(caller_channel_id, local_channel_id)
+                    else:
+                        logger.error("🎯 HYBRID ARI - Failed to add Local channel to bridge", 
+                                   local_channel_id=local_channel_id,
+                                   bridge_id=bridge_id)
+                        raise RuntimeError("Failed to add Local channel to bridge")
+                else:
+                    logger.error("🎯 HYBRID ARI - Caller channel not found for Local channel", 
+                               local_channel_id=local_channel_id,
+                               caller_channel_id=caller_channel_id)
+                    raise RuntimeError("Caller channel not found")
+            else:
+                raise RuntimeError("Failed to originate Local channel")
+        except Exception as e:
+            logger.error("🎯 HYBRID ARI - Local channel originate failed", 
+                        caller_channel_id=caller_channel_id,
+                        audio_uuid=audio_uuid,
+                        error=str(e), exc_info=True)
+            raise
+
     async def _originate_local_channel(self, caller_channel_id: str):
-        """Originate Local channel for AudioSocket."""
+        """Originate Local channel for AudioSocket - LEGACY (kept for reference)."""
         local_endpoint = f"Local/{caller_channel_id}@ai-agent-media-fork/n"
         
         orig_params = {
@@ -420,8 +562,91 @@ class Engine:
                         error=str(e), exc_info=True)
             await self._cleanup_call(caller_channel_id)
 
+    async def _start_provider_session_hybrid(self, caller_channel_id: str, local_channel_id: str):
+        """Start provider session - Hybrid ARI approach."""
+        try:
+            logger.info("🎯 HYBRID ARI - Starting provider session", 
+                       local_channel_id=local_channel_id, 
+                       caller_channel_id=caller_channel_id)
+            
+            # Get provider
+            provider = self.providers.get(self.config.default_provider)
+            if not provider:
+                logger.error("🎯 HYBRID ARI - Default provider not found", provider=self.config.default_provider)
+                return
+            
+            # Start provider session
+            logger.info("🎯 HYBRID ARI - Starting provider session", provider=self.config.default_provider)
+            await provider.start_session(local_channel_id)
+            
+            # Store in active calls
+            bridge_id = self.caller_channels.get(caller_channel_id, {}).get("bridge_id")
+            self.active_calls[local_channel_id] = {
+                "provider": provider,
+                "conversation_state": "greeting",
+                "bridge_id": bridge_id,
+                "local_channel_id": local_channel_id,
+                "caller_channel_id": caller_channel_id
+            }
+            
+            # Also store reverse mapping for DTMF
+            self.active_calls[caller_channel_id] = {
+                "provider": provider,
+                "conversation_state": "greeting",
+                "bridge_id": bridge_id,
+                "local_channel_id": local_channel_id,
+                "caller_channel_id": caller_channel_id
+            }
+            
+            logger.info("🎯 HYBRID ARI - ✅ Provider session started", 
+                       local_channel_id=local_channel_id, 
+                       caller_channel_id=caller_channel_id,
+                       provider=self.config.default_provider)
+            
+            # Play initial greeting
+            await self._play_initial_greeting_hybrid(caller_channel_id, local_channel_id)
+            
+        except Exception as e:
+            logger.error("🎯 HYBRID ARI - Failed to start provider session", 
+                        local_channel_id=local_channel_id, 
+                        caller_channel_id=caller_channel_id,
+                        error=str(e), exc_info=True)
+
+    async def _play_initial_greeting_hybrid(self, caller_channel_id: str, local_channel_id: str):
+        """Play initial greeting - Hybrid ARI approach."""
+        try:
+            logger.info("🎯 HYBRID ARI - Playing initial greeting", 
+                       caller_channel_id=caller_channel_id,
+                       local_channel_id=local_channel_id)
+            
+            # Get provider for greeting
+            provider = self.providers.get(self.config.default_provider)
+            if not provider:
+                logger.error("🎯 HYBRID ARI - Provider not found for greeting")
+                return
+            
+            # Generate greeting audio
+            greeting_text = self.config.llm.initial_greeting
+            logger.info("🎯 HYBRID ARI - Generating greeting audio", text=greeting_text)
+            
+            # Use provider to generate TTS
+            audio_data = await provider.text_to_speech(greeting_text)
+            if audio_data:
+                # Save audio to file and play
+                await self.ari_client.play_audio_response(caller_channel_id, audio_data, "greeting")
+                logger.info("🎯 HYBRID ARI - ✅ Initial greeting played", 
+                           caller_channel_id=caller_channel_id)
+            else:
+                logger.warning("🎯 HYBRID ARI - No greeting audio generated")
+                
+        except Exception as e:
+            logger.error("🎯 HYBRID ARI - Failed to play initial greeting", 
+                        caller_channel_id=caller_channel_id,
+                        local_channel_id=local_channel_id,
+                        error=str(e), exc_info=True)
+
     async def _start_provider_session(self, caller_channel_id: str, local_channel_id: str):
-        """Start provider session and bind AudioSocket."""
+        """Start provider session and bind AudioSocket - LEGACY (kept for reference)."""
         try:
             # Get provider
             provider = self.providers.get(self.config.default_provider)
@@ -575,46 +800,56 @@ class Engine:
             logger.debug("Error in ChannelVarset handler", exc_info=True)
 
     def _on_audiosocket_accept(self, conn_id: str):
-        """Bind to pending ARI channel or start a headless session on accept."""
+        """Bind AudioSocket connection - Hybrid ARI approach."""
         try:
-            logger.info("on_accept invoked", conn_id=conn_id, pending_channel=self.pending_channel_for_bind)
+            logger.info("🎯 HYBRID ARI - AudioSocket connection accepted", conn_id=conn_id)
             
             # Initialize frame processor and VAD for this connection
             self.frame_processors[conn_id] = AudioFrameProcessor()
             self.vad_detectors[conn_id] = VoiceActivityDetector()
-            logger.debug("Audio processing components initialized", conn_id=conn_id)
-            channel_id = self.pending_channel_for_bind
-            if not channel_id:
-                # Start headless provider session (AudioSocket-only)
+            logger.debug("🎯 HYBRID ARI - Audio processing components initialized", conn_id=conn_id)
+            
+            # In hybrid approach, we need to find the caller channel that's waiting for this connection
+            # The UUID should be in the connection info or we can use the first active call
+            caller_channel_id = None
+            for cid, call_data in self.caller_channels.items():
+                if call_data.get("status") == "connected":
+                    caller_channel_id = cid
+                    break
+            
+            if not caller_channel_id:
+                logger.warning("🎯 HYBRID ARI - No active caller channel found for AudioSocket connection", conn_id=conn_id)
+                # Start headless session as fallback
                 provider_name = self.config.default_provider
                 provider = self.providers.get(provider_name)
-                if not provider:
-                    logger.error("Default provider not found for headless session", provider=provider_name)
-                    return
-                logger.info("No pending ARI channel; starting headless session", conn_id=conn_id)
-                # Hint input mode for local provider (PCM16 8k from AudioSocket)
-                try:
-                    if hasattr(provider, 'set_input_mode'):
-                        provider.set_input_mode('pcm16_8k')
-                except Exception:
-                    logger.debug("Could not set provider input mode", exc_info=True)
-                asyncio.get_event_loop().create_task(self._start_headless_session(conn_id, provider))
-                # Send a short test tone over socket to confirm downstream path
-                try:
-                    asyncio.get_event_loop().create_task(self._send_test_tone_over_socket(conn_id, ms=1200))
-                except Exception:
-                    logger.debug("Could not schedule test tone", conn_id=conn_id, exc_info=True)
+                if provider:
+                    logger.info("🎯 HYBRID ARI - Starting headless session as fallback", conn_id=conn_id)
+                    asyncio.get_event_loop().create_task(self._start_headless_session(conn_id, provider))
                 return
-            if channel_id in self.channel_to_conn:
-                self.pending_channel_for_bind = None
-                return
-            # Fire-and-forget binding task
-            asyncio.get_event_loop().create_task(
-                self._bind_connection_to_channel(conn_id, channel_id, self.config.default_provider)
-            )
-            self.pending_channel_for_bind = None
-        except Exception:
-            logger.debug("Error in on_accept binder", exc_info=True)
+            
+            # Bind connection to caller channel
+            logger.info("🎯 HYBRID ARI - Binding AudioSocket to caller channel", 
+                       conn_id=conn_id, 
+                       caller_channel_id=caller_channel_id)
+            
+            # Store connection mapping
+            self.conn_to_channel[conn_id] = caller_channel_id
+            self.channel_to_conn[caller_channel_id] = conn_id
+            
+            # Set provider input mode
+            provider = self.providers.get(self.config.default_provider)
+            if provider and hasattr(provider, 'set_input_mode'):
+                provider.set_input_mode('pcm16_8k')
+                logger.info("🎯 HYBRID ARI - Set provider input mode to pcm16_8k", conn_id=conn_id)
+            
+            logger.info("🎯 HYBRID ARI - ✅ AudioSocket connection bound to caller channel", 
+                       conn_id=conn_id, 
+                       caller_channel_id=caller_channel_id)
+            
+        except Exception as e:
+            logger.error("🎯 HYBRID ARI - Error in AudioSocket accept handler", 
+                        conn_id=conn_id, 
+                        error=str(e), exc_info=True)
 
     async def _start_headless_session(self, conn_id: str, provider: AIProviderInterface):
         """Start provider session without ARI channel; stream via AudioSocket."""
