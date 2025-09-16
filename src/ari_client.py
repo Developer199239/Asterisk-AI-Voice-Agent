@@ -157,7 +157,7 @@ class ARIClient:
 
     async def send_command(self, method: str, resource: str, data: Optional[Dict[str, Any]] = None, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Send a command to the ARI HTTP endpoint."""
-        url = f"{self.http_url}/ari/{resource}"
+        url = f"{self.http_url}/{resource}"
         
         # Handle channelVars specially - they need to be in the JSON body, not query params
         if params and "channelVars" in params:

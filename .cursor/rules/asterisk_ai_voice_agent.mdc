@@ -37,8 +37,39 @@ This is an open-source AI Voice Agent that integrates with Asterisk/FreePBX usin
 
 1. **For ALL code changes**: `docker-compose up --build -d ai-engine` (rebuilds image with new code)
 2. **For dependency changes**: `docker-compose up --build -d` (rebuilds all services)
-3. **View logs**: `docker-compose logs -f ai-engine`
-4. **Clear logs before testing**: `docker-compose logs --tail=0 ai-engine` (start fresh)
+3. **For critical fixes**: `docker-compose build --no-cache ai-engine && docker-compose up -d ai-engine` (force rebuild without cache)
+4. **View logs**: `docker-compose logs -f ai-engine`
+5. **Clear logs before testing**: `docker-compose logs --tail=0 ai-engine` (start fresh)
+
+### Critical Deployment Verification (NEW - MANDATORY)
+
+**ALWAYS verify deployment success after code changes:**
+
+1. **Check ARI Connection**: Engine must show "Successfully connected to ARI HTTP endpoint" and "Successfully connected to ARI WebSocket"
+2. **Check AudioSocket Server**: Must show "AudioSocket server listening on port 8090"
+3. **Check Provider Loading**: Must show "Default provider 'local' is available and ready"
+4. **Check Engine Status**: Must show "Engine started and listening for calls"
+
+**If any verification fails, use `--no-cache` rebuild:**
+```bash
+docker-compose build --no-cache ai-engine && docker-compose up -d ai-engine
+```
+
+### Deployment Failure Prevention (NEW)
+
+**Common Issues and Solutions:**
+
+1. **ARI Connection 404 Errors**: Usually indicates URL construction bugs or cached layers
+   - **Solution**: Use `--no-cache` rebuild
+   - **Verification**: Check logs for "Successfully connected to ARI HTTP endpoint"
+
+2. **Old Code Running**: Docker cache serving old layers
+   - **Solution**: Always use `--build` flag, use `--no-cache` for critical fixes
+   - **Verification**: Check logs for expected new log messages
+
+3. **Provider Not Loading**: Configuration or import errors
+   - **Solution**: Check `.env` file and provider configuration
+   - **Verification**: Check logs for "Provider 'local' loaded successfully"
 
 ### Log Management (CRITICAL)
 
@@ -243,6 +274,65 @@ The project includes a comprehensive test suite designed to systematically verif
 
 ### Troubleshooting Guide
 
+#### Test Call Timeline Analysis (September 16, 2025)
+
+**Test Call Analysis**: After every test call, create a comprehensive timeline of events from Asterisk logs and both container logs to establish what worked, what failed, and how the code handles the flow from caller to Local AI Provider.
+
+**Test Call #1 - September 16, 2025 (30 seconds)**
+
+**Timeline of Events:**
+
+**Phase 1: Call Initiation (23:13:22)**
+- ✅ **Asterisk**: Call received from HAIDER JARRAL (13164619284)
+- ✅ **AI Engine**: New call received event processed
+- ✅ **AI Engine**: Channel answered successfully
+- ❌ **Issue**: Engine was running OLD CODE (not hybrid ARI approach)
+- ❌ **Issue**: No AudioSocket connection established
+- ❌ **Issue**: No Local channel originated
+- ❌ **Issue**: No bridge created
+
+**Phase 2: Audio Processing (23:13:22 - 23:13:53)**
+- ❌ **AI Engine**: Call ready for AudioSocket (but no AudioSocket connection)
+- ❌ **AI Engine**: Playing initial greeting (but no audio path)
+- ❌ **Local AI Server**: No WebSocket connections during call
+- ❌ **Asterisk**: No AudioSocket events in logs
+
+**Phase 3: Call Termination (23:13:53)**
+- ✅ **AI Engine**: Call ended and cleaned up
+- ✅ **AI Engine**: Channel destroyed
+
+**Root Cause Analysis:**
+1. **Deployment Issue**: Hybrid ARI code was not deployed to server
+2. **ARI Connection Issue**: ARI client had duplicate `/ari` in URL construction
+3. **Old Engine Logic**: Engine was running legacy code, not hybrid approach
+4. **No AudioSocket**: No Local channel originated, so no AudioSocket connection
+5. **No Bridge**: No bridge created, so no audio path
+
+**What Worked:**
+- ✅ Call reception and answering
+- ✅ Basic ARI connectivity (after fix)
+- ✅ Container deployment and restart
+
+**What Failed:**
+- ❌ Hybrid ARI approach not active
+- ❌ ARI client URL construction bug
+- ❌ No AudioSocket connection
+- ❌ No Local channel origination
+- ❌ No bridge creation
+- ❌ No audio processing pipeline
+
+**Fixes Applied:**
+1. **Fixed ARI Client URL**: Removed duplicate `/ari` from URL construction
+2. **Deployed Hybrid ARI Code**: Actual engine changes now deployed
+3. **Verified ARI Connection**: Engine now connects successfully
+
+**Next Test Call Expected Results:**
+- ✅ Hybrid ARI approach active
+- ✅ Bridge created immediately
+- ✅ Local channel originated
+- ✅ AudioSocket connection established
+- ✅ Audio processing pipeline active
+
 #### Systematic Troubleshooting Methodology (Established September 2025)
 
 **Core Principle**: "Break it down step by step, each iteration till we reach the correct way to fix this permanently."
@@ -291,12 +381,29 @@ When issues arise:
 # Deploy code changes (ALWAYS use this)
 ssh root@voiprnd.nemtclouddispatch.com 'cd /root/Asterisk-Agent-Develop && git pull && docker-compose up --build -d ai-engine'
 
+# Deploy critical fixes (use when normal build fails)
+ssh root@voiprnd.nemtclouddispatch.com 'cd /root/Asterisk-Agent-Develop && git pull && docker-compose build --no-cache ai-engine && docker-compose up -d ai-engine'
+
 # Clear logs before testing
 ssh root@voiprnd.nemtclouddispatch.com 'cd /root/Asterisk-Agent-Develop && docker-compose logs --tail=0 ai-engine'
 
 # View live logs
 ssh root@voiprnd.nemtclouddispatch.com 'cd /root/Asterisk-Agent-Develop && docker-compose logs -f ai-engine'
 ```
+
+### When to Use --no-cache (CRITICAL)
+
+**Use `--no-cache` when:**
+1. **ARI Connection Issues**: 404 errors, connection failures
+2. **Old Code Running**: Expected log messages not appearing
+3. **Provider Loading Issues**: Providers not initializing correctly
+4. **Critical Bug Fixes**: After fixing major bugs that could be cached
+5. **Dependency Changes**: When requirements.txt or Dockerfile changes
+
+**Normal `--build` is sufficient for:**
+1. **Code Logic Changes**: Engine logic, provider implementations
+2. **Configuration Changes**: YAML config updates
+3. **Minor Bug Fixes**: Small fixes that don't affect core functionality
 
 ### Testing Commands
 ```bash
