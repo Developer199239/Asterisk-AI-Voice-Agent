@@ -483,6 +483,8 @@ class Engine:
         
         orig_params = {
             "endpoint": local_endpoint,
+            "extension": audio_uuid,  # Use UUID as extension to match dialplan pattern
+            "context": "ai-audiosocket-only",  # Specify context explicitly
             "timeout": "30"
             # Note: Local channel will call AudioSocket in dialplan, then we'll handle via ARI
         }
