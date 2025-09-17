@@ -3,9 +3,9 @@
 default_provider: "local"
 
 # Audio transport controls
-# - audio_transport: 'external_media' (recommended) | 'audiosocket' | 'legacy'
+# - audio_transport: 'audiosocket' (recommended) | 'external_media' | 'legacy'
 # - downstream_mode: 'file' (current default) | 'stream' (next phase)
-audio_transport: "external_media"
+audio_transport: "audiosocket"
 downstream_mode: "file"
 
 # Asterisk connection settings (will be overridden by environment variables)
