@@ -38,12 +38,12 @@ ps:
 # DEPLOYMENT & SERVER MANAGEMENT
 # ==============================================================================
 
-## deploy: Pull latest code and deploy the ai-engine on the server
+## deploy: Pull latest code and deploy the ai-engine on the server (with --no-cache)
 deploy:
-	@echo "--> Deploying latest code to $(SERVER_HOST)..."
+	@echo "--> Deploying latest code to $(SERVER_HOST) with --no-cache..."
 	@echo "⚠️  WARNING: This will deploy uncommitted changes if any exist!"
 	@echo "   Use 'make deploy-safe' for validation, or 'make deploy-force' to skip checks"
-	ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && git pull && docker-compose up --build -d ai-engine'
+	ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && git pull && docker-compose build --no-cache ai-engine && docker-compose up -d ai-engine'
 
 ## deploy-safe: Validate changes are committed before deploying
 deploy-safe:
@@ -59,8 +59,8 @@ deploy-safe:
 	@echo "✅ No uncommitted changes found"
 	@echo "🚀 Pushing changes to remote..."
 	git push origin develop
-	@echo "📦 Deploying to server..."
-	ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && git pull && docker-compose up --build -d ai-engine'
+	@echo "📦 Deploying to server with --no-cache..."
+	ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && git pull && docker-compose build --no-cache ai-engine && docker-compose up -d ai-engine'
 	@echo "🔍 Verifying deployment..."
 	@make verify-deployment
 
@@ -68,7 +68,7 @@ deploy-safe:
 deploy-force:
 	@echo "--> Force deployment (skipping validation)..."
 	@echo "⚠️  WARNING: This will deploy even with uncommitted changes!"
-	ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && git pull && docker-compose up --build -d ai-engine'
+	ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && git pull && docker-compose build --no-cache ai-engine && docker-compose up -d ai-engine'
 	@echo "🔍 Verifying deployment..."
 	@make verify-deployment
 
