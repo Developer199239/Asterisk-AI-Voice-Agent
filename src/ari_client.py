@@ -563,17 +563,6 @@ class ARIClient:
             logger.error("Error during audio streaming cleanup", exc_info=True)
             return False
 
-    async def create_external_media_channel(self, app_name: str, channel_id: str) -> Optional[Dict[str, Any]]:
-        """Create an external media channel."""
-        # Note: external_host will be the address of our UDP server
-        # This needs to be coordinated with the UDP server's configuration
-        params = {
-            "app": app_name,
-            "channelId": channel_id,
-            "external_host": "127.0.0.1:5060", # Placeholder, should be configured
-            "format": "ulaw"
-        }
-        return await self.send_command("POST", "channels/externalMedia", params=params)
 
     async def is_channel_active(self, channel_id: str) -> bool:
         """Check if a channel is still active and in Stasis application."""
@@ -634,14 +623,15 @@ class ARIClient:
                          error=str(e))
             return False
 
-    async def create_external_media_channel(self, app: str, external_host: str, format: str = "ulaw", encapsulation: str = "rtp") -> Optional[Dict[str, Any]]:
+    async def create_external_media_channel(self, app: str, external_host: str, format: str = "ulaw", direction: str = "both", encapsulation: str = "rtp") -> Optional[Dict[str, Any]]:
         """
         Create an External Media channel for RTP communication.
         
         Args:
             app: ARI application name
-            external_host: External host:port for RTP (e.g., "127.0.0.1:10000")
+            external_host: External host:port for RTP (e.g., "127.0.0.1:18080")
             format: Audio format (default: "ulaw")
+            direction: Media direction (default: "both") - both, sendonly, recvonly
             encapsulation: Transport protocol (default: "rtp")
             
         Returns:
@@ -655,6 +645,7 @@ class ARIClient:
                     "app": app,
                     "external_host": external_host,
                     "format": format,
+                    "direction": direction,
                     "encapsulation": encapsulation
                 }
             )
@@ -673,6 +664,72 @@ class ARIClient:
             logger.error("Error creating External Media channel", 
                         external_host=external_host, 
                         error=str(e))
+            return None
+
+    async def play_audio_via_bridge(self, bridge_id: str, media_uri: str) -> Optional[str]:
+        """
+        Play audio to a bridge.
+        
+        Args:
+            bridge_id: Bridge ID to play audio to
+            media_uri: Media URI (e.g., "sound:ai-generated/greeting-123")
+            
+        Returns:
+            Playback ID string or None if failed
+        """
+        try:
+            data = {"media": media_uri}
+            response = await self.send_command("POST", f"bridges/{bridge_id}/play", data=data)
+            
+            if response and response.get("id"):
+                playback_id = response["id"]
+                logger.info("Bridge playback started", 
+                           bridge_id=bridge_id, 
+                           media_uri=media_uri,
+                           playback_id=playback_id)
+                return playback_id
+            else:
+                logger.error("Failed to start bridge playback", 
+                            bridge_id=bridge_id, 
+                            media_uri=media_uri,
+                            response=response)
+                return None
+                
+        except Exception as e:
+            logger.error("Error starting bridge playback", 
+                        bridge_id=bridge_id, 
+                        media_uri=media_uri,
+                        error=str(e))
+            return None
+
+    async def create_external_media(self, external_host: str, external_port: int, fmt: str = "ulaw", direction: str = "both") -> Optional[str]:
+        """
+        Create an External Media channel and return the channel ID.
+        
+        Args:
+            external_host: External host IP (e.g., "127.0.0.1")
+            external_port: External port (e.g., 18080)
+            fmt: Audio format (default: "ulaw")
+            direction: Media direction (default: "both")
+            
+        Returns:
+            Channel ID string or None if failed
+        """
+        external_host_port = f"{external_host}:{external_port}"
+        response = await self.create_external_media_channel(
+            app=self.app_name,
+            external_host=external_host_port,
+            format=fmt,
+            direction=direction
+        )
+        
+        if response and response.get("id"):
+            return response["id"]
+        else:
+            logger.error("Failed to create External Media channel", 
+                        external_host=external_host_port,
+                        format=fmt,
+                        direction=direction)
             return None
 
     async def remove_channel_from_bridge(self, bridge_id: str, channel_id: str) -> bool:

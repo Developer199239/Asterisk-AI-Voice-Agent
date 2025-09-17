@@ -3,6 +3,7 @@ import os
 import random
 import signal
 import struct
+import time
 import uuid
 import audioop
 import base64
@@ -14,6 +15,7 @@ from .config import AppConfig, load_config, DeepgramProviderConfig, LocalProvide
 from .logging_config import get_logger, configure_logging
 from .providers.base import AIProviderInterface
 from .audiosocket_server import AudioSocketServer
+from .rtp_server import RTPServer
 from .providers.deepgram import DeepgramProvider
 from .providers.local import LocalProvider
 
@@ -109,6 +111,7 @@ class Engine:
         self.audio_buffers: Dict[str, bytes] = {}
         self.buffer_size = 1600  # 200ms of audio at 8kHz (1600 bytes of ulaw)
         self.audiosocket_server: Any = None
+        self.rtp_server: Optional[RTPServer] = None
         # Headless sessions for AudioSocket-only mode (no ARI channel)
         self.headless_sessions: Dict[str, Dict[str, Any]] = {}
         # Bridge and Local channel tracking for Local Channel Bridge pattern
@@ -126,6 +129,12 @@ class Engine:
         self._audio_rx_debug: Dict[str, int] = {}
         # Keepalive tasks per AudioSocket connection
         self._keepalive_tasks: Dict[str, asyncio.Task] = {}
+        # Active playbacks for cleanup
+        self.active_playbacks: Dict[str, Dict[str, Any]] = {}
+        # ExternalMedia to caller channel mapping
+        self.external_media_to_caller: Dict[str, str] = {}  # external_media_id -> caller_channel_id
+        # SSRC to caller channel mapping for RTP audio routing
+        self.ssrc_to_caller: Dict[int, str] = {}  # ssrc -> caller_channel_id
         # Health server runner
         self._health_runner: Optional[web.AppRunner] = None
 
@@ -171,6 +180,28 @@ class Engine:
                                                        on_accept=self._on_audiosocket_accept,
                                                        on_close=self._on_audiosocket_close)
             asyncio.create_task(self.audiosocket_server.start())
+        
+        # Prepare RTP server for ExternalMedia transport
+        elif self.config.audio_transport == "externalmedia":
+            if not self.config.external_media:
+                raise ValueError("ExternalMedia configuration not found")
+            
+            rtp_host = self.config.external_media.rtp_host
+            rtp_port = self.config.external_media.rtp_port
+            codec = self.config.external_media.codec
+            
+            # Create RTP server with callback to route audio to providers
+            self.rtp_server = RTPServer(
+                host=rtp_host,
+                port=rtp_port,
+                engine_callback=self._on_rtp_audio,
+                codec=codec
+            )
+            
+            # Start RTP server
+            await self.rtp_server.start()
+            logger.info("RTP server started for ExternalMedia transport", 
+                       host=rtp_host, port=rtp_port, codec=codec)
 
         # Start lightweight health endpoint
         try:
@@ -191,6 +222,9 @@ class Engine:
         # Stop AudioSocket server if running
         if hasattr(self, 'audiosocket_server') and self.audiosocket_server:
             await self.audiosocket_server.stop()
+        # Stop RTP server if running
+        if hasattr(self, 'rtp_server') and self.rtp_server:
+            await self.rtp_server.stop()
         # Stop health server
         try:
             if self._health_runner:
@@ -340,9 +374,34 @@ class Engine:
                        channel_id=caller_channel_id, 
                        bridge_id=bridge_id)
             
-            # Step 5: Originate Local channel with minimal dialplan
-            logger.info("🎯 HYBRID ARI - Step 5: Originating Local channel", channel_id=caller_channel_id)
-            await self._originate_local_channel_hybrid(caller_channel_id)
+            # Step 5: Create ExternalMedia channel or originate Local channel
+            if self.config.audio_transport == "externalmedia":
+                logger.info("🎯 EXTERNAL MEDIA - Step 5: Creating ExternalMedia channel", channel_id=caller_channel_id)
+                external_media_id = await self._start_external_media_channel(caller_channel_id)
+                if external_media_id:
+                    # Add ExternalMedia channel to bridge
+                    external_success = await self.ari_client.add_channel_to_bridge(bridge_id, external_media_id)
+                    if external_success:
+                        logger.info("🎯 EXTERNAL MEDIA - ✅ ExternalMedia channel added to bridge", 
+                                   channel_id=caller_channel_id, 
+                                   external_media_id=external_media_id,
+                                   bridge_id=bridge_id)
+                        # Update caller info
+                        self.caller_channels[caller_channel_id]["external_media_id"] = external_media_id
+                        self.caller_channels[caller_channel_id]["status"] = "connected"
+                        # Start provider session
+                        await self._start_provider_session_external_media(caller_channel_id, external_media_id)
+                    else:
+                        logger.error("🎯 EXTERNAL MEDIA - Failed to add ExternalMedia channel to bridge", 
+                                   channel_id=caller_channel_id, 
+                                   external_media_id=external_media_id)
+                        await self.ari_client.hangup_channel(external_media_id)
+                else:
+                    logger.error("🎯 EXTERNAL MEDIA - Failed to create ExternalMedia channel", channel_id=caller_channel_id)
+            else:
+                # AudioSocket approach
+                logger.info("🎯 HYBRID ARI - Step 5: Originating Local channel", channel_id=caller_channel_id)
+                await self._originate_local_channel_hybrid(caller_channel_id)
             
         except Exception as e:
             logger.error("🎯 HYBRID ARI - Failed to handle caller StasisStart", 
@@ -1401,6 +1460,233 @@ class Engine:
             logger.error("🚨 AVR Frame Processing - Error", 
                          conn_id=conn_id, error=str(e), exc_info=True)
     
+    async def _on_rtp_audio(self, ssrc: int, pcm_16k_data: bytes):
+        """Route inbound RTP audio to the appropriate provider using SSRC."""
+        try:
+            # Find the caller channel for this SSRC
+            caller_channel_id = self.ssrc_to_caller.get(ssrc)
+            
+            if not caller_channel_id:
+                # First packet from this SSRC - try to map it to an active ExternalMedia call
+                # We'll map to the most recent ExternalMedia call that doesn't have an SSRC yet
+                for channel_id, call_data in self.active_calls.items():
+                    if call_data.get("external_media_id") and not call_data.get("ssrc_mapped"):
+                        # This ExternalMedia call doesn't have an SSRC yet, map it
+                        caller_channel_id = channel_id
+                        self.ssrc_to_caller[ssrc] = caller_channel_id
+                        call_data["ssrc_mapped"] = True
+                        logger.info("SSRC mapped to caller on first packet", 
+                                   ssrc=ssrc, 
+                                   caller_channel_id=caller_channel_id,
+                                   external_media_id=call_data.get("external_media_id"))
+                        break
+                
+                if not caller_channel_id:
+                    logger.debug("RTP audio received for unknown SSRC", ssrc=ssrc)
+                    return
+            
+            # Check if call is still active
+            if caller_channel_id not in self.active_calls:
+                logger.debug("RTP audio received for inactive call", ssrc=ssrc, caller_channel_id=caller_channel_id)
+                return
+            
+            # Check if audio capture is enabled (set by PlaybackFinished event)
+            call_data = self.active_calls.get(caller_channel_id, {})
+            audio_capture_enabled = call_data.get("audio_capture_enabled", False)
+            
+            if not audio_capture_enabled:
+                logger.debug("RTP audio capture disabled, waiting for greeting to finish", 
+                           ssrc=ssrc, caller_channel_id=caller_channel_id)
+                return
+            
+            # Get provider for this call
+            provider = call_data.get("provider")
+            if not provider:
+                logger.warning("No provider found for RTP audio", ssrc=ssrc, caller_channel_id=caller_channel_id)
+                return
+            
+            # Send audio to provider
+            try:
+                await provider.send_audio(pcm_16k_data)
+                logger.debug("RTP audio sent to provider", 
+                           ssrc=ssrc, 
+                           caller_channel_id=caller_channel_id,
+                           bytes=len(pcm_16k_data))
+            except Exception as e:
+                logger.error("Error sending RTP audio to provider", 
+                           ssrc=ssrc, 
+                           caller_channel_id=caller_channel_id,
+                           error=str(e))
+            
+        except Exception as e:
+            logger.error("Error processing RTP audio", 
+                        ssrc=ssrc, 
+                        error=str(e), 
+                        exc_info=True)
+    
+    async def _start_external_media_channel(self, caller_channel_id: str) -> Optional[str]:
+        """Create an ExternalMedia channel for RTP communication."""
+        try:
+            if not self.config.external_media:
+                logger.error("ExternalMedia configuration not found")
+                return None
+            
+            # Build external host address
+            external_host = "127.0.0.1"  # Asterisk and engine on same host
+            external_port = self.config.external_media.rtp_port
+            codec = self.config.external_media.codec
+            direction = self.config.external_media.direction
+            
+            logger.info("Creating ExternalMedia channel", 
+                       caller_channel_id=caller_channel_id,
+                       external_host=external_host,
+                       external_port=external_port,
+                       codec=codec,
+                       direction=direction)
+            
+            # Create ExternalMedia channel
+            external_media_id = await self.ari_client.create_external_media(
+                external_host=external_host,
+                external_port=external_port,
+                fmt=codec,
+                direction=direction
+            )
+            
+            if external_media_id:
+                logger.info("ExternalMedia channel created successfully", 
+                           caller_channel_id=caller_channel_id,
+                           external_media_id=external_media_id)
+                return external_media_id
+            else:
+                logger.error("Failed to create ExternalMedia channel", 
+                           caller_channel_id=caller_channel_id)
+                return None
+                
+        except Exception as e:
+            logger.error("Error creating ExternalMedia channel", 
+                        caller_channel_id=caller_channel_id,
+                        error=str(e), 
+                        exc_info=True)
+            return None
+    
+    async def _start_provider_session_external_media(self, caller_channel_id: str, external_media_id: str):
+        """Start provider session for ExternalMedia channel."""
+        try:
+            # Get provider
+            provider_name = self.config.default_provider
+            provider = self.providers.get(provider_name)
+            
+            if not provider:
+                logger.error("Provider not found", provider_name=provider_name)
+                return
+            
+            # Generate call ID for RTP mapping
+            call_id = f"call_{external_media_id}_{int(time.time())}"
+            
+            # Store call data
+            call_data = {
+                "provider": provider,
+                "conversation_state": "greeting",
+                "bridge_id": self.caller_channels[caller_channel_id]["bridge_id"],
+                "external_media_id": external_media_id,
+                "external_media_call_id": call_id,
+                "audio_capture_enabled": False
+            }
+            
+            self.active_calls[caller_channel_id] = call_data
+            
+            # Store mapping for RTP audio routing
+            self.external_media_to_caller[external_media_id] = caller_channel_id
+            logger.info("ExternalMedia channel mapped to caller", 
+                       caller_channel_id=caller_channel_id,
+                       external_media_id=external_media_id,
+                       call_id=call_id)
+            
+            # Note: SSRC mapping will be established when first RTP packet is received
+            # We'll need to add a method to map SSRC to caller when we see the first packet
+            
+            # Start provider session
+            await provider.start_session(caller_channel_id)
+            
+            # Play initial greeting
+            greeting_text = self.config.llm.initial_greeting
+            await self._play_greeting_external_media(caller_channel_id, greeting_text)
+            
+            logger.info("Provider session started for ExternalMedia", 
+                       caller_channel_id=caller_channel_id,
+                       external_media_id=external_media_id,
+                       provider=provider_name,
+                       call_id=call_id)
+            
+        except Exception as e:
+            logger.error("Error starting provider session for ExternalMedia", 
+                        caller_channel_id=caller_channel_id,
+                        external_media_id=external_media_id,
+                        error=str(e), 
+                        exc_info=True)
+    
+    async def _play_greeting_external_media(self, caller_channel_id: str, greeting_text: str):
+        """Play greeting audio for ExternalMedia channel."""
+        try:
+            # Get provider
+            call_data = self.active_calls.get(caller_channel_id, {})
+            provider = call_data.get("provider")
+            
+            if not provider:
+                logger.error("No provider found for greeting", caller_channel_id=caller_channel_id)
+                return
+            
+            # Generate TTS audio
+            audio_data = await provider.text_to_speech(greeting_text)
+            
+            if audio_data:
+                # Save audio to file for playback
+                audio_id = str(uuid.uuid4())
+                audio_file = f"/mnt/asterisk_media/ai-generated/greeting-{audio_id}.ulaw"
+                
+                # Ensure directory exists
+                os.makedirs(os.path.dirname(audio_file), exist_ok=True)
+                
+                # Write audio file
+                with open(audio_file, 'wb') as f:
+                    f.write(audio_data)
+                
+                # Play audio via ARI
+                bridge_id = call_data.get("bridge_id")
+                if bridge_id:
+                    playback_id = await self.ari_client.play_audio_via_bridge(
+                        bridge_id, 
+                        f"sound:ai-generated/greeting-{audio_id}"  # No .ulaw extension
+                    )
+                    
+                    if playback_id:
+                        self.active_playbacks[playback_id] = {
+                            "channel_id": caller_channel_id,
+                            "audio_file": audio_file
+                        }
+                        logger.info("Greeting playback started for ExternalMedia", 
+                                   caller_channel_id=caller_channel_id,
+                                   playback_id=playback_id,
+                                   audio_file=audio_file)
+                    else:
+                        logger.error("Failed to start greeting playback for ExternalMedia", 
+                                   caller_channel_id=caller_channel_id)
+                        # Clean up audio file
+                        try:
+                            os.remove(audio_file)
+                        except:
+                            pass
+                else:
+                    logger.error("No bridge ID found for greeting playback", caller_channel_id=caller_channel_id)
+            else:
+                logger.error("Failed to generate greeting audio", caller_channel_id=caller_channel_id)
+                
+        except Exception as e:
+            logger.error("Error playing greeting for ExternalMedia", 
+                        caller_channel_id=caller_channel_id,
+                        error=str(e), 
+                        exc_info=True)
+    
     def _calculate_frame_energy(self, frame: bytes) -> float:
         """Calculate audio energy for a single frame."""
         try:
@@ -1512,11 +1798,23 @@ class Engine:
                     except Exception:
                         ready = False
                     providers[name] = {"ready": ready}
+                # Get RTP server stats if available
+                rtp_stats = {}
+                if hasattr(self, 'rtp_server') and self.rtp_server:
+                    try:
+                        rtp_stats = self.rtp_server.get_stats()
+                    except Exception:
+                        rtp_stats = {"error": "Failed to get RTP stats"}
+                
                 data = {
+                    "status": "healthy",
                     "ari_connected": bool(self.ari_client and self.ari_client.running),
                     "audiosocket_listening": bool(getattr(self, 'audiosocket_server', None) and getattr(self.audiosocket_server, '_server', None)),
+                    "rtp_server_running": bool(getattr(self, 'rtp_server', None) and getattr(self.rtp_server, 'running', False)),
+                    "audio_transport": self.config.audio_transport,
                     "active_calls": len(self.active_calls),
                     "providers": providers,
+                    "rtp_server": rtp_stats,
                 }
                 return web.json_response(data)
             except Exception:
@@ -1660,21 +1958,21 @@ class Engine:
                        playback_id=playback_id,
                        channel_id=channel_id)
             
-            # Find the connection for this channel and enable audio capture
-            conn_id = self.channel_to_conn.get(channel_id)
-            if conn_id:
-                # Mark this connection as ready for audio capture
-                if channel_id in self.active_calls:
-                    self.active_calls[channel_id]["audio_capture_enabled"] = True
-                    logger.info("🎤 AUDIO CAPTURE - Enabled for connection after greeting",
+            # Enable audio capture for this channel (works for both AudioSocket and ExternalMedia)
+            if channel_id in self.active_calls:
+                self.active_calls[channel_id]["audio_capture_enabled"] = True
+                
+                # Check if this is an AudioSocket connection for logging
+                conn_id = self.channel_to_conn.get(channel_id)
+                if conn_id:
+                    logger.info("🎤 AUDIO CAPTURE - Enabled for AudioSocket connection after greeting",
                                conn_id=conn_id,
                                channel_id=channel_id)
                 else:
-                    logger.warning("🎤 AUDIO CAPTURE - Channel not found in active calls",
-                                 conn_id=conn_id,
-                                 channel_id=channel_id)
+                    logger.info("🎤 AUDIO CAPTURE - Enabled for ExternalMedia call after greeting",
+                               channel_id=channel_id)
             else:
-                logger.warning("🎤 AUDIO CAPTURE - No connection found for channel",
+                logger.warning("🎤 AUDIO CAPTURE - Channel not found in active calls",
                              channel_id=channel_id)
                 
         except Exception as e:

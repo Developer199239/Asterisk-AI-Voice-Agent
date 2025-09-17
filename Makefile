@@ -53,9 +53,13 @@ deploy-force:
 	@echo "--> Forcing a no-cache rebuild and deployment of ai-engine on $(SERVER_HOST)..."
 	ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && git pull && docker-compose build --no-cache ai-engine && docker-compose up -d ai-engine'
 
-## server-logs: View live logs for a service on the server
+## server-logs: View live logs for a service on the server (follow mode - use Ctrl+C to exit)
 server-logs:
 	ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && docker-compose logs -f $(SERVICE)'
+
+## server-logs-snapshot: View last N lines of logs and exit (default: 50)
+server-logs-snapshot:
+	ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && docker-compose logs --tail=$(LINES) $(SERVICE)'
 
 ## server-status: Check the status of services on the server
 server-status:
@@ -87,6 +91,22 @@ test-integration:
 ## test-ari: Test ARI commands
 test-ari:
 	ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && docker-compose exec ai-engine python /app/test_ari_commands.py'
+
+## test-externalmedia: Test ExternalMedia + RTP implementation
+test-externalmedia:
+	@echo "--> Testing ExternalMedia + RTP implementation..."
+	python3 scripts/validate_externalmedia_config.py
+	python3 scripts/test_externalmedia_call.py
+
+## monitor-externalmedia: Monitor ExternalMedia + RTP status
+monitor-externalmedia:
+	@echo "--> Starting ExternalMedia + RTP monitoring..."
+	python3 scripts/monitor_externalmedia.py
+
+## monitor-externalmedia-once: Check ExternalMedia + RTP status once
+monitor-externalmedia-once:
+	@echo "--> Checking ExternalMedia + RTP status..."
+	python3 scripts/monitor_externalmedia.py --once
 
 ## capture-logs: Capture structured logs during test call (default: 40 seconds)
 capture-logs:
@@ -145,4 +165,4 @@ help:
 	@echo "Targets:"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
-.PHONY: build up down logs logs-all ps deploy deploy-full deploy-force server-logs server-status server-clear-logs server-health test-local test-integration test-ari help
+.PHONY: build up down logs logs-all ps deploy deploy-full deploy-force server-logs server-logs-snapshot server-status server-clear-logs server-health test-local test-integration test-ari test-externalmedia monitor-externalmedia monitor-externalmedia-once help

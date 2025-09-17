@@ -444,3 +444,254 @@ make help                # Show all available commands
 ssh root@voiprnd.nemtclouddispatch.com 'cd /root/Asterisk-Agent-Develop && git pull && docker-compose up --build -d ai-engine'
 ssh root@voiprnd.nemtclouddispatch.com 'cd /root/Asterisk-Agent-Develop && docker-compose logs -f ai-engine'
 ```
+
+## Critical Limitations and Known Issues (MANDATORY READING)
+
+### AudioSocket Integration Limitations
+
+#### 1. **ARI execute_application Does NOT Support AudioSocket (CRITICAL)**
+**Issue**: ARI `execute_application` command returns 404 error for AudioSocket
+**Evidence**: `{"status": 404, "reason": "{\"message\":\"Resource not found\"}"}`
+**Root Cause**: AudioSocket is a dialplan application, not supported via ARI commands in Asterisk 16+
+**Impact**: Cannot establish AudioSocket connection via ARI, no voice capture possible
+**Solution**: Use dialplan approach - originate Local channel directly to AudioSocket context
+
+**❌ NEVER DO THIS:**
+```python
+# This will ALWAYS fail with 404 error
+await self.ari_client.execute_application(channel_id, "AudioSocket", f"{uuid},127.0.0.1:8090")
+```
+
+**✅ CORRECT APPROACH:**
+```asterisk
+# Originate Local channel to AudioSocket context
+[ai-audiosocket-only]
+exten => _[0-9a-fA-F].,1,NoOp(AudioSocket for ${EXTEN})
+ same => n,Answer()
+ same => n,AudioSocket(${EXTEN},127.0.0.1:8090)
+ same => n,Hangup()
+```
+
+#### 2. **AudioSocket Format Handling (CRITICAL)**
+**Issue**: AudioSocket in Asterisk 16 sends PCM16LE@8k directly, NOT µ-law
+**Evidence**: Converting PCM16LE as µ-law causes garbled audio and VAD failure
+**Impact**: Voice capture fails, audio sounds distorted
+**Solution**: Pass AudioSocket data directly to AudioFrameProcessor without conversion
+
+**❌ NEVER DO THIS:**
+```python
+# This corrupts the audio data
+pcm_data = self._convert_ulaw_to_pcm16le(audio_data)
+```
+
+**✅ CORRECT APPROACH:**
+```python
+# AudioSocket sends PCM16LE@8kHz directly in Asterisk 16
+pcm_data = audio_data
+```
+
+#### 3. **AudioSocket and Stasis Cannot Be Called in Same Context (CRITICAL)**
+**Issue**: AudioSocket() is a blocking dialplan application
+**Evidence**: When AudioSocket() is called, Stasis() never executes
+**Impact**: Channel never enters Stasis for ARI management
+**Solution**: Use separate contexts - AudioSocket context for connection, Stasis context for ARI control
+
+**❌ NEVER DO THIS:**
+```asterisk
+[ai-stasis]
+exten => _[0-9a-fA-F].,1,NoOp(Stasis for ${EXTEN})
+ same => n,Answer()
+ same => n,AudioSocket(${EXTEN},127.0.0.1:8090)  # Blocking!
+ same => n,Stasis(asterisk-ai-voice-agent)      # Never reached!
+ same => n,Hangup()
+```
+
+**✅ CORRECT APPROACH:**
+```asterisk
+# Separate contexts for different purposes
+[ai-audiosocket-only]
+exten => _[0-9a-fA-F].,1,NoOp(AudioSocket for ${EXTEN})
+ same => n,Answer()
+ same => n,AudioSocket(${EXTEN},127.0.0.1:8090)
+ same => n,Hangup()
+
+[ai-stasis]
+exten => _[0-9a-fA-F].,1,NoOp(Stasis for ${EXTEN})
+ same => n,Answer()
+ same => n,Stasis(asterisk-ai-voice-agent)
+ same => n,Hangup()
+```
+
+### Audio Format and Codec Limitations
+
+#### 4. **Asterisk File Extension Handling (CRITICAL)**
+**Issue**: Asterisk automatically appends file extensions to `sound:` URIs
+**Evidence**: `sound:ai-generated/response-xxx.ulaw` becomes `response-xxx.ulaw.ulaw`
+**Impact**: File not found errors, audio playback fails
+**Solution**: Remove file extension from URI
+
+**❌ NEVER DO THIS:**
+```python
+# This causes double extension
+sound_uri = f"sound:ai-generated/response-{audio_id}.ulaw"
+```
+
+**✅ CORRECT APPROACH:**
+```python
+# Let Asterisk add the extension
+sound_uri = f"sound:ai-generated/response-{audio_id}"
+```
+
+#### 5. **Audio Capture Gating Logic (CRITICAL)**
+**Issue**: Using hardcoded chunk count instead of event-driven gating
+**Evidence**: Voice capture disabled for fixed time regardless of greeting completion
+**Impact**: User speech ignored during greeting, poor conversation flow
+**Solution**: Use `audio_capture_enabled` flag set by `PlaybackFinished` event
+
+**❌ NEVER DO THIS:**
+```python
+# Hardcoded wait time
+if count < 100:  # Wait for 100 chunks (4 seconds)
+    return
+```
+
+**✅ CORRECT APPROACH:**
+```python
+# Event-driven gating
+audio_capture_enabled = call_data.get("audio_capture_enabled", False)
+if not audio_capture_enabled:
+    return
+```
+
+### ARI Integration Limitations
+
+#### 6. **ARI Channel Origination Requirements (CRITICAL)**
+**Issue**: ARI channel origination requires either `app` OR `extension`+`context`
+**Evidence**: `"Application or extension must be specified"` error
+**Impact**: Channel origination fails
+**Solution**: Always provide either `app` parameter OR both `extension` and `context`
+
+**❌ NEVER DO THIS:**
+```python
+# Missing required parameters
+orig_params = {
+    "endpoint": local_endpoint,
+    "timeout": "30"
+    # Missing app OR extension+context
+}
+```
+
+**✅ CORRECT APPROACH:**
+```python
+# Option 1: Use app parameter
+orig_params = {
+    "endpoint": local_endpoint,
+    "app": "asterisk-ai-voice-agent",
+    "timeout": "30"
+}
+
+# Option 2: Use extension and context
+orig_params = {
+    "endpoint": local_endpoint,
+    "extension": audio_uuid,
+    "context": "ai-audiosocket-only",
+    "timeout": "30"
+}
+```
+
+### Development Workflow Limitations
+
+#### 7. **Docker Cache Issues (CRITICAL)**
+**Issue**: Docker cache serves old layers, new code not deployed
+**Evidence**: Expected log messages not appearing, old behavior persists
+**Impact**: Debugging becomes impossible, fixes appear to not work
+**Solution**: Always use `--build` flag, use `--no-cache` for critical fixes
+
+**❌ NEVER DO THIS:**
+```bash
+# Uses old cached image
+docker-compose restart ai-engine
+```
+
+**✅ CORRECT APPROACH:**
+```bash
+# Rebuilds image with new code
+docker-compose up --build -d ai-engine
+
+# For critical fixes, clear cache
+docker-compose build --no-cache ai-engine && docker-compose up -d ai-engine
+```
+
+#### 8. **Log Management (CRITICAL)**
+**Issue**: Old logs mask new issues, debugging becomes confusing
+**Evidence**: Previous test results interfere with current analysis
+**Impact**: Cannot identify actual problems, false positives/negatives
+**Solution**: Always clear logs before testing
+
+**❌ NEVER DO THIS:**
+```bash
+# Start testing without clearing logs
+make capture-logs
+```
+
+**✅ CORRECT APPROACH:**
+```bash
+# Clear logs first, then test
+make server-clear-logs
+make capture-logs
+```
+
+### Testing and Verification Limitations
+
+#### 9. **Test Call Analysis Requirements (CRITICAL)**
+**Issue**: Incomplete analysis leads to wrong conclusions
+**Evidence**: Missing critical log entries, incomplete timeline
+**Impact**: Wrong fixes applied, time wasted on incorrect solutions
+**Solution**: Always analyze complete call flow with all log sources
+
+**❌ NEVER DO THIS:**
+```bash
+# Only check one log source
+docker-compose logs ai-engine
+```
+
+**✅ CORRECT APPROACH:**
+```bash
+# Check all log sources
+make capture-logs  # Captures ai-engine, local-ai-server, and asterisk logs
+make analyze-logs  # Analyzes complete call flow
+```
+
+#### 10. **Confidence Scoring (MANDATORY)**
+**Issue**: Overconfidence in fixes without proper verification
+**Evidence**: Claims of "9/10 confidence" when issues remain
+**Impact**: Wasted time on incorrect solutions
+**Solution**: Always provide confidence scores and verify fixes work
+
+**❌ NEVER DO THIS:**
+```python
+# Claim high confidence without verification
+# Confidence Score: 9/10 - This will definitely work!
+```
+
+**✅ CORRECT APPROACH:**
+```python
+# Provide realistic confidence with verification
+# Confidence Score: 6/10 - Based on analysis, but needs testing to verify
+```
+
+### Prevention Checklist
+
+**Before implementing any AudioSocket changes:**
+1. ✅ Verify ARI `execute_application` is NOT used for AudioSocket
+2. ✅ Confirm dialplan approach is used instead
+3. ✅ Check AudioSocket format handling (PCM16LE@8k, not µ-law)
+4. ✅ Verify separate contexts for AudioSocket and Stasis
+5. ✅ Test complete call flow with all log sources
+6. ✅ Clear logs before testing
+7. ✅ Use `--build` flag for deployments
+8. ✅ Provide realistic confidence scores
+9. ✅ Document findings in call-framework.md
+10. ✅ Verify fixes actually work before claiming success
+
+**Remember**: These limitations are based on actual failures and debugging sessions. Ignoring them will result in repeated failures and wasted time.

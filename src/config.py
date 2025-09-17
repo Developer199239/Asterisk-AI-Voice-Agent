@@ -22,6 +22,13 @@ class AsteriskConfig(BaseModel):
     password: str
     app_name: str = Field(default="ai-voice-agent")
 
+class ExternalMediaConfig(BaseModel):
+    rtp_host: str = Field(default="0.0.0.0")
+    rtp_port: int = Field(default=18080)
+    codec: str = Field(default="ulaw")  # ulaw or slin16
+    direction: str = Field(default="both")  # both, sendonly, recvonly
+    jitter_buffer_ms: int = Field(default=20)
+
 class RTPConfig(BaseModel):
     host: str = Field(default="127.0.0.1")
     port_range: list = Field(default=[10000, 10100])
@@ -73,8 +80,9 @@ class AppConfig(BaseModel):
     providers: Dict[str, Any]
     asterisk: AsteriskConfig
     llm: LLMConfig
-    audio_transport: str = Field(default="external_media")  # 'external_media' | 'audiosocket' | 'legacy'
+    audio_transport: str = Field(default="externalmedia")  # 'externalmedia' | 'audiosocket' | 'legacy'
     downstream_mode: str = Field(default="file")  # 'file' | 'stream'
+    external_media: Optional[ExternalMediaConfig] = Field(default_factory=ExternalMediaConfig)
     streaming: Optional[StreamingConfig] = Field(default_factory=StreamingConfig)
     rtp: Optional[RTPConfig] = Field(default_factory=RTPConfig)
 

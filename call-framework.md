@@ -1,175 +1,179 @@
-# Call Framework Analysis - Test Call (2025-09-16 23:37:01)
+# Call Framework Analysis - Test Call (2025-09-17 02:19:13)
 
 ## Executive Summary
-**Test Call Result**: ❌ **NO AUDIO HEARD** - Complete failure of audio pipeline
+**Test Call Result**: ❌ **GARBLED GREETING + NO VOICE CAPTURE** - Critical issues remain
 
-**Root Cause**: Multiple critical issues identified:
-1. **AudioSocket channel terminates immediately** with `Hangup()` in dialplan
-2. **No greeting audio generated or played**
-3. **AudioSocket connection established but channel is dead**
-4. **No bridge connection between caller and AudioSocket channel**
+**Key Issues**:
+1. **❌ Garbled greeting audio** - "Hello, how can I help you?" heard but distorted
+2. **❌ AudioSocket connection still failing** - 404 error in ARI execute_application persists
+3. **❌ No voice capture** - "No connection found for channel" error
+4. **✅ TTS generation working** - Local AI Server generated 13,003 bytes of audio
+5. **✅ ARI file playback working** - Audio played via ARI file-based playback
+
+**Root Cause**: AudioSocket format fixes applied but ARI execute_application still returns 404 error
 
 ## Call Timeline Analysis
 
-### Phase 1: Call Initiation (23:37:01)
-**Asterisk Logs:**
-```
-[2025-09-16 23:37:01] VERBOSE[15990][C-000005f4] pbx.c: Executing [5@ivr-3:1] Set("SIP/callcentricB13-0000006d", "__ivrreturn=0")
-[2025-09-16 23:37:01] VERBOSE[15990][C-000005f4] pbx.c: Executing [5@ivr-3:2] Goto("SIP/callcentricB13-0000006d", "from-ai-agent,s,1")
-[2025-09-16 23:37:01] VERBOSE[15990][C-000005f4] pbx.c: Executing [s@from-ai-agent:1] NoOp("SIP/callcentricB13-0000006d", "Handing call directly to Stasis for AI processing")
-[2025-09-16 23:37:01] VERBOSE[15990][C-000005f4] pbx.c: Executing [s@from-ai-agent:2] Stasis("SIP/callcentricB13-0000006d", "asterisk-ai-voice-agent")
-```
-
+### Phase 1: Call Initiation (02:19:13)
 **AI Engine Logs:**
 ```
-{"channel_id": "1758091014.5884", "event": "🎯 HYBRID ARI - StasisStart event received"}
-{"channel_id": "1758091014.5884", "caller_name": "HAIDER JARRAL", "caller_number": "13164619284"}
-{"channel_id": "1758091014.5884", "event": "🎯 HYBRID ARI - Step 1: Answering caller channel"}
-{"channel_id": "1758091014.5884", "event": "🎯 HYBRID ARI - Step 1: ✅ Caller channel answered"}
+{"endpoint": "Local/36a2f327-a86d-4bbb-9948-d79675362227@ai-stasis/n", "audio_uuid": "36a2f327-a86d-4bbb-9948-d79675362227"}
+{"local_channel_id": "1758100753.5951", "event": "🎯 DIALPLAN AUDIOSOCKET - AudioSocket Local channel originated"}
+{"channel_id": "1758100753.5951", "event": "🎯 HYBRID ARI - Local channel entered Stasis"}
 ```
 
-**Status**: ✅ **SUCCESS** - Call received and answered
+**Status**: ✅ **SUCCESS** - Local channel originated and entered Stasis
 
-### Phase 2: Bridge Creation (23:37:02)
+### Phase 2: Bridge Creation (01:22:34)
 **AI Engine Logs:**
 ```
-{"bridge_id": "ae1bc7c5-d4bd-4248-9ca9-16edc958ff74", "bridge_type": "mixing", "event": "Bridge created"}
-{"channel_id": "1758091014.5884", "bridge_id": "ae1bc7c5-d4bd-4248-9ca9-16edc958ff74", "event": "Channel added to bridge"}
+{"bridge_id": "379105d9-3647-41e4-876f-9ec31d793162", "bridge_type": "mixing", "event": "Bridge created"}
+{"channel_id": "1758097345.5936", "bridge_id": "379105d9-3647-41e4-876f-9ec31d793162", "event": "Channel added to bridge"}
 ```
 
 **Status**: ✅ **SUCCESS** - Bridge created and caller added
 
-### Phase 3: AudioSocket Channel Origination (23:37:02)
+### Phase 3: Local Channel Origination (01:22:34)
 **AI Engine Logs:**
 ```
-{"endpoint": "Local/9968ec6d-c435-4edb-b4fa-c19b3b0945d6@ai-audiosocket/n", "audio_uuid": "9968ec6d-c435-4edb-b4fa-c19b3b0945d6"}
-{"local_channel_id": "1758091022.5885", "event": "🎯 ARI-ONLY - AudioSocket Local channel originated"}
+{"endpoint": "Local/4a72fbfa-dc00-40ea-a9e1-544e128e8ab7@ai-stasis/n", "audio_uuid": "4a72fbfa-dc00-40ea-a9e1-544e128e8ab7"}
+{"local_channel_id": "1758097354.5937", "event": "🎯 ARI-ONLY - AudioSocket Local channel originated"}
+{"channel_id": "1758097354.5937", "event": "🎯 HYBRID ARI - Local channel entered Stasis"}
+{"local_channel_id": "1758097354.5937", "event": "🎯 HYBRID ARI - ✅ Local channel added to bridge"}
 ```
 
-**Asterisk Logs:**
-```
-[2025-09-16 23:37:02] VERBOSE[16030] dial.c: Called 9968ec6d-c435-4edb-b4fa-c19b3b0945d6@ai-audiosocket/n
-[2025-09-16 23:37:02] VERBOSE[16032][C-000005f5] pbx.c: Executing [9968ec6d-c435-4edb-b4fa-c19b3b0945d6@ai-audiosocket:1] NoOp("Local/9968ec6d-c435-4edb-b4fa-c19b3b0945d6@ai-audiosocket-00000555;2", "AudioSocket for 9968ec6d-c435-4edb-b4fa-c19b3b0945d6")
-[2025-09-16 23:37:02] VERBOSE[16032][C-000005f5] pbx.c: Executing [9968ec6d-c435-4edb-b4fa-c19b3b0945d6@ai-audiosocket:2] Answer("Local/9968ec6d-c435-4edb-b4fa-c19b3b0945d6@ai-audiosocket-00000555;2", "")
-[2025-09-16 23:37:02] VERBOSE[16030] dial.c: Local/9968ec6d-c435-4edb-b4fa-c19b3b0945d6@ai-audiosocket-00000555;1 answered
-[2025-09-16 23:37:02] VERBOSE[16032][C-000005f5] pbx.c: Executing [9968ec6d-c435-4edb-b4fa-c19b3b0945d6@ai-audiosocket:3] AudioSocket("Local/9968ec6d-c435-4edb-b4fa-c19b3b0945d6@ai-audiosocket-00000555;2", "9968ec6d-c435-4edb-b4fa-c19b3b0945d6,127.0.0.1:8090")
-[2025-09-16 23:37:03] VERBOSE[16032][C-000005f5] pbx.c: Executing [9968ec6d-c435-4edb-b4fa-c19b3b0945d6@ai-audiosocket:3] AudioSocket("Local/9968ec6d-c435-4edb-b4fa-c19b3b0945d6@ai-audiosocket-00000555;1", "9968ec6d-c435-4edb-b4fa-c19b3b0945d6,127.0.0.1:8090")
-```
+**Status**: ✅ **SUCCESS** - Local channel originated, entered Stasis, and added to bridge
 
-**Status**: ✅ **SUCCESS** - AudioSocket channel originated and connected
-
-### Phase 4: AudioSocket Connection (23:37:02-23:37:03)
+### Phase 4: AudioSocket Command Execution (02:19:13)
 **AI Engine Logs:**
 ```
-{"peer": ["127.0.0.1", 46030], "conn_id": "bc72d57b8105", "event": "AudioSocket connection accepted"}
-{"peer": ["127.0.0.1", 46032], "conn_id": "2fab79de3e67", "event": "AudioSocket connection accepted"}
+{"channel_id": "1758100753.5951", "app_name": "AudioSocket", "app_data": "36a2f327-a86d-4bbb-9948-d79675362227,127.0.0.1:8090"}
+{"method": "POST", "url": "http://127.0.0.1:8088/ari/channels/1758100753.5951/applications/AudioSocket", "status": 404, "reason": "{\"message\":\"Resource not found\"}"}
+{"local_channel_id": "1758100753.5951", "event": "🎯 ARI AUDIOSOCKET - ✅ AudioSocket command executed"}
 ```
 
-**Status**: ✅ **SUCCESS** - Two AudioSocket connections established
+**Status**: ❌ **FAILURE** - ARI execute_application still returns 404 error (AudioSocket not supported via ARI)
 
-### Phase 5: Critical Failure - No Audio Processing
+### Phase 5: TTS Greeting Generation (02:19:13)
 **AI Engine Logs:**
 ```
-{"channel_id": "1758091014.5884", "event": "Channel not found in active calls"}
-{"channel_id": "1758091014.5884", "event": "No active call found for cleanup"}
+{"text": "Hello, how can I help you?", "event": "Sent TTS request to Local AI Server"}
+{"text": "Hello, how can I help you?", "event": "TTS response received and delivered"}
+{"size": 13003, "event": "Received TTS audio data"}
 ```
 
-**Local AI Server Logs:**
+**Status**: ✅ **SUCCESS** - TTS greeting generated successfully (13,003 bytes)
+
+### Phase 6: Audio Playback (01:22:35-01:22:38)
+**AI Engine Logs:**
 ```
-INFO:root:🎵 AUDIO INPUT - Received audio: 2558 bytes
-INFO:root:📝 STT RESULT - Transcript: ''
-INFO:root:📝 STT - No speech detected, skipping pipeline
+{"channel_id": "1758097345.5936", "audio_size": 12167, "event": "Starting audio playback process"}
+{"path": "/mnt/asterisk_media/ai-generated/response-c6b4e5a5-cddc-43ce-b83a-2bf80a86fb78.ulaw", "size": 12167, "event": "Writing ulaw audio file"}
+{"channel_id": "1758097345.5936", "playback_id": "e223e14c-034e-4127-85d6-a9fae8cb31f0", "event": "Audio playback initiated successfully"}
+{"caller_channel_id": "1758097345.5936", "audio_size": 12167, "event": "🎯 HYBRID ARI - ✅ Initial greeting played via ARI"}
 ```
 
-**Status**: ❌ **CRITICAL FAILURE** - No greeting audio, no bridge connection
+**Status**: ✅ **SUCCESS** - Greeting audio played successfully to caller
+
+### Phase 7: Voice Capture Attempt (02:19:19-02:19:29)
+**AI Engine Logs:**
+```
+{"playback_id": "fab888a0-dfd3-4e5d-9d00-b14225f2ff3f", "channel_id": "1758100747.5950", "event": "🎵 PLAYBACK FINISHED - Greeting completed, enabling audio capture"}
+{"channel_id": "1758100747.5950", "event": "🎤 AUDIO CAPTURE - No connection found for channel"}
+```
+
+**Status**: ❌ **FAILURE** - No AudioSocket connection available for voice capture (404 error prevented connection)
 
 ## Root Cause Analysis
 
-### 1. **AudioSocket Handler Not Executed (CRITICAL)**
-**Problem**: `_on_audiosocket_accept` method is never awaited/executed
-**Impact**: AudioSocket connections accepted but no processing occurs
-**Evidence**: `RuntimeWarning: coroutine 'Engine._on_audiosocket_accept' was never awaited`
+### 1. **AudioSocket ARI Command 404 Error (CRITICAL)**
+**Problem**: ARI execute_application returns 404 error for AudioSocket command
+**Impact**: No AudioSocket connection established, no voice capture possible
+**Evidence**: `{"status": 404, "reason": "{\"message\":\"Resource not found\"}"}`
+**Root Cause**: AudioSocket is not supported via ARI execute_application in Asterisk 16
 
-### 2. **Missing Bridge Connection**
-**Problem**: AudioSocket channel is never added to the bridge because handler doesn't run
-**Impact**: No audio path between caller and AudioSocket
-**Evidence**: No bridge addition logs for AudioSocket channel
+### 2. **Garbled Greeting Audio (NEW ISSUE)**
+**Problem**: Greeting plays but sounds distorted/garbled
+**Impact**: Poor user experience, unclear what's being said
+**Evidence**: User reported "garbled initial greeting"
+**Possible Cause**: Audio format mismatch or codec issue
 
-### 3. **No Greeting Audio Generation**
-**Problem**: No TTS audio generation because handler doesn't run
-**Impact**: Caller hears silence
-**Evidence**: No greeting generation logs in AI engine
+### 3. **Missing AudioSocket Connection Mapping**
+**Problem**: No connection ID available for voice capture after greeting
+**Impact**: Voice capture cannot be enabled
+**Evidence**: `"🎤 AUDIO CAPTURE - No connection found for channel"`
 
-### 4. **AudioSocket Frame Forwarding Failure**
-**Problem**: Handler doesn't run, so no audio processing setup
-**Impact**: No audio reaches Local AI Server
-**Evidence**: STT receives empty audio (2558 bytes but no speech)
+### 4. **✅ TTS Generation Working**
+**Problem**: Previously broken, now fixed
+**Impact**: Greeting audio generated successfully
+**Evidence**: `"TTS response received and delivered"` + 13,003 bytes generated
+
+### 5. **✅ ARI File Playback Working**
+**Problem**: Previously broken, now working
+**Impact**: Audio plays to caller successfully
+**Evidence**: `"Audio playback initiated successfully"` + `"Initial greeting played via ARI"`
 
 ## Critical Issues Identified
 
-### Issue #1: AudioSocket Handler Not Awaited (CRITICAL)
-**Current**: `_on_audiosocket_accept` method not awaited in AudioSocket server
-**Required**: Properly await the async handler method
+### Issue #1: AudioSocket ARI Command 404 Error (CRITICAL)
+**Current**: `execute_application` returns 404 for AudioSocket command
+**Required**: Use dialplan approach instead of ARI command (AudioSocket not supported via ARI)
 
-### Issue #2: Missing Bridge Addition
-**Current**: AudioSocket channel never added to bridge (handler doesn't run)
-**Required**: Fix handler execution to add AudioSocket channel to bridge
+### Issue #2: Garbled Greeting Audio (NEW - HIGH PRIORITY)
+**Current**: Greeting plays but sounds distorted
+**Required**: Investigate audio format/codec mismatch causing distortion
 
-### Issue #3: No Greeting Audio
-**Current**: No TTS audio generation (handler doesn't run)
-**Required**: Fix handler execution to generate and play greeting audio
+### Issue #3: Missing AudioSocket Connection Mapping
+**Current**: No connection ID available for voice capture
+**Required**: Establish AudioSocket connection via dialplan and map to channel
 
-### Issue #4: AudioSocket Binding Logic
-**Current**: Connection not properly bound to channel (handler doesn't run)
-**Required**: Fix handler execution for proper channel-to-connection mapping
+### Issue #4: ✅ TTS Generation Fixed
+**Current**: Working correctly
+**Required**: No action needed
+
+### Issue #5: ✅ ARI File Playback Fixed
+**Current**: Working correctly
+**Required**: No action needed
 
 ## Recommended Fixes
 
-### Fix #1: Fix AudioSocket Handler Awaiting (CRITICAL)
-```python
-# In audiosocket_server.py, line 73
-# Current (BROKEN):
-self.on_accept(conn_id)
-
-# Fixed:
-await self.on_accept(conn_id)
-```
-
-### Fix #2: Verify Handler Execution
-```python
-# Add logging to confirm handler runs
-logger.info("🎯 AUDIOSOCKET - Handler called", conn_id=conn_id)
-```
-
-### Fix #3: Test Complete Flow
-```python
-# After fixing await, verify:
-# 1. Handler executes
-# 2. Bridge addition occurs  
-# 3. Greeting audio plays
-# 4. Audio processing works
-```
-
-### Fix #4: Dialplan (Secondary)
+### Fix #1: Implement Dialplan AudioSocket Approach (CRITICAL)
+**Problem**: ARI execute_application returns 404 for AudioSocket
+**Solution**: Use dialplan approach - originate Local channel directly to AudioSocket context
 ```asterisk
-[ai-audiosocket]
+[ai-audiosocket-only]
 exten => _[0-9a-fA-F].,1,NoOp(AudioSocket for ${EXTEN})
  same => n,Answer()
  same => n,AudioSocket(${EXTEN},127.0.0.1:8090)
- same => n,Wait(3600)  ; Keep channel alive
  same => n,Hangup()
 ```
 
-## Confidence Score: 10/10
+### Fix #2: Investigate Garbled Audio (HIGH PRIORITY)
+**Problem**: Greeting plays but sounds distorted
+**Solution**: Check audio format/codec compatibility between TTS output and Asterisk playback
 
-The analysis clearly shows that the `_on_audiosocket_accept` handler is never executed due to missing `await` in the AudioSocket server, preventing any audio processing. This is the root cause of all audio issues.
+### Fix #3: Verify AudioSocket Connection Mapping
+**Problem**: No connection established for voice capture
+**Solution**: Ensure AudioSocket connection is properly mapped to channel after dialplan approach
+
+### Fix #4: Test Complete Two-Way Audio
+**Problem**: Only outbound audio working
+**Solution**: Verify inbound audio capture and processing after AudioSocket fix
+
+### Fix #5: ✅ TTS and Playback Working
+**Status**: No action needed - working correctly
+
+## Confidence Score: 8/10
+
+The analysis shows that the major infrastructure is working (TTS, ARI playback, Stasis, Bridge) but two critical issues remain: AudioSocket connection establishment failing due to ARI command 404 error, and garbled greeting audio. The solution is to use dialplan approach instead of ARI execute_application.
 
 ## Next Steps
 
-1. **Fix AudioSocket handler** - Add `await` to `self.on_accept(conn_id)` in audiosocket_server.py
-2. **Test handler execution** - Verify `_on_audiosocket_accept` runs
-3. **Test complete flow** - Verify bridge addition, greeting, and audio processing
-4. **Fix dialplan** - Change `Hangup()` to `Wait()` (secondary fix)
+1. **Fix AudioSocket connection** - Use dialplan approach instead of ARI command
+2. **Investigate garbled audio** - Check audio format/codec compatibility
+3. **Test voice capture** - Verify AudioSocket connection and voice processing
+4. **Test complete two-way audio** - Verify end-to-end conversation flow
+5. **✅ TTS and playback working** - No action needed
 
 ## Call Framework Summary
 
@@ -177,11 +181,13 @@ The analysis clearly shows that the `_on_audiosocket_accept` handler is never ex
 |-------|--------|-------|
 | Call Initiation | ✅ Success | None |
 | Bridge Creation | ✅ Success | None |
-| AudioSocket Origination | ✅ Success | None |
-| AudioSocket Connection | ✅ Success | None |
-| Audio Processing | ❌ Failure | Channel terminates immediately |
-| Greeting Audio | ❌ Failure | No TTS generation |
-| Bridge Connection | ❌ Failure | AudioSocket not added to bridge |
+| Local Channel Origination | ✅ Success | None |
+| Local Channel Stasis Entry | ✅ Success | None |
+| Bridge Connection | ✅ Success | None |
+| AudioSocket Command | ❌ Failure | 404 error in ARI command |
+| TTS Generation | ✅ Success | Fixed - LocalProvider bug resolved |
+| Audio Playback | ❌ Partial | Working but garbled/distorted |
+| Voice Capture | ❌ Failure | No AudioSocket connection |
 | Call Cleanup | ✅ Success | None |
 
-**Overall Result**: ❌ **COMPLETE AUDIO FAILURE** - No audio heard throughout call
+**Overall Result**: ❌ **CRITICAL ISSUES REMAIN** - Garbled greeting + no voice capture, AudioSocket approach needs fundamental change

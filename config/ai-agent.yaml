@@ -3,9 +3,9 @@
 default_provider: "local"
 
 # Audio transport controls
-# - audio_transport: 'audiosocket' (recommended) | 'external_media' | 'legacy'
+# - audio_transport: 'audiosocket' (recommended) | 'externalmedia' | 'legacy'
 # - downstream_mode: 'file' (current default) | 'stream' (next phase)
-audio_transport: "audiosocket"
+audio_transport: "externalmedia"
 downstream_mode: "file"
 
 # Asterisk connection settings (will be overridden by environment variables)
@@ -15,7 +15,15 @@ asterisk:
   password: "your_ari_password"
   app_name: "asterisk-ai-voice-agent"
 
-# RTP server settings for External Media
+# External Media configuration for RTP-based audio capture
+external_media:
+  rtp_host: "0.0.0.0"        # bind inside container
+  rtp_port: 18080            # fixed port for simplicity
+  codec: "ulaw"              # ulaw (8k) or slin16 (8k)
+  direction: "both"          # sendrecv | sendonly | recvonly
+  jitter_buffer_ms: 20       # target frame size
+
+# RTP server settings for External Media (legacy - kept for compatibility)
 rtp:
   host: "127.0.0.1"
   port_range: [10000, 10100]  # Range of UDP ports for RTP communication
