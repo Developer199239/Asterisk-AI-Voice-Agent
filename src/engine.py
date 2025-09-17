@@ -281,6 +281,11 @@ class Engine:
         channel_name = channel.get('name', '')
         return channel_name.startswith('Local/')
 
+    def _is_external_media_channel(self, channel: dict) -> bool:
+        """Check if this is an ExternalMedia channel"""
+        channel_name = channel.get('name', '')
+        return channel_name.startswith('UnicastRTP/')
+
     def _find_caller_for_local(self, local_channel_id: str) -> Optional[str]:
         """Find the caller channel that corresponds to this Local channel."""
         # Check if we have a pending Local channel mapping
@@ -318,10 +323,58 @@ class Engine:
                        channel_name=channel_name)
             # Now add the Local channel to the bridge
             await self._handle_local_stasis_start_hybrid(channel_id, channel)
+        elif self._is_external_media_channel(channel):
+            # This is an ExternalMedia channel entering Stasis
+            logger.info("🎯 EXTERNAL MEDIA - ExternalMedia channel entered Stasis", 
+                       channel_id=channel_id,
+                       channel_name=channel_name)
+            await self._handle_external_media_stasis_start(channel_id, channel)
         else:
             logger.warning("🎯 HYBRID ARI - Unknown channel type in StasisStart", 
                           channel_id=channel_id, 
                           channel_name=channel_name)
+
+    async def _handle_external_media_stasis_start(self, external_media_id: str, channel: dict):
+        """Handle ExternalMedia channel entering Stasis."""
+        try:
+            # Find the caller channel that this ExternalMedia channel belongs to
+            caller_channel_id = None
+            for channel_id, call_data in self.caller_channels.items():
+                if call_data.get("external_media_id") == external_media_id:
+                    caller_channel_id = channel_id
+                    break
+            
+            if not caller_channel_id:
+                logger.warning("ExternalMedia channel entered Stasis but no caller found", 
+                             external_media_id=external_media_id)
+                return
+            
+            # Add ExternalMedia channel to the bridge
+            bridge_id = self.caller_channels[caller_channel_id].get("bridge_id")
+            if bridge_id:
+                success = await self.ari_client.add_channel_to_bridge(bridge_id, external_media_id)
+                if success:
+                    logger.info("🎯 EXTERNAL MEDIA - ExternalMedia channel added to bridge", 
+                               external_media_id=external_media_id,
+                               bridge_id=bridge_id,
+                               caller_channel_id=caller_channel_id)
+                    
+                    # Start the provider session for ExternalMedia
+                    await self._start_provider_session_external_media(caller_channel_id, external_media_id)
+                else:
+                    logger.error("🎯 EXTERNAL MEDIA - Failed to add ExternalMedia channel to bridge", 
+                               external_media_id=external_media_id,
+                               bridge_id=bridge_id)
+            else:
+                logger.error("ExternalMedia channel entered Stasis but no bridge found", 
+                           external_media_id=external_media_id,
+                           caller_channel_id=caller_channel_id)
+                
+        except Exception as e:
+            logger.error("Error handling ExternalMedia StasisStart", 
+                        external_media_id=external_media_id, 
+                        error=str(e), 
+                        exc_info=True)
 
     async def _handle_caller_stasis_start_hybrid(self, caller_channel_id: str, channel: dict):
         """Handle caller channel entering Stasis - Hybrid ARI approach."""
@@ -379,23 +432,12 @@ class Engine:
                 logger.info("🎯 EXTERNAL MEDIA - Step 5: Creating ExternalMedia channel", channel_id=caller_channel_id)
                 external_media_id = await self._start_external_media_channel(caller_channel_id)
                 if external_media_id:
-                    # Add ExternalMedia channel to bridge
-                    external_success = await self.ari_client.add_channel_to_bridge(bridge_id, external_media_id)
-                    if external_success:
-                        logger.info("🎯 EXTERNAL MEDIA - ✅ ExternalMedia channel added to bridge", 
-                                   channel_id=caller_channel_id, 
-                                   external_media_id=external_media_id,
-                                   bridge_id=bridge_id)
-                        # Update caller info
-                        self.caller_channels[caller_channel_id]["external_media_id"] = external_media_id
-                        self.caller_channels[caller_channel_id]["status"] = "connected"
-                        # Start provider session
-                        await self._start_provider_session_external_media(caller_channel_id, external_media_id)
-                    else:
-                        logger.error("🎯 EXTERNAL MEDIA - Failed to add ExternalMedia channel to bridge", 
-                                   channel_id=caller_channel_id, 
-                                   external_media_id=external_media_id)
-                        await self.ari_client.hangup_channel(external_media_id)
+                    # Store the ExternalMedia ID - the StasisStart event will handle adding to bridge
+                    self.caller_channels[caller_channel_id]["external_media_id"] = external_media_id
+                    self.caller_channels[caller_channel_id]["status"] = "external_media_created"
+                    logger.info("🎯 EXTERNAL MEDIA - ExternalMedia channel created, waiting for StasisStart", 
+                               channel_id=caller_channel_id, 
+                               external_media_id=external_media_id)
                 else:
                     logger.error("🎯 EXTERNAL MEDIA - Failed to create ExternalMedia channel", channel_id=caller_channel_id)
             else:
@@ -1552,10 +1594,28 @@ class Engine:
                 direction=direction
             )
             
+            if not external_media_id:
+                logger.error("Failed to create ExternalMedia channel")
+                return
+            
             if external_media_id:
                 logger.info("ExternalMedia channel created successfully", 
                            caller_channel_id=caller_channel_id,
                            external_media_id=external_media_id)
+                
+                # Add ExternalMedia channel to Stasis application
+                try:
+                    await self.ari_client.add_channel_to_stasis(
+                        channel_id=external_media_id,
+                        app_name=self.ari_client.app_name
+                    )
+                    logger.info("ExternalMedia channel added to Stasis", 
+                               external_media_id=external_media_id)
+                except Exception as e:
+                    logger.error("Failed to add ExternalMedia channel to Stasis", 
+                               external_media_id=external_media_id, 
+                               error=str(e))
+                    return
                 return external_media_id
             else:
                 logger.error("Failed to create ExternalMedia channel", 

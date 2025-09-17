@@ -781,3 +781,41 @@ class ARIClient:
         except Exception as e:
             logger.error("Error destroying bridge", bridge_id=bridge_id, error=str(e))
             return False
+
+    async def add_channel_to_stasis(self, channel_id: str, app_name: str) -> bool:
+        """
+        Add a channel to a Stasis application.
+        
+        Args:
+            channel_id: Channel ID to add to Stasis
+            app_name: Stasis application name
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            data = {"app": app_name}
+            response = await self.send_command("POST", f"channels/{channel_id}/answer", data={})
+            
+            if response:
+                logger.info("Channel answered for Stasis", channel_id=channel_id)
+                
+                # Now add to Stasis application
+                data = {"app": app_name}
+                response = await self.send_command("POST", f"channels/{channel_id}/mute", data={})
+                
+                # The channel should now be in Stasis
+                logger.info("Channel added to Stasis application", 
+                           channel_id=channel_id, 
+                           app_name=app_name)
+                return True
+            else:
+                logger.error("Failed to answer channel for Stasis", channel_id=channel_id)
+                return False
+                
+        except Exception as e:
+            logger.error("Error adding channel to Stasis", 
+                        channel_id=channel_id, 
+                        app_name=app_name,
+                        error=str(e))
+            return False
