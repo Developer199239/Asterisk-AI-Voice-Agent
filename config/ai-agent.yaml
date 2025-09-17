@@ -17,7 +17,7 @@ asterisk:
 
 # External Media configuration for RTP-based audio capture
 external_media:
-  rtp_host: "127.0.0.1"      # target IP for ExternalMedia (localhost for host networking)
+  rtp_host: "0.0.0.0"      # target IP for ExternalMedia (localhost for host networking)
   rtp_port: 18080            # fixed port for simplicity
   codec: "ulaw"              # ulaw (8k) or slin16 (8k)
   direction: "both"          # sendrecv | sendonly | recvonly
