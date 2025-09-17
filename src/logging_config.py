@@ -34,15 +34,24 @@ def add_correlation_id(logger, method_name, event_dict):
         event_dict['correlation_id'] = correlation_id
     return event_dict
 
-def configure_logging(log_level="INFO", log_to_file=False, log_file_path="service.log"):
+def add_service_context(logger, method_name, event_dict):
+    """Add service context to the log record."""
+    event_dict['service'] = 'ai-engine'
+    event_dict['component'] = logger.name
+    return event_dict
+
+def configure_logging(log_level="INFO", log_to_file=False, log_file_path="service.log", service_name="ai-engine"):
     """
-    Set up structured logging.
+    Set up structured logging with enhanced context for troubleshooting.
     """
     # Set up processors for structlog
     structlog.configure(
         processors=[
             structlog.processors.add_log_level,
             structlog.processors.TimeStamper(fmt="iso"),
+            # Add service name and correlation ID
+            add_service_context,
+            add_correlation_id,
             # Add the processor to format exceptions
             structlog.processors.format_exc_info,
             structlog.processors.JSONRenderer(),

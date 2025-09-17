@@ -31,22 +31,37 @@ This is an open-source AI Voice Agent that integrates with Asterisk/FreePBX usin
    - **ALWAYS use `docker-compose up --build -d` for code changes** (rebuilds image with new code)
    - **NEVER use `docker-compose restart`** (uses old image without new code)
 
-### Docker Development Workflow (CRITICAL - UPDATED)
+### Docker Development Workflow (Using Makefile)
 
-**ALWAYS rebuild the Docker image for ANY code changes in the `ai-engine`.** The previous volume-based workflow was incorrect:
+**ALWAYS use the `Makefile` for development operations.** It ensures the correct flags are used and eliminates command-line errors.
 
-1. **For code changes (FASTEST)**: `docker-compose up --build -d ai-engine` (rebuilds image with new code, uses cache when possible)
-2. **For dependency changes**: `docker-compose up --build -d` (rebuilds all services)
-3. **For critical fixes or cache issues**: `docker-compose build --no-cache ai-engine && docker-compose up -d ai-engine` (force rebuild without cache)
-4. **For local-ai-server code changes**: `docker-compose up --build -d local-ai-server` (rebuilds only local-ai-server)
-5. **View logs**: `docker-compose logs -f ai-engine`
-6. **Clear logs before testing**: `docker-compose logs --tail=0 ai-engine` (start fresh)
+#### **Server Deployment Commands:**
+1. **For code changes (FASTEST)**: `make deploy`
+2. **For dependency changes**: `make deploy-full`
+3. **For critical fixes or cache issues**: `make deploy-force`
+4. **View live server logs**: `make server-logs` (or `make server-logs SERVICE=local-ai-server`)
+5. **Check server status**: `make server-status`
+6. **Clear logs before testing**: `make server-clear-logs`
+7. **Check deployment health**: `make server-health`
 
-**OPTIMIZED CODE CHANGE WORKFLOW:**
-- **Most code changes**: Use `docker-compose up --build -d <service>` - this is the fastest approach
-- **Only use `--no-cache`** when you have cache-related issues or need to force a complete rebuild
-- **The `--build` flag** automatically detects changes and rebuilds only what's necessary
-- **Docker layer caching** makes subsequent builds much faster for unchanged dependencies
+#### **Local Development Commands:**
+- `make build` - Build or rebuild all service images
+- `make up` - Start all services in the background
+- `make down` - Stop and remove all services
+- `make logs` - Tail logs for ai-engine (or `make logs SERVICE=local-ai-server`)
+- `make logs-all` - Tail logs for all services
+- `make ps` - Show status of running services
+
+#### **Testing Commands:**
+- `make test-local` - Run local tests
+- `make test-integration` - Run integration tests
+- `make test-ari` - Test ARI commands on server
+
+**Why Use Makefile:**
+- **Eliminates Command Errors**: No more typos in long SSH commands
+- **Consistent Workflow**: Same commands work for all developers
+- **Easy to Remember**: Simple `make deploy` instead of complex SSH strings
+- **Self-Documenting**: `make help` shows all available commands
 
 ### Critical Deployment Verification (NEW - MANDATORY)
 
@@ -383,49 +398,49 @@ When issues arise:
 
 ## Quick Reference Commands
 
-### Deployment Commands
+### Primary Development Workflow (Using Makefile)
+
 ```bash
-# Deploy code changes (ALWAYS use this)
-ssh root@voiprnd.nemtclouddispatch.com 'cd /root/Asterisk-Agent-Develop && git pull && docker-compose up --build -d ai-engine'
+# Most common commands
+make deploy              # Deploy code changes (FASTEST)
+make deploy-force        # Force no-cache rebuild (when issues occur)
+make server-logs         # View live server logs
+make server-health       # Check deployment health
+make server-clear-logs   # Clear logs before testing
 
-# Deploy critical fixes (use when normal build fails)
-ssh root@voiprnd.nemtclouddispatch.com 'cd /root/Asterisk-Agent-Develop && git pull && docker-compose build --no-cache ai-engine && docker-compose up -d ai-engine'
+# Local development
+make build               # Build all services
+make up                  # Start all services
+make logs                # View local logs
+make down                # Stop all services
 
-# Clear logs before testing
-ssh root@voiprnd.nemtclouddispatch.com 'cd /root/Asterisk-Agent-Develop && docker-compose logs --tail=0 ai-engine'
+# Testing
+make test-local          # Run local tests
+make test-integration    # Run integration tests
+make test-ari            # Test ARI commands on server
 
-# View live logs
-ssh root@voiprnd.nemtclouddispatch.com 'cd /root/Asterisk-Agent-Develop && docker-compose logs -f ai-engine'
+# Help
+make help                # Show all available commands
 ```
 
-### When to Use --no-cache (CRITICAL)
+### When to Use Each Deploy Command
 
-**Use `--no-cache` when:**
+**Use `make deploy` (normal build) for:**
+1. **Code Logic Changes**: Engine logic, provider implementations
+2. **Configuration Changes**: YAML config updates
+3. **Minor Bug Fixes**: Small fixes that don't affect core functionality
+
+**Use `make deploy-force` (no-cache) when:**
 1. **ARI Connection Issues**: 404 errors, connection failures
 2. **Old Code Running**: Expected log messages not appearing
 3. **Provider Loading Issues**: Providers not initializing correctly
 4. **Critical Bug Fixes**: After fixing major bugs that could be cached
 5. **Dependency Changes**: When requirements.txt or Dockerfile changes
 
-**Normal `--build` is sufficient for:**
-1. **Code Logic Changes**: Engine logic, provider implementations
-2. **Configuration Changes**: YAML config updates
-3. **Minor Bug Fixes**: Small fixes that don't affect core functionality
+### Legacy Commands (for reference only)
 
-### Testing Commands
 ```bash
-# Test ARI commands
-ssh root@voiprnd.nemtclouddispatch.com 'cd /root/Asterisk-Agent-Develop && docker-compose exec ai-engine python /app/test_ari_commands.py'
-
-# Check container status
-ssh root@voiprnd.nemtclouddispatch.com 'cd /root/Asterisk-Agent-Develop && docker-compose ps'
-```
-
-### Debugging Commands
-```bash
-# Check Asterisk logs
-ssh root@voiprnd.nemtclouddispatch.com 'tail -f /var/log/asterisk/full | grep -i "ai-voice-agent\|audiosocket\|stasis"'
-
-# Check container health
-ssh root@voiprnd.nemtclouddispatch.com 'cd /root/Asterisk-Agent-Develop && docker-compose logs --tail=20 ai-engine'
+# These are now handled by the Makefile - use make commands instead
+ssh root@voiprnd.nemtclouddispatch.com 'cd /root/Asterisk-Agent-Develop && git pull && docker-compose up --build -d ai-engine'
+ssh root@voiprnd.nemtclouddispatch.com 'cd /root/Asterisk-Agent-Develop && docker-compose logs -f ai-engine'
 ```
