@@ -59,8 +59,14 @@ deploy-safe:
 	@echo "✅ No uncommitted changes found"
 	@echo "🚀 Pushing changes to remote..."
 	git push origin develop
+	@echo "⏳ Waiting 5 seconds for remote propagation..."
+	sleep 5
+	@echo "🔍 Verifying remote has latest commit..."
+	@make verify-remote-sync
 	@echo "📦 Deploying to server with --no-cache..."
 	ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && git pull && docker-compose build --no-cache ai-engine && docker-compose up -d ai-engine'
+	@echo "🔍 Verifying server has latest commit..."
+	@make verify-server-commit
 	@echo "🔍 Verifying deployment..."
 	@make verify-deployment
 
@@ -68,7 +74,11 @@ deploy-safe:
 deploy-force:
 	@echo "--> Force deployment (skipping validation)..."
 	@echo "⚠️  WARNING: This will deploy even with uncommitted changes!"
+	@echo "⏳ Waiting 5 seconds before deployment..."
+	sleep 5
 	ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && git pull && docker-compose build --no-cache ai-engine && docker-compose up -d ai-engine'
+	@echo "🔍 Verifying server has latest commit..."
+	@make verify-server-commit
 	@echo "🔍 Verifying deployment..."
 	@make verify-deployment
 
@@ -137,6 +147,50 @@ verify-deployment:
 	@echo "⚙️  Checking configuration..."
 	@ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && docker-compose logs --tail=20 ai-engine | grep -E "(audio_transport|RTP Server|ExternalMedia)" || echo "⚠️  Configuration logs not found"'
 	@echo "✅ Deployment verification complete"
+
+## verify-remote-sync: Verify that remote repository has the latest commit
+verify-remote-sync:
+	@echo "🔍 Verifying remote repository sync..."
+	@echo "📋 Getting local commit hash..."
+	@LOCAL_COMMIT=$$(git rev-parse HEAD); \
+	echo "Local commit: $$LOCAL_COMMIT"; \
+	echo "📋 Getting remote commit hash..."; \
+	REMOTE_COMMIT=$$(git ls-remote origin develop | cut -f1); \
+	echo "Remote commit: $$REMOTE_COMMIT"; \
+	if [ "$$LOCAL_COMMIT" = "$$REMOTE_COMMIT" ]; then \
+		echo "✅ Remote repository is in sync with local"; \
+	else \
+		echo "❌ ERROR: Remote repository is not in sync!"; \
+		echo "   Local:  $$LOCAL_COMMIT"; \
+		echo "   Remote: $$REMOTE_COMMIT"; \
+		echo "   Waiting 5 more seconds and retrying..."; \
+		sleep 5; \
+		REMOTE_COMMIT=$$(git ls-remote origin develop | cut -f1); \
+		if [ "$$LOCAL_COMMIT" = "$$REMOTE_COMMIT" ]; then \
+			echo "✅ Remote repository is now in sync"; \
+		else \
+			echo "❌ ERROR: Remote repository still not in sync after retry!"; \
+			exit 1; \
+		fi; \
+	fi
+
+## verify-server-commit: Verify that server has the expected commit
+verify-server-commit:
+	@echo "🔍 Verifying server has the latest commit..."
+	@echo "📋 Getting local commit hash..."
+	@LOCAL_COMMIT=$$(git rev-parse HEAD); \
+	echo "Local commit: $$LOCAL_COMMIT"; \
+	echo "📋 Getting server commit hash..."; \
+	SERVER_COMMIT=$$(ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && git rev-parse HEAD'); \
+	echo "Server commit: $$SERVER_COMMIT"; \
+	if [ "$$LOCAL_COMMIT" = "$$SERVER_COMMIT" ]; then \
+		echo "✅ Server has the latest commit"; \
+	else \
+		echo "❌ ERROR: Server does not have the latest commit!"; \
+		echo "   Local:  $$LOCAL_COMMIT"; \
+		echo "   Server: $$SERVER_COMMIT"; \
+		exit 1; \
+	fi
 
 ## verify-config: Verify the configuration is correct
 verify-config:
@@ -213,4 +267,4 @@ help:
 	@echo "Targets:"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
-.PHONY: build up down logs logs-all ps deploy deploy-safe deploy-force deploy-full deploy-no-cache server-logs server-logs-snapshot server-status server-clear-logs server-health test-local test-integration test-ari test-externalmedia verify-deployment verify-config monitor-externalmedia monitor-externalmedia-once help
+.PHONY: build up down logs logs-all ps deploy deploy-safe deploy-force deploy-full deploy-no-cache server-logs server-logs-snapshot server-status server-clear-logs server-health test-local test-integration test-ari test-externalmedia verify-deployment verify-remote-sync verify-server-commit verify-config monitor-externalmedia monitor-externalmedia-once help
