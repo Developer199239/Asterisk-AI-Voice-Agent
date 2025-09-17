@@ -195,6 +195,38 @@ class ARIClient:
         if response and response.get("status") == 404:
             logger.debug("Channel hangup failed (404), likely already hung up.", channel_id=channel_id)
 
+    async def execute_application(self, channel_id: str, app_name: str, app_data: str) -> bool:
+        """Execute an Asterisk application on a channel."""
+        try:
+            logger.info("Executing application on channel", 
+                       channel_id=channel_id, 
+                       app_name=app_name, 
+                       app_data=app_data)
+            
+            response = await self.send_command(
+                "POST", 
+                f"channels/{channel_id}/applications/{app_name}",
+                data={"app": app_name, "appArgs": app_data}
+            )
+            
+            if response:
+                logger.info("Application executed successfully", 
+                           channel_id=channel_id, 
+                           app_name=app_name)
+                return True
+            else:
+                logger.error("Failed to execute application", 
+                           channel_id=channel_id, 
+                           app_name=app_name)
+                return False
+                
+        except Exception as e:
+            logger.error("Error executing application", 
+                        channel_id=channel_id, 
+                        app_name=app_name, 
+                        error=str(e))
+            return False
+
     async def play_media(self, channel_id: str, media_uri: str) -> Optional[Dict[str, Any]]:
         """Play media on a channel."""
         logger.info("Playing media on channel", channel_id=channel_id, media_uri=media_uri)

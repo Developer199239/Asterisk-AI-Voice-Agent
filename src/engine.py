@@ -388,6 +388,9 @@ class Engine:
                 self.caller_channels[caller_channel_id]["status"] = "connected"
                 self.local_channels[caller_channel_id] = local_channel_id
                 
+                # Start AudioSocket connection
+                await self._start_audiosocket_connection_hybrid(caller_channel_id, local_channel_id)
+                
                 # Start provider session
                 await self._start_provider_session_hybrid(caller_channel_id, local_channel_id)
             else:
@@ -400,6 +403,42 @@ class Engine:
                         local_channel_id=local_channel_id,
                         error=str(e), exc_info=True)
             await self.ari_client.hangup_channel(local_channel_id)
+
+    async def _start_audiosocket_connection_hybrid(self, caller_channel_id: str, local_channel_id: str):
+        """Start AudioSocket connection for Local channel - Hybrid ARI approach."""
+        try:
+            # Get the audio UUID for this Local channel
+            audio_uuid = None
+            for uuid_key, channel_id in self.uuidext_to_channel.items():
+                if channel_id == caller_channel_id:
+                    audio_uuid = uuid_key
+                    break
+            
+            if not audio_uuid:
+                logger.error("🎯 HYBRID ARI - No audio UUID found for Local channel", 
+                           caller_channel_id=caller_channel_id,
+                           local_channel_id=local_channel_id)
+                return
+            
+            logger.info("🎯 HYBRID ARI - Starting AudioSocket connection", 
+                       caller_channel_id=caller_channel_id,
+                       local_channel_id=local_channel_id,
+                       audio_uuid=audio_uuid)
+            
+            # Use ARI to execute AudioSocket on the Local channel
+            # This will establish the AudioSocket connection
+            await self.ari_client.execute_application(local_channel_id, "AudioSocket", 
+                                                    f"{audio_uuid},127.0.0.1:8090")
+            
+            logger.info("🎯 HYBRID ARI - ✅ AudioSocket command executed", 
+                       local_channel_id=local_channel_id,
+                       audio_uuid=audio_uuid)
+            
+        except Exception as e:
+            logger.error("🎯 HYBRID ARI - Failed to start AudioSocket connection", 
+                        caller_channel_id=caller_channel_id,
+                        local_channel_id=local_channel_id,
+                        error=str(e), exc_info=True)
 
     async def _handle_caller_stasis_start(self, caller_channel_id: str, channel: dict):
         """Handle caller channel entering Stasis - LEGACY (kept for reference)."""
@@ -472,15 +511,14 @@ class Engine:
         """Originate single Local channel for AudioSocket - ARI-Only approach."""
         # Generate UUID for AudioSocket binding
         audio_uuid = str(uuid.uuid4())
-        local_endpoint = f"Local/{audio_uuid}@ai-audiosocket/n"
+        # Originate Local channel directly into Stasis application
+        local_endpoint = f"Local/{audio_uuid}@ai-stasis/n"
         
         orig_params = {
             "endpoint": local_endpoint,
-            "extension": audio_uuid,  # Use UUID as extension for AudioSocket binding
-            "context": "ai-audiosocket",  # AudioSocket only context
-            "priority": "1",
-            "timeout": "30",
-            # NO app parameter - this channel won't enter Stasis
+            "app": "asterisk-ai-voice-agent",  # Directly enter Stasis application
+            "timeout": "30"
+            # Note: Local channel will enter Stasis directly, then we'll handle AudioSocket via ARI
         }
         
         logger.info("🎯 ARI-ONLY - Originating AudioSocket Local channel", 
@@ -906,15 +944,43 @@ class Engine:
             logger.info("🎯 HYBRID ARI - DEBUG: Local channels mapping:", 
                        local_channels=list(self.local_channels.keys()))
             
+            # CRITICAL DEBUG: Log the actual caller_channels data structure
+            logger.info("🎯 HYBRID ARI - DEBUG: Full caller_channels data structure:")
+            for cid, data in self.caller_channels.items():
+                logger.info("🎯 HYBRID ARI - DEBUG: Caller channel data:", 
+                           caller_id=cid,
+                           status=data.get("status"),
+                           has_audiosocket_channel_id="audiosocket_channel_id" in data,
+                           audiosocket_channel_id=data.get("audiosocket_channel_id"),
+                           has_local_channel_id="local_channel_id" in data,
+                           local_channel_id=data.get("local_channel_id"),
+                           all_keys=list(data.keys()))
+            
             # Look for a caller that has an AudioSocket channel waiting for connection
+            # First try the audiosocket_channel_id field
             for cid, call_data in self.caller_channels.items():
-                if call_data.get("status") == "connected" and call_data.get("audiosocket_channel_id"):
+                if call_data.get("status") in ["connected", "bridge_ready"] and call_data.get("audiosocket_channel_id"):
                     local_channel_id = call_data["audiosocket_channel_id"]  # Use AudioSocket channel
                     caller_channel_id = cid
-                    logger.info("🎯 HYBRID ARI - DEBUG: Found connected caller with AudioSocket channel", 
+                    logger.info("🎯 HYBRID ARI - DEBUG: Found caller with AudioSocket channel", 
                                caller_channel_id=cid, 
-                               audiosocket_channel_id=local_channel_id)
+                               audiosocket_channel_id=local_channel_id,
+                               status=call_data.get("status"))
                     break
+            
+            # If not found, try the pending_local_channels mapping
+            if not local_channel_id:
+                for pending_local_id, pending_caller_id in self.pending_local_channels.items():
+                    if pending_caller_id in self.caller_channels:
+                        call_data = self.caller_channels[pending_caller_id]
+                        if call_data.get("status") in ["connected", "bridge_ready"]:
+                            local_channel_id = pending_local_id
+                            caller_channel_id = pending_caller_id
+                            logger.info("🎯 HYBRID ARI - DEBUG: Found caller via pending mapping", 
+                                       caller_channel_id=pending_caller_id, 
+                                       local_channel_id=pending_local_id,
+                                       status=call_data.get("status"))
+                            break
             
             if not local_channel_id or not caller_channel_id:
                 logger.warning("🎯 HYBRID ARI - No Local channel found for AudioSocket connection", 
