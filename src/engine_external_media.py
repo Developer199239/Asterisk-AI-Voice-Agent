@@ -143,7 +143,7 @@ class ExternalMediaEngine:
             logger.info("Connected to ARI")
             
             # Start WebSocket event loop
-            await self.ari_client.start_websocket()
+            await self.ari_client.start_listening()
             logger.info("ARI WebSocket started")
             
             self.running = True
