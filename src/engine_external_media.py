@@ -75,7 +75,7 @@ class ExternalMediaEngine:
                 if deepgram_config.get('api_key'):
                     def on_event_wrapper(event):
                         asyncio.create_task(self._on_provider_event(event))
-                    self.providers['deepgram'] = DeepgramProvider(deepgram_config, on_event_wrapper)
+                    self.providers['deepgram'] = DeepgramProvider(deepgram_config, self.config.llm, on_event_wrapper)
                     logger.info("Deepgram provider initialized")
             
             logger.info(f"Initialized {len(self.providers)} providers: {list(self.providers.keys())}")
