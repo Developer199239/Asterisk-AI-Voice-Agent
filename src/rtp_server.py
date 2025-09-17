@@ -151,6 +151,7 @@ class RTPServer:
                         logger.info("New RTP session created", call_id=call_id, ssrc=ssrc, addr=addr)
                     
                     # Process packet and call engine with SSRC directly
+                    logger.debug("RTP packet received", ssrc=ssrc, sequence=sequence, size=len(audio_payload), addr=addr)
                     await self._process_rtp_packet_with_ssrc(ssrc, sequence, timestamp, audio_payload)
                     
             except asyncio.CancelledError:
@@ -182,11 +183,17 @@ class RTPServer:
     
     async def _process_rtp_packet_with_ssrc(self, ssrc: int, sequence: int, timestamp: int, audio_payload: bytes):
         """Process an RTP packet and call engine with SSRC directly."""
-        if ssrc not in self.sessions:
-            logger.warning("No session found for SSRC", ssrc=ssrc)
+        # Get call_id from SSRC mapping
+        call_id = self.ssrc_to_call_id.get(ssrc)
+        if not call_id:
+            logger.warning("No call_id found for SSRC", ssrc=ssrc)
             return
         
-        session = self.sessions[self.ssrc_to_call_id[ssrc]]
+        if call_id not in self.sessions:
+            logger.warning("No session found for call_id", call_id=call_id, ssrc=ssrc)
+            return
+        
+        session = self.sessions[call_id]
         session.frames_received += 1
         session.last_packet_at = time.time()
         

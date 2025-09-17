@@ -1589,8 +1589,8 @@ class Engine:
                 logger.error("ExternalMedia configuration not found")
                 return None
             
-            # Build external host address
-            external_host = "127.0.0.1"  # Asterisk and engine on same host
+            # Build external host address - use configured RTP host
+            external_host = self.config.external_media.rtp_host
             external_port = self.config.external_media.rtp_port
             codec = self.config.external_media.codec
             direction = self.config.external_media.direction
