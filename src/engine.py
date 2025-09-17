@@ -647,9 +647,9 @@ class Engine:
                         error=str(e), exc_info=True)
 
     async def _play_initial_greeting_hybrid(self, caller_channel_id: str, local_channel_id: str):
-        """Play initial greeting - Hybrid ARI approach."""
+        """Play initial greeting - Hybrid ARI approach with AudioSocket streaming."""
         try:
-            logger.info("🎯 HYBRID ARI - Playing initial greeting", 
+            logger.info("🎯 HYBRID ARI - Playing initial greeting via AudioSocket", 
                        caller_channel_id=caller_channel_id,
                        local_channel_id=local_channel_id)
             
@@ -666,10 +666,11 @@ class Engine:
             # Use provider to generate TTS
             audio_data = await provider.text_to_speech(greeting_text)
             if audio_data:
-                # Save audio to file and play
-                await self.ari_client.play_audio_response(caller_channel_id, audio_data, "greeting")
-                logger.info("🎯 HYBRID ARI - ✅ Initial greeting played", 
-                           caller_channel_id=caller_channel_id)
+                # Stream audio via AudioSocket instead of file-based playback
+                await self._stream_audio_via_audiosocket(caller_channel_id, audio_data)
+                logger.info("🎯 HYBRID ARI - ✅ Initial greeting streamed via AudioSocket", 
+                           caller_channel_id=caller_channel_id,
+                           audio_size=len(audio_data))
             else:
                 logger.warning("🎯 HYBRID ARI - No greeting audio generated")
                 
@@ -1692,6 +1693,67 @@ class Engine:
             # For now, we rely on hanging up or answering to stop it.
         except Exception as e:
             logger.error("Error playing ring tone", channel_id=channel_id, exc_info=True)
+
+    async def _stream_audio_via_audiosocket(self, channel_id: str, audio_data: bytes):
+        """Stream audio via AudioSocket connection instead of file-based playback."""
+        try:
+            # Find the AudioSocket connection for this channel
+            conn_id = self.channel_to_conn.get(channel_id)
+            if not conn_id:
+                logger.error("🎯 AUDIOSOCKET TTS - No AudioSocket connection found for channel", 
+                           channel_id=channel_id)
+                # Fallback to file-based playback
+                await self.ari_client.play_audio_response(channel_id, audio_data)
+                return
+            
+            logger.info("🎯 AUDIOSOCKET TTS - Streaming audio via AudioSocket", 
+                       channel_id=channel_id, 
+                       conn_id=conn_id,
+                       audio_size=len(audio_data))
+            
+            # Convert ulaw to PCM16LE for AudioSocket
+            # TTS generates ulaw, but AudioSocket expects PCM16LE@8kHz
+            pcm_data = self._convert_ulaw_to_pcm16le(audio_data)
+            
+            # Stream audio in chunks via AudioSocket
+            chunk_size = 320  # 20ms at 8kHz PCM16LE (320 bytes)
+            for i in range(0, len(pcm_data), chunk_size):
+                chunk = pcm_data[i:i + chunk_size]
+                if len(chunk) < chunk_size:
+                    # Pad last chunk with silence
+                    chunk += b'\x00\x00' * ((chunk_size - len(chunk)) // 2)
+                
+                await self.audiosocket_server.send_audio(conn_id, chunk)
+                
+                # Small delay to simulate real-time streaming
+                await asyncio.sleep(0.02)  # 20ms delay
+            
+            logger.info("🎯 AUDIOSOCKET TTS - ✅ Audio streamed successfully", 
+                       channel_id=channel_id, 
+                       conn_id=conn_id,
+                       total_chunks=(len(pcm_data) + chunk_size - 1) // chunk_size)
+            
+        except Exception as e:
+            logger.error("🎯 AUDIOSOCKET TTS - Failed to stream audio via AudioSocket", 
+                        channel_id=channel_id, 
+                        error=str(e), exc_info=True)
+            # Fallback to file-based playback
+            await self.ari_client.play_audio_response(channel_id, audio_data)
+
+    def _convert_ulaw_to_pcm16le(self, ulaw_data: bytes) -> bytes:
+        """Convert ulaw audio data to PCM16LE format for AudioSocket."""
+        try:
+            import audioop
+            # Convert ulaw to linear PCM (16-bit signed)
+            pcm_data = audioop.ulaw2lin(ulaw_data, 2)  # 2 bytes per sample
+            logger.debug("Converted ulaw to PCM16LE", 
+                        ulaw_bytes=len(ulaw_data), 
+                        pcm_bytes=len(pcm_data))
+            return pcm_data
+        except Exception as e:
+            logger.error("Failed to convert ulaw to PCM16LE", error=str(e), exc_info=True)
+            # Return silence as fallback
+            return b'\x00\x00' * (len(ulaw_data) * 2)
 
     async def _play_audio_via_bridge(self, channel_id: str, audio_data: bytes):
         """Play audio via bridge to avoid interrupting AudioSocket capture."""
