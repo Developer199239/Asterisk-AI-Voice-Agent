@@ -406,41 +406,6 @@ class Engine:
                         error=str(e), exc_info=True)
             await self.ari_client.hangup_channel(local_channel_id)
 
-    async def _start_audiosocket_connection_hybrid(self, caller_channel_id: str, local_channel_id: str):
-        """Start AudioSocket connection for Local channel - Hybrid ARI approach."""
-        try:
-            # Get the audio UUID for this Local channel
-            audio_uuid = None
-            for uuid_key, channel_id in self.uuidext_to_channel.items():
-                if channel_id == caller_channel_id:
-                    audio_uuid = uuid_key
-                    break
-            
-            if not audio_uuid:
-                logger.error("🎯 HYBRID ARI - No audio UUID found for Local channel", 
-                           caller_channel_id=caller_channel_id,
-                           local_channel_id=local_channel_id)
-                return
-            
-            logger.info("🎯 HYBRID ARI - Starting AudioSocket connection", 
-                       caller_channel_id=caller_channel_id,
-                       local_channel_id=local_channel_id,
-                       audio_uuid=audio_uuid)
-            
-            # Use ARI to execute AudioSocket on the Local channel
-            # This will establish the AudioSocket connection
-            await self.ari_client.execute_application(local_channel_id, "AudioSocket", 
-                                                    f"{audio_uuid},127.0.0.1:8090")
-            
-            logger.info("🎯 HYBRID ARI - ✅ AudioSocket command executed", 
-                       local_channel_id=local_channel_id,
-                       audio_uuid=audio_uuid)
-            
-        except Exception as e:
-            logger.error("🎯 HYBRID ARI - Failed to start AudioSocket connection", 
-                        caller_channel_id=caller_channel_id,
-                        local_channel_id=local_channel_id,
-                        error=str(e), exc_info=True)
 
     async def _handle_caller_stasis_start(self, caller_channel_id: str, channel: dict):
         """Handle caller channel entering Stasis - LEGACY (kept for reference)."""
