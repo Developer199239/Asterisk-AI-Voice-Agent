@@ -388,8 +388,10 @@ class Engine:
                 self.caller_channels[caller_channel_id]["status"] = "connected"
                 self.local_channels[caller_channel_id] = local_channel_id
                 
-                # Start AudioSocket connection
-                await self._start_audiosocket_connection_hybrid(caller_channel_id, local_channel_id)
+                # AudioSocket connection will be established via dialplan
+                logger.info("🎯 DIALPLAN AUDIOSOCKET - AudioSocket will be established via dialplan", 
+                           local_channel_id=local_channel_id,
+                           caller_channel_id=caller_channel_id)
                 
                 # Start provider session
                 await self._start_provider_session_hybrid(caller_channel_id, local_channel_id)
@@ -508,20 +510,19 @@ class Engine:
             await self.ari_client.hangup_channel(local_channel_id)
 
     async def _originate_local_channel_hybrid(self, caller_channel_id: str):
-        """Originate single Local channel for AudioSocket - ARI-Only approach."""
+        """Originate single Local channel for AudioSocket - Dialplan approach."""
         # Generate UUID for AudioSocket binding
         audio_uuid = str(uuid.uuid4())
-        # Originate Local channel directly into Stasis application
-        local_endpoint = f"Local/{audio_uuid}@ai-stasis/n"
+        # Originate Local channel into AudioSocket-only context (no Stasis)
+        local_endpoint = f"Local/{audio_uuid}@ai-audiosocket-only/n"
         
         orig_params = {
             "endpoint": local_endpoint,
-            "app": "asterisk-ai-voice-agent",  # Directly enter Stasis application
             "timeout": "30"
-            # Note: Local channel will enter Stasis directly, then we'll handle AudioSocket via ARI
+            # Note: Local channel will call AudioSocket in dialplan, then we'll handle via ARI
         }
         
-        logger.info("🎯 ARI-ONLY - Originating AudioSocket Local channel", 
+        logger.info("🎯 DIALPLAN AUDIOSOCKET - Originating AudioSocket Local channel", 
                     endpoint=local_endpoint, 
                     caller_channel_id=caller_channel_id,
                     audio_uuid=audio_uuid)
@@ -533,7 +534,7 @@ class Engine:
                 # Store mapping for AudioSocket binding
                 self.pending_local_channels[local_channel_id] = caller_channel_id
                 self.uuidext_to_channel[audio_uuid] = caller_channel_id
-                logger.info("🎯 ARI-ONLY - AudioSocket Local channel originated", 
+                logger.info("🎯 DIALPLAN AUDIOSOCKET - AudioSocket Local channel originated", 
                            local_channel_id=local_channel_id, 
                            caller_channel_id=caller_channel_id,
                            audio_uuid=audio_uuid)
@@ -541,18 +542,18 @@ class Engine:
                 # Store Local channel info - will be added to bridge when AudioSocket connects
                 if caller_channel_id in self.caller_channels:
                     self.caller_channels[caller_channel_id]["audiosocket_channel_id"] = local_channel_id
-                    logger.info("🎯 ARI-ONLY - AudioSocket channel ready for connection", 
+                    logger.info("🎯 DIALPLAN AUDIOSOCKET - AudioSocket channel ready for connection", 
                                local_channel_id=local_channel_id,
                                caller_channel_id=caller_channel_id)
                 else:
-                    logger.error("🎯 ARI-ONLY - Caller channel not found for AudioSocket channel", 
+                    logger.error("🎯 DIALPLAN AUDIOSOCKET - Caller channel not found for AudioSocket channel", 
                                local_channel_id=local_channel_id,
                                caller_channel_id=caller_channel_id)
                     raise RuntimeError("Caller channel not found")
             else:
                 raise RuntimeError("Failed to originate AudioSocket Local channel")
         except Exception as e:
-            logger.error("🎯 ARI-ONLY - AudioSocket channel originate failed", 
+            logger.error("🎯 DIALPLAN AUDIOSOCKET - AudioSocket channel originate failed", 
                         caller_channel_id=caller_channel_id,
                         audio_uuid=audio_uuid,
                         error=str(e), exc_info=True)
