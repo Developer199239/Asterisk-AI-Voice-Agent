@@ -7,6 +7,9 @@ import asyncio
 import os
 import signal
 import uuid
+import json
+import base64
+import audioop
 from typing import Dict, Any, Optional
 
 from .ari_client import ARIClient
@@ -60,14 +63,19 @@ class ExternalMediaEngine:
             if hasattr(self.config, 'providers') and 'local' in self.config.providers:
                 local_config = self.config.providers['local']
                 if local_config.get('enabled', True):
-                    self.providers['local'] = LocalProvider(local_config)
+                    # Create a wrapper for the async callback
+                    def on_event_wrapper(event):
+                        asyncio.create_task(self._on_provider_event(event))
+                    self.providers['local'] = LocalProvider(local_config, on_event_wrapper)
                     logger.info("Local provider initialized")
             
             # Initialize Deepgram provider
             if hasattr(self.config, 'providers') and 'deepgram' in self.config.providers:
                 deepgram_config = self.config.providers['deepgram']
                 if deepgram_config.get('api_key'):
-                    self.providers['deepgram'] = DeepgramProvider(deepgram_config)
+                    def on_event_wrapper(event):
+                        asyncio.create_task(self._on_provider_event(event))
+                    self.providers['deepgram'] = DeepgramProvider(deepgram_config, on_event_wrapper)
                     logger.info("Deepgram provider initialized")
             
             logger.info(f"Initialized {len(self.providers)} providers: {list(self.providers.keys())}")
@@ -75,6 +83,35 @@ class ExternalMediaEngine:
         except Exception as e:
             logger.error(f"Failed to initialize providers: {e}")
             raise
+    
+    async def _on_provider_event(self, event: Dict[str, Any]):
+        """Handle events from AI providers."""
+        try:
+            event_type = event.get('type')
+            call_id = event.get('call_id')
+            
+            if event_type == 'AgentAudio':
+                # Handle audio response from LocalProvider
+                audio_data = event.get('data')
+                if audio_data and call_id:
+                    # Convert ulaw to PCM for RTP
+                    pcm_data = audioop.ulaw2lin(audio_data, 2)
+                    await self.rtp_server.send_audio(call_id, pcm_data)
+                    logger.debug("Audio response sent via RTP", call_id=call_id, size=len(pcm_data))
+            
+            elif event_type == 'transcript':
+                # Handle transcript from STT
+                transcript = event.get('transcript')
+                if transcript and call_id:
+                    logger.info("Transcript received", call_id=call_id, transcript=transcript)
+            
+            elif event_type == 'error':
+                # Handle provider errors
+                error = event.get('error')
+                logger.error("Provider error", call_id=call_id, error=error)
+            
+        except Exception as e:
+            logger.error(f"Error handling provider event: {e}")
     
     async def start(self):
         """Start the External Media engine."""
@@ -288,13 +325,20 @@ class ExternalMediaEngine:
             
             provider = call_info["provider"]
             
-            # Process audio with provider (STT -> LLM -> TTS)
-            if hasattr(provider, 'process_audio'):
-                response_audio = await provider.process_audio(pcm_data)
-                if response_audio:
-                    # Send response back via RTP
-                    await self.rtp_server.send_audio(call_id, response_audio)
-                    logger.debug("Audio response sent", call_id=call_id, size=len(response_audio))
+            # Convert PCM to ulaw for LocalProvider
+            import audioop
+            ulaw_data = audioop.lin2ulaw(pcm_data, 2)
+            
+            # Send audio to provider via WebSocket
+            if hasattr(provider, 'send_audio') and provider.websocket:
+                audio_message = {
+                    "type": "audio",
+                    "call_id": call_id,
+                    "data": base64.b64encode(ulaw_data).decode('utf-8'),
+                    "format": "ulaw"
+                }
+                await provider.websocket.send(json.dumps(audio_message))
+                logger.debug("Audio sent to LocalProvider", call_id=call_id, size=len(ulaw_data))
             
         except Exception as e:
             logger.error(f"Error processing RTP audio for call {call_id}: {e}")
