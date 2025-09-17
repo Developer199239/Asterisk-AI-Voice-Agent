@@ -70,7 +70,10 @@ class AudioSocketServer:
         # Notify accept callback to allow immediate pairing
         try:
             if self.on_accept:
-                self.on_accept(conn_id)
+                if asyncio.iscoroutinefunction(self.on_accept):
+                    await self.on_accept(conn_id)
+                else:
+                    self.on_accept(conn_id)
         except Exception:
             logger.debug("on_accept handler error", exc_info=True)
         try:

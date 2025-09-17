@@ -13,7 +13,7 @@ This is an open-source AI Voice Agent that integrates with Asterisk/FreePBX usin
 
 ### Test Server Configuration
 - **Server**: <internal test host>
-- **Asterisk Version**: 16+ with FreePBX UI
+- **Asterisk Version**: 18+ with FreePBX UI
 - **Docker**: Installed and available
 - **Access**: SSH with appropriate privileges
 - **Shared Media Directory**: A `tmpfs` (RAM disk) is mounted at `/mnt/asterisk_media` for high-performance, temporary audio file storage.
@@ -35,11 +35,18 @@ This is an open-source AI Voice Agent that integrates with Asterisk/FreePBX usin
 
 **ALWAYS rebuild the Docker image for ANY code changes in the `ai-engine`.** The previous volume-based workflow was incorrect:
 
-1. **For ALL code changes**: `docker-compose up --build -d ai-engine` (rebuilds image with new code)
+1. **For code changes (FASTEST)**: `docker-compose up --build -d ai-engine` (rebuilds image with new code, uses cache when possible)
 2. **For dependency changes**: `docker-compose up --build -d` (rebuilds all services)
-3. **For critical fixes**: `docker-compose build --no-cache ai-engine && docker-compose up -d ai-engine` (force rebuild without cache)
-4. **View logs**: `docker-compose logs -f ai-engine`
-5. **Clear logs before testing**: `docker-compose logs --tail=0 ai-engine` (start fresh)
+3. **For critical fixes or cache issues**: `docker-compose build --no-cache ai-engine && docker-compose up -d ai-engine` (force rebuild without cache)
+4. **For local-ai-server code changes**: `docker-compose up --build -d local-ai-server` (rebuilds only local-ai-server)
+5. **View logs**: `docker-compose logs -f ai-engine`
+6. **Clear logs before testing**: `docker-compose logs --tail=0 ai-engine` (start fresh)
+
+**OPTIMIZED CODE CHANGE WORKFLOW:**
+- **Most code changes**: Use `docker-compose up --build -d <service>` - this is the fastest approach
+- **Only use `--no-cache`** when you have cache-related issues or need to force a complete rebuild
+- **The `--build` flag** automatically detects changes and rebuilds only what's necessary
+- **Docker layer caching** makes subsequent builds much faster for unchanged dependencies
 
 ### Critical Deployment Verification (NEW - MANDATORY)
 

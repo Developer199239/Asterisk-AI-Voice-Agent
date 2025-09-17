@@ -20,9 +20,9 @@ from .providers.local import LocalProvider
 logger = get_logger(__name__)
 
 class AudioFrameProcessor:
-    """Processes audio in 20ms frames to prevent voice queue backlog."""
+    """Processes audio in 40ms frames to prevent voice queue backlog."""
     
-    def __init__(self, frame_size: int = 160):  # 20ms at 8kHz = 160 samples
+    def __init__(self, frame_size: int = 320):  # 40ms at 8kHz = 320 samples
         self.frame_size = frame_size
         self.buffer = bytearray()
         self.frame_bytes = frame_size * 2  # 2 bytes per sample (PCM16)
@@ -59,7 +59,7 @@ class AudioFrameProcessor:
 class VoiceActivityDetector:
     """Simple VAD to reduce unnecessary audio processing."""
     
-    def __init__(self, speech_threshold: float = 0.1, silence_frames: int = 10):
+    def __init__(self, speech_threshold: float = 0.3, silence_frames: int = 10):
         self.speech_threshold = speech_threshold
         self.max_silence_frames = silence_frames
         self.silence_frames = 0
@@ -97,6 +97,8 @@ class Engine:
             base_url=base_url,
             app_name=config.asterisk.app_name
         )
+        # Set engine reference for event propagation
+        self.ari_client.engine = self
         self.providers: Dict[str, AIProviderInterface] = {}
         self.active_calls: Dict[str, Dict[str, Any]] = {}
         self.conn_to_channel: Dict[str, str] = {}
@@ -176,6 +178,8 @@ class Engine:
         except Exception:
             logger.debug("Health server failed to start", exc_info=True)
         await self.ari_client.connect()
+        # Add PlaybackFinished event handler for timing control
+        self.ari_client.add_event_handler("PlaybackFinished", self._on_playback_finished)
         asyncio.create_task(self.ari_client.start_listening())
         logger.info("Engine started and listening for calls.")
 
@@ -465,7 +469,7 @@ class Engine:
             await self.ari_client.hangup_channel(local_channel_id)
 
     async def _originate_local_channel_hybrid(self, caller_channel_id: str):
-        """Originate Local channel for AudioSocket - Hybrid ARI approach."""
+        """Originate single Local channel for AudioSocket - ARI-Only approach."""
         # Generate UUID for AudioSocket binding
         audio_uuid = str(uuid.uuid4())
         local_endpoint = f"Local/{audio_uuid}@ai-audiosocket/n"
@@ -473,13 +477,13 @@ class Engine:
         orig_params = {
             "endpoint": local_endpoint,
             "extension": audio_uuid,  # Use UUID as extension for AudioSocket binding
-            "context": "ai-audiosocket",  # Minimal dialplan context
+            "context": "ai-audiosocket",  # AudioSocket only context
             "priority": "1",
             "timeout": "30",
-            "app": self.config.asterisk.app_name,  # CRITICAL: Enter Stasis application
+            # NO app parameter - this channel won't enter Stasis
         }
         
-        logger.info("🎯 HYBRID ARI - Originating Local channel", 
+        logger.info("🎯 ARI-ONLY - Originating AudioSocket Local channel", 
                     endpoint=local_endpoint, 
                     caller_channel_id=caller_channel_id,
                     audio_uuid=audio_uuid)
@@ -491,26 +495,26 @@ class Engine:
                 # Store mapping for AudioSocket binding
                 self.pending_local_channels[local_channel_id] = caller_channel_id
                 self.uuidext_to_channel[audio_uuid] = caller_channel_id
-                logger.info("🎯 HYBRID ARI - Local channel originated", 
+                logger.info("🎯 ARI-ONLY - AudioSocket Local channel originated", 
                            local_channel_id=local_channel_id, 
                            caller_channel_id=caller_channel_id,
                            audio_uuid=audio_uuid)
                 
-                # Store Local channel info - will be added to bridge when StasisStart event arrives
+                # Store Local channel info - will be added to bridge when AudioSocket connects
                 if caller_channel_id in self.caller_channels:
-                    self.caller_channels[caller_channel_id]["pending_local_channel_id"] = local_channel_id
-                    logger.info("🎯 HYBRID ARI - Local channel originated, waiting for StasisStart", 
+                    self.caller_channels[caller_channel_id]["audiosocket_channel_id"] = local_channel_id
+                    logger.info("🎯 ARI-ONLY - AudioSocket channel ready for connection", 
                                local_channel_id=local_channel_id,
                                caller_channel_id=caller_channel_id)
                 else:
-                    logger.error("🎯 HYBRID ARI - Caller channel not found for Local channel", 
+                    logger.error("🎯 ARI-ONLY - Caller channel not found for AudioSocket channel", 
                                local_channel_id=local_channel_id,
                                caller_channel_id=caller_channel_id)
                     raise RuntimeError("Caller channel not found")
             else:
-                raise RuntimeError("Failed to originate Local channel")
+                raise RuntimeError("Failed to originate AudioSocket Local channel")
         except Exception as e:
-            logger.error("🎯 HYBRID ARI - Local channel originate failed", 
+            logger.error("🎯 ARI-ONLY - AudioSocket channel originate failed", 
                         caller_channel_id=caller_channel_id,
                         audio_uuid=audio_uuid,
                         error=str(e), exc_info=True)
@@ -621,7 +625,8 @@ class Engine:
                 "conversation_state": "greeting",
                 "bridge_id": bridge_id,
                 "local_channel_id": local_channel_id,
-                "caller_channel_id": caller_channel_id
+                "caller_channel_id": caller_channel_id,
+                "audio_capture_enabled": False  # Disabled until greeting finishes
             }
             
             # Also store reverse mapping for DTMF
@@ -630,7 +635,8 @@ class Engine:
                 "conversation_state": "greeting",
                 "bridge_id": bridge_id,
                 "local_channel_id": local_channel_id,
-                "caller_channel_id": caller_channel_id
+                "caller_channel_id": caller_channel_id,
+                "audio_capture_enabled": False  # Disabled until greeting finishes
             }
             
             logger.info("🎯 HYBRID ARI - ✅ Provider session started", 
@@ -667,11 +673,15 @@ class Engine:
             # Use provider to generate TTS
             audio_data = await provider.text_to_speech(greeting_text)
             if audio_data:
-                # Stream audio via AudioSocket instead of file-based playback
-                await self._stream_audio_via_audiosocket(caller_channel_id, audio_data)
-                logger.info("🎯 HYBRID ARI - ✅ Initial greeting streamed via AudioSocket", 
+                # Use ARI file-based playback (correct approach)
+                await self.ari_client.play_audio_response(caller_channel_id, audio_data)
+                logger.info("🎯 HYBRID ARI - ✅ Initial greeting played via ARI", 
                            caller_channel_id=caller_channel_id,
                            audio_size=len(audio_data))
+                
+                # Start timer to enable audio capture after greeting finishes
+                asyncio.create_task(self._enable_audio_capture_after_delay(caller_channel_id, 4.0))
+                logger.info("🎯 HYBRID ARI - ⏰ Audio capture timer started (4 seconds)")
             else:
                 logger.warning("🎯 HYBRID ARI - No greeting audio generated")
                 
@@ -679,6 +689,40 @@ class Engine:
             logger.error("🎯 HYBRID ARI - Failed to play initial greeting", 
                         caller_channel_id=caller_channel_id,
                         local_channel_id=local_channel_id,
+                        error=str(e), exc_info=True)
+
+    async def _enable_audio_capture_after_delay(self, channel_id: str, delay_seconds: float):
+        """Enable audio capture after a delay to allow greeting to finish playing."""
+        try:
+            logger.info("🎤 AUDIO TIMER - Starting delay timer", 
+                       channel_id=channel_id, 
+                       delay_seconds=delay_seconds)
+            
+            # Wait for the specified delay
+            await asyncio.sleep(delay_seconds)
+            
+            # Find the connection for this channel
+            conn_id = self.channel_to_conn.get(channel_id)
+            if conn_id:
+                # Enable audio capture for this connection
+                if channel_id in self.active_calls:
+                    self.active_calls[channel_id]["audio_capture_enabled"] = True
+                    logger.info("🎤 AUDIO CAPTURE - ✅ Enabled after timer delay",
+                               conn_id=conn_id,
+                               channel_id=channel_id,
+                               delay_seconds=delay_seconds)
+                else:
+                    logger.warning("🎤 AUDIO CAPTURE - Channel not found in active calls",
+                                  conn_id=conn_id,
+                                  channel_id=channel_id)
+            else:
+                logger.warning("🎤 AUDIO CAPTURE - No connection found for channel",
+                              channel_id=channel_id)
+                
+        except Exception as e:
+            logger.error("🎤 AUDIO TIMER - Timer failed", 
+                        channel_id=channel_id,
+                        delay_seconds=delay_seconds,
                         error=str(e), exc_info=True)
 
     async def _start_provider_session(self, caller_channel_id: str, local_channel_id: str):
@@ -700,7 +744,8 @@ class Engine:
                 "conversation_state": "greeting",
                 "bridge_id": bridge_id,
                 "local_channel_id": local_channel_id,
-                "caller_channel_id": caller_channel_id
+                "caller_channel_id": caller_channel_id,
+                "audio_capture_enabled": False  # Disabled until greeting finishes
             }
             
             # Also store reverse mapping for DTMF
@@ -709,7 +754,8 @@ class Engine:
                 "conversation_state": "greeting",
                 "bridge_id": bridge_id,
                 "local_channel_id": local_channel_id,
-                "caller_channel_id": caller_channel_id
+                "caller_channel_id": caller_channel_id,
+                "audio_capture_enabled": False  # Disabled until greeting finishes
             }
             
             logger.info("Provider session started", 
@@ -835,7 +881,7 @@ class Engine:
         except Exception:
             logger.debug("Error in ChannelVarset handler", exc_info=True)
 
-    def _on_audiosocket_accept(self, conn_id: str):
+    async def _on_audiosocket_accept(self, conn_id: str):
         """Bind AudioSocket connection - Hybrid ARI approach."""
         try:
             logger.info("🎯 HYBRID ARI - AudioSocket connection accepted", conn_id=conn_id)
@@ -860,14 +906,14 @@ class Engine:
             logger.info("🎯 HYBRID ARI - DEBUG: Local channels mapping:", 
                        local_channels=list(self.local_channels.keys()))
             
-            # Look for a Local channel that was just originated and is waiting for AudioSocket
+            # Look for a caller that has an AudioSocket channel waiting for connection
             for cid, call_data in self.caller_channels.items():
-                if call_data.get("status") == "connected" and call_data.get("local_channel_id"):
-                    local_channel_id = call_data["local_channel_id"]
+                if call_data.get("status") == "connected" and call_data.get("audiosocket_channel_id"):
+                    local_channel_id = call_data["audiosocket_channel_id"]  # Use AudioSocket channel
                     caller_channel_id = cid
-                    logger.info("🎯 HYBRID ARI - DEBUG: Found connected caller with Local channel", 
+                    logger.info("🎯 HYBRID ARI - DEBUG: Found connected caller with AudioSocket channel", 
                                caller_channel_id=cid, 
-                               local_channel_id=local_channel_id)
+                               audiosocket_channel_id=local_channel_id)
                     break
             
             if not local_channel_id or not caller_channel_id:
@@ -883,8 +929,8 @@ class Engine:
                     asyncio.get_event_loop().create_task(self._start_headless_session(conn_id, provider))
                 return
             
-            # CRITICAL FIX: Bind AudioSocket to Local channel, not caller channel
-            logger.info("🎯 HYBRID ARI - Binding AudioSocket to Local channel", 
+            # CRITICAL FIX: Bind AudioSocket to Local channel and add to bridge
+            logger.info("🎯 ARI-ONLY - Binding AudioSocket to Local channel", 
                        conn_id=conn_id, 
                        local_channel_id=local_channel_id,
                        caller_channel_id=caller_channel_id)
@@ -896,13 +942,34 @@ class Engine:
             # Also store reverse mapping for caller channel lookup
             self.conn_to_caller[conn_id] = caller_channel_id
             
+            # Add Local channel to bridge immediately
+            bridge_id = self.caller_channels[caller_channel_id]["bridge_id"]
+            local_success = await self.ari_client.add_channel_to_bridge(bridge_id, local_channel_id)
+            if local_success:
+                logger.info("🎯 ARI-ONLY - ✅ Local channel added to bridge", 
+                           local_channel_id=local_channel_id,
+                           bridge_id=bridge_id)
+                # Update caller info
+                self.caller_channels[caller_channel_id]["local_channel_id"] = local_channel_id
+                self.caller_channels[caller_channel_id]["status"] = "connected"
+                self.local_channels[caller_channel_id] = local_channel_id
+                
+                # Start provider session
+                await self._start_provider_session_hybrid(caller_channel_id, local_channel_id)
+            else:
+                logger.error("🎯 ARI-ONLY - Failed to add Local channel to bridge", 
+                           local_channel_id=local_channel_id,
+                           bridge_id=bridge_id)
+                await self.ari_client.hangup_channel(local_channel_id)
+                return
+            
             # Set provider input mode
             provider = self.providers.get(self.config.default_provider)
             if provider and hasattr(provider, 'set_input_mode'):
                 provider.set_input_mode('pcm16_8k')
-                logger.info("🎯 HYBRID ARI - Set provider input mode to pcm16_8k", conn_id=conn_id)
+                logger.info("🎯 ARI-ONLY - Set provider input mode to pcm16_8k", conn_id=conn_id)
             
-            logger.info("🎯 HYBRID ARI - ✅ AudioSocket connection bound to Local channel", 
+            logger.info("🎯 ARI-ONLY - ✅ AudioSocket connection bound and bridged", 
                        conn_id=conn_id, 
                        local_channel_id=local_channel_id,
                        caller_channel_id=caller_channel_id)
@@ -1213,6 +1280,23 @@ class Engine:
             count = self._audio_rx_debug.get(conn_id, 0) + 1
             self._audio_rx_debug[conn_id] = count
             
+            # Check if audio capture is enabled (wait for 100 chunks = ~4 seconds)
+            call_data = self.active_calls.get(channel_id, {})
+            if count < 100:  # Wait for 100 chunks (4 seconds at 40ms per chunk)
+                if count <= 10 or count % 50 == 0:  # Log first 10, then every 50th
+                    logger.info("🎤 AUDIO CAPTURE - ⏸️ Disabled, waiting for greeting to finish",
+                               conn_id=conn_id,
+                               channel_id=channel_id,
+                               chunk_number=count,
+                               remaining_chunks=100-count)
+                return
+            
+            # Log when audio capture is enabled
+            if count == 100:
+                logger.info("🎤 AUDIO CAPTURE - ✅ Enabled after 100 chunks (4 seconds)",
+                           conn_id=conn_id,
+                           channel_id=channel_id)
+            
             # Enhanced debugging for first 10 chunks, then every 50th
             if count <= 10 or count % 50 == 0:
                 logger.info("🎤 AUDIO CAPTURE - Chunk Received",
@@ -1235,10 +1319,10 @@ class Engine:
                               available_vads=list(self.vad_detectors.keys()))
                 return
             
-            # AudioSocket sends PCM16LE@8kHz directly - no conversion needed
-            pcm_data = audio_data
+            # AudioSocket sends uLaw@8kHz - convert to PCM16LE for processing
+            pcm_data = self._convert_ulaw_to_pcm16le(audio_data)
             
-            # Process audio into frames
+            # Process audio into frames (PCM16LE: 640 bytes = 40ms at 8kHz)
             frames = frame_processor.process_audio(pcm_data)
             
             if count <= 10 or count % 50 == 0:
@@ -1293,6 +1377,60 @@ class Engine:
             return (energy ** 0.5) / 32768.0  # Normalize to 0-1
         except Exception:
             return 0.0
+
+    def _convert_ulaw_to_pcm16le(self, ulaw_data: bytes) -> bytes:
+        """Convert uLaw audio to PCM16LE format."""
+        try:
+            import struct
+            # uLaw to linear conversion table (simplified)
+            ulaw_table = [
+                -32124, -31100, -30076, -29052, -28028, -27004, -25980, -24956,
+                -23932, -22908, -21884, -20860, -19836, -18812, -17788, -16764,
+                -15996, -15484, -14972, -14460, -13948, -13436, -12924, -12412,
+                -11900, -11388, -10876, -10364, -9852, -9340, -8828, -8316,
+                -7932, -7676, -7420, -7164, -6908, -6652, -6396, -6140,
+                -5884, -5628, -5372, -5116, -4860, -4604, -4348, -4092,
+                -3900, -3772, -3644, -3516, -3388, -3260, -3132, -3004,
+                -2876, -2748, -2620, -2492, -2364, -2236, -2108, -1980,
+                -1884, -1820, -1756, -1692, -1628, -1564, -1500, -1436,
+                -1372, -1308, -1244, -1180, -1116, -1052, -988, -924,
+                -876, -844, -812, -780, -748, -716, -684, -652,
+                -620, -588, -556, -524, -492, -460, -428, -396,
+                -372, -356, -340, -324, -308, -292, -276, -260,
+                -244, -228, -212, -196, -180, -164, -148, -132,
+                -120, -112, -104, -96, -88, -80, -72, -64,
+                -56, -48, -40, -32, -24, -16, -8, 0,
+                32124, 31100, 30076, 29052, 28028, 27004, 25980, 24956,
+                23932, 22908, 21884, 20860, 19836, 18812, 17788, 16764,
+                15996, 15484, 14972, 14460, 13948, 13436, 12924, 12412,
+                11900, 11388, 10876, 10364, 9852, 9340, 8828, 8316,
+                7932, 7676, 7420, 7164, 6908, 6652, 6396, 6140,
+                5884, 5628, 5372, 5116, 4860, 4604, 4348, 4092,
+                3900, 3772, 3644, 3516, 3388, 3260, 3132, 3004,
+                2876, 2748, 2620, 2492, 2364, 2236, 2108, 1980,
+                1884, 1820, 1756, 1692, 1628, 1564, 1500, 1436,
+                1372, 1308, 1244, 1180, 1116, 1052, 988, 924,
+                876, 844, 812, 780, 748, 716, 684, 652,
+                620, 588, 556, 524, 492, 460, 428, 396,
+                372, 356, 340, 324, 308, 292, 276, 260,
+                244, 228, 212, 196, 180, 164, 148, 132,
+                120, 112, 104, 96, 88, 80, 72, 64,
+                56, 48, 40, 32, 24, 16, 8, 0
+            ]
+            
+            # Convert each uLaw byte to PCM16LE
+            pcm_samples = []
+            for ulaw_byte in ulaw_data:
+                pcm_sample = ulaw_table[ulaw_byte]
+                pcm_samples.append(pcm_sample)
+            
+            # Pack as little-endian 16-bit samples
+            return struct.pack(f'<{len(pcm_samples)}h', *pcm_samples)
+            
+        except Exception as e:
+            logger.error("uLaw to PCM16LE conversion failed", error=str(e), exc_info=True)
+            # Return original data as fallback
+            return ulaw_data
     
     def _route_audio_frame(self, conn_id: str, frame: bytes, audio_energy: float):
         """Route a single audio frame to the appropriate provider."""
@@ -1479,6 +1617,36 @@ class Engine:
         except Exception as e:
             logger.error("Error in provider event handler", event_type=event.get("type"), error=str(e), exc_info=True)
 
+    async def _on_playback_finished(self, event: Dict[str, Any]):
+        """Handle PlaybackFinished event to enable audio capture after greeting."""
+        try:
+            playback_id = event.get("playback", {}).get("id")
+            channel_id = event.get("playback", {}).get("target_uri", "").replace("channel:", "")
+            
+            logger.info("🎵 PLAYBACK FINISHED - Greeting completed, enabling audio capture",
+                       playback_id=playback_id,
+                       channel_id=channel_id)
+            
+            # Find the connection for this channel and enable audio capture
+            conn_id = self.channel_to_conn.get(channel_id)
+            if conn_id:
+                # Mark this connection as ready for audio capture
+                if channel_id in self.active_calls:
+                    self.active_calls[channel_id]["audio_capture_enabled"] = True
+                    logger.info("🎤 AUDIO CAPTURE - Enabled for connection after greeting",
+                               conn_id=conn_id,
+                               channel_id=channel_id)
+                else:
+                    logger.warning("🎤 AUDIO CAPTURE - Channel not found in active calls",
+                                 conn_id=conn_id,
+                                 channel_id=channel_id)
+            else:
+                logger.warning("🎤 AUDIO CAPTURE - No connection found for channel",
+                             channel_id=channel_id)
+                
+        except Exception as e:
+            logger.error("Error handling PlaybackFinished event", error=str(e), exc_info=True)
+
     async def _play_audio_to_channel(self, channel_id: str, audio_data: bytes):
         """Convert audio data to a temp WAV file and play it to the channel."""
         if not audio_data:
@@ -1588,14 +1756,14 @@ class Engine:
             # CRITICAL FIX: Handle new mapping structure where AudioSocket is bound to Local channel
             conn_id = None
             
-            # First, try to find AudioSocket connection via Local channel
+            # First, try to find AudioSocket connection via AudioSocket channel
             if channel_id in self.caller_channels:
-                local_channel_id = self.caller_channels[channel_id].get("local_channel_id")
-                if local_channel_id:
-                    conn_id = self.channel_to_conn.pop(local_channel_id, None)
-                    logger.debug("🎯 CLEANUP - Found AudioSocket connection via Local channel", 
+                audiosocket_channel_id = self.caller_channels[channel_id].get("audiosocket_channel_id")
+                if audiosocket_channel_id:
+                    conn_id = self.channel_to_conn.pop(audiosocket_channel_id, None)
+                    logger.debug("🎯 CLEANUP - Found AudioSocket connection via AudioSocket channel", 
                                caller_channel_id=channel_id,
-                               local_channel_id=local_channel_id,
+                               audiosocket_channel_id=audiosocket_channel_id,
                                conn_id=conn_id)
             
             # Fallback: try direct mapping (for backward compatibility)
@@ -1740,87 +1908,10 @@ class Engine:
         except Exception as e:
             logger.error("Error playing ring tone", channel_id=channel_id, exc_info=True)
 
-    async def _stream_audio_via_audiosocket(self, channel_id: str, audio_data: bytes):
-        """Stream audio via AudioSocket connection instead of file-based playback."""
-        try:
-            # CRITICAL FIX: Find the AudioSocket connection for this channel
-            # channel_id is the caller channel, but we need to find the Local channel's connection
-            conn_id = None
-            
-            # First, try to find the Local channel for this caller
-            if channel_id in self.caller_channels:
-                local_channel_id = self.caller_channels[channel_id].get("local_channel_id")
-                if local_channel_id:
-                    conn_id = self.channel_to_conn.get(local_channel_id)
-                    logger.info("🎯 AUDIOSOCKET TTS - Found Local channel for caller", 
-                               caller_channel_id=channel_id,
-                               local_channel_id=local_channel_id,
-                               conn_id=conn_id)
-            
-            # Fallback: try direct mapping (for backward compatibility)
-            if not conn_id:
-                conn_id = self.channel_to_conn.get(channel_id)
-                logger.info("🎯 AUDIOSOCKET TTS - Using direct channel mapping", 
-                           channel_id=channel_id,
-                           conn_id=conn_id)
-            
-            if not conn_id:
-                logger.error("🎯 AUDIOSOCKET TTS - No AudioSocket connection found for channel", 
-                           channel_id=channel_id,
-                           caller_channels=list(self.caller_channels.keys()),
-                           channel_to_conn_mappings=list(self.channel_to_conn.keys()))
-                # Fallback to file-based playback
-                await self.ari_client.play_audio_response(channel_id, audio_data)
-                return
-            
-            logger.info("🎯 AUDIOSOCKET TTS - Streaming audio via AudioSocket", 
-                       channel_id=channel_id, 
-                       conn_id=conn_id,
-                       audio_size=len(audio_data))
-            
-            # Convert ulaw to PCM16LE for AudioSocket
-            # TTS generates ulaw, but AudioSocket expects PCM16LE@8kHz
-            pcm_data = self._convert_ulaw_to_pcm16le(audio_data)
-            
-            # Stream audio in chunks via AudioSocket
-            chunk_size = 320  # 20ms at 8kHz PCM16LE (320 bytes)
-            for i in range(0, len(pcm_data), chunk_size):
-                chunk = pcm_data[i:i + chunk_size]
-                if len(chunk) < chunk_size:
-                    # Pad last chunk with silence
-                    chunk += b'\x00\x00' * ((chunk_size - len(chunk)) // 2)
-                
-                await self.audiosocket_server.send_audio(conn_id, chunk)
-                
-                # Small delay to simulate real-time streaming
-                await asyncio.sleep(0.02)  # 20ms delay
-            
-            logger.info("🎯 AUDIOSOCKET TTS - ✅ Audio streamed successfully", 
-                       channel_id=channel_id, 
-                       conn_id=conn_id,
-                       total_chunks=(len(pcm_data) + chunk_size - 1) // chunk_size)
-            
-        except Exception as e:
-            logger.error("🎯 AUDIOSOCKET TTS - Failed to stream audio via AudioSocket", 
-                        channel_id=channel_id, 
-                        error=str(e), exc_info=True)
-            # Fallback to file-based playback
-            await self.ari_client.play_audio_response(channel_id, audio_data)
+    # AudioSocket TTS streaming removed - using ARI file playback instead
+    # AudioSocket is only for inbound audio (STT), not outbound (TTS)
 
-    def _convert_ulaw_to_pcm16le(self, ulaw_data: bytes) -> bytes:
-        """Convert ulaw audio data to PCM16LE format for AudioSocket."""
-        try:
-            import audioop
-            # Convert ulaw to linear PCM (16-bit signed)
-            pcm_data = audioop.ulaw2lin(ulaw_data, 2)  # 2 bytes per sample
-            logger.debug("Converted ulaw to PCM16LE", 
-                        ulaw_bytes=len(ulaw_data), 
-                        pcm_bytes=len(pcm_data))
-            return pcm_data
-        except Exception as e:
-            logger.error("Failed to convert ulaw to PCM16LE", error=str(e), exc_info=True)
-            # Return silence as fallback
-            return b'\x00\x00' * (len(ulaw_data) * 2)
+    # Audio conversion methods removed - using ARI file playback instead
 
     async def _play_audio_via_bridge(self, channel_id: str, audio_data: bytes):
         """Play audio via bridge to avoid interrupting AudioSocket capture."""

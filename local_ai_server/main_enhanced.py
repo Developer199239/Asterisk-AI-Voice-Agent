@@ -30,16 +30,11 @@ class AudioProcessor:
             with tempfile.NamedTemporaryFile(suffix=f".{output_format}", delete=False) as output_file:
                 output_path = output_file.name
             
-            # Use sox to resample - specify input format for raw PCM data
+            # Use sox to resample
             cmd = [
                 'sox',
-                '-t', 'raw',  # input format: raw
-                '-r', str(input_rate),  # input sample rate
-                '-e', 'signed-integer',  # input encoding
-                '-b', '16',  # input bit depth
-                '-c', '1',  # input channels
                 input_path,
-                '-r', str(output_rate),  # output sample rate
+                '-r', str(output_rate),
                 '-c', '1',  # mono
                 '-e', 'signed-integer',
                 '-b', '16',
@@ -98,7 +93,7 @@ class AudioProcessor:
             logging.error(f"uLaw conversion failed: {e}")
             return input_data
 
-class LocalAIServer:
+class EnhancedLocalAIServer:
     def __init__(self):
         self.stt_model: Optional[VoskModel] = None
         self.llm_model: Optional[Llama] = None
@@ -172,7 +167,7 @@ class LocalAIServer:
             raise
 
     async def process_stt(self, audio_data: bytes) -> str:
-        """Process STT with 8kHz to 16kHz resampling for Vosk compatibility"""
+        """Process STT with 8kHz to 16kHz resampling"""
         try:
             if not self.stt_model:
                 logging.error("STT model not loaded")
@@ -183,21 +178,14 @@ class LocalAIServer:
             resampled_audio = self.audio_processor.resample_audio(
                 audio_data, 8000, 16000, "raw", "raw"
             )
-            logging.debug(f"🎵 STT RESAMPLED - Resampled audio: {len(resampled_audio)} bytes")
             
             # Process with Vosk at 16kHz
             recognizer = KaldiRecognizer(self.stt_model, 16000)
-            
-            # Check if recognizer accepts the waveform
-            if recognizer.AcceptWaveform(resampled_audio):
-                result = json.loads(recognizer.Result())
-                logging.debug(f"🎵 STT INTERMEDIATE - Partial result: {result}")
-            else:
-                result = json.loads(recognizer.FinalResult())
-                logging.debug(f"🎵 STT FINAL - Final result: {result}")
+            recognizer.AcceptWaveform(resampled_audio)
+            result = json.loads(recognizer.FinalResult())
             
             transcript = result.get("text", "").strip()
-            logging.info(f"📝 STT RESULT - Transcript: '{transcript}' (length: {len(transcript)})")
+            logging.info(f"📝 STT RESULT - Transcript: '{transcript}'")
             return transcript
             
         except Exception as e:
@@ -235,36 +223,32 @@ Assistant:"""
             return "I'm here to help you. How can I assist you today?"
 
     async def process_tts(self, text: str) -> bytes:
-        """Process TTS with 8kHz uLaw generation directly"""
+        """Process TTS with 22kHz to 8kHz uLaw conversion"""
         try:
             if not self.tts_model:
                 logging.error("TTS model not loaded")
                 return b""
             
-            # Generate WAV at 8kHz using Piper (native rate for telephony)
-            logging.debug(f"🔊 TTS INPUT - Generating 8kHz audio for: '{text}'")
+            # Generate WAV at 22kHz using Piper
+            logging.debug(f"🔊 TTS INPUT - Generating audio for: '{text}'")
             
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as wav_file:
                 wav_path = wav_file.name
             
-            # Synthesize with Piper at 8kHz - collect generator output
+            # Synthesize with Piper
             with wave.open(wav_path, "wb") as wav_file:
                 wav_file.setnchannels(1)  # Mono
                 wav_file.setsampwidth(2)  # 16-bit
-                wav_file.setframerate(8000)  # 8kHz for telephony
-                
-                # Piper.synthesize returns AudioChunk objects, collect all chunks
-                audio_generator = self.tts_model.synthesize(text)
-                for audio_chunk in audio_generator:
-                    wav_file.writeframes(audio_chunk.audio_int16_bytes)
+                wav_file.setframerate(22050)  # 22kHz
+                self.tts_model.synthesize(text, wav_file)
             
             # Read the generated WAV
             with open(wav_path, 'rb') as f:
                 wav_data = f.read()
             
-            # Convert to uLaw 8kHz for ARI playback (minimal conversion)
-            logging.debug(f"🔄 TTS CONVERSION - Converting 8kHz WAV → 8kHz uLaw")
-            ulaw_data = self.audio_processor.convert_to_ulaw_8k(wav_data, 8000)
+            # Convert to uLaw 8kHz for ARI playback
+            logging.debug(f"🔄 TTS CONVERSION - Converting 22kHz WAV → 8kHz uLaw")
+            ulaw_data = self.audio_processor.convert_to_ulaw_8k(wav_data, 22050)
             
             # Cleanup
             os.unlink(wav_path)
@@ -277,7 +261,7 @@ Assistant:"""
             return b""
 
     async def handler(self, websocket):
-        """Enhanced WebSocket handler with MVP pipeline and hot reloading"""
+        """Enhanced WebSocket handler with MVP pipeline"""
         logging.info(f"🔌 New connection established: {websocket.remote_address}")
         try:
             async for message in websocket:
@@ -326,30 +310,6 @@ Assistant:"""
                             await websocket.send(json.dumps(response))
                             logging.info(f"📤 TTS RESPONSE - Sent {len(audio_response)} bytes")
                         
-                        elif data.get("type") == "audio":
-                            # Audio data from AI Engine (legacy format)
-                            audio_data = base64.b64decode(data.get("data", ""))
-                            logging.info(f"🎵 AUDIO INPUT - Received audio: {len(audio_data)} bytes")
-                            
-                            # Full MVP pipeline: STT → LLM → TTS
-                            transcript = await self.process_stt(audio_data)
-                            
-                            if transcript.strip():
-                                llm_response = await self.process_llm(transcript)
-                                
-                                if llm_response.strip():
-                                    audio_response = await self.process_tts(llm_response)
-                                    
-                                    if audio_response:
-                                        await websocket.send(audio_response)
-                                        logging.info("📤 AUDIO OUTPUT - Sent uLaw 8kHz response")
-                                    else:
-                                        logging.warning("🔊 TTS - No audio generated")
-                                else:
-                                    logging.info("🤖 LLM - Empty response, skipping TTS")
-                            else:
-                                logging.info("📝 STT - No speech detected, skipping pipeline")
-                        
                         elif data.get("type") == "reload_models":
                             # Hot reload models
                             logging.info("🔄 RELOAD REQUEST - Hot reloading models...")
@@ -376,13 +336,12 @@ Assistant:"""
 
 async def main():
     """Main server function"""
-    server = LocalAIServer()
+    server = EnhancedLocalAIServer()
     await server.initialize_models()
     
     async with serve(server.handler, "0.0.0.0", 8765):
         logging.info("🚀 Enhanced Local AI Server started on ws://0.0.0.0:8765")
-        logging.info("📋 MVP Pipeline: AudioSocket (8kHz) → STT (16kHz) → LLM → TTS (8kHz uLaw) - Optimized!")
-        logging.info("🔄 Hot Reload: Send {'type': 'reload_models'} to reload models")
+        logging.info("📋 MVP Pipeline: AudioSocket (8kHz) → STT (16kHz) → LLM → TTS (8kHz uLaw)")
         await asyncio.Future()  # Run forever
 
 if __name__ == "__main__":

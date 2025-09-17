@@ -188,13 +188,34 @@ class LocalProvider(AIProviderInterface):
             return
         try:
             async for message in self.websocket:
-                # The local AI server will send back raw audio bytes for TTS
+                # Handle binary messages (raw audio)
                 if isinstance(message, bytes):
                     audio_event = {'type': 'AgentAudio', 'data': message, 'call_id': self._active_call_id}
                     if self.on_event:
                         await self.on_event(audio_event)
+                # Handle JSON messages (TTS responses, etc.)
+                elif isinstance(message, str):
+                    try:
+                        data = json.loads(message)
+                        # Handle TTS responses
+                        if data.get("type") == "tts_response":
+                            # Find the pending TTS response and complete it
+                            text = data.get("text", "")
+                            if text in self._pending_tts_responses:
+                                future = self._pending_tts_responses.pop(text)
+                                if not future.done():
+                                    future.set_result(data)
+                                    logger.info("TTS response received and delivered", text=text[:50])
+                                else:
+                                    logger.warning("TTS response received but future already completed", text=text[:50])
+                            else:
+                                logger.warning("TTS response received but no pending request found", text=text[:50])
+                        else:
+                            logger.debug("Received JSON message from Local AI Server", message=data)
+                    except json.JSONDecodeError:
+                        logger.warning("Received non-JSON string message from Local AI Server", message=message)
                 else:
-                    logger.warning("Received non-binary message from Local AI Server", message=message)
+                    logger.warning("Received unknown message type from Local AI Server", message_type=type(message))
         except websockets.exceptions.ConnectionClosed as e:
             logger.warning("Local AI Server connection closed", reason=str(e))
         except Exception:
@@ -222,10 +243,13 @@ class LocalProvider(AIProviderInterface):
             await self.websocket.send(json.dumps(tts_message))
             logger.info("Sent TTS request to Local AI Server", text=text[:50] + "..." if len(text) > 50 else text)
             
-            # Wait for TTS response (with timeout)
+            # Wait for TTS response using a future-based approach
+            response_future = asyncio.Future()
+            self._pending_tts_responses[text] = response_future
+            
             try:
-                response = await asyncio.wait_for(self.websocket.recv(), timeout=10.0)
-                response_data = json.loads(response)
+                # Wait for response with timeout
+                response_data = await asyncio.wait_for(response_future, timeout=10.0)
                 
                 if response_data.get("type") == "tts_response" and response_data.get("audio_data"):
                     # Decode base64 audio data
@@ -239,6 +263,9 @@ class LocalProvider(AIProviderInterface):
             except asyncio.TimeoutError:
                 logger.error("TTS request timed out")
                 return None
+            finally:
+                # Clean up the pending response
+                self._pending_tts_responses.pop(text, None)
                 
         except Exception as e:
             logger.error("Failed to generate TTS", text=text, error=str(e), exc_info=True)

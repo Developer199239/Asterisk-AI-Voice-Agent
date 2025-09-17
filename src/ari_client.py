@@ -330,6 +330,10 @@ class ARIClient:
                     logger.debug("Successfully deleted audio file", file_path=file_path)
                 except OSError:
                     logger.error("Error deleting audio file", file_path=file_path, exc_info=True)
+        
+        # Call the engine's PlaybackFinished handler if it exists
+        if hasattr(self, 'engine') and hasattr(self.engine, '_on_playback_finished'):
+            await self.engine._on_playback_finished(event)
 
     async def cleanup_call_files(self, channel_id: str):
         """Clean up any remaining audio files for a specific call."""
