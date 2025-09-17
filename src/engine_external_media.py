@@ -142,8 +142,8 @@ class ExternalMediaEngine:
             await self.ari_client.connect()
             logger.info("Connected to ARI")
             
-            # Start WebSocket event loop
-            await self.ari_client.start_listening()
+            # Start WebSocket event loop as background task
+            asyncio.create_task(self.ari_client.start_listening())
             logger.info("ARI WebSocket started")
             
             self.running = True
