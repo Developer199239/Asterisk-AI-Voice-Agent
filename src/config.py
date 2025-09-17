@@ -22,6 +22,12 @@ class AsteriskConfig(BaseModel):
     password: str
     app_name: str = Field(default="ai-voice-agent")
 
+class RTPConfig(BaseModel):
+    host: str = Field(default="127.0.0.1")
+    port_range: list = Field(default=[10000, 10100])
+    sample_rate: int = Field(default=8000)
+    samples_per_packet: int = Field(default=160)
+
 class DeepgramProviderConfig(BaseModel):
     api_key: str
     model: str
@@ -67,9 +73,10 @@ class AppConfig(BaseModel):
     providers: Dict[str, Any]
     asterisk: AsteriskConfig
     llm: LLMConfig
-    audio_transport: str = Field(default="audiosocket")  # 'audiosocket' | 'legacy'
+    audio_transport: str = Field(default="external_media")  # 'external_media' | 'audiosocket' | 'legacy'
     downstream_mode: str = Field(default="file")  # 'file' | 'stream'
     streaming: Optional[StreamingConfig] = Field(default_factory=StreamingConfig)
+    rtp: Optional[RTPConfig] = Field(default_factory=RTPConfig)
 
 def load_config(path: str = "config/ai-agent.yaml") -> AppConfig:
     # If the provided path is not absolute, resolve it relative to the project root.

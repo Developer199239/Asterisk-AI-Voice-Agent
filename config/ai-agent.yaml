@@ -3,9 +3,9 @@
 default_provider: "local"
 
 # Audio transport controls
-# - audio_transport: 'audiosocket' (recommended) | 'legacy'
+# - audio_transport: 'external_media' (recommended) | 'audiosocket' | 'legacy'
 # - downstream_mode: 'file' (current default) | 'stream' (next phase)
-audio_transport: "audiosocket"
+audio_transport: "external_media"
 downstream_mode: "file"
 
 # Asterisk connection settings (will be overridden by environment variables)
@@ -14,6 +14,13 @@ asterisk:
   username: "your_ari_username"
   password: "your_ari_password"
   app_name: "asterisk-ai-voice-agent"
+
+# RTP server settings for External Media
+rtp:
+  host: "127.0.0.1"
+  port_range: [10000, 10100]  # Range of UDP ports for RTP communication
+  sample_rate: 8000
+  samples_per_packet: 160  # 20ms at 8kHz
 
 # Global LLM settings (will be overridden by environment variables)
 llm:

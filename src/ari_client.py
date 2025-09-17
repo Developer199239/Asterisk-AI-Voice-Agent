@@ -597,3 +597,93 @@ class ARIClient:
                          channel_id=channel_id, 
                          error=str(e))
             return False
+
+    async def create_external_media_channel(self, app: str, external_host: str, format: str = "ulaw", encapsulation: str = "rtp") -> Optional[Dict[str, Any]]:
+        """
+        Create an External Media channel for RTP communication.
+        
+        Args:
+            app: ARI application name
+            external_host: External host:port for RTP (e.g., "127.0.0.1:10000")
+            format: Audio format (default: "ulaw")
+            encapsulation: Transport protocol (default: "rtp")
+            
+        Returns:
+            Channel information dict or None if failed
+        """
+        try:
+            response = await self.send_command(
+                "POST",
+                "channels/externalMedia",
+                data={
+                    "app": app,
+                    "external_host": external_host,
+                    "format": format,
+                    "encapsulation": encapsulation
+                }
+            )
+            
+            if response and response.get("id"):
+                logger.info("External Media channel created", 
+                           channel_id=response["id"], 
+                           external_host=external_host,
+                           format=format)
+                return response
+            else:
+                logger.error("Failed to create External Media channel", response=response)
+                return None
+                
+        except Exception as e:
+            logger.error("Error creating External Media channel", 
+                        external_host=external_host, 
+                        error=str(e))
+            return None
+
+    async def remove_channel_from_bridge(self, bridge_id: str, channel_id: str) -> bool:
+        """Remove a channel from a bridge."""
+        try:
+            response = await self.send_command(
+                "POST",
+                f"bridges/{bridge_id}/removeChannel",
+                data={"channel": channel_id}
+            )
+
+            status = response.get("status") if isinstance(response, dict) else None
+            if status is not None:
+                if 200 <= int(status) < 300:
+                    logger.info("Channel removed from bridge", bridge_id=bridge_id, channel_id=channel_id, status=status)
+                    return True
+                else:
+                    logger.error("Failed to remove channel from bridge", bridge_id=bridge_id, channel_id=channel_id, status=status, response=response)
+                    return False
+
+            logger.info("Channel remove-from-bridge response without status; assuming success", bridge_id=bridge_id, channel_id=channel_id, response=response)
+            return True
+            
+        except Exception as e:
+            logger.error("Error removing channel from bridge", 
+                        bridge_id=bridge_id, 
+                        channel_id=channel_id, 
+                        error=str(e))
+            return False
+
+    async def destroy_bridge(self, bridge_id: str) -> bool:
+        """Destroy a bridge."""
+        try:
+            response = await self.send_command("DELETE", f"bridges/{bridge_id}")
+            
+            status = response.get("status") if isinstance(response, dict) else None
+            if status is not None:
+                if 200 <= int(status) < 300:
+                    logger.info("Bridge destroyed", bridge_id=bridge_id, status=status)
+                    return True
+                else:
+                    logger.error("Failed to destroy bridge", bridge_id=bridge_id, status=status, response=response)
+                    return False
+
+            logger.info("Bridge destroy response without status; assuming success", bridge_id=bridge_id, response=response)
+            return True
+            
+        except Exception as e:
+            logger.error("Error destroying bridge", bridge_id=bridge_id, error=str(e))
+            return False
