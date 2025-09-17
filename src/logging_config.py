@@ -37,7 +37,11 @@ def add_correlation_id(logger, method_name, event_dict):
 def add_service_context(logger, method_name, event_dict):
     """Add service context to the log record."""
     event_dict['service'] = 'ai-engine'
-    event_dict['component'] = logger.name
+    # Handle different logger types that may not have a 'name' attribute
+    try:
+        event_dict['component'] = logger.name
+    except AttributeError:
+        event_dict['component'] = 'unknown'
     return event_dict
 
 def configure_logging(log_level="INFO", log_to_file=False, log_file_path="service.log", service_name="ai-engine"):
