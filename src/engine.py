@@ -337,12 +337,15 @@ class Engine:
     async def _handle_external_media_stasis_start(self, external_media_id: str, channel: dict):
         """Handle ExternalMedia channel entering Stasis."""
         try:
-            # Find the caller channel that this ExternalMedia channel belongs to
-            caller_channel_id = None
-            for channel_id, call_data in self.active_calls.items():
-                if call_data.get("external_media_id") == external_media_id:
-                    caller_channel_id = channel_id
-                    break
+            # Use direct mapping first for fast lookup
+            caller_channel_id = self.external_media_to_caller.get(external_media_id)
+            
+            # Fallback to scanning if direct mapping fails
+            if not caller_channel_id:
+                for channel_id, call_data in self.active_calls.items():
+                    if call_data.get("external_media_id") == external_media_id:
+                        caller_channel_id = channel_id
+                        break
             
             if not caller_channel_id:
                 logger.warning("ExternalMedia channel entered Stasis but no caller found", 
@@ -446,7 +449,9 @@ class Engine:
                     # Store the ExternalMedia ID in active_calls - the StasisStart event will handle adding to bridge
                     self.active_calls[caller_channel_id]["external_media_id"] = external_media_id
                     self.active_calls[caller_channel_id]["status"] = "external_media_created"
-                    logger.info("🎯 EXTERNAL MEDIA - ExternalMedia channel created, waiting for StasisStart", 
+                    # Add direct mapping for fast lookup
+                    self.external_media_to_caller[external_media_id] = caller_channel_id
+                    logger.info("🎯 EXTERNAL MEDIA - ExternalMedia channel created, external_media_id stored, external_media_to_caller mapped", 
                                channel_id=caller_channel_id, 
                                external_media_id=external_media_id)
                 else:
