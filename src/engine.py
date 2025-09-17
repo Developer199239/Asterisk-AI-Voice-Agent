@@ -427,6 +427,17 @@ class Engine:
                        channel_id=caller_channel_id, 
                        bridge_id=bridge_id)
             
+            # Initialize active_calls for the caller before creating ExternalMedia
+            self.active_calls[caller_channel_id] = {
+                "bridge_id": bridge_id,
+                "provider": self.providers[self.config.default_provider],
+                "audio_capture_enabled": False,
+                "status": "connected"
+            }
+            logger.info("🎯 EXTERNAL MEDIA - Initialized active_calls for caller", 
+                       channel_id=caller_channel_id, 
+                       bridge_id=bridge_id)
+            
             # Step 5: Create ExternalMedia channel or originate Local channel
             if self.config.audio_transport == "externalmedia":
                 logger.info("🎯 EXTERNAL MEDIA - Step 5: Creating ExternalMedia channel", channel_id=caller_channel_id)
