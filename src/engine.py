@@ -101,6 +101,7 @@ class Engine:
         self.active_calls: Dict[str, Dict[str, Any]] = {}
         self.conn_to_channel: Dict[str, str] = {}
         self.channel_to_conn: Dict[str, str] = {}
+        self.conn_to_caller: Dict[str, str] = {}  # conn_id -> caller_channel_id
         self.pending_channel_for_bind: Optional[str] = None
         # Audio buffering for better playback quality
         self.audio_buffers: Dict[str, bytes] = {}
@@ -844,16 +845,36 @@ class Engine:
             self.vad_detectors[conn_id] = VoiceActivityDetector()
             logger.debug("🎯 HYBRID ARI - Audio processing components initialized", conn_id=conn_id)
             
-            # In hybrid approach, we need to find the caller channel that's waiting for this connection
-            # The UUID should be in the connection info or we can use the first active call
+            # CRITICAL FIX: Find the Local channel that has the AudioSocket connection
+            # We need to find the Local channel that was just originated and is waiting for this connection
+            local_channel_id = None
             caller_channel_id = None
+            
+            # Debug: Log all active channels and their status
+            logger.info("🎯 HYBRID ARI - DEBUG: Searching for Local channel with AudioSocket connection")
+            logger.info("🎯 HYBRID ARI - DEBUG: Active caller channels:", 
+                       caller_channels=list(self.caller_channels.keys()),
+                       caller_statuses={cid: data.get("status") for cid, data in self.caller_channels.items()})
+            logger.info("🎯 HYBRID ARI - DEBUG: Pending local channels:", 
+                       pending_local_channels=list(self.pending_local_channels.keys()))
+            logger.info("🎯 HYBRID ARI - DEBUG: Local channels mapping:", 
+                       local_channels=list(self.local_channels.keys()))
+            
+            # Look for a Local channel that was just originated and is waiting for AudioSocket
             for cid, call_data in self.caller_channels.items():
-                if call_data.get("status") == "connected":
+                if call_data.get("status") == "connected" and call_data.get("local_channel_id"):
+                    local_channel_id = call_data["local_channel_id"]
                     caller_channel_id = cid
+                    logger.info("🎯 HYBRID ARI - DEBUG: Found connected caller with Local channel", 
+                               caller_channel_id=cid, 
+                               local_channel_id=local_channel_id)
                     break
             
-            if not caller_channel_id:
-                logger.warning("🎯 HYBRID ARI - No active caller channel found for AudioSocket connection", conn_id=conn_id)
+            if not local_channel_id or not caller_channel_id:
+                logger.warning("🎯 HYBRID ARI - No Local channel found for AudioSocket connection", 
+                              conn_id=conn_id,
+                              local_channel_id=local_channel_id,
+                              caller_channel_id=caller_channel_id)
                 # Start headless session as fallback
                 provider_name = self.config.default_provider
                 provider = self.providers.get(provider_name)
@@ -862,14 +883,18 @@ class Engine:
                     asyncio.get_event_loop().create_task(self._start_headless_session(conn_id, provider))
                 return
             
-            # Bind connection to caller channel
-            logger.info("🎯 HYBRID ARI - Binding AudioSocket to caller channel", 
+            # CRITICAL FIX: Bind AudioSocket to Local channel, not caller channel
+            logger.info("🎯 HYBRID ARI - Binding AudioSocket to Local channel", 
                        conn_id=conn_id, 
+                       local_channel_id=local_channel_id,
                        caller_channel_id=caller_channel_id)
             
-            # Store connection mapping
-            self.conn_to_channel[conn_id] = caller_channel_id
-            self.channel_to_conn[caller_channel_id] = conn_id
+            # Store connection mapping - CRITICAL: Map to Local channel
+            self.conn_to_channel[conn_id] = local_channel_id  # Map to Local channel
+            self.channel_to_conn[local_channel_id] = conn_id  # Map Local channel to connection
+            
+            # Also store reverse mapping for caller channel lookup
+            self.conn_to_caller[conn_id] = caller_channel_id
             
             # Set provider input mode
             provider = self.providers.get(self.config.default_provider)
@@ -877,8 +902,9 @@ class Engine:
                 provider.set_input_mode('pcm16_8k')
                 logger.info("🎯 HYBRID ARI - Set provider input mode to pcm16_8k", conn_id=conn_id)
             
-            logger.info("🎯 HYBRID ARI - ✅ AudioSocket connection bound to caller channel", 
+            logger.info("🎯 HYBRID ARI - ✅ AudioSocket connection bound to Local channel", 
                        conn_id=conn_id, 
+                       local_channel_id=local_channel_id,
                        caller_channel_id=caller_channel_id)
             
         except Exception as e:
@@ -1559,10 +1585,30 @@ class Engine:
                 await provider.stop_session()
                 
             # Close bound AudioSocket connection if any
-            conn_id = self.channel_to_conn.pop(channel_id, None)
+            # CRITICAL FIX: Handle new mapping structure where AudioSocket is bound to Local channel
+            conn_id = None
+            
+            # First, try to find AudioSocket connection via Local channel
+            if channel_id in self.caller_channels:
+                local_channel_id = self.caller_channels[channel_id].get("local_channel_id")
+                if local_channel_id:
+                    conn_id = self.channel_to_conn.pop(local_channel_id, None)
+                    logger.debug("🎯 CLEANUP - Found AudioSocket connection via Local channel", 
+                               caller_channel_id=channel_id,
+                               local_channel_id=local_channel_id,
+                               conn_id=conn_id)
+            
+            # Fallback: try direct mapping (for backward compatibility)
+            if not conn_id:
+                conn_id = self.channel_to_conn.pop(channel_id, None)
+                logger.debug("🎯 CLEANUP - Using direct channel mapping", 
+                           channel_id=channel_id,
+                           conn_id=conn_id)
+            
             if conn_id:
                 logger.debug("Closing AudioSocket connection", channel_id=channel_id, conn_id=conn_id)
                 self.conn_to_channel.pop(conn_id, None)
+                self.conn_to_caller.pop(conn_id, None)  # Clean up caller mapping
                 # Cancel keepalive task early
                 try:
                     t = self._keepalive_tasks.pop(conn_id, None)
@@ -1697,11 +1743,32 @@ class Engine:
     async def _stream_audio_via_audiosocket(self, channel_id: str, audio_data: bytes):
         """Stream audio via AudioSocket connection instead of file-based playback."""
         try:
-            # Find the AudioSocket connection for this channel
-            conn_id = self.channel_to_conn.get(channel_id)
+            # CRITICAL FIX: Find the AudioSocket connection for this channel
+            # channel_id is the caller channel, but we need to find the Local channel's connection
+            conn_id = None
+            
+            # First, try to find the Local channel for this caller
+            if channel_id in self.caller_channels:
+                local_channel_id = self.caller_channels[channel_id].get("local_channel_id")
+                if local_channel_id:
+                    conn_id = self.channel_to_conn.get(local_channel_id)
+                    logger.info("🎯 AUDIOSOCKET TTS - Found Local channel for caller", 
+                               caller_channel_id=channel_id,
+                               local_channel_id=local_channel_id,
+                               conn_id=conn_id)
+            
+            # Fallback: try direct mapping (for backward compatibility)
+            if not conn_id:
+                conn_id = self.channel_to_conn.get(channel_id)
+                logger.info("🎯 AUDIOSOCKET TTS - Using direct channel mapping", 
+                           channel_id=channel_id,
+                           conn_id=conn_id)
+            
             if not conn_id:
                 logger.error("🎯 AUDIOSOCKET TTS - No AudioSocket connection found for channel", 
-                           channel_id=channel_id)
+                           channel_id=channel_id,
+                           caller_channels=list(self.caller_channels.keys()),
+                           channel_to_conn_mappings=list(self.channel_to_conn.keys()))
                 # Fallback to file-based playback
                 await self.ari_client.play_audio_response(channel_id, audio_data)
                 return
