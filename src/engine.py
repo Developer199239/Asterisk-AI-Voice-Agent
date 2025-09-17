@@ -339,7 +339,7 @@ class Engine:
         try:
             # Find the caller channel that this ExternalMedia channel belongs to
             caller_channel_id = None
-            for channel_id, call_data in self.caller_channels.items():
+            for channel_id, call_data in self.active_calls.items():
                 if call_data.get("external_media_id") == external_media_id:
                     caller_channel_id = channel_id
                     break
@@ -350,7 +350,7 @@ class Engine:
                 return
             
             # Add ExternalMedia channel to the bridge
-            bridge_id = self.caller_channels[caller_channel_id].get("bridge_id")
+            bridge_id = self.active_calls[caller_channel_id].get("bridge_id")
             if bridge_id:
                 success = await self.ari_client.add_channel_to_bridge(bridge_id, external_media_id)
                 if success:

@@ -1,22 +1,150 @@
 # Call Framework Analysis - Test Call (2025-09-17 02:19:13)
 
 ## Executive Summary
-**Test Call Result**: ❌ **EXTERNALMEDIA APPROACH FUNDAMENTALLY FLAWED** - Need different solution
+**Test Call Result**: ❌ **EXTERNALMEDIA CHANNEL MAPPING ISSUE** - Channel not found in caller mapping
 
 **Key Issues**:
-1. **❌ ExternalMedia channels don't enter Stasis** - They're external media sources, not Stasis channels
-2. **❌ Call never reached AI engine** - Original caller channel never entered Stasis
-3. **❌ Wrong channel type created** - UnicastRTP instead of proper ExternalMedia
-4. **❌ Bridge addition failed** - "Channel not in Stasis application" error
-5. **✅ ARI connection working** - Successfully connected to HTTP endpoint and WebSocket
-6. **✅ RTP server running** - Started on Host: 0.0.0.0, Port: 18080, Codec: ulaw
+1. **✅ ExternalMedia channel created successfully** - Channel `1758135639.6021` created
+2. **✅ ExternalMedia entered Stasis** - StasisStart event received and recognized
+3. **❌ Channel mapping failed** - "ExternalMedia channel entered Stasis but no caller found"
+4. **❌ Bridge addition failed** - ExternalMedia channel not added to bridge
+5. **❌ No greeting played** - Provider session never started
+6. **✅ ARI connection working** - Successfully connected to HTTP endpoint and WebSocket
+7. **✅ RTP server running** - Started on Host: 0.0.0.0, Port: 18080, Codec: ulaw
 
-**Root Cause**: ExternalMedia channels are not designed to enter Stasis applications - they're for external media sources/sinks
+**Root Cause**: ExternalMedia channel mapping logic is looking in wrong data structure - `caller_channels` vs `active_calls`
 
 ## Call Timeline Analysis
 
-### Phase 1: Call Initiation (02:19:13)
+### Phase 1: Call Initiation (12:00:38)
 **AI Engine Logs:**
+```
+{"channel_id": "1758135631.6020", "event": "🎯 HYBRID ARI - StasisStart event received"}
+{"channel_id": "1758135631.6020", "event": "🎯 HYBRID ARI - Step 2: Creating bridge immediately"}
+{"bridge_id": "9b15a5cb-86d3-4f0a-908d-05721df96af1", "event": "Bridge created"}
+{"channel_id": "1758135631.6020", "event": "🎯 HYBRID ARI - Step 3: ✅ Caller added to bridge"}
+```
+
+**Status**: ✅ **SUCCESS** - Caller entered Stasis, bridge created, caller added
+
+### Phase 2: ExternalMedia Channel Creation (12:00:39)
+**AI Engine Logs:**
+```
+{"channel_id": "1758135631.6020", "event": "🎯 EXTERNAL MEDIA - Step 5: Creating ExternalMedia channel"}
+{"caller_channel_id": "1758135631.6020", "external_media_id": "1758135639.6021", "event": "ExternalMedia channel created successfully"}
+{"channel_id": "1758135639.6021", "event": "🎯 EXTERNAL MEDIA - ExternalMedia channel created, waiting for StasisStart"}
+```
+
+**Status**: ✅ **SUCCESS** - ExternalMedia channel created successfully
+
+### Phase 3: ExternalMedia StasisStart Event (12:00:39)
+**AI Engine Logs:**
+```
+{"channel_id": "1758135639.6021", "event": "🎯 EXTERNAL MEDIA - ExternalMedia channel entered Stasis"}
+{"external_media_id": "1758135639.6021", "event": "ExternalMedia channel entered Stasis but no caller found"}
+```
+
+**Status**: ❌ **FAILURE** - Channel mapping failed, no caller found
+
+### Phase 4: Bridge Addition (MISSING)
+**AI Engine Logs:**
+```
+# No logs for bridge addition - ExternalMedia channel never added to bridge
+```
+
+**Status**: ❌ **FAILURE** - ExternalMedia channel not added to bridge
+
+### Phase 5: Provider Session (MISSING)
+**AI Engine Logs:**
+```
+# No logs for provider session - never started due to mapping failure
+```
+
+**Status**: ❌ **FAILURE** - No greeting played, no voice capture
+
+## Root Cause Analysis
+
+### 1. **ExternalMedia Channel Mapping Issue (CRITICAL)**
+**Problem**: ExternalMedia channel mapping logic looks in `caller_channels` but data is stored in `active_calls`
+**Impact**: ExternalMedia channel cannot find its caller, bridge addition fails
+**Evidence**: `"ExternalMedia channel entered Stasis but no caller found"`
+**Root Cause**: Data structure mismatch in mapping logic
+
+### 2. **Missing Bridge Addition**
+**Problem**: ExternalMedia channel never added to bridge
+**Impact**: No audio path between caller and ExternalMedia channel
+**Evidence**: No bridge addition logs found
+**Root Cause**: Mapping failure prevents bridge addition
+
+### 3. **No Provider Session**
+**Problem**: Provider session never started
+**Impact**: No greeting played, no voice capture
+**Evidence**: No TTS or provider logs found
+**Root Cause**: Bridge addition failure prevents provider session
+
+## Critical Issues Identified
+
+### Issue #1: Data Structure Mismatch (CRITICAL)
+**Current**: ExternalMedia handler looks in `caller_channels` for mapping
+**Required**: Should look in `active_calls` where the data is actually stored
+**Impact**: ExternalMedia channels cannot find their caller channels
+
+### Issue #2: Missing Bridge Addition
+**Current**: ExternalMedia channel not added to bridge
+**Required**: Add ExternalMedia channel to bridge after successful mapping
+**Impact**: No audio path between caller and ExternalMedia
+
+### Issue #3: No Provider Session
+**Current**: Provider session never started
+**Required**: Start provider session after successful bridge addition
+**Impact**: No greeting, no voice capture
+
+## Recommended Fixes
+
+### Fix #1: Correct Data Structure Mapping (CRITICAL)
+**Problem**: ExternalMedia handler uses wrong data structure
+**Solution**: Change mapping logic to use `active_calls` instead of `caller_channels`
+```python
+# Current (WRONG):
+for channel_id, call_data in self.caller_channels.items():
+
+# Fixed (CORRECT):
+for channel_id, call_data in self.active_calls.items():
+```
+
+### Fix #2: Verify Bridge Addition
+**Problem**: ExternalMedia channel not added to bridge
+**Solution**: Ensure bridge addition happens after successful mapping
+
+### Fix #3: Start Provider Session
+**Problem**: Provider session never started
+**Solution**: Start provider session after successful bridge addition
+
+## Confidence Score: 9/10
+
+The issue is clearly identified - data structure mismatch in the ExternalMedia channel mapping logic. The fix is straightforward and should resolve the problem completely.
+
+## Next Steps
+
+1. **Fix data structure mapping** - Change `caller_channels` to `active_calls` in ExternalMedia handler
+2. **Test bridge addition** - Verify ExternalMedia channel is added to bridge
+3. **Test provider session** - Verify greeting plays and voice capture works
+4. **Test complete flow** - Verify end-to-end ExternalMedia functionality
+
+## Call Framework Summary
+
+| Phase | Status | Issue |
+|-------|--------|-------|
+| Call Initiation | ✅ Success | None |
+| Bridge Creation | ✅ Success | None |
+| Caller Addition | ✅ Success | None |
+| ExternalMedia Creation | ✅ Success | None |
+| ExternalMedia StasisStart | ❌ Failure | Channel mapping failed |
+| Bridge Addition | ❌ Failure | Not attempted due to mapping failure |
+| Provider Session | ❌ Failure | Not started due to mapping failure |
+| Voice Capture | ❌ Failure | Not available due to mapping failure |
+
+**Overall Result**: ❌ **CHANNEL MAPPING ISSUE** - ExternalMedia approach working but data structure mismatch prevents completion
 ```
 {"endpoint": "Local/36a2f327-a86d-4bbb-9948-d79675362227@ai-stasis/n", "audio_uuid": "36a2f327-a86d-4bbb-9948-d79675362227"}
 {"local_channel_id": "1758100753.5951", "event": "🎯 DIALPLAN AUDIOSOCKET - AudioSocket Local channel originated"}
