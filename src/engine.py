@@ -480,8 +480,9 @@ class Engine:
         
         orig_params = {
             "endpoint": local_endpoint,
+            "extension": audio_uuid,  # Use UUID as extension
+            "context": "ai-audiosocket-only",  # Specify the dialplan context
             "timeout": "30"
-            # No app parameter - goes directly to dialplan for AudioSocket
         }
         
         logger.info("🎯 DIALPLAN AUDIOSOCKET - Originating AudioSocket Local channel", 
