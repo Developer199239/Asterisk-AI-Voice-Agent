@@ -1346,22 +1346,25 @@ class Engine:
             count = self._audio_rx_debug.get(conn_id, 0) + 1
             self._audio_rx_debug[conn_id] = count
             
-            # Check if audio capture is enabled (wait for 100 chunks = ~4 seconds)
+            # Check if audio capture is enabled (set by PlaybackFinished event)
             call_data = self.active_calls.get(channel_id, {})
-            if count < 100:  # Wait for 100 chunks (4 seconds at 40ms per chunk)
+            audio_capture_enabled = call_data.get("audio_capture_enabled", False)
+            
+            if not audio_capture_enabled:
                 if count <= 10 or count % 50 == 0:  # Log first 10, then every 50th
                     logger.info("🎤 AUDIO CAPTURE - ⏸️ Disabled, waiting for greeting to finish",
                                conn_id=conn_id,
                                channel_id=channel_id,
                                chunk_number=count,
-                               remaining_chunks=100-count)
+                               audio_capture_enabled=audio_capture_enabled)
                 return
             
-            # Log when audio capture is enabled
-            if count == 100:
-                logger.info("🎤 AUDIO CAPTURE - ✅ Enabled after 100 chunks (4 seconds)",
+            # Log when audio capture is enabled (one-time)
+            if count == 1 or (count <= 10 and audio_capture_enabled):
+                logger.info("🎤 AUDIO CAPTURE - ✅ Enabled after greeting completion",
                            conn_id=conn_id,
-                           channel_id=channel_id)
+                           channel_id=channel_id,
+                           chunk_number=count)
             
             # Enhanced debugging for first 10 chunks, then every 50th
             if count <= 10 or count % 50 == 0:
@@ -1385,8 +1388,8 @@ class Engine:
                               available_vads=list(self.vad_detectors.keys()))
                 return
             
-            # AudioSocket sends uLaw@8kHz - convert to PCM16LE for processing
-            pcm_data = self._convert_ulaw_to_pcm16le(audio_data)
+            # AudioSocket sends PCM16LE@8kHz directly in Asterisk 16 - no conversion needed
+            pcm_data = audio_data
             
             # Process audio into frames (PCM16LE: 640 bytes = 40ms at 8kHz)
             frames = frame_processor.process_audio(pcm_data)
