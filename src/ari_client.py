@@ -31,6 +31,7 @@ class ARIClient:
     def __init__(self, username: str, password: str, base_url: str, app_name: str):
         self.username = username
         self.password = password
+        self.app_name = app_name
         self.http_url = base_url
         ws_host = base_url.replace("http://", "").split('/')[0]
         safe_username = quote(username)
