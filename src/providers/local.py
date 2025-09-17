@@ -25,6 +25,7 @@ class LocalProvider(AIProviderInterface):
         self._send_queue: asyncio.Queue = asyncio.Queue(maxsize=200)
         self._active_call_id: Optional[str] = None
         self.input_mode: str = 'mulaw8k'  # or 'pcm16_8k'
+        self._pending_tts_responses: Dict[str, asyncio.Future] = {}  # Track pending TTS responses
 
     @property
     def supported_codecs(self) -> List[str]:
