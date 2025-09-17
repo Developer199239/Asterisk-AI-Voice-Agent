@@ -424,7 +424,7 @@ class Engine:
             "context": "ai-audiosocket",  # Minimal dialplan context
             "priority": "1",
             "timeout": "30",
-            # NO app parameter - Local channel doesn't enter Stasis
+            "app": self.config.asterisk.app_name,  # CRITICAL: Enter Stasis application
         }
         
         logger.info("🎯 HYBRID ARI - Originating Local channel", 
