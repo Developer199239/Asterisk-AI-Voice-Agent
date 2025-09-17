@@ -41,15 +41,44 @@ ps:
 ## deploy: Pull latest code and deploy the ai-engine on the server
 deploy:
 	@echo "--> Deploying latest code to $(SERVER_HOST)..."
+	@echo "⚠️  WARNING: This will deploy uncommitted changes if any exist!"
+	@echo "   Use 'make deploy-safe' for validation, or 'make deploy-force' to skip checks"
 	ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && git pull && docker-compose up --build -d ai-engine'
+
+## deploy-safe: Validate changes are committed before deploying
+deploy-safe:
+	@echo "--> Safe deployment with validation..."
+	@echo "🔍 Checking for uncommitted changes..."
+	@if [ -n "$$(git status --porcelain)" ]; then \
+		echo "❌ ERROR: You have uncommitted changes!"; \
+		echo "   Please commit your changes first:"; \
+		echo "   git add . && git commit -m 'Your commit message'"; \
+		echo "   Or use 'make deploy-force' to skip this check"; \
+		exit 1; \
+	fi
+	@echo "✅ No uncommitted changes found"
+	@echo "🚀 Pushing changes to remote..."
+	git push origin develop
+	@echo "📦 Deploying to server..."
+	ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && git pull && docker-compose up --build -d ai-engine'
+	@echo "🔍 Verifying deployment..."
+	@make verify-deployment
+
+## deploy-force: Deploy without validation (use with caution)
+deploy-force:
+	@echo "--> Force deployment (skipping validation)..."
+	@echo "⚠️  WARNING: This will deploy even with uncommitted changes!"
+	ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && git pull && docker-compose up --build -d ai-engine'
+	@echo "🔍 Verifying deployment..."
+	@make verify-deployment
 
 ## deploy-full: Pull latest and rebuild all services on the server
 deploy-full:
 	@echo "--> Performing a full rebuild and deployment on $(SERVER_HOST)..."
 	ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && git pull && docker-compose up --build -d'
 
-## deploy-force: Pull latest and force a no-cache rebuild of ai-engine
-deploy-force:
+## deploy-no-cache: Pull latest and force a no-cache rebuild of ai-engine
+deploy-no-cache:
 	@echo "--> Forcing a no-cache rebuild and deployment of ai-engine on $(SERVER_HOST)..."
 	ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && git pull && docker-compose build --no-cache ai-engine && docker-compose up -d ai-engine'
 
@@ -97,6 +126,25 @@ test-externalmedia:
 	@echo "--> Testing ExternalMedia + RTP implementation..."
 	python3 scripts/validate_externalmedia_config.py
 	python3 scripts/test_externalmedia_call.py
+
+## verify-deployment: Verify that deployment was successful
+verify-deployment:
+	@echo "🔍 Verifying deployment..."
+	@echo "📊 Checking container status..."
+	@ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && docker-compose ps'
+	@echo "📋 Checking recent logs for errors..."
+	@ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && docker-compose logs --tail=10 ai-engine | grep -E "(ERROR|CRITICAL|Exception|Traceback)" || echo "✅ No errors found in recent logs"'
+	@echo "⚙️  Checking configuration..."
+	@ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && docker-compose logs --tail=20 ai-engine | grep -E "(audio_transport|RTP Server|ExternalMedia)" || echo "⚠️  Configuration logs not found"'
+	@echo "✅ Deployment verification complete"
+
+## verify-config: Verify the configuration is correct
+verify-config:
+	@echo "🔍 Verifying configuration..."
+	@echo "📋 Local configuration:"
+	@python3 scripts/validate_externalmedia_config.py
+	@echo "📋 Server configuration:"
+	@ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && python3 scripts/validate_externalmedia_config.py'
 
 ## monitor-externalmedia: Monitor ExternalMedia + RTP status
 monitor-externalmedia:
@@ -165,4 +213,4 @@ help:
 	@echo "Targets:"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
-.PHONY: build up down logs logs-all ps deploy deploy-full deploy-force server-logs server-logs-snapshot server-status server-clear-logs server-health test-local test-integration test-ari test-externalmedia monitor-externalmedia monitor-externalmedia-once help
+.PHONY: build up down logs logs-all ps deploy deploy-safe deploy-force deploy-full deploy-no-cache server-logs server-logs-snapshot server-status server-clear-logs server-health test-local test-integration test-ari test-externalmedia verify-deployment verify-config monitor-externalmedia monitor-externalmedia-once help
