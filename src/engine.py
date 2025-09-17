@@ -388,8 +388,8 @@ class Engine:
                 self.caller_channels[caller_channel_id]["status"] = "connected"
                 self.local_channels[caller_channel_id] = local_channel_id
                 
-                # Start AudioSocket connection via ARI (now that Local channel is in Stasis)
-                await self._start_audiosocket_connection_ari(caller_channel_id, local_channel_id)
+                # AudioSocket connection will be established automatically via dialplan
+                # No ARI execute_application needed - dialplan handles AudioSocket
                 
                 # Start provider session
                 await self._start_provider_session_hybrid(caller_channel_id, local_channel_id)
@@ -403,42 +403,6 @@ class Engine:
                         local_channel_id=local_channel_id,
                         error=str(e), exc_info=True)
             await self.ari_client.hangup_channel(local_channel_id)
-
-    async def _start_audiosocket_connection_ari(self, caller_channel_id: str, local_channel_id: str):
-        """Start AudioSocket connection for Local channel via ARI execute_application."""
-        try:
-            # Get the audio UUID for this Local channel
-            audio_uuid = None
-            for uuid_key, channel_id in self.uuidext_to_channel.items():
-                if channel_id == caller_channel_id:
-                    audio_uuid = uuid_key
-                    break
-            
-            if not audio_uuid:
-                logger.error("🎯 ARI AUDIOSOCKET - No audio UUID found for Local channel", 
-                           caller_channel_id=caller_channel_id,
-                           local_channel_id=local_channel_id)
-                return
-            
-            logger.info("🎯 ARI AUDIOSOCKET - Starting AudioSocket connection", 
-                       caller_channel_id=caller_channel_id,
-                       local_channel_id=local_channel_id,
-                       audio_uuid=audio_uuid)
-            
-            # Use ARI to execute AudioSocket on the Local channel
-            # This will establish the AudioSocket connection
-            await self.ari_client.execute_application(local_channel_id, "AudioSocket", 
-                                                    f"{audio_uuid},127.0.0.1:8090")
-            
-            logger.info("🎯 ARI AUDIOSOCKET - ✅ AudioSocket command executed", 
-                       local_channel_id=local_channel_id,
-                       audio_uuid=audio_uuid)
-            
-        except Exception as e:
-            logger.error("🎯 ARI AUDIOSOCKET - Failed to start AudioSocket connection", 
-                        caller_channel_id=caller_channel_id,
-                        local_channel_id=local_channel_id,
-                        error=str(e), exc_info=True)
 
     async def _handle_caller_stasis_start(self, caller_channel_id: str, channel: dict):
         """Handle caller channel entering Stasis - LEGACY (kept for reference)."""
@@ -511,14 +475,13 @@ class Engine:
         """Originate single Local channel for AudioSocket - Dialplan approach."""
         # Generate UUID for AudioSocket binding
         audio_uuid = str(uuid.uuid4())
-        # Originate Local channel into Stasis context for ARI management
-        local_endpoint = f"Local/{audio_uuid}@ai-stasis/n"
+        # Originate Local channel directly to AudioSocket dialplan context
+        local_endpoint = f"Local/{audio_uuid}@ai-audiosocket-only/n"
         
         orig_params = {
             "endpoint": local_endpoint,
-            "app": "asterisk-ai-voice-agent",  # Enter Stasis for ARI management
             "timeout": "30"
-            # Note: Local channel will enter Stasis, then we'll execute AudioSocket via ARI
+            # No app parameter - goes directly to dialplan for AudioSocket
         }
         
         logger.info("🎯 DIALPLAN AUDIOSOCKET - Originating AudioSocket Local channel", 
