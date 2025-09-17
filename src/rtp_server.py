@@ -85,7 +85,7 @@ class RTPServer:
             self.running = True
             self.server_task = asyncio.create_task(self._rtp_receiver())
             
-            logger.info("RTP Server started", host=self.host, port=self.port, codec=self.codec)
+            logger.info(f"RTP Server started - Host: {self.host}, Port: {self.port}, Codec: {self.codec}")
             
         except Exception as e:
             logger.error(f"Failed to start RTP server: {e}")
