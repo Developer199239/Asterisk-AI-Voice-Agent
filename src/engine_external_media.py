@@ -49,8 +49,8 @@ class ExternalMediaEngine:
         rtp_config = getattr(config, 'rtp', None)
         if rtp_config:
             self.rtp_server = RTPServer(
-                host=rtp_config.get('host', '127.0.0.1'),
-                port_range=tuple(rtp_config.get('port_range', [10000, 10100])),
+                host=rtp_config.host,
+                port_range=tuple(rtp_config.port_range),
                 engine_callback=self._on_rtp_audio_received
             )
         else:
