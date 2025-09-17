@@ -205,6 +205,45 @@ class LocalProvider(AIProviderInterface):
         # Direct speech injection is not the primary mode of operation.
         logger.warning("Direct 'speak' method not implemented for this provider. Use the streaming pipeline.")
     
+    async def text_to_speech(self, text: str) -> Optional[bytes]:
+        """Generate TTS audio for the given text."""
+        try:
+            if not self.websocket or self.websocket.closed:
+                logger.error("WebSocket not connected for TTS")
+                return None
+            
+            # Send TTS request to Local AI Server
+            tts_message = {
+                "type": "tts_request",
+                "text": text,
+                "call_id": self._active_call_id or "greeting"
+            }
+            
+            await self.websocket.send(json.dumps(tts_message))
+            logger.info("Sent TTS request to Local AI Server", text=text[:50] + "..." if len(text) > 50 else text)
+            
+            # Wait for TTS response (with timeout)
+            try:
+                response = await asyncio.wait_for(self.websocket.recv(), timeout=10.0)
+                response_data = json.loads(response)
+                
+                if response_data.get("type") == "tts_response" and response_data.get("audio_data"):
+                    # Decode base64 audio data
+                    audio_data = base64.b64decode(response_data["audio_data"])
+                    logger.info("Received TTS audio data", size=len(audio_data))
+                    return audio_data
+                else:
+                    logger.warning("Unexpected TTS response format", response=response_data)
+                    return None
+                    
+            except asyncio.TimeoutError:
+                logger.error("TTS request timed out")
+                return None
+                
+        except Exception as e:
+            logger.error("Failed to generate TTS", text=text, error=str(e), exc_info=True)
+            return None
+    
     def get_provider_info(self) -> Dict[str, Any]:
         return {
             "name": "LocalProvider",
