@@ -290,35 +290,11 @@ class ExternalMediaEngine:
             logger.info("AI pipeline started", call_id=call_id, provider=provider_name)
             
             # Play initial greeting
-            await self._play_initial_greeting(call_id)
+            await provider.play_initial_greeting(call_id)
             
         except Exception as e:
             logger.error(f"Failed to start AI pipeline for call {call_id}: {e}")
     
-    async def _play_initial_greeting(self, call_id: str):
-        """Play initial greeting to the caller."""
-        try:
-            call_info = self.active_calls.get(call_id)
-            if not call_info:
-                logger.error("Call info not found", call_id=call_id)
-                return
-            
-            provider = call_info["provider"]
-            greeting_text = self.config.llm.initial_greeting
-            
-            logger.info("Generating greeting audio", call_id=call_id, text=greeting_text)
-            
-            # Generate TTS audio
-            audio_data = await provider.speak(greeting_text)
-            if audio_data:
-                # Send audio via RTP
-                await self.rtp_server.send_audio(call_id, audio_data)
-                logger.info("Initial greeting played", call_id=call_id)
-            else:
-                logger.warning("No greeting audio generated", call_id=call_id)
-                
-        except Exception as e:
-            logger.error(f"Failed to play initial greeting for call {call_id}: {e}")
     
     async def _on_rtp_audio_received(self, call_id: str, pcm_data: bytes):
         """Handle incoming RTP audio from caller."""
