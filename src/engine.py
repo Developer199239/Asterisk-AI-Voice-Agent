@@ -273,12 +273,12 @@ class Engine:
             logger.info("🎯 HYBRID ARI - Processing caller channel", channel_id=channel_id)
             await self._handle_caller_stasis_start_hybrid(channel_id, channel)
         elif self._is_local_channel(channel):
-            # This is the Local channel entering Stasis - SHOULD NOT HAPPEN in hybrid approach
-            logger.warning("🎯 HYBRID ARI - Local channel entered Stasis (unexpected)", 
-                          channel_id=channel_id,
-                          channel_name=channel_name)
-            # In hybrid approach, Local channel should NOT enter Stasis
-            # Just log and continue - the bridge should already be created
+            # This is the Local channel entering Stasis - NOW EXPECTED!
+            logger.info("🎯 HYBRID ARI - Local channel entered Stasis", 
+                       channel_id=channel_id,
+                       channel_name=channel_name)
+            # Now add the Local channel to the bridge
+            await self._handle_local_stasis_start_hybrid(channel_id, channel)
         else:
             logger.warning("🎯 HYBRID ARI - Unknown channel type in StasisStart", 
                           channel_id=channel_id, 
@@ -344,6 +344,57 @@ class Engine:
                         caller_channel_id=caller_channel_id, 
                         error=str(e), exc_info=True)
             await self._cleanup_call(caller_channel_id)
+
+    async def _handle_local_stasis_start_hybrid(self, local_channel_id: str, channel: dict):
+        """Handle Local channel entering Stasis - Hybrid ARI approach."""
+        logger.info("🎯 HYBRID ARI - Processing Local channel StasisStart", 
+                   local_channel_id=local_channel_id)
+        
+        # Find the caller channel that this Local channel belongs to
+        caller_channel_id = self._find_caller_for_local(local_channel_id)
+        if not caller_channel_id:
+            logger.error("🎯 HYBRID ARI - No caller found for Local channel", 
+                        local_channel_id=local_channel_id)
+            await self.ari_client.hangup_channel(local_channel_id)
+            return
+        
+        # Check if caller channel exists and has a bridge
+        if caller_channel_id not in self.caller_channels:
+            logger.error("🎯 HYBRID ARI - Caller channel not found for Local channel", 
+                        local_channel_id=local_channel_id,
+                        caller_channel_id=caller_channel_id)
+            await self.ari_client.hangup_channel(local_channel_id)
+            return
+        
+        bridge_id = self.caller_channels[caller_channel_id]["bridge_id"]
+        
+        try:
+            # Add Local channel to bridge
+            logger.info("🎯 HYBRID ARI - Adding Local channel to bridge", 
+                       local_channel_id=local_channel_id,
+                       bridge_id=bridge_id)
+            local_success = await self.ari_client.add_channel_to_bridge(bridge_id, local_channel_id)
+            if local_success:
+                logger.info("🎯 HYBRID ARI - ✅ Local channel added to bridge", 
+                           local_channel_id=local_channel_id,
+                           bridge_id=bridge_id)
+                # Update caller info
+                self.caller_channels[caller_channel_id]["local_channel_id"] = local_channel_id
+                self.caller_channels[caller_channel_id]["status"] = "connected"
+                self.local_channels[caller_channel_id] = local_channel_id
+                
+                # Start provider session
+                await self._start_provider_session_hybrid(caller_channel_id, local_channel_id)
+            else:
+                logger.error("🎯 HYBRID ARI - Failed to add Local channel to bridge", 
+                           local_channel_id=local_channel_id,
+                           bridge_id=bridge_id)
+                await self.ari_client.hangup_channel(local_channel_id)
+        except Exception as e:
+            logger.error("🎯 HYBRID ARI - Failed to handle Local channel StasisStart", 
+                        local_channel_id=local_channel_id,
+                        error=str(e), exc_info=True)
+            await self.ari_client.hangup_channel(local_channel_id)
 
     async def _handle_caller_stasis_start(self, caller_channel_id: str, channel: dict):
         """Handle caller channel entering Stasis - LEGACY (kept for reference)."""
@@ -444,29 +495,12 @@ class Engine:
                            caller_channel_id=caller_channel_id,
                            audio_uuid=audio_uuid)
                 
-                # Add Local channel to existing bridge
+                # Store Local channel info - will be added to bridge when StasisStart event arrives
                 if caller_channel_id in self.caller_channels:
-                    bridge_id = self.caller_channels[caller_channel_id]["bridge_id"]
-                    logger.info("🎯 HYBRID ARI - Adding Local channel to bridge", 
+                    self.caller_channels[caller_channel_id]["pending_local_channel_id"] = local_channel_id
+                    logger.info("🎯 HYBRID ARI - Local channel originated, waiting for StasisStart", 
                                local_channel_id=local_channel_id,
-                               bridge_id=bridge_id)
-                    local_success = await self.ari_client.add_channel_to_bridge(bridge_id, local_channel_id)
-                    if local_success:
-                        logger.info("🎯 HYBRID ARI - ✅ Local channel added to bridge", 
-                                   local_channel_id=local_channel_id,
-                                   bridge_id=bridge_id)
-                        # Update caller info
-                        self.caller_channels[caller_channel_id]["local_channel_id"] = local_channel_id
-                        self.caller_channels[caller_channel_id]["status"] = "connected"
-                        self.local_channels[caller_channel_id] = local_channel_id
-                        
-                        # Start provider session
-                        await self._start_provider_session_hybrid(caller_channel_id, local_channel_id)
-                    else:
-                        logger.error("🎯 HYBRID ARI - Failed to add Local channel to bridge", 
-                                   local_channel_id=local_channel_id,
-                                   bridge_id=bridge_id)
-                        raise RuntimeError("Failed to add Local channel to bridge")
+                               caller_channel_id=caller_channel_id)
                 else:
                     logger.error("🎯 HYBRID ARI - Caller channel not found for Local channel", 
                                local_channel_id=local_channel_id,
