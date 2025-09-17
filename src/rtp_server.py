@@ -88,7 +88,7 @@ class RTPServer:
             logger.info("RTP Server started", host=self.host, port=self.port, codec=self.codec)
             
         except Exception as e:
-            logger.error("Failed to start RTP server", error=str(e))
+            logger.error(f"Failed to start RTP server: {e}")
             raise
     
     async def stop(self):
