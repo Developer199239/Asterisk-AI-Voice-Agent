@@ -432,9 +432,9 @@ class Engine:
                 logger.info("🎯 EXTERNAL MEDIA - Step 5: Creating ExternalMedia channel", channel_id=caller_channel_id)
                 external_media_id = await self._start_external_media_channel(caller_channel_id)
                 if external_media_id:
-                    # Store the ExternalMedia ID - the StasisStart event will handle adding to bridge
-                    self.caller_channels[caller_channel_id]["external_media_id"] = external_media_id
-                    self.caller_channels[caller_channel_id]["status"] = "external_media_created"
+                    # Store the ExternalMedia ID in active_calls - the StasisStart event will handle adding to bridge
+                    self.active_calls[caller_channel_id]["external_media_id"] = external_media_id
+                    self.active_calls[caller_channel_id]["status"] = "external_media_created"
                     logger.info("🎯 EXTERNAL MEDIA - ExternalMedia channel created, waiting for StasisStart", 
                                channel_id=caller_channel_id, 
                                external_media_id=external_media_id)
@@ -1603,19 +1603,9 @@ class Engine:
                            caller_channel_id=caller_channel_id,
                            external_media_id=external_media_id)
                 
-                # Add ExternalMedia channel to Stasis application
-                try:
-                    await self.ari_client.add_channel_to_stasis(
-                        channel_id=external_media_id,
-                        app_name=self.ari_client.app_name
-                    )
-                    logger.info("ExternalMedia channel added to Stasis", 
-                               external_media_id=external_media_id)
-                except Exception as e:
-                    logger.error("Failed to add ExternalMedia channel to Stasis", 
-                               external_media_id=external_media_id, 
-                               error=str(e))
-                    return
+                # ExternalMedia channel automatically enters Stasis when created with app parameter
+                logger.info("ExternalMedia channel will enter Stasis automatically", 
+                           external_media_id=external_media_id)
                 return external_media_id
             else:
                 logger.error("Failed to create ExternalMedia channel", 
@@ -2012,28 +2002,54 @@ class Engine:
         """Handle PlaybackFinished event to enable audio capture after greeting."""
         try:
             playback_id = event.get("playback", {}).get("id")
-            channel_id = event.get("playback", {}).get("target_uri", "").replace("channel:", "")
+            target_uri = event.get("playback", {}).get("target_uri", "")
             
             logger.info("🎵 PLAYBACK FINISHED - Greeting completed, enabling audio capture",
                        playback_id=playback_id,
-                       channel_id=channel_id)
+                       target_uri=target_uri)
             
-            # Enable audio capture for this channel (works for both AudioSocket and ExternalMedia)
-            if channel_id in self.active_calls:
-                self.active_calls[channel_id]["audio_capture_enabled"] = True
+            # Handle bridge playback (ExternalMedia) vs channel playback (AudioSocket)
+            caller_channel_id = None
+            
+            if target_uri.startswith("bridge:"):
+                # Bridge playback - use active_playbacks mapping
+                playback_data = self.active_playbacks.pop(playback_id, None)
+                if playback_data:
+                    caller_channel_id = playback_data.get("channel_id")
+                    logger.info("🎤 AUDIO CAPTURE - Bridge playback finished, found caller",
+                               caller_channel_id=caller_channel_id,
+                               playback_id=playback_id)
+                else:
+                    logger.warning("🎤 AUDIO CAPTURE - Bridge playback finished but no mapping found",
+                                 playback_id=playback_id)
+            elif target_uri.startswith("channel:"):
+                # Channel playback - direct channel ID
+                caller_channel_id = target_uri.replace("channel:", "")
+                logger.info("🎤 AUDIO CAPTURE - Channel playback finished",
+                           caller_channel_id=caller_channel_id,
+                           playback_id=playback_id)
+            else:
+                logger.warning("🎤 AUDIO CAPTURE - Unknown target URI format",
+                             target_uri=target_uri,
+                             playback_id=playback_id)
+                return
+            
+            # Enable audio capture for the caller channel
+            if caller_channel_id and caller_channel_id in self.active_calls:
+                self.active_calls[caller_channel_id]["audio_capture_enabled"] = True
                 
                 # Check if this is an AudioSocket connection for logging
-                conn_id = self.channel_to_conn.get(channel_id)
+                conn_id = self.channel_to_conn.get(caller_channel_id)
                 if conn_id:
                     logger.info("🎤 AUDIO CAPTURE - Enabled for AudioSocket connection after greeting",
                                conn_id=conn_id,
-                               channel_id=channel_id)
+                               caller_channel_id=caller_channel_id)
                 else:
                     logger.info("🎤 AUDIO CAPTURE - Enabled for ExternalMedia call after greeting",
-                               channel_id=channel_id)
+                               caller_channel_id=caller_channel_id)
             else:
-                logger.warning("🎤 AUDIO CAPTURE - Channel not found in active calls",
-                             channel_id=channel_id)
+                logger.warning("🎤 AUDIO CAPTURE - Caller channel not found in active calls",
+                             caller_channel_id=caller_channel_id)
                 
         except Exception as e:
             logger.error("Error handling PlaybackFinished event", error=str(e), exc_info=True)
