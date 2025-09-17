@@ -193,6 +193,11 @@ class ExternalMediaEngine:
                 logger.error("No channel ID in StasisStart event")
                 return
             
+            # Skip External Media channels - only process caller channels
+            if channel_id in self.external_media_channels.values():
+                logger.debug("Skipping StasisStart for External Media channel", channel_id=channel_id)
+                return
+            
             # Check if call is already in progress
             if channel_id in self.active_calls:
                 logger.warning("Call already in progress", channel_id=channel_id)
@@ -304,7 +309,7 @@ class ExternalMediaEngine:
             logger.info("Generating greeting audio", call_id=call_id, text=greeting_text)
             
             # Generate TTS audio
-            audio_data = await provider.text_to_speech(greeting_text)
+            audio_data = await provider.speak(greeting_text)
             if audio_data:
                 # Send audio via RTP
                 await self.rtp_server.send_audio(call_id, audio_data)
