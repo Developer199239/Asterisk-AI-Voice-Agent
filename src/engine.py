@@ -1671,6 +1671,14 @@ class Engine:
             # Note: SSRC mapping will be established when first RTP packet is received
             # We'll need to add a method to map SSRC to caller when we see the first packet
             
+            # Set provider input mode for RTP (16kHz PCM)
+            if hasattr(provider, 'set_input_mode'):
+                provider.set_input_mode('pcm16_16k')  # RTP server sends 16kHz PCM directly
+                logger.info("Set provider input mode for RTP", 
+                           caller_channel_id=caller_channel_id, 
+                           mode='pcm16_16k', 
+                           provider=provider_name)
+            
             # Start provider session
             await provider.start_session(caller_channel_id)
             

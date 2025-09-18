@@ -24,7 +24,7 @@ class LocalProvider(AIProviderInterface):
         self._sender_task: Optional[asyncio.Task] = None
         self._send_queue: asyncio.Queue = asyncio.Queue(maxsize=200)
         self._active_call_id: Optional[str] = None
-        self.input_mode: str = 'mulaw8k'  # or 'pcm16_8k'
+        self.input_mode: str = 'mulaw8k'  # or 'pcm16_8k' or 'pcm16_16k'
         self._pending_tts_responses: Dict[str, asyncio.Future] = {}  # Track pending TTS responses
 
     @property
@@ -114,12 +114,18 @@ class LocalProvider(AIProviderInterface):
 
                 # Convert and send one aggregated message
                 import audioop
-                # Concatenate at 8k then resample once
-                if self.input_mode == 'pcm16_8k':
+                # Handle different input modes
+                if self.input_mode == 'pcm16_16k':
+                    # Already 16kHz PCM, just concatenate
+                    pcm16k = b"".join(batch)
+                elif self.input_mode == 'pcm16_8k':
+                    # 8kHz PCM, resample to 16kHz
                     pcm8k = b"".join(batch)
+                    pcm16k, _ = audioop.ratecv(pcm8k, 2, 1, 8000, 16000, None)
                 else:
+                    # µ-law 8kHz, convert to PCM then resample
                     pcm8k = b"".join(audioop.ulaw2lin(b, 2) for b in batch)
-                pcm16k, _ = audioop.ratecv(pcm8k, 2, 1, 8000, 16000, None)
+                    pcm16k, _ = audioop.ratecv(pcm8k, 2, 1, 8000, 16000, None)
                 
                 # Process audio batch for STT
                 total_bytes = sum(len(b) for b in batch)
