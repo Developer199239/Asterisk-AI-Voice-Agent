@@ -1432,8 +1432,7 @@ class Engine:
             call_data = self.active_calls.get(channel_id, {})
             audio_capture_enabled = call_data.get("audio_capture_enabled", False)
             
-            logger.info("🎤 AUDIO CAPTURE - Check", ssrc=ssrc, caller_channel_id=caller_channel_id, audio_capture_enabled=audio_capture_enabled)
-        if not audio_capture_enabled:
+            if not audio_capture_enabled:
                 if count <= 10 or count % 50 == 0:  # Log first 10, then every 50th
                     logger.info("🎤 AUDIO CAPTURE - ⏸️ Disabled, waiting for greeting to finish",
                                conn_id=conn_id,
@@ -1523,7 +1522,6 @@ class Engine:
     async def _on_rtp_audio(self, ssrc: int, pcm_16k_data: bytes):
         logger.info("🎵 RTP AUDIO - Received audio", ssrc=ssrc, bytes=len(pcm_16k_data))
         """Route inbound RTP audio to the appropriate provider using SSRC with VAD-based utterance detection."""
-        logger.info("🎵 RTP AUDIO - Received audio", ssrc=ssrc, bytes=len(pcm_16k_data))
         try:
             # Find the caller channel for this SSRC
             caller_channel_id = self.ssrc_to_caller.get(ssrc)
@@ -1556,8 +1554,7 @@ class Engine:
             call_data = self.active_calls.get(caller_channel_id, {})
             audio_capture_enabled = call_data.get("audio_capture_enabled", False)
             
-            logger.info("🎤 AUDIO CAPTURE - Check", ssrc=ssrc, caller_channel_id=caller_channel_id, audio_capture_enabled=audio_capture_enabled)
-        if not audio_capture_enabled:
+            if not audio_capture_enabled:
                 logger.debug("RTP audio capture disabled, waiting for greeting to finish", 
                            ssrc=ssrc, caller_channel_id=caller_channel_id)
                 return

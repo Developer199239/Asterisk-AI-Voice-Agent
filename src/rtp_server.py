@@ -35,6 +35,8 @@ class RTPSession:
     jitter_buffer: list = None
     frames_received: int = 0
     frames_processed: int = 0
+    # Resampling state for consistent frame sizes
+    resample_state: tuple = None
     
     def __post_init__(self):
         if self.jitter_buffer is None:
@@ -240,7 +242,14 @@ class RTPServer:
             return
         
         # Resample from 8kHz to 16kHz
-        pcm_16k = self._resample_8k_to_16k(pcm_data)
+        pcm_16k = self._resample_8k_to_16k(pcm_data, session)
+        
+        # Log resampled audio size for verification
+        logger.debug("🎵 RTP RESAMPLE - Audio resampled", 
+                    ssrc=ssrc, 
+                    input_bytes=len(pcm_data), 
+                    output_bytes=len(pcm_16k),
+                    expected_bytes=640)
         
         # Forward to engine with SSRC directly
         try:
@@ -294,20 +303,28 @@ class RTPServer:
             return
         
         # Resample from 8kHz to 16kHz
-        pcm_16k = self._resample_8k_to_16k(pcm_data)
+        pcm_16k = self._resample_8k_to_16k(pcm_data, session)
+        
+        # Log resampled audio size for verification
+        logger.debug("🎵 RTP RESAMPLE - Audio resampled", 
+                    call_id=call_id, 
+                    input_bytes=len(pcm_data), 
+                    output_bytes=len(pcm_16k),
+                    expected_bytes=640)
         
         # Forward to engine
         try:
-            await self.engine_callback(call_id, pcm_16k)
+            await self.engine_callback(ssrc, pcm_16k)
             session.frames_processed += 1
         except Exception as e:
-            logger.error("Error in engine callback", call_id=call_id, error=str(e))
+            logger.error("Error in engine callback", ssrc=ssrc, error=str(e))
     
-    def _resample_8k_to_16k(self, pcm_8k: bytes) -> bytes:
-        """Resample PCM16 8kHz to 16kHz using audioop.ratecv."""
+    def _resample_8k_to_16k(self, pcm_8k: bytes, session: RTPSession) -> bytes:
+        """Resample PCM16 8kHz to 16kHz using audioop.ratecv with persistent state."""
         try:
-            # Use audioop.ratecv for proper resampling
-            pcm_16k, _ = audioop.ratecv(pcm_8k, 2, 1, 8000, 16000, None)
+            # Use audioop.ratecv with persistent state to avoid frame size drift
+            pcm_16k, state = audioop.ratecv(pcm_8k, 2, 1, 8000, 16000, session.resample_state)
+            session.resample_state = state  # Store state for next packet
             return pcm_16k
         except Exception as e:
             logger.error("Resampling failed", error=str(e))
