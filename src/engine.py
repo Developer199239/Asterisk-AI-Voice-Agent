@@ -1608,7 +1608,7 @@ class Engine:
             
             # Get VAD configuration from config
             vad_config = self.config.streaming.barge_in
-            vad_threshold_db = getattr(vad_config, "vad_threshold_db", -30)
+            vad_threshold_db = -50  # Phase 1 fix: Hardcoded threshold
             
             # Debug logging for VAD energy levels (every 10 frames)
             if vad_state["frame_count"] % 10 == 0:
@@ -1619,8 +1619,8 @@ class Engine:
                            threshold_db=vad_threshold_db,
                            is_speech=energy_db > vad_threshold_db)
             min_speech_ms = getattr(vad_config, "min_speech_ms", 200)
-            end_silence_ms = 1500  # Fixed for now
-            pre_roll_ms = 200
+            end_silence_ms = 1000  # Phase 1 fix
+            pre_roll_ms = 400  # Phase 1 fix
             max_utterance_ms = 10000
             
             # Convert durations to frame counts (20ms per frame)
@@ -1675,9 +1675,15 @@ class Engine:
                     vad_state["silence_duration_ms"] += 20
                 
                 # Check for end conditions
+                # Phase 1 fix: Minimum utterance duration guard
+                min_utterance_ms = 600  # Prevent single words
+                if vad_state["speech_duration_ms"] < min_utterance_ms:
+                    should_end = False  # Force continue recording
+
                 should_end = False
                 end_reason = ""
                 
+
                 # End if too much silence
                 if vad_state["consecutive_silence_frames"] >= end_silence_frames:
                     should_end = True
