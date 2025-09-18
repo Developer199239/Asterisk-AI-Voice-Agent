@@ -1585,6 +1585,11 @@ class Engine:
     async def _process_rtp_audio_with_vad(self, caller_channel_id: str, ssrc: int, pcm_16k_data: bytes, provider):
         """Process RTP audio with VAD-based utterance detection."""
         try:
+            # ARCHITECT FIX: TTS feedback loop prevention gate
+            # Prevent LLM from hearing its own TTS responses
+            call_data = self.active_calls.get(caller_channel_id, {})
+            if call_data.get("tts_playing", False):
+                return  # Skip VAD processing during TTS playback
             # Get or initialize VAD state for this call
             if "vad_state" not in self.active_calls[caller_channel_id]:
                 self.active_calls[caller_channel_id]["vad_state"] = {
@@ -1638,23 +1643,23 @@ class Engine:
             
             noise_db = vs.get("noise_floor_db", -70.0)
             
-            # AVR-VAD INSPIRED: Optimal parameters for 8kHz system
-            start_margin_db = 10
-            end_margin_db = 6
-            hard_min_start_db = -70
-            hard_min_end_db = -75
+            # ARCHITECT RECOMMENDED: Optimized parameters for telephony audio
+            start_margin_db = 8      # Conservative start margin
+            end_margin_db = 4        # Conservative end margin
+            hard_min_start_db = -75  # Lower minimum for quiet callers
+            hard_min_end_db = -80    # Lower minimum for quiet callers
             hard_max_start_db = -40  # Prevent thresholds from becoming too high
-            hard_max_end_db = -45
+            hard_max_end_db = -45    # Prevent thresholds from becoming too high
             
             # Compute adaptive thresholds with safety rails
             start_db = min(hard_max_start_db, max(noise_db + start_margin_db, hard_min_start_db))
             end_db = min(hard_max_end_db, max(noise_db + end_margin_db, hard_min_end_db))
             snr_db = energy_db - noise_db
             
-            # AVR-VAD INSPIRED: Redemption period parameters
-            redemption_frames = 12  # 240ms at 20ms frames (8kHz) - prevents false negatives
-            pre_speech_pad_frames = 2  # 40ms pre-roll buffer
-            min_speech_frames = 5  # 100ms minimum speech duration
+            # ARCHITECT RECOMMENDED: Redemption period parameters for telephony
+            redemption_frames = 40   # 800ms at 20ms frames - longer for natural speech pauses
+            pre_speech_pad_frames = 15  # 300ms pre-roll buffer
+            min_speech_frames = 10  # 200ms minimum speech duration
             
             # Update noise floor when not in recording and not above start threshold
             if vs["state"] == "listening" and energy_db < start_db:
@@ -1703,9 +1708,14 @@ class Engine:
                            noise_db=f"{noise_db:.2f}",
                            snr_db=f"{snr_db:.2f}")
             
+            # ARCHITECT FIX: Lower SNR thresholds for telephony audio
+            # Telephony SNR typically 1-5 dB, not 8+ dB
+            min_snr_start = 3      # Start speech detection at 3 dB SNR
+            min_snr_continue = 1   # Continue speech at 1 dB SNR
+            
             # AVR-VAD INSPIRED: Main VAD State Machine
-            is_speech = energy_db > start_db and snr_db >= 8
-            is_silence = energy_db < end_db or snr_db < 4
+            is_speech = energy_db > start_db and snr_db >= min_snr_start
+            is_silence = energy_db < end_db or snr_db < min_snr_continue
             
             # Add frame to pre-roll buffer (always)
             vs["pre_roll_buffer"] += pcm_16k_data
@@ -1793,6 +1803,19 @@ class Engine:
                             buf = vs["utterance_buffer"]
                             buf = self._normalize_to_dbfs(buf, target_dbfs=-20.0, max_gain=3.0)
                             
+                            # ARCHITECT FIX: Discard ultra-short utterances
+                            # 200ms = 10 frames = 6400 bytes at 16kHz
+                            min_utterance_bytes = 6400
+                            if len(buf) < min_utterance_bytes:
+                                logger.debug("🎤 VAD - Discarding short utterance", 
+                                           caller_channel_id=caller_channel_id,
+                                           utterance_id=vs["utterance_id"],
+                                           bytes=len(buf),
+                                           min_bytes=min_utterance_bytes)
+                                vs["state"] = "listening"
+                                vs["utterance_buffer"] = b""
+                                continue
+                            
                             vs["state"] = "processing"
                             logger.info("🎤 VAD - Speech ended", 
                                        caller_channel_id=caller_channel_id,
@@ -1803,12 +1826,12 @@ class Engine:
                                        bytes=len(buf),
                                        noise_db=f"{noise_db:.1f}")
                             
-                        # Send to provider
-                        await provider.send_audio(buf)
-                        logger.info("🎤 VAD - Utterance sent to provider", 
-                                   caller_channel_id=caller_channel_id,
-                                   utterance_id=vs["utterance_id"],
-                                   bytes=len(buf))
+                            # Send to provider
+                            await provider.send_audio(buf)
+                            logger.info("🎤 VAD - Utterance sent to provider", 
+                                       caller_channel_id=caller_channel_id,
+                                       utterance_id=vs["utterance_id"],
+                                       bytes=len(buf))
                         
                         # Reset for next utterance
                         vs["state"] = "listening"
