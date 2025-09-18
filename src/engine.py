@@ -1623,6 +1623,8 @@ class Engine:
             if "t0_ms" not in vad_state:
                 vad_state["t0_ms"] = int(time.monotonic() * 1000)
             
+            # ARCHITECT FIX: Increment frame_count BEFORE calculating current_time_ms
+            vad_state["frame_count"] += 1
             current_time_ms = vad_state["t0_ms"] + vad_state["frame_count"] * 20
             
             # Calculate audio energy for VAD
@@ -1633,13 +1635,6 @@ class Engine:
             
             # ARCHITECT'S VAD IMPROVEMENTS - Adaptive thresholds with noise tracking
             vs = vad_state
-            
-            # CRITICAL: Prevent feedback loop - don't process audio during TTS playback
-            if vs.get("tts_playing", False):
-                logger.debug("🔇 VAD - Capture gated during TTS playback", 
-                           caller_channel_id=caller_channel_id,
-                           utterance_id=vs.get("utterance_id", 0))
-                return
             
             noise_db = vs.get("noise_floor_db", -70.0)
             
@@ -1689,7 +1684,6 @@ class Engine:
             post_roll_frames = post_roll_ms // 20
             max_utterance_frames = max_utterance_ms // 20
             
-            vad_state["frame_count"] += 1
             # current_time_ms already calculated above with monotonic clock
             
             # Update pre-roll buffer (keep last 400ms)
