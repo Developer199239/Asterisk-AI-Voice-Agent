@@ -1589,6 +1589,8 @@ class Engine:
             if "vad_state" not in self.active_calls[caller_channel_id]:
                 self.active_calls[caller_channel_id]["vad_state"] = {
                     "state": "listening",  # 'listening' | 'recording' | 'processing'
+                    "speaking": False,  # AVR-VAD inspired: main speech state
+                    "speech_real_start_fired": False,  # Confirmation state
                     "pre_roll_buffer": b"",  # Last 400ms of audio
                     "utterance_buffer": b"",  # Current recording
                     "last_voice_ms": 0,  # Monotonic ms of last speech frame
@@ -1599,12 +1601,15 @@ class Engine:
                     "frame_count": 0,
                     "consecutive_speech_frames": 0,
                     "consecutive_silence_frames": 0,
+                    "redemption_counter": 0,  # AVR-VAD inspired: redemption period
+                    "speech_frame_count": 0,  # Total speech frames in current utterance
                     # ARCHITECT'S VAD IMPROVEMENTS
                     "noise_db_history": deque(maxlen=100),  # ~2s at 20ms
                     "noise_floor_db": -70.0,
                     "tail_frames_remaining": 0,
                     "last_utterance_end_ms": 0,
                     "utterance_id": 0,  # ARCHITECT FIX: Track utterance sequence
+                    "tts_playing": False,  # CRITICAL: Track TTS playback state
                 }
             
             vad_state = self.active_calls[caller_channel_id]["vad_state"]
@@ -1623,9 +1628,17 @@ class Engine:
             
             # ARCHITECT'S VAD IMPROVEMENTS - Adaptive thresholds with noise tracking
             vs = vad_state
+            
+            # CRITICAL: Prevent feedback loop - don't process audio during TTS playback
+            if vs.get("tts_playing", False):
+                logger.debug("🔇 VAD - Capture gated during TTS playback", 
+                           caller_channel_id=caller_channel_id,
+                           utterance_id=vs.get("utterance_id", 0))
+                return
+            
             noise_db = vs.get("noise_floor_db", -70.0)
             
-            # ARCHITECT FIX: Add threshold safety rails with upper bounds
+            # AVR-VAD INSPIRED: Optimal parameters for 8kHz system
             start_margin_db = 10
             end_margin_db = 6
             hard_min_start_db = -70
@@ -1637,6 +1650,11 @@ class Engine:
             start_db = min(hard_max_start_db, max(noise_db + start_margin_db, hard_min_start_db))
             end_db = min(hard_max_end_db, max(noise_db + end_margin_db, hard_min_end_db))
             snr_db = energy_db - noise_db
+            
+            # AVR-VAD INSPIRED: Redemption period parameters
+            redemption_frames = 12  # 240ms at 20ms frames (8kHz) - prevents false negatives
+            pre_speech_pad_frames = 2  # 40ms pre-roll buffer
+            min_speech_frames = 5  # 100ms minimum speech duration
             
             # Update noise floor when not in recording and not above start threshold
             if vs["state"] == "listening" and energy_db < start_db:
@@ -1685,130 +1703,136 @@ class Engine:
                            noise_db=f"{noise_db:.2f}",
                            snr_db=f"{snr_db:.2f}")
             
-            # ARCHITECT'S VAD STATE MACHINE - Listening → Recording (start)
-            if vs["state"] == "listening":
-                # Min-gap between utterances
-                if current_time_ms - vs.get("last_utterance_end_ms", 0) < min_gap_ms:
-                    # Too soon after last utterance, require extra frames
-                    if energy_db > start_db and snr_db >= 8:
-                        vs["consecutive_speech_frames"] += 1
-                        if vs["consecutive_speech_frames"] >= min_speech_frames + 2:  # Extra frames for chattering prevention
-                            vs["state"] = "recording"
-                            vs["speech_start_ms"] = current_time_ms - pre_roll_ms
-                            vs["utterance_buffer"] = vs["pre_roll_buffer"]
-                            vs["speech_duration_ms"] = 0
-                            vs["silence_duration_ms"] = 0
-                            vs["consecutive_speech_frames"] = 0
-                            vs["consecutive_silence_frames"] = 0
-                            logger.info("🎤 VAD - Speech started (chattering prevention)", 
-                                       caller_channel_id=caller_channel_id,
-                                       start_db=f"{start_db:.1f}",
-                                       noise_db=f"{noise_db:.1f}",
-                                       energy_db=f"{energy_db:.1f}")
-                    else:
-                        vs["consecutive_speech_frames"] = 0
-                        vs["consecutive_silence_frames"] += 1
-                else:
-                    # Normal speech detection
-                    if energy_db > start_db and snr_db >= 8:
-                        vs["consecutive_speech_frames"] += 1
-                        if vs["consecutive_speech_frames"] >= min_speech_frames:
-                            vs["state"] = "recording"
-                            vs["speech_start_ms"] = current_time_ms - pre_roll_ms
-                            vs["utterance_buffer"] = vs["pre_roll_buffer"]
-                            vs["speech_duration_ms"] = 0
-                            vs["silence_duration_ms"] = 0
-                            vs["consecutive_speech_frames"] = 0
-                            vs["consecutive_silence_frames"] = 0
-                            vs["utterance_id"] += 1
-                            logger.info("🎤 VAD - Speech started", 
-                                       caller_channel_id=caller_channel_id,
-                                       utterance_id=vs["utterance_id"],
-                                       start_db=f"{start_db:.1f}",
-                                       noise_db=f"{noise_db:.1f}",
-                                       energy_db=f"{energy_db:.1f}")
-                    else:
-                        vs["consecutive_speech_frames"] = 0
-                        vs["consecutive_silence_frames"] += 1
+            # AVR-VAD INSPIRED: Main VAD State Machine
+            is_speech = energy_db > start_db and snr_db >= 8
+            is_silence = energy_db < end_db or snr_db < 4
             
-            # ARCHITECT'S VAD STATE MACHINE - Recording updates with SNR & hysteresis
-            elif vs["state"] == "recording":
+            # Add frame to pre-roll buffer (always)
+            vs["pre_roll_buffer"] += pcm_16k_data
+            if len(vs["pre_roll_buffer"]) > pre_roll_ms * 32:  # 400ms * 32 bytes/ms
+                vs["pre_roll_buffer"] = vs["pre_roll_buffer"][-pre_roll_ms * 32:]
+            
+            # AVR-VAD INSPIRED: Speech detection logic
+            if is_speech and not vs["speaking"]:
+                # Speech start detected
+                vs["speaking"] = True
+                vs["speech_real_start_fired"] = False
+                vs["speech_frame_count"] = 0
+                vs["redemption_counter"] = 0
+                vs["consecutive_speech_frames"] = 0
+                vs["consecutive_silence_frames"] = 0
+                vs["utterance_buffer"] = vs["pre_roll_buffer"]
+                vs["speech_start_ms"] = current_time_ms - pre_roll_ms
+                vs["speech_duration_ms"] = 0
+                vs["silence_duration_ms"] = 0
+                vs["utterance_id"] += 1
+                logger.info("🎤 VAD - Speech started", 
+                           caller_channel_id=caller_channel_id,
+                           utterance_id=vs["utterance_id"],
+                           start_db=f"{start_db:.1f}",
+                           noise_db=f"{noise_db:.1f}",
+                           energy_db=f"{energy_db:.1f}")
+            
+            # AVR-VAD INSPIRED: During speech recording
+            elif vs["speaking"]:
                 vs["utterance_buffer"] += pcm_16k_data
-                if energy_db > end_db and snr_db >= 4:
+                
+                if is_speech:
+                    # Speech continues
+                    vs["speech_frame_count"] += 1
+                    vs["redemption_counter"] = 0
                     vs["consecutive_speech_frames"] += 1
                     vs["consecutive_silence_frames"] = 0
                     vs["speech_duration_ms"] += 20
-                    # Reset tail if we dipped into silence before
-                    vs["tail_frames_remaining"] = 0
+                    
+                    # Debug logging for consecutive frames
+                    if vs["consecutive_speech_frames"] % 5 == 0:  # Log every 5 frames
+                        logger.debug("🎤 VAD - Consecutive speech frames", 
+                                   caller_channel_id=caller_channel_id,
+                                   utterance_id=vs["utterance_id"],
+                                   consecutive_speech=vs["consecutive_speech_frames"],
+                                   speech_frames=vs["speech_frame_count"],
+                                   energy_db=f"{energy_db:.1f}")
+                    
+                    # Fire speech real start after minimum frames
+                    if vs["speech_frame_count"] >= min_speech_frames and not vs["speech_real_start_fired"]:
+                        vs["speech_real_start_fired"] = True
+                        logger.info("🎤 VAD - Speech confirmed", 
+                                   caller_channel_id=caller_channel_id,
+                                   utterance_id=vs["utterance_id"],
+                                   speech_frames=vs["speech_frame_count"])
                 else:
+                    # Silence detected - start redemption period
                     vs["consecutive_speech_frames"] = 0
                     vs["consecutive_silence_frames"] += 1
+                    vs["redemption_counter"] += 1
                     vs["silence_duration_ms"] += 20
-
-                # ARCHITECT FIX: Use single min_utterance_ms variable
-                # End on long-enough silence
-                end_on_silence = vs["consecutive_silence_frames"] >= end_silence_frames
-                # Cap utterance length
-                utterance_frames = len(vs["utterance_buffer"]) // 640
-                too_long = utterance_frames >= max_utterance_frames
-
-                should_end = False
-                end_reason = ""
-                if end_on_silence and vs["speech_duration_ms"] >= min_utterance_ms:
-                    should_end = True
-                    end_reason = "silence"
-                if too_long:
-                    should_end = True
-                    end_reason = "max_duration"
-
-                # Post-roll: once end condition hits, collect 200ms tail
-                if should_end and vs["tail_frames_remaining"] == 0:
-                    vs["tail_frames_remaining"] = post_roll_frames
-                    should_end = False
-                elif vs["tail_frames_remaining"] > 0:
-                    vs["tail_frames_remaining"] -= 1
-                    if vs["tail_frames_remaining"] == 0:
-                        should_end = True
-                        end_reason = end_reason or "post_roll"
-
-                if should_end:
-                    # Normalize to target RMS before sending
-                    buf = vs["utterance_buffer"]
-                    buf = self._normalize_to_dbfs(buf, target_dbfs=-20.0, max_gain=3.0)
-
-                    vs["state"] = "processing"
-                    logger.info("🎤 VAD - Speech ended", 
-                               caller_channel_id=caller_channel_id,
-                               utterance_id=vs["utterance_id"],
-                               reason=end_reason,
-                               speech_ms=vs["speech_duration_ms"],
-                               silence_ms=vs["silence_duration_ms"],
-                               bytes=len(buf), 
-                               noise_db=f"{noise_db:.1f}")
                     
-                    # Send complete utterance to provider
-                    if len(buf) > 0:
-                        try:
-                            await provider.send_audio(buf)
+                    # Debug logging for redemption period
+                    if vs["redemption_counter"] % 3 == 0:  # Log every 3 frames
+                        logger.debug("🎤 VAD - Redemption period", 
+                                   caller_channel_id=caller_channel_id,
+                                   utterance_id=vs["utterance_id"],
+                                   redemption_counter=vs["redemption_counter"],
+                                   redemption_frames=redemption_frames,
+                                   consecutive_silence=vs["consecutive_silence_frames"],
+                                   energy_db=f"{energy_db:.1f}")
+                    
+                    # Check if redemption period expired
+                    if vs["redemption_counter"] >= redemption_frames:
+                        # End speech after redemption period
+                        vs["speaking"] = False
+                        vs["speech_real_start_fired"] = False
+                        vs["redemption_counter"] = 0
+                        vs["speech_frame_count"] = 0
+                        vs["last_utterance_end_ms"] = current_time_ms
+                        
+                        # Process the utterance
+                        if len(vs["utterance_buffer"]) > 0:
+                            # Normalize to target RMS before sending
+                            buf = vs["utterance_buffer"]
+                            buf = self._normalize_to_dbfs(buf, target_dbfs=-20.0, max_gain=3.0)
+                            
+                            vs["state"] = "processing"
+                            logger.info("🎤 VAD - Speech ended", 
+                                       caller_channel_id=caller_channel_id,
+                                       utterance_id=vs["utterance_id"],
+                                       reason="redemption_period",
+                                       speech_ms=vs["speech_duration_ms"],
+                                       silence_ms=vs["silence_duration_ms"],
+                                       bytes=len(buf),
+                                       noise_db=f"{noise_db:.1f}")
+                            
+                            # Send to provider
+                            await provider.process_audio(caller_channel_id, buf)
                             logger.info("🎤 VAD - Utterance sent to provider", 
                                        caller_channel_id=caller_channel_id,
                                        utterance_id=vs["utterance_id"],
                                        bytes=len(buf))
-                        except Exception as e:
-                            logger.error("Error sending utterance to provider", 
+                            
+                            # Reset for next utterance
+                            vs["state"] = "listening"
+                            vs["utterance_buffer"] = b""
+                        else:
+                            # Empty utterance - misfire
+                            logger.info("🎤 VAD - Speech misfire (empty utterance)", 
                                        caller_channel_id=caller_channel_id,
-                                       error=str(e))
-
-                    # Reset for next utterance
-                    vs["state"] = "listening"
-                    vs["last_utterance_end_ms"] = current_time_ms
-                    vs["utterance_buffer"] = b""
-                    vs["speech_duration_ms"] = 0
-                    vs["silence_duration_ms"] = 0
-                    vs["consecutive_speech_frames"] = 0
-                    vs["consecutive_silence_frames"] = 0
+                                       utterance_id=vs["utterance_id"])
+                            vs["state"] = "listening"
+                            vs["utterance_buffer"] = b""
             
-            elif vad_state["state"] == "processing":
+            # AVR-VAD INSPIRED: Not speaking - manage pre-roll buffer
+            else:
+                # Keep only pre-speech pad frames in buffer
+                if len(vs["pre_roll_buffer"]) > pre_speech_pad_frames * 640:  # 2 frames * 640 bytes
+                    vs["pre_roll_buffer"] = vs["pre_roll_buffer"][-pre_speech_pad_frames * 640:]
+                vs["consecutive_speech_frames"] = 0
+                vs["consecutive_silence_frames"] += 1
+            
+            # AVR-VAD INSPIRED: Old state machine removed - now handled above
+            
+            # Handle processing state
+            if vad_state["state"] == "processing":
                 # Ignore audio while processing previous utterance
                 # This prevents overlapping processing
                 pass
@@ -2014,7 +2038,7 @@ class Engine:
             return pcm16le
         
         try:
-            import numpy as np
+            import numpy as np  # type: ignore
             x = np.frombuffer(pcm16le, dtype=np.int16).astype(np.float32)
             rms = np.sqrt(np.mean(x * x)) + 1e-9
             dbfs = 20.0 * math.log10(rms / 32768.0)
@@ -2260,11 +2284,15 @@ class Engine:
                             target_channel_id = next(iter(self.active_calls.keys()), None)
                         
                         if target_channel_id:
-                            # Set TTS playing state but keep audio capture enabled for now
+                            # Set TTS playing state to prevent feedback loop
                             call_data = self.active_calls[target_channel_id]
                             call_data["tts_playing"] = True
-                            # Keep audio capture enabled - we'll implement smarter loop prevention later
-                            logger.info("🔊 TTS START - Playing response", 
+                            
+                            # Also set in VAD state for immediate effect
+                            if "vad_state" in call_data:
+                                call_data["vad_state"]["tts_playing"] = True
+                            
+                            logger.info("🔊 TTS START - Playing response (feedback prevention active)", 
                                       channel_id=target_channel_id)
                             
                             # Play audio to specific call
@@ -2345,6 +2373,11 @@ class Engine:
                 if call_data.get("tts_playing", False):
                     # Agent TTS finished - re-enable audio capture
                     call_data["tts_playing"] = False
+                    
+                    # Also clear in VAD state
+                    if "vad_state" in call_data:
+                        call_data["vad_state"]["tts_playing"] = False
+                    
                     call_data["audio_capture_enabled"] = True
                     logger.info("🎤 TTS FINISHED - Re-enabled audio capture after agent TTS playback",
                                caller_channel_id=caller_channel_id,
