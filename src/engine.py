@@ -1803,23 +1803,23 @@ class Engine:
                                        bytes=len(buf),
                                        noise_db=f"{noise_db:.1f}")
                             
-                            # Send to provider
-                            await provider.process_audio(caller_channel_id, buf)
-                            logger.info("🎤 VAD - Utterance sent to provider", 
-                                       caller_channel_id=caller_channel_id,
-                                       utterance_id=vs["utterance_id"],
-                                       bytes=len(buf))
-                            
-                            # Reset for next utterance
-                            vs["state"] = "listening"
-                            vs["utterance_buffer"] = b""
-                        else:
-                            # Empty utterance - misfire
-                            logger.info("🎤 VAD - Speech misfire (empty utterance)", 
-                                       caller_channel_id=caller_channel_id,
-                                       utterance_id=vs["utterance_id"])
-                            vs["state"] = "listening"
-                            vs["utterance_buffer"] = b""
+                        # Send to provider
+                        await provider.send_audio(buf)
+                        logger.info("🎤 VAD - Utterance sent to provider", 
+                                   caller_channel_id=caller_channel_id,
+                                   utterance_id=vs["utterance_id"],
+                                   bytes=len(buf))
+                        
+                        # Reset for next utterance
+                        vs["state"] = "listening"
+                        vs["utterance_buffer"] = b""
+                    else:
+                        # Empty utterance - misfire
+                        logger.info("🎤 VAD - Speech misfire (empty utterance)", 
+                                   caller_channel_id=caller_channel_id,
+                                   utterance_id=vs["utterance_id"])
+                        vs["state"] = "listening"
+                        vs["utterance_buffer"] = b""
             
             # AVR-VAD INSPIRED: Not speaking - manage pre-roll buffer
             else:
