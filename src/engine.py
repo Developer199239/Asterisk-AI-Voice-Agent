@@ -1542,10 +1542,18 @@ class Engine:
                                    caller_channel_id=caller_channel_id,
                                    external_media_id=call_data.get("external_media_id"))
                         break
-                
-                if not caller_channel_id:
-                    logger.debug("RTP audio received for unknown SSRC", ssrc=ssrc)
+            
+            # CRITICAL FIX: Gate audio capture during TTS playback to prevent feedback loop
+            if caller_channel_id and caller_channel_id in self.active_calls:
+                call_data = self.active_calls[caller_channel_id]
+                if call_data.get("tts_playing", False):
+                    logger.debug("🔇 RTP AUDIO - Capture disabled during TTS playback to prevent feedback loop", 
+                               caller_channel_id=caller_channel_id, ssrc=ssrc)
                     return
+            
+            if not caller_channel_id:
+                logger.debug("RTP audio received for unknown SSRC", ssrc=ssrc)
+                return
             
             # Check if call is still active
             if caller_channel_id not in self.active_calls:
@@ -1608,7 +1616,7 @@ class Engine:
             
             # Get VAD configuration from config
             vad_config = self.config.streaming.barge_in
-            vad_threshold_db = -50  # Phase 1 fix: Hardcoded threshold
+            vad_threshold_db = -75  # Phase 3 fix: Lowered for actual audio levels
             
             # Debug logging for VAD energy levels (every 10 frames)
             if vad_state["frame_count"] % 10 == 0:
@@ -1675,13 +1683,12 @@ class Engine:
                     vad_state["silence_duration_ms"] += 20
                 
                 # Check for end conditions
+                should_end = False  # Initialize default value
+                end_reason = ""     # Initialize default value
                 # Phase 1 fix: Minimum utterance duration guard
                 min_utterance_ms = 600  # Prevent single words
                 if vad_state["speech_duration_ms"] < min_utterance_ms:
                     should_end = False  # Force continue recording
-
-                should_end = False
-                end_reason = ""
                 
 
                 # End if too much silence
@@ -2144,26 +2151,48 @@ class Engine:
                                     logger.debug("Error streaming audio over AudioSocket; falling back to ARI", exc_info=True)
                                     await self._play_audio_via_snoop(channel_id, audio_data)
                     else:
-                        # File-based playback via ARI (default path) - use bridge playback
-                        for channel_id, call_data in self.active_calls.items():
-                            await self._play_audio_via_bridge(channel_id, audio_data)
-                            logger.info(f"🔊 AUDIO OUTPUT - Sent {len(audio_data)} bytes to call channel {channel_id}")
+                        # File-based playback via ARI (default path) - target specific call
+                        target_channel_id = None
+                        if call_id:
+                            # Find the channel ID for this call_id
+                            for channel_id, call_data in self.active_calls.items():
+                                if call_data.get("call_id") == call_id:
+                                    target_channel_id = channel_id
+                                    break
                         
-                        # Update conversation state after playing response
-                        conversation_state = call_data.get('conversation_state')
-                        if conversation_state == 'greeting':
-                            # First response after greeting - transition to listening
-                            call_data['conversation_state'] = 'listening'
-                            logger.info("Greeting completed, now listening for conversation", channel_id=channel_id)
-                        elif conversation_state == 'processing':
-                            # Response to user input - transition back to listening
-                            call_data['conversation_state'] = 'listening'
-                            logger.info("Response played, listening for next user input", channel_id=channel_id)
+                        if not target_channel_id:
+                            # Fallback: use the first active call (for backward compatibility)
+                            target_channel_id = next(iter(self.active_calls.keys()), None)
+                        
+                        if target_channel_id:
+                            # Set TTS playing state and disable audio capture
+                            call_data = self.active_calls[target_channel_id]
+                            call_data["tts_playing"] = True
+                            call_data["audio_capture_enabled"] = False
+                            logger.info("🔇 TTS START - Disabled audio capture to prevent feedback loop", 
+                                      channel_id=target_channel_id)
                             
-                            # Cancel provider timeout task since we got a response
-                            if call_data.get('provider_timeout_task') and not call_data['provider_timeout_task'].done():
-                                call_data['provider_timeout_task'].cancel()
-                                logger.debug("Cancelled provider timeout task - response received", channel_id=channel_id)
+                            # Play audio to specific call
+                            await self._play_audio_via_bridge(target_channel_id, audio_data)
+                            logger.info(f"🔊 AUDIO OUTPUT - Sent {len(audio_data)} bytes to call channel {target_channel_id}")
+                            
+                            # Update conversation state after playing response
+                            conversation_state = call_data.get('conversation_state')
+                            if conversation_state == 'greeting':
+                                # First response after greeting - transition to listening
+                                call_data['conversation_state'] = 'listening'
+                                logger.info("Greeting completed, now listening for conversation", channel_id=target_channel_id)
+                            elif conversation_state == 'processing':
+                                # Response to user input - transition back to listening
+                                call_data['conversation_state'] = 'listening'
+                                logger.info("Response played, listening for next user input", channel_id=target_channel_id)
+                                
+                                # Cancel provider timeout task since we got a response
+                                if call_data.get('provider_timeout_task') and not call_data['provider_timeout_task'].done():
+                                    call_data['provider_timeout_task'].cancel()
+                                    logger.debug("Cancelled provider timeout task - response received", channel_id=target_channel_id)
+                        else:
+                            logger.warning("No active call found for AgentAudio playback", call_id=call_id)
             elif event_type == "Transcription":
                 # Handle transcription data
                 text = event.get("text", "")
@@ -2215,12 +2244,27 @@ class Engine:
             
             # Enable audio capture for the caller channel
             if caller_channel_id and caller_channel_id in self.active_calls:
-                self.active_calls[caller_channel_id]["audio_capture_enabled"] = True
+                call_data = self.active_calls[caller_channel_id]
+                
+                # Check if this was agent TTS playback
+                if call_data.get("tts_playing", False):
+                    # Agent TTS finished - re-enable audio capture
+                    call_data["tts_playing"] = False
+                    call_data["audio_capture_enabled"] = True
+                    logger.info("🎤 TTS FINISHED - Re-enabled audio capture after agent TTS playback",
+                               caller_channel_id=caller_channel_id,
+                               playback_id=playback_id)
+                else:
+                    # Regular greeting playback - enable audio capture
+                    call_data["audio_capture_enabled"] = True
+                    logger.info("🎤 AUDIO CAPTURE - Enabled after greeting playback",
+                               caller_channel_id=caller_channel_id,
+                               playback_id=playback_id)
                 
                 # Check if this is an AudioSocket connection for logging
                 conn_id = self.channel_to_conn.get(caller_channel_id)
                 if conn_id:
-                    logger.info("🎤 AUDIO CAPTURE - Enabled for AudioSocket connection after greeting",
+                    logger.info("🎤 AUDIO CAPTURE - Enabled for AudioSocket connection",
                                conn_id=conn_id,
                                caller_channel_id=caller_channel_id)
                 else:
