@@ -1544,13 +1544,8 @@ class Engine:
                                    external_media_id=call_data.get("external_media_id"))
                         break
             
-            # CRITICAL FIX: Gate audio capture during TTS playback to prevent feedback loop
-            if caller_channel_id and caller_channel_id in self.active_calls:
-                call_data = self.active_calls[caller_channel_id]
-                if call_data.get("tts_playing", False):
-                    logger.debug("🔇 RTP AUDIO - Capture disabled during TTS playback to prevent feedback loop", 
-                               caller_channel_id=caller_channel_id, ssrc=ssrc)
-                    return
+            # SIMPLIFIED: Always process audio for VAD - we'll implement smart loop prevention later
+            # This ensures VAD improvements can actually work
             
             if not caller_channel_id:
                 logger.debug("RTP audio received for unknown SSRC", ssrc=ssrc)
@@ -1594,7 +1589,7 @@ class Engine:
             if "vad_state" not in self.active_calls[caller_channel_id]:
                 self.active_calls[caller_channel_id]["vad_state"] = {
                     "state": "listening",  # 'listening' | 'recording' | 'processing'
-                    "pre_roll_buffer": b"",  # Last 200ms of audio
+                    "pre_roll_buffer": b"",  # Last 400ms of audio
                     "utterance_buffer": b"",  # Current recording
                     "last_voice_ms": 0,  # Monotonic ms of last speech frame
                     "speech_start_ms": 0,  # When speech started
@@ -1609,10 +1604,16 @@ class Engine:
                     "noise_floor_db": -70.0,
                     "tail_frames_remaining": 0,
                     "last_utterance_end_ms": 0,
+                    "utterance_id": 0,  # ARCHITECT FIX: Track utterance sequence
                 }
             
             vad_state = self.active_calls[caller_channel_id]["vad_state"]
-            current_time_ms = int(time.time() * 1000)
+            
+            # ARCHITECT FIX: Use consistent monotonic time base
+            if "t0_ms" not in vad_state:
+                vad_state["t0_ms"] = int(time.monotonic() * 1000)
+            
+            current_time_ms = vad_state["t0_ms"] + vad_state["frame_count"] * 20
             
             # Calculate audio energy for VAD
             energy = self._calculate_frame_energy(pcm_16k_data)
@@ -1624,26 +1625,30 @@ class Engine:
             vs = vad_state
             noise_db = vs.get("noise_floor_db", -70.0)
             
-            # Adaptive threshold parameters
+            # ARCHITECT FIX: Add threshold safety rails with upper bounds
             start_margin_db = 10
             end_margin_db = 6
             hard_min_start_db = -70
             hard_min_end_db = -75
+            hard_max_start_db = -40  # Prevent thresholds from becoming too high
+            hard_max_end_db = -45
             
-            # Compute adaptive thresholds
-            start_db = max(noise_db + start_margin_db, hard_min_start_db)
-            end_db = max(noise_db + end_margin_db, hard_min_end_db)
+            # Compute adaptive thresholds with safety rails
+            start_db = min(hard_max_start_db, max(noise_db + start_margin_db, hard_min_start_db))
+            end_db = min(hard_max_end_db, max(noise_db + end_margin_db, hard_min_end_db))
             snr_db = energy_db - noise_db
             
             # Update noise floor when not in recording and not above start threshold
             if vs["state"] == "listening" and energy_db < start_db:
                 vs["noise_db_history"].append(energy_db)
                 if len(vs["noise_db_history"]) >= 10:
-                    # Robust to outliers: median
+                    # ARCHITECT FIX: Robust to outliers with smoothing
                     sorted_vals = sorted(vs["noise_db_history"])
                     mid = len(sorted_vals) // 2
-                    vs["noise_floor_db"] = (sorted_vals[mid] if len(sorted_vals) % 2
-                                          else 0.5 * (sorted_vals[mid - 1] + sorted_vals[mid]))
+                    median_value = (sorted_vals[mid] if len(sorted_vals) % 2
+                                  else 0.5 * (sorted_vals[mid - 1] + sorted_vals[mid]))
+                    # Add low-pass smoothing to avoid "breathing" on noisy lines
+                    vs["noise_floor_db"] = 0.9 * vs["noise_floor_db"] + 0.1 * median_value
             
             # VAD parameters
             min_speech_ms = 200
@@ -1662,7 +1667,7 @@ class Engine:
             max_utterance_frames = max_utterance_ms // 20
             
             vad_state["frame_count"] += 1
-            current_time_ms = vad_state["frame_count"] * 20  # Each frame is 20ms
+            # current_time_ms already calculated above with monotonic clock
             
             # Update pre-roll buffer (keep last 400ms)
             vad_state["pre_roll_buffer"] += pcm_16k_data
@@ -1715,8 +1720,10 @@ class Engine:
                             vs["silence_duration_ms"] = 0
                             vs["consecutive_speech_frames"] = 0
                             vs["consecutive_silence_frames"] = 0
+                            vs["utterance_id"] += 1
                             logger.info("🎤 VAD - Speech started", 
                                        caller_channel_id=caller_channel_id,
+                                       utterance_id=vs["utterance_id"],
                                        start_db=f"{start_db:.1f}",
                                        noise_db=f"{noise_db:.1f}",
                                        energy_db=f"{energy_db:.1f}")
@@ -1738,8 +1745,7 @@ class Engine:
                     vs["consecutive_silence_frames"] += 1
                     vs["silence_duration_ms"] += 20
 
-                # Min utterance guard
-                min_utt_ms = 600
+                # ARCHITECT FIX: Use single min_utterance_ms variable
                 # End on long-enough silence
                 end_on_silence = vs["consecutive_silence_frames"] >= end_silence_frames
                 # Cap utterance length
@@ -1748,7 +1754,7 @@ class Engine:
 
                 should_end = False
                 end_reason = ""
-                if end_on_silence and vs["speech_duration_ms"] >= min_utt_ms:
+                if end_on_silence and vs["speech_duration_ms"] >= min_utterance_ms:
                     should_end = True
                     end_reason = "silence"
                 if too_long:
@@ -1773,6 +1779,7 @@ class Engine:
                     vs["state"] = "processing"
                     logger.info("🎤 VAD - Speech ended", 
                                caller_channel_id=caller_channel_id,
+                               utterance_id=vs["utterance_id"],
                                reason=end_reason,
                                speech_ms=vs["speech_duration_ms"],
                                silence_ms=vs["silence_duration_ms"],
@@ -1785,6 +1792,7 @@ class Engine:
                             await provider.send_audio(buf)
                             logger.info("🎤 VAD - Utterance sent to provider", 
                                        caller_channel_id=caller_channel_id,
+                                       utterance_id=vs["utterance_id"],
                                        bytes=len(buf))
                         except Exception as e:
                             logger.error("Error sending utterance to provider", 
@@ -2252,11 +2260,11 @@ class Engine:
                             target_channel_id = next(iter(self.active_calls.keys()), None)
                         
                         if target_channel_id:
-                            # Set TTS playing state and disable audio capture
+                            # Set TTS playing state but keep audio capture enabled for now
                             call_data = self.active_calls[target_channel_id]
                             call_data["tts_playing"] = True
-                            call_data["audio_capture_enabled"] = False
-                            logger.info("🔇 TTS START - Disabled audio capture to prevent feedback loop", 
+                            # Keep audio capture enabled - we'll implement smarter loop prevention later
+                            logger.info("🔊 TTS START - Playing response", 
                                       channel_id=target_channel_id)
                             
                             # Play audio to specific call
