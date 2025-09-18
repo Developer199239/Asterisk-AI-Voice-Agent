@@ -109,6 +109,11 @@ class LocalAIServer:
         self.stt_model_path = "/app/models/stt/vosk-model-small-en-us-0.15"
         self.llm_model_path = "/app/models/llm/TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf"
         self.tts_model_path = "/app/models/tts/en_US-lessac-medium.onnx"
+        
+        # Audio buffering for STT (20ms chunks need to be buffered for effective STT)
+        self.audio_buffer = b""
+        self.buffer_size_bytes = 16000 * 2 * 1.0  # 1 second at 16kHz (32000 bytes)
+        self.buffer_timeout_ms = 1000  # Process buffer after 1 second of silence
 
     async def initialize_models(self):
         """Initialize all AI models with proper error handling"""
@@ -170,6 +175,47 @@ class LocalAIServer:
         except Exception as e:
             logging.error(f"❌ Model reload failed: {e}")
             raise
+
+    async def process_stt_buffered(self, audio_data: bytes) -> str:
+        """Process STT with buffering for 20ms chunks - buffers until we have enough audio for reliable STT"""
+        try:
+            if not self.stt_model:
+                logging.error("STT model not loaded")
+                return ""
+            
+            # Add new audio to buffer
+            self.audio_buffer += audio_data
+            logging.debug(f"🎵 STT BUFFER - Added {len(audio_data)} bytes, buffer now {len(self.audio_buffer)} bytes")
+            
+            # Check if we have enough audio for STT (at least 1 second)
+            if len(self.audio_buffer) < self.buffer_size_bytes:
+                logging.debug(f"🎵 STT BUFFER - Not enough audio yet ({len(self.audio_buffer)}/{self.buffer_size_bytes} bytes)")
+                return ""
+            
+            # Process buffered audio with STT
+            logging.info(f"🎵 STT PROCESSING - Processing buffered audio: {len(self.audio_buffer)} bytes")
+            
+            recognizer = KaldiRecognizer(self.stt_model, 16000)
+            
+            # Check if recognizer accepts the waveform
+            if recognizer.AcceptWaveform(self.audio_buffer):
+                result = json.loads(recognizer.Result())
+                logging.debug(f"🎵 STT INTERMEDIATE - Partial result: {result}")
+            else:
+                result = json.loads(recognizer.FinalResult())
+                logging.debug(f"🎵 STT FINAL - Final result: {result}")
+            
+            transcript = result.get("text", "").strip()
+            logging.info(f"📝 STT RESULT - Transcript: '{transcript}'")
+            
+            # Clear buffer after processing
+            self.audio_buffer = b""
+            
+            return transcript
+            
+        except Exception as e:
+            logging.error(f"Buffered STT processing failed: {e}", exc_info=True)
+            return ""
 
     async def process_stt(self, audio_data: bytes) -> str:
         """Process STT with 8kHz to 16kHz resampling for Vosk compatibility"""
@@ -241,17 +287,17 @@ Assistant:"""
                 logging.error("TTS model not loaded")
                 return b""
             
-            # Generate WAV at 8kHz using Piper (native rate for telephony)
-            logging.debug(f"🔊 TTS INPUT - Generating 8kHz audio for: '{text}'")
+            # Generate WAV at 22kHz using Piper (native rate) then resample to 8kHz
+            logging.debug(f"🔊 TTS INPUT - Generating 22kHz audio for: '{text}'")
             
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as wav_file:
                 wav_path = wav_file.name
             
-            # Synthesize with Piper at 8kHz - collect generator output
+            # Synthesize with Piper at native 22kHz rate - collect generator output
             with wave.open(wav_path, "wb") as wav_file:
                 wav_file.setnchannels(1)  # Mono
                 wav_file.setsampwidth(2)  # 16-bit
-                wav_file.setframerate(8000)  # 8kHz for telephony
+                wav_file.setframerate(22050)  # 22kHz native rate for Piper
                 
                 # Piper.synthesize returns AudioChunk objects, collect all chunks
                 audio_generator = self.tts_model.synthesize(text)
@@ -262,9 +308,9 @@ Assistant:"""
             with open(wav_path, 'rb') as f:
                 wav_data = f.read()
             
-            # Convert to uLaw 8kHz for ARI playback (minimal conversion)
-            logging.debug(f"🔄 TTS CONVERSION - Converting 8kHz WAV → 8kHz uLaw")
-            ulaw_data = self.audio_processor.convert_to_ulaw_8k(wav_data, 8000)
+            # Convert to uLaw 8kHz for ARI playback (proper resampling from 22kHz)
+            logging.debug(f"🔄 TTS CONVERSION - Converting 22kHz WAV → 8kHz uLaw")
+            ulaw_data = self.audio_processor.convert_to_ulaw_8k(wav_data, 22050)
             
             # Cleanup
             os.unlink(wav_path)
@@ -327,11 +373,11 @@ Assistant:"""
                             logging.info(f"📤 TTS RESPONSE - Sent {len(audio_response)} bytes")
                         
                         elif data.get("type") == "audio":
-                            # Audio data from AI Engine (legacy format)
+                            # Audio data from AI Engine (RTP format - 16kHz PCM)
                             audio_data = base64.b64decode(data.get("data", ""))
                             logging.info(f"🎵 AUDIO INPUT - Received audio: {len(audio_data)} bytes")
                             
-                            # Full MVP pipeline: STT → LLM → TTS
+                            # Process with STT (now receiving complete utterances from VAD)
                             transcript = await self.process_stt(audio_data)
                             
                             if transcript.strip():

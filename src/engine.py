@@ -1,4 +1,5 @@
 import asyncio
+import math
 import os
 import random
 import signal
@@ -1519,7 +1520,7 @@ class Engine:
                          conn_id=conn_id, error=str(e), exc_info=True)
     
     async def _on_rtp_audio(self, ssrc: int, pcm_16k_data: bytes):
-        """Route inbound RTP audio to the appropriate provider using SSRC."""
+        """Route inbound RTP audio to the appropriate provider using SSRC with VAD-based utterance detection."""
         try:
             # Find the caller channel for this SSRC
             caller_channel_id = self.ssrc_to_caller.get(ssrc)
@@ -1563,22 +1564,155 @@ class Engine:
                 logger.warning("No provider found for RTP audio", ssrc=ssrc, caller_channel_id=caller_channel_id)
                 return
             
-            # Send audio to provider
-            try:
-                await provider.send_audio(pcm_16k_data)
-                logger.debug("RTP audio sent to provider", 
-                           ssrc=ssrc, 
-                           caller_channel_id=caller_channel_id,
-                           bytes=len(pcm_16k_data))
-            except Exception as e:
-                logger.error("Error sending RTP audio to provider", 
-                           ssrc=ssrc, 
-                           caller_channel_id=caller_channel_id,
-                           error=str(e))
+            # Process audio with VAD-based utterance detection
+            await self._process_rtp_audio_with_vad(caller_channel_id, ssrc, pcm_16k_data, provider)
             
         except Exception as e:
             logger.error("Error processing RTP audio", 
                         ssrc=ssrc, 
+                        error=str(e), 
+                        exc_info=True)
+    
+    async def _process_rtp_audio_with_vad(self, caller_channel_id: str, ssrc: int, pcm_16k_data: bytes, provider):
+        """Process RTP audio with VAD-based utterance detection."""
+        try:
+            # Get or initialize VAD state for this call
+            if "vad_state" not in self.active_calls[caller_channel_id]:
+                self.active_calls[caller_channel_id]["vad_state"] = {
+                    "state": "listening",  # 'listening' | 'recording' | 'processing'
+                    "pre_roll_buffer": b"",  # Last 200ms of audio
+                    "utterance_buffer": b"",  # Current recording
+                    "last_voice_ms": 0,  # Monotonic ms of last speech frame
+                    "speech_start_ms": 0,  # When speech started
+                    "speech_duration_ms": 0,  # Accumulated speech time
+                    "silence_duration_ms": 0,  # Accumulated silence while recording
+                    "ssrc": ssrc,
+                    "frame_count": 0,
+                    "consecutive_speech_frames": 0,
+                    "consecutive_silence_frames": 0
+                }
+            
+            vad_state = self.active_calls[caller_channel_id]["vad_state"]
+            current_time_ms = int(time.time() * 1000)
+            
+            # Calculate audio energy for VAD
+            energy = self._calculate_frame_energy(pcm_16k_data)
+            
+            # Convert energy to dB for threshold comparison
+            energy_db = 20 * math.log10(energy + 1e-10)  # Add small value to avoid log(0)
+            
+            # Get VAD configuration from config
+            vad_config = self.config.streaming.barge_in
+            vad_threshold_db = getattr(vad_config, "vad_threshold_db", -30)
+            min_speech_ms = getattr(vad_config, "min_speech_ms", 200)
+            end_silence_ms = 600  # Fixed for now
+            pre_roll_ms = 200
+            max_utterance_ms = 10000
+            
+            # Convert durations to frame counts (20ms per frame)
+            min_speech_frames = min_speech_ms // 20
+            end_silence_frames = end_silence_ms // 20
+            pre_roll_frames = pre_roll_ms // 20
+            max_utterance_frames = max_utterance_ms // 20
+            
+            vad_state["frame_count"] += 1
+            
+            # Update pre-roll buffer (keep last 200ms)
+            vad_state["pre_roll_buffer"] += pcm_16k_data
+            if len(vad_state["pre_roll_buffer"]) > pre_roll_frames * 640:  # 640 bytes per 20ms frame
+                vad_state["pre_roll_buffer"] = vad_state["pre_roll_buffer"][-pre_roll_frames * 640:]
+            
+            # VAD State Machine
+            if vad_state["state"] == "listening":
+                # Check for speech start
+                if energy_db > vad_threshold_db:
+                    vad_state["consecutive_speech_frames"] += 1
+                    vad_state["consecutive_silence_frames"] = 0
+                    
+                    # Start recording if we have enough consecutive speech frames
+                    if vad_state["consecutive_speech_frames"] >= min_speech_frames:
+                        vad_state["state"] = "recording"
+                        vad_state["speech_start_ms"] = current_time_ms
+                        vad_state["utterance_buffer"] = vad_state["pre_roll_buffer"]  # Start with pre-roll
+                        vad_state["speech_duration_ms"] = 0
+                        vad_state["silence_duration_ms"] = 0
+                        vad_state["consecutive_speech_frames"] = 0
+                        vad_state["consecutive_silence_frames"] = 0
+                        
+                        logger.info("🎤 VAD - Speech started", 
+                                   caller_channel_id=caller_channel_id,
+                                   energy_db=f"{energy_db:.1f}",
+                                   threshold_db=vad_threshold_db)
+                else:
+                    vad_state["consecutive_speech_frames"] = 0
+                    vad_state["consecutive_silence_frames"] += 1
+            
+            elif vad_state["state"] == "recording":
+                # Always append audio while recording
+                vad_state["utterance_buffer"] += pcm_16k_data
+                
+                if energy_db > vad_threshold_db:
+                    vad_state["consecutive_speech_frames"] += 1
+                    vad_state["consecutive_silence_frames"] = 0
+                    vad_state["speech_duration_ms"] += 20  # 20ms per frame
+                else:
+                    vad_state["consecutive_speech_frames"] = 0
+                    vad_state["consecutive_silence_frames"] += 1
+                    vad_state["silence_duration_ms"] += 20
+                
+                # Check for end conditions
+                should_end = False
+                end_reason = ""
+                
+                # End if too much silence
+                if vad_state["consecutive_silence_frames"] >= end_silence_frames:
+                    should_end = True
+                    end_reason = "silence"
+                
+                # End if utterance too long
+                elif vad_state["frame_count"] >= max_utterance_frames:
+                    should_end = True
+                    end_reason = "max_duration"
+                
+                if should_end:
+                    # Finalize utterance
+                    vad_state["state"] = "processing"
+                    
+                    logger.info("🎤 VAD - Speech ended", 
+                               caller_channel_id=caller_channel_id,
+                               reason=end_reason,
+                               speech_duration_ms=vad_state["speech_duration_ms"],
+                               silence_duration_ms=vad_state["silence_duration_ms"],
+                               utterance_bytes=len(vad_state["utterance_buffer"]))
+                    
+                    # Send complete utterance to provider
+                    if len(vad_state["utterance_buffer"]) > 0:
+                        try:
+                            await provider.send_audio(vad_state["utterance_buffer"])
+                            logger.info("🎤 VAD - Utterance sent to provider", 
+                                       caller_channel_id=caller_channel_id,
+                                       bytes=len(vad_state["utterance_buffer"]))
+                        except Exception as e:
+                            logger.error("Error sending utterance to provider", 
+                                       caller_channel_id=caller_channel_id,
+                                       error=str(e))
+                    
+                    # Reset for next utterance
+                    vad_state["state"] = "listening"
+                    vad_state["utterance_buffer"] = b""
+                    vad_state["speech_duration_ms"] = 0
+                    vad_state["silence_duration_ms"] = 0
+                    vad_state["consecutive_speech_frames"] = 0
+                    vad_state["consecutive_silence_frames"] = 0
+            
+            elif vad_state["state"] == "processing":
+                # Ignore audio while processing previous utterance
+                # This prevents overlapping processing
+                pass
+            
+        except Exception as e:
+            logger.error("Error in VAD processing", 
+                        caller_channel_id=caller_channel_id,
                         error=str(e), 
                         exc_info=True)
     
@@ -1988,11 +2122,11 @@ class Engine:
                                 except Exception:
                                     logger.debug("Error streaming audio over AudioSocket; falling back to ARI", exc_info=True)
                                     await self._play_audio_via_snoop(channel_id, audio_data)
-                else:
-                    # File-based playback via ARI (default path) - use bridge playback
-                    for channel_id, call_data in self.active_calls.items():
-                        await self._play_audio_via_bridge(channel_id, audio_data)
-                        logger.info(f"🔊 AUDIO OUTPUT - Sent {len(audio_data)} bytes to call channel {channel_id}")
+                    else:
+                        # File-based playback via ARI (default path) - use bridge playback
+                        for channel_id, call_data in self.active_calls.items():
+                            await self._play_audio_via_bridge(channel_id, audio_data)
+                            logger.info(f"🔊 AUDIO OUTPUT - Sent {len(audio_data)} bytes to call channel {channel_id}")
                         
                         # Update conversation state after playing response
                         conversation_state = call_data.get('conversation_state')
