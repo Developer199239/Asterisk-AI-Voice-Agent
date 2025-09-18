@@ -7,12 +7,13 @@ import asyncio
 import socket
 import struct
 import audioop
-import logging
 import time
 from typing import Dict, Optional, Callable, Any
 from dataclasses import dataclass
 
-logger = logging.getLogger(__name__)
+from .logging_config import get_logger
+
+logger = get_logger(__name__)
 
 @dataclass
 class RTPSession:
@@ -115,7 +116,7 @@ class RTPServer:
     
     async def _rtp_receiver(self):
         """Main RTP receiver loop."""
-        logger.info("RTP receiver started", host=self.host, port=self.port)
+        logger.info(f"RTP receiver started - Host: {self.host}, Port: {self.port}")
         
         while self.running:
             try:
@@ -148,10 +149,10 @@ class RTPServer:
                         call_id = f"call_{ssrc}_{int(time.time())}"
                         await self._create_session_from_ssrc(call_id, ssrc, addr)
                         self.ssrc_to_call_id[ssrc] = call_id
-                        logger.info("New RTP session created", call_id=call_id, ssrc=ssrc, addr=addr)
+                        logger.info("🎵 NEW RTP SESSION - New RTP session created", call_id=call_id, ssrc=ssrc, addr=addr)
                     
                     # Process packet and call engine with SSRC directly
-                    logger.debug("RTP packet received", ssrc=ssrc, sequence=sequence, size=len(audio_payload), addr=addr)
+                    logger.debug("🎵 RTP PACKET - RTP packet received", ssrc=ssrc, sequence=sequence, size=len(audio_payload), addr=addr)
                     await self._process_rtp_packet_with_ssrc(ssrc, sequence, timestamp, audio_payload)
                     
             except asyncio.CancelledError:
@@ -196,6 +197,13 @@ class RTPServer:
         session = self.sessions[call_id]
         session.frames_received += 1
         session.last_packet_at = time.time()
+        
+        # Periodic logging every 50 packets
+        if session.frames_received % 50 == 0:
+            logger.info("🎵 RTP STATS - RTP frames received/processed", 
+                       ssrc=ssrc, 
+                       frames_received=session.frames_received, 
+                       frames_processed=session.frames_processed)
         
         # Sequence validation and loss detection
         if session.expected_sequence == 0:
