@@ -1814,7 +1814,7 @@ class Engine:
                                            min_bytes=min_utterance_bytes)
                                 vs["state"] = "listening"
                                 vs["utterance_buffer"] = b""
-                                continue
+                                return  # Exit function early for short utterance
                             
                             vs["state"] = "processing"
                             logger.info("🎤 VAD - Speech ended", 
