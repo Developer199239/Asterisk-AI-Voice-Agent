@@ -8,6 +8,7 @@ import time
 import uuid
 import audioop
 import base64
+from collections import deque
 from typing import Dict, Any, Optional, List
 
 from .ari_client import ARIClient
@@ -1602,7 +1603,12 @@ class Engine:
                     "ssrc": ssrc,
                     "frame_count": 0,
                     "consecutive_speech_frames": 0,
-                    "consecutive_silence_frames": 0
+                    "consecutive_silence_frames": 0,
+                    # ARCHITECT'S VAD IMPROVEMENTS
+                    "noise_db_history": deque(maxlen=100),  # ~2s at 20ms
+                    "noise_floor_db": -70.0,
+                    "tail_frames_remaining": 0,
+                    "last_utterance_end_ms": 0,
                 }
             
             vad_state = self.active_calls[caller_channel_id]["vad_state"]
@@ -1614,9 +1620,54 @@ class Engine:
             # Convert energy to dB for threshold comparison
             energy_db = 20 * math.log10(energy + 1e-10)  # Add small value to avoid log(0)
             
-            # Get VAD configuration from config
-            vad_config = self.config.streaming.barge_in
-            vad_threshold_db = -75  # Phase 3 fix: Lowered for actual audio levels
+            # ARCHITECT'S VAD IMPROVEMENTS - Adaptive thresholds with noise tracking
+            vs = vad_state
+            noise_db = vs.get("noise_floor_db", -70.0)
+            
+            # Adaptive threshold parameters
+            start_margin_db = 10
+            end_margin_db = 6
+            hard_min_start_db = -70
+            hard_min_end_db = -75
+            
+            # Compute adaptive thresholds
+            start_db = max(noise_db + start_margin_db, hard_min_start_db)
+            end_db = max(noise_db + end_margin_db, hard_min_end_db)
+            snr_db = energy_db - noise_db
+            
+            # Update noise floor when not in recording and not above start threshold
+            if vs["state"] == "listening" and energy_db < start_db:
+                vs["noise_db_history"].append(energy_db)
+                if len(vs["noise_db_history"]) >= 10:
+                    # Robust to outliers: median
+                    sorted_vals = sorted(vs["noise_db_history"])
+                    mid = len(sorted_vals) // 2
+                    vs["noise_floor_db"] = (sorted_vals[mid] if len(sorted_vals) % 2
+                                          else 0.5 * (sorted_vals[mid - 1] + sorted_vals[mid]))
+            
+            # VAD parameters
+            min_speech_ms = 200
+            end_silence_ms = 1000
+            pre_roll_ms = 400
+            post_roll_ms = 200
+            max_utterance_ms = 10000
+            min_gap_ms = 150
+            min_utterance_ms = 600
+            
+            # Convert durations to frame counts (20ms per frame)
+            min_speech_frames = min_speech_ms // 20
+            end_silence_frames = end_silence_ms // 20
+            pre_roll_frames = pre_roll_ms // 20
+            post_roll_frames = post_roll_ms // 20
+            max_utterance_frames = max_utterance_ms // 20
+            
+            vad_state["frame_count"] += 1
+            current_time_ms = vad_state["frame_count"] * 20  # Each frame is 20ms
+            
+            # Update pre-roll buffer (keep last 400ms)
+            vad_state["pre_roll_buffer"] += pcm_16k_data
+            if len(vad_state["pre_roll_buffer"]) > pre_roll_frames * 640:  # 640 bytes per 20ms frame
+                vad_state["pre_roll_buffer"] = vad_state["pre_roll_buffer"][-pre_roll_frames * 640:]
             
             # Debug logging for VAD energy levels (every 10 frames)
             if vad_state["frame_count"] % 10 == 0:
@@ -1624,114 +1675,130 @@ class Engine:
                            caller_channel_id=caller_channel_id,
                            frame_count=vad_state["frame_count"],
                            energy_db=f"{energy_db:.2f}",
-                           threshold_db=vad_threshold_db,
-                           is_speech=energy_db > vad_threshold_db)
-            min_speech_ms = getattr(vad_config, "min_speech_ms", 200)
-            end_silence_ms = 1000  # Phase 1 fix
-            pre_roll_ms = 400  # Phase 1 fix
-            max_utterance_ms = 10000
+                           start_db=f"{start_db:.2f}",
+                           end_db=f"{end_db:.2f}",
+                           noise_db=f"{noise_db:.2f}",
+                           snr_db=f"{snr_db:.2f}")
             
-            # Convert durations to frame counts (20ms per frame)
-            min_speech_frames = min_speech_ms // 20
-            end_silence_frames = end_silence_ms // 20
-            pre_roll_frames = pre_roll_ms // 20
-            max_utterance_frames = max_utterance_ms // 20
-            
-            vad_state["frame_count"] += 1
-            
-            # Update pre-roll buffer (keep last 200ms)
-            vad_state["pre_roll_buffer"] += pcm_16k_data
-            if len(vad_state["pre_roll_buffer"]) > pre_roll_frames * 640:  # 640 bytes per 20ms frame
-                vad_state["pre_roll_buffer"] = vad_state["pre_roll_buffer"][-pre_roll_frames * 640:]
-            
-            # VAD State Machine
-            if vad_state["state"] == "listening":
-                # Check for speech start
-                if energy_db > vad_threshold_db:
-                    vad_state["consecutive_speech_frames"] += 1
-                    vad_state["consecutive_silence_frames"] = 0
-                    
-                    # Start recording if we have enough consecutive speech frames
-                    if vad_state["consecutive_speech_frames"] >= min_speech_frames:
-                        vad_state["state"] = "recording"
-                        vad_state["speech_start_ms"] = current_time_ms
-                        vad_state["utterance_buffer"] = vad_state["pre_roll_buffer"]  # Start with pre-roll
-                        vad_state["speech_duration_ms"] = 0
-                        vad_state["silence_duration_ms"] = 0
-                        vad_state["consecutive_speech_frames"] = 0
-                        vad_state["consecutive_silence_frames"] = 0
-                        
-                        logger.info("🎤 VAD - Speech started", 
-                                   caller_channel_id=caller_channel_id,
-                                   energy_db=f"{energy_db:.1f}",
-                                   threshold_db=vad_threshold_db)
+            # ARCHITECT'S VAD STATE MACHINE - Listening → Recording (start)
+            if vs["state"] == "listening":
+                # Min-gap between utterances
+                if current_time_ms - vs.get("last_utterance_end_ms", 0) < min_gap_ms:
+                    # Too soon after last utterance, require extra frames
+                    if energy_db > start_db and snr_db >= 8:
+                        vs["consecutive_speech_frames"] += 1
+                        if vs["consecutive_speech_frames"] >= min_speech_frames + 2:  # Extra frames for chattering prevention
+                            vs["state"] = "recording"
+                            vs["speech_start_ms"] = current_time_ms - pre_roll_ms
+                            vs["utterance_buffer"] = vs["pre_roll_buffer"]
+                            vs["speech_duration_ms"] = 0
+                            vs["silence_duration_ms"] = 0
+                            vs["consecutive_speech_frames"] = 0
+                            vs["consecutive_silence_frames"] = 0
+                            logger.info("🎤 VAD - Speech started (chattering prevention)", 
+                                       caller_channel_id=caller_channel_id,
+                                       start_db=f"{start_db:.1f}",
+                                       noise_db=f"{noise_db:.1f}",
+                                       energy_db=f"{energy_db:.1f}")
+                    else:
+                        vs["consecutive_speech_frames"] = 0
+                        vs["consecutive_silence_frames"] += 1
                 else:
-                    vad_state["consecutive_speech_frames"] = 0
-                    vad_state["consecutive_silence_frames"] += 1
+                    # Normal speech detection
+                    if energy_db > start_db and snr_db >= 8:
+                        vs["consecutive_speech_frames"] += 1
+                        if vs["consecutive_speech_frames"] >= min_speech_frames:
+                            vs["state"] = "recording"
+                            vs["speech_start_ms"] = current_time_ms - pre_roll_ms
+                            vs["utterance_buffer"] = vs["pre_roll_buffer"]
+                            vs["speech_duration_ms"] = 0
+                            vs["silence_duration_ms"] = 0
+                            vs["consecutive_speech_frames"] = 0
+                            vs["consecutive_silence_frames"] = 0
+                            logger.info("🎤 VAD - Speech started", 
+                                       caller_channel_id=caller_channel_id,
+                                       start_db=f"{start_db:.1f}",
+                                       noise_db=f"{noise_db:.1f}",
+                                       energy_db=f"{energy_db:.1f}")
+                    else:
+                        vs["consecutive_speech_frames"] = 0
+                        vs["consecutive_silence_frames"] += 1
             
-            elif vad_state["state"] == "recording":
-                # Always append audio while recording
-                vad_state["utterance_buffer"] += pcm_16k_data
-                
-                if energy_db > vad_threshold_db:
-                    vad_state["consecutive_speech_frames"] += 1
-                    vad_state["consecutive_silence_frames"] = 0
-                    vad_state["speech_duration_ms"] += 20  # 20ms per frame
+            # ARCHITECT'S VAD STATE MACHINE - Recording updates with SNR & hysteresis
+            elif vs["state"] == "recording":
+                vs["utterance_buffer"] += pcm_16k_data
+                if energy_db > end_db and snr_db >= 4:
+                    vs["consecutive_speech_frames"] += 1
+                    vs["consecutive_silence_frames"] = 0
+                    vs["speech_duration_ms"] += 20
+                    # Reset tail if we dipped into silence before
+                    vs["tail_frames_remaining"] = 0
                 else:
-                    vad_state["consecutive_speech_frames"] = 0
-                    vad_state["consecutive_silence_frames"] += 1
-                    vad_state["silence_duration_ms"] += 20
-                
-                # Check for end conditions
-                should_end = False  # Initialize default value
-                end_reason = ""     # Initialize default value
-                # Phase 1 fix: Minimum utterance duration guard
-                min_utterance_ms = 600  # Prevent single words
-                if vad_state["speech_duration_ms"] < min_utterance_ms:
-                    should_end = False  # Force continue recording
-                
+                    vs["consecutive_speech_frames"] = 0
+                    vs["consecutive_silence_frames"] += 1
+                    vs["silence_duration_ms"] += 20
 
-                # End if too much silence
-                if vad_state["consecutive_silence_frames"] >= end_silence_frames:
+                # Min utterance guard
+                min_utt_ms = 600
+                # End on long-enough silence
+                end_on_silence = vs["consecutive_silence_frames"] >= end_silence_frames
+                # Cap utterance length
+                utterance_frames = len(vs["utterance_buffer"]) // 640
+                too_long = utterance_frames >= max_utterance_frames
+
+                should_end = False
+                end_reason = ""
+                if end_on_silence and vs["speech_duration_ms"] >= min_utt_ms:
                     should_end = True
                     end_reason = "silence"
-                
-                # End if utterance too long (use utterance-local measurement)
-                utterance_frames = len(vad_state["utterance_buffer"]) // 640
-                if utterance_frames >= max_utterance_frames:
+                if too_long:
                     should_end = True
                     end_reason = "max_duration"
-                
+
+                # Post-roll: once end condition hits, collect 200ms tail
+                if should_end and vs["tail_frames_remaining"] == 0:
+                    vs["tail_frames_remaining"] = post_roll_frames
+                    should_end = False
+                elif vs["tail_frames_remaining"] > 0:
+                    vs["tail_frames_remaining"] -= 1
+                    if vs["tail_frames_remaining"] == 0:
+                        should_end = True
+                        end_reason = end_reason or "post_roll"
+
                 if should_end:
-                    # Finalize utterance
-                    vad_state["state"] = "processing"
-                    
+                    # Normalize to target RMS before sending
+                    buf = vs["utterance_buffer"]
+                    buf = self._normalize_to_dbfs(buf, target_dbfs=-20.0, max_gain=3.0)
+
+                    vs["state"] = "processing"
                     logger.info("🎤 VAD - Speech ended", 
                                caller_channel_id=caller_channel_id,
                                reason=end_reason,
-                               speech_duration_ms=vad_state["speech_duration_ms"],
-                               silence_duration_ms=vad_state["silence_duration_ms"],
-                               utterance_bytes=len(vad_state["utterance_buffer"]))
+                               speech_ms=vs["speech_duration_ms"],
+                               silence_ms=vs["silence_duration_ms"],
+                               bytes=len(buf), 
+                               noise_db=f"{noise_db:.1f}")
                     
                     # Send complete utterance to provider
-                    if len(vad_state["utterance_buffer"]) > 0:
+                    if len(buf) > 0:
                         try:
-                            await provider.send_audio(vad_state["utterance_buffer"])
+                            await provider.send_audio(buf)
                             logger.info("🎤 VAD - Utterance sent to provider", 
                                        caller_channel_id=caller_channel_id,
-                                       bytes=len(vad_state["utterance_buffer"]))
+                                       bytes=len(buf))
                         except Exception as e:
                             logger.error("Error sending utterance to provider", 
                                        caller_channel_id=caller_channel_id,
                                        error=str(e))
-                    
+
                     # Reset for next utterance
-                    vad_state["state"] = "listening"
-                    vad_state["utterance_buffer"] = b""
-                    vad_state["speech_duration_ms"] = 0
-                    vad_state["silence_duration_ms"] = 0
-                    vad_state["consecutive_speech_frames"] = 0
-                    vad_state["consecutive_silence_frames"] = 0
+                    vs["state"] = "listening"
+                    vs["last_utterance_end_ms"] = current_time_ms
+                    vs["utterance_buffer"] = b""
+                    vs["speech_duration_ms"] = 0
+                    vs["silence_duration_ms"] = 0
+                    vs["consecutive_speech_frames"] = 0
+                    vs["consecutive_silence_frames"] = 0
             
             elif vad_state["state"] == "processing":
                 # Ignore audio while processing previous utterance
@@ -1932,6 +1999,26 @@ class Engine:
             return (energy ** 0.5) / 32768.0  # Normalize to 0-1
         except Exception:
             return 0.0
+
+    def _normalize_to_dbfs(self, pcm16le: bytes, target_dbfs: float = -20.0, max_gain: float = 3.0) -> bytes:
+        """Normalize audio to target dBFS for better STT accuracy."""
+        if not pcm16le:
+            return pcm16le
+        
+        try:
+            import numpy as np
+            x = np.frombuffer(pcm16le, dtype=np.int16).astype(np.float32)
+            rms = np.sqrt(np.mean(x * x)) + 1e-9
+            dbfs = 20.0 * math.log10(rms / 32768.0)
+            gain_db = target_dbfs - dbfs
+            gain = pow(10.0, gain_db / 20.0)
+            gain = min(max_gain, max(0.3, gain))  # clamp
+            y = np.clip(x * gain, -32768, 32767).astype(np.int16)
+            return y.tobytes()
+        except ImportError:
+            # Fallback without numpy
+            logger.warning("NumPy not available, skipping audio normalization")
+            return pcm16le
 
     def _convert_ulaw_to_pcm16le(self, ulaw_data: bytes) -> bytes:
         """Convert uLaw audio to PCM16LE format."""
@@ -2254,6 +2341,17 @@ class Engine:
                     logger.info("🎤 TTS FINISHED - Re-enabled audio capture after agent TTS playback",
                                caller_channel_id=caller_channel_id,
                                playback_id=playback_id)
+                    
+                    # CRITICAL FIX: Complete delayed cleanup if needed
+                    if call_data.get("cleanup_after_tts", False):
+                        logger.info("🧹 COMPLETING DELAYED CLEANUP - TTS finished, cleaning up provider",
+                                   caller_channel_id=caller_channel_id)
+                        provider = call_data.get("provider")
+                        if provider:
+                            await provider.stop_session()
+                        # Remove from active calls
+                        if caller_channel_id in self.active_calls:
+                            del self.active_calls[caller_channel_id]
                 else:
                     # Regular greeting playback - enable audio capture
                     call_data["audio_capture_enabled"] = True
@@ -2379,8 +2477,15 @@ class Engine:
             
             provider = call_data.get("provider")
             if provider:
-                logger.debug("Stopping provider session", channel_id=channel_id)
-                await provider.stop_session()
+                # CRITICAL FIX: Don't stop provider if TTS is still playing
+                if call_data.get("tts_playing", False):
+                    logger.info("🔇 CLEANUP DELAYED - TTS still playing, delaying provider cleanup", 
+                              channel_id=channel_id)
+                    # Mark for cleanup after TTS finishes
+                    call_data["cleanup_after_tts"] = True
+                else:
+                    logger.debug("Stopping provider session", channel_id=channel_id)
+                    await provider.stop_session()
                 
             # Close bound AudioSocket connection if any
             # CRITICAL FIX: Handle new mapping structure where AudioSocket is bound to Local channel
