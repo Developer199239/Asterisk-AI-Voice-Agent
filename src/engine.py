@@ -1432,8 +1432,9 @@ class Engine:
             call_data = self.active_calls.get(channel_id, {})
             audio_capture_enabled = call_data.get("audio_capture_enabled", False)
             
-            logger.info("🎤 AUDIO CAPTURE - Check", ssrc=ssrc, caller_channel_id=caller_channel_id, audio_capture_enabled=audio_capture_enabled)
-        if not audio_capture_enabled:
+            logger.info("🎤 AUDIO CAPTURE - Check", conn_id=conn_id, channel_id=channel_id, audio_capture_enabled=audio_capture_enabled)
+            
+            if not audio_capture_enabled:
                 if count <= 10 or count % 50 == 0:  # Log first 10, then every 50th
                     logger.info("🎤 AUDIO CAPTURE - ⏸️ Disabled, waiting for greeting to finish",
                                conn_id=conn_id,
@@ -1521,7 +1522,6 @@ class Engine:
                          conn_id=conn_id, error=str(e), exc_info=True)
     
     async def _on_rtp_audio(self, ssrc: int, pcm_16k_data: bytes):
-        logger.info("🎵 RTP AUDIO - Received audio", ssrc=ssrc, bytes=len(pcm_16k_data))
         """Route inbound RTP audio to the appropriate provider using SSRC with VAD-based utterance detection."""
         logger.info("🎵 RTP AUDIO - Received audio", ssrc=ssrc, bytes=len(pcm_16k_data))
         try:
@@ -1557,7 +1557,8 @@ class Engine:
             audio_capture_enabled = call_data.get("audio_capture_enabled", False)
             
             logger.info("🎤 AUDIO CAPTURE - Check", ssrc=ssrc, caller_channel_id=caller_channel_id, audio_capture_enabled=audio_capture_enabled)
-        if not audio_capture_enabled:
+            
+            if not audio_capture_enabled:
                 logger.debug("RTP audio capture disabled, waiting for greeting to finish", 
                            ssrc=ssrc, caller_channel_id=caller_channel_id)
                 return
@@ -1608,6 +1609,15 @@ class Engine:
             # Get VAD configuration from config
             vad_config = self.config.streaming.barge_in
             vad_threshold_db = getattr(vad_config, "vad_threshold_db", -30)
+            
+            # Debug logging for VAD energy levels (every 10 frames)
+            if vad_state["frame_count"] % 10 == 0:
+                logger.debug("🎤 VAD ENERGY - Frame analysis", 
+                           caller_channel_id=caller_channel_id,
+                           frame_count=vad_state["frame_count"],
+                           energy_db=f"{energy_db:.2f}",
+                           threshold_db=vad_threshold_db,
+                           is_speech=energy_db > vad_threshold_db)
             min_speech_ms = getattr(vad_config, "min_speech_ms", 200)
             end_silence_ms = 1500  # Fixed for now
             pre_roll_ms = 200
@@ -1673,8 +1683,9 @@ class Engine:
                     should_end = True
                     end_reason = "silence"
                 
-                # End if utterance too long
-                elif vad_state["frame_count"] >= max_utterance_frames:
+                # End if utterance too long (use utterance-local measurement)
+                utterance_frames = len(vad_state["utterance_buffer"]) // 640
+                if utterance_frames >= max_utterance_frames:
                     should_end = True
                     end_reason = "max_duration"
                 
