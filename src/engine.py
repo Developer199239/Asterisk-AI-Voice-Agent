@@ -1682,6 +1682,13 @@ class Engine:
             if self.webrtc_vad and len(pcm_16k_data) == 640:  # Ensure exactly 20ms at 16kHz
                 try:
                     webrtc_decision = self.webrtc_vad.is_speech(pcm_16k_data, 16000)
+                    # Debug logging for WebRTC VAD decisions (every 50 frames)
+                    if vad_state["frame_count"] % 50 == 0:
+                        logger.debug("🎤 WebRTC VAD - Decision", 
+                                   caller_channel_id=caller_channel_id,
+                                   frame_count=vad_state["frame_count"],
+                                   webrtc_decision=webrtc_decision,
+                                   audio_bytes=len(pcm_16k_data))
                 except Exception as e:
                     logger.debug("WebRTC VAD error", error=str(e))
                     webrtc_decision = False
