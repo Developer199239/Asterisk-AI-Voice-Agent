@@ -1577,6 +1577,15 @@ class Engine:
     async def _on_rtp_audio(self, ssrc: int, pcm_16k_data: bytes):
         """Route inbound RTP audio to the appropriate provider using SSRC with VAD-based utterance detection."""
         logger.info("🎵 RTP AUDIO - Received audio", ssrc=ssrc, bytes=len(pcm_16k_data))
+        
+        # AUDIO CAPTURE: Capture ALL RTP audio frames (before any filtering)
+        if AUDIO_CAPTURE_AVAILABLE and capture_audio:
+            try:
+                capture_audio(pcm_16k_data, f"rtp_ssrc_{ssrc}", "raw_rtp_all")
+                logger.debug("🎤 AUDIO CAPTURE - RTP frame captured", ssrc=ssrc, bytes=len(pcm_16k_data))
+            except Exception as e:
+                logger.error("🎤 AUDIO CAPTURE - Error capturing RTP frame", ssrc=ssrc, error=str(e))
+        
         try:
             # Find the caller channel for this SSRC
             caller_channel_id = self.ssrc_to_caller.get(ssrc)
@@ -1628,6 +1637,10 @@ class Engine:
             
             # Process audio with VAD-based utterance detection
             await self._process_rtp_audio_with_vad(caller_channel_id, ssrc, pcm_16k_data, provider)
+            
+            # FALLBACK: If VAD hasn't detected speech for a while, send audio directly to STT
+            # This ensures we capture audio even when VAD fails
+            await self._fallback_audio_processing(caller_channel_id, ssrc, pcm_16k_data, provider)
             
         except Exception as e:
             logger.error("Error processing RTP audio", 
@@ -1958,6 +1971,90 @@ class Engine:
         except Exception as e:
             logger.error("Error in VAD processing", 
                         caller_channel_id=caller_channel_id,
+                        error=str(e), 
+                        exc_info=True)
+    
+    async def _fallback_audio_processing(self, caller_channel_id: str, ssrc: int, pcm_16k_data: bytes, provider):
+        """Fallback audio processing when VAD fails to detect speech."""
+        try:
+            call_data = self.active_calls.get(caller_channel_id, {})
+            if not call_data:
+                return
+            
+            # Initialize fallback state if not present
+            if "fallback_state" not in call_data:
+                call_data["fallback_state"] = {
+                    "audio_buffer": b"",
+                    "last_vad_speech_time": time.time(),
+                    "buffer_start_time": None,
+                    "frame_count": 0
+                }
+            
+            fallback_state = call_data["fallback_state"]
+            fallback_state["frame_count"] += 1
+            
+            # Check if VAD has detected speech recently
+            vad_state = call_data.get("vad_state", {})
+            if vad_state.get("speaking", False):
+                # VAD is working, reset fallback timer
+                fallback_state["last_vad_speech_time"] = time.time()
+                fallback_state["audio_buffer"] = b""
+                fallback_state["buffer_start_time"] = None
+                return
+            
+            # Check if we should start buffering (no VAD speech for 2 seconds)
+            time_since_vad_speech = time.time() - fallback_state["last_vad_speech_time"]
+            if time_since_vad_speech < 2.0:
+                return
+            
+            # Start buffering audio
+            if fallback_state["buffer_start_time"] is None:
+                fallback_state["buffer_start_time"] = time.time()
+                logger.info("🔄 FALLBACK - Starting audio buffering (VAD silent for 2s)", 
+                           caller_channel_id=caller_channel_id, ssrc=ssrc)
+            
+            # Add audio to fallback buffer
+            fallback_state["audio_buffer"] += pcm_16k_data
+            
+            # AUDIO CAPTURE: Capture fallback buffered audio
+            if AUDIO_CAPTURE_AVAILABLE and capture_audio:
+                try:
+                    capture_audio(pcm_16k_data, f"fallback_{caller_channel_id}", "fallback_buffer")
+                except Exception as e:
+                    logger.debug("🎤 AUDIO CAPTURE - Error capturing fallback frame", error=str(e))
+            
+            # Send buffer to STT every 2 seconds or when buffer is large enough
+            buffer_duration = time.time() - fallback_state["buffer_start_time"]
+            buffer_size = len(fallback_state["audio_buffer"])
+            
+            if buffer_duration >= 2.0 or buffer_size >= 32000:  # 2 seconds or ~1 second of audio
+                logger.info("🔄 FALLBACK - Sending buffered audio to STT", 
+                           caller_channel_id=caller_channel_id,
+                           buffer_size=buffer_size,
+                           buffer_duration=f"{buffer_duration:.1f}s")
+                
+                # AUDIO CAPTURE: Capture complete fallback utterance
+                if AUDIO_CAPTURE_AVAILABLE and capture_audio:
+                    try:
+                        capture_audio(fallback_state["audio_buffer"], f"fallback_utterance_{caller_channel_id}", "fallback_complete")
+                        logger.info("🎤 AUDIO CAPTURE - Fallback utterance captured", 
+                                   caller_channel_id=caller_channel_id,
+                                   bytes=len(fallback_state["audio_buffer"]))
+                    except Exception as e:
+                        logger.error("🎤 AUDIO CAPTURE - Error capturing fallback utterance", error=str(e))
+                
+                # Send to provider
+                await provider.send_audio(fallback_state["audio_buffer"])
+                
+                # Reset buffer
+                fallback_state["audio_buffer"] = b""
+                fallback_state["buffer_start_time"] = None
+                fallback_state["last_vad_speech_time"] = time.time()  # Reset timer
+                
+        except Exception as e:
+            logger.error("Error in fallback audio processing", 
+                        caller_channel_id=caller_channel_id,
+                        ssrc=ssrc,
                         error=str(e), 
                         exc_info=True)
     
