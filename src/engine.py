@@ -1490,63 +1490,47 @@ class Engine:
                            has_frame_processor=conn_id in self.frame_processors,
                            has_vad_detector=conn_id in self.vad_detectors)
             
-            # Get frame processor and VAD for this connection
-            frame_processor = self.frame_processors.get(conn_id)
-            vad_detector = self.vad_detectors.get(conn_id)
+            # CRITICAL FIX: Use main VAD system instead of AVR frame processing
+            # The AVR frame processing was sending individual 20ms frames to STT,
+            # causing fragmented transcripts. We now use the main VAD system
+            # that properly buffers complete utterances.
             
-            if not frame_processor or not vad_detector:
-                logger.warning("🚨 AVR Frame Processing - Missing Components", 
-                              conn_id=conn_id,
-                              has_frame_processor=frame_processor is not None,
-                              has_vad_detector=vad_detector is not None,
-                              available_processors=list(self.frame_processors.keys()),
-                              available_vads=list(self.vad_detectors.keys()))
-                return
+            # Convert AudioSocket PCM16LE@8kHz to the format expected by main VAD
+            # AudioSocket sends PCM16LE@8kHz, but main VAD expects PCM16LE@16kHz
+            # We need to resample from 8kHz to 16kHz for the main VAD system
             
-            # AudioSocket sends PCM16LE@8kHz directly in Asterisk 16 - no conversion needed
-            pcm_data = audio_data
-            
-            # Process audio into frames (PCM16LE: 640 bytes = 40ms at 8kHz)
-            frames = frame_processor.process_audio(pcm_data)
-            
-            if count <= 10 or count % 50 == 0:
-                logger.info("🎤 AUDIO PROCESSING - Frames Generated",
-                           conn_id=conn_id,
-                           input_bytes=len(pcm_data),
-                           frames_generated=len(frames),
-                           chunk_number=count)
-            
-            # Process each frame
-            speech_frames = 0
-            silence_frames = 0
-            
-            for frame_idx, frame in enumerate(frames):
-                # Calculate energy for VAD
-                audio_energy = self._calculate_frame_energy(frame)
+            try:
+                # Resample 8kHz to 16kHz for main VAD system
+                resampled_audio = self._resample_8k_to_16k(audio_data)
                 
-                # Only process if speech detected
-                if vad_detector.is_speech(audio_energy):
-                    speech_frames += 1
-                    # Route frame to appropriate provider
-                    self._route_audio_frame(conn_id, frame, audio_energy)
+                # Get provider for this call
+                call_data = self.active_calls.get(channel_id, {})
+                provider = call_data.get("provider")
+                
+                if provider:
+                    # Process through main VAD system (buffers complete utterances)
+                    asyncio.create_task(self._process_rtp_audio_with_vad(
+                        channel_id, 
+                        0,  # ssrc not used in main VAD
+                        resampled_audio, 
+                        provider
+                    ))
+                    
+                    if count <= 10 or count % 50 == 0:
+                        logger.info("🎤 MAIN VAD - Processing audio through main VAD system",
+                                   conn_id=conn_id,
+                                   channel_id=channel_id,
+                                   input_bytes=len(audio_data),
+                                   resampled_bytes=len(resampled_audio),
+                                   chunk_number=count)
                 else:
-                    silence_frames += 1
-                    # Log silence frames occasionally
-                    if count % 100 == 0:
-                        logger.debug("🎤 AVR Frame Processing - Silence Frame Skipped", 
-                                     conn_id=conn_id, 
-                                     frame_idx=frame_idx,
-                                     energy=f"{audio_energy:.4f}",
-                                     chunk_number=count)
-            
-            # Log frame processing summary
-            if count <= 10 or count % 50 == 0:
-                logger.info("🎤 AUDIO PROCESSING - Summary",
-                           conn_id=conn_id,
-                           total_frames=len(frames),
-                           speech_frames=speech_frames,
-                           silence_frames=silence_frames,
-                           chunk_number=count)
+                    logger.warning("No provider found for main VAD processing", 
+                                   conn_id=conn_id, channel_id=channel_id)
+                    
+            except Exception as e:
+                logger.error("Error in main VAD processing", 
+                           conn_id=conn_id, channel_id=channel_id, 
+                           error=str(e), exc_info=True)
             
         except Exception as e:
             logger.error("🚨 AVR Frame Processing - Error", 
@@ -2211,6 +2195,26 @@ class Engine:
             logger.error("uLaw to PCM16LE conversion failed", error=str(e), exc_info=True)
             # Return original data as fallback
             return ulaw_data
+    
+    def _resample_8k_to_16k(self, audio_8k: bytes) -> bytes:
+        """Resample 8kHz PCM16LE audio to 16kHz for main VAD system."""
+        try:
+            # Convert bytes to 16-bit samples
+            samples_8k = struct.unpack(f'<{len(audio_8k)//2}h', audio_8k)
+            
+            # Simple upsampling: duplicate each sample (8kHz -> 16kHz)
+            samples_16k = []
+            for sample in samples_8k:
+                samples_16k.append(sample)
+                samples_16k.append(sample)  # Duplicate for 2x sample rate
+            
+            # Convert back to bytes
+            return struct.pack(f'<{len(samples_16k)}h', *samples_16k)
+            
+        except Exception as e:
+            logger.error("8kHz to 16kHz resampling failed", error=str(e), exc_info=True)
+            # Return original data as fallback
+            return audio_8k
     
     def _route_audio_frame(self, conn_id: str, frame: bytes, audio_energy: float):
         """Route a single audio frame to the appropriate provider."""
