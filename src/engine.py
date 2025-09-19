@@ -11,14 +11,14 @@ import base64
 from collections import deque
 from typing import Dict, Any, Optional, List
 
-# Audio capture and testing system
+# Audio frame capture system
 try:
-    from capture_audio_inside_container import capture_and_test_audio, capture_tester
+    from capture_frames_simple import capture_audio_frame, frame_capture
     AUDIO_CAPTURE_AVAILABLE = True
 except ImportError:
     AUDIO_CAPTURE_AVAILABLE = False
-    capture_and_test_audio = None
-    capture_tester = None
+    capture_audio_frame = None
+    frame_capture = None
 
 # WebRTC VAD for robust speech detection
 try:
@@ -1401,21 +1401,21 @@ class Engine:
                        buffer_size=len(call_data['audio_buffer']),
                        buffer_duration_estimate=f"{len(call_data['audio_buffer']) / 1000:.1f}s")
             
-            # AUDIO CAPTURE: Capture and test audio before sending to provider
-            if AUDIO_CAPTURE_AVAILABLE and capture_and_test_audio:
+            # AUDIO CAPTURE: Capture audio frame before sending to provider
+            if AUDIO_CAPTURE_AVAILABLE and capture_audio_frame:
                 try:
-                    logger.info("🎤 AUDIO CAPTURE - Testing ExternalMedia audio pipeline", 
+                    logger.info("🎤 AUDIO CAPTURE - Capturing ExternalMedia audio", 
                                channel_id=channel_id,
                                bytes=len(call_data['audio_buffer']))
                     
-                    # Capture and test the audio
-                    test_results = capture_and_test_audio(call_data['audio_buffer'], f"externalmedia_{channel_id}")
+                    # Capture the audio frame
+                    frame_info = capture_audio_frame(call_data['audio_buffer'], f"externalmedia_{channel_id}", "externalmedia_buffer")
                     
-                    logger.info("🎤 AUDIO CAPTURE - ExternalMedia test completed", 
+                    logger.info("🎤 AUDIO CAPTURE - ExternalMedia frame captured", 
                                channel_id=channel_id,
-                               stt_result=test_results.get("stt_result", {}).get("transcript", ""))
+                               frame_number=frame_info["frame_info"]["frame_number"])
                 except Exception as e:
-                    logger.error("🎤 AUDIO CAPTURE - Error during ExternalMedia testing", 
+                    logger.error("🎤 AUDIO CAPTURE - Error capturing ExternalMedia frame", 
                                channel_id=channel_id,
                                error=str(e))
             
@@ -1639,6 +1639,13 @@ class Engine:
     async def _process_rtp_audio_with_vad(self, caller_channel_id: str, ssrc: int, pcm_16k_data: bytes, provider):
         """Process RTP audio with VAD-based utterance detection."""
         try:
+            # AUDIO CAPTURE: Capture raw RTP audio frames
+            if AUDIO_CAPTURE_AVAILABLE and capture_audio_frame:
+                try:
+                    capture_audio_frame(pcm_16k_data, f"rtp_{caller_channel_id}", "raw_rtp")
+                except Exception as e:
+                    logger.debug("🎤 AUDIO CAPTURE - Error capturing RTP frame", error=str(e))
+            
             # ARCHITECT FIX: TTS feedback loop prevention gate
             # Prevent LLM from hearing its own TTS responses
             call_data = self.active_calls.get(caller_channel_id, {})
@@ -1910,23 +1917,23 @@ class Engine:
                                            bytes=len(buf),
                                            webrtc_silence_frames=vs["webrtc_silence_frames"])
                                 
-                                # AUDIO CAPTURE: Capture and test audio before sending to provider
-                                if AUDIO_CAPTURE_AVAILABLE and capture_and_test_audio:
+                                # AUDIO CAPTURE: Capture audio frame before sending to provider
+                                if AUDIO_CAPTURE_AVAILABLE and capture_audio_frame:
                                     try:
-                                        logger.info("🎤 AUDIO CAPTURE - Testing audio pipeline", 
+                                        logger.info("🎤 AUDIO CAPTURE - Capturing VAD utterance", 
                                                    caller_channel_id=caller_channel_id,
                                                    utterance_id=vs["utterance_id"],
                                                    bytes=len(buf))
                                         
-                                        # Capture and test the audio
-                                        test_results = capture_and_test_audio(buf, f"vad_utterance_{vs['utterance_id']}")
+                                        # Capture the audio frame
+                                        frame_info = capture_audio_frame(buf, f"vad_utterance_{vs['utterance_id']}", "vad_complete")
                                         
-                                        logger.info("🎤 AUDIO CAPTURE - Test completed", 
+                                        logger.info("🎤 AUDIO CAPTURE - Frame captured", 
                                                    caller_channel_id=caller_channel_id,
                                                    utterance_id=vs["utterance_id"],
-                                                   stt_result=test_results.get("stt_result", {}).get("transcript", ""))
+                                                   frame_number=frame_info["frame_info"]["frame_number"])
                                     except Exception as e:
-                                        logger.error("🎤 AUDIO CAPTURE - Error during testing", 
+                                        logger.error("🎤 AUDIO CAPTURE - Error capturing frame", 
                                                    caller_channel_id=caller_channel_id,
                                                    utterance_id=vs["utterance_id"],
                                                    error=str(e))
@@ -2703,17 +2710,17 @@ class Engine:
         """Cleanup resources associated with a call."""
         logger.debug("Starting call cleanup", channel_id=channel_id)
         
-        # AUDIO CAPTURE: Save analysis report when call ends
-        if AUDIO_CAPTURE_AVAILABLE and capture_tester:
+        # AUDIO CAPTURE: Save capture report when call ends
+        if AUDIO_CAPTURE_AVAILABLE and frame_capture:
             try:
-                logger.info("🎤 AUDIO CAPTURE - Saving analysis report", channel_id=channel_id)
-                report_file = capture_tester.save_analysis_report()
-                capture_tester.print_summary()
-                logger.info("🎤 AUDIO CAPTURE - Analysis report saved", 
+                logger.info("🎤 AUDIO CAPTURE - Saving capture report", channel_id=channel_id)
+                report_file = frame_capture.save_capture_report()
+                frame_capture.print_summary()
+                logger.info("🎤 AUDIO CAPTURE - Capture report saved", 
                            channel_id=channel_id,
                            report_file=report_file)
             except Exception as e:
-                logger.error("🎤 AUDIO CAPTURE - Error saving analysis report", 
+                logger.error("🎤 AUDIO CAPTURE - Error saving capture report", 
                            channel_id=channel_id,
                            error=str(e))
         
