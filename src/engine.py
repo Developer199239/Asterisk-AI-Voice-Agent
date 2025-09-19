@@ -786,6 +786,15 @@ class Engine:
                        caller_channel_id=caller_channel_id,
                        provider=self.config.default_provider)
             
+            # CRITICAL FIX: Enable audio capture immediately after call setup
+            if caller_channel_id in self.active_calls:
+                self.active_calls[caller_channel_id]["audio_capture_enabled"] = True
+                logger.info("🎤 AUDIO CAPTURE - ✅ Enabled immediately after Hybrid ARI setup",
+                           caller_channel_id=caller_channel_id)
+                
+                # FALLBACK: Ensure audio capture is enabled after 5 seconds as backup
+                asyncio.create_task(self._ensure_audio_capture_enabled(caller_channel_id, delay=5.0))
+            
             # Play initial greeting
             await self._play_initial_greeting_hybrid(caller_channel_id, local_channel_id)
             
@@ -1611,6 +1620,10 @@ class Engine:
             call_data = self.active_calls.get(caller_channel_id, {})
             if call_data.get("tts_playing", False):
                 return  # Skip VAD processing during TTS playback
+            
+            # CRITICAL FIX: Check if audio capture is enabled
+            if not call_data.get("audio_capture_enabled", False):
+                return  # Skip VAD processing when audio capture is disabled
             # Get or initialize VAD state for this call
             if "vad_state" not in self.active_calls[caller_channel_id]:
                 self.active_calls[caller_channel_id]["vad_state"] = {
@@ -1872,6 +1885,61 @@ class Engine:
                         error=str(e), 
                         exc_info=True)
     
+    async def _ensure_audio_capture_enabled(self, caller_channel_id: str, delay: float = 5.0):
+        """Fallback method to ensure audio capture is enabled after a delay."""
+        try:
+            await asyncio.sleep(delay)
+            
+            if caller_channel_id in self.active_calls:
+                call_data = self.active_calls[caller_channel_id]
+                if not call_data.get("audio_capture_enabled", False):
+                    call_data["audio_capture_enabled"] = True
+                    logger.info("🎤 AUDIO CAPTURE - ✅ FALLBACK: Enabled after delay",
+                               caller_channel_id=caller_channel_id,
+                               delay=delay)
+                else:
+                    logger.debug("🎤 AUDIO CAPTURE - Already enabled, fallback not needed",
+                               caller_channel_id=caller_channel_id)
+            else:
+                logger.debug("🎤 AUDIO CAPTURE - Call no longer active, skipping fallback",
+                           caller_channel_id=caller_channel_id)
+        except Exception as e:
+            logger.error("Error in audio capture fallback", 
+                        caller_channel_id=caller_channel_id,
+                        error=str(e), 
+                        exc_info=True)
+    
+    async def _tts_completion_fallback(self, caller_channel_id: str, delay: float = 10.0):
+        """Fallback method to re-enable audio capture after TTS completion."""
+        try:
+            await asyncio.sleep(delay)
+            
+            if caller_channel_id in self.active_calls:
+                call_data = self.active_calls[caller_channel_id]
+                if call_data.get("tts_playing", False):
+                    # TTS is still playing, re-enable audio capture as fallback
+                    call_data["tts_playing"] = False
+                    call_data["audio_capture_enabled"] = True
+                    
+                    # Also clear in VAD state
+                    if "vad_state" in call_data:
+                        call_data["vad_state"]["tts_playing"] = False
+                    
+                    logger.info("🎤 TTS FALLBACK - Re-enabled audio capture after TTS timeout",
+                               caller_channel_id=caller_channel_id,
+                               delay=delay)
+                else:
+                    logger.debug("🎤 TTS FALLBACK - TTS already finished, fallback not needed",
+                               caller_channel_id=caller_channel_id)
+            else:
+                logger.debug("🎤 TTS FALLBACK - Call no longer active, skipping fallback",
+                           caller_channel_id=caller_channel_id)
+        except Exception as e:
+            logger.error("Error in TTS completion fallback", 
+                        caller_channel_id=caller_channel_id,
+                        error=str(e), 
+                        exc_info=True)
+    
     async def _start_external_media_channel(self, caller_channel_id: str) -> Optional[str]:
         """Create an ExternalMedia channel for RTP communication."""
         try:
@@ -1981,6 +2049,15 @@ class Engine:
                        external_media_id=external_media_id,
                        provider=provider_name,
                        call_id=call_id)
+            
+            # CRITICAL FIX: Enable audio capture immediately after call setup
+            if caller_channel_id in self.active_calls:
+                self.active_calls[caller_channel_id]["audio_capture_enabled"] = True
+                logger.info("🎤 AUDIO CAPTURE - ✅ Enabled immediately after ExternalMedia setup",
+                           caller_channel_id=caller_channel_id)
+                
+                # FALLBACK: Ensure audio capture is enabled after 5 seconds as backup
+                asyncio.create_task(self._ensure_audio_capture_enabled(caller_channel_id, delay=5.0))
             
         except Exception as e:
             logger.error("Error starting provider session for ExternalMedia", 
@@ -2323,6 +2400,10 @@ class Engine:
                             
                             logger.info("🔊 TTS START - Playing response (feedback prevention active)", 
                                       channel_id=target_channel_id)
+                            
+                            # FALLBACK: Set timer to re-enable audio capture after TTS
+                            # This ensures audio capture is re-enabled even if PlaybackFinished fails
+                            asyncio.create_task(self._tts_completion_fallback(target_channel_id, delay=10.0))
                             
                             # Play audio to specific call
                             await self._play_audio_via_bridge(target_channel_id, audio_data)
