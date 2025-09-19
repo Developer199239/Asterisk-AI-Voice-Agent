@@ -16,4 +16,4 @@ tenacity==8.2.3
 numpy>=1.21.0
 
 # WebRTC VAD for robust speech detection
-py-webrtcvad==2.0.10
+webrtcvad==2.0.10
