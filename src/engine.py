@@ -1854,9 +1854,9 @@ class Engine:
             
             # AVR-VAD INSPIRED: Not speaking - manage pre-roll buffer
             else:
-                # Keep only pre-speech pad frames in buffer
-                if len(vs["pre_roll_buffer"]) > pre_speech_pad_frames * 640:  # 2 frames * 640 bytes
-                    vs["pre_roll_buffer"] = vs["pre_roll_buffer"][-pre_speech_pad_frames * 640:]
+                # Keep only pre-roll frames in buffer
+                if len(vs["pre_roll_buffer"]) > pre_roll_frames * 640:  # pre_roll_frames * 640 bytes
+                    vs["pre_roll_buffer"] = vs["pre_roll_buffer"][-pre_roll_frames * 640:]
                 vs["consecutive_speech_frames"] = 0
                 vs["consecutive_silence_frames"] += 1
             
