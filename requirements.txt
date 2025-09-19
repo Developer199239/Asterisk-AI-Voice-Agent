@@ -14,3 +14,6 @@ tenacity==8.2.3
 
 # Optional dependencies for audio processing
 numpy>=1.21.0
+
+# WebRTC VAD for robust speech detection
+py-webrtcvad==2.0.10

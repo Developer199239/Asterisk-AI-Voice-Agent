@@ -50,6 +50,10 @@ streaming:
     enabled: false           # Enable in streaming mode to support barge-in
     vad_threshold_db: -30    # Voice activity threshold
     min_speech_ms: 200       # Minimum speech duration to trigger barge-in
+    # WebRTC VAD configuration
+    vad_backend: "hybrid"    # "energy" | "webrtc" | "hybrid" (default: hybrid)
+    webrtc_aggressiveness: 2 # WebRTC VAD aggressiveness 0-3 (2 is good for phone audio)
+    webrtc_start_frames: 3   # Consecutive speech frames to start recording
 
 # Provider-specific configurations
 providers:

@@ -11,6 +11,14 @@ import base64
 from collections import deque
 from typing import Dict, Any, Optional, List
 
+# WebRTC VAD for robust speech detection
+try:
+    import webrtcvad
+    WEBRTC_VAD_AVAILABLE = True
+except ImportError:
+    WEBRTC_VAD_AVAILABLE = False
+    webrtcvad = None
+
 from .ari_client import ARIClient
 from aiohttp import web
 from .config import AppConfig, load_config, DeepgramProviderConfig, LocalProviderConfig
@@ -122,6 +130,19 @@ class Engine:
         self.frame_processors: Dict[str, AudioFrameProcessor] = {}  # conn_id -> processor
         self.vad_detectors: Dict[str, VoiceActivityDetector] = {}  # conn_id -> VAD
         self.local_channels: Dict[str, str] = {}  # channel_id -> local_channel_id
+        
+        # WebRTC VAD for robust speech detection
+        self.webrtc_vad = None
+        if WEBRTC_VAD_AVAILABLE:
+            try:
+                aggressiveness = getattr(config.streaming.barge_in, 'webrtc_aggressiveness', 2)
+                self.webrtc_vad = webrtcvad.Vad(aggressiveness)
+                logger.info("🎤 WebRTC VAD initialized", aggressiveness=aggressiveness)
+            except Exception as e:
+                logger.warning("🎤 WebRTC VAD initialization failed", error=str(e))
+                self.webrtc_vad = None
+        else:
+            logger.warning("🎤 WebRTC VAD not available - install py-webrtcvad")
         # Map our synthesized UUID extension to the real ARI caller channel id
         self.uuidext_to_channel: Dict[str, str] = {}
         # NEW: Caller channel tracking for dual StasisStart handling
@@ -1615,6 +1636,10 @@ class Engine:
                     "last_utterance_end_ms": 0,
                     "utterance_id": 0,  # ARCHITECT FIX: Track utterance sequence
                     "tts_playing": False,  # CRITICAL: Track TTS playback state
+                    # WebRTC VAD state
+                    "webrtc_speech_frames": 0,  # Consecutive WebRTC speech frames
+                    "webrtc_silence_frames": 0,  # Consecutive WebRTC silence frames
+                    "webrtc_last_decision": False,  # Last WebRTC VAD decision
                 }
             
             vad_state = self.active_calls[caller_channel_id]["vad_state"]
@@ -1692,30 +1717,57 @@ class Engine:
             if len(vad_state["pre_roll_buffer"]) > pre_roll_frames * 640:  # 640 bytes per 20ms frame
                 vad_state["pre_roll_buffer"] = vad_state["pre_roll_buffer"][-pre_roll_frames * 640:]
             
-            # Debug logging for VAD energy levels (every 10 frames)
+            # Debug logging for VAD analysis (every 10 frames)
             if vad_state["frame_count"] % 10 == 0:
-                logger.debug("🎤 VAD ENERGY - Frame analysis", 
+                logger.debug("🎤 VAD ANALYSIS - Frame analysis", 
                            caller_channel_id=caller_channel_id,
                            frame_count=vad_state["frame_count"],
                            energy_db=f"{energy_db:.2f}",
                            start_db=f"{start_db:.2f}",
                            end_db=f"{end_db:.2f}",
                            noise_db=f"{noise_db:.2f}",
-                           snr_db=f"{snr_db:.2f}")
+                           snr_db=f"{snr_db:.2f}",
+                           webrtc_decision=webrtc_decision,
+                           webrtc_speech_frames=vs["webrtc_speech_frames"],
+                           webrtc_silence_frames=vs["webrtc_silence_frames"],
+                           webrtc_speech=webrtc_speech,
+                           energy_speech=energy_speech,
+                           is_speech=is_speech)
             
-            # ARCHITECT FIX: Lower SNR thresholds for telephony audio
-            # Telephony SNR typically 1-5 dB, not 8+ dB
+            # WebRTC VAD for robust speech detection
+            webrtc_decision = False
+            if self.webrtc_vad and len(pcm_16k_data) == 640:  # Ensure exactly 20ms at 16kHz
+                try:
+                    webrtc_decision = self.webrtc_vad.is_speech(pcm_16k_data, 16000)
+                except Exception as e:
+                    logger.debug("WebRTC VAD error", error=str(e))
+                    webrtc_decision = False
+            
+            # Update WebRTC frame counters
+            if webrtc_decision:
+                vs["webrtc_speech_frames"] += 1
+                vs["webrtc_silence_frames"] = 0
+            else:
+                vs["webrtc_speech_frames"] = 0
+                vs["webrtc_silence_frames"] += 1
+            
+            vs["webrtc_last_decision"] = webrtc_decision
+            
+            # Hybrid VAD logic: WebRTC primary + energy/SNR secondary
             min_snr_start = 3      # Start speech detection at 3 dB SNR
             min_snr_continue = 1   # Continue speech at 1 dB SNR
+            webrtc_start_frames = getattr(self.config.streaming.barge_in, 'webrtc_start_frames', 3)
             
-            # ARCHITECT FIX: Hybrid start condition for telephony audio
-            # Path A (classic): energy_db >= start_db AND snr_db >= 1
-            # Path B (soft): snr_db >= 3 AND energy_db >= (noise_db + 2)
+            # Primary: WebRTC VAD decision
+            webrtc_speech = vs["webrtc_speech_frames"] >= webrtc_start_frames
+            
+            # Secondary: Energy/SNR fallback for edge cases
             classic_start = energy_db >= start_db and snr_db >= 1
             soft_start = snr_db >= 3 and energy_db >= (noise_db + 2)
-            is_speech = classic_start or soft_start
+            energy_speech = classic_start or soft_start
             
-            # AVR-VAD INSPIRED: Main VAD State Machine
+            # Hybrid decision: WebRTC primary OR energy fallback
+            is_speech = webrtc_speech or energy_speech
             is_silence = energy_db < end_db or snr_db < min_snr_continue
             
             # Add frame to pre-roll buffer (always)
