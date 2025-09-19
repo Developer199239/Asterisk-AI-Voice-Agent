@@ -13,7 +13,7 @@ from typing import Dict, Any, Optional, List
 
 # Simple audio capture system
 try:
-    from simple_audio_capture import capture_audio, audio_capture
+    from simple_audio_capture import capture_audio, audio_capture  # type: ignore[import-untyped]
     AUDIO_CAPTURE_AVAILABLE = True
 except ImportError:
     AUDIO_CAPTURE_AVAILABLE = False
