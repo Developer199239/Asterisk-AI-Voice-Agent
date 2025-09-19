@@ -148,7 +148,13 @@ class LocalAIServer:
             if not os.path.exists(self.llm_model_path):
                 raise FileNotFoundError(f"LLM model not found at {self.llm_model_path}")
             
-            self.llm_model = Llama(model_path=self.llm_model_path, n_ctx=2048)
+            self.llm_model = Llama(
+                model_path=self.llm_model_path, 
+                n_ctx=512,           # Reduced context for faster inference
+                n_threads=16,        # Use all CPU cores
+                n_batch=256,         # Optimized batch size
+                verbose=False
+            )
             logging.info(f"✅ LLM model loaded: {self.llm_model_path}")
         except Exception as e:
             logging.error(f"❌ Failed to load LLM model: {e}")
@@ -217,19 +223,24 @@ class LocalAIServer:
             logging.error(f"Buffered STT processing failed: {e}", exc_info=True)
             return ""
 
-    async def process_stt(self, audio_data: bytes) -> str:
-        """Process STT with 8kHz to 16kHz resampling for Vosk compatibility"""
+    async def process_stt(self, audio_data: bytes, input_rate: int = 16000) -> str:
+        """Process STT with optional resampling for Vosk compatibility"""
         try:
             if not self.stt_model:
                 logging.error("STT model not loaded")
                 return ""
             
-            # Resample 8kHz AudioSocket input to 16kHz for Vosk
-            logging.debug(f"🎵 STT INPUT - Resampling 8kHz → 16kHz: {len(audio_data)} bytes")
-            resampled_audio = self.audio_processor.resample_audio(
-                audio_data, 8000, 16000, "raw", "raw"
-            )
-            logging.debug(f"🎵 STT RESAMPLED - Resampled audio: {len(resampled_audio)} bytes")
+            # Only resample if input rate is not 16kHz
+            if input_rate != 16000:
+                logging.debug(f"🎵 STT INPUT - Resampling {input_rate}Hz → 16kHz: {len(audio_data)} bytes")
+                resampled_audio = self.audio_processor.resample_audio(
+                    audio_data, input_rate, 16000, "raw", "raw"
+                )
+                logging.debug(f"🎵 STT RESAMPLED - Resampled audio: {len(resampled_audio)} bytes")
+            else:
+                # Already 16kHz, use directly
+                resampled_audio = audio_data
+                logging.debug(f"🎵 STT INPUT - Using 16kHz audio directly: {len(audio_data)} bytes")
             
             # Process with Vosk at 16kHz
             recognizer = KaldiRecognizer(self.stt_model, 16000)
@@ -266,10 +277,10 @@ Assistant:"""
             
             output = self.llm_model(
                 prompt, 
-                max_tokens=100, 
+                max_tokens=50,         # Reduced for faster responses
                 stop=["User:", "\n\n"], 
                 echo=False,
-                temperature=0.7
+                temperature=0.5        # Lower temperature for more focused responses
             )
             
             response = output['choices'][0]['text'].strip()
@@ -375,10 +386,11 @@ Assistant:"""
                         elif data.get("type") == "audio":
                             # Audio data from AI Engine (RTP format - 16kHz PCM)
                             audio_data = base64.b64decode(data.get("data", ""))
-                            logging.info(f"🎵 AUDIO INPUT - Received audio: {len(audio_data)} bytes")
+                            input_rate = int(data.get("rate", 16000))  # Default to 16kHz if not specified
+                            logging.info(f"🎵 AUDIO INPUT - Received audio: {len(audio_data)} bytes at {input_rate} Hz")
                             
                             # Process with STT (now receiving complete utterances from VAD)
-                            transcript = await self.process_stt(audio_data)
+                            transcript = await self.process_stt(audio_data, input_rate)
                             
                             if transcript.strip():
                                 llm_response = await self.process_llm(transcript)

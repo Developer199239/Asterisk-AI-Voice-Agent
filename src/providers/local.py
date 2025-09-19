@@ -134,7 +134,12 @@ class LocalProvider(AIProviderInterface):
                              total_bytes=total_bytes,
                              input_mode=self.input_mode)
                 
-                msg = json.dumps({"type": "audio", "data": base64.b64encode(pcm16k).decode('utf-8')})
+                msg = json.dumps({
+                    "type": "audio", 
+                    "data": base64.b64encode(pcm16k).decode('utf-8'),
+                    "rate": 16000,
+                    "format": "pcm16le"
+                })
                 try:
                     await self.websocket.send(msg)
                     logger.debug("WebSocket batch send successful", 

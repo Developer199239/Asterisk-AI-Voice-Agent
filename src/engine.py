@@ -11,6 +11,15 @@ import base64
 from collections import deque
 from typing import Dict, Any, Optional, List
 
+# Audio capture and testing system
+try:
+    from capture_audio_inside_container import capture_and_test_audio, capture_tester
+    AUDIO_CAPTURE_AVAILABLE = True
+except ImportError:
+    AUDIO_CAPTURE_AVAILABLE = False
+    capture_and_test_audio = None
+    capture_tester = None
+
 # WebRTC VAD for robust speech detection
 try:
     import webrtcvad  # pyright: ignore[reportMissingImports]
@@ -171,17 +180,26 @@ class Engine:
 
     async def on_rtp_packet(self, packet: bytes, addr: tuple):
         """Handle incoming RTP packets from the UDP server."""
-        # This is a simplified handler. A real implementation would parse RTP headers
-        # to map the audio to the correct call based on SSRC or other identifiers.
-        # For now, we assume a single active call and forward audio to its provider.
-        if self.active_calls:
-            channel_id = list(self.active_calls.keys())[0]
-            call_data = self.active_calls[channel_id]
-            provider = call_data.get("provider")
-            if provider:
-                # The first 12 bytes of an RTP packet are the header. The rest is payload.
-                audio_payload = packet[12:]
-                await provider.send_audio(audio_payload)
+        # ARCHITECT FIX: This legacy bypass fragments STT and bypasses VAD
+        # Log warning and disable to ensure all audio goes through VAD
+        logger.warning("🚨 LEGACY RTP BYPASS - This method bypasses VAD and fragments STT", 
+                      packet_len=len(packet), 
+                      addr=addr,
+                      active_calls=len(self.active_calls))
+        
+        # Disable this bypass to prevent STT fragmentation
+        # All audio should go through RTPServer -> _on_rtp_audio -> _process_rtp_audio_with_vad
+        return
+        
+        # LEGACY CODE (disabled):
+        # if self.active_calls:
+        #     channel_id = list(self.active_calls.keys())[0]
+        #     call_data = self.active_calls[channel_id]
+        #     provider = call_data.get("provider")
+        #     if provider:
+        #         # The first 12 bytes of an RTP packet are the header. The rest is payload.
+        #         audio_payload = packet[12:]
+        #         await provider.send_audio(audio_payload)
 
     async def _on_ari_event(self, event: Dict[str, Any]):
         """Default event handler for unhandled ARI events."""
@@ -786,14 +804,10 @@ class Engine:
                        caller_channel_id=caller_channel_id,
                        provider=self.config.default_provider)
             
-            # CRITICAL FIX: Enable audio capture immediately after call setup
-            if caller_channel_id in self.active_calls:
-                self.active_calls[caller_channel_id]["audio_capture_enabled"] = True
-                logger.info("🎤 AUDIO CAPTURE - ✅ Enabled immediately after Hybrid ARI setup",
-                           caller_channel_id=caller_channel_id)
-                
-                # FALLBACK: Ensure audio capture is enabled after 5 seconds as backup
-                asyncio.create_task(self._ensure_audio_capture_enabled(caller_channel_id, delay=5.0))
+            # ARCHITECT FIX: Audio capture will be enabled after greeting playback completes
+            # via PlaybackFinished event handler, not immediately after setup
+            logger.info("🎤 AUDIO CAPTURE - Will be enabled after greeting playback completes",
+                       caller_channel_id=caller_channel_id)
             
             # Play initial greeting
             await self._play_initial_greeting_hybrid(caller_channel_id, local_channel_id)
@@ -816,6 +830,13 @@ class Engine:
             if not provider:
                 logger.error("🎯 HYBRID ARI - Provider not found for greeting")
                 return
+            
+            # ARCHITECT FIX: Set TTS gating before playing greeting
+            call_data = self.active_calls.get(caller_channel_id, {})
+            call_data["tts_playing"] = True
+            call_data["audio_capture_enabled"] = False
+            logger.info("🔊 TTS START - Playing greeting with audio capture disabled", 
+                       caller_channel_id=caller_channel_id)
             
             # Generate greeting audio
             greeting_text = self.config.llm.initial_greeting
@@ -1380,6 +1401,24 @@ class Engine:
                        buffer_size=len(call_data['audio_buffer']),
                        buffer_duration_estimate=f"{len(call_data['audio_buffer']) / 1000:.1f}s")
             
+            # AUDIO CAPTURE: Capture and test audio before sending to provider
+            if AUDIO_CAPTURE_AVAILABLE and capture_and_test_audio:
+                try:
+                    logger.info("🎤 AUDIO CAPTURE - Testing ExternalMedia audio pipeline", 
+                               channel_id=channel_id,
+                               bytes=len(call_data['audio_buffer']))
+                    
+                    # Capture and test the audio
+                    test_results = capture_and_test_audio(call_data['audio_buffer'], f"externalmedia_{channel_id}")
+                    
+                    logger.info("🎤 AUDIO CAPTURE - ExternalMedia test completed", 
+                               channel_id=channel_id,
+                               stt_result=test_results.get("stt_result", {}).get("transcript", ""))
+                except Exception as e:
+                    logger.error("🎤 AUDIO CAPTURE - Error during ExternalMedia testing", 
+                               channel_id=channel_id,
+                               error=str(e))
+            
             # Send audio to provider (this may take time for long responses)
             await provider.send_audio(call_data['audio_buffer'])
             
@@ -1573,8 +1612,9 @@ class Engine:
             # Check if audio capture is enabled (set by PlaybackFinished event)
             call_data = self.active_calls.get(caller_channel_id, {})
             audio_capture_enabled = call_data.get("audio_capture_enabled", False)
+            tts_playing = call_data.get("tts_playing", False)
             
-            logger.info("🎤 AUDIO CAPTURE - Check", ssrc=ssrc, caller_channel_id=caller_channel_id, audio_capture_enabled=audio_capture_enabled)
+            logger.info("🎤 AUDIO CAPTURE - Check", ssrc=ssrc, caller_channel_id=caller_channel_id, audio_capture_enabled=audio_capture_enabled, tts_playing=tts_playing)
             
             if not audio_capture_enabled:
                 logger.debug("RTP audio capture disabled, waiting for greeting to finish", 
@@ -1637,6 +1677,8 @@ class Engine:
                     "webrtc_speech_frames": 0,  # Consecutive WebRTC speech frames
                     "webrtc_silence_frames": 0,  # Consecutive WebRTC silence frames
                     "webrtc_last_decision": False,  # Last WebRTC VAD decision
+                    # ARCHITECT FIX: Frame buffering for exact 20ms frames
+                    "frame_buffer": b"",  # Buffer for accumulating audio to slice into exact 640-byte frames
                 }
             
             vad_state = self.active_calls[caller_channel_id]["vad_state"]
@@ -1672,203 +1714,241 @@ class Engine:
             
             # current_time_ms already calculated above with monotonic clock
             
-            # Update pre-roll buffer (keep last 400ms)
-            vad_state["pre_roll_buffer"] += pcm_16k_data
-            if len(vad_state["pre_roll_buffer"]) > pre_roll_frames * 640:  # 640 bytes per 20ms frame
-                vad_state["pre_roll_buffer"] = vad_state["pre_roll_buffer"][-pre_roll_frames * 640:]
+            # ARCHITECT FIX: Frame-accurate WebRTC VAD with buffering
+            # Add incoming audio to frame buffer
+            vad_state["frame_buffer"] += pcm_16k_data
             
-            # WebRTC VAD for robust speech detection
-            webrtc_decision = False
-            if self.webrtc_vad and len(pcm_16k_data) == 640:  # Ensure exactly 20ms at 16kHz
-                try:
-                    webrtc_decision = self.webrtc_vad.is_speech(pcm_16k_data, 16000)
-                    # Debug logging for WebRTC VAD decisions (every 50 frames)
-                    if vad_state["frame_count"] % 50 == 0:
-                        logger.debug("🎤 WebRTC VAD - Decision", 
-                                   caller_channel_id=caller_channel_id,
-                                   frame_count=vad_state["frame_count"],
-                                   webrtc_decision=webrtc_decision,
-                                   audio_bytes=len(pcm_16k_data))
-                except Exception as e:
-                    logger.debug("WebRTC VAD error", error=str(e))
-                    webrtc_decision = False
-            
-            # Update WebRTC frame counters
-            if webrtc_decision:
-                vs["webrtc_speech_frames"] += 1
-                vs["webrtc_silence_frames"] = 0
-            else:
-                vs["webrtc_speech_frames"] = 0
-                vs["webrtc_silence_frames"] += 1
-            
-            vs["webrtc_last_decision"] = webrtc_decision
-            
-            # WebRTC-only VAD logic (architect recommended)
-            webrtc_start_frames = getattr(self.config.streaming.barge_in, 'webrtc_start_frames', 3)
-            end_silence_frames = 50  # 1000ms / 20ms = 50 frames
-            
-            # Start: WebRTC only - require consecutive speech frames
-            webrtc_speech = vs["webrtc_speech_frames"] >= webrtc_start_frames
-            
-            # Continue: WebRTC only - direct decision per frame
-            webrtc_continue = webrtc_decision
-            
-            # End: WebRTC silence frames threshold
-            webrtc_silence = vs["webrtc_silence_frames"] >= end_silence_frames
-            
-            # WebRTC-only speech decisions
-            is_speech = webrtc_speech or (vs["speaking"] and webrtc_continue)
-            is_silence = webrtc_silence
-            
-            # Debug logging for VAD analysis (every 10 frames)
-            if vad_state["frame_count"] % 10 == 0:
-                logger.debug("🎤 VAD ANALYSIS - WebRTC-only", 
-                           caller_channel_id=caller_channel_id,
-                           frame_count=vad_state["frame_count"],
-                           webrtc_decision=webrtc_decision,
-                           webrtc_speech_frames=vs["webrtc_speech_frames"],
-                           webrtc_silence_frames=vs["webrtc_silence_frames"],
-                           webrtc_speech=webrtc_speech,
-                           webrtc_continue=webrtc_continue,
-                           webrtc_silence=webrtc_silence,
-                           is_speech=is_speech,
-                           speaking=vs.get("speaking", False))
-            
-            # Add frame to pre-roll buffer (always)
-            vs["pre_roll_buffer"] += pcm_16k_data
-            if len(vs["pre_roll_buffer"]) > pre_roll_ms * 32:  # 400ms * 32 bytes/ms
-                vs["pre_roll_buffer"] = vs["pre_roll_buffer"][-pre_roll_ms * 32:]
-            
-            # AVR-VAD INSPIRED: Speech detection logic
-            if is_speech and not vs["speaking"]:
-                # Speech start detected
-                vs["speaking"] = True
-                vs["speech_real_start_fired"] = False
-                vs["speech_frame_count"] = 0
-                vs["redemption_counter"] = 0
-                vs["consecutive_speech_frames"] = 0
-                vs["consecutive_silence_frames"] = 0
-                vs["utterance_buffer"] = vs["pre_roll_buffer"]
-                vs["speech_start_ms"] = current_time_ms - pre_roll_ms
-                vs["speech_duration_ms"] = 0
-                vs["silence_duration_ms"] = 0
-                vs["utterance_id"] += 1
-                logger.info("🎤 VAD - Speech started", 
-                           caller_channel_id=caller_channel_id,
-                           utterance_id=vs["utterance_id"],
-                           webrtc_speech_frames=vs["webrtc_speech_frames"])
-            
-            # AVR-VAD INSPIRED: During speech recording
-            elif vs["speaking"]:
-                vs["utterance_buffer"] += pcm_16k_data
+            # Process complete 20ms frames (640 bytes each)
+            frames_processed = 0
+            while len(vad_state["frame_buffer"]) >= 640:
+                # Extract exactly 640 bytes (20ms at 16kHz)
+                frame_data = vad_state["frame_buffer"][:640]
+                vad_state["frame_buffer"] = vad_state["frame_buffer"][640:]
+                frames_processed += 1
                 
-                if is_speech:
-                    # Speech continues
-                    vs["speech_frame_count"] += 1
-                    vs["redemption_counter"] = 0
-                    vs["consecutive_speech_frames"] += 1
-                    vs["consecutive_silence_frames"] = 0
-                    vs["speech_duration_ms"] += 20
-                    
-                    # Debug logging for consecutive frames
-                    if vs["consecutive_speech_frames"] % 5 == 0:  # Log every 5 frames
-                        logger.debug("🎤 VAD - Consecutive speech frames", 
-                                   caller_channel_id=caller_channel_id,
-                                   utterance_id=vs["utterance_id"],
-                                   consecutive_speech=vs["consecutive_speech_frames"],
-                                   speech_frames=vs["speech_frame_count"],
-                                   webrtc_decision=webrtc_decision)
-                    
-                    # Fire speech real start after minimum frames
-                    if vs["speech_frame_count"] >= min_speech_frames and not vs["speech_real_start_fired"]:
-                        vs["speech_real_start_fired"] = True
-                        logger.info("🎤 VAD - Speech confirmed", 
-                                   caller_channel_id=caller_channel_id,
-                                   utterance_id=vs["utterance_id"],
-                                   speech_frames=vs["speech_frame_count"])
+                # ARCHITECT FIX: Per-frame timebase increment
+                vs["frame_count"] += 1
+                current_time_ms = vs["t0_ms"] + vs["frame_count"] * 20
+                
+                # WebRTC VAD decision for this exact 20ms frame
+                webrtc_decision = False
+                if self.webrtc_vad:
+                    try:
+                        webrtc_decision = self.webrtc_vad.is_speech(frame_data, 16000)
+                        # Debug logging for WebRTC VAD decisions (every 50 frames)
+                        if vad_state["frame_count"] % 50 == 0:
+                            logger.debug("🎤 WebRTC VAD - Decision", 
+                                       caller_channel_id=caller_channel_id,
+                                       frame_count=vad_state["frame_count"],
+                                       webrtc_decision=webrtc_decision,
+                                       audio_bytes=len(frame_data),
+                                       frames_processed=frames_processed)
+                    except Exception as e:
+                        logger.debug("WebRTC VAD error", error=str(e))
+                        webrtc_decision = False
+                
+                # Update WebRTC frame counters
+                if webrtc_decision:
+                    vs["webrtc_speech_frames"] += 1
+                    vs["webrtc_silence_frames"] = 0
                 else:
-                    # Silence detected - track silence frames
+                    vs["webrtc_speech_frames"] = 0
+                    vs["webrtc_silence_frames"] += 1
+                
+                vs["webrtc_last_decision"] = webrtc_decision
+                
+                # Update pre-roll buffer with this frame (keep last 400ms)
+                vs["pre_roll_buffer"] += frame_data
+                if len(vs["pre_roll_buffer"]) > pre_roll_frames * 640:  # 640 bytes per 20ms frame
+                    vs["pre_roll_buffer"] = vs["pre_roll_buffer"][-pre_roll_frames * 640:]
+                
+                # WebRTC-only VAD logic (architect recommended)
+                webrtc_start_frames = getattr(self.config.streaming.barge_in, 'webrtc_start_frames', 3)
+                end_silence_frames = 50  # 1000ms / 20ms = 50 frames
+                
+                # Start: WebRTC only - require consecutive speech frames
+                webrtc_speech = vs["webrtc_speech_frames"] >= webrtc_start_frames
+                
+                # Continue: WebRTC only - direct decision per frame
+                webrtc_continue = webrtc_decision
+                
+                # End: WebRTC silence frames threshold
+                webrtc_silence = vs["webrtc_silence_frames"] >= end_silence_frames
+                
+                # WebRTC-only speech decisions
+                is_speech = webrtc_speech or (vs["speaking"] and webrtc_continue)
+                is_silence = webrtc_silence
+                
+                # ARCHITECT FIX: INFO-level VAD heartbeat (every 50 frames)
+                if vs["frame_count"] % 50 == 0:
+                    logger.info("🎤 VAD HEARTBEAT - WebRTC-only", 
+                               caller_channel_id=caller_channel_id,
+                               frame_count=vs["frame_count"],
+                               webrtc_decision=webrtc_decision,
+                               webrtc_speech_frames=vs["webrtc_speech_frames"],
+                               webrtc_silence_frames=vs["webrtc_silence_frames"],
+                               webrtc_speech=webrtc_speech,
+                               webrtc_continue=webrtc_continue,
+                               webrtc_silence=webrtc_silence,
+                               is_speech=is_speech,
+                               speaking=vs.get("speaking", False),
+                               utterance_id=vs.get("utterance_id", 0),
+                               frame_buffer_len=len(vs["frame_buffer"]),
+                               frames_processed=frames_processed)
+                
+                # Debug logging for VAD analysis (every 10 frames)
+                if vs["frame_count"] % 10 == 0:
+                    logger.debug("🎤 VAD ANALYSIS - WebRTC-only", 
+                               caller_channel_id=caller_channel_id,
+                               frame_count=vs["frame_count"],
+                               webrtc_decision=webrtc_decision,
+                               webrtc_speech_frames=vs["webrtc_speech_frames"],
+                               webrtc_silence_frames=vs["webrtc_silence_frames"],
+                               webrtc_speech=webrtc_speech,
+                               webrtc_continue=webrtc_continue,
+                               webrtc_silence=webrtc_silence,
+                               is_speech=is_speech,
+                               speaking=vs.get("speaking", False),
+                               frames_processed=frames_processed)
+                
+                # AVR-VAD INSPIRED: Speech detection logic (per frame)
+                if is_speech and not vs["speaking"]:
+                    # Speech start detected
+                    vs["speaking"] = True
+                    vs["speech_real_start_fired"] = False
+                    vs["speech_frame_count"] = 0
+                    vs["redemption_counter"] = 0
                     vs["consecutive_speech_frames"] = 0
-                    vs["consecutive_silence_frames"] += 1
-                    vs["silence_duration_ms"] += 20
+                    vs["consecutive_silence_frames"] = 0
+                    vs["utterance_buffer"] = vs["pre_roll_buffer"]
+                    vs["speech_start_ms"] = current_time_ms - pre_roll_ms
+                    vs["speech_duration_ms"] = 0
+                    vs["silence_duration_ms"] = 0
+                    vs["utterance_id"] += 1
+                    logger.info("🎤 VAD - Speech started", 
+                               caller_channel_id=caller_channel_id,
+                               utterance_id=vs["utterance_id"],
+                               webrtc_speech_frames=vs["webrtc_speech_frames"])
+                
+                # AVR-VAD INSPIRED: During speech recording
+                elif vs["speaking"]:
+                    vs["utterance_buffer"] += frame_data
                     
-                    # Debug logging for silence detection
-                    if vs["consecutive_silence_frames"] % 10 == 0:  # Log every 10 frames
-                        logger.debug("🎤 VAD - Silence detected", 
-                                   caller_channel_id=caller_channel_id,
-                                   utterance_id=vs["utterance_id"],
-                                   webrtc_silence_frames=vs["webrtc_silence_frames"],
-                                   end_silence_frames=end_silence_frames,
-                                   consecutive_silence=vs["consecutive_silence_frames"])
-                    
-                    # Check if WebRTC silence threshold reached
-                    if vs["webrtc_silence_frames"] >= end_silence_frames:
-                        # End speech after WebRTC silence threshold
-                        vs["speaking"] = False
-                        vs["speech_real_start_fired"] = False
-                        vs["speech_frame_count"] = 0
-                        vs["last_utterance_end_ms"] = current_time_ms
+                    if is_speech:
+                        # Speech continues
+                        vs["speech_frame_count"] += 1
+                        vs["redemption_counter"] = 0
+                        vs["consecutive_speech_frames"] += 1
+                        vs["consecutive_silence_frames"] = 0
+                        vs["speech_duration_ms"] += 20
                         
-                        # Process the utterance
-                        if len(vs["utterance_buffer"]) > 0:
-                            # Normalize to target RMS before sending
-                            buf = vs["utterance_buffer"]
-                            buf = self._normalize_to_dbfs(buf, target_dbfs=-20.0, max_gain=3.0)
+                        # Debug logging for consecutive frames
+                        if vs["consecutive_speech_frames"] % 5 == 0:  # Log every 5 frames
+                            logger.debug("🎤 VAD - Consecutive speech frames", 
+                                       caller_channel_id=caller_channel_id,
+                                       utterance_id=vs["utterance_id"],
+                                       consecutive_speech=vs["consecutive_speech_frames"],
+                                       speech_frames=vs["speech_frame_count"],
+                                       webrtc_decision=webrtc_decision)
+                        
+                        # Fire speech real start after minimum frames
+                        if vs["speech_frame_count"] >= min_speech_frames and not vs["speech_real_start_fired"]:
+                            vs["speech_real_start_fired"] = True
+                            logger.info("🎤 VAD - Speech confirmed", 
+                                       caller_channel_id=caller_channel_id,
+                                       utterance_id=vs["utterance_id"],
+                                       speech_frames=vs["speech_frame_count"])
+                    else:
+                        # Silence detected - track silence frames
+                        vs["consecutive_speech_frames"] = 0
+                        vs["consecutive_silence_frames"] += 1
+                        vs["silence_duration_ms"] += 20
+                        
+                        # Debug logging for silence detection
+                        if vs["consecutive_silence_frames"] % 10 == 0:  # Log every 10 frames
+                            logger.debug("🎤 VAD - Silence detected", 
+                                       caller_channel_id=caller_channel_id,
+                                       utterance_id=vs["utterance_id"],
+                                       webrtc_silence_frames=vs["webrtc_silence_frames"],
+                                       end_silence_frames=end_silence_frames,
+                                       consecutive_silence=vs["consecutive_silence_frames"])
+                        
+                        # Check if WebRTC silence threshold reached
+                        if vs["webrtc_silence_frames"] >= end_silence_frames:
+                            # End speech after WebRTC silence threshold
+                            vs["speaking"] = False
+                            vs["speech_real_start_fired"] = False
+                            vs["speech_frame_count"] = 0
+                            vs["last_utterance_end_ms"] = current_time_ms
                             
-                            # ARCHITECT FIX: Discard ultra-short utterances
-                            # 200ms = 10 frames = 6400 bytes at 16kHz
-                            min_utterance_bytes = 6400
-                            if len(buf) < min_utterance_bytes:
-                                logger.debug("🎤 VAD - Discarding short utterance", 
+                            # Process the utterance
+                            if len(vs["utterance_buffer"]) > 0:
+                                # Normalize to target RMS before sending
+                                buf = vs["utterance_buffer"]
+                                buf = self._normalize_to_dbfs(buf, target_dbfs=-20.0, max_gain=3.0)
+                                
+                                # ARCHITECT FIX: Discard ultra-short utterances using config
+                                # Use min_utterance_ms from config (default 600ms)
+                                min_utterance_bytes = (min_utterance_ms // 20) * 640
+                                if len(buf) < min_utterance_bytes:
+                                    logger.debug("🎤 VAD - Discarding short utterance", 
+                                               caller_channel_id=caller_channel_id,
+                                               utterance_id=vs["utterance_id"],
+                                               bytes=len(buf),
+                                               min_bytes=min_utterance_bytes)
+                                    vs["state"] = "listening"
+                                    vs["utterance_buffer"] = b""
+                                    continue  # Continue to next frame
+                                
+                                vs["state"] = "processing"
+                                logger.info("🎤 VAD - Speech ended", 
                                            caller_channel_id=caller_channel_id,
                                            utterance_id=vs["utterance_id"],
+                                           reason="webrtc_silence",
+                                           speech_ms=vs["speech_duration_ms"],
+                                           silence_ms=vs["silence_duration_ms"],
                                            bytes=len(buf),
-                                           min_bytes=min_utterance_bytes)
-                                vs["state"] = "listening"
-                                vs["utterance_buffer"] = b""
-                                return  # Exit function early for short utterance
+                                           webrtc_silence_frames=vs["webrtc_silence_frames"])
+                                
+                                # AUDIO CAPTURE: Capture and test audio before sending to provider
+                                if AUDIO_CAPTURE_AVAILABLE and capture_and_test_audio:
+                                    try:
+                                        logger.info("🎤 AUDIO CAPTURE - Testing audio pipeline", 
+                                                   caller_channel_id=caller_channel_id,
+                                                   utterance_id=vs["utterance_id"],
+                                                   bytes=len(buf))
+                                        
+                                        # Capture and test the audio
+                                        test_results = capture_and_test_audio(buf, f"vad_utterance_{vs['utterance_id']}")
+                                        
+                                        logger.info("🎤 AUDIO CAPTURE - Test completed", 
+                                                   caller_channel_id=caller_channel_id,
+                                                   utterance_id=vs["utterance_id"],
+                                                   stt_result=test_results.get("stt_result", {}).get("transcript", ""))
+                                    except Exception as e:
+                                        logger.error("🎤 AUDIO CAPTURE - Error during testing", 
+                                                   caller_channel_id=caller_channel_id,
+                                                   utterance_id=vs["utterance_id"],
+                                                   error=str(e))
+                                
+                                # Send to provider
+                                await provider.send_audio(buf)
+                                logger.info("🎤 VAD - Utterance sent to provider", 
+                                           caller_channel_id=caller_channel_id,
+                                           utterance_id=vs["utterance_id"],
+                                           bytes=len(buf))
+                            else:
+                                # Empty utterance - misfire (only when speech actually ends)
+                                logger.info("🎤 VAD - Speech misfire (empty utterance)", 
+                                           caller_channel_id=caller_channel_id,
+                                           utterance_id=vs["utterance_id"])
                             
-                            vs["state"] = "processing"
-                            logger.info("🎤 VAD - Speech ended", 
-                                       caller_channel_id=caller_channel_id,
-                                       utterance_id=vs["utterance_id"],
-                                       reason="webrtc_silence",
-                                       speech_ms=vs["speech_duration_ms"],
-                                       silence_ms=vs["silence_duration_ms"],
-                                       bytes=len(buf),
-                                       webrtc_silence_frames=vs["webrtc_silence_frames"])
-                            
-                            # Send to provider
-                            await provider.send_audio(buf)
-                            logger.info("🎤 VAD - Utterance sent to provider", 
-                                       caller_channel_id=caller_channel_id,
-                                       utterance_id=vs["utterance_id"],
-                                       bytes=len(buf))
-                        else:
-                            # Empty utterance - misfire (only when speech actually ends)
-                            logger.info("🎤 VAD - Speech misfire (empty utterance)", 
-                                       caller_channel_id=caller_channel_id,
-                                       utterance_id=vs["utterance_id"])
-                        
-                        # Reset for next utterance
-                        vs["state"] = "listening"
-                        vs["utterance_buffer"] = b""
+                            # Reset for next utterance
+                            vs["state"] = "listening"
+                            vs["utterance_buffer"] = b""
             
-            # AVR-VAD INSPIRED: Not speaking - manage pre-roll buffer
-            else:
-                # Keep only pre-roll frames in buffer
-                if len(vs["pre_roll_buffer"]) > pre_roll_frames * 640:  # pre_roll_frames * 640 bytes
-                    vs["pre_roll_buffer"] = vs["pre_roll_buffer"][-pre_roll_frames * 640:]
-                vs["consecutive_speech_frames"] = 0
-                vs["consecutive_silence_frames"] += 1
-            
-            # AVR-VAD INSPIRED: Old state machine removed - now handled above
-            
-            # Handle processing state
-            if vad_state["state"] == "processing":
-                # Ignore audio while processing previous utterance
-                # This prevents overlapping processing
-                pass
+            # ARCHITECT FIX: All speech detection logic now handled inside frame processing loop
+            # No additional processing needed here
             
         except Exception as e:
             logger.error("Error in VAD processing", 
@@ -2041,14 +2121,10 @@ class Engine:
                        provider=provider_name,
                        call_id=call_id)
             
-            # CRITICAL FIX: Enable audio capture immediately after call setup
-            if caller_channel_id in self.active_calls:
-                self.active_calls[caller_channel_id]["audio_capture_enabled"] = True
-                logger.info("🎤 AUDIO CAPTURE - ✅ Enabled immediately after ExternalMedia setup",
-                           caller_channel_id=caller_channel_id)
-                
-                # FALLBACK: Ensure audio capture is enabled after 5 seconds as backup
-                asyncio.create_task(self._ensure_audio_capture_enabled(caller_channel_id, delay=5.0))
+            # ARCHITECT FIX: Audio capture will be enabled after greeting playback completes
+            # via PlaybackFinished event handler, not immediately after setup
+            logger.info("🎤 AUDIO CAPTURE - Will be enabled after greeting playback completes",
+                       caller_channel_id=caller_channel_id)
             
         except Exception as e:
             logger.error("Error starting provider session for ExternalMedia", 
@@ -2067,6 +2143,12 @@ class Engine:
             if not provider:
                 logger.error("No provider found for greeting", caller_channel_id=caller_channel_id)
                 return
+            
+            # ARCHITECT FIX: Set TTS gating before playing greeting
+            call_data["tts_playing"] = True
+            call_data["audio_capture_enabled"] = False
+            logger.info("🔊 TTS START - Playing greeting with audio capture disabled", 
+                       caller_channel_id=caller_channel_id)
             
             # Generate TTS audio
             audio_data = await provider.text_to_speech(greeting_text)
@@ -2620,6 +2702,20 @@ class Engine:
     async def _cleanup_call(self, channel_id: str):
         """Cleanup resources associated with a call."""
         logger.debug("Starting call cleanup", channel_id=channel_id)
+        
+        # AUDIO CAPTURE: Save analysis report when call ends
+        if AUDIO_CAPTURE_AVAILABLE and capture_tester:
+            try:
+                logger.info("🎤 AUDIO CAPTURE - Saving analysis report", channel_id=channel_id)
+                report_file = capture_tester.save_analysis_report()
+                capture_tester.print_summary()
+                logger.info("🎤 AUDIO CAPTURE - Analysis report saved", 
+                           channel_id=channel_id,
+                           report_file=report_file)
+            except Exception as e:
+                logger.error("🎤 AUDIO CAPTURE - Error saving analysis report", 
+                           channel_id=channel_id,
+                           error=str(e))
         
         if channel_id in self.active_calls:
             call_data = self.active_calls[channel_id]
