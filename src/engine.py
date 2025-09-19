@@ -1638,9 +1638,9 @@ class Engine:
             
             noise_db = vs.get("noise_floor_db", -70.0)
             
-            # ARCHITECT RECOMMENDED: Optimized parameters for telephony audio
-            start_margin_db = 8      # Conservative start margin
-            end_margin_db = 4        # Conservative end margin
+            # ARCHITECT FIX: Lower margins for telephony audio sensitivity
+            start_margin_db = 6      # Reduced from 8 for better sensitivity
+            end_margin_db = 4        # Keep conservative end margin
             hard_min_start_db = -75  # Lower minimum for quiet callers
             hard_min_end_db = -80    # Lower minimum for quiet callers
             hard_max_start_db = -40  # Prevent thresholds from becoming too high
@@ -1656,8 +1656,9 @@ class Engine:
             pre_speech_pad_frames = 15  # 300ms pre-roll buffer
             min_speech_frames = 10  # 200ms minimum speech duration
             
-            # Update noise floor when not in recording and not above start threshold
-            if vs["state"] == "listening" and energy_db < start_db:
+            # ARCHITECT FIX: Don't update noise floor during TTS playback
+            # Noise model gets skewed if we adapt while TTS is playing
+            if vs["state"] == "listening" and energy_db < start_db and not call_data.get("tts_playing", False):
                 vs["noise_db_history"].append(energy_db)
                 if len(vs["noise_db_history"]) >= 10:
                     # ARCHITECT FIX: Robust to outliers with smoothing
@@ -1707,8 +1708,14 @@ class Engine:
             min_snr_start = 3      # Start speech detection at 3 dB SNR
             min_snr_continue = 1   # Continue speech at 1 dB SNR
             
+            # ARCHITECT FIX: Hybrid start condition for telephony audio
+            # Path A (classic): energy_db >= start_db AND snr_db >= 1
+            # Path B (soft): snr_db >= 3 AND energy_db >= (noise_db + 2)
+            classic_start = energy_db >= start_db and snr_db >= 1
+            soft_start = snr_db >= 3 and energy_db >= (noise_db + 2)
+            is_speech = classic_start or soft_start
+            
             # AVR-VAD INSPIRED: Main VAD State Machine
-            is_speech = energy_db > start_db and snr_db >= min_snr_start
             is_silence = energy_db < end_db or snr_db < min_snr_continue
             
             # Add frame to pre-roll buffer (always)
