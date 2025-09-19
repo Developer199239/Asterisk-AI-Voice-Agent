@@ -1652,47 +1652,10 @@ class Engine:
             vad_state["frame_count"] += 1
             current_time_ms = vad_state["t0_ms"] + vad_state["frame_count"] * 20
             
-            # Calculate audio energy for VAD
-            energy = self._calculate_frame_energy(pcm_16k_data)
-            
-            # Convert energy to dB for threshold comparison
-            energy_db = 20 * math.log10(energy + 1e-10)  # Add small value to avoid log(0)
-            
-            # ARCHITECT'S VAD IMPROVEMENTS - Adaptive thresholds with noise tracking
+            # WebRTC-only VAD - no energy calculations needed
             vs = vad_state
             
-            noise_db = vs.get("noise_floor_db", -70.0)
-            
-            # ARCHITECT FIX: Lower margins for telephony audio sensitivity
-            start_margin_db = 6      # Reduced from 8 for better sensitivity
-            end_margin_db = 4        # Keep conservative end margin
-            hard_min_start_db = -75  # Lower minimum for quiet callers
-            hard_min_end_db = -80    # Lower minimum for quiet callers
-            hard_max_start_db = -40  # Prevent thresholds from becoming too high
-            hard_max_end_db = -45    # Prevent thresholds from becoming too high
-            
-            # Compute adaptive thresholds with safety rails
-            start_db = min(hard_max_start_db, max(noise_db + start_margin_db, hard_min_start_db))
-            end_db = min(hard_max_end_db, max(noise_db + end_margin_db, hard_min_end_db))
-            snr_db = energy_db - noise_db
-            
-            # ARCHITECT RECOMMENDED: Redemption period parameters for telephony
-            redemption_frames = 40   # 800ms at 20ms frames - longer for natural speech pauses
-            pre_speech_pad_frames = 15  # 300ms pre-roll buffer
-            min_speech_frames = 10  # 200ms minimum speech duration
-            
-            # ARCHITECT FIX: Don't update noise floor during TTS playback
-            # Noise model gets skewed if we adapt while TTS is playing
-            if vs["state"] == "listening" and energy_db < start_db and not call_data.get("tts_playing", False):
-                vs["noise_db_history"].append(energy_db)
-                if len(vs["noise_db_history"]) >= 10:
-                    # ARCHITECT FIX: Robust to outliers with smoothing
-                    sorted_vals = sorted(vs["noise_db_history"])
-                    mid = len(sorted_vals) // 2
-                    median_value = (sorted_vals[mid] if len(sorted_vals) % 2
-                                  else 0.5 * (sorted_vals[mid - 1] + sorted_vals[mid]))
-                    # Add low-pass smoothing to avoid "breathing" on noisy lines
-                    vs["noise_floor_db"] = 0.9 * vs["noise_floor_db"] + 0.1 * median_value
+            # WebRTC-only VAD - no noise floor tracking needed
             
             # VAD parameters
             min_speech_ms = 200
@@ -1736,39 +1699,36 @@ class Engine:
             
             vs["webrtc_last_decision"] = webrtc_decision
             
-            # Hybrid VAD logic: WebRTC primary + energy/SNR secondary
-            min_snr_start = 3      # Start speech detection at 3 dB SNR
-            min_snr_continue = 1   # Continue speech at 1 dB SNR
+            # WebRTC-only VAD logic (architect recommended)
             webrtc_start_frames = getattr(self.config.streaming.barge_in, 'webrtc_start_frames', 3)
+            end_silence_frames = 50  # 1000ms / 20ms = 50 frames
             
-            # Primary: WebRTC VAD decision
+            # Start: WebRTC only - require consecutive speech frames
             webrtc_speech = vs["webrtc_speech_frames"] >= webrtc_start_frames
             
-            # Secondary: Energy/SNR fallback for edge cases
-            classic_start = energy_db >= start_db and snr_db >= 1
-            soft_start = snr_db >= 3 and energy_db >= (noise_db + 2)
-            energy_speech = classic_start or soft_start
+            # Continue: WebRTC only - direct decision per frame
+            webrtc_continue = webrtc_decision
             
-            # Hybrid decision: WebRTC primary OR energy fallback
-            is_speech = webrtc_speech or energy_speech
-            is_silence = energy_db < end_db or snr_db < min_snr_continue
+            # End: WebRTC silence frames threshold
+            webrtc_silence = vs["webrtc_silence_frames"] >= end_silence_frames
+            
+            # WebRTC-only speech decisions
+            is_speech = webrtc_speech or (vs["speaking"] and webrtc_continue)
+            is_silence = webrtc_silence
             
             # Debug logging for VAD analysis (every 10 frames)
             if vad_state["frame_count"] % 10 == 0:
-                logger.debug("🎤 VAD ANALYSIS - Frame analysis", 
+                logger.debug("🎤 VAD ANALYSIS - WebRTC-only", 
                            caller_channel_id=caller_channel_id,
                            frame_count=vad_state["frame_count"],
-                           energy_db=f"{energy_db:.2f}",
-                           start_db=f"{start_db:.2f}",
-                           end_db=f"{end_db:.2f}",
-                           noise_db=f"{noise_db:.2f}",
-                           snr_db=f"{snr_db:.2f}",
                            webrtc_decision=webrtc_decision,
                            webrtc_speech_frames=vs["webrtc_speech_frames"],
                            webrtc_silence_frames=vs["webrtc_silence_frames"],
                            webrtc_speech=webrtc_speech,
-                           energy_speech=energy_speech,
-                           is_speech=is_speech)
+                           webrtc_continue=webrtc_continue,
+                           webrtc_silence=webrtc_silence,
+                           is_speech=is_speech,
+                           speaking=vs.get("speaking", False))
             
             # Add frame to pre-roll buffer (always)
             vs["pre_roll_buffer"] += pcm_16k_data
@@ -1792,9 +1752,7 @@ class Engine:
                 logger.info("🎤 VAD - Speech started", 
                            caller_channel_id=caller_channel_id,
                            utterance_id=vs["utterance_id"],
-                           start_db=f"{start_db:.1f}",
-                           noise_db=f"{noise_db:.1f}",
-                           energy_db=f"{energy_db:.1f}")
+                           webrtc_speech_frames=vs["webrtc_speech_frames"])
             
             # AVR-VAD INSPIRED: During speech recording
             elif vs["speaking"]:
@@ -1815,7 +1773,7 @@ class Engine:
                                    utterance_id=vs["utterance_id"],
                                    consecutive_speech=vs["consecutive_speech_frames"],
                                    speech_frames=vs["speech_frame_count"],
-                                   energy_db=f"{energy_db:.1f}")
+                                   webrtc_decision=webrtc_decision)
                     
                     # Fire speech real start after minimum frames
                     if vs["speech_frame_count"] >= min_speech_frames and not vs["speech_real_start_fired"]:
@@ -1825,28 +1783,25 @@ class Engine:
                                    utterance_id=vs["utterance_id"],
                                    speech_frames=vs["speech_frame_count"])
                 else:
-                    # Silence detected - start redemption period
+                    # Silence detected - track silence frames
                     vs["consecutive_speech_frames"] = 0
                     vs["consecutive_silence_frames"] += 1
-                    vs["redemption_counter"] += 1
                     vs["silence_duration_ms"] += 20
                     
-                    # Debug logging for redemption period
-                    if vs["redemption_counter"] % 3 == 0:  # Log every 3 frames
-                        logger.debug("🎤 VAD - Redemption period", 
+                    # Debug logging for silence detection
+                    if vs["consecutive_silence_frames"] % 10 == 0:  # Log every 10 frames
+                        logger.debug("🎤 VAD - Silence detected", 
                                    caller_channel_id=caller_channel_id,
                                    utterance_id=vs["utterance_id"],
-                                   redemption_counter=vs["redemption_counter"],
-                                   redemption_frames=redemption_frames,
-                                   consecutive_silence=vs["consecutive_silence_frames"],
-                                   energy_db=f"{energy_db:.1f}")
+                                   webrtc_silence_frames=vs["webrtc_silence_frames"],
+                                   end_silence_frames=end_silence_frames,
+                                   consecutive_silence=vs["consecutive_silence_frames"])
                     
-                    # Check if redemption period expired
-                    if vs["redemption_counter"] >= redemption_frames:
-                        # End speech after redemption period
+                    # Check if WebRTC silence threshold reached
+                    if vs["webrtc_silence_frames"] >= end_silence_frames:
+                        # End speech after WebRTC silence threshold
                         vs["speaking"] = False
                         vs["speech_real_start_fired"] = False
-                        vs["redemption_counter"] = 0
                         vs["speech_frame_count"] = 0
                         vs["last_utterance_end_ms"] = current_time_ms
                         
@@ -1873,11 +1828,11 @@ class Engine:
                             logger.info("🎤 VAD - Speech ended", 
                                        caller_channel_id=caller_channel_id,
                                        utterance_id=vs["utterance_id"],
-                                       reason="redemption_period",
+                                       reason="webrtc_silence",
                                        speech_ms=vs["speech_duration_ms"],
                                        silence_ms=vs["silence_duration_ms"],
                                        bytes=len(buf),
-                                       noise_db=f"{noise_db:.1f}")
+                                       webrtc_silence_frames=vs["webrtc_silence_frames"])
                             
                             # Send to provider
                             await provider.send_audio(buf)
