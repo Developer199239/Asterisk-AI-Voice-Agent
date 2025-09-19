@@ -1840,15 +1840,13 @@ class Engine:
                                        caller_channel_id=caller_channel_id,
                                        utterance_id=vs["utterance_id"],
                                        bytes=len(buf))
+                        else:
+                            # Empty utterance - misfire (only when speech actually ends)
+                            logger.info("🎤 VAD - Speech misfire (empty utterance)", 
+                                       caller_channel_id=caller_channel_id,
+                                       utterance_id=vs["utterance_id"])
                         
                         # Reset for next utterance
-                        vs["state"] = "listening"
-                        vs["utterance_buffer"] = b""
-                    else:
-                        # Empty utterance - misfire
-                        logger.info("🎤 VAD - Speech misfire (empty utterance)", 
-                                   caller_channel_id=caller_channel_id,
-                                   utterance_id=vs["utterance_id"])
                         vs["state"] = "listening"
                         vs["utterance_buffer"] = b""
             
