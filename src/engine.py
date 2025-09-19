@@ -13,7 +13,7 @@ from typing import Dict, Any, Optional, List
 
 # WebRTC VAD for robust speech detection
 try:
-    import webrtcvad
+    import webrtcvad  # pyright: ignore[reportMissingImports]
     WEBRTC_VAD_AVAILABLE = True
 except ImportError:
     WEBRTC_VAD_AVAILABLE = False
@@ -1717,23 +1717,6 @@ class Engine:
             if len(vad_state["pre_roll_buffer"]) > pre_roll_frames * 640:  # 640 bytes per 20ms frame
                 vad_state["pre_roll_buffer"] = vad_state["pre_roll_buffer"][-pre_roll_frames * 640:]
             
-            # Debug logging for VAD analysis (every 10 frames)
-            if vad_state["frame_count"] % 10 == 0:
-                logger.debug("🎤 VAD ANALYSIS - Frame analysis", 
-                           caller_channel_id=caller_channel_id,
-                           frame_count=vad_state["frame_count"],
-                           energy_db=f"{energy_db:.2f}",
-                           start_db=f"{start_db:.2f}",
-                           end_db=f"{end_db:.2f}",
-                           noise_db=f"{noise_db:.2f}",
-                           snr_db=f"{snr_db:.2f}",
-                           webrtc_decision=webrtc_decision,
-                           webrtc_speech_frames=vs["webrtc_speech_frames"],
-                           webrtc_silence_frames=vs["webrtc_silence_frames"],
-                           webrtc_speech=webrtc_speech,
-                           energy_speech=energy_speech,
-                           is_speech=is_speech)
-            
             # WebRTC VAD for robust speech detection
             webrtc_decision = False
             if self.webrtc_vad and len(pcm_16k_data) == 640:  # Ensure exactly 20ms at 16kHz
@@ -1769,6 +1752,23 @@ class Engine:
             # Hybrid decision: WebRTC primary OR energy fallback
             is_speech = webrtc_speech or energy_speech
             is_silence = energy_db < end_db or snr_db < min_snr_continue
+            
+            # Debug logging for VAD analysis (every 10 frames)
+            if vad_state["frame_count"] % 10 == 0:
+                logger.debug("🎤 VAD ANALYSIS - Frame analysis", 
+                           caller_channel_id=caller_channel_id,
+                           frame_count=vad_state["frame_count"],
+                           energy_db=f"{energy_db:.2f}",
+                           start_db=f"{start_db:.2f}",
+                           end_db=f"{end_db:.2f}",
+                           noise_db=f"{noise_db:.2f}",
+                           snr_db=f"{snr_db:.2f}",
+                           webrtc_decision=webrtc_decision,
+                           webrtc_speech_frames=vs["webrtc_speech_frames"],
+                           webrtc_silence_frames=vs["webrtc_silence_frames"],
+                           webrtc_speech=webrtc_speech,
+                           energy_speech=energy_speech,
+                           is_speech=is_speech)
             
             # Add frame to pre-roll buffer (always)
             vs["pre_roll_buffer"] += pcm_16k_data
