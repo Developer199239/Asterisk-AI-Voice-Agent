@@ -5,13 +5,13 @@ from typing import Callable, Optional, List, Dict, Any
 import websockets.exceptions
 
 from structlog import get_logger
-from ..config import DeepgramProviderConfig, LLMConfig
+from ..config import LLMConfig
 from .base import AIProviderInterface
 
 logger = get_logger(__name__)
 
 class DeepgramProvider(AIProviderInterface):
-    def __init__(self, config: DeepgramProviderConfig, llm_config: LLMConfig, on_event: Callable[[Dict[str, Any]], None]):
+    def __init__(self, config: Dict[str, Any], llm_config: LLMConfig, on_event: Callable[[Dict[str, Any]], None]):
         super().__init__(on_event)
         self.config = config
         self.llm_config = llm_config
