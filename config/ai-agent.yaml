@@ -55,6 +55,23 @@ streaming:
     webrtc_aggressiveness: 0 # WebRTC VAD aggressiveness 0-3 (0 is least aggressive, 3 is most aggressive)
     webrtc_start_frames: 3   # Consecutive speech frames to start recording
 
+# VAD Configuration - Optimized for 4+ second utterances
+vad:
+  # WebRTC VAD settings
+  webrtc_aggressiveness: 0   # Least aggressive (0-3) for telephony audio
+  webrtc_start_frames: 3     # Consecutive frames to start recording
+  webrtc_end_silence_frames: 50  # Silence frames to end recording (1000ms)
+  
+  # Utterance settings - optimized for 4+ second duration
+  min_utterance_duration_ms: 4000  # Minimum 4 seconds for accurate STT
+  max_utterance_duration_ms: 10000 # Maximum 10 seconds
+  utterance_padding_ms: 200        # Padding before/after speech
+  
+  # Fallback settings
+  fallback_enabled: true           # Enable fallback when VAD fails
+  fallback_interval_ms: 2000       # Send audio every 2 seconds as fallback
+  fallback_buffer_size: 64000      # 2 seconds of 16kHz audio (64,000 bytes)
+
 # Provider-specific configurations
 providers:
   deepgram:

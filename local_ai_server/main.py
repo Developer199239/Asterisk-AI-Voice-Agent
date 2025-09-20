@@ -206,8 +206,8 @@ class LocalAIServer:
         self.tts_model: Optional[PiperVoice] = None
         self.audio_processor = AudioProcessor()
         
-        # Initialize Whisper STT (primary) and Vosk (fallback)
-        self.whisper_stt = WhisperSTT(model_name="tiny", language="en")
+        # Initialize Vosk STT (primary) - optimized for telephony audio
+        # Whisper STT removed - Vosk performs better with telephony audio quality
         
         # Model paths
         self.stt_model_path = "/app/models/stt/vosk-model-small-en-us-0.15"
@@ -328,24 +328,14 @@ class LocalAIServer:
             return ""
 
     async def process_stt(self, audio_data: bytes, input_rate: int = 16000) -> str:
-        """Process STT with Whisper (primary) and Vosk (fallback)"""
+        """Process STT with Vosk (primary) - optimized for telephony audio"""
         try:
-            # Try Whisper first (primary STT)
-            if self.whisper_stt.is_available:
-                logging.debug(f"🎤 STT INPUT - Using Whisper: {len(audio_data)} bytes at {input_rate}Hz")
-                transcript = await self.whisper_stt.transcribe(audio_data, input_rate)
-                if transcript:
-                    logging.info(f"📝 STT RESULT - Whisper transcript: '{transcript}'")
-                    return transcript
-                else:
-                    logging.warning("🎤 STT - Whisper returned empty transcript, falling back to Vosk")
-            
-            # Fallback to Vosk if Whisper fails or is unavailable
+            # Use Vosk as primary STT (better for telephony audio)
             if not self.stt_model:
                 logging.error("STT model not loaded")
                 return ""
             
-            logging.debug(f"🎤 STT INPUT - Using Vosk fallback: {len(audio_data)} bytes at {input_rate}Hz")
+            logging.debug(f"🎤 STT INPUT - Using Vosk (primary): {len(audio_data)} bytes at {input_rate}Hz")
             
             # Only resample if input rate is not 16kHz
             if input_rate != 16000:

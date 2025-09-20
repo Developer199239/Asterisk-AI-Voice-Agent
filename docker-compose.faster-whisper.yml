@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  local-ai-server:
+    build:
+      context: ./local_ai_server
+      dockerfile: Dockerfile.faster_whisper
+    container_name: local_ai_server_faster_whisper
+    ports:
+      - "8765:8765"
+    volumes:
+      - ./models:/app/models
+      - ./local_ai_server:/app
+    environment:
+      - STT_PROVIDER=faster_whisper
+      - FASTER_WHISPER_MODEL=base
+      - PORT=8765
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import websockets; import asyncio; asyncio.run(websockets.connect('ws://localhost:8765/ws').close())"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
