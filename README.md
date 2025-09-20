@@ -92,7 +92,7 @@ Source code for the `ai-engine` is mounted as a volume, so there's no need to re
 
 -   **Production Directory**: `/root/Asterisk-AI-Voice-Agent` (runs `main` branch)
 -   **Development Directory**: `/root/Asterisk-Agent-Develop` (runs `develop` branch)
--   **Server**: `root@voiprnd.nemtclouddispatch.com`
+-   **Server**: Configure your own Asterisk server
 
 ## 🎯 Current Status
 

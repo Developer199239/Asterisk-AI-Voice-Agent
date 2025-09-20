@@ -115,7 +115,7 @@ File "/app/src/engine.py", line 1807, in _process_rtp_audio_with_vad
 ## TTS Playback Fix Applied
 
 **Root Cause Identified**: AgentAudio event handling had incorrect indentation
-- **Problem**: `else:` block was inside `if not sent:` instead of at the same level as AudioSocket condition
+- **Problem**: `else:` block was inside `if not sent:` instead of at the same level as ExternalMedia condition
 - **Impact**: File-based playback code never executed for ExternalMedia calls
 - **Fix**: Corrected indentation to properly handle file-based TTS playback
 - **Result**: TTS responses now properly played back to caller via bridge playback
@@ -124,17 +124,17 @@ File "/app/src/engine.py", line 1807, in _process_rtp_audio_with_vad
 ```python
 # BEFORE (incorrect indentation)
 if self.config.audio_transport == 'audiosocket' and self.config.downstream_mode == 'stream':
-    # AudioSocket streaming logic
+    # ExternalMedia streaming logic
     if not sent:
         # Fallback logic
 else:  # This was inside the if not sent block!
 
 # AFTER (correct indentation)  
 if self.config.audio_transport == 'audiosocket' and self.config.downstream_mode == 'stream':
-    # AudioSocket streaming logic
+    # ExternalMedia streaming logic
     if not sent:
         # Fallback logic
-else:  # Now properly at the same level as the AudioSocket condition
+else:  # Now properly at the same level as the ExternalMedia condition
     # File-based playback via ARI (default path)
 ```
 
@@ -408,7 +408,7 @@ The major architectural issues have been resolved. The ExternalMedia + RTP appro
 **Confidence Score**: 7/10 - VAD and pipeline working, but utterance length issue needs immediate fix
 ```
 {"endpoint": "Local/36a2f327-a86d-4bbb-9948-d79675362227@ai-stasis/n", "audio_uuid": "36a2f327-a86d-4bbb-9948-d79675362227"}
-{"local_channel_id": "1758100753.5951", "event": "🎯 DIALPLAN AUDIOSOCKET - AudioSocket Local channel originated"}
+{"local_channel_id": "1758100753.5951", "event": "🎯 DIALPLAN AUDIOSOCKET - ExternalMedia Local channel originated"}
 {"channel_id": "1758100753.5951", "event": "🎯 HYBRID ARI - Local channel entered Stasis"}
 ```
 
@@ -427,22 +427,22 @@ The major architectural issues have been resolved. The ExternalMedia + RTP appro
 **AI Engine Logs:**
 ```
 {"endpoint": "Local/4a72fbfa-dc00-40ea-a9e1-544e128e8ab7@ai-stasis/n", "audio_uuid": "4a72fbfa-dc00-40ea-a9e1-544e128e8ab7"}
-{"local_channel_id": "1758097354.5937", "event": "🎯 ARI-ONLY - AudioSocket Local channel originated"}
+{"local_channel_id": "1758097354.5937", "event": "🎯 ARI-ONLY - ExternalMedia Local channel originated"}
 {"channel_id": "1758097354.5937", "event": "🎯 HYBRID ARI - Local channel entered Stasis"}
 {"local_channel_id": "1758097354.5937", "event": "🎯 HYBRID ARI - ✅ Local channel added to bridge"}
 ```
 
 **Status**: ✅ **SUCCESS** - Local channel originated, entered Stasis, and added to bridge
 
-### Phase 4: AudioSocket Command Execution (02:19:13)
+### Phase 4: ExternalMedia Command Execution (02:19:13)
 **AI Engine Logs:**
 ```
-{"channel_id": "1758100753.5951", "app_name": "AudioSocket", "app_data": "36a2f327-a86d-4bbb-9948-d79675362227,127.0.0.1:8090"}
-{"method": "POST", "url": "http://127.0.0.1:8088/ari/channels/1758100753.5951/applications/AudioSocket", "status": 404, "reason": "{\"message\":\"Resource not found\"}"}
-{"local_channel_id": "1758100753.5951", "event": "🎯 ARI AUDIOSOCKET - ✅ AudioSocket command executed"}
+{"channel_id": "1758100753.5951", "app_name": "ExternalMedia", "app_data": "36a2f327-a86d-4bbb-9948-d79675362227,127.0.0.1:8090"}
+{"method": "POST", "url": "http://127.0.0.1:8088/ari/channels/1758100753.5951/applications/ExternalMedia", "status": 404, "reason": "{\"message\":\"Resource not found\"}"}
+{"local_channel_id": "1758100753.5951", "event": "🎯 ARI AUDIOSOCKET - ✅ ExternalMedia command executed"}
 ```
 
-**Status**: ❌ **FAILURE** - ARI execute_application still returns 404 error (AudioSocket not supported via ARI)
+**Status**: ❌ **FAILURE** - ARI execute_application still returns 404 error (ExternalMedia not supported via ARI)
 
 ### Phase 5: TTS Greeting Generation (02:19:13)
 **AI Engine Logs:**
@@ -472,15 +472,15 @@ The major architectural issues have been resolved. The ExternalMedia + RTP appro
 {"channel_id": "1758100747.5950", "event": "🎤 AUDIO CAPTURE - No connection found for channel"}
 ```
 
-**Status**: ❌ **FAILURE** - No AudioSocket connection available for voice capture (404 error prevented connection)
+**Status**: ❌ **FAILURE** - No ExternalMedia connection available for voice capture (404 error prevented connection)
 
 ## Root Cause Analysis
 
-### 1. **AudioSocket ARI Command 404 Error (CRITICAL)**
-**Problem**: ARI execute_application returns 404 error for AudioSocket command
-**Impact**: No AudioSocket connection established, no voice capture possible
+### 1. **ExternalMedia ARI Command 404 Error (CRITICAL)**
+**Problem**: ARI execute_application returns 404 error for ExternalMedia command
+**Impact**: No ExternalMedia connection established, no voice capture possible
 **Evidence**: `{"status": 404, "reason": "{\"message\":\"Resource not found\"}"}`
-**Root Cause**: AudioSocket is not supported via ARI execute_application in Asterisk 16
+**Root Cause**: ExternalMedia is not supported via ARI execute_application in Asterisk 16
 
 ### 2. **Garbled Greeting Audio (NEW ISSUE)**
 **Problem**: Greeting plays but sounds distorted/garbled
@@ -488,7 +488,7 @@ The major architectural issues have been resolved. The ExternalMedia + RTP appro
 **Evidence**: User reported "garbled initial greeting"
 **Possible Cause**: Audio format mismatch or codec issue
 
-### 3. **Missing AudioSocket Connection Mapping**
+### 3. **Missing ExternalMedia Connection Mapping**
 **Problem**: No connection ID available for voice capture after greeting
 **Impact**: Voice capture cannot be enabled
 **Evidence**: `"🎤 AUDIO CAPTURE - No connection found for channel"`
@@ -505,17 +505,17 @@ The major architectural issues have been resolved. The ExternalMedia + RTP appro
 
 ## Critical Issues Identified
 
-### Issue #1: AudioSocket ARI Command 404 Error (CRITICAL)
-**Current**: `execute_application` returns 404 for AudioSocket command
-**Required**: Use dialplan approach instead of ARI command (AudioSocket not supported via ARI)
+### Issue #1: ExternalMedia ARI Command 404 Error (CRITICAL)
+**Current**: `execute_application` returns 404 for ExternalMedia command
+**Required**: Use dialplan approach instead of ARI command (ExternalMedia not supported via ARI)
 
 ### Issue #2: Garbled Greeting Audio (NEW - HIGH PRIORITY)
 **Current**: Greeting plays but sounds distorted
 **Required**: Investigate audio format/codec mismatch causing distortion
 
-### Issue #3: Missing AudioSocket Connection Mapping
+### Issue #3: Missing ExternalMedia Connection Mapping
 **Current**: No connection ID available for voice capture
-**Required**: Establish AudioSocket connection via dialplan and map to channel
+**Required**: Establish ExternalMedia connection via dialplan and map to channel
 
 ### Issue #4: ✅ TTS Generation Fixed
 **Current**: Working correctly
@@ -527,14 +527,14 @@ The major architectural issues have been resolved. The ExternalMedia + RTP appro
 
 ## Recommended Fixes
 
-### Fix #1: Implement Dialplan AudioSocket Approach (CRITICAL)
-**Problem**: ARI execute_application returns 404 for AudioSocket
-**Solution**: Use dialplan approach - originate Local channel directly to AudioSocket context
+### Fix #1: Implement Dialplan ExternalMedia Approach (CRITICAL)
+**Problem**: ARI execute_application returns 404 for ExternalMedia
+**Solution**: Use dialplan approach - originate Local channel directly to ExternalMedia context
 ```asterisk
 [ai-audiosocket-only]
-exten => _[0-9a-fA-F].,1,NoOp(AudioSocket for ${EXTEN})
+exten => _[0-9a-fA-F].,1,NoOp(ExternalMedia for ${EXTEN})
  same => n,Answer()
- same => n,AudioSocket(${EXTEN},127.0.0.1:8090)
+ same => n,ExternalMedia(${EXTEN},127.0.0.1:8090)
  same => n,Hangup()
 ```
 
@@ -542,26 +542,26 @@ exten => _[0-9a-fA-F].,1,NoOp(AudioSocket for ${EXTEN})
 **Problem**: Greeting plays but sounds distorted
 **Solution**: Check audio format/codec compatibility between TTS output and Asterisk playback
 
-### Fix #3: Verify AudioSocket Connection Mapping
+### Fix #3: Verify ExternalMedia Connection Mapping
 **Problem**: No connection established for voice capture
-**Solution**: Ensure AudioSocket connection is properly mapped to channel after dialplan approach
+**Solution**: Ensure ExternalMedia connection is properly mapped to channel after dialplan approach
 
 ### Fix #4: Test Complete Two-Way Audio
 **Problem**: Only outbound audio working
-**Solution**: Verify inbound audio capture and processing after AudioSocket fix
+**Solution**: Verify inbound audio capture and processing after ExternalMedia fix
 
 ### Fix #5: ✅ TTS and Playback Working
 **Status**: No action needed - working correctly
 
 ## Confidence Score: 8/10
 
-The analysis shows that the major infrastructure is working (TTS, ARI playback, Stasis, Bridge) but two critical issues remain: AudioSocket connection establishment failing due to ARI command 404 error, and garbled greeting audio. The solution is to use dialplan approach instead of ARI execute_application.
+The analysis shows that the major infrastructure is working (TTS, ARI playback, Stasis, Bridge) but two critical issues remain: ExternalMedia connection establishment failing due to ARI command 404 error, and garbled greeting audio. The solution is to use dialplan approach instead of ARI execute_application.
 
 ## Next Steps
 
-1. **Fix AudioSocket connection** - Use dialplan approach instead of ARI command
+1. **Fix ExternalMedia connection** - Use dialplan approach instead of ARI command
 2. **Investigate garbled audio** - Check audio format/codec compatibility
-3. **Test voice capture** - Verify AudioSocket connection and voice processing
+3. **Test voice capture** - Verify ExternalMedia connection and voice processing
 4. **Test complete two-way audio** - Verify end-to-end conversation flow
 5. **✅ TTS and playback working** - No action needed
 
@@ -574,13 +574,13 @@ The analysis shows that the major infrastructure is working (TTS, ARI playback, 
 | Local Channel Origination | ✅ Success | None |
 | Local Channel Stasis Entry | ✅ Success | None |
 | Bridge Connection | ✅ Success | None |
-| AudioSocket Command | ❌ Failure | 404 error in ARI command |
+| ExternalMedia Command | ❌ Failure | 404 error in ARI command |
 | TTS Generation | ✅ Success | Fixed - LocalProvider bug resolved |
 | Audio Playback | ❌ Partial | Working but garbled/distorted |
-| Voice Capture | ❌ Failure | No AudioSocket connection |
+| Voice Capture | ❌ Failure | No ExternalMedia connection |
 | Call Cleanup | ✅ Success | None |
 
-**Overall Result**: ❌ **CRITICAL ISSUES REMAIN** - Garbled greeting + no voice capture, AudioSocket approach needs fundamental change
+**Overall Result**: ❌ **CRITICAL ISSUES REMAIN** - Garbled greeting + no voice capture, ExternalMedia approach needs fundamental change
 
 ---
 
@@ -1362,7 +1362,7 @@ webrtc_start_frames: 3    # Consecutive frames to start
 **Caller**: User  
 **Duration**: ~30 seconds  
 **Speech**: "Hello How are you today" (said twice)  
-**Transport**: RTP (not AudioSocket/ExternalMedia)  
+**Transport**: RTP (not ExternalMedia/ExternalMedia)  
 
 ### What Worked ✅
 1. **RTP Audio Reception**: AI engine received continuous RTP audio packets (320 bytes → 640 bytes resampled)

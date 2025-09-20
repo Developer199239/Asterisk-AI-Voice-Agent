@@ -66,7 +66,7 @@ class AppConfig(BaseModel):
     providers: Dict[str, Any]
     asterisk: AsteriskConfig
     llm: LLMConfig
-    audio_transport: str = Field(default="externalmedia")  # 'externalmedia' | 'audiosocket' | 'legacy'
+    audio_transport: str = Field(default="externalmedia")  # 'externalmedia' | 'legacy'
     downstream_mode: str = Field(default="file")  # 'file' | 'stream'
     external_media: Optional[ExternalMediaConfig] = Field(default_factory=ExternalMediaConfig)
     vad: Optional[VADConfig] = Field(default_factory=VADConfig)
@@ -102,7 +102,7 @@ def load_config(path: str = "config/ai-agent.yaml") -> AppConfig:
         }
 
         # Defaults for new flags if not present in YAML
-        config_data.setdefault('audio_transport', os.getenv('AUDIO_TRANSPORT', 'audiosocket'))
+        config_data.setdefault('audio_transport', os.getenv('AUDIO_TRANSPORT', 'externalmedia'))
         config_data.setdefault('downstream_mode', os.getenv('DOWNSTREAM_MODE', 'file'))
         if 'streaming' not in config_data:
             config_data['streaming'] = {}

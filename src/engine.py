@@ -652,7 +652,7 @@ class Engine:
             raise
 
     async def _originate_local_channel(self, caller_channel_id: str):
-        """Originate Local channel for AudioSocket - LEGACY (kept for reference)."""
+        """Originate Local channel for ExternalMedia - LEGACY (kept for reference)."""
         local_endpoint = f"Local/{caller_channel_id}@ai-agent-media-fork/n"
         
         orig_params = {
@@ -722,7 +722,7 @@ class Engine:
                        caller_channel_id=caller_channel_id, 
                        local_channel_id=local_channel_id)
             
-            # Start provider session and bind AudioSocket
+            # Start provider session and bind ExternalMedia
             await self._start_provider_session(caller_channel_id, local_channel_id)
             
         except Exception as e:
@@ -790,9 +790,9 @@ class Engine:
                         error=str(e), exc_info=True)
 
     async def _play_initial_greeting_hybrid(self, caller_channel_id: str, local_channel_id: str):
-        """Play initial greeting - Hybrid ARI approach with AudioSocket streaming."""
+        """Play initial greeting - Hybrid ARI approach with ExternalMedia streaming."""
         try:
-            logger.info("🎯 HYBRID ARI - Playing initial greeting via AudioSocket", 
+            logger.info("🎯 HYBRID ARI - Playing initial greeting via ExternalMedia", 
                        caller_channel_id=caller_channel_id,
                        local_channel_id=local_channel_id)
             
@@ -869,7 +869,7 @@ class Engine:
                         error=str(e), exc_info=True)
 
     async def _start_provider_session(self, caller_channel_id: str, local_channel_id: str):
-        """Start provider session and bind AudioSocket - LEGACY (kept for reference)."""
+        """Start provider session and bind ExternalMedia - LEGACY (kept for reference)."""
         try:
             # Get provider
             provider = self.providers.get(self.config.default_provider)
@@ -906,8 +906,8 @@ class Engine:
                        caller_channel_id=caller_channel_id,
                        provider=self.config.default_provider)
             
-            # AudioSocket will bind automatically via ChannelVarset
-            logger.info("Ready for AudioSocket binding", local_channel_id=local_channel_id)
+            # ExternalMedia will bind automatically via ChannelVarset
+            logger.info("Ready for ExternalMedia binding", local_channel_id=local_channel_id)
             
         except Exception as e:
             logger.error("Failed to start provider session", 
@@ -916,7 +916,7 @@ class Engine:
                         error=str(e), exc_info=True)
 
     async def _bind_connection_to_channel(self, conn_id: str, channel_id: str, provider_name: str):
-        """Bind an accepted AudioSocket connection to a Stasis channel and start provider.
+        """Bind an accepted ExternalMedia connection to a Stasis channel and start provider.
 
         Plays a one-time test prompt to validate audio path, then proceeds with provider flow.
         """
@@ -924,19 +924,19 @@ class Engine:
             # If a connection is already bound to this channel, reject extras to avoid idle sockets
             existing = self.channel_to_conn.get(channel_id)
             if existing and existing != conn_id:
-                logger.info("Rejecting extra AudioSocket connection for already-bound channel",
+                logger.info("Rejecting extra ExternalMedia connection for already-bound channel",
                             channel_id=channel_id, existing_conn=existing, new_conn=conn_id)
                 return
 
             self.conn_to_channel[conn_id] = channel_id
             self.channel_to_conn[channel_id] = conn_id
-            logger.info("AudioSocket connection bound to channel", channel_id=channel_id, conn_id=conn_id)
+            logger.info("ExternalMedia connection bound to channel", channel_id=channel_id, conn_id=conn_id)
             provider = self.active_calls.get(channel_id, {}).get('provider')
             if not provider:
                 provider = self.providers.get(provider_name)
                 if provider:
                     self.active_calls[channel_id] = {"provider": provider}
-            # Hint upstream audio format for providers: AudioSocket delivers PCM16@8k by default
+            # Hint upstream audio format for providers: ExternalMedia delivers PCM16@8k by default
             try:
                 if provider and hasattr(provider, 'set_input_mode'):
                     provider.set_input_mode('pcm16_8k')
@@ -944,14 +944,14 @@ class Engine:
             except Exception:
                 logger.debug("Could not set provider input mode on bind", channel_id=channel_id, conn_id=conn_id, exc_info=True)
 
-            # Start AudioSocket keepalive task to prevent idle timeouts in Asterisk app
+            # Start ExternalMedia keepalive task to prevent idle timeouts in Asterisk app
             try:
                 if conn_id in self._keepalive_tasks:
                     t = self._keepalive_tasks.pop(conn_id, None)
                     if t and not t.done():
                         t.cancel()
-                self._keepalive_tasks[conn_id] = asyncio.create_task(self._audiosocket_keepalive(conn_id))
-                logger.debug("Started AudioSocket keepalive", conn_id=conn_id)
+                self._keepalive_tasks[conn_id] = asyncio.create_task(self._externalmedia_keepalive(conn_id))
+                logger.debug("Started ExternalMedia keepalive", conn_id=conn_id)
             except Exception:
                 logger.debug("Failed to start keepalive task", channel_id=channel_id, conn_id=conn_id, exc_info=True)
             # Remove demo-congrats/test tone; rely on provider greeting to start the dialog
@@ -966,7 +966,7 @@ class Engine:
                     await provider.start_session(channel_id)
                     logger.debug("Provider session started successfully", channel_id=channel_id)
                     
-                    # Play initial greeting only when AudioSocket connects
+                    # Play initial greeting only when ExternalMedia connects
                     if hasattr(provider, 'play_initial_greeting'):
                         logger.info("🔊 GREETING - Playing initial greeting", channel_id=channel_id)
                         await provider.play_initial_greeting(channel_id)
@@ -975,13 +975,13 @@ class Engine:
             logger.error("Error binding connection to channel", channel_id=channel_id, conn_id=conn_id, exc_info=True)
 
     async def _handle_channel_varset(self, event_data: dict):
-        """Bind any pending AudioSocket connection when AUDIOSOCKET_UUID variable is set.
+        """Bind any pending ExternalMedia connection when EXTERNALMEDIA_UUID variable is set.
 
-        The dialplan now generates a proper UUID, so we bind the AudioSocket to the Local channel.
+        The dialplan now generates a proper UUID, so we bind the ExternalMedia to the Local channel.
         """
         try:
             variable = event_data.get('variable') or event_data.get('name')
-            if variable != 'AUDIOSOCKET_UUID':
+            if variable != 'EXTERNALMEDIA_UUID':
                 return
             
             # Get the Local channel ID from the event
@@ -1004,7 +1004,7 @@ class Engine:
             if local_channel_id in self.channel_to_conn:
                 return
                 
-            # No AudioSocket connection binding needed for externalmedia mode
+            # No ExternalMedia connection binding needed for externalmedia mode
             logger.info("ChannelVarset bound or queued", variable=variable, target_channel_id=local_channel_id)
         except Exception:
             logger.debug("Error in ChannelVarset handler", exc_info=True)
@@ -1044,10 +1044,10 @@ class Engine:
         raise ValueError(f"Provider '{provider_name}' does not have a creation rule.")
 
     async def _handle_audio_frame(self, audio_data: bytes):
-        """Handle raw audio frames from AudioSocket connections."""
+        """Handle raw audio frames from ExternalMedia connections."""
         try:
             # Find the active call (assuming single call for now)
-            # For AudioSocket, we can use any active call since there should only be one
+            # For ExternalMedia, we can use any active call since there should only be one
             active_channel_id = None
             for channel_id, call_data in self.active_calls.items():
                     active_channel_id = channel_id
@@ -1131,7 +1131,7 @@ class Engine:
         try:
             import struct
             
-            # AudioSocket sends PCM16LE@8kHz directly - no conversion needed
+            # ExternalMedia sends PCM16LE@8kHz directly - no conversion needed
             # Calculate RMS (Root Mean Square) energy
             samples = struct.unpack(f'<{len(audio_data)//2}h', audio_data)
             rms = sum(sample * sample for sample in samples) / len(samples)
@@ -2271,7 +2271,7 @@ class Engine:
                 audio_data = event.get("data")
                 call_id = event.get("call_id")
                 if audio_data:
-                    # AudioSocket streaming removed - using file-based playback only
+                    # ExternalMedia streaming removed - using file-based playback only
                         # File-based playback via ARI (default path) - target specific call
                         target_channel_id = None
                         if call_id:
@@ -2345,7 +2345,7 @@ class Engine:
                        playback_id=playback_id,
                        target_uri=target_uri)
             
-            # Handle bridge playback (ExternalMedia) vs channel playback (AudioSocket)
+            # Handle bridge playback (ExternalMedia) vs channel playback (ExternalMedia)
             caller_channel_id = None
             playback_data = None
             
@@ -2425,10 +2425,10 @@ class Engine:
                                playback_id=playback_id,
                                audio_capture_enabled=True)
                 
-                # Check if this is an AudioSocket connection for logging
+                # Check if this is an ExternalMedia connection for logging
                 conn_id = self.channel_to_conn.get(caller_channel_id)
                 if conn_id:
-                    logger.info("🎤 TTS GATING - Enabled for AudioSocket connection",
+                    logger.info("🎤 TTS GATING - Enabled for ExternalMedia connection",
                                conn_id=conn_id,
                                caller_channel_id=caller_channel_id)
                 else:
@@ -2555,18 +2555,18 @@ class Engine:
                     logger.debug("Stopping provider session", channel_id=channel_id)
                     await provider.stop_session()
                 
-            # Close bound AudioSocket connection if any
-            # CRITICAL FIX: Handle new mapping structure where AudioSocket is bound to Local channel
+            # Close bound ExternalMedia connection if any
+            # CRITICAL FIX: Handle new mapping structure where ExternalMedia is bound to Local channel
             conn_id = None
             
-            # First, try to find AudioSocket connection via AudioSocket channel
+            # First, try to find ExternalMedia connection via ExternalMedia channel
             if channel_id in self.caller_channels:
-                audiosocket_channel_id = self.caller_channels[channel_id].get("audiosocket_channel_id")
-                if audiosocket_channel_id:
-                    conn_id = self.channel_to_conn.pop(audiosocket_channel_id, None)
-                    logger.debug("🎯 CLEANUP - Found AudioSocket connection via AudioSocket channel", 
+                externalmedia_channel_id = self.caller_channels[channel_id].get("externalmedia_channel_id")
+                if externalmedia_channel_id:
+                    conn_id = self.channel_to_conn.pop(externalmedia_channel_id, None)
+                    logger.debug("🎯 CLEANUP - Found ExternalMedia connection via ExternalMedia channel", 
                                caller_channel_id=channel_id,
-                               audiosocket_channel_id=audiosocket_channel_id,
+                               externalmedia_channel_id=externalmedia_channel_id,
                                conn_id=conn_id)
             
             # Fallback: try direct mapping (for backward compatibility)
@@ -2577,7 +2577,7 @@ class Engine:
                            conn_id=conn_id)
             
             if conn_id:
-                logger.debug("Closing AudioSocket connection", channel_id=channel_id, conn_id=conn_id)
+                logger.debug("Closing ExternalMedia connection", channel_id=channel_id, conn_id=conn_id)
                 self.conn_to_channel.pop(conn_id, None)
                 self.conn_to_caller.pop(conn_id, None)  # Clean up caller mapping
                 # Cancel keepalive task early
@@ -2685,7 +2685,7 @@ class Engine:
             logger.debug("No active call found for cleanup", channel_id=channel_id)
 
     async def _send_test_tone_over_socket(self, conn_id: str, ms: int = 300):
-        """Send a short test tone over AudioSocket (PCM16LE@8k framed) to verify downstream."""
+        """Send a short test tone over ExternalMedia (PCM16LE@8k framed) to verify downstream."""
         try:
             rate = 8000
             duration_sec = ms / 1000.0
@@ -2696,8 +2696,8 @@ class Engine:
             for n in range(samples):
                 val = int(0.2 * 32767 * math.sin(2 * math.pi * freq * (n / rate)))
                 pcm.extend(val.to_bytes(2, 'little', signed=True))
-            # AudioSocket test tone removed - not used in externalmedia mode
-            logger.info("Sent test tone over AudioSocket", conn_id=conn_id, fmt='slin16', rate=rate, ms=ms)
+            # ExternalMedia test tone removed - not used in externalmedia mode
+            logger.info("Sent test tone over ExternalMedia", conn_id=conn_id, fmt='slin16', rate=rate, ms=ms)
         except Exception:
             logger.debug("Error sending test tone", exc_info=True)
 
@@ -2715,13 +2715,13 @@ class Engine:
         except Exception as e:
             logger.error("Error playing ring tone", channel_id=channel_id, exc_info=True)
 
-    # AudioSocket TTS streaming removed - using ARI file playback instead
-    # AudioSocket is only for inbound audio (STT), not outbound (TTS)
+    # ExternalMedia TTS streaming removed - using ARI file playback instead
+    # ExternalMedia is only for inbound audio (STT), not outbound (TTS)
 
     # Audio conversion methods removed - using ARI file playback instead
 
     async def _play_audio_via_bridge(self, channel_id: str, audio_data: bytes):
-        """Play audio via bridge to avoid interrupting AudioSocket capture."""
+        """Play audio via bridge to avoid interrupting ExternalMedia capture."""
         # High-visibility debugging to verify method is called
         logger.info(f"✅✅✅ _play_audio_via_bridge successfully called for channel {channel_id} ✅✅✅")
         

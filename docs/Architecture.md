@@ -152,7 +152,7 @@ Configure via env:
          │                       │                       │                       │
 ```
 
-### 3. AUDIOSOCKET SERVER ARCHITECTURE 🎧
+### 3. EXTERNALMEDIA SERVER ARCHITECTURE 🎧
 
 ```
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
@@ -188,7 +188,7 @@ src/
 │   ├── on_provider_event()      # Handles AgentAudio events
 │   └── _play_ai_audio()         # File-based audio playback
 │
-├── audiosocket_server.py        # 🎧 NEW: ExternalMedia TCP Server
+├── rtp_server.py               # 🎧 ExternalMedia RTP Server
 │   ├── start_server()           # Start TCP server on port 8090
 │   ├── handle_connection()      # Handle per-call TCP connections
 │   ├── process_audio_stream()   # Real-time audio processing
@@ -245,6 +245,47 @@ The new architecture provides a guaranteed media path by leveraging Asterisk's E
    - The event handler immediately deletes the audio file from the shared directory.
 
 This model is the most robust and performant, avoiding the unreliable `ChannelAudioFrame` events and the complexity of manual RTP handling.
+
+## FreePBX Dialplan Configuration
+
+### Working Dialplan Implementation
+
+The system uses a simple, effective dialplan that directly hands calls to the Stasis application:
+
+```asterisk
+[from-ai-agent]
+exten => s,1,NoOp(Handing call directly to Stasis for AI processing)
+ same => n,Stasis(asterisk-ai-voice-agent)
+ same => n,Hangup()
+
+[ai-externalmedia]
+exten => s,1,NoOp(ExternalMedia + RTP AI Voice Agent)
+ same => n,Answer()
+ same => n,Wait(1)
+ same => n,Stasis(asterisk-ai-voice-agent)
+ same => n,Hangup()
+```
+
+### Dialplan Contexts Explained
+
+**`[from-ai-agent]`**:
+- **Purpose**: Direct call routing to AI processing
+- **Usage**: Main entry point for incoming calls
+- **Flow**: Call → Stasis → AI Engine → RTP Server
+- **Benefits**: Simple, reliable, no complex audio handling
+
+**`[ai-externalmedia]`**:
+- **Purpose**: ExternalMedia context for RTP audio processing
+- **Usage**: Alternative entry point with explicit ExternalMedia setup
+- **Flow**: Call → Answer → Wait → Stasis → AI Engine
+- **Benefits**: Explicit audio setup, better for complex scenarios
+
+### Integration Steps
+
+1. **Add to FreePBX**: Copy the dialplan contexts to your FreePBX dialplan
+2. **Route Calls**: Configure your inbound routes to use `from-ai-agent` context
+3. **Test**: Place test calls to verify Stasis application receives calls
+4. **Monitor**: Check AI engine logs for successful call processing
 
 ### Optional: ExternalMedia RTP Bridging
 In deployments that require RTP/SRTP interop, an optional path using Asterisk `ExternalMedia` may be enabled to bridge media via RTP. This is not required for the default ExternalMedia architecture and should be considered only when standards-based RTP interop is necessary.

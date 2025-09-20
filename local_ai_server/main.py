@@ -348,7 +348,7 @@ Assistant:"""
         try:
             async for message in websocket:
                 if isinstance(message, bytes):
-                    # Binary audio data from AudioSocket
+                    # Binary audio data from ExternalMedia
                     logging.info(f"🎵 AUDIO INPUT - Received audio: {len(message)} bytes")
                     
                     # Full MVP pipeline: STT → LLM → TTS
@@ -448,7 +448,7 @@ async def main():
     
     async with serve(server.handler, "0.0.0.0", 8765):
         logging.info("🚀 Enhanced Local AI Server started on ws://0.0.0.0:8765")
-        logging.info("📋 MVP Pipeline: AudioSocket (8kHz) → STT (16kHz) → LLM → TTS (8kHz uLaw) - Optimized!")
+        logging.info("📋 MVP Pipeline: ExternalMedia (8kHz) → STT (16kHz) → LLM → TTS (8kHz uLaw) - Optimized!")
         logging.info("🔄 Hot Reload: Send {'type': 'reload_models'} to reload models")
         await asyncio.Future()  # Run forever
 
