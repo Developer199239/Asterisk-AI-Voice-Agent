@@ -1516,16 +1516,16 @@ class Engine:
                     vs["speech_real_start_fired"] = False
                     vs["speech_frame_count"] = 0
                     vs["redemption_counter"] = 0
-                        vs["consecutive_speech_frames"] = 0
+                    vs["consecutive_speech_frames"] = 0
                     vs["consecutive_silence_frames"] = 0
-                            vs["utterance_buffer"] = vs["pre_roll_buffer"]
+                    vs["utterance_buffer"] = vs["pre_roll_buffer"]
                     vs["speech_start_ms"] = current_time_ms - pre_roll_ms
-                            vs["speech_duration_ms"] = 0
-                            vs["silence_duration_ms"] = 0
-                            vs["utterance_id"] += 1
-                            logger.info("🎤 VAD - Speech started", 
-                                       caller_channel_id=caller_channel_id,
-                                       utterance_id=vs["utterance_id"],
+                    vs["speech_duration_ms"] = 0
+                    vs["silence_duration_ms"] = 0
+                    vs["utterance_id"] += 1
+                    logger.info("🎤 VAD - Speech started", 
+                               caller_channel_id=caller_channel_id,
+                               utterance_id=vs["utterance_id"],
                                webrtc_speech_frames=vs["webrtc_speech_frames"])
                 
                 # AVR-VAD INSPIRED: During speech recording
@@ -1539,87 +1539,86 @@ class Engine:
                     vs["consecutive_speech_frames"] += 1
                     vs["consecutive_silence_frames"] = 0
                     vs["speech_duration_ms"] += 20
-                        
-                        # Debug logging for consecutive frames
-                        if vs["consecutive_speech_frames"] % 5 == 0:  # Log every 5 frames
-                            logger.debug("🎤 VAD - Consecutive speech frames", 
-                                       caller_channel_id=caller_channel_id,
-                                       utterance_id=vs["utterance_id"],
-                                       consecutive_speech=vs["consecutive_speech_frames"],
-                                       speech_frames=vs["speech_frame_count"],
-                                       webrtc_decision=webrtc_decision)
-                        
-                        # Fire speech real start after minimum frames
-                        if vs["speech_frame_count"] >= min_speech_frames and not vs["speech_real_start_fired"]:
-                            vs["speech_real_start_fired"] = True
-                            logger.info("🎤 VAD - Speech confirmed", 
-                                       caller_channel_id=caller_channel_id,
-                                       utterance_id=vs["utterance_id"],
-                                       speech_frames=vs["speech_frame_count"])
+                    
+                    # Debug logging for consecutive frames
+                    if vs["consecutive_speech_frames"] % 5 == 0:  # Log every 5 frames
+                        logger.debug("🎤 VAD - Consecutive speech frames", 
+                                   caller_channel_id=caller_channel_id,
+                                   utterance_id=vs["utterance_id"],
+                                   consecutive_speech=vs["consecutive_speech_frames"],
+                                   speech_frames=vs["speech_frame_count"],
+                                   webrtc_decision=webrtc_decision)
+                    
+                    # Fire speech real start after minimum frames
+                    if vs["speech_frame_count"] >= min_speech_frames and not vs["speech_real_start_fired"]:
+                        vs["speech_real_start_fired"] = True
+                        logger.info("🎤 VAD - Speech confirmed", 
+                                   caller_channel_id=caller_channel_id,
+                                   utterance_id=vs["utterance_id"],
+                                   speech_frames=vs["speech_frame_count"])
                 else:
-                        # Silence detected - track silence frames
+                    # Silence detected - track silence frames
                     vs["consecutive_speech_frames"] = 0
                     vs["consecutive_silence_frames"] += 1
                     vs["silence_duration_ms"] += 20
 
-                        # Debug logging for silence detection
-                        if vs["consecutive_silence_frames"] % 10 == 0:  # Log every 10 frames
-                            logger.debug("🎤 VAD - Silence detected", 
+                    # Debug logging for silence detection
+                    if vs["consecutive_silence_frames"] % 10 == 0:  # Log every 10 frames
+                        logger.debug("🎤 VAD - Silence detected", 
+                                   caller_channel_id=caller_channel_id,
+                                   utterance_id=vs["utterance_id"],
+                                   webrtc_silence_frames=vs["webrtc_silence_frames"],
+                                   end_silence_frames=end_silence_frames,
+                                   consecutive_silence=vs["consecutive_silence_frames"])
+                    
+                    # Check if WebRTC silence threshold reached
+                    if vs["webrtc_silence_frames"] >= end_silence_frames:
+                        # End speech after WebRTC silence threshold
+                        vs["speaking"] = False
+                        vs["speech_real_start_fired"] = False
+                        vs["speech_frame_count"] = 0
+                        vs["last_utterance_end_ms"] = current_time_ms
+                        
+                        # Process the utterance
+                        if len(vs["utterance_buffer"]) > 0:
+                            # Normalize to target RMS before sending
+                            buf = vs["utterance_buffer"]
+                            buf = self._normalize_to_dbfs(buf, target_dbfs=-20.0, max_gain=3.0)
+                            
+                            # ARCHITECT FIX: Discard ultra-short utterances using config
+                            # Use min_utterance_ms from config (default 600ms)
+                            min_utterance_bytes = (min_utterance_ms // 20) * 640
+                            if len(buf) < min_utterance_bytes:
+                                logger.debug("🎤 VAD - Discarding short utterance", 
+                                           caller_channel_id=caller_channel_id,
+                                           utterance_id=vs["utterance_id"],
+                                           bytes=len(buf),
+                                           min_bytes=min_utterance_bytes)
+                                vs["state"] = "listening"
+                                vs["utterance_buffer"] = b""
+                                continue  # Continue to next frame
+
+                            vs["state"] = "processing"
+                            logger.info("🎤 VAD - Speech ended", 
                                        caller_channel_id=caller_channel_id,
                                        utterance_id=vs["utterance_id"],
-                                       webrtc_silence_frames=vs["webrtc_silence_frames"],
-                                       end_silence_frames=end_silence_frames,
-                                       consecutive_silence=vs["consecutive_silence_frames"])
-                        
-                        # Check if WebRTC silence threshold reached
-                        if vs["webrtc_silence_frames"] >= end_silence_frames:
-                            # End speech after WebRTC silence threshold
-                            vs["speaking"] = False
-                            vs["speech_real_start_fired"] = False
-                            vs["speech_frame_count"] = 0
-                            vs["last_utterance_end_ms"] = current_time_ms
+                                       reason="webrtc_silence",
+                                       speech_ms=vs["speech_duration_ms"],
+                                       silence_ms=vs["silence_duration_ms"],
+                                       bytes=len(buf), 
+                                       webrtc_silence_frames=vs["webrtc_silence_frames"])
                             
-                            # Process the utterance
-                            if len(vs["utterance_buffer"]) > 0:
-                    # Normalize to target RMS before sending
-                    buf = vs["utterance_buffer"]
-                    buf = self._normalize_to_dbfs(buf, target_dbfs=-20.0, max_gain=3.0)
-
-                                # ARCHITECT FIX: Discard ultra-short utterances using config
-                                # Use min_utterance_ms from config (default 600ms)
-                                min_utterance_bytes = (min_utterance_ms // 20) * 640
-                                if len(buf) < min_utterance_bytes:
-                                    logger.debug("🎤 VAD - Discarding short utterance", 
-                                               caller_channel_id=caller_channel_id,
-                                               utterance_id=vs["utterance_id"],
-                                               bytes=len(buf),
-                                               min_bytes=min_utterance_bytes)
-                                    vs["state"] = "listening"
-                                    vs["utterance_buffer"] = b""
-                                    continue  # Continue to next frame
-                                
-                    vs["state"] = "processing"
-                    logger.info("🎤 VAD - Speech ended", 
-                               caller_channel_id=caller_channel_id,
-                               utterance_id=vs["utterance_id"],
-                                           reason="webrtc_silence",
-                               speech_ms=vs["speech_duration_ms"],
-                               silence_ms=vs["silence_duration_ms"],
-                               bytes=len(buf), 
-                                           webrtc_silence_frames=vs["webrtc_silence_frames"])
-                    
-                                
-                                # Send to provider
+                            # Send to provider
                             await provider.send_audio(buf)
                             logger.info("🎤 VAD - Utterance sent to provider", 
                                        caller_channel_id=caller_channel_id,
                                        utterance_id=vs["utterance_id"],
                                        bytes=len(buf))
-                            else:
-                                # Empty utterance - misfire (only when speech actually ends)
-                                logger.info("🎤 VAD - Speech misfire (empty utterance)", 
+                        else:
+                            # Empty utterance - misfire (only when speech actually ends)
+                            logger.info("🎤 VAD - Speech misfire (empty utterance)", 
                                        caller_channel_id=caller_channel_id,
-                                           utterance_id=vs["utterance_id"])
+                                       utterance_id=vs["utterance_id"])
 
                     # Reset for next utterance
                     vs["state"] = "listening"
