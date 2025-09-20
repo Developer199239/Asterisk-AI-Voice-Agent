@@ -198,7 +198,7 @@ class Engine:
         await self._load_providers()
         # Log transport and downstream modes
         logger.info("Runtime modes", audio_transport=self.config.audio_transport, downstream_mode=self.config.downstream_mode)
-
+        
         # Prepare RTP server for ExternalMedia transport
         if self.config.audio_transport == "externalmedia":
             if not self.config.external_media:
@@ -1262,7 +1262,7 @@ class Engine:
                 provider = call_data.get('provider')
                 if provider and hasattr(provider, 'handle_dtmf'):
                     await provider.handle_dtmf(digit)
-
+    
     async def _on_rtp_audio(self, ssrc: int, pcm_16k_data: bytes):
         """Route inbound RTP audio to the appropriate provider using SSRC with VAD-based utterance detection."""
         logger.info("🎵 RTP AUDIO - Received audio", ssrc=ssrc, bytes=len(pcm_16k_data))
@@ -1436,8 +1436,8 @@ class Engine:
                         # Debug logging for WebRTC VAD decisions (every 50 frames)
                         if vad_state["frame_count"] % 50 == 0:
                             logger.debug("🎤 WebRTC VAD - Decision", 
-                                       caller_channel_id=caller_channel_id,
-                                       frame_count=vad_state["frame_count"],
+                           caller_channel_id=caller_channel_id,
+                           frame_count=vad_state["frame_count"],
                                        webrtc_decision=webrtc_decision,
                                        audio_bytes=len(frame_data),
                                        frames_processed=frames_processed)
@@ -1449,7 +1449,7 @@ class Engine:
                 if webrtc_decision:
                     vs["webrtc_speech_frames"] += 1
                     vs["webrtc_silence_frames"] = 0
-                else:
+                    else:
                     vs["webrtc_speech_frames"] = 0
                     vs["webrtc_silence_frames"] += 1
                 
@@ -1516,16 +1516,16 @@ class Engine:
                     vs["speech_real_start_fired"] = False
                     vs["speech_frame_count"] = 0
                     vs["redemption_counter"] = 0
-                    vs["consecutive_speech_frames"] = 0
+                        vs["consecutive_speech_frames"] = 0
                     vs["consecutive_silence_frames"] = 0
-                    vs["utterance_buffer"] = vs["pre_roll_buffer"]
+                            vs["utterance_buffer"] = vs["pre_roll_buffer"]
                     vs["speech_start_ms"] = current_time_ms - pre_roll_ms
-                    vs["speech_duration_ms"] = 0
-                    vs["silence_duration_ms"] = 0
-                    vs["utterance_id"] += 1
-                    logger.info("🎤 VAD - Speech started", 
-                               caller_channel_id=caller_channel_id,
-                               utterance_id=vs["utterance_id"],
+                            vs["speech_duration_ms"] = 0
+                            vs["silence_duration_ms"] = 0
+                            vs["utterance_id"] += 1
+                            logger.info("🎤 VAD - Speech started", 
+                                       caller_channel_id=caller_channel_id,
+                                       utterance_id=vs["utterance_id"],
                                webrtc_speech_frames=vs["webrtc_speech_frames"])
                 
                 # AVR-VAD INSPIRED: During speech recording
@@ -1536,9 +1536,9 @@ class Engine:
                         # Speech continues
                         vs["speech_frame_count"] += 1
                         vs["redemption_counter"] = 0
-                        vs["consecutive_speech_frames"] += 1
-                        vs["consecutive_silence_frames"] = 0
-                        vs["speech_duration_ms"] += 20
+                    vs["consecutive_speech_frames"] += 1
+                    vs["consecutive_silence_frames"] = 0
+                    vs["speech_duration_ms"] += 20
                         
                         # Debug logging for consecutive frames
                         if vs["consecutive_speech_frames"] % 5 == 0:  # Log every 5 frames
@@ -1556,12 +1556,12 @@ class Engine:
                                        caller_channel_id=caller_channel_id,
                                        utterance_id=vs["utterance_id"],
                                        speech_frames=vs["speech_frame_count"])
-                    else:
+                else:
                         # Silence detected - track silence frames
-                        vs["consecutive_speech_frames"] = 0
-                        vs["consecutive_silence_frames"] += 1
-                        vs["silence_duration_ms"] += 20
-                        
+                    vs["consecutive_speech_frames"] = 0
+                    vs["consecutive_silence_frames"] += 1
+                    vs["silence_duration_ms"] += 20
+
                         # Debug logging for silence detection
                         if vs["consecutive_silence_frames"] % 10 == 0:  # Log every 10 frames
                             logger.debug("🎤 VAD - Silence detected", 
@@ -1581,10 +1581,10 @@ class Engine:
                             
                             # Process the utterance
                             if len(vs["utterance_buffer"]) > 0:
-                                # Normalize to target RMS before sending
-                                buf = vs["utterance_buffer"]
-                                buf = self._normalize_to_dbfs(buf, target_dbfs=-20.0, max_gain=3.0)
-                                
+                    # Normalize to target RMS before sending
+                    buf = vs["utterance_buffer"]
+                    buf = self._normalize_to_dbfs(buf, target_dbfs=-20.0, max_gain=3.0)
+
                                 # ARCHITECT FIX: Discard ultra-short utterances using config
                                 # Use min_utterance_ms from config (default 600ms)
                                 min_utterance_bytes = (min_utterance_ms // 20) * 640
@@ -1598,32 +1598,32 @@ class Engine:
                                     vs["utterance_buffer"] = b""
                                     continue  # Continue to next frame
                                 
-                                vs["state"] = "processing"
-                                logger.info("🎤 VAD - Speech ended", 
-                                           caller_channel_id=caller_channel_id,
-                                           utterance_id=vs["utterance_id"],
+                    vs["state"] = "processing"
+                    logger.info("🎤 VAD - Speech ended", 
+                               caller_channel_id=caller_channel_id,
+                               utterance_id=vs["utterance_id"],
                                            reason="webrtc_silence",
-                                           speech_ms=vs["speech_duration_ms"],
-                                           silence_ms=vs["silence_duration_ms"],
-                                           bytes=len(buf),
+                               speech_ms=vs["speech_duration_ms"],
+                               silence_ms=vs["silence_duration_ms"],
+                               bytes=len(buf), 
                                            webrtc_silence_frames=vs["webrtc_silence_frames"])
-                                
+                    
                                 
                                 # Send to provider
-                                await provider.send_audio(buf)
-                                logger.info("🎤 VAD - Utterance sent to provider", 
-                                           caller_channel_id=caller_channel_id,
-                                           utterance_id=vs["utterance_id"],
-                                           bytes=len(buf))
+                            await provider.send_audio(buf)
+                            logger.info("🎤 VAD - Utterance sent to provider", 
+                                       caller_channel_id=caller_channel_id,
+                                       utterance_id=vs["utterance_id"],
+                                       bytes=len(buf))
                             else:
                                 # Empty utterance - misfire (only when speech actually ends)
                                 logger.info("🎤 VAD - Speech misfire (empty utterance)", 
-                                           caller_channel_id=caller_channel_id,
+                                       caller_channel_id=caller_channel_id,
                                            utterance_id=vs["utterance_id"])
-                            
-                            # Reset for next utterance
-                            vs["state"] = "listening"
-                            vs["utterance_buffer"] = b""
+
+                    # Reset for next utterance
+                    vs["state"] = "listening"
+                    vs["utterance_buffer"] = b""
             
             # ARCHITECT FIX: All speech detection logic now handled inside frame processing loop
             # No additional processing needed here
@@ -2132,6 +2132,80 @@ class Engine:
         await site.start()
         logger.info("Health endpoint started", host=os.getenv('HEALTH_HOST', '0.0.0.0'), port=os.getenv('HEALTH_PORT', '15000'))
 
+    async def _handle_stasis_end(self, event_data: dict):
+        """Handle a call leaving the Stasis application."""
+        channel_id = event_data.get('channel', {}).get('id')
+        await self._cleanup_call(channel_id)
+
+    async def _handle_channel_destroyed(self, event_data: dict):
+        """Handle a channel being destroyed (caller hung up)."""
+        channel_id = event_data.get('channel', {}).get('id')
+        cause = event_data.get('cause', 'unknown')
+        cause_txt = event_data.get('cause_txt', 'unknown')
+        
+        logger.info("Channel destroyed event received", 
+                   channel_id=channel_id, 
+                   cause=cause, 
+                   cause_txt=cause_txt)
+        
+        # Immediately remove from active calls to prevent playback attempts
+        if channel_id in self.active_calls:
+            logger.debug("Channel was active - cleaning up immediately", channel_id=channel_id)
+            await self._cleanup_call(channel_id)
+        else:
+            logger.debug("Channel was not in active calls", channel_id=channel_id)
+
+    async def _cleanup_call(self, channel_id: str):
+        """Cleanup resources associated with a call."""
+        logger.debug("Starting call cleanup", channel_id=channel_id)
+        
+        if channel_id in self.active_calls:
+            call_data = self.active_calls[channel_id]
+            logger.debug("Call found in active calls", channel_id=channel_id, call_data_keys=list(call_data.keys()))
+            
+            # Cancel any pending timeout tasks
+            timeout_task = call_data.get('timeout_task')
+            if timeout_task and not timeout_task.done():
+                timeout_task.cancel()
+                logger.debug("Cancelled timeout task", channel_id=channel_id)
+            
+            # Cancel provider timeout task
+            provider_timeout_task = call_data.get('provider_timeout_task')
+            if provider_timeout_task and not provider_timeout_task.done():
+                provider_timeout_task.cancel()
+                logger.debug("Cancelled provider timeout task", channel_id=channel_id)
+            
+            provider = call_data.get("provider")
+            if provider:
+                # CRITICAL FIX: Don't stop provider if TTS is still playing
+                if call_data.get("tts_playing", False):
+                    logger.info("🔇 CLEANUP DELAYED - TTS still playing, delaying provider cleanup", 
+                              channel_id=channel_id)
+                    # Mark for cleanup after TTS finishes
+                    call_data["cleanup_after_tts"] = True
+                else:
+                    logger.debug("Stopping provider session", channel_id=channel_id)
+                    await provider.stop_session()
+                
+            # Clean up SSRC mapping
+            ssrc_to_remove = []
+            for ssrc, mapped_channel in self.ssrc_to_caller.items():
+                if mapped_channel == channel_id:
+                    ssrc_to_remove.append(ssrc)
+            
+            for ssrc in ssrc_to_remove:
+                del self.ssrc_to_caller[ssrc]
+                logger.debug("SSRC mapping cleaned up", ssrc=ssrc, channel_id=channel_id)
+
+            # Remove from active calls (with safety check for race conditions)
+            if channel_id in self.active_calls:
+                del self.active_calls[channel_id]
+                logger.info("Call resources cleaned up successfully", channel_id=channel_id)
+            else:
+                logger.debug("Channel already removed from active calls", channel_id=channel_id)
+        else:
+            logger.debug("Channel not found in active calls", channel_id=channel_id)
+
     async def _play_ring_tone(self, channel_id: str, duration: float = 15.0):
         """Play a ringing tone to the channel."""
         logger.info("Starting ring tone", channel_id=channel_id, duration=duration)
@@ -2188,7 +2262,7 @@ class Engine:
 
             # Play on bridge and capture playback ID for TTS gating
             response = await self.ari_client.send_command("POST", f"bridges/{bridge_id}/play", 
-                                                        data={"media": asterisk_media_uri})
+                                             data={"media": asterisk_media_uri})
             
             # Extract playback ID from response for TTS gating
             playback_id = None
