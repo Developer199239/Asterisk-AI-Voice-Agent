@@ -2180,27 +2180,19 @@ class Engine:
             
         logger.debug("🎤 Audio capture re-enabled after TTS playback")
 
-    async def on_provider_event(self, event_type: str, data: dict) -> None:
+    async def on_provider_event(self, event: Dict[str, Any]):
         """Handle events from AI providers."""
-        logger.debug("Provider event received", event_type=event_type, data=data)
-        
-        if event_type == "stt_result":
-            # Handle STT result
-            transcript = data.get("transcript", "")
-            if transcript:
-                logger.info("📝 STT RESULT", transcript=transcript)
-        elif event_type == "tts_result":
-            # Handle TTS result
-            audio_data = data.get("audio_data")
-            if audio_data:
-                logger.info("🔊 TTS RESULT", bytes=len(audio_data))
-        elif event_type == "AgentAudio":
-            # Handle audio data from the provider - now we need to play it back
-            audio_data = data.get("data")
-            call_id = data.get("call_id")
-            if audio_data:
-                # File-based playback via ARI (default path) - target specific call
-                target_channel_id = None
+        try:
+            event_type = event.get("type")
+            logger.debug("Received provider event", event_type=event_type, event_keys=list(event.keys()))
+            
+            if event_type == "AgentAudio":
+                # Handle audio data from the provider - now we need to play it back
+                audio_data = event.get("data")
+                call_id = event.get("call_id")
+                if audio_data:
+                    # File-based playback via ARI (default path) - target specific call
+                    target_channel_id = None
                 if call_id:
                     # Find the channel ID for this call_id
                     for channel_id, call_data in self.active_calls.items():
@@ -2249,16 +2241,18 @@ class Engine:
                             logger.debug("Cancelled provider timeout task - response received", channel_id=target_channel_id)
                 else:
                     logger.warning("No active call found for AgentAudio playback", call_id=call_id)
-        elif event_type == "Transcription":
-            # Handle transcription data
-            text = data.get("text", "")
-            logger.info("Received transcription from provider", text=text, text_length=len(text))
-        elif event_type == "Error":
-            # Handle provider errors
-            error_msg = data.get("message", "Unknown provider error")
-            logger.error("Provider reported error", error=error_msg, event=data)
-        else:
-            logger.debug("Unhandled provider event", event_type=event_type, event_keys=list(data.keys()))
+            elif event_type == "Transcription":
+                # Handle transcription data
+                text = event.get("text", "")
+                logger.info("Received transcription from provider", text=text, text_length=len(text))
+            elif event_type == "Error":
+                # Handle provider errors
+                error_msg = event.get("message", "Unknown provider error")
+                logger.error("Provider reported error", error=error_msg, event=event)
+            else:
+                logger.debug("Unhandled provider event", event_type=event_type, event_keys=list(event.keys()))
+        except Exception as e:
+            logger.error("Error in provider event handler", event_type=event.get("type"), error=str(e), exc_info=True)
 
     async def _cleanup_call(self, channel_id: str):
         """Cleanup resources associated with a call."""
