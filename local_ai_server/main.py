@@ -6,6 +6,7 @@ import os
 import subprocess
 import tempfile
 import wave
+import io
 from typing import Optional
 
 from websockets.server import serve
@@ -14,6 +15,106 @@ from llama_cpp import Llama
 from piper import PiperVoice
 
 logging.basicConfig(level=logging.INFO)
+
+class WhisperSTT:
+    """Whisper STT implementation using the command-line tool"""
+    
+    def __init__(self, model_name: str = "base", language: str = "en"):
+        self.model_name = model_name
+        self.language = language
+        self.is_available = self._check_whisper_availability()
+        
+        if self.is_available:
+            logging.info(f"🎤 Whisper STT initialized with model: {model_name}")
+        else:
+            logging.warning("⚠️ Whisper STT not available - command not found")
+    
+    def _check_whisper_availability(self) -> bool:
+        """Check if Whisper command-line tool is available"""
+        try:
+            result = subprocess.run(["/opt/venv/bin/whisper", "--version"], 
+                                  capture_output=True, text=True, timeout=5)
+            return result.returncode in [0, 2]  # 0 = success, 2 = missing audio argument (expected)
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return False
+    
+    async def transcribe(self, audio_data: bytes, sample_rate: int = 16000) -> str:
+        """Transcribe audio using Whisper"""
+        if not self.is_available:
+            logging.error("Whisper STT not available")
+            return ""
+        
+        try:
+            # Convert raw audio to WAV format
+            wav_data = self._convert_to_wav(audio_data, sample_rate)
+            
+            # Save to temporary file
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
+                temp_file.write(wav_data)
+                temp_file_path = temp_file.name
+            
+            try:
+                # Run Whisper with optimized settings for real-time
+                result = subprocess.run([
+                    "/opt/venv/bin/whisper",
+                    "--model", self.model_name,
+                    "--language", self.language,
+                    "--output_format", "txt",
+                    "--temperature", "0.0",
+                    "--best_of", "1",
+                    "--beam_size", "1",
+                    "--patience", "1.0",
+                    "--length_penalty", "1.0",
+                    "--suppress_tokens", "-1",
+                    "--condition_on_previous_text", "True",
+                    "--fp16", "False",
+                    "--compression_ratio_threshold", "2.4",
+                    "--logprob_threshold", "-1.0",
+                    "--no_speech_threshold", "0.6",
+                    temp_file_path
+                ], capture_output=True, text=True, timeout=30)
+                
+                if result.returncode == 0:
+                    # Extract transcript from stdout
+                    transcript = self._extract_transcript(result.stdout)
+                    logging.info(f"🎤 Whisper STT - Transcript: '{transcript}'")
+                    return transcript
+                else:
+                    logging.error(f"Whisper STT failed: {result.stderr}")
+                    return ""
+                    
+            finally:
+                # Clean up temporary file
+                if os.path.exists(temp_file_path):
+                    os.unlink(temp_file_path)
+                    
+        except Exception as e:
+            logging.error(f"Whisper STT error: {e}")
+            return ""
+    
+    def _convert_to_wav(self, audio_data: bytes, sample_rate: int) -> bytes:
+        """Convert raw PCM audio to WAV format"""
+        wav_buffer = io.BytesIO()
+        with wave.open(wav_buffer, "wb") as wav_file:
+            wav_file.setnchannels(1)  # Mono
+            wav_file.setsampwidth(2)  # 16-bit
+            wav_file.setframerate(sample_rate)
+            wav_file.writeframes(audio_data)
+        return wav_buffer.getvalue()
+    
+    def _extract_transcript(self, stdout: str) -> str:
+        """Extract transcript text from Whisper stdout"""
+        lines = stdout.strip().split("\n")
+        transcript = ""
+        
+        for line in lines:
+            if "-->" in line:
+                # Extract text after timestamp
+                parts = line.split("--> ")
+                if len(parts) > 1:
+                    transcript += parts[1].strip() + " "
+        
+        return transcript.strip()
 
 class AudioProcessor:
     """Handles audio format conversions for MVP uLaw 8kHz pipeline"""
@@ -104,6 +205,9 @@ class LocalAIServer:
         self.llm_model: Optional[Llama] = None
         self.tts_model: Optional[PiperVoice] = None
         self.audio_processor = AudioProcessor()
+        
+        # Initialize Whisper STT (primary) and Vosk (fallback)
+        self.whisper_stt = WhisperSTT(model_name="tiny", language="en")
         
         # Model paths
         self.stt_model_path = "/app/models/stt/vosk-model-small-en-us-0.15"
@@ -224,11 +328,24 @@ class LocalAIServer:
             return ""
 
     async def process_stt(self, audio_data: bytes, input_rate: int = 16000) -> str:
-        """Process STT with optional resampling for Vosk compatibility"""
+        """Process STT with Whisper (primary) and Vosk (fallback)"""
         try:
+            # Try Whisper first (primary STT)
+            if self.whisper_stt.is_available:
+                logging.debug(f"🎤 STT INPUT - Using Whisper: {len(audio_data)} bytes at {input_rate}Hz")
+                transcript = await self.whisper_stt.transcribe(audio_data, input_rate)
+                if transcript:
+                    logging.info(f"📝 STT RESULT - Whisper transcript: '{transcript}'")
+                    return transcript
+                else:
+                    logging.warning("🎤 STT - Whisper returned empty transcript, falling back to Vosk")
+            
+            # Fallback to Vosk if Whisper fails or is unavailable
             if not self.stt_model:
                 logging.error("STT model not loaded")
                 return ""
+            
+            logging.debug(f"🎤 STT INPUT - Using Vosk fallback: {len(audio_data)} bytes at {input_rate}Hz")
             
             # Only resample if input rate is not 16kHz
             if input_rate != 16000:
@@ -254,7 +371,7 @@ class LocalAIServer:
                 logging.debug(f"🎵 STT FINAL - Final result: {result}")
             
             transcript = result.get("text", "").strip()
-            logging.info(f"📝 STT RESULT - Transcript: '{transcript}' (length: {len(transcript)})")
+            logging.info(f"📝 STT RESULT - Vosk transcript: '{transcript}' (length: {len(transcript)})")
             return transcript
             
         except Exception as e:
