@@ -1449,7 +1449,7 @@ class Engine:
                 if webrtc_decision:
                     vs["webrtc_speech_frames"] += 1
                     vs["webrtc_silence_frames"] = 0
-                    else:
+                else:
                     vs["webrtc_speech_frames"] = 0
                     vs["webrtc_silence_frames"] += 1
                 
