@@ -260,6 +260,11 @@ class Engine:
                     provider = LocalProvider(config, self.on_provider_event)
                     self.providers[name] = provider
                     logger.info(f"Provider '{name}' loaded successfully.")
+                    
+                    # Initialize persistent connection for local provider
+                    if hasattr(provider, 'initialize'):
+                        await provider.initialize()
+                        logger.info(f"Provider '{name}' connection initialized.")
                 elif name == "deepgram":
                     # Deepgram provider requires both Deepgram and OpenAI API keys
                     deepgram_config = provider_config_data

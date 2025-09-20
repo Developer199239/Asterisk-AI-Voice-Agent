@@ -59,6 +59,26 @@ class LocalProvider(AIProviderInterface):
                 await asyncio.sleep(delay)
         return False
 
+    async def initialize(self):
+        """Initialize persistent connection to Local AI Server."""
+        try:
+            if self.websocket and not self.websocket.closed:
+                logger.debug("WebSocket already connected, skipping initialization")
+                return
+            
+            logger.info("Initializing connection to Local AI Server...", url=self.ws_url)
+            self.websocket = await self._connect_ws()
+            logger.info("✅ Successfully connected to Local AI Server.")
+            
+            # Start tasks only if not already running
+            if not self._listener_task or self._listener_task.done():
+                self._listener_task = asyncio.create_task(self._receive_loop())
+            if not self._sender_task or self._sender_task.done():
+                self._sender_task = asyncio.create_task(self._send_loop())
+        except Exception:
+            logger.error("Failed to initialize connection to Local AI Server", exc_info=True)
+            raise
+
     async def start_session(self, call_id: str):
         try:
             # Check if already connected
@@ -67,18 +87,11 @@ class LocalProvider(AIProviderInterface):
                 self._active_call_id = call_id
                 return
             
-            logger.info("Connecting to Local AI Server...", url=self.ws_url)
-            self.websocket = await self._connect_ws()
-            logger.info("✅ Successfully connected to Local AI Server.")
+            # If not connected, initialize first
+            await self.initialize()
             self._active_call_id = call_id
-            
-            # Start tasks only if not already running
-            if not self._listener_task or self._listener_task.done():
-                self._listener_task = asyncio.create_task(self._receive_loop())
-            if not self._sender_task or self._sender_task.done():
-                self._sender_task = asyncio.create_task(self._send_loop())
         except Exception:
-            logger.error("Failed to connect to Local AI Server", exc_info=True)
+            logger.error("Failed to start session", call_id=call_id, exc_info=True)
             raise
 
     async def send_audio(self, audio_chunk: bytes):
