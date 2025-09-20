@@ -24,7 +24,8 @@ except ImportError:
 from .ari_client import ARIClient
 from aiohttp import web
 from .config import AppConfig, load_config, LocalProviderConfig
-from .logging_config import get_logger, configure_logging
+from .logging_config import get_logger
+from .rtp_server import RTPServer
 from .providers.base import AIProviderInterface
 from .providers.deepgram import DeepgramProvider
 from .providers.local import LocalProvider
@@ -207,7 +208,16 @@ class Engine:
             rtp_port = self.config.external_media.rtp_port
             codec = self.config.external_media.codec
             
-            # RTP server initialization removed - using external media only
+            # Create RTP server with callback to route audio to providers
+            self.rtp_server = RTPServer(
+                host=rtp_host,
+                port=rtp_port,
+                engine_callback=self._on_rtp_audio,
+                codec=codec
+            )
+            
+            # Start RTP server
+            await self.rtp_server.start()
             logger.info("RTP server started for ExternalMedia transport", 
                        host=rtp_host, port=rtp_port, codec=codec)
 
@@ -227,7 +237,9 @@ class Engine:
         for channel_id in list(self.active_calls.keys()):
             await self._cleanup_call(channel_id)
         await self.ari_client.disconnect()
-        # RTP server stop removed - using external media only
+        # Stop RTP server if running
+        if hasattr(self, 'rtp_server') and self.rtp_server:
+            await self.rtp_server.stop()
         # Stop health server
         try:
             if self._health_runner:
@@ -593,16 +605,16 @@ class Engine:
         # Generate UUID for channel binding
         audio_uuid = str(uuid.uuid4())
         # Originate Local channel directly to dialplan context
-        local_endpoint = f"Local/{audio_uuid}@ai-audiosocket-only/n"
+        local_endpoint = f"Local/{audio_uuid}@ai-agent-media-fork/n"
         
         orig_params = {
             "endpoint": local_endpoint,
             "extension": audio_uuid,  # Use UUID as extension
-            "context": "ai-audiosocket-only",  # Specify the dialplan context
+            "context": "ai-agent-media-fork",  # Specify the dialplan context
             "timeout": "30"
         }
         
-        logger.info("🎯 DIALPLAN AUDIOSOCKET - Originating AudioSocket Local channel", 
+        logger.info("🎯 DIALPLAN EXTERNALMEDIA - Originating ExternalMedia Local channel", 
                     endpoint=local_endpoint, 
                     caller_channel_id=caller_channel_id,
                     audio_uuid=audio_uuid)
@@ -611,29 +623,29 @@ class Engine:
             response = await self.ari_client.send_command("POST", "channels", params=orig_params)
             if response and response.get("id"):
                 local_channel_id = response["id"]
-                # Store mapping for AudioSocket binding
+                # Store mapping for ExternalMedia binding
                 self.pending_local_channels[local_channel_id] = caller_channel_id
                 self.uuidext_to_channel[audio_uuid] = caller_channel_id
-                logger.info("🎯 DIALPLAN AUDIOSOCKET - AudioSocket Local channel originated", 
+                logger.info("🎯 DIALPLAN EXTERNALMEDIA - ExternalMedia Local channel originated", 
                            local_channel_id=local_channel_id, 
                            caller_channel_id=caller_channel_id,
                            audio_uuid=audio_uuid)
                 
-                # Store Local channel info - will be added to bridge when AudioSocket connects
+                # Store Local channel info - will be added to bridge when ExternalMedia connects
                 if caller_channel_id in self.caller_channels:
-                    self.caller_channels[caller_channel_id]["audiosocket_channel_id"] = local_channel_id
-                    logger.info("🎯 DIALPLAN AUDIOSOCKET - AudioSocket channel ready for connection", 
+                    self.caller_channels[caller_channel_id]["external_media_channel_id"] = local_channel_id
+                    logger.info("🎯 DIALPLAN EXTERNALMEDIA - ExternalMedia channel ready for connection", 
                                local_channel_id=local_channel_id,
                                caller_channel_id=caller_channel_id)
                 else:
-                    logger.error("🎯 DIALPLAN AUDIOSOCKET - Caller channel not found for AudioSocket channel", 
+                    logger.error("🎯 DIALPLAN EXTERNALMEDIA - Caller channel not found for ExternalMedia channel", 
                                local_channel_id=local_channel_id,
                                caller_channel_id=caller_channel_id)
                     raise RuntimeError("Caller channel not found")
             else:
-                raise RuntimeError("Failed to originate AudioSocket Local channel")
+                raise RuntimeError("Failed to originate ExternalMedia Local channel")
         except Exception as e:
-            logger.error("🎯 DIALPLAN AUDIOSOCKET - AudioSocket channel originate failed", 
+            logger.error("🎯 DIALPLAN EXTERNALMEDIA - ExternalMedia channel originate failed", 
                         caller_channel_id=caller_channel_id,
                         audio_uuid=audio_uuid,
                         error=str(e), exc_info=True)
@@ -2102,7 +2114,7 @@ class Engine:
                 data = {
                     "status": "healthy",
                     "ari_connected": bool(self.ari_client and self.ari_client.running),
-                    "rtp_server_running": False,  # RTP server removed
+                    "rtp_server_running": bool(getattr(self, 'rtp_server', None) and getattr(self.rtp_server, 'running', False)),
                     "audio_transport": self.config.audio_transport,
                     "active_calls": len(self.active_calls),
                     "providers": providers,
@@ -2119,6 +2131,134 @@ class Engine:
         site = web.TCPSite(self._health_runner, host=os.getenv('HEALTH_HOST', '0.0.0.0'), port=int(os.getenv('HEALTH_PORT', '15000')))
         await site.start()
         logger.info("Health endpoint started", host=os.getenv('HEALTH_HOST', '0.0.0.0'), port=os.getenv('HEALTH_PORT', '15000'))
+
+    async def _on_rtp_audio(self, ssrc: int, pcm_16k_data: bytes):
+        """Handle RTP audio from the RTP server."""
+        try:
+            # Find the caller channel for this SSRC
+            caller_channel_id = self.ssrc_to_caller.get(ssrc)
+            
+            if not caller_channel_id:
+                # First packet from this SSRC - try to map it to an active ExternalMedia call
+                # We'll map to the most recent ExternalMedia call that doesn't have an SSRC yet
+                for channel_id, call_data in self.active_calls.items():
+                    if call_data.get("external_media_id") and not call_data.get("ssrc_mapped"):
+                        # This ExternalMedia call doesn't have an SSRC yet, map it
+                        caller_channel_id = channel_id
+                        self.ssrc_to_caller[ssrc] = caller_channel_id
+                        call_data["ssrc_mapped"] = True
+                        logger.info("SSRC mapped to caller on first packet", 
+                                   ssrc=ssrc, 
+                                   caller_channel_id=caller_channel_id,
+                                   external_media_id=call_data.get("external_media_id"))
+                        break
+            
+            if not caller_channel_id:
+                logger.debug("RTP audio received for unknown SSRC", ssrc=ssrc)
+                return
+            
+            # Check if call is still active
+            if caller_channel_id not in self.active_calls:
+                logger.debug("RTP audio received for inactive call", ssrc=ssrc, caller_channel_id=caller_channel_id)
+                return
+            
+            # Check if audio capture is enabled (set by PlaybackFinished event)
+            call_data = self.active_calls.get(caller_channel_id, {})
+            audio_capture_enabled = call_data.get("audio_capture_enabled", False)
+            tts_playing = call_data.get("tts_playing", False)
+            
+            logger.debug("🎤 AUDIO CAPTURE - Check", ssrc=ssrc, caller_channel_id=caller_channel_id, audio_capture_enabled=audio_capture_enabled, tts_playing=tts_playing)
+            
+            if not audio_capture_enabled:
+                logger.debug("RTP audio capture disabled, waiting for greeting to finish", 
+                           ssrc=ssrc, caller_channel_id=caller_channel_id)
+                return
+            
+            # Get provider for this call
+            provider = call_data.get("provider")
+            if not provider:
+                logger.warning("No provider found for RTP audio", ssrc=ssrc, caller_channel_id=caller_channel_id)
+                return
+            
+            # Process audio with VAD-based utterance detection
+            await self._process_rtp_audio_with_vad(caller_channel_id, ssrc, pcm_16k_data, provider)
+            
+            # FALLBACK: If VAD hasn't detected speech for a while, send audio directly to STT
+            # This ensures we capture audio even when VAD fails
+            await self._fallback_audio_processing(caller_channel_id, ssrc, pcm_16k_data, provider)
+            
+        except Exception as e:
+            logger.error("Error processing RTP audio", ssrc=ssrc, error=str(e))
+
+    async def _fallback_audio_processing(self, caller_channel_id: str, ssrc: int, pcm_16k_data: bytes, provider):
+        """Fallback audio processing when VAD fails to detect speech."""
+        try:
+            call_data = self.active_calls.get(caller_channel_id, {})
+            if not call_data:
+                return
+            
+            # Initialize fallback state if not present
+            if "fallback_state" not in call_data:
+                call_data["fallback_state"] = {
+                    "audio_buffer": b"",
+                    "last_vad_speech_time": time.time(),
+                    "buffer_start_time": None,
+                    "frame_count": 0
+                }
+            
+            fallback_state = call_data["fallback_state"]
+            fallback_state["frame_count"] += 1
+            
+            # Check if VAD has detected speech recently
+            vad_state = call_data.get("vad_state", {})
+            last_speech_time = vad_state.get("last_voice_ms", 0) / 1000.0  # Convert to seconds
+            current_time = time.time()
+            time_since_speech = current_time - last_speech_time
+            
+            # Only start fallback buffering if VAD has been silent for 2 seconds
+            fallback_interval = 2.0  # seconds
+            if time_since_speech < fallback_interval:
+                # VAD is still active, reset fallback state
+                fallback_state["last_vad_speech_time"] = current_time
+                fallback_state["audio_buffer"] = b""
+                fallback_state["buffer_start_time"] = None
+                return
+            
+            # Start buffering audio
+            if fallback_state["buffer_start_time"] is None:
+                fallback_state["buffer_start_time"] = current_time
+                logger.info("🔄 FALLBACK - Starting audio buffering (VAD silent for 2s)", 
+                           caller_channel_id=caller_channel_id, ssrc=ssrc)
+            
+            # Add audio to fallback buffer
+            fallback_state["audio_buffer"] += pcm_16k_data
+            
+            # Send buffer to STT every configured interval or when buffer is large enough
+            buffer_duration = current_time - fallback_state["buffer_start_time"]
+            buffer_size = len(fallback_state["audio_buffer"])
+            fallback_buffer_size = self.config.vad.fallback_buffer_size
+            
+            if buffer_duration >= fallback_interval or buffer_size >= fallback_buffer_size:
+                logger.info("🔄 FALLBACK - Sending buffered audio to STT", 
+                           caller_channel_id=caller_channel_id,
+                           buffer_size=buffer_size,
+                           buffer_duration=buffer_duration)
+                
+                # Send buffered audio to provider
+                if hasattr(provider, 'process_audio'):
+                    await provider.process_audio(caller_channel_id, fallback_state["audio_buffer"])
+                
+                # Reset buffer
+                fallback_state["audio_buffer"] = b""
+                fallback_state["buffer_start_time"] = None
+                fallback_state["last_vad_speech_time"] = current_time  # Reset timer
+                
+        except Exception as e:
+            logger.error("Error in fallback audio processing", 
+                        caller_channel_id=caller_channel_id,
+                        ssrc=ssrc,
+                        error=str(e), 
+                        exc_info=True)
 
     async def on_provider_event(self, event: Dict[str, Any]):
         """Callback for providers to send events back to the engine."""
@@ -2510,6 +2650,16 @@ class Engine:
                                local_channel_id=local_id, 
                                caller_channel_id=caller_id)
 
+            # Clean up SSRC mapping
+            ssrc_to_remove = []
+            for ssrc, mapped_channel in self.ssrc_to_caller.items():
+                if mapped_channel == channel_id:
+                    ssrc_to_remove.append(ssrc)
+            
+            for ssrc in ssrc_to_remove:
+                del self.ssrc_to_caller[ssrc]
+                logger.debug("SSRC mapping cleaned up", ssrc=ssrc, channel_id=channel_id)
+            
             # Remove from active calls (with safety check for race conditions)
             if channel_id in self.active_calls:
                 del self.active_calls[channel_id]
@@ -2646,7 +2796,6 @@ class Engine:
 
 
 async def main():
-    configure_logging(log_level=os.getenv("LOG_LEVEL", "INFO"))
     config = load_config()
     engine = Engine(config)
 
