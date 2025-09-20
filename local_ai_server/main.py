@@ -361,14 +361,9 @@ Assistant:"""
                             audio_response = await self.process_tts(llm_response)
                             
                             if audio_response:
-                                # Send as AgentAudio event for proper handling
-                                agent_audio_event = {
-                                    "type": "AgentAudio",
-                                    "data": audio_response,
-                                    "call_id": "unknown"  # We don't have call_id in this context
-                                }
-                                await websocket.send(json.dumps(agent_audio_event))
-                                logging.info("📤 AUDIO OUTPUT - Sent uLaw 8kHz response as AgentAudio event")
+                                # Send binary audio data directly (like working commit)
+                                await websocket.send(audio_response)
+                                logging.info("📤 AUDIO OUTPUT - Sent uLaw 8kHz response")
                             else:
                                 logging.warning("🔊 TTS - No audio generated")
                         else:
@@ -414,14 +409,9 @@ Assistant:"""
                                     audio_response = await self.process_tts(llm_response)
                                     
                                     if audio_response:
-                                        # Send as AgentAudio event for proper handling
-                                        agent_audio_event = {
-                                            "type": "AgentAudio",
-                                            "data": audio_response,
-                                            "call_id": "unknown"  # We don't have call_id in this context
-                                        }
-                                        await websocket.send(json.dumps(agent_audio_event))
-                                        logging.info("📤 AUDIO OUTPUT - Sent uLaw 8kHz response as AgentAudio event")
+                                        # Send binary audio data directly (like working commit)
+                                        await websocket.send(audio_response)
+                                        logging.info("📤 AUDIO OUTPUT - Sent uLaw 8kHz response")
                                     else:
                                         logging.warning("🔊 TTS - No audio generated")
                                 else:
