@@ -16,105 +16,7 @@ from piper import PiperVoice
 
 logging.basicConfig(level=logging.INFO)
 
-class WhisperSTT:
-    """Whisper STT implementation using the command-line tool"""
-    
-    def __init__(self, model_name: str = "base", language: str = "en"):
-        self.model_name = model_name
-        self.language = language
-        self.is_available = self._check_whisper_availability()
-        
-        if self.is_available:
-            logging.info(f"🎤 Whisper STT initialized with model: {model_name}")
-        else:
-            logging.warning("⚠️ Whisper STT not available - command not found")
-    
-    def _check_whisper_availability(self) -> bool:
-        """Check if Whisper command-line tool is available"""
-        try:
-            result = subprocess.run(["/opt/venv/bin/whisper", "--version"], 
-                                  capture_output=True, text=True, timeout=5)
-            return result.returncode in [0, 2]  # 0 = success, 2 = missing audio argument (expected)
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            return False
-    
-    async def transcribe(self, audio_data: bytes, sample_rate: int = 16000) -> str:
-        """Transcribe audio using Whisper"""
-        if not self.is_available:
-            logging.error("Whisper STT not available")
-            return ""
-        
-        try:
-            # Convert raw audio to WAV format
-            wav_data = self._convert_to_wav(audio_data, sample_rate)
-            
-            # Save to temporary file
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
-                temp_file.write(wav_data)
-                temp_file_path = temp_file.name
-            
-            try:
-                # Run Whisper with optimized settings for real-time
-                result = subprocess.run([
-                    "/opt/venv/bin/whisper",
-                    "--model", self.model_name,
-                    "--language", self.language,
-                    "--output_format", "txt",
-                    "--temperature", "0.0",
-                    "--best_of", "1",
-                    "--beam_size", "1",
-                    "--patience", "1.0",
-                    "--length_penalty", "1.0",
-                    "--suppress_tokens", "-1",
-                    "--condition_on_previous_text", "True",
-                    "--fp16", "False",
-                    "--compression_ratio_threshold", "2.4",
-                    "--logprob_threshold", "-1.0",
-                    "--no_speech_threshold", "0.6",
-                    temp_file_path
-                ], capture_output=True, text=True, timeout=30)
-                
-                if result.returncode == 0:
-                    # Extract transcript from stdout
-                    transcript = self._extract_transcript(result.stdout)
-                    logging.info(f"🎤 Whisper STT - Transcript: '{transcript}'")
-                    return transcript
-                else:
-                    logging.error(f"Whisper STT failed: {result.stderr}")
-                    return ""
-                    
-            finally:
-                # Clean up temporary file
-                if os.path.exists(temp_file_path):
-                    os.unlink(temp_file_path)
-                    
-        except Exception as e:
-            logging.error(f"Whisper STT error: {e}")
-            return ""
-    
-    def _convert_to_wav(self, audio_data: bytes, sample_rate: int) -> bytes:
-        """Convert raw PCM audio to WAV format"""
-        wav_buffer = io.BytesIO()
-        with wave.open(wav_buffer, "wb") as wav_file:
-            wav_file.setnchannels(1)  # Mono
-            wav_file.setsampwidth(2)  # 16-bit
-            wav_file.setframerate(sample_rate)
-            wav_file.writeframes(audio_data)
-        return wav_buffer.getvalue()
-    
-    def _extract_transcript(self, stdout: str) -> str:
-        """Extract transcript text from Whisper stdout"""
-        lines = stdout.strip().split("\n")
-        transcript = ""
-        
-        for line in lines:
-            if "-->" in line:
-                # Extract text after timestamp
-                parts = line.split("--> ")
-                if len(parts) > 1:
-                    transcript += parts[1].strip() + " "
-        
-        return transcript.strip()
+# WhisperSTT class removed - using Vosk STT only for faster responses
 
 class AudioProcessor:
     """Handles audio format conversions for MVP uLaw 8kHz pipeline"""
@@ -206,8 +108,8 @@ class LocalAIServer:
         self.tts_model: Optional[PiperVoice] = None
         self.audio_processor = AudioProcessor()
         
-        # Initialize Vosk STT (primary) - optimized for telephony audio
-        # Whisper STT removed - Vosk performs better with telephony audio quality
+        # Initialize Vosk STT only - optimized for telephony audio
+        # Whisper STT completely removed for faster responses
         
         # Model paths
         self.stt_model_path = "/app/models/stt/vosk-model-small-en-us-0.15"
@@ -328,14 +230,14 @@ class LocalAIServer:
             return ""
 
     async def process_stt(self, audio_data: bytes, input_rate: int = 16000) -> str:
-        """Process STT with Vosk (primary) - optimized for telephony audio"""
+        """Process STT with Vosk only - optimized for telephony audio"""
         try:
-            # Use Vosk as primary STT (better for telephony audio)
+            # Use Vosk STT only (removed Whisper for faster responses)
             if not self.stt_model:
                 logging.error("STT model not loaded")
                 return ""
             
-            logging.debug(f"🎤 STT INPUT - Using Vosk (primary): {len(audio_data)} bytes at {input_rate}Hz")
+            logging.debug(f"🎤 STT INPUT - Using Vosk: {len(audio_data)} bytes at {input_rate}Hz")
             
             # Only resample if input rate is not 16kHz
             if input_rate != 16000:

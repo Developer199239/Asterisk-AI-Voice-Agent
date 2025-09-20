@@ -1787,3 +1787,116 @@ webrtc_start_frames: 3    # Consecutive frames to start
 5. **Minimum Duration**: Require 4+ seconds of audio for accurate transcription
 
 **The system is working optimally when VAD completes full utterances of 4+ seconds duration!**
+
+---
+
+## Test Call #26 - September 19, 2025 (Optimized Audio Pipeline Test)
+
+**Call Duration**: ~2 minutes  
+**Caller**: HAIDER JARRAL (13164619284)  
+**Channel ID**: 1758334925.246  
+**Test Focus**: Verify optimized audio pipeline with Vosk-only STT
+
+### What Worked ✅
+
+1. **First Conversation Success**: Initial exchange worked perfectly
+   - **User Speech**: "hey how are you today" (21 characters)
+   - **STT Result**: "hey how are you today" - **100% ACCURATE!**
+   - **LLM Response**: "I'm doing great, thank you for asking. How about you?"
+   - **TTS Output**: 24,335 bytes generated successfully
+
+2. **VAD System Running**: WebRTC VAD processing frames correctly
+   - **Frame Count**: 11,250+ frames processed
+   - **WebRTC Decision**: `false` for all frames (expected for telephony)
+   - **Fallback System**: Activated correctly after 2 seconds of VAD silence
+
+3. **Audio Capture System**: Working throughout the call
+   - **Audio Input**: Continuous 32,000-byte chunks received
+   - **Fallback Processing**: Sending audio every 2 seconds as configured
+
+### What Failed ❌
+
+1. **Subsequent STT Processing**: All follow-up audio resulted in empty transcripts
+   - **Pattern**: `Vosk transcript: '' (length: 0)` for all subsequent audio
+   - **Impact**: No speech detected, skipping pipeline
+   - **Duration**: Continued for entire remaining call duration
+
+2. **Whisper STT Still Active**: Despite configuration changes, Whisper still being called
+   - **Evidence**: `Whisper STT - Transcript: ''` in all logs
+   - **Impact**: Slower processing due to Whisper fallback attempts
+   - **Root Cause**: Whisper STT not completely removed from pipeline
+
+3. **Audio Quality Degradation**: Audio reaching STT but not being transcribed
+   - **Audio Size**: Consistent 32,000 bytes (2 seconds of 16kHz audio)
+   - **STT Result**: Empty transcripts from both Whisper and Vosk
+   - **Possible Cause**: Audio quality issues or format problems
+
+### Critical Findings
+
+**STT Processing Analysis**:
+- **First Audio**: 105,600 bytes → "hey how are you today" (SUCCESS)
+- **Subsequent Audio**: 32,000 bytes → Empty transcripts (FAILURE)
+- **Pattern**: Larger audio chunks (105KB) work, smaller chunks (32KB) fail
+- **Whisper**: Still being called despite configuration changes
+
+**VAD Analysis**:
+- **WebRTC VAD**: `webrtc_decision: false` for all frames
+- **Fallback System**: Working correctly, sending audio every 2 seconds
+- **Frame Processing**: 11,250+ frames processed successfully
+- **Audio Capture**: System working throughout call
+
+**Audio Quality Analysis**:
+- **First Success**: 105,600 bytes (6.6 seconds of 16kHz audio)
+- **Subsequent Failure**: 32,000 bytes (2 seconds of 16kHz audio)
+- **Threshold**: Audio duration appears to be critical factor
+
+### Root Cause Analysis
+
+**Primary Issue**: **Audio Duration Threshold**
+- **Success**: 105,600 bytes (6.6 seconds) → Perfect transcript
+- **Failure**: 32,000 bytes (2 seconds) → Empty transcript
+- **Threshold**: Vosk STT requires longer audio duration for accurate transcription
+- **Configuration**: Fallback system sending 2-second chunks (too short)
+
+**Secondary Issue**: **Whisper STT Still Active**
+- **Problem**: Whisper STT still being called despite configuration changes
+- **Impact**: Slower processing and unnecessary fallback attempts
+- **Solution**: Complete removal of Whisper STT from pipeline
+
+**Tertiary Issue**: **Fallback Buffer Size**
+- **Current**: 32,000 bytes (2 seconds) - too short for Vosk STT
+- **Required**: 64,000+ bytes (4+ seconds) for accurate transcription
+- **Configuration**: Need to increase fallback buffer size
+
+### Technical Details
+
+**STT Performance**:
+- **First Audio**: 105,600 bytes → "hey how are you today" (100% accuracy)
+- **Subsequent Audio**: 32,000 bytes → Empty transcripts (0% accuracy)
+- **Duration Threshold**: ~4+ seconds needed for Vosk STT accuracy
+
+**Fallback System**:
+- **Interval**: 2 seconds (32,000 bytes)
+- **Status**: Working correctly
+- **Issue**: Buffer size too small for Vosk STT accuracy
+
+**VAD System**:
+- **WebRTC VAD**: Non-functional (expected for telephony)
+- **Fallback**: Working as designed
+- **Audio Capture**: System working throughout call
+
+### Recommended Fixes
+
+1. **Remove Whisper STT Completely**: Eliminate Whisper from pipeline entirely
+2. **Increase Fallback Buffer Size**: Change from 32,000 to 64,000+ bytes
+3. **Optimize Fallback Interval**: Consider 4-second intervals for better accuracy
+4. **Audio Quality Investigation**: Check if audio quality degrades over time
+
+### Confidence Score: 9/10
+
+**Very high confidence** in diagnosis - the issue is clear:
+1. **Audio Duration**: Vosk STT needs 4+ seconds for accurate transcription
+2. **Whisper Removal**: Whisper STT still active despite configuration changes
+3. **Buffer Size**: Fallback system sending too-small audio chunks
+
+**Overall Result**: ⚠️ **PARTIAL SUCCESS** - First conversation perfect, subsequent conversations fail due to audio duration threshold
