@@ -1523,6 +1523,7 @@ class Engine:
                     vs["speech_duration_ms"] = 0
                     vs["silence_duration_ms"] = 0
                     vs["utterance_id"] += 1
+                    vs["last_voice_ms"] = current_time_ms  # Update last voice time for fallback
                     logger.info("🎤 VAD - Speech started", 
                                caller_channel_id=caller_channel_id,
                                utterance_id=vs["utterance_id"],
@@ -1536,6 +1537,7 @@ class Engine:
                         # Speech continues
                         vs["speech_frame_count"] += 1
                         vs["redemption_counter"] = 0
+                        vs["last_voice_ms"] = current_time_ms  # Update last voice time for fallback
                     vs["consecutive_speech_frames"] += 1
                     vs["consecutive_silence_frames"] = 0
                     vs["speech_duration_ms"] += 20
@@ -1654,17 +1656,17 @@ class Engine:
             
             # Check if VAD has detected speech recently
             vad_state = call_data.get("vad_state", {})
-            if vad_state.get("speaking", False):
-                # VAD is working, reset fallback timer
-                fallback_state["last_vad_speech_time"] = time.time()
+            last_speech_time = vad_state.get("last_voice_ms", 0) / 1000.0  # Convert to seconds
+            current_time = time.time()
+            time_since_speech = current_time - last_speech_time
+            
+            # Only start fallback buffering if VAD has been silent for configured interval
+            fallback_interval = self.config.vad.fallback_interval_ms / 1000.0
+            if time_since_speech < fallback_interval:
+                # VAD is still active, reset fallback state
+                fallback_state["last_vad_speech_time"] = current_time
                 fallback_state["audio_buffer"] = b""
                 fallback_state["buffer_start_time"] = None
-                return
-            
-            # Check if we should start buffering (no VAD speech for configured interval)
-            fallback_interval = self.config.vad.fallback_interval_ms / 1000.0
-            time_since_vad_speech = time.time() - fallback_state["last_vad_speech_time"]
-            if time_since_vad_speech < fallback_interval:
                 return
             
             # Start buffering audio
