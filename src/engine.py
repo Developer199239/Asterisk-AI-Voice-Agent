@@ -2189,6 +2189,71 @@ class Engine:
             audio_data = data.get("audio_data")
             if audio_data:
                 logger.info("🔊 TTS RESULT", bytes=len(audio_data))
+        elif event_type == "AgentAudio":
+            # Handle audio data from the provider - now we need to play it back
+            audio_data = data.get("data")
+            call_id = data.get("call_id")
+            if audio_data:
+                # File-based playback via ARI (default path) - target specific call
+                target_channel_id = None
+                if call_id:
+                    # Find the channel ID for this call_id
+                    for channel_id, call_data in self.active_calls.items():
+                        if call_data.get("call_id") == call_id:
+                            target_channel_id = channel_id
+                            break
+                
+                if not target_channel_id:
+                    # Fallback: use the first active call (for backward compatibility)
+                    target_channel_id = next(iter(self.active_calls.keys()), None)
+                
+                if target_channel_id:
+                    # Set TTS playing state to prevent feedback loop
+                    call_data = self.active_calls[target_channel_id]
+                    call_data["tts_playing"] = True
+                    
+                    # Also set in VAD state for immediate effect
+                    if "vad_state" in call_data:
+                        call_data["vad_state"]["tts_playing"] = True
+                    
+                    logger.info("🔊 TTS START - Playing response (feedback prevention active)", 
+                              channel_id=target_channel_id)
+                    
+                    # FALLBACK: Set timer to re-enable audio capture after TTS
+                    # This ensures audio capture is re-enabled even if PlaybackFinished fails
+                    asyncio.create_task(self._tts_completion_fallback(target_channel_id, delay=10.0))
+                    
+                    # Play audio to specific call
+                    await self._play_audio_via_bridge(target_channel_id, audio_data)
+                    logger.info(f"🔊 AUDIO OUTPUT - Sent {len(audio_data)} bytes to call channel {target_channel_id}")
+                    
+                    # Update conversation state after playing response
+                    conversation_state = call_data.get('conversation_state')
+                    if conversation_state == 'greeting':
+                        # First response after greeting - transition to listening
+                        call_data['conversation_state'] = 'listening'
+                        logger.info("Greeting completed, now listening for conversation", channel_id=target_channel_id)
+                    elif conversation_state == 'processing':
+                        # Response to user input - transition back to listening
+                        call_data['conversation_state'] = 'listening'
+                        logger.info("Response played, listening for next user input", channel_id=target_channel_id)
+                        
+                        # Cancel provider timeout task since we got a response
+                        if call_data.get('provider_timeout_task') and not call_data['provider_timeout_task'].done():
+                            call_data['provider_timeout_task'].cancel()
+                            logger.debug("Cancelled provider timeout task - response received", channel_id=target_channel_id)
+                else:
+                    logger.warning("No active call found for AgentAudio playback", call_id=call_id)
+        elif event_type == "Transcription":
+            # Handle transcription data
+            text = data.get("text", "")
+            logger.info("Received transcription from provider", text=text, text_length=len(text))
+        elif event_type == "Error":
+            # Handle provider errors
+            error_msg = data.get("message", "Unknown provider error")
+            logger.error("Provider reported error", error=error_msg, event=data)
+        else:
+            logger.debug("Unhandled provider event", event_type=event_type, event_keys=list(data.keys()))
 
     async def _cleanup_call(self, channel_id: str):
         """Cleanup resources associated with a call."""
