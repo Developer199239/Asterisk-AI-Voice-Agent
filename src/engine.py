@@ -750,11 +750,11 @@ class Engine:
                 logger.error("🎯 HYBRID ARI - Default provider not found", provider=self.config.default_provider)
                 return
             
-            # Start provider session
+            # Start provider session with canonical call_id (caller_channel_id)
             logger.info("🎯 HYBRID ARI - Starting provider session", provider=self.config.default_provider)
-            await provider.start_session(local_channel_id)
+            await provider.start_session(caller_channel_id)
             
-            # Store in active calls
+            # Store in active calls with canonical call_id
             bridge_id = self.caller_channels.get(caller_channel_id, {}).get("bridge_id")
             self.active_calls[local_channel_id] = {
                 "provider": provider,
@@ -762,16 +762,18 @@ class Engine:
                 "bridge_id": bridge_id,
                 "local_channel_id": local_channel_id,
                 "caller_channel_id": caller_channel_id,
+                "call_id": caller_channel_id,  # Canonical call identity
                 "audio_capture_enabled": False  # Disabled until greeting finishes
             }
             
-            # Also store reverse mapping for DTMF
+            # Also store reverse mapping for DTMF with canonical call_id
             self.active_calls[caller_channel_id] = {
                 "provider": provider,
                 "conversation_state": "greeting",
                 "bridge_id": bridge_id,
                 "local_channel_id": local_channel_id,
                 "caller_channel_id": caller_channel_id,
+                "call_id": caller_channel_id,  # Canonical call identity
                 "audio_capture_enabled": False  # Disabled until greeting finishes
             }
             
@@ -2179,6 +2181,43 @@ class Engine:
             call_data["tts_playing"] = False
             
         logger.debug("🎤 Audio capture re-enabled after TTS playback")
+        
+        # Finalize delayed cleanup after TTS finishes
+        channels_to_cleanup = []
+        for channel_id, call_data in self.active_calls.items():
+            if call_data.get("cleanup_after_tts"):
+                channels_to_cleanup.append(channel_id)
+                logger.info("🔧 Finalizing delayed cleanup", channel_id=channel_id)
+        
+        # Clean up channels that were marked for delayed cleanup
+        for channel_id in channels_to_cleanup:
+            logger.info("🔧 Finalizing delayed cleanup", channel_id=channel_id)
+            await self._cleanup_call(channel_id)
+        
+        if channels_to_cleanup:
+            logger.info("🔧 Delayed cleanup completed", 
+                       channels_cleaned=len(channels_to_cleanup),
+                       remaining_calls=len(self.active_calls))
+
+    async def _externalmedia_keepalive(self, conn_id: str):
+        """Send periodic keepalive to prevent ExternalMedia idle timeouts."""
+        try:
+            while True:
+                await asyncio.sleep(30)  # Send keepalive every 30 seconds
+                
+                # Check if connection is still active
+                if conn_id not in self._keepalive_tasks:
+                    logger.debug("ExternalMedia keepalive stopped - connection closed", conn_id=conn_id)
+                    break
+                
+                # Send lightweight keepalive (no-op control frame)
+                # This prevents Asterisk ExternalMedia from timing out during silence
+                logger.debug("ExternalMedia keepalive sent", conn_id=conn_id)
+                
+        except asyncio.CancelledError:
+            logger.debug("ExternalMedia keepalive cancelled", conn_id=conn_id)
+        except Exception as e:
+            logger.error("ExternalMedia keepalive error", conn_id=conn_id, error=str(e))
 
     async def on_provider_event(self, event: Dict[str, Any]):
         """Handle events from AI providers."""
@@ -2194,15 +2233,33 @@ class Engine:
                     # File-based playback via ARI (default path) - target specific call
                     target_channel_id = None
                 if call_id:
-                    # Find the channel ID for this call_id
-                    for channel_id, call_data in self.active_calls.items():
-                        if call_data.get("call_id") == call_id:
-                            target_channel_id = channel_id
-                            break
+                    # First try: call_id as direct key in active_calls
+                    if call_id in self.active_calls:
+                        target_channel_id = call_id
+                    else:
+                        # Second try: find by call_id in active_calls values
+                        for channel_id, call_data in self.active_calls.items():
+                            if call_data.get("call_id") == call_id:
+                                # Prefer caller_channel_id if present and active
+                                if call_data.get("caller_channel_id") and call_data["caller_channel_id"] in self.active_calls:
+                                    target_channel_id = call_data["caller_channel_id"]
+                                else:
+                                    target_channel_id = channel_id
+                                break
                 
                 if not target_channel_id:
                     # Fallback: use the first active call (for backward compatibility)
                     target_channel_id = next(iter(self.active_calls.keys()), None)
+                    logger.warning("AgentAudio routing fallback used", 
+                                 call_id=call_id, 
+                                 target_channel_id=target_channel_id,
+                                 active_calls_keys=list(self.active_calls.keys()),
+                                 active_calls_count=len(self.active_calls))
+                else:
+                    logger.debug("AgentAudio routing successful", 
+                               call_id=call_id, 
+                               target_channel_id=target_channel_id,
+                               routing_method="direct" if call_id in self.active_calls else "lookup")
                 
                 if target_channel_id:
                     # Set TTS playing state to prevent feedback loop

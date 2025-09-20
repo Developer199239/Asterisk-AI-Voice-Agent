@@ -148,13 +148,16 @@ class LocalProvider(AIProviderInterface):
                     "type": "audio", 
                     "data": base64.b64encode(pcm16k).decode('utf-8'),
                     "rate": 16000,
-                    "format": "pcm16le"
+                    "format": "pcm16le",
+                    "call_id": self._active_call_id
                 })
                 try:
                     await self.websocket.send(msg)
                     logger.debug("WebSocket batch send successful", 
                                  frames=len(batch), 
-                                 in_bytes=total_bytes)
+                                 in_bytes=total_bytes,
+                                 call_id=self._active_call_id,
+                                 queue_depth=self._send_queue.qsize())
                 except websockets.exceptions.ConnectionClosed as e:
                     logger.warning("WebSocket closed during send, attempting reconnect", 
                                    code=getattr(e, 'code', None), 
@@ -207,6 +210,16 @@ class LocalProvider(AIProviderInterface):
         #     await self.websocket.close()
         #     logger.info("Disconnected from Local AI Server.")
         
+        # Safety guard: drain send queue and discard pending frames
+        queue_size = self._send_queue.qsize()
+        if queue_size > 0:
+            logger.debug("Draining send queue on stop_session", queue_size=queue_size)
+            while not self._send_queue.empty():
+                try:
+                    self._send_queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+        
         # Just clear the active call ID
         self._active_call_id = None
         logger.info("Provider session stopped, WebSocket connection and listener maintained.")
@@ -218,6 +231,11 @@ class LocalProvider(AIProviderInterface):
             async for message in self.websocket:
                 # Handle binary messages (raw audio)
                 if isinstance(message, bytes):
+                    # Safety guard: drop AgentAudio if no active call
+                    if self._active_call_id is None:
+                        logger.debug("Dropping AgentAudio - no active call", message_size=len(message))
+                        continue
+                    
                     audio_event = {'type': 'AgentAudio', 'data': message, 'call_id': self._active_call_id}
                     if self.on_event:
                         await self.on_event(audio_event)

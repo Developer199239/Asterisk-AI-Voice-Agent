@@ -351,14 +351,14 @@ Assistant:"""
                     # Binary audio data from ExternalMedia
                     logging.info(f"🎵 AUDIO INPUT - Received audio: {len(message)} bytes")
                     
-                    # Full MVP pipeline: STT → LLM → TTS
-                    transcript = await self.process_stt(message)
+                    # Full MVP pipeline: STT → LLM → TTS (CPU offloaded)
+                    transcript = await asyncio.to_thread(self.process_stt, message)
                     
                     if transcript.strip():
-                        llm_response = await self.process_llm(transcript)
+                        llm_response = await asyncio.to_thread(self.process_llm, transcript)
                         
                         if llm_response.strip():
-                            audio_response = await self.process_tts(llm_response)
+                            audio_response = await asyncio.to_thread(self.process_tts, llm_response)
                             
                             if audio_response:
                                 # Send binary audio data directly (like working commit)
@@ -448,10 +448,11 @@ async def main():
     server = LocalAIServer()
     await server.initialize_models()
     
-    async with serve(server.handler, "0.0.0.0", 8765):
+    async with serve(server.handler, "0.0.0.0", 8765, ping_interval=30, ping_timeout=30, max_size=None):
         logging.info("🚀 Enhanced Local AI Server started on ws://0.0.0.0:8765")
-        logging.info("📋 MVP Pipeline: ExternalMedia (8kHz) → STT (16kHz) → LLM → TTS (8kHz uLaw) - Optimized!")
+        logging.info("📋 MVP Pipeline: ExternalMedia (8kHz) → STT (16kHz) → LLM → TTS (8kHz uLaw) - CPU Offloaded!")
         logging.info("🔄 Hot Reload: Send {'type': 'reload_models'} to reload models")
+        logging.info("⚡ CPU Offloading: STT/LLM/TTS running in threads to prevent WebSocket timeouts")
         await asyncio.Future()  # Run forever
 
 if __name__ == "__main__":
