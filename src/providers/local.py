@@ -191,9 +191,14 @@ class LocalProvider(AIProviderInterface):
     async def stop_session(self):
         if self._listener_task:
             self._listener_task.cancel()
-        if self.websocket:
-            await self.websocket.close()
-            logger.info("Disconnected from Local AI Server.")
+        # DON'T close the WebSocket - keep it alive for reuse
+        # if self.websocket:
+        #     await self.websocket.close()
+        #     logger.info("Disconnected from Local AI Server.")
+        
+        # Just clear the active call ID
+        self._active_call_id = None
+        logger.info("Provider session stopped, WebSocket connection maintained.")
 
     async def _receive_loop(self):
         if not self.websocket:
