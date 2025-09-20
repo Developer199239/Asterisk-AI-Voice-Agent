@@ -67,14 +67,11 @@ class LocalProvider(AIProviderInterface):
                 return
             
             logger.info("Initializing connection to Local AI Server...", url=self.ws_url)
-            self.websocket = await self._connect_ws()
+            # Use _reconnect method which has retry logic
+            success = await self._reconnect()
+            if not success:
+                raise RuntimeError("Failed to connect to Local AI Server after retries")
             logger.info("✅ Successfully connected to Local AI Server.")
-            
-            # Start tasks only if not already running
-            if not self._listener_task or self._listener_task.done():
-                self._listener_task = asyncio.create_task(self._receive_loop())
-            if not self._sender_task or self._sender_task.done():
-                self._sender_task = asyncio.create_task(self._send_loop())
         except Exception:
             logger.error("Failed to initialize connection to Local AI Server", exc_info=True)
             raise
