@@ -3,8 +3,6 @@
 default_provider: "local"
 
 # Audio transport controls
-# - audio_transport: 'audiosocket' (recommended) | 'externalmedia' | 'legacy'
-# - downstream_mode: 'file' (current default) | 'stream' (next phase)
 audio_transport: "externalmedia"
 downstream_mode: "file"
 
@@ -23,12 +21,6 @@ external_media:
   direction: "both"          # sendrecv | sendonly | recvonly
   jitter_buffer_ms: 20       # target frame size
 
-# RTP server settings for External Media (legacy - kept for compatibility)
-rtp:
-  host: "127.0.0.1"
-  port_range: [10000, 10100]  # Range of UDP ports for RTP communication
-  sample_rate: 8000
-  samples_per_packet: 160  # 20ms at 8kHz
 
 # Global LLM settings (will be overridden by environment variables)
 llm:
@@ -37,23 +29,6 @@ llm:
   model: "gpt-4o"
   api_key: "${OPENAI_API_KEY}" # Example of using env var substitution
 
-# Streaming settings (used when downstream_mode == 'stream')
-streaming:
-  sample_rate_hz: 16000      # PCM16 sample rate for providers that require conversion
-  chunk_duration_ms: 20      # Audio chunk size
-  jitter_buffer_ms: 120      # Downstream jitter buffer target
-  keepalive_ms: 2000         # Gateway/provider heartbeat interval (reduced to keep AudioSocket alive)
-  timeouts:
-    provider_ms: 15000       # Provider operation timeout
-    handshake_ms: 5000       # AudioSocket handshake timeout
-  barge_in:
-    enabled: false           # Enable in streaming mode to support barge-in
-    vad_threshold_db: -30    # Voice activity threshold
-    min_speech_ms: 200       # Minimum speech duration to trigger barge-in
-    # WebRTC VAD configuration
-    vad_backend: "hybrid"    # "energy" | "webrtc" | "hybrid" (default: hybrid)
-    webrtc_aggressiveness: 0 # WebRTC VAD aggressiveness 0-3 (0 is least aggressive, 3 is most aggressive)
-    webrtc_start_frames: 3   # Consecutive speech frames to start recording
 
 # VAD Configuration - Optimized for 4+ second utterances
 vad:
@@ -74,16 +49,6 @@ vad:
 
 # Provider-specific configurations
 providers:
-  deepgram:
-    api_key: "${DEEPGRAM_API_KEY}"
-    model: "nova-2"
-    tts_model: "aura-asteria-en"
-
-  openai:
-    api_key: "${OPENAI_API_KEY}"
-    model: "gpt-4o"
-    voice: "alloy"
-
   local:
     enabled: true
     stt_model: "models/stt/vosk-model-small-en-us-0.15"

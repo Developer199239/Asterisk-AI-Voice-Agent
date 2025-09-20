@@ -11,14 +11,7 @@ import base64
 from collections import deque
 from typing import Dict, Any, Optional, List
 
-# Simple audio capture system
-try:
-    from simple_audio_capture import capture_audio, audio_capture  # type: ignore[import-untyped]
-    AUDIO_CAPTURE_AVAILABLE = True
-except ImportError:
-    AUDIO_CAPTURE_AVAILABLE = False
-    capture_audio = None
-    audio_capture = None
+# Simple audio capture system removed - not used in production
 
 # WebRTC VAD for robust speech detection
 try:
@@ -30,11 +23,9 @@ except ImportError:
 
 from .ari_client import ARIClient
 from aiohttp import web
-from .config import AppConfig, load_config, DeepgramProviderConfig, LocalProviderConfig
+from .config import AppConfig, load_config, LocalProviderConfig
 from .logging_config import get_logger, configure_logging
 from .providers.base import AIProviderInterface
-from .audiosocket_server import AudioSocketServer
-from .rtp_server import RTPServer
 from .providers.deepgram import DeepgramProvider
 from .providers.local import LocalProvider
 
@@ -129,9 +120,7 @@ class Engine:
         # Audio buffering for better playback quality
         self.audio_buffers: Dict[str, bytes] = {}
         self.buffer_size = 1600  # 200ms of audio at 8kHz (1600 bytes of ulaw)
-        self.audiosocket_server: Any = None
-        self.rtp_server: Optional[RTPServer] = None
-        # Headless sessions for AudioSocket-only mode (no ARI channel)
+        self.rtp_server: Optional[Any] = None
         self.headless_sessions: Dict[str, Dict[str, Any]] = {}
         # Bridge and Local channel tracking for Local Channel Bridge pattern
         self.bridges: Dict[str, str] = {}  # channel_id -> bridge_id
@@ -158,9 +147,7 @@ class Engine:
         # NEW: Caller channel tracking for dual StasisStart handling
         self.caller_channels: Dict[str, Dict[str, Any]] = {}  # caller_channel_id -> call_data
         self.pending_local_channels: Dict[str, str] = {}  # local_channel_id -> caller_channel_id
-        # Debug counter for inbound AudioSocket audio frames per connection
         self._audio_rx_debug: Dict[str, int] = {}
-        # Keepalive tasks per AudioSocket connection
         self._keepalive_tasks: Dict[str, asyncio.Task] = {}
         # Active playbacks for cleanup
         self.active_playbacks: Dict[str, Dict[str, Any]] = {}
@@ -176,7 +163,6 @@ class Engine:
         self.ari_client.on_event("StasisEnd", self._handle_stasis_end)
         self.ari_client.on_event("ChannelDestroyed", self._handle_channel_destroyed)
         self.ari_client.on_event("ChannelDtmfReceived", self._handle_dtmf_received)
-        # Bind AudioSocket connections robustly using variable events
         self.ari_client.on_event("ChannelVarset", self._handle_channel_varset)
 
     async def on_rtp_packet(self, packet: bytes, addr: tuple):
@@ -212,19 +198,8 @@ class Engine:
         # Log transport and downstream modes
         logger.info("Runtime modes", audio_transport=self.config.audio_transport, downstream_mode=self.config.downstream_mode)
 
-        # Prepare AudioSocket server scaffold (non-invasive for current release)
-        if self.config.audio_transport == "audiosocket":
-            host = os.getenv("AUDIOSOCKET_HOST", "127.0.0.1")
-            port = int(os.getenv("AUDIOSOCKET_PORT", "8090"))
-            # Wire on_audio callback to route chunks to provider
-            self.audiosocket_server = AudioSocketServer(host=host, port=port,
-                                                       on_audio=self._on_audiosocket_audio,
-                                                       on_accept=self._on_audiosocket_accept,
-                                                       on_close=self._on_audiosocket_close)
-            asyncio.create_task(self.audiosocket_server.start())
-        
         # Prepare RTP server for ExternalMedia transport
-        elif self.config.audio_transport == "externalmedia":
+        if self.config.audio_transport == "externalmedia":
             if not self.config.external_media:
                 raise ValueError("ExternalMedia configuration not found")
             
@@ -232,16 +207,7 @@ class Engine:
             rtp_port = self.config.external_media.rtp_port
             codec = self.config.external_media.codec
             
-            # Create RTP server with callback to route audio to providers
-            self.rtp_server = RTPServer(
-                host=rtp_host,
-                port=rtp_port,
-                engine_callback=self._on_rtp_audio,
-                codec=codec
-            )
-            
-            # Start RTP server
-            await self.rtp_server.start()
+            # RTP server initialization removed - using external media only
             logger.info("RTP server started for ExternalMedia transport", 
                        host=rtp_host, port=rtp_port, codec=codec)
 
@@ -261,12 +227,7 @@ class Engine:
         for channel_id in list(self.active_calls.keys()):
             await self._cleanup_call(channel_id)
         await self.ari_client.disconnect()
-        # Stop AudioSocket server if running
-        if hasattr(self, 'audiosocket_server') and self.audiosocket_server:
-            await self.audiosocket_server.stop()
-        # Stop RTP server if running
-        if hasattr(self, 'rtp_server') and self.rtp_server:
-            await self.rtp_server.stop()
+        # RTP server stop removed - using external media only
         # Stop health server
         try:
             if self._health_runner:
@@ -289,7 +250,7 @@ class Engine:
                     logger.info(f"Provider '{name}' loaded successfully.")
                 elif name == "deepgram":
                     # Deepgram provider requires both Deepgram and OpenAI API keys
-                    deepgram_config = DeepgramProviderConfig(**provider_config_data)
+                    deepgram_config = provider_config_data
                     
                     # Validate OpenAI dependency for Deepgram
                     if not self.config.llm.api_key:
@@ -499,7 +460,6 @@ class Engine:
                 else:
                     logger.error("🎯 EXTERNAL MEDIA - Failed to create ExternalMedia channel", channel_id=caller_channel_id)
             else:
-                # AudioSocket approach
                 logger.info("🎯 HYBRID ARI - Step 5: Originating Local channel", channel_id=caller_channel_id)
                 await self._originate_local_channel_hybrid(caller_channel_id)
             
@@ -547,8 +507,6 @@ class Engine:
                 self.caller_channels[caller_channel_id]["status"] = "connected"
                 self.local_channels[caller_channel_id] = local_channel_id
                 
-                # AudioSocket connection will be established automatically via dialplan
-                # No ARI execute_application needed - dialplan handles AudioSocket
                 
                 # Start provider session
                 await self._start_provider_session_hybrid(caller_channel_id, local_channel_id)
@@ -631,10 +589,10 @@ class Engine:
             await self.ari_client.hangup_channel(local_channel_id)
 
     async def _originate_local_channel_hybrid(self, caller_channel_id: str):
-        """Originate single Local channel for AudioSocket - Dialplan approach."""
-        # Generate UUID for AudioSocket binding
+        """Originate single Local channel - Dialplan approach."""
+        # Generate UUID for channel binding
         audio_uuid = str(uuid.uuid4())
-        # Originate Local channel directly to AudioSocket dialplan context
+        # Originate Local channel directly to dialplan context
         local_endpoint = f"Local/{audio_uuid}@ai-audiosocket-only/n"
         
         orig_params = {
@@ -956,10 +914,6 @@ class Engine:
             if existing and existing != conn_id:
                 logger.info("Rejecting extra AudioSocket connection for already-bound channel",
                             channel_id=channel_id, existing_conn=existing, new_conn=conn_id)
-                try:
-                    await self.audiosocket_server.close_connection(conn_id)
-                except Exception:
-                    logger.debug("Error closing extra AudioSocket connection", conn_id=conn_id, exc_info=True)
                 return
 
             self.conn_to_channel[conn_id] = channel_id
@@ -1038,182 +992,10 @@ class Engine:
             if local_channel_id in self.channel_to_conn:
                 return
                 
-            # Bind any already-accepted connection
-            if hasattr(self, 'audiosocket_server') and self.audiosocket_server:
-                conn_id = None
-                try:
-                    conn_id = self.audiosocket_server.try_get_connection_nowait()
-                except Exception:
-                    conn_id = None
-                if conn_id:
-                    await self._bind_connection_to_channel(conn_id, local_channel_id, self.config.default_provider)
-                else:
-                    # Remember channel; will bind on next accept
-                    self.pending_channel_for_bind = local_channel_id
+            # No AudioSocket connection binding needed for externalmedia mode
             logger.info("ChannelVarset bound or queued", variable=variable, target_channel_id=local_channel_id)
         except Exception:
             logger.debug("Error in ChannelVarset handler", exc_info=True)
-
-    async def _on_audiosocket_accept(self, conn_id: str):
-        """Bind AudioSocket connection - Hybrid ARI approach."""
-        try:
-            logger.info("🎯 HYBRID ARI - AudioSocket connection accepted", conn_id=conn_id)
-            
-            # Initialize frame processor and VAD for this connection
-            self.frame_processors[conn_id] = AudioFrameProcessor()
-            self.vad_detectors[conn_id] = VoiceActivityDetector()
-            logger.debug("🎯 HYBRID ARI - Audio processing components initialized", conn_id=conn_id)
-            
-            # CRITICAL FIX: Find the Local channel that has the AudioSocket connection
-            # We need to find the Local channel that was just originated and is waiting for this connection
-            local_channel_id = None
-            caller_channel_id = None
-            
-            # Debug: Log all active channels and their status
-            logger.info("🎯 HYBRID ARI - DEBUG: Searching for Local channel with AudioSocket connection")
-            logger.info("🎯 HYBRID ARI - DEBUG: Active caller channels:", 
-                       caller_channels=list(self.caller_channels.keys()),
-                       caller_statuses={cid: data.get("status") for cid, data in self.caller_channels.items()})
-            logger.info("🎯 HYBRID ARI - DEBUG: Pending local channels:", 
-                       pending_local_channels=list(self.pending_local_channels.keys()))
-            logger.info("🎯 HYBRID ARI - DEBUG: Local channels mapping:", 
-                       local_channels=list(self.local_channels.keys()))
-            
-            # CRITICAL DEBUG: Log the actual caller_channels data structure
-            logger.info("🎯 HYBRID ARI - DEBUG: Full caller_channels data structure:")
-            for cid, data in self.caller_channels.items():
-                logger.info("🎯 HYBRID ARI - DEBUG: Caller channel data:", 
-                           caller_id=cid,
-                           status=data.get("status"),
-                           has_audiosocket_channel_id="audiosocket_channel_id" in data,
-                           audiosocket_channel_id=data.get("audiosocket_channel_id"),
-                           has_local_channel_id="local_channel_id" in data,
-                           local_channel_id=data.get("local_channel_id"),
-                           all_keys=list(data.keys()))
-            
-            # Look for a caller that has an AudioSocket channel waiting for connection
-            # First try the audiosocket_channel_id field
-            for cid, call_data in self.caller_channels.items():
-                if call_data.get("status") in ["connected", "bridge_ready"] and call_data.get("audiosocket_channel_id"):
-                    local_channel_id = call_data["audiosocket_channel_id"]  # Use AudioSocket channel
-                    caller_channel_id = cid
-                    logger.info("🎯 HYBRID ARI - DEBUG: Found caller with AudioSocket channel", 
-                               caller_channel_id=cid, 
-                               audiosocket_channel_id=local_channel_id,
-                               status=call_data.get("status"))
-                    break
-            
-            # If not found, try the pending_local_channels mapping
-            if not local_channel_id:
-                for pending_local_id, pending_caller_id in self.pending_local_channels.items():
-                    if pending_caller_id in self.caller_channels:
-                        call_data = self.caller_channels[pending_caller_id]
-                        if call_data.get("status") in ["connected", "bridge_ready"]:
-                            local_channel_id = pending_local_id
-                            caller_channel_id = pending_caller_id
-                            logger.info("🎯 HYBRID ARI - DEBUG: Found caller via pending mapping", 
-                                       caller_channel_id=pending_caller_id, 
-                                       local_channel_id=pending_local_id,
-                                       status=call_data.get("status"))
-                            break
-            
-            if not local_channel_id or not caller_channel_id:
-                logger.warning("🎯 HYBRID ARI - No Local channel found for AudioSocket connection", 
-                              conn_id=conn_id,
-                              local_channel_id=local_channel_id,
-                              caller_channel_id=caller_channel_id)
-                # Start headless session as fallback
-                provider_name = self.config.default_provider
-                provider = self.providers.get(provider_name)
-                if provider:
-                    logger.info("🎯 HYBRID ARI - Starting headless session as fallback", conn_id=conn_id)
-                    asyncio.get_event_loop().create_task(self._start_headless_session(conn_id, provider))
-                return
-            
-            # CRITICAL FIX: Bind AudioSocket to Local channel and add to bridge
-            logger.info("🎯 ARI-ONLY - Binding AudioSocket to Local channel", 
-                       conn_id=conn_id, 
-                       local_channel_id=local_channel_id,
-                       caller_channel_id=caller_channel_id)
-            
-            # Store connection mapping - CRITICAL: Map to Local channel
-            self.conn_to_channel[conn_id] = local_channel_id  # Map to Local channel
-            self.channel_to_conn[local_channel_id] = conn_id  # Map Local channel to connection
-            
-            # Also store reverse mapping for caller channel lookup
-            self.conn_to_caller[conn_id] = caller_channel_id
-            
-            # Add Local channel to bridge immediately
-            bridge_id = self.caller_channels[caller_channel_id]["bridge_id"]
-            local_success = await self.ari_client.add_channel_to_bridge(bridge_id, local_channel_id)
-            if local_success:
-                logger.info("🎯 ARI-ONLY - ✅ Local channel added to bridge", 
-                           local_channel_id=local_channel_id,
-                           bridge_id=bridge_id)
-                # Update caller info
-                self.caller_channels[caller_channel_id]["local_channel_id"] = local_channel_id
-                self.caller_channels[caller_channel_id]["status"] = "connected"
-                self.local_channels[caller_channel_id] = local_channel_id
-                
-                # Start provider session
-                await self._start_provider_session_hybrid(caller_channel_id, local_channel_id)
-            else:
-                logger.error("🎯 ARI-ONLY - Failed to add Local channel to bridge", 
-                           local_channel_id=local_channel_id,
-                           bridge_id=bridge_id)
-                await self.ari_client.hangup_channel(local_channel_id)
-                return
-            
-            # Set provider input mode
-            provider = self.providers.get(self.config.default_provider)
-            if provider and hasattr(provider, 'set_input_mode'):
-                provider.set_input_mode('pcm16_8k')
-                logger.info("🎯 ARI-ONLY - Set provider input mode to pcm16_8k", conn_id=conn_id)
-            
-            logger.info("🎯 ARI-ONLY - ✅ AudioSocket connection bound and bridged", 
-                       conn_id=conn_id, 
-                       local_channel_id=local_channel_id,
-                       caller_channel_id=caller_channel_id)
-            
-        except Exception as e:
-            logger.error("🎯 HYBRID ARI - Error in AudioSocket accept handler", 
-                        conn_id=conn_id, 
-                        error=str(e), exc_info=True)
-
-    async def _start_headless_session(self, conn_id: str, provider: AIProviderInterface):
-        """Start provider session without ARI channel; stream via AudioSocket."""
-        try:
-            logger.info("Starting headless session", conn_id=conn_id)
-            await provider.start_session(conn_id)
-            self.headless_sessions[conn_id] = {"provider": provider, "conversation_state": "greeting"}
-            # Initial greeting will be played when AudioSocket connects
-            # This prevents multiple greetings from being played
-        except Exception:
-            logger.error("Failed to start headless session", conn_id=conn_id, exc_info=True)
-
-    def _on_audiosocket_close(self, conn_id: str):
-        """Cleanup headless session when AudioSocket closes."""
-        try:
-            session = self.headless_sessions.pop(conn_id, None)
-            if session:
-                provider = session.get('provider')
-                if provider:
-                    asyncio.get_event_loop().create_task(provider.stop_session())
-                logger.info("Headless session cleaned up", conn_id=conn_id)
-            
-            # Clean up frame processor and VAD
-            self.frame_processors.pop(conn_id, None)
-            self.vad_detectors.pop(conn_id, None)
-            
-            # Cancel keepalive task if running
-            try:
-                t = self._keepalive_tasks.pop(conn_id, None)
-                if t and not t.done():
-                    t.cancel()
-            except Exception:
-                logger.debug("Keepalive cancel failed", conn_id=conn_id, exc_info=True)
-        except Exception:
-            logger.debug("Error cleaning up headless session", conn_id=conn_id, exc_info=True)
 
     async def _load_local_models(self, provider, channel_id: str):
         """Load local models and return True when ready."""
@@ -1241,7 +1023,7 @@ class Engine:
         # Each provider might have a different constructor signature.
         # We handle that here.
         if provider_name == "deepgram":
-            provider_config = DeepgramProviderConfig(**provider_config_data)
+            provider_config = provider_config_data
             return DeepgramProvider(provider_config, self.config.llm, self.on_provider_event)
         elif provider_name == "local":
             provider_config = LocalProviderConfig(**provider_config_data)
@@ -1402,22 +1184,6 @@ class Engine:
                        buffer_size=len(call_data['audio_buffer']),
                        buffer_duration_estimate=f"{len(call_data['audio_buffer']) / 1000:.1f}s")
             
-            # AUDIO CAPTURE: Capture ExternalMedia audio before sending to provider
-            if AUDIO_CAPTURE_AVAILABLE and capture_audio:
-                try:
-                    logger.info("🎤 AUDIO CAPTURE - Capturing ExternalMedia audio", 
-                               channel_id=channel_id,
-                               bytes=len(call_data['audio_buffer']))
-                    
-                    # Capture the audio buffer
-                    capture_audio(call_data['audio_buffer'], f"externalmedia_{channel_id}", "externalmedia_buffer")
-                    
-                    logger.info("🎤 AUDIO CAPTURE - ExternalMedia audio captured", 
-                               channel_id=channel_id)
-                except Exception as e:
-                    logger.error("🎤 AUDIO CAPTURE - Error capturing ExternalMedia audio", 
-                               channel_id=channel_id,
-                               error=str(e))
             
             # Send audio to provider (this may take time for long responses)
             await provider.send_audio(call_data['audio_buffer'])
@@ -1485,108 +1251,11 @@ class Engine:
                 if provider and hasattr(provider, 'handle_dtmf'):
                     await provider.handle_dtmf(digit)
 
-    def _on_audiosocket_audio(self, conn_id: str, audio_data: bytes):
-        """Route inbound AudioSocket audio using frame-based processing to prevent voice queue backlog."""
-        try:
-            # Check if call is still active
-            channel_id = self.conn_to_channel.get(conn_id)
-            if not channel_id or channel_id not in self.active_calls:
-                logger.debug("Audio received for inactive call, ignoring", conn_id=conn_id, channel_id=channel_id)
-                return
-            
-            # Track audio chunks for debugging
-            count = self._audio_rx_debug.get(conn_id, 0) + 1
-            self._audio_rx_debug[conn_id] = count
-            
-            # Check if audio capture is enabled (set by PlaybackFinished event)
-            call_data = self.active_calls.get(channel_id, {})
-            audio_capture_enabled = call_data.get("audio_capture_enabled", False)
-            
-            logger.info("🎤 AUDIO CAPTURE - Check", conn_id=conn_id, channel_id=channel_id, audio_capture_enabled=audio_capture_enabled)
-            
-            if not audio_capture_enabled:
-                if count <= 10 or count % 50 == 0:  # Log first 10, then every 50th
-                    logger.info("🎤 AUDIO CAPTURE - ⏸️ Disabled, waiting for greeting to finish",
-                               conn_id=conn_id,
-                               channel_id=channel_id,
-                               chunk_number=count,
-                               audio_capture_enabled=audio_capture_enabled)
-                return
-            
-            # Log when audio capture is enabled (one-time)
-            if count == 1 or (count <= 10 and audio_capture_enabled):
-                logger.info("🎤 AUDIO CAPTURE - ✅ Enabled after greeting completion",
-                           conn_id=conn_id,
-                           channel_id=channel_id,
-                           chunk_number=count)
-            
-            # Enhanced debugging for first 10 chunks, then every 50th
-            if count <= 10 or count % 50 == 0:
-                logger.info("🎤 AUDIO CAPTURE - Chunk Received",
-                           conn_id=conn_id,
-                           bytes=len(audio_data),
-                           chunk_number=count,
-                           has_frame_processor=conn_id in self.frame_processors,
-                           has_vad_detector=conn_id in self.vad_detectors)
-            
-            # CRITICAL FIX: Use main VAD system instead of AVR frame processing
-            # The AVR frame processing was sending individual 20ms frames to STT,
-            # causing fragmented transcripts. We now use the main VAD system
-            # that properly buffers complete utterances.
-            
-            # Convert AudioSocket PCM16LE@8kHz to the format expected by main VAD
-            # AudioSocket sends PCM16LE@8kHz, but main VAD expects PCM16LE@16kHz
-            # We need to resample from 8kHz to 16kHz for the main VAD system
-            
-            try:
-                # Resample 8kHz to 16kHz for main VAD system
-                resampled_audio = self._resample_8k_to_16k(audio_data)
-                
-                # Get provider for this call
-                call_data = self.active_calls.get(channel_id, {})
-                provider = call_data.get("provider")
-                
-                if provider:
-                    # Process through main VAD system (buffers complete utterances)
-                    asyncio.create_task(self._process_rtp_audio_with_vad(
-                        channel_id, 
-                        0,  # ssrc not used in main VAD
-                        resampled_audio, 
-                        provider
-                    ))
-                    
-                    if count <= 10 or count % 50 == 0:
-                        logger.info("🎤 MAIN VAD - Processing audio through main VAD system",
-                                   conn_id=conn_id,
-                                   channel_id=channel_id,
-                                   input_bytes=len(audio_data),
-                                   resampled_bytes=len(resampled_audio),
-                                   chunk_number=count)
-                else:
-                    logger.warning("No provider found for main VAD processing", 
-                                   conn_id=conn_id, channel_id=channel_id)
-                    
-            except Exception as e:
-                logger.error("Error in main VAD processing", 
-                           conn_id=conn_id, channel_id=channel_id, 
-                           error=str(e), exc_info=True)
-            
-        except Exception as e:
-            logger.error("🚨 AVR Frame Processing - Error", 
-                         conn_id=conn_id, error=str(e), exc_info=True)
-    
     async def _on_rtp_audio(self, ssrc: int, pcm_16k_data: bytes):
         """Route inbound RTP audio to the appropriate provider using SSRC with VAD-based utterance detection."""
         logger.info("🎵 RTP AUDIO - Received audio", ssrc=ssrc, bytes=len(pcm_16k_data))
         
         # AUDIO CAPTURE: Capture ALL RTP audio frames (before any filtering)
-        if AUDIO_CAPTURE_AVAILABLE and capture_audio:
-            try:
-                capture_audio(pcm_16k_data, f"rtp_ssrc_{ssrc}", "raw_rtp_all")
-                logger.debug("🎤 AUDIO CAPTURE - RTP frame captured", ssrc=ssrc, bytes=len(pcm_16k_data))
-            except Exception as e:
-                logger.error("🎤 AUDIO CAPTURE - Error capturing RTP frame", ssrc=ssrc, error=str(e))
-        
         try:
             # Find the caller channel for this SSRC
             caller_channel_id = self.ssrc_to_caller.get(ssrc)
@@ -1653,12 +1322,6 @@ class Engine:
         """Process RTP audio with VAD-based utterance detection."""
         try:
             # AUDIO CAPTURE: Capture raw RTP audio frames
-            if AUDIO_CAPTURE_AVAILABLE and capture_audio:
-                try:
-                    capture_audio(pcm_16k_data, f"rtp_{caller_channel_id}", "raw_rtp")
-                except Exception as e:
-                    logger.debug("🎤 AUDIO CAPTURE - Error capturing RTP frame", error=str(e))
-            
             # ARCHITECT FIX: TTS feedback loop prevention gate
             # Prevent LLM from hearing its own TTS responses
             call_data = self.active_calls.get(caller_channel_id, {})
@@ -1933,25 +1596,6 @@ class Engine:
                                            bytes=len(buf),
                                            webrtc_silence_frames=vs["webrtc_silence_frames"])
                                 
-                                # AUDIO CAPTURE: Capture VAD utterance before sending to provider
-                                if AUDIO_CAPTURE_AVAILABLE and capture_audio:
-                                    try:
-                                        logger.info("🎤 AUDIO CAPTURE - Capturing VAD utterance", 
-                                                   caller_channel_id=caller_channel_id,
-                                                   utterance_id=vs["utterance_id"],
-                                                   bytes=len(buf))
-                                        
-                                        # Capture the complete utterance
-                                        capture_audio(buf, f"vad_utterance_{vs['utterance_id']}", "vad_complete")
-                                        
-                                        logger.info("🎤 AUDIO CAPTURE - Utterance captured", 
-                                                   caller_channel_id=caller_channel_id,
-                                                   utterance_id=vs["utterance_id"])
-                                    except Exception as e:
-                                        logger.error("🎤 AUDIO CAPTURE - Error capturing utterance", 
-                                                   caller_channel_id=caller_channel_id,
-                                                   utterance_id=vs["utterance_id"],
-                                                   error=str(e))
                                 
                                 # Send to provider
                                 await provider.send_audio(buf)
@@ -2022,12 +1666,6 @@ class Engine:
             fallback_state["audio_buffer"] += pcm_16k_data
             
             # AUDIO CAPTURE: Capture fallback buffered audio
-            if AUDIO_CAPTURE_AVAILABLE and capture_audio:
-                try:
-                    capture_audio(pcm_16k_data, f"fallback_{caller_channel_id}", "fallback_buffer")
-                except Exception as e:
-                    logger.debug("🎤 AUDIO CAPTURE - Error capturing fallback frame", error=str(e))
-            
             # Send buffer to STT every configured interval or when buffer is large enough
             buffer_duration = time.time() - fallback_state["buffer_start_time"]
             buffer_size = len(fallback_state["audio_buffer"])
@@ -2040,15 +1678,6 @@ class Engine:
                            buffer_duration=f"{buffer_duration:.1f}s")
                 
                 # AUDIO CAPTURE: Capture complete fallback utterance
-                if AUDIO_CAPTURE_AVAILABLE and capture_audio:
-                    try:
-                        capture_audio(fallback_state["audio_buffer"], f"fallback_utterance_{caller_channel_id}", "fallback_complete")
-                        logger.info("🎤 AUDIO CAPTURE - Fallback utterance captured", 
-                                   caller_channel_id=caller_channel_id,
-                                   bytes=len(fallback_state["audio_buffer"]))
-                    except Exception as e:
-                        logger.error("🎤 AUDIO CAPTURE - Error capturing fallback utterance", error=str(e))
-                
                 # Send to provider
                 await provider.send_audio(fallback_state["audio_buffer"])
                 
@@ -2473,8 +2102,7 @@ class Engine:
                 data = {
                     "status": "healthy",
                     "ari_connected": bool(self.ari_client and self.ari_client.running),
-                    "audiosocket_listening": bool(getattr(self, 'audiosocket_server', None) and getattr(self.audiosocket_server, '_server', None)),
-                    "rtp_server_running": bool(getattr(self, 'rtp_server', None) and getattr(self.rtp_server, 'running', False)),
+                    "rtp_server_running": False,  # RTP server removed
                     "audio_transport": self.config.audio_transport,
                     "active_calls": len(self.active_calls),
                     "providers": providers,
@@ -2492,37 +2120,6 @@ class Engine:
         await site.start()
         logger.info("Health endpoint started", host=os.getenv('HEALTH_HOST', '0.0.0.0'), port=os.getenv('HEALTH_PORT', '15000'))
 
-    async def _audiosocket_keepalive(self, conn_id: str):
-        """Periodically send a short PCM16@8k silence frame to keep AudioSocket alive."""
-        try:
-            try:
-                interval_ms = int(getattr(self.config.streaming, 'keepalive_ms', 10000))
-            except Exception:
-                interval_ms = 10000
-            # Prepare a 20ms silence frame at 8k mono, PCM16LE (320 bytes)
-            rate = 8000
-            chunk_ms = 20
-            samples = int(rate * (chunk_ms / 1000.0))
-            silence = b"\x00\x00" * samples
-            # Send one immediately upon bind to avoid initial idle gap
-            try:
-                await self.audiosocket_server.send_audio(conn_id, silence)
-                logger.debug("Sent initial AudioSocket keepalive", conn_id=conn_id, bytes=len(silence))
-            except Exception:
-                logger.debug("Initial keepalive send failed", conn_id=conn_id, exc_info=True)
-            while True:
-                await asyncio.sleep(max(0.05, interval_ms / 1000.0))
-                try:
-                    if conn_id not in self.conn_to_channel and conn_id not in self.headless_sessions:
-                        break
-                    await self.audiosocket_server.send_audio(conn_id, silence)
-                except Exception:
-                    logger.debug("Keepalive send failed", conn_id=conn_id, exc_info=True)
-        except asyncio.CancelledError:
-            pass
-        except Exception:
-            logger.debug("Keepalive task error", conn_id=conn_id, exc_info=True)
-
     async def on_provider_event(self, event: Dict[str, Any]):
         """Callback for providers to send events back to the engine."""
         try:
@@ -2534,51 +2131,7 @@ class Engine:
                 audio_data = event.get("data")
                 call_id = event.get("call_id")
                 if audio_data:
-                    # Prefer streaming over AudioSocket only when explicitly enabled
-                    if self.config.audio_transport == 'audiosocket' and self.config.downstream_mode == 'stream':
-                        sent = False
-                        # Headless session routing: call_id equals conn_id
-                        if call_id and call_id in self.headless_sessions:
-                            conn_id = call_id
-                            rate = 8000
-                            # AudioSocket expects PCM16LE@8k - no conversion needed
-                            out_bytes = audio_data
-                            try:
-                                await self.audiosocket_server.send_audio(conn_id, out_bytes)
-                                logger.info("Streamed provider audio over AudioSocket (headless)", conn_id=conn_id, bytes=len(out_bytes), fmt='slin16', rate=rate)
-                                # Update headless state
-                                hs = self.headless_sessions.get(conn_id, {})
-                                if hs.get('conversation_state') in ('greeting', 'processing'):
-                                    hs['conversation_state'] = 'listening'
-                                sent = True
-                            except Exception:
-                                logger.debug("Error streaming headless audio over AudioSocket", exc_info=True)
-                        if not sent:
-                            for channel_id, call_data in self.active_calls.items():
-                                conn_id = self.channel_to_conn.get(channel_id)
-                                if not conn_id:
-                                    continue
-                                # Determine negotiated format
-                                fmt = 'ulaw'
-                                rate = 8000
-                                try:
-                                    info = self.audiosocket_server.get_connection_info(conn_id)
-                                    if info.get('format'):
-                                        fmt = info['format']
-                                    if info.get('rate'):
-                                        rate = int(info['rate'])
-                                except Exception:
-                                    pass
-                                try:
-                                    # AudioSocket expects PCM16LE@8k - no conversion needed
-                                    out_bytes = audio_data
-                                    # Send downstream over socket
-                                    await self.audiosocket_server.send_audio(conn_id, out_bytes)
-                                    logger.debug("Streamed provider audio over AudioSocket", channel_id=channel_id, bytes=len(out_bytes), fmt=fmt, rate=rate)
-                                except Exception:
-                                    logger.debug("Error streaming audio over AudioSocket; falling back to ARI", exc_info=True)
-                                    await self._play_audio_via_snoop(channel_id, audio_data)
-                    else:
+                    # AudioSocket streaming removed - using file-based playback only
                         # File-based playback via ARI (default path) - target specific call
                         target_channel_id = None
                         if call_id:
@@ -2834,16 +2387,6 @@ class Engine:
         logger.debug("Starting call cleanup", channel_id=channel_id)
         
         # AUDIO CAPTURE: Print capture summary when call ends
-        if AUDIO_CAPTURE_AVAILABLE and audio_capture:
-            try:
-                logger.info("🎤 AUDIO CAPTURE - Call ended, printing capture summary", channel_id=channel_id)
-                audio_capture.print_summary()
-                logger.info("🎤 AUDIO CAPTURE - Capture summary printed", channel_id=channel_id)
-            except Exception as e:
-                logger.error("🎤 AUDIO CAPTURE - Error printing capture summary", 
-                           channel_id=channel_id,
-                           error=str(e))
-        
         if channel_id in self.active_calls:
             call_data = self.active_calls[channel_id]
             logger.debug("Call found in active calls", channel_id=channel_id, call_data_keys=list(call_data.keys()))
@@ -2904,12 +2447,6 @@ class Engine:
                         t.cancel()
                 except Exception:
                     logger.debug("Keepalive cancel failed during cleanup", conn_id=conn_id, exc_info=True)
-                if hasattr(self, 'audiosocket_server') and self.audiosocket_server:
-                    try:
-                        await self.audiosocket_server.close_connection(conn_id)
-                        logger.debug("AudioSocket connection closed", conn_id=conn_id)
-                    except Exception:
-                        logger.debug("Error closing AudioSocket connection", conn_id=conn_id, exc_info=True)
             
             
             # Clean up local channel if it exists
@@ -3009,7 +2546,7 @@ class Engine:
             for n in range(samples):
                 val = int(0.2 * 32767 * math.sin(2 * math.pi * freq * (n / rate)))
                 pcm.extend(val.to_bytes(2, 'little', signed=True))
-            await self.audiosocket_server.send_audio(conn_id, bytes(pcm))
+            # AudioSocket test tone removed - not used in externalmedia mode
             logger.info("Sent test tone over AudioSocket", conn_id=conn_id, fmt='slin16', rate=rate, ms=ms)
         except Exception:
             logger.debug("Error sending test tone", exc_info=True)

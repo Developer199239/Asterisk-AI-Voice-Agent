@@ -29,21 +29,6 @@ class ExternalMediaConfig(BaseModel):
     direction: str = Field(default="both")  # both, sendonly, recvonly
     jitter_buffer_ms: int = Field(default=20)
 
-class RTPConfig(BaseModel):
-    host: str = Field(default="127.0.0.1")
-    port_range: list = Field(default=[10000, 10100])
-    sample_rate: int = Field(default=8000)
-    samples_per_packet: int = Field(default=160)
-
-class DeepgramProviderConfig(BaseModel):
-    api_key: str
-    model: str
-    tts_model: str
-
-class OpenAIProviderConfig(BaseModel):
-    api_key: str
-    model: str
-    voice: str
 
 class LocalProviderConfig(BaseModel):
     stt_model: str
@@ -58,14 +43,6 @@ class LLMConfig(BaseModel):
     model: str = "gpt-4o"
     api_key: Optional[str] = None
 
-class StreamingTimeouts(BaseModel):
-    provider_ms: int = 15000
-    handshake_ms: int = 15000
-
-class StreamingBargeIn(BaseModel):
-    enabled: bool = False
-    vad_threshold_db: int = -30
-    min_speech_ms: int = 200
 
 class VADConfig(BaseModel):
     # WebRTC VAD settings
@@ -83,13 +60,6 @@ class VADConfig(BaseModel):
     fallback_interval_ms: int = 4000
     fallback_buffer_size: int = 128000
 
-class StreamingConfig(BaseModel):
-    sample_rate_hz: int = 16000
-    chunk_duration_ms: int = 20
-    jitter_buffer_ms: int = 120
-    keepalive_ms: int = 10000
-    timeouts: StreamingTimeouts = Field(default_factory=StreamingTimeouts)
-    barge_in: StreamingBargeIn = Field(default_factory=StreamingBargeIn)
 
 class AppConfig(BaseModel):
     default_provider: str
@@ -99,8 +69,6 @@ class AppConfig(BaseModel):
     audio_transport: str = Field(default="externalmedia")  # 'externalmedia' | 'audiosocket' | 'legacy'
     downstream_mode: str = Field(default="file")  # 'file' | 'stream'
     external_media: Optional[ExternalMediaConfig] = Field(default_factory=ExternalMediaConfig)
-    streaming: Optional[StreamingConfig] = Field(default_factory=StreamingConfig)
-    rtp: Optional[RTPConfig] = Field(default_factory=RTPConfig)
     vad: Optional[VADConfig] = Field(default_factory=VADConfig)
 
 def load_config(path: str = "config/ai-agent.yaml") -> AppConfig:
