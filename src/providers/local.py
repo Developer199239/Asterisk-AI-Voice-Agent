@@ -246,6 +246,16 @@ class LocalProvider(AIProviderInterface):
                     logger.warning("Received unknown message type from Local AI Server", message_type=type(message))
         except websockets.exceptions.ConnectionClosed as e:
             logger.warning("Local AI Server connection closed", reason=str(e))
+            # Attempt to reconnect
+            logger.info("Attempting to reconnect to Local AI Server...")
+            success = await self._reconnect()
+            if success:
+                logger.info("✅ Reconnected to Local AI Server, restarting receive loop")
+                # Restart the receive loop
+                if not self._listener_task or self._listener_task.done():
+                    self._listener_task = asyncio.create_task(self._receive_loop())
+            else:
+                logger.error("Failed to reconnect to Local AI Server")
         except Exception:
             logger.error("Error receiving events from Local AI Server", exc_info=True)
 
