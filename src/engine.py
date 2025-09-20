@@ -2154,6 +2154,25 @@ class Engine:
         else:
             logger.debug("Channel was not in active calls", channel_id=channel_id)
 
+    async def _on_playback_finished(self, event: dict) -> None:
+        """Handle playback finished event."""
+        playback_id = event.get("playback", {}).get("id")
+        if not playback_id:
+            return
+            
+        logger.info("🔊 Playback finished", playback_id=playback_id)
+        
+        # Remove from active playbacks
+        if playback_id in self.active_playbacks:
+            del self.active_playbacks[playback_id]
+            
+        # Re-enable audio capture after TTS playback
+        for call_data in self.active_calls.values():
+            call_data["audio_capture_enabled"] = True
+            call_data["tts_playing"] = False
+            
+        logger.debug("🎤 Audio capture re-enabled after TTS playback")
+
     async def _cleanup_call(self, channel_id: str):
         """Cleanup resources associated with a call."""
         logger.debug("Starting call cleanup", channel_id=channel_id)
