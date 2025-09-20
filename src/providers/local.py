@@ -202,8 +202,9 @@ class LocalProvider(AIProviderInterface):
             logger.error("Failed to send greeting message", call_id=call_id, error=str(e), exc_info=True)
 
     async def stop_session(self):
-        if self._listener_task:
-            self._listener_task.cancel()
+        # DON'T cancel the listener task - keep it running to receive AgentAudio events
+        # if self._listener_task:
+        #     self._listener_task.cancel()
         # DON'T close the WebSocket - keep it alive for reuse
         # if self.websocket:
         #     await self.websocket.close()
@@ -211,7 +212,7 @@ class LocalProvider(AIProviderInterface):
         
         # Just clear the active call ID
         self._active_call_id = None
-        logger.info("Provider session stopped, WebSocket connection maintained.")
+        logger.info("Provider session stopped, WebSocket connection and listener maintained.")
 
     async def _receive_loop(self):
         if not self.websocket:
