@@ -1663,6 +1663,9 @@ class Engine:
             # Prevent LLM from hearing its own TTS responses
             call_data = self.active_calls.get(caller_channel_id, {})
             if call_data.get("tts_playing", False):
+                logger.debug("🎤 TTS GATING - Skipping VAD processing during TTS playback", 
+                           caller_channel_id=caller_channel_id,
+                           tts_playing=True)
                 return  # Skip VAD processing during TTS playback
             
             # CRITICAL FIX: Check if audio capture is enabled
@@ -2103,7 +2106,9 @@ class Engine:
                     
                     logger.info("🎤 TTS FALLBACK - Re-enabled audio capture after TTS timeout",
                                caller_channel_id=caller_channel_id,
-                               delay=delay)
+                               delay=delay,
+                               tts_playing=False,
+                               audio_capture_enabled=True)
                 else:
                     logger.debug("🎤 TTS FALLBACK - TTS already finished, fallback not needed",
                                caller_channel_id=caller_channel_id)
@@ -2638,37 +2643,40 @@ class Engine:
             logger.error("Error in provider event handler", event_type=event.get("type"), error=str(e), exc_info=True)
 
     async def _on_playback_finished(self, event: Dict[str, Any]):
-        """Handle PlaybackFinished event to enable audio capture after greeting."""
+        """Handle PlaybackFinished event to enable audio capture after TTS playback."""
         try:
             playback_id = event.get("playback", {}).get("id")
             target_uri = event.get("playback", {}).get("target_uri", "")
             
-            logger.info("🎵 PLAYBACK FINISHED - Greeting completed, enabling audio capture",
+            logger.info("🎵 PLAYBACK FINISHED - Audio playback completed",
                        playback_id=playback_id,
                        target_uri=target_uri)
             
             # Handle bridge playback (ExternalMedia) vs channel playback (AudioSocket)
             caller_channel_id = None
+            playback_data = None
             
             if target_uri.startswith("bridge:"):
                 # Bridge playback - use active_playbacks mapping
                 playback_data = self.active_playbacks.pop(playback_id, None)
                 if playback_data:
                     caller_channel_id = playback_data.get("channel_id")
-                    logger.info("🎤 AUDIO CAPTURE - Bridge playback finished, found caller",
+                    logger.info("🎤 TTS GATING - Bridge playback finished, found caller",
                                caller_channel_id=caller_channel_id,
-                               playback_id=playback_id)
+                               playback_id=playback_id,
+                               bridge_id=playback_data.get("bridge_id"))
                 else:
-                    logger.warning("🎤 AUDIO CAPTURE - Bridge playback finished but no mapping found",
-                                 playback_id=playback_id)
+                    logger.warning("🎤 TTS GATING - Bridge playback finished but no mapping found",
+                                 playback_id=playback_id,
+                                 target_uri=target_uri)
             elif target_uri.startswith("channel:"):
                 # Channel playback - direct channel ID
                 caller_channel_id = target_uri.replace("channel:", "")
-                logger.info("🎤 AUDIO CAPTURE - Channel playback finished",
+                logger.info("🎤 TTS GATING - Channel playback finished",
                            caller_channel_id=caller_channel_id,
                            playback_id=playback_id)
             else:
-                logger.warning("🎤 AUDIO CAPTURE - Unknown target URI format",
+                logger.warning("🎤 TTS GATING - Unknown target URI format",
                              target_uri=target_uri,
                              playback_id=playback_id)
                 return
@@ -2677,7 +2685,7 @@ class Engine:
             if caller_channel_id and caller_channel_id in self.active_calls:
                 call_data = self.active_calls[caller_channel_id]
                 
-                # Check if this was agent TTS playback
+                # Check if this was agent TTS playback (feedback prevention)
                 if call_data.get("tts_playing", False):
                     # Agent TTS finished - re-enable audio capture
                     call_data["tts_playing"] = False
@@ -2687,9 +2695,24 @@ class Engine:
                         call_data["vad_state"]["tts_playing"] = False
                     
                     call_data["audio_capture_enabled"] = True
-                    logger.info("🎤 TTS FINISHED - Re-enabled audio capture after agent TTS playback",
+                    logger.info("🎤 TTS GATING - Re-enabled audio capture after agent TTS playback",
                                caller_channel_id=caller_channel_id,
-                               playback_id=playback_id)
+                               playback_id=playback_id,
+                               tts_playing=False,
+                               audio_capture_enabled=True)
+                    
+                    # Clean up audio file if it was tracked
+                    if playback_data and "audio_file" in playback_data:
+                        try:
+                            audio_file = playback_data["audio_file"]
+                            if os.path.exists(audio_file):
+                                os.unlink(audio_file)
+                                logger.debug("🧹 CLEANUP - Removed TTS audio file", 
+                                           file_path=audio_file)
+                        except Exception as e:
+                            logger.warning("Failed to clean up TTS audio file", 
+                                         file_path=playback_data.get("audio_file"), 
+                                         error=str(e))
                     
                     # CRITICAL FIX: Complete delayed cleanup if needed
                     if call_data.get("cleanup_after_tts", False):
@@ -2704,22 +2727,24 @@ class Engine:
                 else:
                     # Regular greeting playback - enable audio capture
                     call_data["audio_capture_enabled"] = True
-                    logger.info("🎤 AUDIO CAPTURE - Enabled after greeting playback",
+                    logger.info("🎤 TTS GATING - Enabled audio capture after greeting playback",
                                caller_channel_id=caller_channel_id,
-                               playback_id=playback_id)
+                               playback_id=playback_id,
+                               audio_capture_enabled=True)
                 
                 # Check if this is an AudioSocket connection for logging
                 conn_id = self.channel_to_conn.get(caller_channel_id)
                 if conn_id:
-                    logger.info("🎤 AUDIO CAPTURE - Enabled for AudioSocket connection",
+                    logger.info("🎤 TTS GATING - Enabled for AudioSocket connection",
                                conn_id=conn_id,
                                caller_channel_id=caller_channel_id)
                 else:
-                    logger.info("🎤 AUDIO CAPTURE - Enabled for ExternalMedia call after greeting",
+                    logger.info("🎤 TTS GATING - Enabled for ExternalMedia call after playback",
                                caller_channel_id=caller_channel_id)
             else:
-                logger.warning("🎤 AUDIO CAPTURE - Caller channel not found in active calls",
-                             caller_channel_id=caller_channel_id)
+                logger.warning("🎤 TTS GATING - Caller channel not found in active calls",
+                             caller_channel_id=caller_channel_id,
+                             playback_id=playback_id)
                 
         except Exception as e:
             logger.error("Error handling PlaybackFinished event", error=str(e), exc_info=True)
@@ -3043,10 +3068,36 @@ class Engine:
             except Exception as e:
                 logger.warning("Failed to change file ownership", path=container_path, error=str(e))
 
-            # Play on bridge
-            await self.ari_client.send_command("POST", f"bridges/{bridge_id}/play", 
-                                             data={"media": asterisk_media_uri})
-            logger.info("Audio played on bridge successfully", bridge_id=bridge_id, media_uri=asterisk_media_uri)
+            # Play on bridge and capture playback ID for TTS gating
+            response = await self.ari_client.send_command("POST", f"bridges/{bridge_id}/play", 
+                                                        data={"media": asterisk_media_uri})
+            
+            # Extract playback ID from response for TTS gating
+            playback_id = None
+            if response and "id" in response:
+                playback_id = response["id"]
+                logger.info("🔊 TTS PLAYBACK - Bridge playback started", 
+                           playback_id=playback_id, 
+                           bridge_id=bridge_id, 
+                           channel_id=channel_id)
+                
+                # Store playback mapping for PlaybackFinished event
+                self.active_playbacks[playback_id] = {
+                    "channel_id": channel_id,
+                    "bridge_id": bridge_id,
+                    "media_uri": asterisk_media_uri,
+                    "audio_file": container_path
+                }
+                logger.info("🔊 TTS TRACKING - Playback mapped for TTS gating", 
+                           playback_id=playback_id, 
+                           channel_id=channel_id)
+            else:
+                logger.warning("🔊 TTS PLAYBACK - No playback ID returned from bridge play command")
+            
+            logger.info("Audio played on bridge successfully", 
+                       bridge_id=bridge_id, 
+                       media_uri=asterisk_media_uri,
+                       playback_id=playback_id)
             
         except Exception as e:
             logger.error("Failed to play audio via bridge, falling back to direct playback",
