@@ -2173,6 +2173,21 @@ class Engine:
             
         logger.debug("🎤 Audio capture re-enabled after TTS playback")
 
+    async def on_provider_event(self, event_type: str, data: dict) -> None:
+        """Handle events from AI providers."""
+        logger.debug("Provider event received", event_type=event_type, data=data)
+        
+        if event_type == "stt_result":
+            # Handle STT result
+            transcript = data.get("transcript", "")
+            if transcript:
+                logger.info("📝 STT RESULT", transcript=transcript)
+        elif event_type == "tts_result":
+            # Handle TTS result
+            audio_data = data.get("audio_data")
+            if audio_data:
+                logger.info("🔊 TTS RESULT", bytes=len(audio_data))
+
     async def _cleanup_call(self, channel_id: str):
         """Cleanup resources associated with a call."""
         logger.debug("Starting call cleanup", channel_id=channel_id)
