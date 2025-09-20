@@ -24,3 +24,4 @@ tenacity
 pyyaml
 pydantic
 pydantic_settings
+openai-whisper
