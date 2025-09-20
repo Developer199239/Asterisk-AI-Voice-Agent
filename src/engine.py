@@ -144,8 +144,8 @@ class Engine:
         self.webrtc_vad = None
         if WEBRTC_VAD_AVAILABLE:
             try:
-                # Use new VAD configuration section
-                aggressiveness = getattr(config.vad, 'webrtc_aggressiveness', 0)
+                # Use VAD configuration section
+                aggressiveness = config.vad.webrtc_aggressiveness
                 self.webrtc_vad = webrtcvad.Vad(aggressiveness)
                 logger.info("🎤 WebRTC VAD initialized", aggressiveness=aggressiveness)
             except Exception as e:
@@ -1783,8 +1783,8 @@ class Engine:
                     vs["pre_roll_buffer"] = vs["pre_roll_buffer"][-pre_roll_frames * 640:]
                 
                 # WebRTC-only VAD logic (architect recommended)
-                webrtc_start_frames = getattr(self.config.vad, 'webrtc_start_frames', 3)
-                end_silence_frames = getattr(self.config.vad, 'webrtc_end_silence_frames', 50)  # 1000ms / 20ms = 50 frames
+                webrtc_start_frames = self.config.vad.webrtc_start_frames
+                end_silence_frames = self.config.vad.webrtc_end_silence_frames  # 1000ms / 20ms = 50 frames
                 
                 # Start: WebRTC only - require consecutive speech frames
                 webrtc_speech = vs["webrtc_speech_frames"] >= webrtc_start_frames
@@ -2004,7 +2004,7 @@ class Engine:
                 return
             
             # Check if we should start buffering (no VAD speech for configured interval)
-            fallback_interval = getattr(self.config.vad, 'fallback_interval_ms', 2000) / 1000.0
+            fallback_interval = self.config.vad.fallback_interval_ms / 1000.0
             time_since_vad_speech = time.time() - fallback_state["last_vad_speech_time"]
             if time_since_vad_speech < fallback_interval:
                 return
@@ -2028,7 +2028,7 @@ class Engine:
             # Send buffer to STT every configured interval or when buffer is large enough
             buffer_duration = time.time() - fallback_state["buffer_start_time"]
             buffer_size = len(fallback_state["audio_buffer"])
-            fallback_buffer_size = getattr(self.config.vad, 'fallback_buffer_size', 64000)
+            fallback_buffer_size = self.config.vad.fallback_buffer_size
             
             if buffer_duration >= fallback_interval or buffer_size >= fallback_buffer_size:
                 logger.info("🔄 FALLBACK - Sending buffered audio to STT", 

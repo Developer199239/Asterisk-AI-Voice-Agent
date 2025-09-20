@@ -67,6 +67,22 @@ class StreamingBargeIn(BaseModel):
     vad_threshold_db: int = -30
     min_speech_ms: int = 200
 
+class VADConfig(BaseModel):
+    # WebRTC VAD settings
+    webrtc_aggressiveness: int = 0
+    webrtc_start_frames: int = 3
+    webrtc_end_silence_frames: int = 50
+    
+    # Utterance settings - optimized for 4+ second duration
+    min_utterance_duration_ms: int = 4000
+    max_utterance_duration_ms: int = 10000
+    utterance_padding_ms: int = 200
+    
+    # Fallback settings
+    fallback_enabled: bool = True
+    fallback_interval_ms: int = 4000
+    fallback_buffer_size: int = 128000
+
 class StreamingConfig(BaseModel):
     sample_rate_hz: int = 16000
     chunk_duration_ms: int = 20
@@ -85,6 +101,7 @@ class AppConfig(BaseModel):
     external_media: Optional[ExternalMediaConfig] = Field(default_factory=ExternalMediaConfig)
     streaming: Optional[StreamingConfig] = Field(default_factory=StreamingConfig)
     rtp: Optional[RTPConfig] = Field(default_factory=RTPConfig)
+    vad: Optional[VADConfig] = Field(default_factory=VADConfig)
 
 def load_config(path: str = "config/ai-agent.yaml") -> AppConfig:
     # If the provided path is not absolute, resolve it relative to the project root.
