@@ -1964,7 +1964,10 @@ class Engine:
                     )
                     
                     if playback_id:
+                        # Get the call_id for this channel (same as caller_channel_id for ExternalMedia)
+                        call_id = caller_channel_id
                         self.active_playbacks[playback_id] = {
+                            "call_id": call_id,
                             "channel_id": caller_channel_id,
                             "audio_file": audio_file
                         }
@@ -2209,8 +2212,14 @@ class Engine:
             return
             
         call_info = self.active_playbacks[playback_id]
-        call_id = call_info["call_id"]
+        call_id = call_info.get("call_id")
         channel_id = call_info["channel_id"]
+        
+        # Safety check: if call_id is missing, use channel_id as fallback
+        if not call_id:
+            call_id = channel_id
+            logger.warning("🔊 PlaybackFinished - Missing call_id, using channel_id as fallback", 
+                         playback_id=playback_id, channel_id=channel_id)
         
         # Remove from active playbacks
         del self.active_playbacks[playback_id]
