@@ -220,9 +220,15 @@ class LocalProvider(AIProviderInterface):
                 except asyncio.QueueEmpty:
                     break
         
-        # Just clear the active call ID
+        # DON'T clear the active call ID immediately - keep it for AgentAudio processing
+        # The call_id will be cleared when the TTS playback is complete
+        # self._active_call_id = None
+        logger.info("Provider session stopped, WebSocket connection and listener maintained. Call ID preserved for TTS processing.")
+
+    async def clear_active_call_id(self):
+        """Clear the active call ID after TTS playback is complete."""
         self._active_call_id = None
-        logger.info("Provider session stopped, WebSocket connection and listener maintained.")
+        logger.info("Active call ID cleared after TTS completion.")
 
     async def _receive_loop(self):
         if not self.websocket:

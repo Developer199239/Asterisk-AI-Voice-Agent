@@ -809,13 +809,6 @@ class Engine:
                 logger.error("🎯 HYBRID ARI - Provider not found for greeting")
                 return
             
-            # ARCHITECT FIX: Set TTS gating before playing greeting
-            call_data = self.active_calls.get(caller_channel_id, {})
-            call_data["tts_playing"] = True
-            call_data["audio_capture_enabled"] = False
-            logger.info("🔊 TTS START - Playing greeting with audio capture disabled", 
-                       caller_channel_id=caller_channel_id)
-            
             # Generate greeting audio
             greeting_text = self.config.llm.initial_greeting
             logger.info("🎯 HYBRID ARI - Generating greeting audio", text=greeting_text)
@@ -823,15 +816,29 @@ class Engine:
             # Use provider to generate TTS
             audio_data = await provider.text_to_speech(greeting_text)
             if audio_data:
-                # Use ARI file-based playback (correct approach)
-                await self.ari_client.play_audio_response(caller_channel_id, audio_data)
-                logger.info("🎯 HYBRID ARI - ✅ Initial greeting played via ARI", 
-                           caller_channel_id=caller_channel_id,
-                           audio_size=len(audio_data))
+                # Generate playback ID for token tracking
+                playback_id = f"greeting:{caller_channel_id}:{int(time.time()*1000)}"
                 
-                # Start timer to enable audio capture after greeting finishes
-                asyncio.create_task(self._enable_audio_capture_after_delay(caller_channel_id, 4.0))
-                logger.info("🎯 HYBRID ARI - ⏰ Audio capture timer started (4 seconds)")
+                # Set TTS gating with token/refcount logic
+                call_id = caller_channel_id  # Use caller_channel_id as canonical call_id
+                await self._set_tts_gating_for_call(call_id, True, playback_id)
+                
+                # Calculate dynamic fallback timer based on audio duration
+                audio_duration_sec = len(audio_data) / 8000.0
+                safety_margin_sec = 0.5  # 500ms safety margin
+                fallback_delay = audio_duration_sec + safety_margin_sec
+                
+                # Use ARI file-based playback with token tracking
+                await self._play_audio_via_bridge(caller_channel_id, audio_data, playback_id, call_id)
+                
+                # Set token-aware fallback timer
+                asyncio.create_task(self._tts_fallback_by_playback(call_id, playback_id, fallback_delay))
+                
+                logger.info("🎯 HYBRID ARI - ✅ Initial greeting played via ARI with token gating", 
+                           caller_channel_id=caller_channel_id,
+                           audio_size=len(audio_data),
+                           playback_id=playback_id,
+                           fallback_delay=fallback_delay)
             else:
                 logger.warning("🎯 HYBRID ARI - No greeting audio generated")
                 
@@ -1458,7 +1465,7 @@ class Engine:
                 if webrtc_decision:
                     vs["webrtc_speech_frames"] += 1
                     vs["webrtc_silence_frames"] = 0
-                else:
+                    else:
                     vs["webrtc_speech_frames"] = 0
                     vs["webrtc_silence_frames"] += 1
                 
@@ -1525,17 +1532,17 @@ class Engine:
                     vs["speech_real_start_fired"] = False
                     vs["speech_frame_count"] = 0
                     vs["redemption_counter"] = 0
-                    vs["consecutive_speech_frames"] = 0
+                        vs["consecutive_speech_frames"] = 0
                     vs["consecutive_silence_frames"] = 0
-                    vs["utterance_buffer"] = vs["pre_roll_buffer"]
+                            vs["utterance_buffer"] = vs["pre_roll_buffer"]
                     vs["speech_start_ms"] = current_time_ms - pre_roll_ms
-                    vs["speech_duration_ms"] = 0
-                    vs["silence_duration_ms"] = 0
-                    vs["utterance_id"] += 1
+                            vs["speech_duration_ms"] = 0
+                            vs["silence_duration_ms"] = 0
+                            vs["utterance_id"] += 1
                     vs["last_voice_ms"] = current_time_ms  # Update last voice time for fallback
-                    logger.info("🎤 VAD - Speech started", 
-                               caller_channel_id=caller_channel_id,
-                               utterance_id=vs["utterance_id"],
+                            logger.info("🎤 VAD - Speech started", 
+                                       caller_channel_id=caller_channel_id,
+                                       utterance_id=vs["utterance_id"],
                                webrtc_speech_frames=vs["webrtc_speech_frames"])
                 
                 # AVR-VAD INSPIRED: During speech recording
@@ -1592,9 +1599,9 @@ class Engine:
                         
                         # Process the utterance
                         if len(vs["utterance_buffer"]) > 0:
-                            # Normalize to target RMS before sending
-                            buf = vs["utterance_buffer"]
-                            buf = self._normalize_to_dbfs(buf, target_dbfs=-20.0, max_gain=3.0)
+                    # Normalize to target RMS before sending
+                    buf = vs["utterance_buffer"]
+                    buf = self._normalize_to_dbfs(buf, target_dbfs=-20.0, max_gain=3.0)
                             
                             # ARCHITECT FIX: Discard ultra-short utterances using config
                             # Use min_utterance_ms from config (default 600ms)
@@ -1609,16 +1616,16 @@ class Engine:
                                 vs["utterance_buffer"] = b""
                                 continue  # Continue to next frame
 
-                            vs["state"] = "processing"
-                            logger.info("🎤 VAD - Speech ended", 
-                                       caller_channel_id=caller_channel_id,
-                                       utterance_id=vs["utterance_id"],
+                    vs["state"] = "processing"
+                    logger.info("🎤 VAD - Speech ended", 
+                               caller_channel_id=caller_channel_id,
+                               utterance_id=vs["utterance_id"],
                                        reason="webrtc_silence",
-                                       speech_ms=vs["speech_duration_ms"],
-                                       silence_ms=vs["silence_duration_ms"],
-                                       bytes=len(buf), 
-                                       webrtc_silence_frames=vs["webrtc_silence_frames"])
-                            
+                               speech_ms=vs["speech_duration_ms"],
+                               silence_ms=vs["silence_duration_ms"],
+                               bytes=len(buf), 
+                               webrtc_silence_frames=vs["webrtc_silence_frames"])
+                    
                             # Send to provider
                             await provider.send_audio(buf)
                             logger.info("🎤 VAD - Utterance sent to provider", 
@@ -1739,6 +1746,24 @@ class Engine:
                         error=str(e), 
                         exc_info=True)
     
+    async def _tts_fallback_by_playback(self, call_id: str, playback_id: str, delay: float):
+        """Token-aware fallback to re-enable audio capture after TTS completion."""
+        try:
+            await asyncio.sleep(delay)
+            
+            # Use token/refcount gating to un-gate this specific playback
+            await self._set_tts_gating_for_call(call_id, False, playback_id)
+            
+            logger.info("🎤 TTS FALLBACK - Token-aware un-gating completed", 
+                       call_id=call_id, 
+                       playback_id=playback_id, 
+                       delay=delay)
+        except Exception as e:
+            logger.error("Error in token-aware TTS fallback", 
+                        call_id=call_id,
+                        playback_id=playback_id,
+                        error=str(e))
+
     async def _tts_completion_fallback(self, caller_channel_id: str, delay: float = 10.0):
         """Fallback method to re-enable audio capture after TTS completion."""
         try:
@@ -1754,6 +1779,10 @@ class Engine:
                     # Also clear in VAD state
                     if "vad_state" in call_data:
                         call_data["vad_state"]["tts_playing"] = False
+                    
+                    # Clear the active call ID in the provider as fallback
+                    if hasattr(self.provider_manager, 'provider') and hasattr(self.provider_manager.provider, 'clear_active_call_id'):
+                        await self.provider_manager.provider.clear_active_call_id()
                     
                     logger.info("🎤 TTS FALLBACK - Re-enabled audio capture after TTS timeout",
                                caller_channel_id=caller_channel_id,
@@ -2189,6 +2218,10 @@ class Engine:
         # Scoped un-gating: only affect the specific call that started this playback
         await self._set_tts_gating_for_call(call_id, False, playback_id)
         
+        # Clear the active call ID in the provider after TTS completion
+        if hasattr(self.provider_manager, 'provider') and hasattr(self.provider_manager.provider, 'clear_active_call_id'):
+            await self.provider_manager.provider.clear_active_call_id()
+        
         logger.info("🎤 TTS GATING - Scoped un-gating completed", 
                    playback_id=playback_id, 
                    call_id=call_id, 
@@ -2322,7 +2355,7 @@ class Engine:
                 # Check if connection is still active
                 if conn_id not in self._keepalive_tasks:
                     logger.debug("ExternalMedia keepalive stopped - connection closed", conn_id=conn_id)
-                    break
+                        break
                 
                 # Send lightweight keepalive (no-op control frame)
                 # This prevents Asterisk ExternalMedia from timing out during silence
@@ -2344,26 +2377,26 @@ class Engine:
                 audio_data = event.get("data")
                 call_id = event.get("call_id")
                 if audio_data:
-                    # File-based playback via ARI (default path) - target specific call
-                    target_channel_id = None
-                if call_id:
-                    # First try: call_id as direct key in active_calls
-                    if call_id in self.active_calls:
-                        target_channel_id = call_id
-                    else:
-                        # Second try: find by call_id in active_calls values
-                        for channel_id, call_data in self.active_calls.items():
-                            if call_data.get("call_id") == call_id:
-                                # Prefer caller_channel_id if present and active
-                                if call_data.get("caller_channel_id") and call_data["caller_channel_id"] in self.active_calls:
-                                    target_channel_id = call_data["caller_channel_id"]
-                                else:
+                        # File-based playback via ARI (default path) - target specific call
+                        target_channel_id = None
+                        if call_id:
+                            # First try: call_id as direct key in active_calls
+                            if call_id in self.active_calls:
+                                target_channel_id = call_id
+                            else:
+                                # Second try: find by call_id in active_calls values
+                            for channel_id, call_data in self.active_calls.items():
+                                if call_data.get("call_id") == call_id:
+                                        # Prefer caller_channel_id if present and active
+                                        if call_data.get("caller_channel_id") and call_data["caller_channel_id"] in self.active_calls:
+                                            target_channel_id = call_data["caller_channel_id"]
+                                        else:
                                     target_channel_id = channel_id
-                                break
-                
-                if not target_channel_id:
-                    # Fallback: use the first active call (for backward compatibility)
-                    target_channel_id = next(iter(self.active_calls.keys()), None)
+                                    break
+                        
+                        if not target_channel_id:
+                            # Fallback: use the first active call (for backward compatibility)
+                            target_channel_id = next(iter(self.active_calls.keys()), None)
                     logger.warning("AgentAudio routing fallback used", 
                                  call_id=call_id, 
                                  target_channel_id=target_channel_id,
@@ -2374,8 +2407,11 @@ class Engine:
                                call_id=call_id, 
                                target_channel_id=target_channel_id,
                                routing_method="direct" if call_id in self.active_calls else "lookup")
-                
-                if target_channel_id:
+                        
+                        if target_channel_id:
+                    # Get call data first
+                            call_data = self.active_calls[target_channel_id]
+                    
                     # Generate playback ID for token tracking
                     playback_id = f"tts:{target_channel_id}:{int(time.time()*1000)}"
                     
@@ -2395,34 +2431,34 @@ class Engine:
                     
                     # FALLBACK: Set dynamic timer to re-enable audio capture after TTS
                     # This ensures audio capture is re-enabled even if PlaybackFinished fails
-                    asyncio.create_task(self._tts_completion_fallback(target_channel_id, delay=fallback_delay))
+                    asyncio.create_task(self._tts_fallback_by_playback(call_id, playback_id, fallback_delay))
                     
                     logger.info("🔊 TTS FALLBACK - Dynamic timer set", 
                               channel_id=target_channel_id,
                               audio_duration_sec=audio_duration_sec,
                               fallback_delay=fallback_delay)
-                    
-                    # Play audio to specific call
-                    await self._play_audio_via_bridge(target_channel_id, audio_data)
-                    logger.info(f"🔊 AUDIO OUTPUT - Sent {len(audio_data)} bytes to call channel {target_channel_id}")
-                    
-                    # Update conversation state after playing response
-                    conversation_state = call_data.get('conversation_state')
-                    if conversation_state == 'greeting':
-                        # First response after greeting - transition to listening
-                        call_data['conversation_state'] = 'listening'
-                        logger.info("Greeting completed, now listening for conversation", channel_id=target_channel_id)
-                    elif conversation_state == 'processing':
-                        # Response to user input - transition back to listening
-                        call_data['conversation_state'] = 'listening'
-                        logger.info("Response played, listening for next user input", channel_id=target_channel_id)
-                        
-                        # Cancel provider timeout task since we got a response
-                        if call_data.get('provider_timeout_task') and not call_data['provider_timeout_task'].done():
-                            call_data['provider_timeout_task'].cancel()
-                            logger.debug("Cancelled provider timeout task - response received", channel_id=target_channel_id)
-                else:
-                    logger.warning("No active call found for AgentAudio playback", call_id=call_id)
+                            
+                    # Play audio to specific call with playback_id and canonical call_id
+                    await self._play_audio_via_bridge(target_channel_id, audio_data, playback_id, call_id)
+                            logger.info(f"🔊 AUDIO OUTPUT - Sent {len(audio_data)} bytes to call channel {target_channel_id}")
+                            
+                            # Update conversation state after playing response
+                            conversation_state = call_data.get('conversation_state')
+                            if conversation_state == 'greeting':
+                                # First response after greeting - transition to listening
+                                call_data['conversation_state'] = 'listening'
+                                logger.info("Greeting completed, now listening for conversation", channel_id=target_channel_id)
+                            elif conversation_state == 'processing':
+                                # Response to user input - transition back to listening
+                                call_data['conversation_state'] = 'listening'
+                                logger.info("Response played, listening for next user input", channel_id=target_channel_id)
+                                
+                                # Cancel provider timeout task since we got a response
+                                if call_data.get('provider_timeout_task') and not call_data['provider_timeout_task'].done():
+                                    call_data['provider_timeout_task'].cancel()
+                                    logger.debug("Cancelled provider timeout task - response received", channel_id=target_channel_id)
+                        else:
+                            logger.warning("No active call found for AgentAudio playback", call_id=call_id)
             elif event_type == "Transcription":
                 # Handle transcription data
                 text = event.get("text", "")
@@ -2506,7 +2542,7 @@ class Engine:
 
     # Audio conversion methods removed - using ARI file playback instead
 
-    async def _play_audio_via_bridge(self, channel_id: str, audio_data: bytes):
+    async def _play_audio_via_bridge(self, channel_id: str, audio_data: bytes, playback_id: str = None, call_id: str = None):
         """Play audio via bridge to avoid interrupting ExternalMedia capture."""
         # High-visibility debugging to verify method is called
         logger.info(f"✅✅✅ _play_audio_via_bridge successfully called for channel {channel_id} ✅✅✅")
@@ -2541,8 +2577,12 @@ class Engine:
             except Exception as e:
                 logger.warning("Failed to change file ownership", path=container_path, error=str(e))
 
-            # Generate deterministic playback ID for TTS gating
-            playback_id = f"tts:{channel_id}:{int(time.time()*1000)}"
+            # Use provided playback_id or generate one
+            if not playback_id:
+                playback_id = f"tts:{channel_id}:{int(time.time()*1000)}"
+            
+            # Use provided call_id or fallback to channel_id
+            canonical_call_id = call_id if call_id else channel_id
             
             # Play on bridge with client-specified playbackId for deterministic tracking
             response = await self.ari_client.send_command("POST", f"bridges/{bridge_id}/play?playbackId={playback_id}", 
@@ -2551,11 +2591,12 @@ class Engine:
             logger.info("🔊 TTS PLAYBACK - Bridge playback started with deterministic ID", 
                        playback_id=playback_id, 
                        bridge_id=bridge_id, 
-                       channel_id=channel_id)
+                       channel_id=channel_id,
+                       canonical_call_id=canonical_call_id)
             
-            # Store playback mapping for PlaybackFinished event
+            # Store playback mapping for PlaybackFinished event with canonical call_id
             self.active_playbacks[playback_id] = {
-                "call_id": channel_id,  # Use channel_id as call_id for now
+                "call_id": canonical_call_id,  # Use canonical call_id
                 "channel_id": channel_id,
                 "bridge_id": bridge_id,
                 "media_uri": asterisk_media_uri,

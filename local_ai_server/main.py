@@ -425,14 +425,16 @@ Assistant:"""
                             input_rate = int(data.get("rate", 16000))  # Default to 16kHz if not specified
                             logging.info(f"🎵 AUDIO INPUT - Received audio: {len(audio_data)} bytes at {input_rate} Hz")
                             
-                            # Process with STT (now receiving complete utterances from VAD)
-                            transcript = await self.process_stt(audio_data, input_rate)
+                            # Process with STT (now receiving complete utterances from VAD) - CPU OFFLOADED
+                            transcript = await asyncio.to_thread(self.process_stt, audio_data, input_rate)
                             
                             if transcript.strip():
-                                llm_response = await self.process_llm(transcript)
+                                # LLM processing - CPU OFFLOADED
+                                llm_response = await asyncio.to_thread(self.process_llm, transcript)
                                 
                                 if llm_response.strip():
-                                    audio_response = await self.process_tts(llm_response)
+                                    # TTS processing - CPU OFFLOADED
+                                    audio_response = await asyncio.to_thread(self.process_tts, llm_response)
                                     
                                     if audio_response:
                                         # Send binary audio data directly (like working commit)
