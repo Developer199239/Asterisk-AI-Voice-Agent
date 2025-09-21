@@ -1875,7 +1875,10 @@ class Engine:
                 "bridge_id": self.caller_channels[caller_channel_id]["bridge_id"],
                 "external_media_id": external_media_id,
                 "external_media_call_id": call_id,
-                "audio_capture_enabled": False
+                "audio_capture_enabled": False,
+                "tts_playing": False,  # Track TTS playback state
+                "tts_tokens": set(),   # Track active playback IDs for overlapping TTS
+                "tts_active_count": 0  # Refcount for overlapping TTS segments
             }
             
             self.active_calls[caller_channel_id] = call_data
