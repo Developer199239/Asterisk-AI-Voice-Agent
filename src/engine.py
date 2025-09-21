@@ -1378,6 +1378,8 @@ class Engine:
                     "last_utterance_end_ms": 0,
                     "utterance_id": 0,  # ARCHITECT FIX: Track utterance sequence
                     "tts_playing": False,  # CRITICAL: Track TTS playback state
+                    "tts_tokens": set(),   # Track active playback IDs for overlapping TTS
+                    "tts_active_count": 0, # Refcount for overlapping TTS segments
                     # WebRTC VAD state
                     "webrtc_speech_frames": 0,  # Consecutive WebRTC speech frames
                     "webrtc_silence_frames": 0,  # Consecutive WebRTC silence frames
@@ -2164,23 +2166,135 @@ class Engine:
             logger.debug("Channel was not in active calls", channel_id=channel_id)
 
     async def _on_playback_finished(self, event: dict) -> None:
-        """Handle playback finished event."""
+        """Handle playback finished event with scoped un-gating."""
         playback_id = event.get("playback", {}).get("id")
         if not playback_id:
+            logger.warning("🔊 PlaybackFinished event missing playback ID", event=event)
             return
             
         logger.info("🔊 Playback finished", playback_id=playback_id)
         
+        # Look up the specific call that started this playback
+        if playback_id not in self.active_playbacks:
+            logger.warning("🔊 PlaybackFinished for unknown playback ID", playback_id=playback_id)
+            return
+            
+        call_info = self.active_playbacks[playback_id]
+        call_id = call_info["call_id"]
+        channel_id = call_info["channel_id"]
+        
         # Remove from active playbacks
-        if playback_id in self.active_playbacks:
-            del self.active_playbacks[playback_id]
+        del self.active_playbacks[playback_id]
+        
+        # Scoped un-gating: only affect the specific call that started this playback
+        await self._set_tts_gating_for_call(call_id, False, playback_id)
+        
+        logger.info("🎤 TTS GATING - Scoped un-gating completed", 
+                   playback_id=playback_id, 
+                   call_id=call_id, 
+                   channel_id=channel_id)
+
+    async def _set_tts_gating_for_call(self, call_id: str, playing: bool, playback_id: str = None):
+        """Set TTS gating state consistently for both call entries with token/refcount logic."""
+        # Find both active call entries (local and caller channels)
+        target_channels = []
+        for channel_id, call_data in self.active_calls.items():
+            if call_data.get("call_id") == call_id or channel_id == call_id:
+                target_channels.append(channel_id)
+        
+        if not target_channels:
+            logger.warning("🎤 TTS GATING - Call not found for gating update", call_id=call_id)
+            return
+        
+        # Update all matching call entries consistently
+        for channel_id in target_channels:
+            call_data = self.active_calls[channel_id]
             
-        # Re-enable audio capture after TTS playback
-        for call_data in self.active_calls.values():
-            call_data["audio_capture_enabled"] = True
-            call_data["tts_playing"] = False
+            if playing and playback_id:
+                # TTS starting - add token and increment refcount
+                call_data["tts_tokens"].add(playback_id)
+                call_data["tts_active_count"] += 1
+                call_data["tts_playing"] = True
+                call_data["audio_capture_enabled"] = False
+                
+                # Update VAD state for immediate effect
+                if "vad_state" in call_data:
+                    call_data["vad_state"]["tts_playing"] = True
+                    
+                # Reset VAD/STT buffers to prevent TTS bleed-through
+                if "vad_state" in call_data:
+                    # Flush any partial VAD frames/accumulators
+                    call_data["vad_state"]["webrtc_speech_frames"] = 0
+                    call_data["vad_state"]["webrtc_silence_frames"] = 0
+                    call_data["vad_state"]["webrtc_last_decision"] = False
+                    # Clear any buffered audio
+                    if "audio_buffer" in call_data["vad_state"]:
+                        call_data["vad_state"]["audio_buffer"] = b""
+                
+                logger.info("🔇 TTS GATING - Audio capture disabled (token added)", 
+                           channel_id=channel_id, 
+                           call_id=call_id, 
+                           playback_id=playback_id,
+                           active_count=call_data["tts_active_count"])
+            elif not playing and playback_id:
+                # TTS finished - remove token and decrement refcount
+                call_data["tts_tokens"].discard(playback_id)
+                call_data["tts_active_count"] = max(0, call_data["tts_active_count"] - 1)
+                
+                # Only re-enable if no more active TTS
+                if call_data["tts_active_count"] == 0:
+                    call_data["tts_playing"] = False
+                    call_data["audio_capture_enabled"] = True
+                    
+                    # Update VAD state for immediate effect
+                    if "vad_state" in call_data:
+                        call_data["vad_state"]["tts_playing"] = False
+                        
+                    # Brief post-delay to prevent TTS echo contamination
+                    asyncio.create_task(self._tts_post_delay_cleanup(channel_id, call_id))
+                    
+                    logger.info("🎤 TTS GATING - Audio capture re-enabled (all tokens cleared)", 
+                               channel_id=channel_id, 
+                               call_id=call_id, 
+                               active_count=call_data["tts_active_count"])
+                else:
+                    logger.info("🔇 TTS GATING - Audio capture remains disabled (overlapping TTS)", 
+                               channel_id=channel_id, 
+                               call_id=call_id, 
+                               active_count=call_data["tts_active_count"],
+                               remaining_tokens=len(call_data["tts_tokens"]))
+        
+        logger.debug("🎤 TTS GATING - Token/refcount updates applied", 
+                    call_id=call_id, 
+                    channels_updated=len(target_channels), 
+                    playing=playing,
+                    playback_id=playback_id)
+
+    async def _tts_post_delay_cleanup(self, channel_id: str, call_id: str):
+        """Brief post-delay cleanup to prevent TTS echo contamination."""
+        try:
+            # Wait 200ms to let any remaining TTS audio settle
+            await asyncio.sleep(0.2)
             
-        logger.debug("🎤 Audio capture re-enabled after TTS playback")
+            # Final flush of VAD/STT buffers
+            if channel_id in self.active_calls:
+                call_data = self.active_calls[channel_id]
+                if "vad_state" in call_data:
+                    # Final flush of any remaining audio
+                    call_data["vad_state"]["webrtc_speech_frames"] = 0
+                    call_data["vad_state"]["webrtc_silence_frames"] = 0
+                    call_data["vad_state"]["webrtc_last_decision"] = False
+                    if "audio_buffer" in call_data["vad_state"]:
+                        call_data["vad_state"]["audio_buffer"] = b""
+                    
+                    logger.debug("🎤 TTS POST-DELAY - VAD buffers flushed", 
+                               channel_id=channel_id, 
+                               call_id=call_id)
+        except Exception as e:
+            logger.error("🎤 TTS POST-DELAY - Cleanup error", 
+                        channel_id=channel_id, 
+                        call_id=call_id, 
+                        error=str(e))
         
         # Finalize delayed cleanup after TTS finishes
         channels_to_cleanup = []
@@ -2262,20 +2376,31 @@ class Engine:
                                routing_method="direct" if call_id in self.active_calls else "lookup")
                 
                 if target_channel_id:
-                    # Set TTS playing state to prevent feedback loop
-                    call_data = self.active_calls[target_channel_id]
-                    call_data["tts_playing"] = True
+                    # Generate playback ID for token tracking
+                    playback_id = f"tts:{target_channel_id}:{int(time.time()*1000)}"
                     
-                    # Also set in VAD state for immediate effect
-                    if "vad_state" in call_data:
-                        call_data["vad_state"]["tts_playing"] = True
+                    # Set TTS gating with token/refcount logic
+                    call_id = call_data.get("call_id", target_channel_id)
+                    await self._set_tts_gating_for_call(call_id, True, playback_id)
                     
                     logger.info("🔊 TTS START - Playing response (feedback prevention active)", 
-                              channel_id=target_channel_id)
+                              channel_id=target_channel_id,
+                              playback_id=playback_id)
                     
-                    # FALLBACK: Set timer to re-enable audio capture after TTS
+                    # Calculate dynamic fallback timer based on audio duration
+                    # For 8kHz μ-law: duration_sec = len(audio_bytes) / 8000.0
+                    audio_duration_sec = len(audio_data) / 8000.0
+                    safety_margin_sec = 0.5  # 500ms safety margin
+                    fallback_delay = audio_duration_sec + safety_margin_sec
+                    
+                    # FALLBACK: Set dynamic timer to re-enable audio capture after TTS
                     # This ensures audio capture is re-enabled even if PlaybackFinished fails
-                    asyncio.create_task(self._tts_completion_fallback(target_channel_id, delay=10.0))
+                    asyncio.create_task(self._tts_completion_fallback(target_channel_id, delay=fallback_delay))
+                    
+                    logger.info("🔊 TTS FALLBACK - Dynamic timer set", 
+                              channel_id=target_channel_id,
+                              audio_duration_sec=audio_duration_sec,
+                              fallback_delay=fallback_delay)
                     
                     # Play audio to specific call
                     await self._play_audio_via_bridge(target_channel_id, audio_data)
@@ -2416,31 +2541,30 @@ class Engine:
             except Exception as e:
                 logger.warning("Failed to change file ownership", path=container_path, error=str(e))
 
-            # Play on bridge and capture playback ID for TTS gating
-            response = await self.ari_client.send_command("POST", f"bridges/{bridge_id}/play", 
+            # Generate deterministic playback ID for TTS gating
+            playback_id = f"tts:{channel_id}:{int(time.time()*1000)}"
+            
+            # Play on bridge with client-specified playbackId for deterministic tracking
+            response = await self.ari_client.send_command("POST", f"bridges/{bridge_id}/play?playbackId={playback_id}", 
                                              data={"media": asterisk_media_uri})
             
-            # Extract playback ID from response for TTS gating
-            playback_id = None
-            if response and "id" in response:
-                playback_id = response["id"]
-                logger.info("🔊 TTS PLAYBACK - Bridge playback started", 
-                           playback_id=playback_id, 
-                           bridge_id=bridge_id, 
-                           channel_id=channel_id)
-                
-                # Store playback mapping for PlaybackFinished event
-                self.active_playbacks[playback_id] = {
-                    "channel_id": channel_id,
-                    "bridge_id": bridge_id,
-                    "media_uri": asterisk_media_uri,
-                    "audio_file": container_path
-                }
-                logger.info("🔊 TTS TRACKING - Playback mapped for TTS gating", 
-                           playback_id=playback_id, 
-                           channel_id=channel_id)
-            else:
-                logger.warning("🔊 TTS PLAYBACK - No playback ID returned from bridge play command")
+            logger.info("🔊 TTS PLAYBACK - Bridge playback started with deterministic ID", 
+                       playback_id=playback_id, 
+                       bridge_id=bridge_id, 
+                       channel_id=channel_id)
+            
+            # Store playback mapping for PlaybackFinished event
+            self.active_playbacks[playback_id] = {
+                "call_id": channel_id,  # Use channel_id as call_id for now
+                "channel_id": channel_id,
+                "bridge_id": bridge_id,
+                "media_uri": asterisk_media_uri,
+                "audio_file": container_path,
+                "ts": time.time()
+            }
+            logger.info("🔊 TTS TRACKING - Playback mapped for TTS gating", 
+                       playback_id=playback_id, 
+                       channel_id=channel_id)
             
             logger.info("Audio played on bridge successfully", 
                        bridge_id=bridge_id, 
