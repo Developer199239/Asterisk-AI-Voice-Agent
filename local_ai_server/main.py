@@ -149,19 +149,24 @@ class LocalAIServer:
             raise
 
     async def _load_llm_model(self):
-        """Load LLM model"""
+        """Load LLM model with optimized parameters for faster inference"""
         try:
             if not os.path.exists(self.llm_model_path):
                 raise FileNotFoundError(f"LLM model not found at {self.llm_model_path}")
             
+            # Optimized parameters for faster real-time voice responses
             self.llm_model = Llama(
                 model_path=self.llm_model_path, 
-                n_ctx=512,           # Reduced context for faster inference
+                n_ctx=1024,          # Increased context for better conversations
                 n_threads=16,        # Use all CPU cores
-                n_batch=256,         # Optimized batch size
-                verbose=False
+                n_batch=512,         # Increased batch size for better throughput
+                n_gpu_layers=0,      # Explicitly CPU-only
+                verbose=False,
+                use_mmap=True,       # Memory mapping for faster loading
+                use_mlock=True       # Lock memory for stability
             )
-            logging.info(f"✅ LLM model loaded: {self.llm_model_path}")
+            logging.info(f"✅ LLM model loaded with optimized parameters: {self.llm_model_path}")
+            logging.info(f"📊 LLM Config: ctx=1024, threads=16, batch=512, mmap=True")
         except Exception as e:
             logging.error(f"❌ Failed to load LLM model: {e}")
             raise
@@ -186,6 +191,24 @@ class LocalAIServer:
             logging.info("✅ Models reloaded successfully")
         except Exception as e:
             logging.error(f"❌ Model reload failed: {e}")
+            raise
+
+    async def reload_llm_only(self):
+        """Hot reload only the LLM model with optimized parameters"""
+        logging.info("🔄 Hot reloading LLM model with optimizations...")
+        try:
+            # Unload current model to free memory
+            if self.llm_model:
+                del self.llm_model
+                self.llm_model = None
+                logging.info("🗑️ Previous LLM model unloaded")
+            
+            # Load with optimized parameters
+            await self._load_llm_model()
+            logging.info("✅ LLM model reloaded with optimizations")
+            logging.info("📊 Optimized: ctx=1024, batch=512, temp=0.3, max_tokens=80")
+        except Exception as e:
+            logging.error(f"❌ LLM reload failed: {e}")
             raise
 
     async def process_stt_buffered(self, audio_data: bytes) -> str:
@@ -271,29 +294,32 @@ class LocalAIServer:
             return ""
 
     async def process_llm(self, text: str) -> str:
-        """Process LLM with enhanced prompting"""
+        """Process LLM with optimized parameters for faster real-time responses"""
         try:
             if not self.llm_model:
                 logging.warning("LLM model not loaded, using fallback")
                 return "I'm here to help you. How can I assist you today?"
             
-            # Enhanced prompt for better responses
+            # Optimized prompt for faster, more focused responses
             prompt = f"""You are a helpful AI voice assistant. Respond naturally and conversationally to the user's input.
 
 User: {text}
 
 Assistant:"""
             
+            # Optimized generation parameters for speed and quality
             output = self.llm_model(
                 prompt, 
-                max_tokens=50,         # Reduced for faster responses
-                stop=["User:", "\n\n"], 
+                max_tokens=80,         # Increased from 50 for better responses
+                stop=["User:", "\n\n", "Assistant:"], 
                 echo=False,
-                temperature=0.5        # Lower temperature for more focused responses
+                temperature=0.3,       # Lower temperature for faster, more focused responses
+                top_p=0.9,            # Nucleus sampling for better quality
+                repeat_penalty=1.1     # Prevent repetition
             )
             
             response = output['choices'][0]['text'].strip()
-            logging.info(f"🤖 LLM RESULT - Response: '{response}'")
+            logging.info(f"🤖 LLM RESULT - Response: '{response}' (optimized)")
             return response
             
         except Exception as e:
@@ -420,17 +446,30 @@ Assistant:"""
                                 logging.info("📝 STT - No speech detected, skipping pipeline")
                         
                         elif data.get("type") == "reload_models":
-                            # Hot reload models
-                            logging.info("🔄 RELOAD REQUEST - Hot reloading models...")
+                            # Hot reload all models
+                            logging.info("🔄 RELOAD REQUEST - Hot reloading all models...")
                             await self.reload_models()
                             
                             response = {
                                 "type": "reload_response",
                                 "status": "success",
-                                "message": "Models reloaded successfully"
+                                "message": "All models reloaded successfully"
                             }
                             await websocket.send(json.dumps(response))
-                            logging.info("✅ RELOAD COMPLETE - Models reloaded")
+                            logging.info("✅ RELOAD COMPLETE - All models reloaded")
+                        
+                        elif data.get("type") == "reload_llm":
+                            # Hot reload only LLM with optimizations
+                            logging.info("🔄 LLM RELOAD REQUEST - Hot reloading LLM with optimizations...")
+                            await self.reload_llm_only()
+                            
+                            response = {
+                                "type": "reload_response",
+                                "status": "success",
+                                "message": "LLM model reloaded with optimizations (ctx=1024, batch=512, temp=0.3, max_tokens=80)"
+                            }
+                            await websocket.send(json.dumps(response))
+                            logging.info("✅ LLM RELOAD COMPLETE - Optimized LLM loaded")
                         
                         else:
                             logging.warning(f"❓ Unknown message type: {data.get('type')}")
