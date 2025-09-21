@@ -1616,15 +1616,15 @@ class Engine:
                                 vs["utterance_buffer"] = b""
                                 continue  # Continue to next frame
 
-                    vs["state"] = "processing"
-                    logger.info("🎤 VAD - Speech ended", 
-                               caller_channel_id=caller_channel_id,
-                               utterance_id=vs["utterance_id"],
+                            vs["state"] = "processing"
+                            logger.info("🎤 VAD - Speech ended", 
+                                       caller_channel_id=caller_channel_id,
+                                       utterance_id=vs["utterance_id"],
                                        reason="webrtc_silence",
-                               speech_ms=vs["speech_duration_ms"],
-                               silence_ms=vs["silence_duration_ms"],
-                               bytes=len(buf), 
-                               webrtc_silence_frames=vs["webrtc_silence_frames"])
+                                       speech_ms=vs["speech_duration_ms"],
+                                       silence_ms=vs["silence_duration_ms"],
+                                       bytes=len(buf), 
+                                       webrtc_silence_frames=vs["webrtc_silence_frames"])
                             
                             # Send to provider
                             await provider.send_audio(buf)
@@ -1635,12 +1635,12 @@ class Engine:
                         else:
                             # Empty utterance - misfire (only when speech actually ends)
                             logger.info("🎤 VAD - Speech misfire (empty utterance)", 
-                                       caller_channel_id=caller_channel_id,
-                                       utterance_id=vs["utterance_id"])
+                               caller_channel_id=caller_channel_id,
+                               utterance_id=vs["utterance_id"])
 
-                    # Reset for next utterance
-                    vs["state"] = "listening"
-                    vs["utterance_buffer"] = b""
+                        # Reset for next utterance
+                        vs["state"] = "listening"
+                        vs["utterance_buffer"] = b""
             
             # ARCHITECT FIX: All speech detection logic now handled inside frame processing loop
             # No additional processing needed here
@@ -2355,7 +2355,7 @@ class Engine:
                 # Check if connection is still active
                 if conn_id not in self._keepalive_tasks:
                     logger.debug("ExternalMedia keepalive stopped - connection closed", conn_id=conn_id)
-                        break
+                    break
                 
                 # Send lightweight keepalive (no-op control frame)
                 # This prevents Asterisk ExternalMedia from timing out during silence
@@ -2418,25 +2418,25 @@ class Engine:
                             # Set TTS gating with token/refcount logic
                             call_id = call_data.get("call_id", target_channel_id)
                             await self._set_tts_gating_for_call(call_id, True, playback_id)
-                    
-                    logger.info("🔊 TTS START - Playing response (feedback prevention active)", 
-                              channel_id=target_channel_id,
-                              playback_id=playback_id)
-                    
-                    # Calculate dynamic fallback timer based on audio duration
-                    # For 8kHz μ-law: duration_sec = len(audio_bytes) / 8000.0
-                    audio_duration_sec = len(audio_data) / 8000.0
-                    safety_margin_sec = 0.5  # 500ms safety margin
-                    fallback_delay = audio_duration_sec + safety_margin_sec
-                    
-                    # FALLBACK: Set dynamic timer to re-enable audio capture after TTS
-                    # This ensures audio capture is re-enabled even if PlaybackFinished fails
-                    asyncio.create_task(self._tts_fallback_by_playback(call_id, playback_id, fallback_delay))
-                    
-                    logger.info("🔊 TTS FALLBACK - Dynamic timer set", 
-                              channel_id=target_channel_id,
-                              audio_duration_sec=audio_duration_sec,
-                              fallback_delay=fallback_delay)
+                            
+                            logger.info("🔊 TTS START - Playing response (feedback prevention active)", 
+                                      channel_id=target_channel_id,
+                                      playback_id=playback_id)
+                            
+                            # Calculate dynamic fallback timer based on audio duration
+                            # For 8kHz μ-law: duration_sec = len(audio_bytes) / 8000.0
+                            audio_duration_sec = len(audio_data) / 8000.0
+                            safety_margin_sec = 0.5  # 500ms safety margin
+                            fallback_delay = audio_duration_sec + safety_margin_sec
+                            
+                            # FALLBACK: Set dynamic timer to re-enable audio capture after TTS
+                            # This ensures audio capture is re-enabled even if PlaybackFinished fails
+                            asyncio.create_task(self._tts_fallback_by_playback(call_id, playback_id, fallback_delay))
+                            
+                            logger.info("🔊 TTS FALLBACK - Dynamic timer set", 
+                                      channel_id=target_channel_id,
+                                      audio_duration_sec=audio_duration_sec,
+                                      fallback_delay=fallback_delay)
                             
                             # Play audio to specific call with playback_id and canonical call_id
                             await self._play_audio_via_bridge(target_channel_id, audio_data, playback_id, call_id)
