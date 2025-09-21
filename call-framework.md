@@ -2851,6 +2851,80 @@ async def on_provider_event(self, event: Dict[str, Any]):
 
 #### **STT Performance**:
 - **Success Rate**: 100% for meaningful speech (3/3 successful transcripts)
+
+## Test Call #35 - September 21, 2025 (TTS Gating Logic Analysis)
+
+**Call Duration**: ~30 seconds (21:48:08 - 21:48:08)  
+**Caller**: HAIDER JARRAL (13164619284)  
+**Channel ID**: 1758491127.361  
+**Test Focus**: Verify TTS gating logic implementation after architect recommendations
+
+### 🔍 **TTS Gating Logic Analysis**
+
+#### **What Worked:**
+- **✅ Audio Capture**: `audio_capture_enabled: true` throughout call
+- **✅ VAD Processing**: WebRTC VAD detecting speech correctly
+- **✅ RTP Processing**: Continuous RTP packets received and processed
+- **✅ SSRC Mapping**: SSRC 1990254406 mapped to caller channel
+- **✅ Call Cleanup**: Proper cleanup after call termination
+
+#### **What Failed - TTS Gating Issues:**
+
+**❌ TTS Gating Not Working:**
+- **Issue**: `tts_playing: false` throughout entire call
+- **Impact**: No TTS gating implemented, potential feedback loops
+- **Evidence**: All audio capture checks show `tts_playing: false`
+
+**❌ No Playback ID Tracking:**
+- **Issue**: No playback IDs captured from ARI responses
+- **Impact**: Cannot track TTS playback completion
+- **Evidence**: No `PlaybackFinished` events received
+
+**❌ No TTS Playback:**
+- **Issue**: No TTS audio generated or played back
+- **Impact**: User only heard initial greeting, no LLM responses
+- **Evidence**: No TTS generation logs in Local AI Server
+
+**❌ WebSocket Connection Issues:**
+- **Issue**: WebSocket connection closed with keepalive timeout
+- **Impact**: Local AI Server disconnected from AI Engine
+- **Evidence**: `sent 1011 (internal error) keepalive ping timeout`
+
+### 🚨 **Critical Issues Identified:**
+
+1. **TTS Gating Implementation Missing**: The TTS gating logic is not being triggered
+2. **Playback ID Tracking Not Working**: ARI responses not providing playback IDs
+3. **WebSocket Keepalive Failing**: Connection stability issues
+4. **No TTS Pipeline Execution**: STT → LLM → TTS pipeline not completing
+
+### 📊 **Performance Analysis:**
+
+- **Audio Processing**: ✅ Working (RTP, VAD, SSRC mapping)
+- **STT Processing**: ❌ Not triggered (no audio sent to Local AI Server)
+- **LLM Processing**: ❌ Not triggered (no STT input)
+- **TTS Processing**: ❌ Not triggered (no LLM input)
+- **TTS Gating**: ❌ Not working (no playback tracking)
+- **WebSocket Stability**: ❌ Failing (keepalive timeout)
+
+### 🎯 **Root Cause Analysis:**
+
+The TTS gating implementation is completely non-functional because:
+1. **No TTS Playback**: TTS audio is not being generated or played
+2. **No Playback ID Capture**: ARI responses not providing playback IDs
+3. **WebSocket Instability**: Connection issues preventing proper communication
+4. **Missing TTS Pipeline**: The complete STT → LLM → TTS pipeline is not executing
+
+### 📋 **Architect Consultation Summary:**
+
+**TTS Gating Implementation Status**: ❌ **COMPLETELY FAILED**
+
+**Key Issues for Architect Review**:
+1. TTS gating logic not being triggered
+2. Playback ID tracking not working
+3. WebSocket keepalive configuration issues
+4. Complete TTS pipeline failure
+
+**Confidence Score**: 2/10 - TTS gating implementation needs complete overhaul
 - **Accuracy**: High accuracy for clear speech
 - **Processing**: 2-second fallback intervals working perfectly
 
