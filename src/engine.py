@@ -1465,7 +1465,7 @@ class Engine:
                 if webrtc_decision:
                     vs["webrtc_speech_frames"] += 1
                     vs["webrtc_silence_frames"] = 0
-                    else:
+                else:
                     vs["webrtc_speech_frames"] = 0
                     vs["webrtc_silence_frames"] += 1
                 
@@ -1532,17 +1532,17 @@ class Engine:
                     vs["speech_real_start_fired"] = False
                     vs["speech_frame_count"] = 0
                     vs["redemption_counter"] = 0
-                        vs["consecutive_speech_frames"] = 0
+                    vs["consecutive_speech_frames"] = 0
                     vs["consecutive_silence_frames"] = 0
-                            vs["utterance_buffer"] = vs["pre_roll_buffer"]
+                    vs["utterance_buffer"] = vs["pre_roll_buffer"]
                     vs["speech_start_ms"] = current_time_ms - pre_roll_ms
-                            vs["speech_duration_ms"] = 0
-                            vs["silence_duration_ms"] = 0
-                            vs["utterance_id"] += 1
+                    vs["speech_duration_ms"] = 0
+                    vs["silence_duration_ms"] = 0
+                    vs["utterance_id"] += 1
                     vs["last_voice_ms"] = current_time_ms  # Update last voice time for fallback
-                            logger.info("🎤 VAD - Speech started", 
-                                       caller_channel_id=caller_channel_id,
-                                       utterance_id=vs["utterance_id"],
+                    logger.info("🎤 VAD - Speech started", 
+                               caller_channel_id=caller_channel_id,
+                               utterance_id=vs["utterance_id"],
                                webrtc_speech_frames=vs["webrtc_speech_frames"])
                 
                 # AVR-VAD INSPIRED: During speech recording
@@ -1599,9 +1599,9 @@ class Engine:
                         
                         # Process the utterance
                         if len(vs["utterance_buffer"]) > 0:
-                    # Normalize to target RMS before sending
-                    buf = vs["utterance_buffer"]
-                    buf = self._normalize_to_dbfs(buf, target_dbfs=-20.0, max_gain=3.0)
+                            # Normalize to target RMS before sending
+                            buf = vs["utterance_buffer"]
+                            buf = self._normalize_to_dbfs(buf, target_dbfs=-20.0, max_gain=3.0)
                             
                             # ARCHITECT FIX: Discard ultra-short utterances using config
                             # Use min_utterance_ms from config (default 600ms)
@@ -1625,7 +1625,7 @@ class Engine:
                                silence_ms=vs["silence_duration_ms"],
                                bytes=len(buf), 
                                webrtc_silence_frames=vs["webrtc_silence_frames"])
-                    
+                            
                             # Send to provider
                             await provider.send_audio(buf)
                             logger.info("🎤 VAD - Utterance sent to provider", 
@@ -2385,39 +2385,39 @@ class Engine:
                                 target_channel_id = call_id
                             else:
                                 # Second try: find by call_id in active_calls values
-                            for channel_id, call_data in self.active_calls.items():
-                                if call_data.get("call_id") == call_id:
+                                for channel_id, call_data in self.active_calls.items():
+                                    if call_data.get("call_id") == call_id:
                                         # Prefer caller_channel_id if present and active
                                         if call_data.get("caller_channel_id") and call_data["caller_channel_id"] in self.active_calls:
                                             target_channel_id = call_data["caller_channel_id"]
                                         else:
-                                    target_channel_id = channel_id
-                                    break
+                                            target_channel_id = channel_id
+                                        break
                         
                         if not target_channel_id:
                             # Fallback: use the first active call (for backward compatibility)
                             target_channel_id = next(iter(self.active_calls.keys()), None)
-                    logger.warning("AgentAudio routing fallback used", 
-                                 call_id=call_id, 
-                                 target_channel_id=target_channel_id,
-                                 active_calls_keys=list(self.active_calls.keys()),
-                                 active_calls_count=len(self.active_calls))
-                else:
-                    logger.debug("AgentAudio routing successful", 
-                               call_id=call_id, 
-                               target_channel_id=target_channel_id,
-                               routing_method="direct" if call_id in self.active_calls else "lookup")
+                            logger.warning("AgentAudio routing fallback used", 
+                                         call_id=call_id, 
+                                         target_channel_id=target_channel_id,
+                                         active_calls_keys=list(self.active_calls.keys()),
+                                         active_calls_count=len(self.active_calls))
+                        else:
+                            logger.debug("AgentAudio routing successful", 
+                                       call_id=call_id, 
+                                       target_channel_id=target_channel_id,
+                                       routing_method="direct" if call_id in self.active_calls else "lookup")
                         
                         if target_channel_id:
-                    # Get call data first
+                            # Get call data first
                             call_data = self.active_calls[target_channel_id]
-                    
-                    # Generate playback ID for token tracking
-                    playback_id = f"tts:{target_channel_id}:{int(time.time()*1000)}"
-                    
-                    # Set TTS gating with token/refcount logic
-                    call_id = call_data.get("call_id", target_channel_id)
-                    await self._set_tts_gating_for_call(call_id, True, playback_id)
+                            
+                            # Generate playback ID for token tracking
+                            playback_id = f"tts:{target_channel_id}:{int(time.time()*1000)}"
+                            
+                            # Set TTS gating with token/refcount logic
+                            call_id = call_data.get("call_id", target_channel_id)
+                            await self._set_tts_gating_for_call(call_id, True, playback_id)
                     
                     logger.info("🔊 TTS START - Playing response (feedback prevention active)", 
                               channel_id=target_channel_id,
@@ -2438,8 +2438,8 @@ class Engine:
                               audio_duration_sec=audio_duration_sec,
                               fallback_delay=fallback_delay)
                             
-                    # Play audio to specific call with playback_id and canonical call_id
-                    await self._play_audio_via_bridge(target_channel_id, audio_data, playback_id, call_id)
+                            # Play audio to specific call with playback_id and canonical call_id
+                            await self._play_audio_via_bridge(target_channel_id, audio_data, playback_id, call_id)
                             logger.info(f"🔊 AUDIO OUTPUT - Sent {len(audio_data)} bytes to call channel {target_channel_id}")
                             
                             # Update conversation state after playing response
@@ -2452,11 +2452,11 @@ class Engine:
                                 # Response to user input - transition back to listening
                                 call_data['conversation_state'] = 'listening'
                                 logger.info("Response played, listening for next user input", channel_id=target_channel_id)
-                                
-                                # Cancel provider timeout task since we got a response
-                                if call_data.get('provider_timeout_task') and not call_data['provider_timeout_task'].done():
-                                    call_data['provider_timeout_task'].cancel()
-                                    logger.debug("Cancelled provider timeout task - response received", channel_id=target_channel_id)
+                            
+                            # Cancel provider timeout task since we got a response
+                            if call_data.get('provider_timeout_task') and not call_data['provider_timeout_task'].done():
+                                call_data['provider_timeout_task'].cancel()
+                                logger.debug("Cancelled provider timeout task - response received", channel_id=target_channel_id)
                         else:
                             logger.warning("No active call found for AgentAudio playback", call_id=call_id)
             elif event_type == "Transcription":
