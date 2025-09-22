@@ -33,7 +33,7 @@ services:
       - ./models:/app/models
     environment:
       - PYTHONUNBUFFERED=1
-      - LOCAL_LLM_MODEL_PATH=${LOCAL_LLM_MODEL_PATH:-}
+      - LOCAL_LLM_MODEL_PATH=${LOCAL_LLM_MODEL_PATH:-/app/models/llm/TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf}
       - LOCAL_LLM_THREADS=${LOCAL_LLM_THREADS:-16}
       - LOCAL_LLM_CONTEXT=${LOCAL_LLM_CONTEXT:-768}
       - LOCAL_LLM_BATCH=${LOCAL_LLM_BATCH:-256}
@@ -41,8 +41,8 @@ services:
       - LOCAL_LLM_TEMPERATURE=${LOCAL_LLM_TEMPERATURE:-0.2}
       - LOCAL_LLM_TOP_P=${LOCAL_LLM_TOP_P:-0.85}
       - LOCAL_LLM_REPEAT_PENALTY=${LOCAL_LLM_REPEAT_PENALTY:-1.05}
-      - LOCAL_STT_MODEL_PATH=${LOCAL_STT_MODEL_PATH:-}
-      - LOCAL_TTS_MODEL_PATH=${LOCAL_TTS_MODEL_PATH:-}
+      - LOCAL_STT_MODEL_PATH=${LOCAL_STT_MODEL_PATH:-/app/models/stt/vosk-model-small-en-us-0.15}
+      - LOCAL_TTS_MODEL_PATH=${LOCAL_TTS_MODEL_PATH:-/app/models/tts/en_US-lessac-medium.onnx}
     tty: true
     stdin_open: true
     restart: unless-stopped
