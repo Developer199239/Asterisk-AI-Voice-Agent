@@ -112,8 +112,11 @@ class SessionStore:
                 session.vad_state["webrtc_speech_frames"] = 0
                 session.vad_state["webrtc_silence_frames"] = 0
                 session.vad_state["webrtc_last_decision"] = False
+                # ARCHITECT FIX: Reset both audio_buffer and frame_buffer
                 if "audio_buffer" in session.vad_state:
                     session.vad_state["audio_buffer"] = b""
+                if "frame_buffer" in session.vad_state:
+                    session.vad_state["frame_buffer"] = b""
             
             logger.info("🔇 TTS GATING - Audio capture disabled (token added)",
                        call_id=call_id,

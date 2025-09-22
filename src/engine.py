@@ -1326,9 +1326,11 @@ class Engine:
             
             logger.info("🎤 AUDIO CAPTURE - Check", ssrc=ssrc, caller_channel_id=caller_channel_id, audio_capture_enabled=audio_capture_enabled, tts_playing=tts_playing)
             
-            if not audio_capture_enabled:
-                logger.debug("RTP audio capture disabled, waiting for greeting to finish", 
-                           ssrc=ssrc, caller_channel_id=caller_channel_id)
+            # ARCHITECT FIX: Drop gated frames as early as possible
+            if not audio_capture_enabled or tts_playing:
+                logger.debug("RTP audio dropped - capture disabled or TTS playing", 
+                           ssrc=ssrc, caller_channel_id=caller_channel_id,
+                           audio_capture_enabled=audio_capture_enabled, tts_playing=tts_playing)
                 return
             
             # Get provider for this call
@@ -1461,6 +1463,8 @@ class Engine:
             
             # ARCHITECT FIX: Frame-accurate WebRTC VAD with buffering
             # Add incoming audio to frame buffer
+            # ARCHITECT FIX: Defensive guard for frame_buffer
+            vad_state.setdefault("frame_buffer", b"")
             vad_state["frame_buffer"] += pcm_16k_data
             
             # Process complete 20ms frames (640 bytes each)

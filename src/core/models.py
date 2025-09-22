@@ -66,6 +66,8 @@ class CallSession:
                 "webrtc_silence_frames": 0,
                 "webrtc_last_decision": False,
                 "audio_buffer": b"",
+                "frame_buffer": b"",  # ARCHITECT FIX: Add frame_buffer for 20ms frame buffering
+                "frame_count": 0,     # ARCHITECT FIX: Add frame_count for VAD processing
                 "last_voice_ms": 0,
                 "tts_playing": False
             }

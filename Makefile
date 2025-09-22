@@ -112,7 +112,15 @@ server-clear-logs:
 ## server-health: Check deployment health (ARI, ExternalMedia, Providers)
 server-health:
 	@echo "--> Checking deployment health on $(SERVER_HOST)..."
-	ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && docker-compose logs --tail=50 ai-engine | grep -E "(Successfully connected|RTP server listening|Provider.*loaded|Engine started)"'
+	@echo "🔍 Checking ARI connections..."
+	@ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && docker-compose logs --tail=200 ai-engine | grep -E "(Successfully connected to ARI HTTP endpoint|Successfully connected to ARI WebSocket)" || echo "❌ ARI connection issues"'
+	@echo "🔍 Checking RTP server..."
+	@ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && docker-compose logs --tail=200 ai-engine | grep -E "(RTP server started|RTP server listening)" || echo "❌ RTP server issues"'
+	@echo "🔍 Checking provider loading..."
+	@ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && docker-compose logs --tail=200 ai-engine | grep -E "(Provider.*loaded successfully|Default provider.*is available)" || echo "❌ Provider loading issues"'
+	@echo "🔍 Checking engine status..."
+	@ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && docker-compose logs --tail=200 ai-engine | grep -E "(Engine started and listening for calls)" || echo "❌ Engine startup issues"'
+	@echo "✅ Health check complete"
 
 # ==============================================================================
 # TESTING & VERIFICATION
