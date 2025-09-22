@@ -112,9 +112,19 @@ class LocalAIServer:
         # Whisper STT completely removed for faster responses
         
         # Model paths
-        self.stt_model_path = "/app/models/stt/vosk-model-small-en-us-0.15"
-        self.llm_model_path = "/app/models/llm/TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf"
-        self.tts_model_path = "/app/models/tts/en_US-lessac-medium.onnx"
+        self.stt_model_path = os.getenv("LOCAL_STT_MODEL_PATH", "/app/models/stt/vosk-model-small-en-us-0.15")
+        self.llm_model_path = os.getenv("LOCAL_LLM_MODEL_PATH", "/app/models/llm/TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf")
+        self.tts_model_path = os.getenv("LOCAL_TTS_MODEL_PATH", "/app/models/tts/en_US-lessac-medium.onnx")
+
+        # LLM tuning knobs for latency vs. quality trade-offs
+        default_threads = max(1, min(16, os.cpu_count() or 1))
+        self.llm_threads = int(os.getenv("LOCAL_LLM_THREADS", str(default_threads)))
+        self.llm_context = int(os.getenv("LOCAL_LLM_CONTEXT", "768"))
+        self.llm_batch = int(os.getenv("LOCAL_LLM_BATCH", "256"))
+        self.llm_max_tokens = int(os.getenv("LOCAL_LLM_MAX_TOKENS", "48"))
+        self.llm_temperature = float(os.getenv("LOCAL_LLM_TEMPERATURE", "0.2"))
+        self.llm_top_p = float(os.getenv("LOCAL_LLM_TOP_P", "0.85"))
+        self.llm_repeat_penalty = float(os.getenv("LOCAL_LLM_REPEAT_PENALTY", "1.05"))
         
         # Audio buffering for STT (20ms chunks need to be buffered for effective STT)
         self.audio_buffer = b""
@@ -156,17 +166,24 @@ class LocalAIServer:
             
             # Optimized parameters for faster real-time voice responses
             self.llm_model = Llama(
-                model_path=self.llm_model_path, 
-                n_ctx=1024,          # Increased context for better conversations
-                n_threads=16,        # Use all CPU cores
-                n_batch=512,         # Increased batch size for better throughput
-                n_gpu_layers=0,      # Explicitly CPU-only
+                model_path=self.llm_model_path,
+                n_ctx=self.llm_context,
+                n_threads=self.llm_threads,
+                n_batch=self.llm_batch,
+                n_gpu_layers=0,
                 verbose=False,
-                use_mmap=True,       # Memory mapping for faster loading
-                use_mlock=True       # Lock memory for stability
+                use_mmap=True,
+                use_mlock=True
             )
-            logging.info(f"✅ LLM model loaded with optimized parameters: {self.llm_model_path}")
-            logging.info(f"📊 LLM Config: ctx=1024, threads=16, batch=512, mmap=True")
+            logging.info(f"✅ LLM model loaded: {self.llm_model_path}")
+            logging.info(
+                "📊 LLM Config: ctx=%s, threads=%s, batch=%s, max_tokens=%s, temp=%s",
+                self.llm_context,
+                self.llm_threads,
+                self.llm_batch,
+                self.llm_max_tokens,
+                self.llm_temperature,
+            )
         except Exception as e:
             logging.error(f"❌ Failed to load LLM model: {e}")
             raise
@@ -206,7 +223,13 @@ class LocalAIServer:
             # Load with optimized parameters
             await self._load_llm_model()
             logging.info("✅ LLM model reloaded with optimizations")
-            logging.info("📊 Optimized: ctx=1024, batch=512, temp=0.3, max_tokens=80")
+            logging.info(
+                "📊 Optimized: ctx=%s, batch=%s, temp=%s, max_tokens=%s",
+                self.llm_context,
+                self.llm_batch,
+                self.llm_temperature,
+                self.llm_max_tokens,
+            )
         except Exception as e:
             logging.error(f"❌ LLM reload failed: {e}")
             raise
@@ -241,7 +264,10 @@ class LocalAIServer:
                 logging.debug(f"🎵 STT FINAL - Final result: {result}")
             
             transcript = result.get("text", "").strip()
-            logging.info(f"📝 STT RESULT - Transcript: '{transcript}'")
+            if transcript:
+                logging.info(f"📝 STT RESULT - Transcript: '{transcript}'")
+            else:
+                logging.debug("📝 STT RESULT - Transcript empty after buffering")
             
             # Clear buffer after processing
             self.audio_buffer = b""
@@ -286,7 +312,10 @@ class LocalAIServer:
                 logging.debug(f"🎵 STT FINAL - Final result: {result}")
             
             transcript = result.get("text", "").strip()
-            logging.info(f"📝 STT RESULT - Vosk transcript: '{transcript}' (length: {len(transcript)})")
+            if transcript:
+                logging.info(f"📝 STT RESULT - Vosk transcript: '{transcript}' (length: {len(transcript)})")
+            else:
+                logging.debug("📝 STT RESULT - Vosk transcript empty")
             return transcript
             
         except Exception as e:
@@ -309,17 +338,26 @@ Assistant:"""
             
             # Optimized generation parameters for speed and quality
             output = self.llm_model(
-                prompt, 
-                max_tokens=80,         # Increased from 50 for better responses
-                stop=["User:", "\n\n", "Assistant:"], 
+                prompt,
+                max_tokens=self.llm_max_tokens,
+                stop=["User:", "\n\n", "Assistant:"],
                 echo=False,
-                temperature=0.3,       # Lower temperature for faster, more focused responses
-                top_p=0.9,            # Nucleus sampling for better quality
-                repeat_penalty=1.1     # Prevent repetition
+                temperature=self.llm_temperature,
+                top_p=self.llm_top_p,
+                repeat_penalty=self.llm_repeat_penalty,
             )
             
-            response = output['choices'][0]['text'].strip()
-            logging.info(f"🤖 LLM RESULT - Response: '{response}' (optimized)")
+            choices = output.get('choices', []) if isinstance(output, dict) else []
+            if not choices:
+                logging.warning("🤖 LLM RESULT - No choices returned, using fallback response")
+                return "I'm here to help you. How can I assist you today?"
+
+            response = choices[0].get('text', '').strip()
+            logging.info(
+                "🤖 LLM RESULT - Response: '%s' (tokens=%s)",
+                response,
+                len(response.split()),
+            )
             return response
             
         except Exception as e:

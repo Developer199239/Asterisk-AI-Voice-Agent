@@ -11,6 +11,7 @@ services:
       - ./src:/app/src
       - ./main.py:/app/main.py
       - ./config:/app/config
+      - ./scripts:/app/scripts
       - /mnt/asterisk_media:/mnt/asterisk_media
       - /var/lib/asterisk/sounds:/var/lib/asterisk/sounds
     env_file:
@@ -32,6 +33,16 @@ services:
       - ./models:/app/models
     environment:
       - PYTHONUNBUFFERED=1
+      - LOCAL_LLM_MODEL_PATH=${LOCAL_LLM_MODEL_PATH:-}
+      - LOCAL_LLM_THREADS=${LOCAL_LLM_THREADS:-16}
+      - LOCAL_LLM_CONTEXT=${LOCAL_LLM_CONTEXT:-768}
+      - LOCAL_LLM_BATCH=${LOCAL_LLM_BATCH:-256}
+      - LOCAL_LLM_MAX_TOKENS=${LOCAL_LLM_MAX_TOKENS:-48}
+      - LOCAL_LLM_TEMPERATURE=${LOCAL_LLM_TEMPERATURE:-0.2}
+      - LOCAL_LLM_TOP_P=${LOCAL_LLM_TOP_P:-0.85}
+      - LOCAL_LLM_REPEAT_PENALTY=${LOCAL_LLM_REPEAT_PENALTY:-1.05}
+      - LOCAL_STT_MODEL_PATH=${LOCAL_STT_MODEL_PATH:-}
+      - LOCAL_TTS_MODEL_PATH=${LOCAL_TTS_MODEL_PATH:-}
     tty: true
     stdin_open: true
     restart: unless-stopped

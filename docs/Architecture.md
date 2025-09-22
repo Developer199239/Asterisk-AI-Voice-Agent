@@ -15,6 +15,7 @@ The production code still follows the **Hybrid ARI** call-control pattern and is
 - **Hybrid ARI**: `_handle_caller_stasis_start_hybrid()` answers the caller, creates a mixing bridge, and either originates a Local channel or spawns an ExternalMedia channel before handing media over to the rest of the engine.
 - **SessionStore (in-progress)**: The engine now instantiates `SessionStore` and `PlaybackManager` (see `src/core/`), and new flows such as playback gating and RTP SSRC mapping query this shared store. Legacy dictionaries like `self.active_calls` and `self.caller_channels` still exist for backwards compatibility and will be phased out as handlers are rewritten to push/read data exclusively through `SessionStore`.
 - **ConversationCoordinator (new)**: `ConversationCoordinator` subscribes to session changes, toggles audio capture, records barge-in attempts, schedules capture fallbacks, and keeps Prometheus gauges aligned with each call’s state. PlaybackManager delegates all gating changes to the coordinator.
+- **Local Provider Tuning**: The local AI server now reads `LOCAL_LLM_*` and `LOCAL_STT/TTS_*` environment variables so operators can swap GGUF/ONNX assets or lower response latency without rebuilding images.
 
 This staged architecture provides:
 - **Improved State Consistency**: Critical paths (playback gating, RTP routing, TTS cleanup) now rely on a single store.

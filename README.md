@@ -63,6 +63,13 @@ The system is configured via `config/ai-agent.yaml` and a `.env` file for secret
 - `ASTERISK_ARI_USERNAME` & `ASTERISK_ARI_PASSWORD`
 - `DEEPGRAM_API_KEY` (if using Deepgram)
 
+### Optional local AI tuning (set via environment variables)
+- `LOCAL_LLM_MODEL_PATH`: absolute path to an alternative GGUF file mounted into the container.
+- `LOCAL_LLM_MAX_TOKENS`: cap the number of response tokens (default `48` for faster replies).
+- `LOCAL_LLM_TEMPERATURE`, `LOCAL_LLM_TOP_P`, `LOCAL_LLM_REPEAT_PENALTY`: sampling controls for the TinyLlama runtime.
+- `LOCAL_LLM_THREADS`, `LOCAL_LLM_CONTEXT`, `LOCAL_LLM_BATCH`: advanced performance knobs; defaults auto-detect CPU cores and favour latency.
+- `LOCAL_STT_MODEL_PATH`, `LOCAL_TTS_MODEL_PATH`: override default Vosk/Piper models if you preload alternates under `models/`.
+
 ## 🏗️ Project Architecture
 
 The application is split into two Docker containers for performance and scalability:
