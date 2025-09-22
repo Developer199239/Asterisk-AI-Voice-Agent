@@ -174,8 +174,7 @@ class Engine:
         # Log warning and disable to ensure all audio goes through VAD
         logger.warning("🚨 LEGACY RTP BYPASS - This method bypasses VAD and fragments STT", 
                       packet_len=len(packet), 
-                      addr=addr,
-                      active_calls=len(self.active_calls))
+                      addr=addr)
         
         # Disable this bypass to prevent STT fragmentation
         # All audio should go through RTPServer -> _on_rtp_audio -> _process_rtp_audio_with_vad
@@ -236,8 +235,10 @@ class Engine:
 
     async def stop(self):
         """Disconnect from ARI and stop the engine."""
-        for channel_id in list(self.active_calls.keys()):
-            await self._cleanup_call(channel_id)
+        # Clean up all sessions from SessionStore
+        sessions = await self.session_store.get_all_sessions()
+        for session in sessions:
+            await self._cleanup_call(session.call_id)
         await self.ari_client.disconnect()
         # Stop RTP server if running
         if hasattr(self, 'rtp_server') and self.rtp_server:
@@ -314,10 +315,11 @@ class Engine:
         if local_channel_id in self.pending_local_channels:
             return self.pending_local_channels[local_channel_id]
         
-        # Fallback: search through caller channels
-        for caller_id, call_data in self.caller_channels.items():
-            if call_data.get('local_channel_id') == local_channel_id:
-                return caller_id
+        # Fallback: search through SessionStore
+        sessions = await self.session_store.get_all_sessions()
+        for session in sessions:
+            if session.local_channel_id == local_channel_id:
+                return session.caller_channel_id
         
         return None
 
@@ -410,7 +412,8 @@ class Engine:
                     caller_number=caller_info.get('number'))
         
         # Check if call is already in progress
-        if caller_channel_id in self.caller_channels:
+        existing_session = await self.session_store.get_by_call_id(caller_channel_id)
+        if existing_session:
             logger.warning("🎯 HYBRID ARI - Caller already in progress", channel_id=caller_channel_id)
             return
         
@@ -1273,9 +1276,9 @@ class Engine:
         if channel_id and digit:
             logger.info(f"DTMF received: {digit}", channel_id=channel_id)
             # Forward DTMF to provider if it supports it
-            call_data = self.active_calls.get(channel_id)  # ✅ Move outside if block
-            if call_data:
-                provider = call_data.get('provider')
+            session = await self.session_store.get_by_call_id(channel_id)
+            if session:
+                provider = self.providers.get(session.provider_name)
                 if provider and hasattr(provider, 'handle_dtmf'):
                     await provider.handle_dtmf(digit)
     
@@ -2336,30 +2339,31 @@ class Engine:
         """Cleanup resources associated with a call."""
         logger.debug("Starting call cleanup", channel_id=channel_id)
         
-        if channel_id in self.active_calls:
-            call_data = self.active_calls[channel_id]
-            logger.debug("Call found in active calls", channel_id=channel_id, call_data_keys=list(call_data.keys()))
+        # Get session from SessionStore
+        session = await self.session_store.get_by_call_id(channel_id)
+        if session:
+            logger.debug("Call found in SessionStore", channel_id=channel_id, call_id=session.call_id)
             
             # Cancel any pending timeout tasks
-            timeout_task = call_data.get('timeout_task')
+            timeout_task = getattr(session, 'timeout_task', None)
             if timeout_task and not timeout_task.done():
                 timeout_task.cancel()
                 logger.debug("Cancelled timeout task", channel_id=channel_id)
             
             # Cancel provider timeout task
-            provider_timeout_task = call_data.get('provider_timeout_task')
+            provider_timeout_task = getattr(session, 'provider_timeout_task', None)
             if provider_timeout_task and not provider_timeout_task.done():
                 provider_timeout_task.cancel()
                 logger.debug("Cancelled provider timeout task", channel_id=channel_id)
             
-            provider = call_data.get("provider")
+            provider = self.providers.get(session.provider_name)
             if provider:
                 # CRITICAL FIX: Don't stop provider if TTS is still playing
-                if call_data.get("tts_playing", False):
+                if session.tts_playing:
                     logger.info("🔇 CLEANUP DELAYED - TTS still playing, delaying provider cleanup", 
                               channel_id=channel_id)
                     # Mark for cleanup after TTS finishes
-                    call_data["cleanup_after_tts"] = True
+                    session.cleanup_after_tts = True
                 else:
                     logger.debug("Stopping provider session", channel_id=channel_id)
                     await provider.stop_session()
@@ -2374,14 +2378,11 @@ class Engine:
                 del self.ssrc_to_caller[ssrc]
                 logger.debug("SSRC mapping cleaned up", ssrc=ssrc, channel_id=channel_id)
 
-            # Remove from active calls (with safety check for race conditions)
-            if channel_id in self.active_calls:
-                del self.active_calls[channel_id]
-                logger.info("Call resources cleaned up successfully", channel_id=channel_id)
-            else:
-                logger.debug("Channel already removed from active calls", channel_id=channel_id)
+            # Remove from SessionStore
+            await self.session_store.remove_call(session.call_id)
+            logger.info("Call resources cleaned up successfully", channel_id=channel_id)
         else:
-            logger.debug("Channel not found in active calls", channel_id=channel_id)
+            logger.debug("Channel not found in SessionStore", channel_id=channel_id)
 
     async def _play_ring_tone(self, channel_id: str, duration: float = 15.0):
         """Play a ringing tone to the channel."""
