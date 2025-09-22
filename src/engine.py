@@ -361,23 +361,25 @@ class Engine:
     async def _handle_external_media_stasis_start(self, external_media_id: str, channel: dict):
         """Handle ExternalMedia channel entering Stasis."""
         try:
-            # Use direct mapping first for fast lookup
-            caller_channel_id = self.external_media_to_caller.get(external_media_id)
-            
-            # Fallback to scanning if direct mapping fails
-            if not caller_channel_id:
-                for channel_id, call_data in self.active_calls.items():
-                    if call_data.get("external_media_id") == external_media_id:
-                        caller_channel_id = channel_id
+            # Find session by external_media_id
+            session = await self.session_store.get_by_channel_id(external_media_id)
+            if not session:
+                # Fallback: search all sessions for external_media_id
+                sessions = await self.session_store.get_all_sessions()
+                for s in sessions:
+                    if s.external_media_id == external_media_id:
+                        session = s
                         break
             
-            if not caller_channel_id:
+            if not session:
                 logger.warning("ExternalMedia channel entered Stasis but no caller found", 
                              external_media_id=external_media_id)
                 return
             
+            caller_channel_id = session.caller_channel_id
+            
             # Add ExternalMedia channel to the bridge
-            bridge_id = self.active_calls[caller_channel_id].get("bridge_id")
+            bridge_id = session.bridge_id
             if bridge_id:
                 success = await self.ari_client.add_channel_to_bridge(bridge_id, external_media_id)
                 if success:
@@ -495,14 +497,15 @@ class Engine:
             return
         
         # Check if caller channel exists and has a bridge
-        if caller_channel_id not in self.caller_channels:
+        session = await self.session_store.get_by_call_id(caller_channel_id)
+        if not session:
             logger.error("🎯 HYBRID ARI - Caller channel not found for Local channel", 
                         local_channel_id=local_channel_id,
                         caller_channel_id=caller_channel_id)
             await self.ari_client.hangup_channel(local_channel_id)
             return
         
-        bridge_id = self.caller_channels[caller_channel_id]["bridge_id"]
+        bridge_id = session.bridge_id
         
         try:
             # Add Local channel to bridge
@@ -514,9 +517,10 @@ class Engine:
                 logger.info("🎯 HYBRID ARI - ✅ Local channel added to bridge", 
                            local_channel_id=local_channel_id,
                            bridge_id=bridge_id)
-                # Update caller info
-                self.caller_channels[caller_channel_id]["local_channel_id"] = local_channel_id
-                self.caller_channels[caller_channel_id]["status"] = "connected"
+                # Update session with Local channel info
+                session.local_channel_id = local_channel_id
+                session.status = "connected"
+                await self.session_store.upsert_call(session)
                 self.local_channels[caller_channel_id] = local_channel_id
                 
                 
@@ -542,7 +546,8 @@ class Engine:
                     caller_number=caller_info.get('number'))
         
         # Check if call is already in progress
-        if caller_channel_id in self.caller_channels:
+        existing_session = await self.session_store.get_by_call_id(caller_channel_id)
+        if existing_session:
             logger.warning("Caller already in progress", channel_id=caller_channel_id)
             return
         
@@ -551,13 +556,16 @@ class Engine:
             await self.ari_client.answer_channel(caller_channel_id)
             logger.info("Caller channel answered", channel_id=caller_channel_id)
             
-            # Store caller info
-            self.caller_channels[caller_channel_id] = {
-                "status": "waiting_for_local",
-                "channel": channel,
-                "local_channel_id": None,
-                "bridge_id": None
-            }
+            # Create session in SessionStore
+            from .core.models import CallSession
+            session = CallSession(
+                call_id=caller_channel_id,
+                caller_channel_id=caller_channel_id,
+                provider_name=self.config.default_provider,
+                status="waiting_for_local",
+                audio_capture_enabled=False
+            )
+            await self.session_store.upsert_call(session)
             
             # Originate Local channel
             await self._originate_local_channel(caller_channel_id)
@@ -582,9 +590,11 @@ class Engine:
                 await self.ari_client.hangup_channel(local_channel_id)
                 return
             
-            # Update caller info with Local channel ID
-            if caller_channel_id in self.caller_channels:
-                self.caller_channels[caller_channel_id]["local_channel_id"] = local_channel_id
+            # Update session with Local channel ID
+            session = await self.session_store.get_by_call_id(caller_channel_id)
+            if session:
+                session.local_channel_id = local_channel_id
+                await self.session_store.upsert_call(session)
                 self.local_channels[caller_channel_id] = local_channel_id
             
             # Create bridge and connect channels
@@ -632,8 +642,10 @@ class Engine:
                            audio_uuid=audio_uuid)
                 
                 # Store Local channel info - will be added to bridge when ExternalMedia connects
-                if caller_channel_id in self.caller_channels:
-                    self.caller_channels[caller_channel_id]["external_media_channel_id"] = local_channel_id
+                session = await self.session_store.get_by_call_id(caller_channel_id)
+                if session:
+                    session.external_media_id = local_channel_id
+                    await self.session_store.upsert_call(session)
                     logger.info("🎯 DIALPLAN EXTERNALMEDIA - ExternalMedia channel ready for connection", 
                                local_channel_id=local_channel_id,
                                caller_channel_id=caller_channel_id)
@@ -713,9 +725,12 @@ class Engine:
             
             # Store bridge info
             self.bridges[caller_channel_id] = bridge_id
-            if caller_channel_id in self.caller_channels:
-                self.caller_channels[caller_channel_id]["bridge_id"] = bridge_id
-                self.caller_channels[caller_channel_id]["status"] = "connected"
+            # Update session with bridge info
+            session = await self.session_store.get_by_call_id(caller_channel_id)
+            if session:
+                session.bridge_id = bridge_id
+                session.status = "connected"
+                await self.session_store.upsert_call(session)
             
             logger.info("Channels successfully bridged", 
                        bridge_id=bridge_id, 
@@ -749,28 +764,17 @@ class Engine:
             logger.info("🎯 HYBRID ARI - Starting provider session", provider=self.config.default_provider)
             await provider.start_session(caller_channel_id)
             
-            # Store in active calls with canonical call_id
-            bridge_id = self.caller_channels.get(caller_channel_id, {}).get("bridge_id")
-            self.active_calls[local_channel_id] = {
-                "provider": provider,
-                "conversation_state": "greeting",
-                "bridge_id": bridge_id,
-                "local_channel_id": local_channel_id,
-                "caller_channel_id": caller_channel_id,
-                "call_id": caller_channel_id,  # Canonical call identity
-                "audio_capture_enabled": False  # Disabled until greeting finishes
-            }
-            
-            # Also store reverse mapping for DTMF with canonical call_id
-            self.active_calls[caller_channel_id] = {
-                "provider": provider,
-                "conversation_state": "greeting",
-                "bridge_id": bridge_id,
-                "local_channel_id": local_channel_id,
-                "caller_channel_id": caller_channel_id,
-                "call_id": caller_channel_id,  # Canonical call identity
-                "audio_capture_enabled": False  # Disabled until greeting finishes
-            }
+            # Get session from SessionStore and update with Local channel info
+            session = await self.session_store.get_by_call_id(caller_channel_id)
+            if session:
+                session.local_channel_id = local_channel_id
+                session.status = "local_channel_created"
+                await self.session_store.upsert_call(session)
+                logger.info("🎯 HYBRID ARI - Session updated with Local channel", 
+                           caller_channel_id=caller_channel_id, 
+                           local_channel_id=local_channel_id)
+            else:
+                logger.warning("🎯 HYBRID ARI - No session found for caller", caller_channel_id=caller_channel_id)
             
             logger.info("🎯 HYBRID ARI - ✅ Provider session started", 
                        local_channel_id=local_channel_id, 
@@ -857,14 +861,16 @@ class Engine:
             conn_id = self.channel_to_conn.get(channel_id)
             if conn_id:
                 # Enable audio capture for this connection
-                if channel_id in self.active_calls:
-                    self.active_calls[channel_id]["audio_capture_enabled"] = True
+                session = await self.session_store.get_by_call_id(channel_id)
+                if session:
+                    session.audio_capture_enabled = True
+                    await self.session_store.upsert_call(session)
                     logger.info("🎤 AUDIO CAPTURE - ✅ Enabled after timer delay",
                                conn_id=conn_id,
                                channel_id=channel_id,
                                delay_seconds=delay_seconds)
                 else:
-                    logger.warning("🎤 AUDIO CAPTURE - Channel not found in active calls",
+                    logger.warning("🎤 AUDIO CAPTURE - Channel not found in sessions",
                                   conn_id=conn_id,
                                   channel_id=channel_id)
             else:
@@ -889,26 +895,17 @@ class Engine:
             # Start provider session
             await provider.start_session(local_channel_id)
             
-            # Store in active calls
-            bridge_id = self.caller_channels.get(caller_channel_id, {}).get("bridge_id")
-            self.active_calls[local_channel_id] = {
-                "provider": provider,
-                "conversation_state": "greeting",
-                "bridge_id": bridge_id,
-                "local_channel_id": local_channel_id,
-                "caller_channel_id": caller_channel_id,
-                "audio_capture_enabled": False  # Disabled until greeting finishes
-            }
-            
-            # Also store reverse mapping for DTMF
-            self.active_calls[caller_channel_id] = {
-                "provider": provider,
-                "conversation_state": "greeting",
-                "bridge_id": bridge_id,
-                "local_channel_id": local_channel_id,
-                "caller_channel_id": caller_channel_id,
-                "audio_capture_enabled": False  # Disabled until greeting finishes
-            }
+            # Get session from SessionStore and update with Local channel info
+            session = await self.session_store.get_by_call_id(caller_channel_id)
+            if session:
+                session.local_channel_id = local_channel_id
+                session.status = "local_channel_created"
+                await self.session_store.upsert_call(session)
+                logger.info("Session updated with Local channel", 
+                           caller_channel_id=caller_channel_id, 
+                           local_channel_id=local_channel_id)
+            else:
+                logger.warning("No session found for caller", caller_channel_id=caller_channel_id)
             
             logger.info("Provider session started", 
                        local_channel_id=local_channel_id, 
@@ -940,11 +937,12 @@ class Engine:
             self.conn_to_channel[conn_id] = channel_id
             self.channel_to_conn[channel_id] = conn_id
             logger.info("ExternalMedia connection bound to channel", channel_id=channel_id, conn_id=conn_id)
-            provider = self.active_calls.get(channel_id, {}).get('provider')
-            if not provider:
+            # Get session from SessionStore
+            session = await self.session_store.get_by_call_id(channel_id)
+            if session:
+                provider = self.providers.get(session.provider_name)
+            else:
                 provider = self.providers.get(provider_name)
-                if provider:
-                    self.active_calls[channel_id] = {"provider": provider}
             # Hint upstream audio format for providers: ExternalMedia delivers PCM16@8k by default
             try:
                 if provider and hasattr(provider, 'set_input_mode'):
@@ -968,7 +966,7 @@ class Engine:
             # Start provider session and optional greeting
             if provider:
                 # Check if provider session already exists for this channel
-                if channel_id in self.active_calls and self.active_calls[channel_id].get('provider'):
+                if session and session.provider_name:
                     logger.debug("Provider session already exists, skipping", channel_id=channel_id)
                 else:
                     logger.debug("Starting provider session", channel_id=channel_id, provider=provider_name)
@@ -999,11 +997,12 @@ class Engine:
             if not local_channel_id:
                 return
                 
-            # Find the corresponding caller channel ID
+            # Find the corresponding caller channel ID using SessionStore
             caller_channel_id = None
-            for caller_id, call_data in self.active_calls.items():
-                if call_data.get('local_channel_id') == local_channel_id:
-                    caller_channel_id = caller_id
+            sessions = await self.session_store.get_all_sessions()
+            for session in sessions:
+                if session.local_channel_id == local_channel_id:
+                    caller_channel_id = session.caller_channel_id
                     break
             
             if not caller_channel_id:
@@ -1055,29 +1054,23 @@ class Engine:
     async def _handle_audio_frame(self, audio_data: bytes):
         """Handle raw audio frames from ExternalMedia connections."""
         try:
-            # Find the active call (assuming single call for now)
-            # For ExternalMedia, we can use any active call since there should only be one
-            active_channel_id = None
-            for channel_id, call_data in self.active_calls.items():
-                    active_channel_id = channel_id
-                    break
-                    
-            if not active_channel_id:
+            # Find the active call using SessionStore
+            sessions = await self.session_store.get_all_sessions()
+            if not sessions:
                 logger.warning("No active call found for audio frame")
                 return
                 
-            call_data = self.active_calls.get(active_channel_id)
-            if not call_data:
-                logger.debug("No call data found for active channel")
-                return
+            # Use the first active session
+            session = sessions[0]
+            active_channel_id = session.caller_channel_id
                 
-            provider = call_data.get('provider')
+            provider = self.providers.get(session.provider_name)
             if not provider:
-                logger.debug("No provider found for active call")
+                logger.debug("No provider found for active call", provider_name=session.provider_name)
                 return
 
             # Check conversation state
-            conversation_state = call_data.get('conversation_state', 'greeting')
+            conversation_state = getattr(session, 'conversation_state', 'greeting')
             
             if conversation_state == 'greeting':
                 # During greeting phase, ignore incoming audio
@@ -1284,16 +1277,18 @@ class Engine:
             if not caller_channel_id:
                 # First packet from this SSRC - try to map it to an active ExternalMedia call
                 # We'll map to the most recent ExternalMedia call that doesn't have an SSRC yet
-                for channel_id, call_data in self.active_calls.items():
-                    if call_data.get("external_media_id") and not call_data.get("ssrc_mapped"):
+                sessions = await self.session_store.get_all_sessions()
+                for session in sessions:
+                    if session.external_media_id and not getattr(session, 'ssrc_mapped', False):
                         # This ExternalMedia call doesn't have an SSRC yet, map it
-                        caller_channel_id = channel_id
+                        caller_channel_id = session.caller_channel_id
                         self.ssrc_to_caller[ssrc] = caller_channel_id
-                        call_data["ssrc_mapped"] = True
+                        session.ssrc_mapped = True
+                        await self.session_store.upsert_call(session)
                         logger.info("SSRC mapped to caller on first packet", 
                                    ssrc=ssrc, 
                                    caller_channel_id=caller_channel_id,
-                                   external_media_id=call_data.get("external_media_id"))
+                                   external_media_id=session.external_media_id)
                         break
             
             # SIMPLIFIED: Always process audio for VAD - we'll implement smart loop prevention later
@@ -1763,10 +1758,11 @@ class Engine:
         try:
             await asyncio.sleep(delay)
             
-            if caller_channel_id in self.active_calls:
-                call_data = self.active_calls[caller_channel_id]
-                if not call_data.get("audio_capture_enabled", False):
-                    call_data["audio_capture_enabled"] = True
+            session = await self.session_store.get_by_call_id(caller_channel_id)
+            if session:
+                if not session.audio_capture_enabled:
+                    session.audio_capture_enabled = True
+                    await self.session_store.upsert_call(session)
                     logger.info("🎤 AUDIO CAPTURE - ✅ FALLBACK: Enabled after delay",
                                caller_channel_id=caller_channel_id,
                                delay=delay)
@@ -1851,41 +1847,22 @@ class Engine:
             # Generate call ID for RTP mapping
             call_id = f"call_{external_media_id}_{int(time.time())}"
             
-            # Store call data
-            call_data = {
-                "provider": provider,
-                "conversation_state": "greeting",
-                "bridge_id": self.caller_channels[caller_channel_id]["bridge_id"],
-                "external_media_id": external_media_id,
-                "external_media_call_id": call_id,
-                "audio_capture_enabled": False,
-                "tts_playing": False,  # Track TTS playback state
-                "tts_tokens": set(),   # Track active playback IDs for overlapping TTS
-                "tts_active_count": 0  # Refcount for overlapping TTS segments
-            }
+            # Get session from SessionStore
+            session = await self.session_store.get_by_call_id(caller_channel_id)
+            if not session:
+                logger.error("No session found for caller channel", caller_channel_id=caller_channel_id)
+                return
             
-            self.active_calls[caller_channel_id] = call_data
-            
-            # Register CallSession in SessionStore for PlaybackManager
-            from .core.models import CallSession
-            session = CallSession(
-                call_id=caller_channel_id,  # Use caller_channel_id as canonical call_id
-                caller_channel_id=caller_channel_id,
-                external_media_id=external_media_id,
-                external_media_call_id=call_id,
-                bridge_id=self.caller_channels[caller_channel_id]["bridge_id"],
-                provider_name=provider_name,
-                conversation_state="greeting",
-                audio_capture_enabled=False,
-                tts_playing=False,
-                tts_tokens=set(),
-                tts_active_count=0
-            )
+            # Update session with ExternalMedia info
+            session.external_media_id = external_media_id
+            session.status = "external_media_created"
             await self.session_store.upsert_call(session)
-            logger.info("🔧 MIGRATION - Created CallSession from Engine state", call_id=caller_channel_id)
+            logger.info("🔧 MIGRATION - Updated session with ExternalMedia info", 
+                       call_id=caller_channel_id, 
+                       external_media_id=external_media_id)
             
-            # Store mapping for RTP audio routing
-            self.external_media_to_caller[external_media_id] = caller_channel_id
+            # RTP audio routing now handled by SessionStore
+            logger.debug("RTP audio routing handled by SessionStore")
             logger.info("ExternalMedia channel mapped to caller", 
                        caller_channel_id=caller_channel_id,
                        external_media_id=external_media_id,
@@ -1930,12 +1907,15 @@ class Engine:
     async def _play_greeting_external_media(self, caller_channel_id: str, greeting_text: str):
         """Play greeting audio for ExternalMedia channel using PlaybackManager."""
         try:
-            # Get provider
-            call_data = self.active_calls.get(caller_channel_id, {})
-            provider = call_data.get("provider")
-            
+            # Get session and provider
+            session = await self.session_store.get_by_call_id(caller_channel_id)
+            if not session:
+                logger.error("No session found for greeting", caller_channel_id=caller_channel_id)
+                return
+                
+            provider = self.providers.get(session.provider_name)
             if not provider:
-                logger.error("No provider found for greeting", caller_channel_id=caller_channel_id)
+                logger.error("No provider found for greeting", caller_channel_id=caller_channel_id, provider_name=session.provider_name)
                 return
             
             # Generate TTS audio
@@ -2079,17 +2059,10 @@ class Engine:
             # Route audio to appropriate provider
             channel_id = self.conn_to_channel.get(conn_id)
             if channel_id:
-                call_data = self.active_calls.get(channel_id)
-                if not call_data:
-                    logger.warning("No active call data for audio frame", 
-                                   conn_id=conn_id, channel_id=channel_id)
-                    return
-                provider = call_data.get('provider')
-                if provider:
-                    asyncio.create_task(provider.send_audio(frame))
-                else:
-                    logger.warning("No provider found for audio frame", 
-                                   conn_id=conn_id, channel_id=channel_id)
+                # This method is not currently used - audio routing is handled elsewhere
+                logger.debug("_route_audio_frame called but not used", 
+                           conn_id=conn_id, channel_id=channel_id)
+                return
             else:
                 # Headless mapping by conn_id
                 session = self.headless_sessions.get(conn_id)
@@ -2133,7 +2106,7 @@ class Engine:
                     "ari_connected": bool(self.ari_client and self.ari_client.running),
                     "rtp_server_running": bool(getattr(self, 'rtp_server', None) and getattr(self.rtp_server, 'running', False)),
                     "audio_transport": self.config.audio_transport,
-                    "active_calls": len(self.active_calls),
+                    "active_calls": len(await self.session_store.get_all_sessions()),
                     "providers": providers,
                     "rtp_server": rtp_stats,
                 }
@@ -2196,10 +2169,11 @@ class Engine:
         
         # Finalize delayed cleanup after TTS finishes
         channels_to_cleanup = []
-        for channel_id, call_data in self.active_calls.items():
-            if call_data.get("cleanup_after_tts"):
-                channels_to_cleanup.append(channel_id)
-                logger.info("🔧 Finalizing delayed cleanup", channel_id=channel_id)
+        sessions = await self.session_store.get_all_sessions()
+        for session in sessions:
+            if getattr(session, 'cleanup_after_tts', False):
+                channels_to_cleanup.append(session.call_id)
+                logger.info("🔧 Finalizing delayed cleanup", channel_id=session.call_id)
         
         # Clean up channels that were marked for delayed cleanup
         for channel_id in channels_to_cleanup:
@@ -2209,7 +2183,7 @@ class Engine:
         if channels_to_cleanup:
             logger.info("🔧 Delayed cleanup completed", 
                        channels_cleaned=len(channels_to_cleanup),
-                       remaining_calls=len(self.active_calls))
+                       remaining_calls=len(sessions))
 
     async def _externalmedia_keepalive(self, conn_id: str):
         """Send periodic keepalive to prevent ExternalMedia idle timeouts."""
@@ -2245,38 +2219,40 @@ class Engine:
                         # File-based playback via ARI (default path) - target specific call
                         target_channel_id = None
                         if call_id:
-                            # First try: call_id as direct key in active_calls
-                            if call_id in self.active_calls:
-                                target_channel_id = call_id
+                            # First try: call_id as direct key in SessionStore
+                            session = await self.session_store.get_by_call_id(call_id)
+                            if session:
+                                target_channel_id = session.caller_channel_id
                             else:
-                                # Second try: find by call_id in active_calls values
-                                for channel_id, call_data in self.active_calls.items():
-                                    if call_data.get("call_id") == call_id:
-                                        # Prefer caller_channel_id if present and active
-                                        if call_data.get("caller_channel_id") and call_data["caller_channel_id"] in self.active_calls:
-                                            target_channel_id = call_data["caller_channel_id"]
-                                        else:
-                                            target_channel_id = channel_id
+                                # Second try: find by call_id in all sessions
+                                sessions = await self.session_store.get_all_sessions()
+                                for s in sessions:
+                                    if s.call_id == call_id:
+                                        target_channel_id = s.caller_channel_id
                                         break
                         
                         if not target_channel_id:
                             # Fallback: use the first active call (for backward compatibility)
-                            target_channel_id = next(iter(self.active_calls.keys()), None)
+                            sessions = await self.session_store.get_all_sessions()
+                            if sessions:
+                                target_channel_id = sessions[0].caller_channel_id
                             logger.warning("AgentAudio routing fallback used", 
                                          call_id=call_id, 
                                          target_channel_id=target_channel_id,
-                                         active_calls_keys=list(self.active_calls.keys()),
-                                         active_calls_count=len(self.active_calls))
+                                         active_sessions_count=len(sessions))
                         else:
                             logger.debug("AgentAudio routing successful", 
                                        call_id=call_id, 
                                        target_channel_id=target_channel_id,
-                                       routing_method="direct" if call_id in self.active_calls else "lookup")
+                                       routing_method="direct" if session else "lookup")
                         
                         if target_channel_id:
-                            # Get call data first
-                            call_data = self.active_calls[target_channel_id]
-                            call_id = call_data.get("call_id", target_channel_id)
+                            # Get session from SessionStore
+                            session = await self.session_store.get_by_call_id(target_channel_id)
+                            if not session:
+                                logger.warning("No session found for target channel", target_channel_id=target_channel_id)
+                                return
+                            call_id = session.call_id
                             
                             # Use PlaybackManager for TTS playback - it handles all gating logic
                             playback_id = await self.playback_manager.play_audio(
@@ -2446,15 +2422,8 @@ class Engine:
                        channel_id=channel_id,
                        canonical_call_id=canonical_call_id)
             
-            # Store playback mapping for PlaybackFinished event with canonical call_id
-            self.active_playbacks[playback_id] = {
-                "call_id": canonical_call_id,  # Use canonical call_id
-                "channel_id": channel_id,
-                "bridge_id": bridge_id,
-                "media_uri": asterisk_media_uri,
-                "audio_file": container_path,
-                "ts": time.time()
-            }
+            # Legacy method - playback tracking now handled by PlaybackManager
+            logger.debug("Legacy _play_ai_audio method - playback tracking handled by PlaybackManager")
             logger.info("🔊 TTS TRACKING - Playback mapped for TTS gating", 
                        playback_id=playback_id, 
                        channel_id=channel_id)
