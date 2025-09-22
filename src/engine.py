@@ -1314,15 +1314,15 @@ class Engine:
                 logger.debug("RTP audio received for unknown SSRC", ssrc=ssrc)
                 return
             
-            # Check if call is still active
-            if caller_channel_id not in self.active_calls:
+            # Check if call is still active using SessionStore
+            session = await self.session_store.get_by_call_id(caller_channel_id)
+            if not session:
                 logger.debug("RTP audio received for inactive call", ssrc=ssrc, caller_channel_id=caller_channel_id)
                 return
             
             # Check if audio capture is enabled (set by PlaybackFinished event)
-            call_data = self.active_calls.get(caller_channel_id, {})
-            audio_capture_enabled = call_data.get("audio_capture_enabled", False)
-            tts_playing = call_data.get("tts_playing", False)
+            audio_capture_enabled = session.audio_capture_enabled
+            tts_playing = session.tts_playing
             
             logger.info("🎤 AUDIO CAPTURE - Check", ssrc=ssrc, caller_channel_id=caller_channel_id, audio_capture_enabled=audio_capture_enabled, tts_playing=tts_playing)
             
@@ -1332,7 +1332,7 @@ class Engine:
                 return
             
             # Get provider for this call
-            provider = call_data.get("provider")
+            provider = self.providers.get(session.provider_name)
             if not provider:
                 logger.warning("No provider found for RTP audio", ssrc=ssrc, caller_channel_id=caller_channel_id)
                 return
