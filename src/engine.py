@@ -2156,7 +2156,7 @@ class Engine:
                 return web.json_response({"error": "health handler failed"}, status=500)
 
         async def handle_metrics(request):
-            return web.Response(body=generate_latest(), content_type=CONTENT_TYPE_LATEST)
+            return web.Response(body=generate_latest(), headers={"Content-Type": CONTENT_TYPE_LATEST})
 
         app = web.Application()
         app.router.add_get('/health', handle_health)
