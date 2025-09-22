@@ -30,6 +30,7 @@ class CallSession:
     caller_channel_id: str
     local_channel_id: Optional[str] = None
     external_media_id: Optional[str] = None
+    external_media_call_id: Optional[str] = None
     bridge_id: Optional[str] = None
     
     # Provider and conversation state
