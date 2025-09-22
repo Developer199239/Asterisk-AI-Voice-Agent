@@ -309,7 +309,7 @@ class Engine:
         channel_name = channel.get('name', '')
         return channel_name.startswith('UnicastRTP/')
 
-    def _find_caller_for_local(self, local_channel_id: str) -> Optional[str]:
+    async def _find_caller_for_local(self, local_channel_id: str) -> Optional[str]:
         """Find the caller channel that corresponds to this Local channel."""
         # Check if we have a pending Local channel mapping
         if local_channel_id in self.pending_local_channels:
@@ -497,7 +497,7 @@ class Engine:
                    local_channel_id=local_channel_id)
         
         # Find the caller channel that this Local channel belongs to
-        caller_channel_id = self._find_caller_for_local(local_channel_id)
+        caller_channel_id = await self._find_caller_for_local(local_channel_id)
         if not caller_channel_id:
             logger.error("🎯 HYBRID ARI - No caller found for Local channel", 
                         local_channel_id=local_channel_id)
@@ -586,7 +586,7 @@ class Engine:
         
         try:
             # Find the caller this Local channel belongs to
-            caller_channel_id = self._find_caller_for_local(local_channel_id)
+            caller_channel_id = await self._find_caller_for_local(local_channel_id)
             if not caller_channel_id:
                 logger.error("No caller found for Local channel", local_channel_id=local_channel_id)
                 await self.ari_client.hangup_channel(local_channel_id)
@@ -605,7 +605,7 @@ class Engine:
                         local_channel_id=local_channel_id, 
                         error=str(e), exc_info=True)
             # Clean up both channels
-            caller_channel_id = self._find_caller_for_local(local_channel_id)
+            caller_channel_id = await self._find_caller_for_local(local_channel_id)
             if caller_channel_id:
                 await self._cleanup_call(caller_channel_id)
             await self.ari_client.hangup_channel(local_channel_id)
