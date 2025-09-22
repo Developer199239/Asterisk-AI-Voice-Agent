@@ -1964,7 +1964,8 @@ class Engine:
                 playback_id = await self.playback_manager.play_audio(
                     call_id, 
                     audio_data, 
-                    playback_type="greeting"
+                    playback_type="greeting",
+                    engine=self
                 )
                 
                 if playback_id:
@@ -2398,7 +2399,8 @@ class Engine:
                             playback_id = await self.playback_manager.play_audio(
                                 call_id, 
                                 audio_data, 
-                                playback_type="response"
+                                playback_type="response",
+                                engine=self
                             )
                             
                             if playback_id:
