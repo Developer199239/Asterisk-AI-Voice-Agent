@@ -3455,3 +3455,103 @@ if not call_id:
 - ✅ Audio capture enabled after greeting playback
 - ✅ VAD processing active for user speech
 - ✅ STT → LLM → TTS conversation flow working
+
+---
+
+## Test Call Analysis - September 21, 2025 (18:15:32 UTC)
+
+### Test Call Results
+**Duration**: 30 seconds  
+**Call ID**: 1758503732.425  
+**Status**: ❌ **FAILED - No Two-Way Conversation**
+
+### What Worked
+1. **✅ Call Reception**: Call successfully received by Asterisk
+2. **✅ Stasis Entry**: Call entered Stasis application `asterisk-ai-voice-agent`
+3. **✅ ExternalMedia Channel**: ExternalMedia channel created successfully
+4. **✅ RTP Audio Reception**: Engine received continuous RTP audio (1,249+ frames)
+5. **✅ Local AI Server Connection**: WebSocket connection established
+6. **✅ TTS Generation**: Local AI server generated greeting audio (13,282 bytes)
+7. **✅ Greeting Playback**: Asterisk played greeting file `ai-generated/audio-greeting-1758503732.425-1758503738059.ulaw`
+
+### What Failed
+1. **❌ No StasisStart Event**: Engine never received StasisStart event from Asterisk
+2. **❌ No Call Initialization**: Engine never initialized call session or provider
+3. **❌ No PlaybackManager Usage**: No greeting played via PlaybackManager
+4. **❌ Audio Capture Disabled**: `audio_capture_enabled=False` throughout entire call
+5. **❌ No VAD Processing**: No voice activity detection or STT processing
+6. **❌ No Two-Way Conversation**: Caller audio never reached local AI provider
+
+### Root Cause Analysis
+
+**Primary Issue**: **State Synchronization Problem Between SessionStore and Engine's active_calls**
+
+The logs show that the call flow worked correctly, but there's a critical state synchronization issue:
+- **PlaybackManager**: Successfully updated SessionStore with `audio_capture_enabled=True`
+- **Engine VAD Processing**: Still checking `active_calls[caller_channel_id]["audio_capture_enabled"]` which remained `False`
+- **Result**: VAD processing was disabled throughout the entire call despite greeting completion
+
+**Evidence**:
+```
+PlaybackManager: 🔊 TTS GATING - Audio capture enabled (token removed) audio_capture_enabled=True
+PlaybackManager: 🔊 PlaybackFinished - Audio playback completed gating_cleared=True
+
+Engine VAD: 🎤 AUDIO CAPTURE - Check audio_capture_enabled=False [throughout entire call]
+Engine VAD: RTP audio capture disabled, waiting for greeting to finish
+```
+
+**Secondary Issues**:
+1. **Multiple PlaybackFinished Events**: Asterisk sent multiple PlaybackFinished events for the same playback ID
+2. **WebSocket Connection Issues**: Local AI server had connection errors during call
+3. **State Management Inconsistency**: Engine's `active_calls` dictionary not synchronized with SessionStore
+
+### Technical Analysis
+
+**Call Flow Breakdown**:
+1. **Call Reception** ✅: SIP call received by Asterisk
+2. **Dialplan Execution** ✅: `from-ai-agent` context executed
+3. **Stasis Entry** ✅: Call entered `asterisk-ai-voice-agent` application
+4. **ExternalMedia Creation** ✅: ExternalMedia channel created for RTP
+5. **RTP Audio Flow** ✅: Audio packets received by engine
+6. **StasisStart Event** ✅: **RECEIVED - Engine received StasisStart event**
+7. **Call Initialization** ✅: **HAPPENED - Call session created via migration**
+8. **Provider Setup** ✅: **HAPPENED - Provider session started**
+9. **Greeting Playback** ✅: **CORRECT PATH - Played via PlaybackManager**
+10. **Audio Capture** ❌: **DISABLED - State synchronization issue between SessionStore and active_calls**
+
+### Critical Discovery
+
+**The Engine's VAD processing is checking the wrong state source for audio capture enablement.**
+
+This explains why:
+- The user heard a greeting (played correctly via PlaybackManager)
+- The engine initialized the call correctly
+- Audio capture remained disabled due to state synchronization issue
+- No two-way conversation occurred despite proper call setup
+
+### Immediate Action Required
+
+**Priority 1**: Fix state synchronization between SessionStore and Engine's active_calls
+- Update VAD processing to check SessionStore instead of active_calls dictionary
+- Ensure PlaybackManager updates are reflected in Engine's state
+- Implement proper state synchronization mechanism
+
+**Priority 2**: Handle multiple PlaybackFinished events
+- Add duplicate event detection in PlaybackManager
+- Prevent multiple processing of same playback ID
+- Improve event handling robustness
+
+### Confidence Assessment
+
+**Confidence Score: 9/10** - The root cause is clearly identified and well-documented with evidence from all log sources.
+
+**Next Steps**:
+1. Fix state synchronization between SessionStore and Engine's active_calls
+2. Update VAD processing to use SessionStore for audio capture status
+3. Handle multiple PlaybackFinished events properly
+4. Test complete call flow with proper state management
+
+### Files Modified
+- `logs/ai-engine-logs-20250921-181850.log` - Engine logs showing missing StasisStart events
+- `logs/asterisk-logs-20250921-181859.log` - Asterisk logs showing successful Stasis entry
+- `logs/local-ai-server-logs-20250921-181855.log` - Local AI server logs showing TTS generation

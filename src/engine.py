@@ -1356,19 +1356,28 @@ class Engine:
             # AUDIO CAPTURE: Capture raw RTP audio frames
             # ARCHITECT FIX: TTS feedback loop prevention gate
             # Prevent LLM from hearing its own TTS responses
-            call_data = self.active_calls.get(caller_channel_id, {})
-            if call_data.get("tts_playing", False):
+            session = await self.session_store.get_by_call_id(caller_channel_id)
+            if not session:
+                logger.debug("🎤 AUDIO CAPTURE - No session found for call", caller_channel_id=caller_channel_id)
+                return  # Skip VAD processing if no session
+            
+            if session.tts_playing:
                 logger.debug("🎤 TTS GATING - Skipping VAD processing during TTS playback", 
                            caller_channel_id=caller_channel_id,
                            tts_playing=True)
                 return  # Skip VAD processing during TTS playback
             
             # CRITICAL FIX: Check if audio capture is enabled
-            if not call_data.get("audio_capture_enabled", False):
+            if not session.audio_capture_enabled:
+                logger.debug("🎤 AUDIO CAPTURE - Check", 
+                           audio_capture_enabled=session.audio_capture_enabled,
+                           caller_channel_id=caller_channel_id,
+                           ssrc=ssrc,
+                           tts_playing=session.tts_playing)
                 return  # Skip VAD processing when audio capture is disabled
             # Get or initialize VAD state for this call
-            if "vad_state" not in self.active_calls[caller_channel_id]:
-                self.active_calls[caller_channel_id]["vad_state"] = {
+            if not session.vad_state:
+                session.vad_state = {
                     "state": "listening",  # 'listening' | 'recording' | 'processing'
                     "speaking": False,  # AVR-VAD inspired: main speech state
                     "speech_real_start_fired": False,  # Confirmation state
@@ -1401,7 +1410,7 @@ class Engine:
                     "frame_buffer": b"",  # Buffer for accumulating audio to slice into exact 640-byte frames
                 }
             
-            vad_state = self.active_calls[caller_channel_id]["vad_state"]
+            vad_state = session.vad_state
             
             # ARCHITECT FIX: Use consistent monotonic time base
             if "t0_ms" not in vad_state:
@@ -1660,24 +1669,24 @@ class Engine:
     async def _fallback_audio_processing(self, caller_channel_id: str, ssrc: int, pcm_16k_data: bytes, provider):
         """Fallback audio processing when VAD fails to detect speech."""
         try:
-            call_data = self.active_calls.get(caller_channel_id, {})
-            if not call_data:
+            session = await self.session_store.get_by_call_id(caller_channel_id)
+            if not session:
                 return
             
             # Initialize fallback state if not present
-            if "fallback_state" not in call_data:
-                call_data["fallback_state"] = {
+            if not session.fallback_state:
+                session.fallback_state = {
                     "audio_buffer": b"",
                     "last_vad_speech_time": time.time(),
                     "buffer_start_time": None,
                     "frame_count": 0
                 }
             
-            fallback_state = call_data["fallback_state"]
+            fallback_state = session.fallback_state
             fallback_state["frame_count"] += 1
             
             # Check if VAD has detected speech recently
-            vad_state = call_data.get("vad_state", {})
+            vad_state = session.vad_state or {}
             last_speech_time = vad_state.get("last_voice_ms", 0) / 1000.0  # Convert to seconds
             current_time = time.time()
             time_since_speech = current_time - last_speech_time
@@ -1709,11 +1718,11 @@ class Engine:
             if buffer_duration >= fallback_interval or buffer_size >= fallback_buffer_size:
                 # ARCHITECT FIX: Check TTS gating before sending fallback audio
                 # Prevent AI from processing its own TTS responses
-                if call_data.get("tts_playing", False) or not call_data.get("audio_capture_enabled", False):
+                if session.tts_playing or not session.audio_capture_enabled:
                     logger.debug("🔄 FALLBACK - Skipping STT during TTS playback", 
                                caller_channel_id=caller_channel_id,
-                               tts_playing=call_data.get("tts_playing", False),
-                               audio_capture_enabled=call_data.get("audio_capture_enabled", False))
+                               tts_playing=session.tts_playing,
+                               audio_capture_enabled=session.audio_capture_enabled)
                     # Reset buffer and return to avoid processing TTS audio
                     fallback_state["audio_buffer"] = b""
                     fallback_state["buffer_start_time"] = None
@@ -1901,6 +1910,24 @@ class Engine:
             
             self.active_calls[caller_channel_id] = call_data
             
+            # Register CallSession in SessionStore for PlaybackManager
+            from .core.models import CallSession
+            session = CallSession(
+                call_id=caller_channel_id,  # Use caller_channel_id as canonical call_id
+                caller_channel_id=caller_channel_id,
+                external_media_id=external_media_id,
+                external_media_call_id=call_id,
+                bridge_id=self.caller_channels[caller_channel_id]["bridge_id"],
+                provider_name=provider_name,
+                conversation_state="greeting",
+                audio_capture_enabled=False,
+                tts_playing=False,
+                tts_tokens=set(),
+                tts_active_count=0
+            )
+            await self.session_store.upsert_call(session)
+            logger.info("🔧 MIGRATION - Created CallSession from Engine state", call_id=caller_channel_id)
+            
             # Store mapping for RTP audio routing
             self.external_media_to_caller[external_media_id] = caller_channel_id
             logger.info("ExternalMedia channel mapped to caller", 
@@ -1964,8 +1991,7 @@ class Engine:
                 playback_id = await self.playback_manager.play_audio(
                     call_id, 
                     audio_data, 
-                    playback_type="greeting",
-                    engine=self
+                    playback_type="greeting"
                 )
                 
                 if playback_id:
@@ -2399,8 +2425,7 @@ class Engine:
                             playback_id = await self.playback_manager.play_audio(
                                 call_id, 
                                 audio_data, 
-                                playback_type="response",
-                                engine=self
+                                playback_type="response"
                             )
                             
                             if playback_id:

@@ -168,6 +168,16 @@ class PlaybackManager:
             with open(file_path, 'wb') as f:
                 f.write(audio_bytes)
             
+            # Set file ownership for Asterisk readability (UID:GID 995:995)
+            try:
+                os.chown(file_path, 995, 995)
+                logger.debug("Audio file ownership set for Asterisk",
+                            file_path=file_path)
+            except OSError as e:
+                logger.warning("Failed to set file ownership for Asterisk",
+                              file_path=file_path,
+                              error=str(e))
+            
             logger.debug("Audio file created",
                         file_path=file_path,
                         size=len(audio_bytes))
