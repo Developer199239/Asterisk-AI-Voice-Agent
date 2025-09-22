@@ -9,11 +9,14 @@ token-aware gating.
 import asyncio
 import time
 import os
-from typing import Optional, Dict
+from typing import Optional, Dict, TYPE_CHECKING
 import structlog
 
 from src.core.session_store import SessionStore
 from src.core.models import PlaybackRef, CallSession
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from src.core.conversation_coordinator import ConversationCoordinator
 
 logger = structlog.get_logger(__name__)
 
@@ -30,10 +33,17 @@ class PlaybackManager:
     - Provide fallback mechanisms
     """
     
-    def __init__(self, session_store: SessionStore, ari_client, media_dir: str = "/mnt/asterisk_media/ai-generated"):
+    def __init__(
+        self,
+        session_store: SessionStore,
+        ari_client,
+        media_dir: str = "/mnt/asterisk_media/ai-generated",
+        conversation_coordinator: Optional["ConversationCoordinator"] = None,
+    ):
         self.session_store = session_store
         self.ari_client = ari_client
         self.media_dir = media_dir
+        self.conversation_coordinator = conversation_coordinator
         
         # Ensure media directory exists
         os.makedirs(media_dir, exist_ok=True)
@@ -71,14 +81,32 @@ class PlaybackManager:
             if not audio_file:
                 return None
             
-            # Set TTS gating before playing
-            await self.session_store.set_gating_token(call_id, playback_id)
+            # Set TTS gating before playing (via coordinator if available)
+            gating_success = True
+            if self.conversation_coordinator:
+                gating_success = await self.conversation_coordinator.on_tts_start(call_id, playback_id)
+            else:
+                gating_success = await self.session_store.set_gating_token(call_id, playback_id)
+
+            if not gating_success:
+                logger.error(
+                    "Failed to start playback gating",
+                    call_id=call_id,
+                    playback_id=playback_id,
+                )
+                if self.conversation_coordinator:
+                    await self.conversation_coordinator.update_conversation_state(call_id, "listening")
+                return None
             
             # Play audio via ARI
             success = await self._play_via_ari(session, audio_file, playback_id)
             if not success:
                 # Cleanup gating token if playback failed
-                await self.session_store.clear_gating_token(call_id, playback_id)
+                if self.conversation_coordinator:
+                    await self.conversation_coordinator.cancel_tts(call_id, playback_id)
+                    await self.conversation_coordinator.update_conversation_state(call_id, "listening")
+                else:
+                    await self.session_store.clear_gating_token(call_id, playback_id)
                 return None
             
             # Create playback reference
@@ -132,8 +160,19 @@ class PlaybackManager:
                 return False
             
             # Clear TTS gating token
-            success = await self.session_store.clear_gating_token(
-                playback_ref.call_id, playback_id)
+            if self.conversation_coordinator:
+                success = await self.conversation_coordinator.on_tts_end(
+                    playback_ref.call_id,
+                    playback_id,
+                    reason="playback-finished",
+                )
+                await self.conversation_coordinator.update_conversation_state(
+                    playback_ref.call_id,
+                    "listening",
+                )
+            else:
+                success = await self.session_store.clear_gating_token(
+                    playback_ref.call_id, playback_id)
             
             # Clean up audio file
             await self._cleanup_audio_file(playback_ref.audio_file)
@@ -290,7 +329,18 @@ class PlaybackManager:
             playback_ref = await self.session_store.get_playback(playback_id)
             if playback_ref:
                 # Playback still active, clear gating token as fallback
-                success = await self.session_store.clear_gating_token(call_id, playback_id)
+                if self.conversation_coordinator:
+                    success = await self.conversation_coordinator.on_tts_end(
+                        call_id,
+                        playback_id,
+                        reason="gating-fallback",
+                    )
+                    await self.conversation_coordinator.update_conversation_state(
+                        call_id,
+                        "listening",
+                    )
+                else:
+                    success = await self.session_store.clear_gating_token(call_id, playback_id)
                 logger.warning("🔊 GATING FALLBACK - Cleared gating token due to missing PlaybackFinished",
                               call_id=call_id,
                               playback_id=playback_id,

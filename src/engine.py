@@ -21,6 +21,8 @@ except ImportError:
     WEBRTC_VAD_AVAILABLE = False
     webrtcvad = None
 
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+
 from .ari_client import ARIClient
 from aiohttp import web
 from .config import AppConfig, load_config, LocalProviderConfig
@@ -29,6 +31,8 @@ from .rtp_server import RTPServer
 from .providers.base import AIProviderInterface
 from .providers.deepgram import DeepgramProvider
 from .providers.local import LocalProvider
+from .core import SessionStore, PlaybackManager, ConversationCoordinator
+from .core.models import CallSession
 
 logger = get_logger(__name__)
 
@@ -114,9 +118,13 @@ class Engine:
         self.ari_client.engine = self
         
         # Initialize core components
-        from .core import SessionStore, PlaybackManager
         self.session_store = SessionStore()
-        self.playback_manager = PlaybackManager(self.session_store, self.ari_client)
+        self.conversation_coordinator = ConversationCoordinator(self.session_store)
+        self.playback_manager = PlaybackManager(
+            self.session_store,
+            self.ari_client,
+            conversation_coordinator=self.conversation_coordinator,
+        )
         
         self.providers: Dict[str, AIProviderInterface] = {}
         self.conn_to_channel: Dict[str, str] = {}
@@ -193,6 +201,15 @@ class Engine:
     async def _on_ari_event(self, event: Dict[str, Any]):
         """Default event handler for unhandled ARI events."""
         logger.debug("Received unhandled ARI event", event_type=event.get("type"), event=event)
+
+    async def _save_session(self, session: CallSession, *, new: bool = False) -> None:
+        """Persist session updates and keep coordinator metrics in sync."""
+        await self.session_store.upsert_call(session)
+        if self.conversation_coordinator:
+            if new:
+                await self.conversation_coordinator.register_call(session)
+            else:
+                await self.conversation_coordinator.sync_from_session(session)
 
     async def start(self):
         """Connect to ARI and start the engine."""
@@ -454,7 +471,7 @@ class Engine:
                 audio_capture_enabled=False,
                 status="connected"
             )
-            await self.session_store.upsert_call(session)
+            await self._save_session(session, new=True)
             logger.info("🎯 HYBRID ARI - Step 4: ✅ Caller session created and stored", 
                        channel_id=caller_channel_id, 
                        bridge_id=bridge_id)
@@ -467,7 +484,7 @@ class Engine:
                     # Update session with ExternalMedia ID
                     session.external_media_id = external_media_id
                     session.status = "external_media_created"
-                    await self.session_store.upsert_call(session)
+                    await self._save_session(session)
                     logger.info("🎯 EXTERNAL MEDIA - ExternalMedia channel created, session updated", 
                                channel_id=caller_channel_id, 
                                external_media_id=external_media_id)
@@ -520,7 +537,7 @@ class Engine:
                 # Update session with Local channel info
                 session.local_channel_id = local_channel_id
                 session.status = "connected"
-                await self.session_store.upsert_call(session)
+                await self._save_session(session)
                 self.local_channels[caller_channel_id] = local_channel_id
                 
                 
@@ -557,7 +574,6 @@ class Engine:
             logger.info("Caller channel answered", channel_id=caller_channel_id)
             
             # Create session in SessionStore
-            from .core.models import CallSession
             session = CallSession(
                 call_id=caller_channel_id,
                 caller_channel_id=caller_channel_id,
@@ -565,7 +581,7 @@ class Engine:
                 status="waiting_for_local",
                 audio_capture_enabled=False
             )
-            await self.session_store.upsert_call(session)
+            await self._save_session(session, new=True)
             
             # Originate Local channel
             await self._originate_local_channel(caller_channel_id)
@@ -594,7 +610,7 @@ class Engine:
             session = await self.session_store.get_by_call_id(caller_channel_id)
             if session:
                 session.local_channel_id = local_channel_id
-                await self.session_store.upsert_call(session)
+                await self._save_session(session)
                 self.local_channels[caller_channel_id] = local_channel_id
             
             # Create bridge and connect channels
@@ -645,7 +661,7 @@ class Engine:
                 session = await self.session_store.get_by_call_id(caller_channel_id)
                 if session:
                     session.external_media_id = local_channel_id
-                    await self.session_store.upsert_call(session)
+                    await self._save_session(session)
                     logger.info("🎯 DIALPLAN EXTERNALMEDIA - ExternalMedia channel ready for connection", 
                                local_channel_id=local_channel_id,
                                caller_channel_id=caller_channel_id)
@@ -730,7 +746,7 @@ class Engine:
             if session:
                 session.bridge_id = bridge_id
                 session.status = "connected"
-                await self.session_store.upsert_call(session)
+                await self._save_session(session)
             
             logger.info("Channels successfully bridged", 
                        bridge_id=bridge_id, 
@@ -769,7 +785,7 @@ class Engine:
             if session:
                 session.local_channel_id = local_channel_id
                 session.status = "local_channel_created"
-                await self.session_store.upsert_call(session)
+                await self._save_session(session)
                 logger.info("🎯 HYBRID ARI - Session updated with Local channel", 
                            caller_channel_id=caller_channel_id, 
                            local_channel_id=local_channel_id)
@@ -864,7 +880,7 @@ class Engine:
                 session = await self.session_store.get_by_call_id(channel_id)
                 if session:
                     session.audio_capture_enabled = True
-                    await self.session_store.upsert_call(session)
+                    await self._save_session(session)
                     logger.info("🎤 AUDIO CAPTURE - ✅ Enabled after timer delay",
                                conn_id=conn_id,
                                channel_id=channel_id,
@@ -900,7 +916,7 @@ class Engine:
             if session:
                 session.local_channel_id = local_channel_id
                 session.status = "local_channel_created"
-                await self.session_store.upsert_call(session)
+                await self._save_session(session)
                 logger.info("Session updated with Local channel", 
                            caller_channel_id=caller_channel_id, 
                            local_channel_id=local_channel_id)
@@ -1284,7 +1300,7 @@ class Engine:
                         caller_channel_id = session.caller_channel_id
                         self.ssrc_to_caller[ssrc] = caller_channel_id
                         session.ssrc_mapped = True
-                        await self.session_store.upsert_call(session)
+                        await self._save_session(session)
                         logger.info("SSRC mapped to caller on first packet", 
                                    ssrc=ssrc, 
                                    caller_channel_id=caller_channel_id,
@@ -1312,6 +1328,8 @@ class Engine:
             
             # ARCHITECT FIX: Drop gated frames as early as possible
             if not audio_capture_enabled or tts_playing:
+                if tts_playing and self.conversation_coordinator:
+                    self.conversation_coordinator.note_audio_during_tts(caller_channel_id)
                 logger.debug("RTP audio dropped - capture disabled or TTS playing", 
                            ssrc=ssrc, caller_channel_id=caller_channel_id,
                            audio_capture_enabled=audio_capture_enabled, tts_playing=tts_playing)
@@ -1348,6 +1366,8 @@ class Engine:
                 return  # Skip VAD processing if no session
             
             if session.tts_playing:
+                if self.conversation_coordinator:
+                    self.conversation_coordinator.note_audio_during_tts(caller_channel_id)
                 logger.debug("🎤 TTS GATING - Skipping VAD processing during TTS playback", 
                            caller_channel_id=caller_channel_id,
                            tts_playing=True)
@@ -1647,6 +1667,11 @@ class Engine:
                             
                             # Send to provider
                             await provider.send_audio(buf)
+                            if self.conversation_coordinator:
+                                await self.conversation_coordinator.update_conversation_state(
+                                    caller_channel_id,
+                                    "processing",
+                                )
                             logger.info("🎤 VAD - Utterance sent to provider", 
                                        caller_channel_id=caller_channel_id,
                                        utterance_id=vs["utterance_id"],
@@ -1723,6 +1748,8 @@ class Engine:
                 # ARCHITECT FIX: Check TTS gating before sending fallback audio
                 # Prevent AI from processing its own TTS responses
                 if session.tts_playing or not session.audio_capture_enabled:
+                    if session.tts_playing and self.conversation_coordinator:
+                        self.conversation_coordinator.note_audio_during_tts(caller_channel_id)
                     logger.debug("🔄 FALLBACK - Skipping STT during TTS playback", 
                                caller_channel_id=caller_channel_id,
                                tts_playing=session.tts_playing,
@@ -1740,6 +1767,11 @@ class Engine:
                 # AUDIO CAPTURE: Capture complete fallback utterance
                 # Send to provider
                 await provider.send_audio(fallback_state["audio_buffer"])
+                if self.conversation_coordinator:
+                    await self.conversation_coordinator.update_conversation_state(
+                        caller_channel_id,
+                        "processing",
+                    )
                 
                 # Reset buffer
                 fallback_state["audio_buffer"] = b""
@@ -1755,6 +1787,9 @@ class Engine:
     
     async def _ensure_audio_capture_enabled(self, caller_channel_id: str, delay: float = 5.0):
         """Fallback method to ensure audio capture is enabled after a delay."""
+        if self.conversation_coordinator:
+            await self.conversation_coordinator.schedule_capture_fallback(caller_channel_id, delay)
+            return
         try:
             await asyncio.sleep(delay)
             
@@ -1762,7 +1797,7 @@ class Engine:
             if session:
                 if not session.audio_capture_enabled:
                     session.audio_capture_enabled = True
-                    await self.session_store.upsert_call(session)
+                    await self._save_session(session)
                     logger.info("🎤 AUDIO CAPTURE - ✅ FALLBACK: Enabled after delay",
                                caller_channel_id=caller_channel_id,
                                delay=delay)
@@ -1856,7 +1891,7 @@ class Engine:
             # Update session with ExternalMedia info
             session.external_media_id = external_media_id
             session.status = "external_media_created"
-            await self.session_store.upsert_call(session)
+            await self._save_session(session)
             logger.info("🔧 MIGRATION - Updated session with ExternalMedia info", 
                        call_id=caller_channel_id, 
                        external_media_id=external_media_id)
@@ -2100,22 +2135,32 @@ class Engine:
                         rtp_stats = self.rtp_server.get_stats()
                     except Exception:
                         rtp_stats = {"error": "Failed to get RTP stats"}
-                
+                session_stats = await self.session_store.get_session_stats()
+                conversation_summary = {}
+                if self.conversation_coordinator:
+                    conversation_summary = await self.conversation_coordinator.get_summary()
+
                 data = {
                     "status": "healthy",
                     "ari_connected": bool(self.ari_client and self.ari_client.running),
                     "rtp_server_running": bool(getattr(self, 'rtp_server', None) and getattr(self.rtp_server, 'running', False)),
                     "audio_transport": self.config.audio_transport,
-                    "active_calls": len(await self.session_store.get_all_sessions()),
+                    "active_calls": session_stats.get("active_calls", 0),
+                    "active_playbacks": session_stats.get("active_playbacks", 0),
                     "providers": providers,
                     "rtp_server": rtp_stats,
+                    "conversation": conversation_summary,
                 }
                 return web.json_response(data)
             except Exception:
                 return web.json_response({"error": "health handler failed"}, status=500)
 
+        async def handle_metrics(request):
+            return web.Response(body=generate_latest(), content_type=CONTENT_TYPE_LATEST)
+
         app = web.Application()
         app.router.add_get('/health', handle_health)
+        app.router.add_get('/metrics', handle_metrics)
         self._health_runner = web.AppRunner(app)
         await self._health_runner.setup()
         site = web.TCPSite(self._health_runner, host=os.getenv('HEALTH_HOST', '0.0.0.0'), port=int(os.getenv('HEALTH_PORT', '15000')))
@@ -2347,6 +2392,8 @@ class Engine:
 
             # Remove from SessionStore
             await self.session_store.remove_call(session.call_id)
+            if self.conversation_coordinator:
+                await self.conversation_coordinator.unregister_call(session.call_id)
             logger.info("Call resources cleaned up successfully", channel_id=channel_id)
         else:
             logger.debug("Channel not found in SessionStore", channel_id=channel_id)
