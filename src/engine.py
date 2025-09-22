@@ -119,7 +119,6 @@ class Engine:
         self.playback_manager = PlaybackManager(self.session_store, self.ari_client)
         
         self.providers: Dict[str, AIProviderInterface] = {}
-        self.active_calls: Dict[str, Dict[str, Any]] = {}
         self.conn_to_channel: Dict[str, str] = {}
         self.channel_to_conn: Dict[str, str] = {}
         self.conn_to_caller: Dict[str, str] = {}  # conn_id -> caller_channel_id
@@ -152,14 +151,11 @@ class Engine:
         # Map our synthesized UUID extension to the real ARI caller channel id
         self.uuidext_to_channel: Dict[str, str] = {}
         # NEW: Caller channel tracking for dual StasisStart handling
-        self.caller_channels: Dict[str, Dict[str, Any]] = {}  # caller_channel_id -> call_data
         self.pending_local_channels: Dict[str, str] = {}  # local_channel_id -> caller_channel_id
         self._audio_rx_debug: Dict[str, int] = {}
         self._keepalive_tasks: Dict[str, asyncio.Task] = {}
-        # Active playbacks for cleanup
-        self.active_playbacks: Dict[str, Dict[str, Any]] = {}
-        # ExternalMedia to caller channel mapping
-        self.external_media_to_caller: Dict[str, str] = {}  # external_media_id -> caller_channel_id
+        # Active playbacks are now managed by SessionStore
+        # ExternalMedia to caller channel mapping is now managed by SessionStore
         # SSRC to caller channel mapping for RTP audio routing
         self.ssrc_to_caller: Dict[int, str] = {}  # ssrc -> caller_channel_id
         # Health server runner

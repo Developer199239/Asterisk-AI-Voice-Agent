@@ -146,6 +146,11 @@ class SessionStore:
                 # Update VAD state
                 if session.vad_state:
                     session.vad_state["tts_playing"] = False
+                    # ARCHITECT FIX: Reset both audio_buffer and frame_buffer
+                    if "audio_buffer" in session.vad_state:
+                        session.vad_state["audio_buffer"] = b""
+                    if "frame_buffer" in session.vad_state:
+                        session.vad_state["frame_buffer"] = b""
             
             logger.info("🔊 TTS GATING - Audio capture enabled (token removed)",
                        call_id=call_id,

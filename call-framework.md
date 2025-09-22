@@ -1,5 +1,128 @@
 # Call Framework Analysis
 
+## 🚨 CRITICAL ANALYSIS - September 21, 2025 (Post-Architect Fixes Test)
+
+### **TEST CALL RESULTS: MIXED SUCCESS WITH CRITICAL ISSUES**
+
+**Test Call Status:**
+- **Audio Pipeline**: ✅ **WORKING** - Two-way conversation functional
+- **VAD Processing**: ❌ **BROKEN** - KeyError: 'frame_buffer' still occurring
+- **TTS Gating**: ❌ **FAILING** - STT hearing LLM responses, causing feedback loops
+- **System Stability**: ❌ **UNSTABLE** - Continues processing after call disconnect
+
+**Evidence from Logs:**
+```
+✅ WORKING: Audio pipeline functional
+- User: "hello how are you today" → AI: "I am doing well, how about you?"
+- User: "florida" → AI: "Thank you for your message. Florida is a beautiful state..."
+
+❌ BROKEN: VAD Processing
+- KeyError: 'frame_buffer' - 180+ occurrences
+- Error in VAD processing: caller_channel_id=1758513450.488, error='frame_buffer'
+
+❌ FAILING: TTS Gating
+- STT processing TTS output: "florida" (user response to AI's Florida response)
+- Multiple audio input events during TTS playback
+- Feedback loop: AI responds to its own responses
+
+❌ UNSTABLE: Post-call processing
+- System continues processing after call disconnect
+- WebSocket connection errors and timeouts
+```
+
+### **ROOT CAUSE ANALYSIS**
+
+**1. VAD KeyError: 'frame_buffer' - STILL OCCURRING**
+- **Issue**: Despite adding `frame_buffer` to `CallSession.__post_init__`, the error persists
+- **Root Cause**: The server is still running the old code without the fix
+- **Evidence**: 180+ KeyError occurrences in logs
+- **Impact**: VAD processing completely broken, audio not being processed correctly
+
+**2. TTS Gating Completely Broken**
+- **Issue**: STT is hearing and processing LLM responses played by TTS
+- **Root Cause**: TTS gating is not preventing audio capture during playback
+- **Evidence**: 
+  - User says "hello how are you today"
+  - AI responds "I am doing well, how about you?"
+  - User says "florida" (responding to AI's Florida response)
+  - AI responds to "florida" as if it's a new question
+- **Impact**: Feedback loops, AI responding to its own responses
+
+**3. System Instability**
+- **Issue**: Processing continues after call disconnect
+- **Root Cause**: Incomplete cleanup and state management
+- **Evidence**: WebSocket errors, connection timeouts, processing after call end
+- **Impact**: Resource leaks, system instability
+
+### **ARCHITECT'S FIXES: PARTIAL SUCCESS**
+
+**✅ What Worked:**
+- Health check improvements
+- Code structure improvements
+- Early frame dropping logic (partially)
+
+**❌ What Failed:**
+- VAD state initialization (server not updated)
+- TTS gating implementation (not working)
+- State synchronization (hybrid issues remain)
+
+### **IMMEDIATE CRITICAL ISSUES**
+
+1. **Server Code Mismatch**: Server still running old code without VAD fixes
+2. **TTS Gating Broken**: No prevention of STT processing during TTS playback
+3. **Feedback Loops**: AI responding to its own responses
+4. **System Instability**: Processing continues after call disconnect
+
+### **DETAILED TECHNICAL ANALYSIS**
+
+**VAD Processing Failure:**
+```
+KeyError: 'frame_buffer'
+File "/app/src/engine.py", line 1464, in _process_rtp_audio_with_vad
+    vad_state["frame_buffer"] += pcm_16k_data
+```
+- **Frequency**: 180+ occurrences in single test call
+- **Impact**: VAD processing completely broken
+- **Root Cause**: Server running old code without `frame_buffer` initialization
+
+**TTS Gating Failure:**
+```
+🎤 AUDIO CAPTURE - Check: audio_capture_enabled=True, tts_playing=False
+🎤 AUDIO CAPTURE - ENABLED - Processing audio
+```
+- **Issue**: Audio capture enabled during TTS playback
+- **Evidence**: STT processing "florida" after AI's Florida response
+- **Root Cause**: TTS gating not properly preventing audio capture
+
+**Feedback Loop Evidence:**
+```
+User: "hello how are you today"
+AI: "I am doing well, how about you?"
+User: "florida" (responding to AI's response)
+AI: "Thank you for your message. Florida is a beautiful state..."
+```
+- **Problem**: AI responding to user's response to AI's response
+- **Root Cause**: STT hearing TTS output, creating feedback loop
+
+**System Instability:**
+```
+WebSocket handler error: no close frame received or sent
+WebSocket handler error: sent 1011 (internal error) keepalive ping timeout
+```
+- **Issue**: WebSocket connections not properly closed
+- **Impact**: Resource leaks, system instability
+- **Root Cause**: Incomplete cleanup after call disconnect
+
+### **NEXT STEPS FOR ARCHITECT**
+
+1. **Deploy Latest Code**: Ensure server has the VAD fixes
+2. **Fix TTS Gating**: Implement proper audio capture prevention during TTS
+3. **Fix State Management**: Resolve hybrid state issues
+4. **Add Cleanup Logic**: Ensure proper cleanup after call disconnect
+5. **Test Feedback Prevention**: Verify STT doesn't hear TTS output
+
+---
+
 ## 🎉 MAJOR SUCCESS - September 21, 2025 (Evening Test)
 
 ### **AUDIO PIPELINE WORKING CORRECTLY!**
