@@ -36,6 +36,7 @@ class CallSession:
     # Provider and conversation state
     provider_name: str = "local"
     conversation_state: str = "greeting"  # greeting | listening | processing
+    status: str = "initializing"
     
     # Audio capture and TTS gating
     audio_capture_enabled: bool = False
@@ -49,6 +50,9 @@ class CallSession:
     
     # Cleanup and lifecycle
     cleanup_after_tts: bool = False
+    pending_local_channel_id: Optional[str] = None
+    pending_external_media_id: Optional[str] = None
+    ssrc: Optional[int] = None
     created_at: float = field(default_factory=time.time)
     
     def __post_init__(self):
