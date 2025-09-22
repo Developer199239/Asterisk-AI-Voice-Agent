@@ -5,6 +5,7 @@ SERVER_USER := root
 SERVER_HOST := voiprnd.nemtclouddispatch.com
 PROJECT_PATH := /root/Asterisk-Agent-Develop
 SERVICE ?= ai-engine
+provider ?= local
 
 # ==============================================================================
 # LOCAL DEVELOPMENT
@@ -33,6 +34,10 @@ logs-all:
 ## ps: Show the status of running services
 ps:
 	docker-compose ps
+
+## model-setup: Detect host tier, download required local provider models, and skip if cached
+model-setup:
+	python3 scripts/model_setup.py --assume-yes
 
 # ==============================================================================
 # DEPLOYMENT & SERVER MANAGEMENT
@@ -144,6 +149,50 @@ test-externalmedia:
 	@echo "--> Testing ExternalMedia + RTP implementation..."
 	python3 scripts/validate_externalmedia_config.py
 	python3 scripts/test_externalmedia_call.py
+
+## test-health: Check the local health endpoint (defaults to http://127.0.0.1:15000/health)
+test-health:
+	@HEALTH_URL=$${HEALTH_URL:-http://127.0.0.1:15000/health}; \
+	echo "--> Checking $$HEALTH_URL"; \
+	if ! curl -sS $$HEALTH_URL ; then \
+		echo "❌ Health check failed"; \
+		exit 1; \
+	else \
+		echo "✅ Health check succeeded"; \
+	fi
+
+## quick-regression: Run health check and print manual call checklist
+quick-regression:
+	@$(MAKE) --no-print-directory test-health
+	@echo
+	@echo "Next steps:" \
+	  && echo "1. Clear logs (local: make logs --tail=0 ai-engine | remote: make server-clear-logs)." \
+	  && echo "2. Place a short call into the AI context." \
+	  && echo "3. Watch for ExternalMedia bridge join, RTP frames, provider input, playback start/finish, and cleanup." \
+	  && echo "4. Re-run make test-health to ensure active_calls resets to 0." \
+	  && echo "5. Capture findings in call-framework.md or your issue tracker."
+
+## provider-switch: Update default provider locally
+provider-switch:
+	@if [ -z "$(provider)" ]; then \
+		echo "Usage: make provider=<name> provider-switch"; \
+		exit 1; \
+	fi
+	@python3 scripts/switch_provider.py --config config/ai-agent.yaml --provider $(provider)
+
+## provider-switch-remote: Update default provider on the server
+provider-switch-remote:
+	@if [ -z "$(provider)" ]; then \
+		echo "Usage: make provider=<name> provider-switch-remote"; \
+		exit 1; \
+	fi
+	@ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && docker-compose exec -T ai-engine python /app/scripts/switch_provider.py --config /app/config/ai-agent.yaml --provider $(provider)'
+
+## provider-reload: Switch provider on server, restart ai-engine, and run health check
+provider-reload:
+	@$(MAKE) --no-print-directory provider-switch-remote provider=$(provider)
+	@ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && docker-compose up -d ai-engine'
+	@$(MAKE) --no-print-directory server-health
 
 ## verify-deployment: Verify that deployment was successful
 verify-deployment:

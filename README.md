@@ -1,6 +1,6 @@
 # Asterisk AI Voice Agent v3.0
 
-An open-source AI Voice Agent that integrates with Asterisk/FreePBX using the Asterisk REST Interface (ARI). It features a **production-ready, two-container architecture** with ExternalMedia RTP integration for reliable real-time audio capture and file-based TTS playback for robust conversation handling.
+An open-source AI Voice Agent that integrates with Asterisk/FreePBX using the Asterisk REST Interface (ARI). It features a **production-ready, two-container architecture** with **Hybrid ARI** call control, **SessionStore** state management, ExternalMedia RTP integration for reliable real-time audio capture and file-based TTS playback for robust conversation handling.
 
 ## 🌟 Features
 
@@ -8,6 +8,8 @@ An open-source AI Voice Agent that integrates with Asterisk/FreePBX using the As
   - ✅ **Deepgram Voice Agent**: Fully implemented for a powerful cloud-based solution.
   - ✅ **Local AI Server**: A dedicated container that runs local models (Vosk for STT, Llama for LLM, and Piper for TTS) for full control and privacy.
 - **High-Performance Architecture**: A lean `ai-engine` for call control and a separate `local-ai-server` for heavy AI processing ensures stability and scalability.
+- **Hybrid ARI Architecture**: Call control using ARI with "answer caller → create mixing bridge → add caller → create ExternalMedia and add it to bridge" flow.
+- **SessionStore State Management**: Centralized, typed store for all call session state, replacing legacy dictionary-based state management.
 - **Real-time Communication**: ExternalMedia RTP upstream capture from Asterisk with ARI-commanded file-based playback; engine↔AI servers use WebSocket.
 - **Docker-based Deployment**: Simple, two-service orchestration using Docker Compose.
 - **Customizable**: Configure greetings, AI roles, and voice personalities in a simple YAML file.
@@ -35,7 +37,13 @@ An open-source AI Voice Agent that integrates with Asterisk/FreePBX using the As
 2.  **Configure your environment**:
     Copy the example config file `config/ai-agent.example.yaml` to `config/ai-agent.yaml` and the `.env.example` to `.env`. Edit them to match your setup, including Asterisk connection details and API keys.
 
-3.  **Start the services**:
+3.  **Download local models (optional but recommended for the local provider)**:
+    ```bash
+    make model-setup
+    ```
+    The helper invokes `scripts/model_setup.py`, detects your hardware tier, downloads the STT/LLM/TTS bundles listed in `models/registry.json`, and skips work when everything is already cached. Light systems take ~60–90 seconds per response; heavy systems can respond in ~20 seconds.
+
+4.  **Start the services**:
     ```bash
     docker-compose up --build -d
     ```
@@ -82,9 +90,9 @@ This separation ensures that the resource-intensive AI models do not impact the 
 
 The two-container setup enables a rapid development workflow.
 
--   **For `ai-engine` code changes**: `docker-compose restart ai-engine` (takes seconds).
--   **For `local-ai-server` changes**: `docker-compose restart local-ai-server`.
--   **For dependency changes**: `docker-compose up --build -d`.
+-   **For `ai-engine` code changes**: `make deploy` (rebuilds image with latest code).
+-   **For dependency changes**: `make deploy-full` or `make deploy-force` as needed.
+-   **For rapid local testing**: `docker-compose up --build -d` keeps the containers in sync with your workspace.
 
 Source code for the `ai-engine` is mounted as a volume, so there's no need to rebuild the image for simple Python code changes.
 
@@ -103,19 +111,39 @@ Source code for the `ai-engine` is mounted as a volume, so there's no need to re
 -   ✅ **Local AI Integration**: Vosk STT, TinyLlama LLM, Piper TTS
 -   ✅ **Conversation Flow**: Complete STT → LLM → TTS pipeline working
 -   ✅ **Architecture Validation**: Refactored codebase with clean separation of concerns
+-   ✅ **Observability**: ConversationCoordinator drives `/health` + `/metrics` (Prometheus friendly)
 
-**Latest Test Results (September 21, 2025):**
+**Latest Test Results (September 22, 2025):**
 - **Duration**: 2 minutes
 - **Conversation Exchanges**: 4 complete sentences
 - **Status**: ✅ **FULLY FUNCTIONAL**
 
 ##  Roadmap
 
--   ✅ **Phase 1 & 2**: Core Infrastructure & Deepgram POC (Completed)
--   ✅ **Phase 3**: Provider Architecture Refactor (Completed)
--   ✅ **Phase 4**: Local AI Integration (Completed)
--   ✅ **Phase 5**: Production Readiness (Completed)
--   🔄 **Phase 6**: Performance Optimization (In Progress)
+Current milestones and acceptance criteria live in [`docs/ROADMAP.md`](docs/ROADMAP.md). Update that file after each deliverable so anyone (or any AI assistant) can resume the project with a single reference.
+
+## 🔁 Quick Regression
+
+1. Clear logs locally (`make logs --tail=0 ai-engine`) or remotely (`make server-clear-logs`).
+2. Place a short call into the AI context.
+3. Verify logs for ExternalMedia bridge join, RTP frames, provider input, playback start/finish, and cleanup.
+4. Run `make test-health` (or `curl $HEALTH_URL`) to confirm `active_calls: 0` within a few seconds of hangup.
+5. Capture findings in `call-framework.md` or your issue tracker.
+
+## 🔄 Switching Providers
+
+Use the new make targets to flip between providers without touching YAML by hand:
+
+- `make provider=<name> provider-switch` – update `config/ai-agent.yaml` locally.
+- `make provider=<name> provider-reload` – update the server, restart `ai-engine`, and run `make server-health` automatically.
+
+Example:
+
+```bash
+make provider=deepgram provider-reload
+```
+
+The command will update the server configuration, restart the container, and print the health summary so you can place a quick regression call immediately.
 
 ## 🤝 Contributing
 
