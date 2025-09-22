@@ -376,18 +376,12 @@ Assistant:"""
                 if isinstance(message, bytes):
                     # Binary audio data from ExternalMedia
                     logging.info(f"🎵 AUDIO INPUT - Received audio: {len(message)} bytes")
-                    
-                    # Full MVP pipeline: STT → LLM → TTS (CPU offloaded)
-                    transcript = await asyncio.to_thread(self.process_stt, message)
-                    
+                    transcript = await self.process_stt(message)
                     if transcript.strip():
-                        llm_response = await asyncio.to_thread(self.process_llm, transcript)
-                        
+                        llm_response = await self.process_llm(transcript)
                         if llm_response.strip():
-                            audio_response = await asyncio.to_thread(self.process_tts, llm_response)
-                            
+                            audio_response = await self.process_tts(llm_response)
                             if audio_response:
-                                # Send binary audio data directly (like working commit)
                                 await websocket.send(audio_response)
                                 logging.info("📤 AUDIO OUTPUT - Sent uLaw 8kHz response")
                             else:
@@ -426,15 +420,13 @@ Assistant:"""
                             logging.info(f"🎵 AUDIO INPUT - Received audio: {len(audio_data)} bytes at {input_rate} Hz")
                             
                             # Process with STT (now receiving complete utterances from VAD) - CPU OFFLOADED
-                            transcript = await asyncio.to_thread(self.process_stt, audio_data, input_rate)
+                            transcript = await self.process_stt(audio_data, input_rate)
                             
                             if transcript.strip():
-                                # LLM processing - CPU OFFLOADED
-                                llm_response = await asyncio.to_thread(self.process_llm, transcript)
+                                llm_response = await self.process_llm(transcript)
                                 
                                 if llm_response.strip():
-                                    # TTS processing - CPU OFFLOADED
-                                    audio_response = await asyncio.to_thread(self.process_tts, llm_response)
+                                    audio_response = await self.process_tts(llm_response)
                                     
                                     if audio_response:
                                         # Send binary audio data directly (like working commit)
