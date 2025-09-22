@@ -188,6 +188,11 @@ class SessionStore:
         async with self._lock:
             return list(self._sessions_by_call_id.keys())
     
+    async def get_all_sessions(self) -> List[CallSession]:
+        """Get all active sessions."""
+        async with self._lock:
+            return list(self._sessions_by_call_id.values())
+    
     async def get_session_stats(self) -> Dict[str, int]:
         """Get statistics about active sessions."""
         async with self._lock:

@@ -443,26 +443,17 @@ class Engine:
                        channel_id=caller_channel_id, 
                        bridge_id=bridge_id)
             
-            # Step 4: Store caller info with bridge
-            self.caller_channels[caller_channel_id] = {
-                "status": "bridge_ready",
-                "channel": channel,
-                "local_channel_id": None,
-                "bridge_id": bridge_id
-            }
-            self.bridges[caller_channel_id] = bridge_id
-            logger.info("🎯 HYBRID ARI - Step 4: ✅ Caller info stored", 
-                       channel_id=caller_channel_id, 
-                       bridge_id=bridge_id)
-            
-            # Initialize active_calls for the caller before creating ExternalMedia
-            self.active_calls[caller_channel_id] = {
-                "bridge_id": bridge_id,
-                "provider": self.providers[self.config.default_provider],
-                "audio_capture_enabled": False,
-                "status": "connected"
-            }
-            logger.info("🎯 EXTERNAL MEDIA - Initialized active_calls for caller", 
+            # Step 4: Create CallSession and store in SessionStore
+            session = CallSession(
+                call_id=caller_channel_id,
+                caller_channel_id=caller_channel_id,
+                bridge_id=bridge_id,
+                provider_name=self.config.default_provider,
+                audio_capture_enabled=False,
+                status="connected"
+            )
+            await self.session_store.upsert_call(session)
+            logger.info("🎯 HYBRID ARI - Step 4: ✅ Caller session created and stored", 
                        channel_id=caller_channel_id, 
                        bridge_id=bridge_id)
             
@@ -471,12 +462,11 @@ class Engine:
                 logger.info("🎯 EXTERNAL MEDIA - Step 5: Creating ExternalMedia channel", channel_id=caller_channel_id)
                 external_media_id = await self._start_external_media_channel(caller_channel_id)
                 if external_media_id:
-                    # Store the ExternalMedia ID in active_calls - the StasisStart event will handle adding to bridge
-                    self.active_calls[caller_channel_id]["external_media_id"] = external_media_id
-                    self.active_calls[caller_channel_id]["status"] = "external_media_created"
-                    # Add direct mapping for fast lookup
-                    self.external_media_to_caller[external_media_id] = caller_channel_id
-                    logger.info("🎯 EXTERNAL MEDIA - ExternalMedia channel created, external_media_id stored, external_media_to_caller mapped", 
+                    # Update session with ExternalMedia ID
+                    session.external_media_id = external_media_id
+                    session.status = "external_media_created"
+                    await self.session_store.upsert_call(session)
+                    logger.info("🎯 EXTERNAL MEDIA - ExternalMedia channel created, session updated", 
                                channel_id=caller_channel_id, 
                                external_media_id=external_media_id)
                 else:
@@ -2175,12 +2165,13 @@ class Engine:
                    cause=cause, 
                    cause_txt=cause_txt)
         
-        # Immediately remove from active calls to prevent playback attempts
-        if channel_id in self.active_calls:
+        # Check if channel was active and clean up immediately
+        session = await self.session_store.get_by_call_id(channel_id)
+        if session:
             logger.debug("Channel was active - cleaning up immediately", channel_id=channel_id)
             await self._cleanup_call(channel_id)
         else:
-            logger.debug("Channel was not in active calls", channel_id=channel_id)
+            logger.debug("Channel was not in active sessions", channel_id=channel_id)
 
     async def _on_playback_finished(self, event: dict) -> None:
         """Handle playback finished event by delegating to PlaybackManager."""
