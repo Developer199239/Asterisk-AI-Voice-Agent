@@ -7,10 +7,9 @@ token-aware gating.
 """
 
 import asyncio
-import uuid
 import time
 import os
-from typing import Optional, Dict, Any
+from typing import Optional, Dict
 import structlog
 
 from src.core.session_store import SessionStore
@@ -43,7 +42,7 @@ class PlaybackManager:
                    media_dir=media_dir)
     
     async def play_audio(self, call_id: str, audio_bytes: bytes, 
-                        playback_type: str = "response", engine=None) -> Optional[str]:
+                        playback_type: str = "response") -> Optional[str]:
         """
         Play audio with deterministic playback ID and gating.
         
@@ -51,7 +50,6 @@ class PlaybackManager:
             call_id: Canonical call ID
             audio_bytes: Audio data to play
             playback_type: Type of playback (greeting, response, etc.)
-            engine: Engine instance for accessing active_calls (temporary migration support)
         
         Returns:
             playback_id if successful, None if failed
@@ -60,38 +58,7 @@ class PlaybackManager:
             # Get session to determine target channel
             session = await self.session_store.get_by_call_id(call_id)
             
-            # TEMPORARY MIGRATION: If no session in SessionStore, create one from Engine state
-            if not session and engine:
-                call_data = engine.active_calls.get(call_id)
-                if call_data:
-                    # Create CallSession from existing call_data
-                    provider = call_data.get("provider")
-                    provider_name = "unknown"
-                    if provider:
-                        # Try different ways to get provider name
-                        if hasattr(provider, 'name'):
-                            provider_name = provider.name
-                        elif hasattr(provider, '__class__'):
-                            provider_name = provider.__class__.__name__.lower()
-                        elif isinstance(provider, dict):
-                            provider_name = provider.get("name", "unknown")
-                    
-                    session = CallSession(
-                        call_id=call_id,
-                        caller_channel_id=call_id,
-                        bridge_id=call_data.get("bridge_id"),
-                        provider_name=provider_name,
-                        conversation_state=call_data.get("conversation_state", "unknown"),
-                        external_media_id=call_data.get("external_media_id"),
-                        external_media_call_id=call_data.get("external_media_call_id")
-                    )
-                    await self.session_store.upsert_call(session)
-                    logger.info("🔧 MIGRATION - Created CallSession from Engine state", call_id=call_id)
-                else:
-                    logger.error("Cannot play audio - call session not found and no engine fallback",
-                               call_id=call_id)
-                    return None
-            elif not session:
+            if not session:
                 logger.error("Cannot play audio - call session not found",
                            call_id=call_id)
                 return None
@@ -126,6 +93,9 @@ class PlaybackManager:
             
             # Track playback reference
             await self.session_store.add_playback(playback_ref)
+            
+            # Schedule token-aware fallback to ensure gating is cleared even if PlaybackFinished is missed
+            await self._schedule_gating_fallback(call_id, playback_id, len(audio_bytes))
             
             logger.info("🔊 AUDIO PLAYBACK - Started",
                        call_id=call_id,
@@ -264,6 +234,68 @@ class PlaybackManager:
                          file_path=audio_file,
                          error=str(e))
     
+    async def _schedule_gating_fallback(self, call_id: str, playback_id: str, audio_size: int) -> None:
+        """
+        Schedule a token-aware fallback to ensure gating is cleared even if PlaybackFinished is missed.
+        
+        Args:
+            call_id: Call ID
+            playback_id: Playback ID to clear
+            audio_size: Size of audio in bytes (used to calculate duration)
+        """
+        try:
+            # Calculate audio duration: 8kHz uLaw = 8000 samples/sec = 1 byte per sample
+            # Add safety margin of 0.5 seconds
+            audio_duration = audio_size / 8000.0  # seconds
+            fallback_delay = audio_duration + 0.5  # safety margin
+            
+            logger.debug("Scheduling gating fallback",
+                        call_id=call_id,
+                        playback_id=playback_id,
+                        audio_duration=audio_duration,
+                        fallback_delay=fallback_delay)
+            
+            # Schedule the fallback task
+            asyncio.create_task(self._gating_fallback_task(call_id, playback_id, fallback_delay))
+            
+        except Exception as e:
+            logger.error("Error scheduling gating fallback",
+                        call_id=call_id,
+                        playback_id=playback_id,
+                        error=str(e))
+    
+    async def _gating_fallback_task(self, call_id: str, playback_id: str, delay: float) -> None:
+        """
+        Fallback task that clears gating token after delay if still active.
+        
+        Args:
+            call_id: Call ID
+            playback_id: Playback ID to clear
+            delay: Delay in seconds before checking
+        """
+        try:
+            await asyncio.sleep(delay)
+            
+            # Check if playback is still active
+            playback_ref = await self.session_store.get_playback(playback_id)
+            if playback_ref:
+                # Playback still active, clear gating token as fallback
+                success = await self.session_store.clear_gating_token(call_id, playback_id)
+                logger.warning("🔊 GATING FALLBACK - Cleared gating token due to missing PlaybackFinished",
+                              call_id=call_id,
+                              playback_id=playback_id,
+                              success=success)
+            else:
+                logger.debug("Gating fallback skipped - playback already finished",
+                            call_id=call_id,
+                            playback_id=playback_id)
+                
+        except Exception as e:
+            logger.error("Error in gating fallback task",
+                        call_id=call_id,
+                        playback_id=playback_id,
+                        error=str(e))
+
     async def get_active_playbacks(self) -> Dict[str, PlaybackRef]:
         """Get all active playbacks."""
         # This would need to be implemented in SessionStore
@@ -274,4 +306,5 @@ class PlaybackManager:
         """Clean up playbacks older than max_age_seconds."""
         # This would need to be implemented in SessionStore
         # For now, return 0
+        _ = max_age_seconds  # Suppress unused argument warning
         return 0

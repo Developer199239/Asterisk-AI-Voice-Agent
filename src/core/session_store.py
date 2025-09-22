@@ -106,7 +106,7 @@ class SessionStore:
             session.audio_capture_enabled = False
             
             # Update VAD state
-            if "vad_state" in session.vad_state:
+            if session.vad_state:
                 session.vad_state["tts_playing"] = True
                 # Reset VAD buffers to prevent TTS bleed-through
                 session.vad_state["webrtc_speech_frames"] = 0
@@ -141,7 +141,7 @@ class SessionStore:
                 session.audio_capture_enabled = True
                 
                 # Update VAD state
-                if "vad_state" in session.vad_state:
+                if session.vad_state:
                     session.vad_state["tts_playing"] = False
             
             logger.info("🔊 TTS GATING - Audio capture enabled (token removed)",
@@ -191,6 +191,7 @@ class SessionStore:
     
     async def cleanup_expired_sessions(self, max_age_seconds: float = 3600) -> int:
         """Clean up sessions older than max_age_seconds."""
+        # First pass: identify expired calls while holding lock
         async with self._lock:
             current_time = time.time()
             expired_calls = []
@@ -198,12 +199,13 @@ class SessionStore:
             for call_id, session in self._sessions_by_call_id.items():
                 if current_time - session.created_at > max_age_seconds:
                     expired_calls.append(call_id)
-            
-            for call_id in expired_calls:
-                await self.remove_call(call_id)
-            
-            if expired_calls:
-                logger.info("Cleaned up expired sessions",
-                           expired_count=len(expired_calls))
-            
-            return len(expired_calls)
+        
+        # Second pass: remove expired calls (each remove_call acquires its own lock)
+        for call_id in expired_calls:
+            await self.remove_call(call_id)
+        
+        if expired_calls:
+            logger.info("Cleaned up expired sessions",
+                       expired_count=len(expired_calls))
+        
+        return len(expired_calls)
