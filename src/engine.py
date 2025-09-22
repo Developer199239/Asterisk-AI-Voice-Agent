@@ -1369,12 +1369,21 @@ class Engine:
             
             # CRITICAL FIX: Check if audio capture is enabled
             if not session.audio_capture_enabled:
-                logger.debug("🎤 AUDIO CAPTURE - Check", 
+                logger.info("🎤 AUDIO CAPTURE - Check", 
                            audio_capture_enabled=session.audio_capture_enabled,
                            caller_channel_id=caller_channel_id,
                            ssrc=ssrc,
-                           tts_playing=session.tts_playing)
+                           tts_playing=session.tts_playing,
+                           tts_active_count=session.tts_active_count,
+                           tts_tokens=list(session.tts_tokens))
                 return  # Skip VAD processing when audio capture is disabled
+            
+            logger.info("🎤 AUDIO CAPTURE - ENABLED - Processing audio",
+                       audio_capture_enabled=session.audio_capture_enabled,
+                       caller_channel_id=caller_channel_id,
+                       ssrc=ssrc,
+                       tts_playing=session.tts_playing,
+                       tts_active_count=session.tts_active_count)
             # Get or initialize VAD state for this call
             if not session.vad_state:
                 session.vad_state = {
