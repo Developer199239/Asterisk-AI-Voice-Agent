@@ -32,7 +32,7 @@ docker exec local_ai_server python /app/test_local_ai_server.py
 - ✅ **ARI Connection Test**: Verifies connection to Asterisk REST Interface
 - ✅ **Audio Playback Test**: Tests audio file creation in shared media directory
 - ❌ **WebSocket Connection Test**: Tests connection to Local AI Server
-- ✅ **AudioSocket Bridging Test**: Verifies AudioSocket listener accepts and processes upstream audio
+- ✅ **ExternalMedia Bridging Test**: Verifies ExternalMedia channels are created and process upstream audio
 
 **Run Command**:
 ```bash
@@ -127,7 +127,7 @@ docker exec ai_engine python /app/test_integration.py
 - Verify audio format compatibility
 - Test TTS API method calls
 
-### AudioSocket / WebSocket Issues
+### ExternalMedia / WebSocket Issues
 - Verify Local AI Server is running
 - Check port 8765 availability
 - Test connection from AI Engine container

@@ -90,7 +90,7 @@ class ARIClient:
                     event_data = json.loads(message)
                     event_type = event_data.get("type")
                     
-                    # Handle audio frames from AudioSocket connections
+                    # Handle audio frames from ExternalMedia connections
                     if event_type == "ChannelAudioFrame":
                         channel = event_data.get('channel', {})
                         channel_id = channel.get('id')
@@ -702,6 +702,44 @@ class ARIClient:
                         media_uri=media_uri,
                         error=str(e))
             return None
+
+    async def play_media_on_bridge_with_id(self, bridge_id: str, media_uri: str, playback_id: str) -> bool:
+        """
+        Play media on bridge with a deterministic playback ID.
+        
+        Args:
+            bridge_id: Bridge ID to play audio to
+            media_uri: Media URI (e.g., "sound:ai-generated/greeting-123")
+            playback_id: Deterministic playback ID to use
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            data = {"media": media_uri, "playbackId": playback_id}
+            response = await self.send_command("POST", f"bridges/{bridge_id}/play", data=data)
+            
+            if response and response.get("id") == playback_id:
+                logger.info("Bridge playback started with deterministic ID", 
+                           bridge_id=bridge_id, 
+                           media_uri=media_uri,
+                           playback_id=playback_id)
+                return True
+            else:
+                logger.error("Failed to start bridge playback with deterministic ID", 
+                            bridge_id=bridge_id, 
+                            media_uri=media_uri,
+                            playback_id=playback_id,
+                            response=response)
+                return False
+                
+        except Exception as e:
+            logger.error("Error starting bridge playback with deterministic ID", 
+                        bridge_id=bridge_id, 
+                        media_uri=media_uri,
+                        playback_id=playback_id,
+                        error=str(e))
+            return False
 
     async def create_external_media(self, external_host: str, external_port: int, fmt: str = "ulaw", direction: str = "both") -> Optional[str]:
         """

@@ -112,6 +112,12 @@ class Engine:
         )
         # Set engine reference for event propagation
         self.ari_client.engine = self
+        
+        # Initialize core components
+        from .core import SessionStore, PlaybackManager
+        self.session_store = SessionStore()
+        self.playback_manager = PlaybackManager(self.session_store, self.ari_client)
+        
         self.providers: Dict[str, AIProviderInterface] = {}
         self.active_calls: Dict[str, Dict[str, Any]] = {}
         self.conn_to_channel: Dict[str, str] = {}
@@ -1701,6 +1707,18 @@ class Engine:
             fallback_buffer_size = self.config.vad.fallback_buffer_size
             
             if buffer_duration >= fallback_interval or buffer_size >= fallback_buffer_size:
+                # ARCHITECT FIX: Check TTS gating before sending fallback audio
+                # Prevent AI from processing its own TTS responses
+                if call_data.get("tts_playing", False) or not call_data.get("audio_capture_enabled", False):
+                    logger.debug("🔄 FALLBACK - Skipping STT during TTS playback", 
+                               caller_channel_id=caller_channel_id,
+                               tts_playing=call_data.get("tts_playing", False),
+                               audio_capture_enabled=call_data.get("audio_capture_enabled", False))
+                    # Reset buffer and return to avoid processing TTS audio
+                    fallback_state["audio_buffer"] = b""
+                    fallback_state["buffer_start_time"] = None
+                    return
+                
                 logger.info("🔄 FALLBACK - Sending buffered audio to STT", 
                            caller_channel_id=caller_channel_id,
                            buffer_size=buffer_size,
@@ -1927,7 +1945,7 @@ class Engine:
                         exc_info=True)
     
     async def _play_greeting_external_media(self, caller_channel_id: str, greeting_text: str):
-        """Play greeting audio for ExternalMedia channel."""
+        """Play greeting audio for ExternalMedia channel using PlaybackManager."""
         try:
             # Get provider
             call_data = self.active_calls.get(caller_channel_id, {})
@@ -1937,57 +1955,28 @@ class Engine:
                 logger.error("No provider found for greeting", caller_channel_id=caller_channel_id)
                 return
             
-            # ARCHITECT FIX: Set TTS gating before playing greeting
-            call_data["tts_playing"] = True
-            call_data["audio_capture_enabled"] = False
-            logger.info("🔊 TTS START - Playing greeting with audio capture disabled", 
-                       caller_channel_id=caller_channel_id)
-            
             # Generate TTS audio
             audio_data = await provider.text_to_speech(greeting_text)
             
             if audio_data:
-                # Save audio to file for playback
-                audio_id = str(uuid.uuid4())
-                audio_file = f"/mnt/asterisk_media/ai-generated/greeting-{audio_id}.ulaw"
+                # Use PlaybackManager for greeting playback - it handles all gating logic
+                call_id = caller_channel_id  # Use caller_channel_id as canonical call_id
+                playback_id = await self.playback_manager.play_audio(
+                    call_id, 
+                    audio_data, 
+                    playback_type="greeting"
+                )
                 
-                # Ensure directory exists
-                os.makedirs(os.path.dirname(audio_file), exist_ok=True)
-                
-                # Write audio file
-                with open(audio_file, 'wb') as f:
-                    f.write(audio_data)
-                
-                # Play audio via ARI
-                bridge_id = call_data.get("bridge_id")
-                if bridge_id:
-                    playback_id = await self.ari_client.play_audio_via_bridge(
-                        bridge_id, 
-                        f"sound:ai-generated/greeting-{audio_id}"  # No .ulaw extension
-                    )
-                    
-                    if playback_id:
-                        # Get the call_id for this channel (same as caller_channel_id for ExternalMedia)
-                        call_id = caller_channel_id
-                        self.active_playbacks[playback_id] = {
-                            "call_id": call_id,
-                            "channel_id": caller_channel_id,
-                            "audio_file": audio_file
-                        }
-                        logger.info("Greeting playback started for ExternalMedia", 
-                                   caller_channel_id=caller_channel_id,
-                                   playback_id=playback_id,
-                                   audio_file=audio_file)
-                    else:
-                        logger.error("Failed to start greeting playback for ExternalMedia", 
-                                   caller_channel_id=caller_channel_id)
-                        # Clean up audio file
-                        try:
-                            os.remove(audio_file)
-                        except:
-                            pass
+                if playback_id:
+                    logger.info("🔊 GREETING START - Greeting playback started via PlaybackManager", 
+                               caller_channel_id=caller_channel_id,
+                               call_id=call_id,
+                               playback_id=playback_id,
+                               audio_size=len(audio_data))
                 else:
-                    logger.error("No bridge ID found for greeting playback", caller_channel_id=caller_channel_id)
+                    logger.error("🔊 GREETING FAILED - PlaybackManager failed to start greeting playback", 
+                               caller_channel_id=caller_channel_id,
+                               call_id=call_id)
             else:
                 logger.error("Failed to generate greeting audio", caller_channel_id=caller_channel_id)
                 
@@ -2201,43 +2190,23 @@ class Engine:
             logger.debug("Channel was not in active calls", channel_id=channel_id)
 
     async def _on_playback_finished(self, event: dict) -> None:
-        """Handle playback finished event with scoped un-gating."""
+        """Handle playback finished event by delegating to PlaybackManager."""
         playback_id = event.get("playback", {}).get("id")
         if not playback_id:
             logger.warning("🔊 PlaybackFinished event missing playback ID", event=event)
             return
             
-        logger.info("🔊 Playback finished", playback_id=playback_id)
+        logger.info("🔊 Playback finished - delegating to PlaybackManager", playback_id=playback_id)
         
-        # Look up the specific call that started this playback
-        if playback_id not in self.active_playbacks:
-            logger.warning("🔊 PlaybackFinished for unknown playback ID", playback_id=playback_id)
-            return
-            
-        call_info = self.active_playbacks[playback_id]
-        call_id = call_info.get("call_id")
-        channel_id = call_info["channel_id"]
+        # Delegate to PlaybackManager - it handles all gating logic
+        success = await self.playback_manager.on_playback_finished(playback_id)
         
-        # Safety check: if call_id is missing, use channel_id as fallback
-        if not call_id:
-            call_id = channel_id
-            logger.warning("🔊 PlaybackFinished - Missing call_id, using channel_id as fallback", 
-                         playback_id=playback_id, channel_id=channel_id)
-        
-        # Remove from active playbacks
-        del self.active_playbacks[playback_id]
-        
-        # Scoped un-gating: only affect the specific call that started this playback
-        await self._set_tts_gating_for_call(call_id, False, playback_id)
-        
-        # Clear the active call ID in the provider after TTS completion
-        if hasattr(self.provider_manager, 'provider') and hasattr(self.provider_manager.provider, 'clear_active_call_id'):
-            await self.provider_manager.provider.clear_active_call_id()
-        
-        logger.info("🎤 TTS GATING - Scoped un-gating completed", 
-                   playback_id=playback_id, 
-                   call_id=call_id, 
-                   channel_id=channel_id)
+        if success:
+            logger.info("🔊 PlaybackFinished handled successfully by PlaybackManager", 
+                       playback_id=playback_id)
+        else:
+            logger.warning("🔊 PlaybackFinished failed in PlaybackManager", 
+                         playback_id=playback_id)
 
     async def _set_tts_gating_for_call(self, call_id: str, playing: bool, playback_id: str = None):
         """Set TTS gating state consistently for both call entries with token/refcount logic."""
@@ -2423,52 +2392,41 @@ class Engine:
                         if target_channel_id:
                             # Get call data first
                             call_data = self.active_calls[target_channel_id]
-                            
-                            # Generate playback ID for token tracking
-                            playback_id = f"tts:{target_channel_id}:{int(time.time()*1000)}"
-                            
-                            # Set TTS gating with token/refcount logic
                             call_id = call_data.get("call_id", target_channel_id)
-                            await self._set_tts_gating_for_call(call_id, True, playback_id)
                             
-                            logger.info("🔊 TTS START - Playing response (feedback prevention active)", 
-                                      channel_id=target_channel_id,
-                                      playback_id=playback_id)
+                            # Use PlaybackManager for TTS playback - it handles all gating logic
+                            playback_id = await self.playback_manager.play_audio(
+                                call_id, 
+                                audio_data, 
+                                playback_type="response"
+                            )
                             
-                            # Calculate dynamic fallback timer based on audio duration
-                            # For 8kHz μ-law: duration_sec = len(audio_bytes) / 8000.0
-                            audio_duration_sec = len(audio_data) / 8000.0
-                            safety_margin_sec = 0.5  # 500ms safety margin
-                            fallback_delay = audio_duration_sec + safety_margin_sec
-                            
-                            # FALLBACK: Set dynamic timer to re-enable audio capture after TTS
-                            # This ensures audio capture is re-enabled even if PlaybackFinished fails
-                            asyncio.create_task(self._tts_fallback_by_playback(call_id, playback_id, fallback_delay))
-                            
-                            logger.info("🔊 TTS FALLBACK - Dynamic timer set", 
-                                      channel_id=target_channel_id,
-                                      audio_duration_sec=audio_duration_sec,
-                                      fallback_delay=fallback_delay)
-                            
-                            # Play audio to specific call with playback_id and canonical call_id
-                            await self._play_audio_via_bridge(target_channel_id, audio_data, playback_id, call_id)
-                            logger.info(f"🔊 AUDIO OUTPUT - Sent {len(audio_data)} bytes to call channel {target_channel_id}")
-                            
-                            # Update conversation state after playing response
-                            conversation_state = call_data.get('conversation_state')
-                            if conversation_state == 'greeting':
-                                # First response after greeting - transition to listening
-                                call_data['conversation_state'] = 'listening'
-                                logger.info("Greeting completed, now listening for conversation", channel_id=target_channel_id)
-                            elif conversation_state == 'processing':
-                                # Response to user input - transition back to listening
-                                call_data['conversation_state'] = 'listening'
-                                logger.info("Response played, listening for next user input", channel_id=target_channel_id)
-                            
-                            # Cancel provider timeout task since we got a response
-                            if call_data.get('provider_timeout_task') and not call_data['provider_timeout_task'].done():
-                                call_data['provider_timeout_task'].cancel()
-                                logger.debug("Cancelled provider timeout task - response received", channel_id=target_channel_id)
+                            if playback_id:
+                                logger.info("🔊 TTS START - Response playback started via PlaybackManager", 
+                                          channel_id=target_channel_id,
+                                          call_id=call_id,
+                                          playback_id=playback_id,
+                                          audio_size=len(audio_data))
+                                
+                                # Update conversation state after playing response
+                                conversation_state = call_data.get('conversation_state')
+                                if conversation_state == 'greeting':
+                                    # First response after greeting - transition to listening
+                                    call_data['conversation_state'] = 'listening'
+                                    logger.info("Greeting completed, now listening for conversation", channel_id=target_channel_id)
+                                elif conversation_state == 'processing':
+                                    # Response to user input - transition back to listening
+                                    call_data['conversation_state'] = 'listening'
+                                    logger.info("Response played, listening for next user input", channel_id=target_channel_id)
+                                
+                                # Cancel provider timeout task since we got a response
+                                if call_data.get('provider_timeout_task') and not call_data['provider_timeout_task'].done():
+                                    call_data['provider_timeout_task'].cancel()
+                                    logger.debug("Cancelled provider timeout task - response received", channel_id=target_channel_id)
+                            else:
+                                logger.error("🔊 TTS FAILED - PlaybackManager failed to start response playback", 
+                                           channel_id=target_channel_id,
+                                           call_id=call_id)
                         else:
                             logger.warning("No active call found for AgentAudio playback", call_id=call_id)
             elif event_type == "Transcription":

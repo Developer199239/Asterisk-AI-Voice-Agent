@@ -109,10 +109,10 @@ server-clear-logs:
 	@echo "--> Clearing logs on $(SERVER_HOST)..."
 	ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && docker-compose logs --tail=0 ai-engine && docker-compose logs --tail=0 local-ai-server'
 
-## server-health: Check deployment health (ARI, AudioSocket, Providers)
+## server-health: Check deployment health (ARI, ExternalMedia, Providers)
 server-health:
 	@echo "--> Checking deployment health on $(SERVER_HOST)..."
-	ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && docker-compose logs --tail=50 ai-engine | grep -E "(Successfully connected|AudioSocket server listening|Provider.*loaded|Engine started)"'
+	ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && docker-compose logs --tail=50 ai-engine | grep -E "(Successfully connected|RTP server listening|Provider.*loaded|Engine started)"'
 
 # ==============================================================================
 # TESTING & VERIFICATION

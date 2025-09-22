@@ -72,7 +72,7 @@ select_models() {
             STT_URL="https://alphacephei.com/vosk/models/vosk-model-en-us-0.22.zip"
             STT_SIZE="1.8GB"
             STT_SAMPLE_RATE="16000"  # Model native rate
-            STT_INPUT_RATE="8000"    # AudioSocket input rate (needs resampling)
+            STT_INPUT_RATE="8000"    # ExternalMedia input rate (needs resampling)
             
             # TTS Models - Focus on models that can output uLaw 8kHz
             TTS_MODEL="en_US-lessac-medium"  # High quality, can be converted to uLaw 8kHz
@@ -92,7 +92,7 @@ select_models() {
             STT_URL="https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip"
             STT_SIZE="40MB"
             STT_SAMPLE_RATE="16000"  # Model native rate
-            STT_INPUT_RATE="8000"    # AudioSocket input rate (needs resampling)
+            STT_INPUT_RATE="8000"    # ExternalMedia input rate (needs resampling)
             
             # TTS Models - Current working model
             TTS_MODEL="en_US-lessac-medium"  # High quality, can be converted to uLaw 8kHz
@@ -112,7 +112,7 @@ select_models() {
             STT_URL="https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip"
             STT_SIZE="40MB"
             STT_SAMPLE_RATE="16000"  # Model native rate
-            STT_INPUT_RATE="8000"    # AudioSocket input rate (needs resampling)
+            STT_INPUT_RATE="8000"    # ExternalMedia input rate (needs resampling)
             
             # TTS Models - Same quality, efficient
             TTS_MODEL="en_US-lessac-medium"  # High quality, can be converted to uLaw 8kHz
@@ -132,7 +132,7 @@ select_models() {
     echo "    - Native Rate: ${TTS_OUTPUT_RATE}Hz → Target Rate: ${TTS_TARGET_RATE}Hz (resampling required)"
     echo "    - Format: WAV → uLaw conversion via sox"
     echo ""
-    echo "Audio Pipeline: AudioSocket (8kHz) → STT (resampled to 16kHz) → TTS (resampled to 8kHz) → ARI (uLaw 8kHz)"
+    echo "Audio Pipeline: ExternalMedia (8kHz) → STT (resampled to 16kHz) → TTS (resampled to 8kHz) → ARI (uLaw 8kHz)"
     echo ""
 }
 

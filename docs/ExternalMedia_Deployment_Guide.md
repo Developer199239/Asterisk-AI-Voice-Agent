@@ -2,7 +2,7 @@
 
 ## Overview
 
-This guide covers the deployment and testing of the ExternalMedia + RTP implementation for the Asterisk AI Voice Agent. This implementation replaces AudioSocket with ARI ExternalMedia for more reliable audio capture.
+This guide covers the deployment and testing of the ExternalMedia + RTP implementation for the Asterisk AI Voice Agent. This is the primary audio transport method for reliable audio capture.
 
 ## Architecture
 
@@ -144,7 +144,7 @@ The engine exposes a health endpoint at `http://localhost:15000/health`:
 {
   "status": "healthy",
   "ari_connected": true,
-  "audiosocket_listening": false,
+  "external_media_listening": true,
   "rtp_server_running": true,
   "active_calls": 0,
   "providers": {
@@ -174,13 +174,12 @@ Access RTP server statistics via the engine logs or health endpoint:
 
 ## Fallback Strategy
 
-If ExternalMedia fails, you can fallback to AudioSocket by changing the configuration:
+If ExternalMedia fails, check the following:
+1. RTP server is listening on the configured port
+2. ExternalMedia channels are being created successfully
+3. Bridge operations are working correctly
 
-```yaml
-audio_transport: "audiosocket"
-```
-
-This will use the existing AudioSocket implementation as a fallback.
+ExternalMedia is the primary and only supported transport method.
 
 ## Performance Expectations
 
