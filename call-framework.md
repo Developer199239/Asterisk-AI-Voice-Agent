@@ -4,8 +4,8 @@
 
 **Highlights**
 - Greeting played instantly via file playback (13 kB uLaw sample).
-- Upstream audio reached the local AI provider: STT captured `hello what did your name` and `thank you alexa goodbye`.
-- Local LLM replied `bye bye`; TTS rendered a 5.7 kB uLaw response and PlaybackManager cleared gating tokens on `PlaybackFinished`.
+- Upstream audio reached the local AI provider: STT captured `hello what did your name` / `what do you do` / `thank you good bye`.
+- Local LLM responded with `My name is Alexa.` then `I am a chatbot designed to assist users with various tasks.` followed by `bye bye`; corresponding uLaw clips were 11 kB, 27 kB, and 5 kB respectively and arrived ~8–10 s after each utterance.
 - Post-call health check: `active_calls: 0`, `conversation.gating_active: 0`, RTP stats show `total_packet_loss: 0`.
 
 **Representative Logs**

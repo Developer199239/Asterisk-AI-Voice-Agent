@@ -427,7 +427,7 @@ Assistant:"""
                         else:
                             logging.info("🤖 LLM - Empty response, skipping TTS")
                     else:
-                        logging.info("📝 STT - No speech detected, skipping pipeline")
+                        logging.debug("📝 STT - No speech detected, skipping pipeline")
                 
                 else:
                     # JSON messages
@@ -472,10 +472,10 @@ Assistant:"""
                                         logging.info("📤 AUDIO OUTPUT - Sent uLaw 8kHz response")
                                     else:
                                         logging.warning("🔊 TTS - No audio generated")
-                                else:
-                                    logging.info("🤖 LLM - Empty response, skipping TTS")
                             else:
-                                logging.info("📝 STT - No speech detected, skipping pipeline")
+                                logging.info("🤖 LLM - Empty response, skipping TTS")
+                    else:
+                        logging.debug("📝 STT - No speech detected, skipping pipeline")
                         
                         elif data.get("type") == "reload_models":
                             # Hot reload all models
