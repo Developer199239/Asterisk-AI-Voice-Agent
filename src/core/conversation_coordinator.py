@@ -8,13 +8,16 @@ engine can make gating decisions with a single source of truth.
 from __future__ import annotations
 
 import asyncio
-from typing import Dict, Optional
+from typing import Dict, Optional, TYPE_CHECKING
 
 import structlog
 from prometheus_client import Counter, Gauge
 
 from .models import CallSession
 from .session_store import SessionStore
+
+if TYPE_CHECKING:  # pragma: no cover
+    from .playback_manager import PlaybackManager
 
 logger = structlog.get_logger(__name__)
 
@@ -48,11 +51,16 @@ _CONVERSATION_STATES = ("greeting", "listening", "processing")
 class ConversationCoordinator:
     """Central coordinator for conversation state and observability."""
 
-    def __init__(self, session_store: SessionStore):
+    def __init__(self, session_store: SessionStore, playback_manager: Optional["PlaybackManager"] = None):
         self._session_store = session_store
+        self._playback_manager = playback_manager
         self._capture_fallback_tasks: Dict[str, asyncio.Task] = {}
         self._barge_in_seen: Dict[str, bool] = {}
         self._barge_in_totals: Dict[str, int] = {}
+
+    def set_playback_manager(self, playback_manager: "PlaybackManager") -> None:
+        """Attach the playback manager after initialisation."""
+        self._playback_manager = playback_manager
 
     async def register_call(self, session: CallSession) -> None:
         """Initialise metrics for a newly tracked call session."""
