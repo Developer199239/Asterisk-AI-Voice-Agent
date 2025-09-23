@@ -338,6 +338,23 @@ exten => s,1,NoOp(Local)
 
 These coexist with `[from-ai-agent]` for simple Stasis routing and allow the engine to originate a Local channel into `[ai-agent-media-fork]` to start the upstream AudioSocket.
 
+### AudioSocket Streaming (Feature-Flag) — Wire Format & Pacing
+
+When `audio_transport=audiosocket` and `downstream_mode=stream` are enabled, the engine can stream provider audio back to Asterisk over the same AudioSocket connection.
+
+- Wire format selection is controlled by `audiosocket.format` in `config/ai-agent.yaml` (or `AUDIOSOCKET_FORMAT` env).
+  - `ulaw` (default): engine sends μ-law 8 kHz frames of 160 bytes per 20 ms frame.
+  - `slin16` (aka `slinear`): engine converts provider μ-law to PCM16 and sends 320-byte frames per 20 ms.
+- Outbound pacing: the engine segments audio into exact 20 ms frames and sends them at real-time cadence to prevent Asterisk buffer overruns (`translate.c: Out of buffer space`).
+- Inbound decode: if the dialplan sends μ-law (typical), the engine decodes μ-law → PCM16 at 8 kHz before resampling to 16 kHz for VAD.
+- Provider streaming events: providers emit `AgentAudio` bytes with `streaming_chunk=true` and a final `AgentAudioDone` with `streaming_done=true` to control the streaming window.
+
+Implementation references:
+- `src/core/streaming_playback_manager.py` — format-aware conversion, 20 ms frame segmentation, pacing, remainder buffering
+- `src/engine.py::_audiosocket_handle_audio` — inbound μ-law decode and 8k→16k resample for VAD
+- `src/providers/deepgram.py` — emits `AgentAudio`/`AgentAudioDone` with streaming flags and call_id
+- `src/config.py::AudioSocketConfig` — `audiosocket.format` (default `ulaw`)
+
 ### Dialplan Contexts Explained
 
 **`[from-ai-agent]`**:

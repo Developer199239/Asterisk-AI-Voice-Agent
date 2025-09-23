@@ -92,11 +92,14 @@ class StreamingPlaybackManager:
         self.audio_transport = audio_transport
         self.rtp_server = rtp_server
         self.audiosocket_server = audiosocket_server
+        self.audiosocket_format: str = "ulaw"  # default format expected by dialplan
         
         # Streaming state
         self.active_streams: Dict[str, Dict[str, Any]] = {}  # call_id -> stream_info
         self.jitter_buffers: Dict[str, asyncio.Queue] = {}  # call_id -> audio_queue
         self.keepalive_tasks: Dict[str, asyncio.Task] = {}  # call_id -> keepalive_task
+        # Per-call remainder buffer for precise frame sizing
+        self.frame_remainders: Dict[str, bytes] = {}
         
         # Configuration defaults
         self.sample_rate = self.streaming_config.get('sample_rate', 8000)
@@ -289,14 +292,39 @@ class StreamingPlaybackManager:
     ) -> bool:
         """Process audio chunks from jitter buffer."""
         try:
-            # Process all available chunks
+            # Process available chunks with pacing to avoid flooding Asterisk
             while not jitter_buffer.empty():
                 chunk = jitter_buffer.get_nowait()
-                
+
                 # Convert audio format if needed
                 processed_chunk = await self._process_audio_chunk(chunk)
-                if processed_chunk:
-                    # Send chunk via AudioSocket/ExternalMedia
+                if not processed_chunk:
+                    continue
+
+                if self.audio_transport == "audiosocket":
+                    # Segment to fixed 20ms frames and pace sends
+                    fmt = (self.audiosocket_format or "ulaw").lower()
+                    bytes_per_sample = 1 if fmt in ("ulaw", "mulaw", "mu-law") else 2
+                    frame_size = int(self.sample_rate * (self.chunk_size_ms / 1000.0) * bytes_per_sample)
+                    if frame_size <= 0:
+                        frame_size = 160 if bytes_per_sample == 1 else 320  # 8k@20ms
+
+                    pending = self.frame_remainders.get(call_id, b"") + processed_chunk
+                    offset = 0
+                    total_len = len(pending)
+                    while (total_len - offset) >= frame_size:
+                        frame = pending[offset:offset + frame_size]
+                        offset += frame_size
+                        success = await self._send_audio_chunk(call_id, stream_id, frame)
+                        if not success:
+                            return False
+                        # Pacing: sleep for chunk duration to avoid overrun
+                        await asyncio.sleep(self.chunk_size_ms / 1000.0)
+
+                    # Save remainder for next round
+                    self.frame_remainders[call_id] = pending[offset:]
+                else:
+                    # ExternalMedia/RTP path: send as-is (RTP layer handles timing)
                     success = await self._send_audio_chunk(call_id, stream_id, processed_chunk)
                     if not success:
                         return False
@@ -320,8 +348,12 @@ class StreamingPlaybackManager:
             return None
         try:
             if self.audio_transport == "audiosocket":
-                # Convert μ-law to 16-bit PCM for AudioSocket downstream
-                return audioop.ulaw2lin(chunk, 2)
+                fmt = (self.audiosocket_format or "ulaw").lower()
+                if fmt in ("slin16", "slinear", "pcm16", "linear16", "slin"):
+                    # Convert μ-law (provider) to 16-bit PCM for AudioSocket downstream
+                    return audioop.ulaw2lin(chunk, 2)
+                # If dialplan expects μ-law, pass through unchanged
+                return chunk
             # ExternalMedia/RTP path: pass-through
             return chunk
         except Exception as e:
@@ -379,6 +411,7 @@ class StreamingPlaybackManager:
         rtp_server: Optional[Any] = None,
         audiosocket_server: Optional[Any] = None,
         audio_transport: Optional[str] = None,
+        audiosocket_format: Optional[str] = None,
     ) -> None:
         """Configure streaming transport after engine initialization."""
         if rtp_server is not None:
@@ -387,6 +420,8 @@ class StreamingPlaybackManager:
             self.audiosocket_server = audiosocket_server
         if audio_transport is not None:
             self.audio_transport = audio_transport
+        if audiosocket_format is not None:
+            self.audiosocket_format = audiosocket_format
 
     async def _record_fallback(self, call_id: str, reason: str) -> None:
         """Increment fallback counters and persist the last error."""
@@ -585,6 +620,8 @@ class StreamingPlaybackManager:
                     await self.session_store.upsert_call(sess)
             except Exception:
                 pass
+            # Clear any remainder buffer
+            self.frame_remainders.pop(call_id, None)
             
             logger.debug("Streaming cleanup completed",
                         call_id=call_id,

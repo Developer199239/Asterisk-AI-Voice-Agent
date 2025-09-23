@@ -46,6 +46,17 @@ This roadmap tracks the open-source enablement work for the Asterisk AI Voice Ag
   - Enabling the flag starts streaming transport and logs readiness; disabling reverts cleanly.
   - Regression call demonstrates that the pipeline either streams audio or falls back without error.
 
+### Milestone 5 — Progress (2025-09-23)
+- **Shipped**:
+  - AudioSocket streaming pacing and frame segmentation (20 ms frames, real-time cadence) to prevent `translate.c: Out of buffer space`.
+  - Wire format selection via `audiosocket.format` (env `AUDIOSOCKET_FORMAT`): `ulaw` (default) or `slin16`.
+  - Provider streaming semantics: Deepgram now emits `AgentAudio` with `streaming_chunk=true` and `AgentAudioDone` with `streaming_done=true` and `call_id`.
+  - Inbound AudioSocket decode: μ-law → PCM16 @8k prior to 8k→16k resample for VAD.
+- **Quick verify**:
+  - Logs on start: `Runtime modes audio_transport=audiosocket downstream_mode=stream` and `AudioSocket server listening ...:8090`.
+  - During call: `🎵 STREAMING PLAYBACK - Started` then steady frame sends (no buffer overrun warnings in Asterisk).
+  - Audible agent audio on the call; if not, confirm `audiosocket.format` matches dialplan and adjust.
+
 ## Quick Regression Checklist
 1. Clear logs: `make logs --tail=0 ai-engine` (or `make server-clear-logs` remotely).
 2. Call into the AI context.

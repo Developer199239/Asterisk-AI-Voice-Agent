@@ -267,9 +267,17 @@ class Engine:
                 on_dtmf=self._audiosocket_handle_dtmf,
             )
             await self.audio_socket_server.start()
+            # Configure streaming manager with AudioSocket format expected by dialplan
+            as_format = None
+            try:
+                if self.config.audiosocket and hasattr(self.config.audiosocket, 'format'):
+                    as_format = self.config.audiosocket.format
+            except Exception:
+                as_format = None
             self.streaming_playback_manager.set_transport(
                 audio_transport=self.config.audio_transport,
                 audiosocket_server=self.audio_socket_server,
+                audiosocket_format=as_format,
             )
 
         # Prepare RTP server for ExternalMedia transport
@@ -1666,13 +1674,28 @@ class Engine:
                 bytes=len(pcm_8k_data),
             )
 
-        # Resample to 16kHz for the VAD pipeline
+        # Decode based on dialplan format, then resample to 16kHz for the VAD pipeline
         state = self.audiosocket_resample_state.get(conn_id)
         try:
-            pcm_16k_data, state = audioop.ratecv(pcm_8k_data, 2, 1, 8000, 16000, state)
+            # Determine expected inbound format (default to ulaw if unspecified)
+            inbound_fmt = None
+            try:
+                if self.config.audiosocket and hasattr(self.config.audiosocket, 'format'):
+                    inbound_fmt = (self.config.audiosocket.format or 'ulaw').lower()
+            except Exception:
+                inbound_fmt = 'ulaw'
+
+            if inbound_fmt in ("ulaw", "mulaw", "mu-law"):
+                # Convert μ-law to 16-bit PCM @8k before resample
+                pcm8k_linear = audioop.ulaw2lin(pcm_8k_data, 2)
+            else:
+                # Already linear PCM16 @8k
+                pcm8k_linear = pcm_8k_data
+
+            pcm_16k_data, state = audioop.ratecv(pcm8k_linear, 2, 1, 8000, 16000, state)
             self.audiosocket_resample_state[conn_id] = state
         except Exception as exc:  # noqa: BLE001
-            logger.error("AudioSocket resample failed", conn_id=conn_id, error=str(exc), exc_info=True)
+            logger.error("AudioSocket decode/resample failed", conn_id=conn_id, error=str(exc), exc_info=True)
             return
 
         ssrc = self._ensure_audiosocket_ssrc(conn_id, caller_channel_id)

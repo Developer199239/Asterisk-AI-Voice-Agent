@@ -33,6 +33,7 @@ class ExternalMediaConfig(BaseModel):
 class AudioSocketConfig(BaseModel):
     host: str = Field(default="0.0.0.0")
     port: int = Field(default=8090)
+    format: str = Field(default="ulaw")  # 'ulaw' or 'slin16'
 
 
 class LocalProviderConfig(BaseModel):
@@ -142,6 +143,8 @@ def load_config(path: str = "config/ai-agent.yaml") -> AppConfig:
             audiosocket_cfg.setdefault('port', int(os.getenv('AUDIOSOCKET_PORT', audiosocket_cfg.get('port', 8090))))
         except ValueError:
             audiosocket_cfg['port'] = 8090
+        # AudioSocket payload format expected by Asterisk dialplan (matches third arg to AudioSocket(...))
+        audiosocket_cfg.setdefault('format', os.getenv('AUDIOSOCKET_FORMAT', audiosocket_cfg.get('format', 'ulaw')))
         config_data['audiosocket'] = audiosocket_cfg
 
         return AppConfig(**config_data)

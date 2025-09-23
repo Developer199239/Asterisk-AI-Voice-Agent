@@ -24,6 +24,36 @@
 
 ---
 
+## 2025-09-23 12:55 PDT — AudioSocket Deepgram Regression (Asterisk buffer warnings)
+
+**Observed Behaviour**
+- No audio heard on the call; Asterisk logged repeated:
+  - `WARNING translate.c: framein: Out of buffer space`
+- Engine showed short-lived streaming windows:
+  - `🎵 STREAMING PLAYBACK - Started` → `🎵 STREAMING PLAYBACK - Stopped` → `🎵 STREAMING DONE`
+  - `AgentAudioDone with empty buffer`
+
+**Diagnosis**
+- Asterisk buffer overruns indicate outbound frames were sent too quickly and/or with the wrong size/format. Prior engine logic forwarded provider μ-law in variable sizes without pacing and expected PCM16 on the AudioSocket leg.
+- Provider emitted frequent JSON control frames; our earlier logic treated any JSON as a stream-boundary and closed streaming too early, yielding near-zero audible output.
+
+**Fixes Implemented (2025-09-23)**
+- Wire format selection via config: `audiosocket.format` (`ulaw` default, or `slin16`).
+- Outbound pacing and segmentation: exact 20 ms frames (160 B for μ-law, 320 B for PCM16) with real-time cadence.
+- Inbound AudioSocket decode: μ-law → PCM16 @8k before resampling to 16 kHz for VAD.
+- Provider streaming flags: Deepgram emits `AgentAudio` with `streaming_chunk=true` and `AgentAudioDone` with `streaming_done=true` (plus `call_id`).
+
+**Expected Results Next Regression**
+- Asterisk logs should no longer report `Out of buffer space`.
+- Engine should show continuous streaming during agent replies, then clean `Streaming DONE` without empty buffer warnings.
+- Caller should hear Deepgram greeting/response.
+
+**Next Test Plan**
+1. `make server-clear-logs` then place a call to the Deepgram AudioSocket context.
+2. Watch `ai-engine` logs for: AudioSocket bind, `🎵 STREAMING PLAYBACK - Started`, steady per-frame pacing (no error bursts).
+3. Confirm audible agent audio.
+4. If still silent, verify dialplan third arg to `AudioSocket(...)` matches `audiosocket.format` and adjust (`ulaw` vs `slin16`).
+
 ## 2025-09-23 12:06 PDT — AudioSocket Deepgram Regression (No audio heard)
 
 **Call Setup**
