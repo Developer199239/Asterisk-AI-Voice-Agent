@@ -24,6 +24,42 @@
 
 ---
 
+## 2025-09-23 13:06 PDT — AudioSocket Deepgram Regression (Asterisk write failure)
+
+**Observed Behaviour (25 s call)**
+- No audio heard end-to-end.
+- Asterisk logs:
+  - `AudioSocket(UUID,127.0.0.1:8090)` (no codec arg shown)
+  - `WARNING res_audiosocket.c: ast_audiosocket_send_frame: Failed to write data to AudioSocket`
+  - `ERROR app_audiosocket.c: audiosocket_run: Failed to forward channel frame from Local/...;2 to AudioSocket`
+
+**Analysis**
+- The `;2` Local leg attempted to write media into the AudioSocket TCP, but the write failed (peer closed or not readable). Prior engine logic disconnected duplicate AudioSocket connections on UUID handshake or on first audio frame, which can leave Asterisk holding a socket it still tries to stream into (yielding the above errors).
+- The dialplan invocation lacked an explicit format argument, so Asterisk likely used its default wire format (often `slin16`). The engine had been assuming μ-law by default, which risks mis-decode on inbound and wrong framing on outbound.
+
+**What Worked**
+- Engine accepted and bound AudioSocket connection(s); Deepgram provider session initialized; streaming manager engaged and closed cleanly when signaled.
+
+**What Failed**
+- Asterisk writes to AudioSocket failed shortly after connect (write error on `;2` leg).
+- No audible downstream audio reached the caller.
+
+**Fixes Implemented (in code)**
+1. Keep both Local `;1/;2` AudioSocket connections open and select a primary on first inbound audio frame (do not disconnect the other leg). See `src/engine.py` (`channel_to_conns`, `audiosocket_primary_conn`).
+2. Add configurable wire format `audiosocket.format` (`ulaw` default) and align outbound streaming:
+   - μ-law: 160-byte 20 ms frames; PCM16: 320-byte 20 ms frames.
+   - Real-time pacing on outbound to prevent Asterisk buffer overruns.
+3. Decode inbound AudioSocket according to configured format (μ-law → PCM16 @8k) before 16 kHz resample for VAD.
+4. Provider streaming events wired (`AgentAudio` with `streaming_chunk=true` + `AgentAudioDone`).
+
+**Next Actions**
+1. Redeploy latest engine (done) and retest the same DID.
+2. Ensure dialplan explicitly specifies the format in `AudioSocket(UUID,host:port,ulaw)` (or set `AUDIOSOCKET_FORMAT=slin16` and use `slinear`).
+3. During the call, watch for:
+   - No `Failed to write data to AudioSocket` in `/var/log/asterisk/full`.
+   - Engine logs: `AudioSocket first frame received`, `🎵 STREAMING PLAYBACK - Started`.
+4. If still silent, capture 30 s of `ai-engine` logs and attach here; we will then adjust the Deepgram `AgentAudioDone` boundary detection to avoid prematurely stopping streams on mid-response JSON frames.
+
 ## 2025-09-23 12:55 PDT — AudioSocket Deepgram Regression (Asterisk buffer warnings)
 
 **Observed Behaviour**

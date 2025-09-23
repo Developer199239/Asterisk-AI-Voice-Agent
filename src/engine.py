@@ -165,6 +165,9 @@ class Engine:
         self.audiosocket_conn_to_ssrc: Dict[str, int] = {}
         self.audiosocket_resample_state: Dict[str, Optional[tuple]] = {}
         self.pending_channel_for_bind: Optional[str] = None
+        # Support duplicate Local ;1/;2 AudioSocket connections per call
+        self.channel_to_conns: Dict[str, set] = {}
+        self.audiosocket_primary_conn: Dict[str, str] = {}
         # Audio buffering for better playback quality
         self.audio_buffers: Dict[str, bytes] = {}
         self.buffer_size = 1600  # 200ms of audio at 8kHz (1600 bytes of ulaw)
@@ -1580,20 +1583,23 @@ class Engine:
 
         existing_conn = self.channel_to_conn.get(caller_channel_id)
         if existing_conn and existing_conn != conn_id:
+            # Keep both connections temporarily; prefer whichever sends audio first
             logger.info(
                 "AudioSocket duplicate connection received",
                 conn_id=conn_id,
                 existing_conn=existing_conn,
                 channel_id=caller_channel_id,
             )
-            if self.audio_socket_server:
-                asyncio.create_task(self.audio_socket_server.disconnect(conn_id))
-            return True
 
+        # Track connection mappings
         self.conn_to_channel[conn_id] = caller_channel_id
-        self.channel_to_conn[caller_channel_id] = conn_id
+        self.channel_to_conn[caller_channel_id] = self.channel_to_conn.get(caller_channel_id, conn_id)
         self.conn_to_caller[conn_id] = caller_channel_id
-        session.audiosocket_conn_id = conn_id
+        # Track set of conns for this channel
+        conns = self.channel_to_conns.get(caller_channel_id, set())
+        conns.add(conn_id)
+        self.channel_to_conns[caller_channel_id] = conns
+        # Do not pick primary yet; we'll select on first audio frame
         session.status = "audiosocket_connected"
         await self._save_session(session)
 
@@ -1673,6 +1679,22 @@ class Engine:
                 channel_id=caller_channel_id,
                 bytes=len(pcm_8k_data),
             )
+            # Select primary conn for this channel on first audio frame
+            primary = self.audiosocket_primary_conn.get(caller_channel_id)
+            if not primary:
+                self.audiosocket_primary_conn[caller_channel_id] = conn_id
+                # Persist primary to session so downstream streaming uses correct conn
+                session = await self.session_store.get_by_call_id(caller_channel_id)
+                if session:
+                    session.audiosocket_conn_id = conn_id
+                    await self._save_session(session)
+                # Keep secondary connection(s) open to avoid Asterisk EPIPE on write
+                logger.debug(
+                    "AudioSocket primary selected; keeping secondary connections open",
+                    channel_id=caller_channel_id,
+                    primary_conn=conn_id,
+                    others=list(self.channel_to_conns.get(caller_channel_id, set() - {conn_id}))
+                )
 
         # Decode based on dialplan format, then resample to 16kHz for the VAD pipeline
         state = self.audiosocket_resample_state.get(conn_id)
@@ -1711,6 +1733,16 @@ class Engine:
                 session.audiosocket_conn_id = None
                 session.provider_session_active = False
                 await self._save_session(session)
+
+        # Remove from per-channel conn set
+        conns = self.channel_to_conns.get(caller_channel_id or "", set())
+        if conn_id in conns:
+            conns.discard(conn_id)
+            if caller_channel_id:
+                self.channel_to_conns[caller_channel_id] = conns
+        # If primary was this conn, clear primary so a future conn can take over
+        if caller_channel_id and self.audiosocket_primary_conn.get(caller_channel_id) == conn_id:
+            self.audiosocket_primary_conn.pop(caller_channel_id, None)
 
         self.conn_to_caller.pop(conn_id, None)
         self.audiosocket_resample_state.pop(conn_id, None)
