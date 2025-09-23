@@ -12,6 +12,7 @@ from typing import Optional, Dict, Any, TYPE_CHECKING
 import structlog
 from prometheus_client import Counter, Gauge
 import math
+import audioop
 
 from src.core.session_store import SessionStore
 from src.core.models import CallSession, PlaybackRef
@@ -311,13 +312,21 @@ class StreamingPlaybackManager:
     async def _process_audio_chunk(self, chunk: bytes) -> Optional[bytes]:
         """Process audio chunk for streaming.
 
-        Deepgram emits μ-law encoded audio. Until we implement an outbound
-        transport, we simply pass the bytes through so fallback playback
-        remains bit-identical.
+        - Deepgram emits μ-law 8 kHz frames.
+        - For AudioSocket downstream we must send PCM16 8 kHz.
+        - For ExternalMedia we pass through μ-law (RTP layer can handle ulaw).
         """
         if not chunk:
             return None
-        return chunk
+        try:
+            if self.audio_transport == "audiosocket":
+                # Convert μ-law to 16-bit PCM for AudioSocket downstream
+                return audioop.ulaw2lin(chunk, 2)
+            # ExternalMedia/RTP path: pass-through
+            return chunk
+        except Exception as e:
+            logger.error("Audio chunk processing failed", error=str(e), exc_info=True)
+            return None
     
     async def _send_audio_chunk(self, call_id: str, stream_id: str, chunk: bytes) -> bool:
         """Send audio chunk via configured streaming transport."""

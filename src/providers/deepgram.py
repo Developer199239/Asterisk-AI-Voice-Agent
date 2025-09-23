@@ -19,6 +19,8 @@ class DeepgramProvider(AIProviderInterface):
         self._keep_alive_task: Optional[asyncio.Task] = None
         self._is_audio_flowing = False
         self.request_id: Optional[str] = None
+        self.call_id: Optional[str] = None
+        self._in_audio_burst: bool = False
 
     @property
     def supported_codecs(self) -> List[str]:
@@ -32,6 +34,9 @@ class DeepgramProvider(AIProviderInterface):
             logger.info("Connecting to Deepgram Voice Agent...", url=ws_url)
             self.websocket = await websockets.connect(ws_url, extra_headers=list(headers.items()))
             logger.info("✅ Successfully connected to Deepgram Voice Agent.")
+
+            # Persist call context for downstream events
+            self.call_id = call_id
 
             await self._configure_agent()
 
@@ -104,18 +109,45 @@ class DeepgramProvider(AIProviderInterface):
                 if isinstance(message, str):
                     try:
                         event_data = json.loads(message)
+                        # If we were in an audio burst, a JSON control/event frame marks a boundary
+                        if self._in_audio_burst and self.on_event:
+                            await self.on_event({
+                                'type': 'AgentAudioDone',
+                                'streaming_done': True,
+                                'call_id': self.call_id
+                            })
+                            self._in_audio_burst = False
+
                         if self.on_event:
                             await self.on_event(event_data)
                     except json.JSONDecodeError:
                         logger.error("Failed to parse JSON message from Deepgram", message=message)
                 elif isinstance(message, bytes):
-                    audio_event = {'type': 'AgentAudio', 'data': message}
+                    audio_event = {
+                        'type': 'AgentAudio',
+                        'data': message,
+                        'streaming_chunk': True,
+                        'call_id': self.call_id
+                    }
+                    self._in_audio_burst = True
                     if self.on_event:
                         await self.on_event(audio_event)
         except websockets.exceptions.ConnectionClosed as e:
             logger.warning("Deepgram Voice Agent connection closed", reason=str(e))
         except Exception:
             logger.error("Error receiving events from Deepgram Voice Agent", exc_info=True)
+        finally:
+            # If socket ends mid-burst, close the burst cleanly
+            if self._in_audio_burst and self.on_event:
+                try:
+                    await self.on_event({
+                        'type': 'AgentAudioDone',
+                        'streaming_done': True,
+                        'call_id': self.call_id
+                    })
+                except Exception:
+                    pass
+            self._in_audio_burst = False
 
     async def speak(self, text: str):
         if not text or not self.websocket:

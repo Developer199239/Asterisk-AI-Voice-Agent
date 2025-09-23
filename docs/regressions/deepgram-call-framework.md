@@ -24,6 +24,57 @@
 
 ---
 
+## 2025-09-23 12:06 PDT — AudioSocket Deepgram Regression (No audio heard)
+
+**Call Setup**
+- Inbound route hit `from-ai-agent-deepgram` and entered `Stasis(asterisk-ai-voice-agent)`.
+- Engine created caller bridge and originated the Local leg to `[ai-agent-media-fork]` to spin up AudioSocket.
+
+**Observed Behaviour (server logs, ai-engine)**
+- `AudioSocket connection accepted` followed by `AudioSocket connection bound to channel`.
+- Immediately after bind: `AudioSocket provider session starting ... provider=local` (provider mismatch).
+- A second Local leg attempted to connect; engine logged `AudioSocket duplicate connection received` and closed the extra socket (expected with Local ;1/;2 legs).
+- ~14 seconds later, call cleanup ran; no greeting or playback logs emitted, and no `AudioSocket first frame received` appeared.
+
+**Why No Audio Was Heard**
+- Provider mismatch: the engine started the `local` provider even though the dialplan used `from-ai-agent-deepgram`. The engine does not currently read the `AI_PROVIDER` dialplan variable; it uses `config.default_provider` (currently `local`).
+- AudioSocket path does not play a greeting in `_audiosocket_handle_uuid`. Unlike the ExternalMedia path (which calls `_play_initial_greeting_hybrid`/`playback_manager`), the AudioSocket bind only starts the provider session; no greeting is synthesized. With `local` selected and no explicit greeting call, the line stays silent.
+- Streaming mode is still `downstream_mode: file` (per `config/ai-agent.yaml`), so even if Deepgram streamed, the engine would buffer chunks for file playback rather than live-stream back. This does not explain total silence by itself, but it confirms the streaming path is not engaged.
+- Possible codec mismatch to verify: `[ai-agent-media-fork]` has historically used `AudioSocket(..., ulaw)` while the engine’s `_audiosocket_handle_audio` treats inbound frames as PCM16 (resampling with `audioop.ratecv(..., width=2)`). If the dialplan is actually using `ulaw`, inbound decode would be wrong and could lead to VAD seeing silence even if frames arrive. In this specific call, there were no `AudioSocket first frame received` logs, suggesting no audio frames surfaced at all (so greeting absence is the primary cause here).
+
+**Evidence Snippets**
+```
+🎯 HYBRID ARI - StasisStart ... context=from-ai-agent-deepgram
+AudioSocket connection accepted conn_id=...
+AudioSocket connection bound to channel channel_id=...
+AudioSocket provider session starting provider=local
+AudioSocket duplicate connection received ... existing_conn=...
+... ~14s later ...
+Call resources cleaned up successfully channel_id=...
+```
+
+**Fix Plan**
+1. Provider selection
+   - Honor dialplan `AI_PROVIDER` by reading the ARI channel variable on `StasisStart` and persisting it into the `CallSession` (fallback to `config.default_provider` if missing).
+   - As an immediate workaround for regression testing, set `default_provider: "deepgram"` in `config/ai-agent.yaml` when using the Deepgram route.
+
+2. Greeting on AudioSocket path
+   - In `_audiosocket_handle_uuid`, call the same greeting flow as ExternalMedia: synthesize via provider (or let Deepgram agent greeting handle it) and play via `PlaybackManager` to the bridge so callers hear sound on connect.
+
+3. Streaming mode and encoding
+   - Enable `downstream_mode: "stream"` for live-stream tests; otherwise the engine will buffer to file playback.
+   - For AudioSocket downstream, convert Deepgram μ-law chunks to PCM16 8 kHz before `AudioSocketServer.send_audio(...)` (use `audioop.ulaw2lin(chunk, 2)`) so Asterisk hears correct audio.
+   - Verify `[ai-agent-media-fork]` uses `slinear` if we keep PCM16 on the wire; if the dialplan uses `ulaw`, then send μ-law downstream and update inbound handling accordingly.
+
+4. Duplicate AudioSocket handshakes
+   - Current behavior (closing the second leg silently) is acceptable; ensure we do not send an Error TLV to avoid Asterisk reporting `non-audio` frames.
+
+**Next Steps**
+- Flip `default_provider` to `deepgram` or implement `AI_PROVIDER` override, redeploy, and place a new call.
+- Confirm a greeting plays immediately after AudioSocket bind.
+- If testing full-duplex, switch `downstream_mode=stream` and verify audible streamed audio; otherwise verify file playback path triggers on `AgentAudioDone`.
+
+
 ## ❌ REGRESSION BLOCKER — September 22, 2025 (Streaming playback loop / caller audio dropped)
 
 **Outcome**
