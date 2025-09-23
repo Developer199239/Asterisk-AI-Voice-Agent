@@ -24,6 +24,57 @@
 
 ---
 
+## 2025-09-23 15:17 PDT — AudioSocket Deepgram Regression (1-minute call, no audio)
+
+**Observed Behaviour**
+- No initial greeting, no audio for ~60s, normal hangup/cleanup.
+- ai-engine logs show multiple Deepgram streaming bytes followed by a quick end:
+  - `Received provider event event_type=AgentAudio` repeated many times (all at 22:14:55Z)
+  - Then `Received provider event event_type=AgentAudioDone`
+  - Streaming manager cleanup messages:
+    - `🎵 STREAMING PLAYBACK - Stopped`
+    - `🎵 STREAMING DONE - Real-time audio streaming completed`
+  - After that, AudioSocket handshake lines appear for this call:
+    - `AudioSocket connection accepted`
+    - `AudioSocket duplicate connection received`
+    - `AudioSocket connection bound to channel`
+    - `AudioSocket UUID bound`
+  - Notably absent: `AudioSocket first frame received` (no inbound audio frame observed by engine).
+
+**What Worked**
+- Deepgram provider produced `AgentAudio` bytes and signaled `AgentAudioDone`.
+- Streaming manager engaged (gating set/cleared) and shut down cleanly.
+- AudioSocket listener accepted and bound the UUID to the channel.
+
+**What Failed and Why**
+- No audible downstream audio:
+  - Engine’s outbound AudioSocket streaming requires a valid `session.audiosocket_conn_id`.
+  - We recently delayed primary selection until the first inbound audio frame to avoid closing the wrong duplicate leg. Because zero inbound frames were observed (`AudioSocket first frame received` never logged), the session never gained a valid `audiosocket_conn_id` during the streaming window. As a result, outbound frames had no target connection.
+  - This explains silence despite `AgentAudio` arrivals and a clean streaming lifecycle.
+- Inbound frames missing:
+  - With AudioSocket dialplan app, Asterisk should send slin16 8 kHz to the server. The absence of inbound frames suggests either:
+    - Dialplan Local pattern did not deliver media to the AudioSocket app (common timing race with Local ;1/;2), or
+    - Asterisk write failures occurred again (not captured in this call’s excerpt), or
+    - The server accepted connections after Deepgram already streamed and closed its short greeting window.
+
+**Immediate Fix Plan**
+1. Provisional conn selection on UUID bind:
+   - Set `session.audiosocket_conn_id = conn_id` when the UUID binds (if none set) so outbound streaming has a target, then update to the true primary on the first inbound frame. Keep both ;1/;2 sockets open (no disconnections) to avoid Asterisk write errors.
+2. Confirm slin16 end-to-end:
+   - We now default `audiosocket.format=slin16`. Inbound path treats socket bytes as PCM16@8k; outbound converts Deepgram μ-law → PCM16@8k and sends 320-byte 20 ms frames with pacing.
+3. Add start-of-call probe (optional):
+   - Stream a 500 ms slin16 test tone on bind (behind a debug flag) to validate the downlink path independently of provider timing.
+
+**Next Diagnostic Steps**
+- Instrumentation to add (short-term):
+  - Log when `Streaming transport missing AudioSocket connection` to confirm/deny the missing-conn hypothesis.
+  - Log provisional vs primary `audiosocket_conn_id` assignment, including which conn_id receives outbound frames.
+  - Count and log frames sent to AudioSocket during the first 2 seconds of streaming.
+- Asterisk log capture:
+  - Save `/var/log/asterisk/full` lines around the bind time to detect any `ast_audiosocket_send_frame` write errors on `;2`.
+- Correlate timings:
+  - Ensure UUID bind occurs before provider streaming begins; if not, delay provider start until AudioSocket bind completes or buffer the first N AgentAudio chunks until a conn_id is available.
+
 ## 2025-09-23 13:06 PDT — AudioSocket Deepgram Regression (Asterisk write failure)
 
 **Observed Behaviour (25 s call)**

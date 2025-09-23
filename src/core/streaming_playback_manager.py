@@ -8,7 +8,7 @@ It includes automatic fallback to file playback on errors or timeouts.
 
 import asyncio
 import time
-from typing import Optional, Dict, Any, TYPE_CHECKING
+from typing import Optional, Dict, Any, TYPE_CHECKING, Set
 import structlog
 from prometheus_client import Counter, Gauge
 import math
@@ -100,6 +100,8 @@ class StreamingPlaybackManager:
         self.keepalive_tasks: Dict[str, asyncio.Task] = {}  # call_id -> keepalive_task
         # Per-call remainder buffer for precise frame sizing
         self.frame_remainders: Dict[str, bytes] = {}
+        # First outbound frame logged tracker
+        self._first_send_logged: Set[str] = set()
         
         # Configuration defaults
         self.sample_rate = self.streaming_config.get('sample_rate', 8000)
@@ -387,6 +389,21 @@ class StreamingPlaybackManager:
                 if not conn_id:
                     logger.warning("Streaming transport missing AudioSocket connection", call_id=call_id)
                     return False
+                # One-time debug for first outbound frame to identify codec/format
+                if call_id not in self._first_send_logged:
+                    fmt = (self.audiosocket_format or "ulaw").lower()
+                    logger.info(
+                        "🎵 STREAMING OUTBOUND - First frame",
+                        call_id=call_id,
+                        stream_id=stream_id,
+                        transport=self.audio_transport,
+                        audiosocket_format=fmt,
+                        frame_bytes=len(chunk),
+                        sample_rate=self.sample_rate,
+                        chunk_size_ms=self.chunk_size_ms,
+                        conn_id=conn_id,
+                    )
+                    self._first_send_logged.add(call_id)
                 success = await self.audiosocket_server.send_audio(conn_id, chunk)
                 if not success:
                     logger.warning("AudioSocket streaming send failed", call_id=call_id, stream_id=stream_id)

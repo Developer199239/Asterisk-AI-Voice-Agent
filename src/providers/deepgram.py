@@ -21,6 +21,7 @@ class DeepgramProvider(AIProviderInterface):
         self.request_id: Optional[str] = None
         self.call_id: Optional[str] = None
         self._in_audio_burst: bool = False
+        self._first_output_chunk_logged: bool = False
 
     @property
     def supported_codecs(self) -> List[str]:
@@ -51,11 +52,17 @@ class DeepgramProvider(AIProviderInterface):
 
     async def _configure_agent(self):
         """Builds and sends the V1 Settings message to the Deepgram Voice Agent."""
+        # Derive codec settings from config with safe defaults
+        input_encoding = getattr(self.config, 'input_encoding', None) or 'linear16'
+        input_sample_rate = int(getattr(self.config, 'input_sample_rate_hz', 16000) or 16000)
+        output_encoding = getattr(self.config, 'output_encoding', None) or 'mulaw'
+        output_sample_rate = int(getattr(self.config, 'output_sample_rate_hz', 8000) or 8000)
+
         settings = {
             "type": "Settings",
             "audio": {
-                "input": { "encoding": "mulaw", "sample_rate": 8000 },
-                "output": { "encoding": "mulaw", "sample_rate": 8000, "container": "none" }
+                "input": { "encoding": input_encoding, "sample_rate": input_sample_rate },
+                "output": { "encoding": output_encoding, "sample_rate": output_sample_rate, "container": "none" }
             },
             "agent": {
                 "greeting": "Hello, I am an AI Assistant for Jugaar LLC. How can I help you today.",
@@ -66,7 +73,13 @@ class DeepgramProvider(AIProviderInterface):
             }
         }
         await self.websocket.send(json.dumps(settings))
-        logger.info("Deepgram agent configured.")
+        logger.info(
+            "Deepgram agent configured.",
+            input_encoding=input_encoding,
+            input_sample_rate=input_sample_rate,
+            output_encoding=output_encoding,
+            output_sample_rate=output_sample_rate,
+        )
 
     async def send_audio(self, audio_chunk: bytes):
         if self.websocket:
@@ -129,6 +142,12 @@ class DeepgramProvider(AIProviderInterface):
                         'streaming_chunk': True,
                         'call_id': self.call_id
                     }
+                    if not self._first_output_chunk_logged:
+                        logger.info(
+                            "Deepgram AgentAudio first chunk",
+                            bytes=len(message)
+                        )
+                        self._first_output_chunk_logged = True
                     self._in_audio_burst = True
                     if self.on_event:
                         await self.on_event(audio_event)

@@ -67,6 +67,7 @@ class AudioSocketServer:
         self._writers: Dict[str, asyncio.StreamWriter] = {}
         self._conn_to_uuid: Dict[str, str] = {}
         self._lock = asyncio.Lock()
+        self._first_audio_logged: Dict[str, bool] = {}
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -208,6 +209,14 @@ class AudioSocketServer:
                 if msg_type == TYPE_AUDIO:
                     if payload:
                         _AUDIO_BYTES_RX.inc(len(payload))
+                        # One-time first inbound audio frame log for this connection
+                        if not self._first_audio_logged.get(conn_id):
+                            self._first_audio_logged[conn_id] = True
+                            logger.info(
+                                "AudioSocket inbound first audio",
+                                conn_id=conn_id,
+                                bytes=len(payload),
+                            )
                         await self._on_audio(conn_id, payload)
                 elif msg_type == TYPE_DTMF:
                     if self._on_dtmf and payload:

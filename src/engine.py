@@ -1601,6 +1601,14 @@ class Engine:
         self.channel_to_conns[caller_channel_id] = conns
         # Do not pick primary yet; we'll select on first audio frame
         session.status = "audiosocket_connected"
+        # Provisional assignment so outbound streaming has a target
+        if not getattr(session, "audiosocket_conn_id", None):
+            session.audiosocket_conn_id = conn_id
+            logger.info(
+                "AudioSocket provisional connection set",
+                channel_id=caller_channel_id,
+                conn_id=conn_id,
+            )
         await self._save_session(session)
 
         provider = self.providers.get(session.provider_name)
@@ -1609,6 +1617,25 @@ class Engine:
                 provider.set_input_mode("pcm16_8k")
         except Exception:
             logger.debug("Failed to set provider input mode for AudioSocket", caller_channel_id=caller_channel_id, exc_info=True)
+
+        # If provider has already produced audio and a queue exists, start streaming now
+        try:
+            if self.config.downstream_mode == "stream" and hasattr(session, "streaming_audio_queue") and not getattr(session, "streaming_started", False):
+                stream_id = await self.streaming_playback_manager.start_streaming_playback(
+                    session.call_id, session.streaming_audio_queue, "streaming-response"
+                )
+                if stream_id:
+                    session.current_stream_id = stream_id
+                    session.streaming_started = True
+                    await self._save_session(session)
+                    logger.info(
+                        "🎵 STREAMING STARTED - Began on AudioSocket bind",
+                        call_id=session.call_id,
+                        stream_id=stream_id,
+                        conn_id=conn_id,
+                    )
+        except Exception:
+            logger.error("Failed to start streaming on bind", call_id=session.call_id, conn_id=conn_id, exc_info=True)
 
         logger.info("AudioSocket connection bound to channel", conn_id=conn_id, channel_id=caller_channel_id)
 
@@ -3057,34 +3084,41 @@ class Engine:
         """Handle streaming audio chunk for real-time playback."""
         try:
             call_id = session.call_id
-            
+
             # Initialize streaming if not already started
             if not hasattr(session, "streaming_audio_queue"):
                 session.streaming_audio_queue = asyncio.Queue()
                 session.streaming_started = False
                 await self._save_session(session)
-            
+
             # Add chunk to queue
             await session.streaming_audio_queue.put(audio_data)
-            
+
             # Start streaming if not already started
             if not session.streaming_started:
+                # If using AudioSocket but connection not yet bound, delay streaming start
+                if self.config.audio_transport == "audiosocket" and not getattr(session, "audiosocket_conn_id", None):
+                    logger.info(
+                        "Streaming delayed - waiting for AudioSocket bind",
+                        call_id=call_id,
+                    )
+                    return
+
                 session.streaming_started = True
                 stream_id = await self.streaming_playback_manager.start_streaming_playback(
-                    call_id,
-                    session.streaming_audio_queue,
-                    "streaming-response"
+                    call_id, session.streaming_audio_queue, "streaming-response"
                 )
-                
+
                 if stream_id:
                     session.current_stream_id = stream_id
                     await self._save_session(session)
-                    logger.info("🎵 STREAMING STARTED - Real-time audio streaming initiated",
-                               call_id=call_id,
-                               stream_id=stream_id)
+                    logger.info(
+                        "🎵 STREAMING STARTED - Real-time audio streaming initiated",
+                        call_id=call_id,
+                        stream_id=stream_id,
+                    )
                 else:
-                    logger.error("Failed to start streaming playback",
-                               call_id=call_id)
+                    logger.error("Failed to start streaming playback", call_id=call_id)
                     session.streaming_started = False
                     await self._save_session(session)
             
