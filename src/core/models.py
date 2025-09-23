@@ -31,12 +31,16 @@ class CallSession:
     local_channel_id: Optional[str] = None
     external_media_id: Optional[str] = None
     external_media_call_id: Optional[str] = None
+    audiosocket_conn_id: Optional[str] = None
+    provider_session_active: bool = False
     bridge_id: Optional[str] = None
     
     # Provider and conversation state
     provider_name: str = "local"
     conversation_state: str = "greeting"  # greeting | listening | processing
     status: str = "initializing"
+    last_transcript: Optional[str] = None
+    last_agent_response: Optional[str] = None
     
     # Audio capture and TTS gating
     audio_capture_enabled: bool = False
@@ -54,6 +58,28 @@ class CallSession:
     pending_external_media_id: Optional[str] = None
     ssrc: Optional[int] = None
     created_at: float = field(default_factory=time.time)
+    agent_audio_buffer: bytearray = field(default_factory=bytearray)
+    last_agent_audio_ts: float = 0.0
+    # Latency instrumentation (all values in absolute unix seconds)
+    last_user_speech_end_ts: float = 0.0
+    last_transcription_ts: float = 0.0
+    last_agent_response_ts: float = 0.0
+    last_response_start_ts: float = 0.0
+    # Cached latency readings for observability (seconds)
+    last_turn_latency_s: float = 0.0
+    last_transcription_latency_s: float = 0.0
+    
+    # Streaming state and observability
+    streaming_ready: bool = False
+    streaming_response: bool = False
+    streaming_started: bool = False
+    current_stream_id: Optional[str] = None
+    streaming_bytes_sent: int = 0
+    streaming_fallback_count: int = 0
+    streaming_jitter_buffer_depth: int = 0
+    streaming_keepalive_sent: int = 0
+    streaming_keepalive_timeouts: int = 0
+    last_streaming_error: Optional[str] = None
     
     def __post_init__(self):
         """Initialize default VAD and fallback state."""
@@ -73,7 +99,8 @@ class CallSession:
                 "frame_buffer": b"",  # ARCHITECT FIX: Add frame_buffer for 20ms frame buffering
                 "frame_count": 0,     # ARCHITECT FIX: Add frame_count for VAD processing
                 "last_voice_ms": 0,
-                "tts_playing": False
+                "tts_playing": False,
+                "consecutive_silence_frames": 0,
             }
         
         if not self.fallback_state:

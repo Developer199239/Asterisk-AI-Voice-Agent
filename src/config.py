@@ -30,13 +30,30 @@ class ExternalMediaConfig(BaseModel):
     jitter_buffer_ms: int = Field(default=20)
 
 
+class AudioSocketConfig(BaseModel):
+    host: str = Field(default="0.0.0.0")
+    port: int = Field(default=8090)
+
+
 class LocalProviderConfig(BaseModel):
     stt_model: str
     llm_model: str
     tts_voice: str
     temperature: float = Field(default=0.8)
     max_tokens: int = Field(default=150)
-    
+
+
+class DeepgramProviderConfig(BaseModel):
+    api_key: Optional[str] = None
+    model: str = Field(default="nova-2-general")
+    tts_model: str = Field(default="aura-asteria-en")
+    greeting: Optional[str] = None
+    instructions: Optional[str] = None
+    input_encoding: str = Field(default="linear16")
+    input_sample_rate_hz: int = Field(default=16000)
+    continuous_input: bool = Field(default=True)
+
+
 class LLMConfig(BaseModel):
     initial_greeting: str = "Hello, I am an AI Assistant for Jugaar LLC. How can I help you today."
     prompt: str = "You are a helpful AI assistant."
@@ -61,6 +78,15 @@ class VADConfig(BaseModel):
     fallback_buffer_size: int = 128000
 
 
+class StreamingConfig(BaseModel):
+    sample_rate: int = Field(default=8000)
+    jitter_buffer_ms: int = Field(default=50)
+    keepalive_interval_ms: int = Field(default=5000)
+    connection_timeout_ms: int = Field(default=10000)
+    fallback_timeout_ms: int = Field(default=2000)
+    chunk_size_ms: int = Field(default=20)
+
+
 class AppConfig(BaseModel):
     default_provider: str
     providers: Dict[str, Any]
@@ -69,7 +95,9 @@ class AppConfig(BaseModel):
     audio_transport: str = Field(default="externalmedia")  # 'externalmedia' | 'legacy'
     downstream_mode: str = Field(default="file")  # 'file' | 'stream'
     external_media: Optional[ExternalMediaConfig] = Field(default_factory=ExternalMediaConfig)
+    audiosocket: Optional[AudioSocketConfig] = Field(default_factory=AudioSocketConfig)
     vad: Optional[VADConfig] = Field(default_factory=VADConfig)
+    streaming: Optional[StreamingConfig] = Field(default_factory=StreamingConfig)
 
 def load_config(path: str = "config/ai-agent.yaml") -> AppConfig:
     # If the provided path is not absolute, resolve it relative to the project root.
@@ -106,6 +134,15 @@ def load_config(path: str = "config/ai-agent.yaml") -> AppConfig:
         config_data.setdefault('downstream_mode', os.getenv('DOWNSTREAM_MODE', 'file'))
         if 'streaming' not in config_data:
             config_data['streaming'] = {}
+
+        # AudioSocket configuration defaults
+        audiosocket_cfg = config_data.get('audiosocket', {}) or {}
+        audiosocket_cfg.setdefault('host', os.getenv('AUDIOSOCKET_HOST', '0.0.0.0'))
+        try:
+            audiosocket_cfg.setdefault('port', int(os.getenv('AUDIOSOCKET_PORT', audiosocket_cfg.get('port', 8090))))
+        except ValueError:
+            audiosocket_cfg['port'] = 8090
+        config_data['audiosocket'] = audiosocket_cfg
 
         return AppConfig(**config_data)
     except FileNotFoundError:

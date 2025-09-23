@@ -25,13 +25,22 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from .ari_client import ARIClient
 from aiohttp import web
-from .config import AppConfig, load_config, LocalProviderConfig
+from pydantic import ValidationError
+
+from .config import (
+    AppConfig,
+    load_config,
+    LocalProviderConfig,
+    DeepgramProviderConfig,
+)
 from .logging_config import get_logger
 from .rtp_server import RTPServer
+from .audio.audiosocket_server import AudioSocketServer
 from .providers.base import AIProviderInterface
 from .providers.deepgram import DeepgramProvider
 from .providers.local import LocalProvider
 from .core import SessionStore, PlaybackManager, ConversationCoordinator
+from .core.streaming_playback_manager import StreamingPlaybackManager
 from .core.models import CallSession
 
 logger = get_logger(__name__)
@@ -125,11 +134,36 @@ class Engine:
             self.ari_client,
             conversation_coordinator=self.conversation_coordinator,
         )
+        self.conversation_coordinator.set_playback_manager(self.playback_manager)
+        
+        # Initialize streaming playback manager
+        streaming_config = {}
+        if hasattr(config, 'streaming') and config.streaming:
+            streaming_config = {
+                'sample_rate': config.streaming.sample_rate,
+                'jitter_buffer_ms': config.streaming.jitter_buffer_ms,
+                'keepalive_interval_ms': config.streaming.keepalive_interval_ms,
+                'connection_timeout_ms': config.streaming.connection_timeout_ms,
+                'fallback_timeout_ms': config.streaming.fallback_timeout_ms,
+                'chunk_size_ms': config.streaming.chunk_size_ms,
+            }
+        
+        self.streaming_playback_manager = StreamingPlaybackManager(
+            self.session_store,
+            self.ari_client,
+            conversation_coordinator=self.conversation_coordinator,
+            fallback_playback_manager=self.playback_manager,
+            streaming_config=streaming_config,
+            audio_transport=self.config.audio_transport,
+        )
         
         self.providers: Dict[str, AIProviderInterface] = {}
         self.conn_to_channel: Dict[str, str] = {}
         self.channel_to_conn: Dict[str, str] = {}
         self.conn_to_caller: Dict[str, str] = {}  # conn_id -> caller_channel_id
+        self.audio_socket_server: Optional[AudioSocketServer] = None
+        self.audiosocket_conn_to_ssrc: Dict[str, int] = {}
+        self.audiosocket_resample_state: Dict[str, Optional[tuple]] = {}
         self.pending_channel_for_bind: Optional[str] = None
         # Audio buffering for better playback quality
         self.audio_buffers: Dict[str, bytes] = {}
@@ -216,7 +250,28 @@ class Engine:
         await self._load_providers()
         # Log transport and downstream modes
         logger.info("Runtime modes", audio_transport=self.config.audio_transport, downstream_mode=self.config.downstream_mode)
-        
+
+        # Prepare AudioSocket transport
+        if self.config.audio_transport == "audiosocket":
+            if not self.config.audiosocket:
+                raise ValueError("AudioSocket configuration not found")
+
+            host = self.config.audiosocket.host
+            port = self.config.audiosocket.port
+            self.audio_socket_server = AudioSocketServer(
+                host=host,
+                port=port,
+                on_uuid=self._audiosocket_handle_uuid,
+                on_audio=self._audiosocket_handle_audio,
+                on_disconnect=self._audiosocket_handle_disconnect,
+                on_dtmf=self._audiosocket_handle_dtmf,
+            )
+            await self.audio_socket_server.start()
+            self.streaming_playback_manager.set_transport(
+                audio_transport=self.config.audio_transport,
+                audiosocket_server=self.audio_socket_server,
+            )
+
         # Prepare RTP server for ExternalMedia transport
         if self.config.audio_transport == "externalmedia":
             if not self.config.external_media:
@@ -238,6 +293,10 @@ class Engine:
             await self.rtp_server.start()
             logger.info("RTP server started for ExternalMedia transport", 
                        host=rtp_host, port=rtp_port, codec=codec)
+            self.streaming_playback_manager.set_transport(
+                rtp_server=self.rtp_server,
+                audio_transport=self.config.audio_transport,
+            )
 
         # Start lightweight health endpoint
         try:
@@ -261,6 +320,9 @@ class Engine:
         if hasattr(self, 'rtp_server') and self.rtp_server:
             await self.rtp_server.stop()
         # Stop health server
+        if self.audio_socket_server:
+            await self.audio_socket_server.stop()
+            self.audio_socket_server = None
         try:
             if self._health_runner:
                 await self._health_runner.cleanup()
@@ -286,17 +348,18 @@ class Engine:
                         await provider.initialize()
                         logger.info(f"Provider '{name}' connection initialized.")
                 elif name == "deepgram":
-                    # Deepgram provider requires both Deepgram and OpenAI API keys
-                    deepgram_config = provider_config_data
-                    
+                    deepgram_config = self._build_deepgram_config(provider_config_data)
+                    if not deepgram_config:
+                        continue
+
                     # Validate OpenAI dependency for Deepgram
                     if not self.config.llm.api_key:
-                        logger.error(f"Deepgram provider requires OpenAI API key in LLM config")
+                        logger.error("Deepgram provider requires OpenAI API key in LLM config")
                         continue
-                    
+
                     provider = DeepgramProvider(deepgram_config, self.config.llm, self.on_provider_event)
                     self.providers[name] = provider
-                    logger.info(f"Provider '{name}' loaded successfully with OpenAI LLM dependency.")
+                    logger.info("Provider 'deepgram' loaded successfully with OpenAI LLM dependency.")
                 else:
                     logger.warning(f"Unknown provider type: {name}")
                     continue
@@ -763,6 +826,82 @@ class Engine:
                         error=str(e), exc_info=True)
             await self._cleanup_call(caller_channel_id)
 
+    def _build_default_vad_state(self, ssrc: int) -> Dict[str, Any]:
+        """Return baseline VAD state for a call."""
+        return {
+            "state": "listening",
+            "speaking": False,
+            "speech_real_start_fired": False,
+            "pre_roll_buffer": b"",
+            "utterance_buffer": b"",
+            "last_voice_ms": 0,
+            "speech_start_ms": 0,
+            "speech_duration_ms": 0,
+            "silence_duration_ms": 0,
+            "ssrc": ssrc,
+            "frame_count": 0,
+            "consecutive_speech_frames": 0,
+            "consecutive_silence_frames": 0,
+            "redemption_counter": 0,
+            "speech_frame_count": 0,
+            "noise_db_history": deque(maxlen=100),
+            "noise_floor_db": -70.0,
+            "tail_frames_remaining": 0,
+            "last_utterance_end_ms": 0,
+            "utterance_id": 0,
+            "tts_playing": False,
+            "tts_tokens": set(),
+            "tts_active_count": 0,
+            "webrtc_speech_frames": 0,
+            "webrtc_silence_frames": 0,
+            "webrtc_last_decision": False,
+            "frame_buffer": b"",
+        }
+
+    def _ensure_vad_state_keys(self, session: CallSession, ssrc: int) -> Dict[str, Any]:
+        """Ensure VAD state has the required bookkeeping before processing audio."""
+        if not isinstance(session.vad_state, dict):
+            logger.warning("VAD state replaced with non-dict, resetting", 
+                           caller_channel_id=session.call_id,
+                           vad_state_type=type(session.vad_state).__name__)
+            session.vad_state = self._build_default_vad_state(ssrc)
+            return session.vad_state
+
+        required_keys = {
+            "frame_buffer",
+            "frame_count",
+            "pre_roll_buffer",
+            "utterance_buffer",
+            "state",
+            "consecutive_silence_frames",
+        }
+
+        missing_keys = [key for key in required_keys if key not in session.vad_state]
+        if missing_keys:
+            logger.warning("VAD state missing keys, patching defaults", 
+                           caller_channel_id=session.call_id,
+                           missing_keys=missing_keys,
+                           existing_keys=list(session.vad_state.keys()))
+            defaults = self._build_default_vad_state(ssrc)
+            for key in missing_keys:
+                session.vad_state[key] = defaults[key]
+
+        frame_buffer = session.vad_state.get("frame_buffer")
+        if not isinstance(frame_buffer, (bytes, bytearray)):
+            logger.warning("VAD frame_buffer had unexpected type, resetting", 
+                           caller_channel_id=session.call_id,
+                           frame_buffer_type=type(frame_buffer).__name__ if frame_buffer is not None else "None")
+            session.vad_state["frame_buffer"] = b""
+
+        frame_count = session.vad_state.get("frame_count")
+        if not isinstance(frame_count, int):
+            logger.warning("VAD frame_count had unexpected type, resetting", 
+                           caller_channel_id=session.call_id,
+                           frame_count_type=type(frame_count).__name__ if frame_count is not None else "None")
+            session.vad_state["frame_count"] = 0
+
+        return session.vad_state
+
     async def _start_provider_session_hybrid(self, caller_channel_id: str, local_channel_id: str):
         """Start provider session - Hybrid ARI approach."""
         try:
@@ -842,12 +981,18 @@ class Engine:
                 safety_margin_sec = 0.5  # 500ms safety margin
                 fallback_delay = audio_duration_sec + safety_margin_sec
                 
-                # Use PlaybackManager for greeting playback - it handles all gating logic
-                await self.playback_manager.play_audio(
-                    call_id, 
-                    audio_data, 
-                    playback_type="greeting"
-                )
+                # Get call_id from session
+                session = await self.session_store.get_by_call_id(caller_channel_id)
+                if session:
+                    call_id = session.call_id
+                    # Use PlaybackManager for greeting playback - it handles all gating logic
+                    await self.playback_manager.play_audio(
+                        call_id, 
+                        audio_data, 
+                        playback_type="greeting"
+                    )
+                else:
+                    logger.error("Cannot play greeting - session not found", caller_channel_id=caller_channel_id)
                 
                 logger.info("🎯 HYBRID ARI - ✅ Initial greeting played via ARI with token gating", 
                            caller_channel_id=caller_channel_id,
@@ -1059,13 +1204,45 @@ class Engine:
         # Each provider might have a different constructor signature.
         # We handle that here.
         if provider_name == "deepgram":
-            provider_config = provider_config_data
-            return DeepgramProvider(provider_config, self.config.llm, self.on_provider_event)
+            deepgram_config = self._build_deepgram_config(provider_config_data)
+            if not deepgram_config:
+                raise ValueError("Deepgram provider configuration invalid")
+            return DeepgramProvider(deepgram_config, self.config.llm, self.on_provider_event)
         elif provider_name == "local":
             provider_config = LocalProviderConfig(**provider_config_data)
             return LocalProvider(provider_config, self.on_provider_event)
 
         raise ValueError(f"Provider '{provider_name}' does not have a creation rule.")
+
+    def _build_deepgram_config(self, raw_config: Any) -> Optional[DeepgramProviderConfig]:
+        """Normalize Deepgram configuration and validate required secrets."""
+        config_dict = dict(raw_config or {})
+        env_api_key = os.getenv("DEEPGRAM_API_KEY")
+        if not config_dict.get("api_key") and env_api_key:
+            config_dict["api_key"] = env_api_key
+        env_encoding = os.getenv("DEEPGRAM_INPUT_ENCODING")
+        if env_encoding:
+            config_dict["input_encoding"] = env_encoding
+        env_sample_rate = os.getenv("DEEPGRAM_INPUT_SAMPLE_RATE_HZ")
+        if env_sample_rate:
+            try:
+                config_dict["input_sample_rate_hz"] = int(env_sample_rate)
+            except ValueError:
+                logger.error("Invalid DEEPGRAM_INPUT_SAMPLE_RATE_HZ env value", value=env_sample_rate)
+
+        try:
+            config = DeepgramProviderConfig(**config_dict)
+        except ValidationError as exc:
+            logger.error("Deepgram provider configuration invalid", error=str(exc))
+            return None
+
+        if not config.api_key:
+            logger.error(
+                "Deepgram provider requires api_key. Set DEEPGRAM_API_KEY env or providers.deepgram.api_key."
+            )
+            return None
+
+        return config
 
     async def _handle_audio_frame(self, audio_data: bytes):
         """Handle raw audio frames from ExternalMedia connections."""
@@ -1094,7 +1271,15 @@ class Engine:
                 return
             elif conversation_state == 'listening':
                 # During listening phase, buffer audio for conversation
-                await self._handle_conversation_audio(active_channel_id, audio_data, call_data, provider)
+                # Get call data from session store
+                session = await self.session_store.get_by_call_id(active_channel_id)
+                if session:
+                    call_data = {
+                        'audio_buffer': getattr(session, 'audio_buffer', b''),
+                        'last_audio_ts': getattr(session, 'last_audio_ts', 0),
+                        'provider_timeout_task': getattr(session, 'provider_timeout_task', None),
+                    }
+                    await self._handle_conversation_audio(active_channel_id, audio_data, call_data, provider)
             else:
                 logger.debug("Unknown conversation state", state=conversation_state, channel_id=active_channel_id)
             
@@ -1300,7 +1485,10 @@ class Engine:
                         caller_channel_id = session.caller_channel_id
                         self.ssrc_to_caller[ssrc] = caller_channel_id
                         session.ssrc_mapped = True
+                        session.ssrc = ssrc
                         await self._save_session(session)
+                        if getattr(self, 'rtp_server', None):
+                            self.rtp_server.map_ssrc_to_call_id(ssrc, caller_channel_id)
                         logger.info("SSRC mapped to caller on first packet", 
                                    ssrc=ssrc, 
                                    caller_channel_id=caller_channel_id,
@@ -1340,10 +1528,26 @@ class Engine:
             if not provider:
                 logger.warning("No provider found for RTP audio", ssrc=ssrc, caller_channel_id=caller_channel_id)
                 return
-            
+
+            continuous_input = bool(getattr(provider, "continuous_input", False))
+
+            if continuous_input:
+                logger.info("<<< CONTINUOUS INPUT: Sending audio to provider >>>", provider=session.provider_name, bytes=len(pcm_16k_data))
+                try:
+                    await provider.send_audio(pcm_16k_data)
+                    logger.debug("🎵 STREAMING - Frame forwarded to provider",
+                                 provider=session.provider_name,
+                                 caller_channel_id=caller_channel_id,
+                                 bytes=len(pcm_16k_data))
+                except Exception:
+                    logger.error("Failed to stream audio chunk to continuous provider",
+                                 caller_channel_id=caller_channel_id,
+                                 ssrc=ssrc,
+                                 exc_info=True)
+
             # Process audio with VAD-based utterance detection
             await self._process_rtp_audio_with_vad(caller_channel_id, ssrc, pcm_16k_data, provider)
-            
+
             # FALLBACK: If VAD hasn't detected speech for a while, send audio directly to STT
             # This ensures we capture audio even when VAD fails
             await self._fallback_audio_processing(caller_channel_id, ssrc, pcm_16k_data, provider)
@@ -1353,9 +1557,170 @@ class Engine:
                         ssrc=ssrc, 
                         error=str(e), 
                         exc_info=True)
+
+    async def _audiosocket_handle_uuid(self, conn_id: str, audio_uuid: str) -> bool:
+        """Bind an AudioSocket connection to the pending caller channel."""
+        caller_channel_id = self.uuidext_to_channel.get(audio_uuid)
+        if not caller_channel_id:
+            logger.warning("AudioSocket UUID not mapped to caller", conn_id=conn_id, uuid=audio_uuid)
+            return False
+
+        session = await self.session_store.get_by_call_id(caller_channel_id)
+        if not session:
+            logger.warning("AudioSocket binding failed - session missing", conn_id=conn_id, caller_channel_id=caller_channel_id)
+            return False
+
+        existing_conn = self.channel_to_conn.get(caller_channel_id)
+        if existing_conn and existing_conn != conn_id:
+            logger.info(
+                "AudioSocket duplicate connection received",
+                conn_id=conn_id,
+                existing_conn=existing_conn,
+                channel_id=caller_channel_id,
+            )
+            if self.audio_socket_server:
+                asyncio.create_task(self.audio_socket_server.disconnect(conn_id))
+            return True
+
+        self.conn_to_channel[conn_id] = caller_channel_id
+        self.channel_to_conn[caller_channel_id] = conn_id
+        self.conn_to_caller[conn_id] = caller_channel_id
+        session.audiosocket_conn_id = conn_id
+        session.status = "audiosocket_connected"
+        await self._save_session(session)
+
+        provider = self.providers.get(session.provider_name)
+        try:
+            if provider and hasattr(provider, "set_input_mode"):
+                provider.set_input_mode("pcm16_8k")
+        except Exception:
+            logger.debug("Failed to set provider input mode for AudioSocket", caller_channel_id=caller_channel_id, exc_info=True)
+
+        logger.info("AudioSocket connection bound to channel", conn_id=conn_id, channel_id=caller_channel_id)
+
+        # Ensure provider session is running when AudioSocket binds
+        if not session.provider_session_active:
+            provider = self.providers.get(session.provider_name)
+            if provider:
+                try:
+                    logger.info(
+                        "AudioSocket provider session starting",
+                        conn_id=conn_id,
+                        channel_id=caller_channel_id,
+                        provider=session.provider_name,
+                    )
+                    await provider.start_session(caller_channel_id)
+                    session.provider_session_active = True
+                    session.audio_capture_enabled = True
+                    session.status = "provider_started"
+                    await self._save_session(session)
+                    if self.conversation_coordinator:
+                        await self.conversation_coordinator.sync_from_session(session)
+                    logger.info(
+                        "AudioSocket provider session ready",
+                        conn_id=conn_id,
+                        channel_id=caller_channel_id,
+                        provider=session.provider_name,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.error(
+                        "Failed to start provider session after AudioSocket bind",
+                        conn_id=conn_id,
+                        channel_id=caller_channel_id,
+                        provider=session.provider_name,
+                        error=str(exc),
+                        exc_info=True,
+                    )
+            else:
+                logger.error(
+                    "No provider configured for AudioSocket session",
+                    conn_id=conn_id,
+                    channel_id=caller_channel_id,
+                )
+
+        return True
+
+    async def _audiosocket_handle_audio(self, conn_id: str, pcm_8k_data: bytes) -> None:
+        caller_channel_id = self.conn_to_channel.get(conn_id)
+        if not caller_channel_id:
+            logger.debug("AudioSocket audio received for unknown connection", conn_id=conn_id)
+            return
+
+        session = await self.session_store.get_by_call_id(caller_channel_id)
+        if not session:
+            logger.debug("AudioSocket audio received for inactive call", conn_id=conn_id, caller_channel_id=caller_channel_id)
+            return
+
+        provider = self.providers.get(session.provider_name)
+        if not provider:
+            logger.warning("AudioSocket audio received but provider missing", conn_id=conn_id, caller_channel_id=caller_channel_id)
+            return
+
+        count = self._audio_rx_debug.get(conn_id, 0) + 1
+        self._audio_rx_debug[conn_id] = count
+        if count == 1:
+            logger.info(
+                "AudioSocket first frame received",
+                conn_id=conn_id,
+                channel_id=caller_channel_id,
+                bytes=len(pcm_8k_data),
+            )
+
+        # Resample to 16kHz for the VAD pipeline
+        state = self.audiosocket_resample_state.get(conn_id)
+        try:
+            pcm_16k_data, state = audioop.ratecv(pcm_8k_data, 2, 1, 8000, 16000, state)
+            self.audiosocket_resample_state[conn_id] = state
+        except Exception as exc:  # noqa: BLE001
+            logger.error("AudioSocket resample failed", conn_id=conn_id, error=str(exc), exc_info=True)
+            return
+
+        ssrc = self._ensure_audiosocket_ssrc(conn_id, caller_channel_id)
+        await self._process_rtp_audio_with_vad(caller_channel_id, ssrc, pcm_16k_data, provider)
+        await self._fallback_audio_processing(caller_channel_id, ssrc, pcm_16k_data, provider)
+
+    async def _audiosocket_handle_disconnect(self, conn_id: str) -> None:
+        caller_channel_id = self.conn_to_channel.pop(conn_id, None)
+        if caller_channel_id:
+            self.channel_to_conn.pop(caller_channel_id, None)
+            session = await self.session_store.get_by_call_id(caller_channel_id)
+            if session and session.audiosocket_conn_id == conn_id:
+                session.audiosocket_conn_id = None
+                session.provider_session_active = False
+                await self._save_session(session)
+
+        self.conn_to_caller.pop(conn_id, None)
+        self.audiosocket_resample_state.pop(conn_id, None)
+        ssrc = self.audiosocket_conn_to_ssrc.pop(conn_id, None)
+        if ssrc is not None:
+            self.ssrc_to_caller.pop(ssrc, None)
+        self._audio_rx_debug.pop(conn_id, None)
+
+        logger.info("AudioSocket connection closed", conn_id=conn_id, channel_id=caller_channel_id)
+
+    async def _audiosocket_handle_dtmf(self, conn_id: str, digit: str) -> None:
+        caller_channel_id = self.conn_to_channel.get(conn_id)
+        if not caller_channel_id:
+            return
+        event = {
+            "channel": {"id": caller_channel_id},
+            "digit": digit,
+        }
+        await self._handle_dtmf_received(event)
+
+    def _ensure_audiosocket_ssrc(self, conn_id: str, caller_channel_id: str) -> int:
+        ssrc = self.audiosocket_conn_to_ssrc.get(conn_id)
+        if ssrc is None:
+            ssrc = random.getrandbits(32)
+            while ssrc in self.ssrc_to_caller and self.ssrc_to_caller[ssrc] != caller_channel_id:
+                ssrc = random.getrandbits(32)
+            self.audiosocket_conn_to_ssrc[conn_id] = ssrc
+        self.ssrc_to_caller[ssrc] = caller_channel_id
+        return ssrc
     
     async def _process_rtp_audio_with_vad(self, caller_channel_id: str, ssrc: int, pcm_16k_data: bytes, provider):
         """Process RTP audio with VAD-based utterance detection."""
+        logger.info("<<< VAD PROCESSING: processing audio >>>", bytes=len(pcm_16k_data))
         try:
             # AUDIO CAPTURE: Capture raw RTP audio frames
             # ARCHITECT FIX: TTS feedback loop prevention gate
@@ -1379,60 +1744,22 @@ class Engine:
                            audio_capture_enabled=session.audio_capture_enabled,
                            caller_channel_id=caller_channel_id,
                            ssrc=ssrc,
-                           tts_playing=session.tts_playing,
-                           tts_active_count=session.tts_active_count,
-                           tts_tokens=list(session.tts_tokens))
+                           tts_playing=session.tts_playing)
                 return  # Skip VAD processing when audio capture is disabled
             
             logger.info("🎤 AUDIO CAPTURE - ENABLED - Processing audio",
                        audio_capture_enabled=session.audio_capture_enabled,
                        caller_channel_id=caller_channel_id,
                        ssrc=ssrc,
-                       tts_playing=session.tts_playing,
-                       tts_active_count=session.tts_active_count)
+                       tts_playing=session.tts_playing)
             # Get or initialize VAD state for this call
             if not session.vad_state:
-                session.vad_state = {
-                    "state": "listening",  # 'listening' | 'recording' | 'processing'
-                    "speaking": False,  # AVR-VAD inspired: main speech state
-                    "speech_real_start_fired": False,  # Confirmation state
-                    "pre_roll_buffer": b"",  # Last 400ms of audio
-                    "utterance_buffer": b"",  # Current recording
-                    "last_voice_ms": 0,  # Monotonic ms of last speech frame
-                    "speech_start_ms": 0,  # When speech started
-                    "speech_duration_ms": 0,  # Accumulated speech time
-                    "silence_duration_ms": 0,  # Accumulated silence while recording
-                    "ssrc": ssrc,
-                    "frame_count": 0,
-                    "consecutive_speech_frames": 0,
-                    "consecutive_silence_frames": 0,
-                    "redemption_counter": 0,  # AVR-VAD inspired: redemption period
-                    "speech_frame_count": 0,  # Total speech frames in current utterance
-                    # ARCHITECT'S VAD IMPROVEMENTS
-                    "noise_db_history": deque(maxlen=100),  # ~2s at 20ms
-                    "noise_floor_db": -70.0,
-                    "tail_frames_remaining": 0,
-                    "last_utterance_end_ms": 0,
-                    "utterance_id": 0,  # ARCHITECT FIX: Track utterance sequence
-                    "tts_playing": False,  # CRITICAL: Track TTS playback state
-                    "tts_tokens": set(),   # Track active playback IDs for overlapping TTS
-                    "tts_active_count": 0, # Refcount for overlapping TTS segments
-                    # WebRTC VAD state
-                    "webrtc_speech_frames": 0,  # Consecutive WebRTC speech frames
-                    "webrtc_silence_frames": 0,  # Consecutive WebRTC silence frames
-                    "webrtc_last_decision": False,  # Last WebRTC VAD decision
-                    # ARCHITECT FIX: Frame buffering for exact 20ms frames
-                    "frame_buffer": b"",  # Buffer for accumulating audio to slice into exact 640-byte frames
-                }
-            
-            # CRITICAL FIX: Ensure VAD state has all required keys
-            if "frame_count" not in session.vad_state:
-                logger.warning("VAD state missing frame_count key, reinitializing", 
-                             caller_channel_id=caller_channel_id,
-                             vad_state_keys=list(session.vad_state.keys()))
-                session.vad_state["frame_count"] = 0
-            
-            vad_state = session.vad_state
+                session.vad_state = self._build_default_vad_state(ssrc)
+
+            vad_state = self._ensure_vad_state_keys(session, ssrc)
+            vad_state.setdefault("consecutive_silence_frames", 0)
+            vad_state.setdefault("consecutive_speech_frames", 0)
+            vad_state.setdefault("speech_frame_count", 0)
             
             # ARCHITECT FIX: Use consistent monotonic time base
             if "t0_ms" not in vad_state:
@@ -1467,8 +1794,6 @@ class Engine:
             
             # ARCHITECT FIX: Frame-accurate WebRTC VAD with buffering
             # Add incoming audio to frame buffer
-            # ARCHITECT FIX: Defensive guard for frame_buffer
-            vad_state.setdefault("frame_buffer", b"")
             vad_state["frame_buffer"] += pcm_16k_data
             
             # Process complete 20ms frames (640 bytes each)
@@ -1655,27 +1980,41 @@ class Engine:
                                 vs["utterance_buffer"] = b""
                                 continue  # Continue to next frame
 
-                            vs["state"] = "processing"
-                            logger.info("🎤 VAD - Speech ended", 
-                                       caller_channel_id=caller_channel_id,
-                                       utterance_id=vs["utterance_id"],
-                                       reason="webrtc_silence",
-                                       speech_ms=vs["speech_duration_ms"],
-                                       silence_ms=vs["silence_duration_ms"],
-                                       bytes=len(buf), 
-                                       webrtc_silence_frames=vs["webrtc_silence_frames"])
-                            
-                            # Send to provider
+                        vs["state"] = "processing"
+                        logger.info("🎤 VAD - Speech ended", 
+                                   caller_channel_id=caller_channel_id,
+                                   utterance_id=vs["utterance_id"],
+                                   reason="webrtc_silence",
+                                   speech_ms=vs["speech_duration_ms"],
+                                   silence_ms=vs["silence_duration_ms"],
+                                   bytes=len(buf), 
+                                   webrtc_silence_frames=vs["webrtc_silence_frames"])
+
+                        now_ts = time.time()
+                        session.last_user_speech_end_ts = now_ts
+                        await self._save_session(session)
+                        
+                        # Send to provider
+                        continuous_input = getattr(provider, "continuous_input", False)
+                        if continuous_input:
+                            logger.debug(
+                                "🎤 VAD - Continuous provider, skipping buffered utterance send",
+                                caller_channel_id=caller_channel_id,
+                                provider=session.provider_name,
+                            )
+                        else:
                             await provider.send_audio(buf)
-                            if self.conversation_coordinator:
-                                await self.conversation_coordinator.update_conversation_state(
-                                    caller_channel_id,
-                                    "processing",
-                                )
-                            logger.info("🎤 VAD - Utterance sent to provider", 
-                                       caller_channel_id=caller_channel_id,
-                                       utterance_id=vs["utterance_id"],
-                                       bytes=len(buf))
+                            logger.info(
+                                "🎤 VAD - Utterance sent to provider",
+                                caller_channel_id=caller_channel_id,
+                                utterance_id=vs["utterance_id"],
+                                bytes=len(buf),
+                            )
+                        if self.conversation_coordinator:
+                            await self.conversation_coordinator.update_conversation_state(
+                                caller_channel_id,
+                                "processing",
+                            )
                         else:
                             # Empty utterance - misfire (only when speech actually ends)
                             logger.info("🎤 VAD - Speech misfire (empty utterance)", 
@@ -1766,7 +2105,12 @@ class Engine:
                 
                 # AUDIO CAPTURE: Capture complete fallback utterance
                 # Send to provider
-                await provider.send_audio(fallback_state["audio_buffer"])
+                if getattr(provider, "continuous_input", False):
+                    logger.debug("🔄 FALLBACK - Continuous provider, skipping fallback send",
+                                 caller_channel_id=caller_channel_id,
+                                 provider=session.provider_name)
+                else:
+                    await provider.send_audio(fallback_state["audio_buffer"])
                 if self.conversation_coordinator:
                     await self.conversation_coordinator.update_conversation_state(
                         caller_channel_id,
@@ -1952,6 +2296,14 @@ class Engine:
             if not provider:
                 logger.error("No provider found for greeting", caller_channel_id=caller_channel_id, provider_name=session.provider_name)
                 return
+
+            if not hasattr(provider, "text_to_speech"):
+                logger.debug(
+                    "Skipping greeting synthesis - provider has no text_to_speech",
+                    caller_channel_id=caller_channel_id,
+                    provider=session.provider_name,
+                )
+                return
             
             # Generate TTS audio
             audio_data = await provider.text_to_speech(greeting_text)
@@ -2018,6 +2370,7 @@ class Engine:
         """Convert uLaw audio to PCM16LE format."""
         try:
             import struct
+            
             # uLaw to linear conversion table (simplified)
             ulaw_table = [
                 -32124, -31100, -30076, -29052, -28028, -27004, -25980, -24956,
@@ -2135,11 +2488,47 @@ class Engine:
                         rtp_stats = self.rtp_server.get_stats()
                     except Exception:
                         rtp_stats = {"error": "Failed to get RTP stats"}
+                audiosocket_info = {
+                    "listening": False,
+                    "host": None,
+                    "port": None,
+                    "active_connections": 0,
+                }
+                if self.audio_socket_server:
+                    try:
+                        audiosocket_info = {
+                            "listening": True,
+                            "host": getattr(self.config.audiosocket, 'host', '0.0.0.0'),
+                            "port": self.audio_socket_server.port,
+                            "active_connections": self.audio_socket_server.get_connection_count(),
+                        }
+                    except Exception:
+                        audiosocket_info["listening"] = True
                 session_stats = await self.session_store.get_session_stats()
                 conversation_summary = {}
+                streaming_summary = {}
+                streaming_details = []
                 if self.conversation_coordinator:
                     conversation_summary = await self.conversation_coordinator.get_summary()
-
+                    try:
+                        streaming_summary = await self.conversation_coordinator.get_streaming_summary()
+                    except Exception:
+                        streaming_summary = {"error": "streaming summary failed"}
+ 
+                    try:
+                        sessions = await self.session_store.get_all_sessions()
+                        for s in sessions:
+                            streaming_details.append({
+                                "call_id": s.call_id,
+                                "provider": s.provider_name,
+                                "streaming_started": bool(getattr(s, "streaming_started", False) or getattr(s, "current_stream_id", None)),
+                                "bytes_sent": int(getattr(s, "streaming_bytes_sent", 0) or 0),
+                                "fallbacks": int(getattr(s, "streaming_fallback_count", 0) or 0),
+                                "last_error": getattr(s, "last_streaming_error", None),
+                            })
+                    except Exception:
+                        pass
+ 
                 data = {
                     "status": "healthy",
                     "ari_connected": bool(self.ari_client and self.ari_client.running),
@@ -2149,7 +2538,11 @@ class Engine:
                     "active_playbacks": session_stats.get("active_playbacks", 0),
                     "providers": providers,
                     "rtp_server": rtp_stats,
+                    "audiosocket": audiosocket_info,
+                    "audiosocket_listening": audiosocket_info.get("listening", False),
                     "conversation": conversation_summary,
+                    "streaming": streaming_summary,
+                    "streaming_details": streaming_details,
                 }
                 return web.json_response(data)
             except Exception:
@@ -2257,87 +2650,190 @@ class Engine:
             logger.debug("Received provider event", event_type=event_type, event_keys=list(event.keys()))
             
             if event_type == "AgentAudio":
-                # Handle audio data from the provider - now we need to play it back
                 audio_data = event.get("data")
                 call_id = event.get("call_id")
-                if audio_data:
-                        # File-based playback via ARI (default path) - target specific call
-                        target_channel_id = None
-                        if call_id:
-                            # First try: call_id as direct key in SessionStore
-                            session = await self.session_store.get_by_call_id(call_id)
-                            if session:
-                                target_channel_id = session.caller_channel_id
-                            else:
-                                # Second try: find by call_id in all sessions
-                                sessions = await self.session_store.get_all_sessions()
-                                for s in sessions:
-                                    if s.call_id == call_id:
-                                        target_channel_id = s.caller_channel_id
-                                        break
-                        
-                        if not target_channel_id:
-                            # Fallback: use the first active call (for backward compatibility)
-                            sessions = await self.session_store.get_all_sessions()
-                            if sessions:
-                                target_channel_id = sessions[0].caller_channel_id
-                            logger.warning("AgentAudio routing fallback used", 
-                                         call_id=call_id, 
-                                         target_channel_id=target_channel_id,
-                                         active_sessions_count=len(sessions))
-                        else:
-                            logger.debug("AgentAudio routing successful", 
-                                       call_id=call_id, 
-                                       target_channel_id=target_channel_id,
-                                       routing_method="direct" if session else "lookup")
-                        
-                        if target_channel_id:
-                            # Get session from SessionStore
-                            session = await self.session_store.get_by_call_id(target_channel_id)
-                            if not session:
-                                logger.warning("No session found for target channel", target_channel_id=target_channel_id)
-                                return
+                is_streaming_chunk = event.get("streaming_chunk", False)
+                if not audio_data:
+                    return
+
+                session = None
+                if call_id:
+                    session = await self.session_store.get_by_call_id(call_id)
+
+                if not session:
+                    sessions = await self.session_store.get_all_sessions()
+                    if call_id:
+                        for s in sessions:
+                            if s.call_id == call_id:
+                                session = s
+                                break
+                    if not session and sessions:
+                        session = sessions[0]
+                        if not call_id:
                             call_id = session.call_id
-                            
-                            # Use PlaybackManager for TTS playback - it handles all gating logic
-                            playback_id = await self.playback_manager.play_audio(
-                                call_id, 
-                                audio_data, 
-                                playback_type="response"
+
+                if not session:
+                    logger.warning("No active call found for AgentAudio buffering", call_id=call_id)
+                    return
+
+                # Handle streaming vs file-based playback
+                if is_streaming_chunk and self.config.downstream_mode == "stream":
+                    # Streaming mode - send chunk directly to streaming manager
+                    await self._handle_streaming_audio_chunk(session, audio_data)
+                else:
+                    # File-based mode - buffer audio for later playback
+                    if not hasattr(session, "agent_audio_buffer"):
+                        session.agent_audio_buffer = bytearray()
+                        session.last_agent_audio_ts = 0.0
+
+                    session.agent_audio_buffer.extend(audio_data)
+                    session.last_agent_audio_ts = time.monotonic()
+                    await self._save_session(session)
+                    logger.debug("Buffered AgentAudio chunk", call_id=session.call_id, buffer_len=len(session.agent_audio_buffer))
+
+            elif event_type == "AgentAudioDone":
+                call_id = event.get("call_id")
+                is_streaming_done = event.get("streaming_done", False)
+                session = None
+                if call_id:
+                    session = await self.session_store.get_by_call_id(call_id)
+
+                if not session:
+                    sessions = await self.session_store.get_all_sessions()
+                    if call_id:
+                        for s in sessions:
+                            if s.call_id == call_id:
+                                session = s
+                                break
+                    if not session and sessions:
+                        session = sessions[0]
+                        if not call_id:
+                            call_id = session.call_id
+
+                if not session:
+                    logger.warning("AgentAudioDone received but session missing", call_id=call_id)
+                    return
+
+                # Handle streaming vs file-based playback
+                if is_streaming_done and self.config.downstream_mode == "stream":
+                    # Streaming mode - stop streaming playback
+                    await self._handle_streaming_audio_done(session)
+                else:
+                    # File-based mode - play buffered audio
+                    if not hasattr(session, "agent_audio_buffer"):
+                        session.agent_audio_buffer = bytearray()
+                        session.last_agent_audio_ts = 0.0
+
+                    if not session.agent_audio_buffer:
+                        logger.debug("AgentAudioDone with empty buffer", call_id=session.call_id)
+                        return
+
+                    audio_bytes = bytes(session.agent_audio_buffer)
+                    session.agent_audio_buffer.clear()
+                    now_ts = time.time()
+                    turn_latency = None
+                    transcription_latency = None
+                    if session.last_user_speech_end_ts:
+                        turn_latency = max(0.0, now_ts - session.last_user_speech_end_ts)
+                        session.last_turn_latency_s = turn_latency
+                    if session.last_transcription_ts:
+                        transcription_latency = max(0.0, now_ts - session.last_transcription_ts)
+                        session.last_transcription_latency_s = transcription_latency
+                    session.last_response_start_ts = now_ts
+                    await self._save_session(session)
+
+                    playback_id = await self.playback_manager.play_audio(
+                        session.call_id,
+                        audio_bytes,
+                        playback_type="response"
+                    )
+
+                    if playback_id:
+                        if self.conversation_coordinator:
+                            await self.conversation_coordinator.record_latency(
+                                session,
+                                turn_latency=turn_latency,
+                                transcription_latency=transcription_latency,
                             )
-                            
-                            if playback_id:
-                                logger.info("🔊 TTS START - Response playback started via PlaybackManager", 
-                                          channel_id=target_channel_id,
-                                          call_id=call_id,
-                                          playback_id=playback_id,
-                                          audio_size=len(audio_data))
-                                
-                                # Update conversation state after playing response
-                                conversation_state = call_data.get('conversation_state')
-                                if conversation_state == 'greeting':
-                                    # First response after greeting - transition to listening
-                                    call_data['conversation_state'] = 'listening'
-                                    logger.info("Greeting completed, now listening for conversation", channel_id=target_channel_id)
-                                elif conversation_state == 'processing':
-                                    # Response to user input - transition back to listening
-                                    call_data['conversation_state'] = 'listening'
-                                    logger.info("Response played, listening for next user input", channel_id=target_channel_id)
-                                
-                                # Cancel provider timeout task since we got a response
-                                if call_data.get('provider_timeout_task') and not call_data['provider_timeout_task'].done():
-                                    call_data['provider_timeout_task'].cancel()
-                                    logger.debug("Cancelled provider timeout task - response received", channel_id=target_channel_id)
-                            else:
-                                logger.error("🔊 TTS FAILED - PlaybackManager failed to start response playback", 
-                                           channel_id=target_channel_id,
-                                           call_id=call_id)
-                        else:
-                            logger.warning("No active call found for AgentAudio playback", call_id=call_id)
+
+                        if turn_latency is not None or transcription_latency is not None:
+                            logger.info(
+                                "⏱️ Turn latency recorded",
+                                call_id=session.call_id,
+                                provider=session.provider_name,
+                                user_to_playback_s=None if turn_latency is None else round(turn_latency, 3),
+                                transcription_to_playback_s=None if transcription_latency is None else round(transcription_latency, 3),
+                            )
+
+                        logger.info(
+                            "🔊 TTS START - Response playback started via PlaybackManager",
+                            channel_id=session.caller_channel_id,
+                            call_id=session.call_id,
+                            playback_id=playback_id,
+                            audio_size=len(audio_bytes),
+                        )
+
+                        if session.conversation_state == "greeting":
+                            session.conversation_state = "listening"
+                            logger.info("Greeting completed, now listening for conversation", channel_id=session.caller_channel_id)
+                        elif session.conversation_state == "processing":
+                            session.conversation_state = "listening"
+                            logger.info("Response played, listening for next user input", channel_id=session.caller_channel_id)
+
+                        provider_timeout_task = getattr(session, "provider_timeout_task", None)
+                        if provider_timeout_task and not provider_timeout_task.done():
+                            provider_timeout_task.cancel()
+                            session.provider_timeout_task = None
+                            logger.debug("Cancelled provider timeout task - response received", channel_id=session.caller_channel_id)
+
+                        await self._save_session(session)
+
+                        if self.conversation_coordinator:
+                            await self.conversation_coordinator.update_conversation_state(session.call_id, "listening")
+                    else:
+                        logger.error(
+                            "🔊 TTS FAILED - PlaybackManager failed to start response playback",
+                            channel_id=session.caller_channel_id,
+                            call_id=session.call_id,
+                        )
+            elif event_type == "Ready":
+                # Handle Ready event for streaming
+                call_id = event.get("call_id")
+                is_streaming_ready = event.get("streaming_ready", False)
+                if call_id and is_streaming_ready:
+                    await self._handle_streaming_ready(call_id)
+                    
+            elif event_type == "AgentResponse":
+                # Handle AgentResponse event for streaming
+                call_id = event.get("call_id")
+                is_streaming_response = event.get("streaming_response", False)
+                if call_id and is_streaming_response:
+                    await self._handle_streaming_response(call_id)
+                    
             elif event_type == "Transcription":
                 # Handle transcription data
                 text = event.get("text", "")
-                logger.info("Received transcription from provider", text=text, text_length=len(text))
+                call_id = event.get("call_id")
+                logger.info("Received transcription from provider", text=text, text_length=len(text), call_id=call_id)
+                if call_id:
+                    session = await self.session_store.get_by_call_id(call_id)
+                    if session:
+                        session.last_transcript = text
+                        session.last_transcription_ts = time.time()
+                        session.conversation_state = "processing"
+                        await self._save_session(session)
+                        if self.conversation_coordinator:
+                            await self.conversation_coordinator.update_conversation_state(call_id, "processing")
+            elif event_type == "AgentResponse":
+                response_text = event.get("text") or event.get("message") or ""
+                call_id = event.get("call_id")
+                logger.info("Received agent response", text=response_text, call_id=call_id)
+                if call_id:
+                    session = await self.session_store.get_by_call_id(call_id)
+                    if session:
+                        session.last_agent_response = response_text
+                        session.last_agent_response_ts = time.time()
+                        await self._save_session(session)
             elif event_type == "Error":
                 # Handle provider errors
                 error_msg = event.get("message", "Unknown provider error")
@@ -2379,7 +2875,21 @@ class Engine:
                 else:
                     logger.debug("Stopping provider session", channel_id=channel_id)
                     await provider.stop_session()
-                
+                    session.provider_session_active = False
+
+            if session.audiosocket_conn_id:
+                conn_id = session.audiosocket_conn_id
+                if self.audio_socket_server:
+                    await self.audio_socket_server.disconnect(conn_id)
+                self.conn_to_channel.pop(conn_id, None)
+                self.conn_to_caller.pop(conn_id, None)
+                self.channel_to_conn.pop(channel_id, None)
+                ssrc = self.audiosocket_conn_to_ssrc.pop(conn_id, None)
+                if ssrc is not None:
+                    self.ssrc_to_caller.pop(ssrc, None)
+                self.audiosocket_resample_state.pop(conn_id, None)
+                session.audiosocket_conn_id = None
+
             # Clean up SSRC mapping
             ssrc_to_remove = []
             for ssrc, mapped_channel in self.ssrc_to_caller.items():
@@ -2487,6 +2997,113 @@ class Engine:
                         error=str(e), exc_info=True)
             # Fallback to direct channel playback
             await self.ari_client.play_audio_response(channel_id, audio_data)
+
+    async def _handle_streaming_audio_chunk(self, session: CallSession, audio_data: bytes) -> None:
+        """Handle streaming audio chunk for real-time playback."""
+        try:
+            call_id = session.call_id
+            
+            # Initialize streaming if not already started
+            if not hasattr(session, "streaming_audio_queue"):
+                session.streaming_audio_queue = asyncio.Queue()
+                session.streaming_started = False
+                await self._save_session(session)
+            
+            # Add chunk to queue
+            await session.streaming_audio_queue.put(audio_data)
+            
+            # Start streaming if not already started
+            if not session.streaming_started:
+                session.streaming_started = True
+                stream_id = await self.streaming_playback_manager.start_streaming_playback(
+                    call_id,
+                    session.streaming_audio_queue,
+                    "streaming-response"
+                )
+                
+                if stream_id:
+                    session.current_stream_id = stream_id
+                    await self._save_session(session)
+                    logger.info("🎵 STREAMING STARTED - Real-time audio streaming initiated",
+                               call_id=call_id,
+                               stream_id=stream_id)
+                else:
+                    logger.error("Failed to start streaming playback",
+                               call_id=call_id)
+                    session.streaming_started = False
+                    await self._save_session(session)
+            
+        except Exception as e:
+            logger.error("Error handling streaming audio chunk",
+                        call_id=session.call_id,
+                        error=str(e),
+                        exc_info=True)
+    
+    async def _handle_streaming_audio_done(self, session: CallSession) -> None:
+        """Handle end of streaming audio."""
+        try:
+            call_id = session.call_id
+            
+            # Signal end of stream
+            if hasattr(session, "streaming_audio_queue"):
+                await session.streaming_audio_queue.put(None)  # End of stream signal
+            
+            # Stop streaming playback
+            if hasattr(session, "current_stream_id"):
+                await self.streaming_playback_manager.stop_streaming_playback(call_id)
+                session.current_stream_id = None
+                session.streaming_started = False
+                await self._save_session(session)
+                
+                logger.info("🎵 STREAMING DONE - Real-time audio streaming completed",
+                           call_id=call_id)
+            
+            # Update conversation state
+            if session.conversation_state == "greeting":
+                session.conversation_state = "listening"
+                logger.info("Greeting completed, now listening for conversation", call_id=call_id)
+            elif session.conversation_state == "processing":
+                session.conversation_state = "listening"
+                logger.info("Response streamed, listening for next user input", call_id=call_id)
+            
+            await self._save_session(session)
+            
+            if self.conversation_coordinator:
+                await self.conversation_coordinator.update_conversation_state(call_id, "listening")
+                
+        except Exception as e:
+            logger.error("Error handling streaming audio done",
+                        call_id=session.call_id,
+                        error=str(e),
+                        exc_info=True)
+    
+    async def _handle_streaming_ready(self, call_id: str) -> None:
+        """Handle streaming ready event."""
+        try:
+            session = await self.session_store.get_by_call_id(call_id)
+            if session:
+                session.streaming_ready = True
+                await self._save_session(session)
+                logger.info("🎵 STREAMING READY - Agent ready for streaming",
+                           call_id=call_id)
+        except Exception as e:
+            logger.error("Error handling streaming ready",
+                        call_id=call_id,
+                        error=str(e))
+    
+    async def _handle_streaming_response(self, call_id: str) -> None:
+        """Handle streaming response event."""
+        try:
+            session = await self.session_store.get_by_call_id(call_id)
+            if session:
+                session.streaming_response = True
+                await self._save_session(session)
+                logger.info("🎵 STREAMING RESPONSE - Agent generating streaming response",
+                           call_id=call_id)
+        except Exception as e:
+            logger.error("Error handling streaming response",
+                        call_id=call_id,
+                        error=str(e))
 
 
 async def main():

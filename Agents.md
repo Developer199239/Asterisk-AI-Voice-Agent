@@ -6,6 +6,12 @@ This document captures how I (the agent) work most effectively on this repo. It 
 - Primary: Implement AudioSocket‑first upstream capture with file‑based playback downstream; stabilize for testing on the server.
 - Next phase (feature‑flagged): Streaming TTS over AudioSocket with barge‑in, jitter buffers, keepalives, telemetry.
 
+## Current Status (2025-09-22)
+- Deepgram AudioSocket regression passes end-to-end with sub-2 s turn latency (see `call-framework.md` for the transcript and metrics notes).
+- Latency histograms/gauges (`ai_agent_turn_latency_seconds`, `ai_agent_transcription_to_audio_seconds`, `ai_agent_last_turn_latency_seconds`) are emitted during calls; scrape `/metrics` before restarting containers to keep the samples.
+- Greeting playback now skips engine-side TTS when the provider lacks `text_to_speech`, eliminating the Deepgram `AttributeError` observed earlier in the day.
+- Docs are aligned across IDEs: `call-framework.md`, `docs/regressions/deepgram-call-framework.md`, `.cursor/rules/…`, `.windsurf/rules/…`, and this guide carry the same assumptions.
+
 ## Architecture Snapshot (Current) — Runtime Contexts (Always Current)
 - Two containers: `ai-engine` (ARI + AudioSocket) and `local-ai-server` (models).
 - Upstream (caller → engine): AudioSocket TCP into the engine.
@@ -16,11 +22,13 @@ Active contexts and call path (server):
 - `ivr-3` (example) → `from-ai-agent` → Stasis(asterisk-ai-voice-agent)
 - Engine originates `Local/<exten>@ai-agent-media-fork/n` to start AudioSocket
 - `ai-agent-media-fork` generates canonical UUID, calls `AudioSocket(UUID, host:port)`, sets `AUDIOSOCKET_UUID=${EXTEN}` for binder
+- `ai-engine` now embeds the AudioSocket TCP listener itself (`config/ai-agent.yaml` → `audiosocket.host/port`, default `0.0.0.0:8090`)
 - Engine binds socket to caller channel; sets upstream input mode `pcm16_8k`; provider greets immediately (no demo tone)
 
 ## Feature Flags & Config
 - `audio_transport`: `audiosocket` (default) | `legacy` (fallback to ARI snoop).
 - `downstream_mode`: `file` (default) | `stream` (next phase, not active yet).
+- `audiosocket`: configure bind address/port for engine-side AudioSocket server (`AUDIOSOCKET_HOST`, `AUDIOSOCKET_PORT`).
 - Streaming knobs (`config/ai-agent.yaml`): `streaming.sample_rate_hz`, `chunk_duration_ms`, `jitter_buffer_ms`, `keepalive_ms`, `timeouts`, `barge_in.*`.
 - Env overrides: `AUDIO_TRANSPORT`, `DOWNSTREAM_MODE`.
 
@@ -46,6 +54,33 @@ exten => s,1,NoOp(Starting AI Voice Agent with AudioSocket)
  same => n,Stasis(asterisk-ai-voice-agent)
  same => n,Hangup()
 ```
+
+### Deepgram Test Entry (Provider Override)
+Add a dedicated context when you want to force the Deepgram provider without touching the default local flow:
+
+```
+[ai-voice-agent-deepgram]
+exten => s,1,NoOp(AudioSocket AI Voice Agent using Deepgram)
+ same => n,Set(AI_PROVIDER=deepgram)
+ same => n,Stasis(asterisk-ai-voice-agent)
+ same => n,Hangup()
+
+[ai-agent-media-fork]
+exten => _X.,1,NoOp(Local channel starting AudioSocket for ${EXTEN})
+ same => n,Answer()
+ same => n,Set(AUDIOSOCKET_HOST=127.0.0.1)
+ same => n,Set(AUDIOSOCKET_PORT=8090)
+ same => n,Set(AUDIOSOCKET_UUID=${EXTEN})
+ same => n,AudioSocket(${AUDIOSOCKET_UUID},${AUDIOSOCKET_HOST}:${AUDIOSOCKET_PORT},ulaw)
+ same => n,Hangup()
+
+; keep ;1 leg alive while the engine streams audio
+exten => s,1,NoOp(Local)
+ same => n,Wait(60)
+ same => n,Hangup()
+```
+
+Route specific DIDs or test extensions to `ai-voice-agent-deepgram` when exercising streaming; leave existing routes on `[ai-voice-agent]` so the local provider flow stays untouched. The engine reads `AI_PROVIDER` on `StasisStart` and falls back to the configured default when the variable is absent.
 
 ## Active Contexts & Usage (Server)
 - Entry context (`from-ai-agent`): hands call directly to `Stasis(asterisk-ai-voice-agent)`.
@@ -120,6 +155,13 @@ exten => s,1,NoOp(Local)
 - Engine logs: ARI connection errors, AudioSocket binds, playback IDs.
 - Asterisk logs: `/var/log/asterisk/full` — verify actual playback and errors.
 - Known gotcha: Do not append `.ulaw` to `sound:` URIs (Asterisk adds extensions automatically).
+- Metrics: hit `curl http://127.0.0.1:15000/metrics` after each regression to capture latency histograms and `ai_agent_last_*` gauges before recycling containers.
+
+## IDE Hand-Off Notes
+- **Codex CLI**: Follow this file plus `call-framework.md` for deployment + regression steps.
+- **Cursor**: `.cursor/rules/asterisk_ai_voice_agent.mdc` mirrors the same guardrails for code edits; keep it updated when workflows change.
+- **Windsurf**: `.windsurf/rules/asterisk_ai_voice_agent.md` references the roadmap; ensure milestone docs stay in sync so prompts remain accurate.
+- **Shared history**: Document every regression in `docs/regressions/` so all IDEs inherit the same context without log-diving.
 
 ## Ports & Paths
 - AudioSocket: TCP 8090 (default; configurable via `AUDIOSOCKET_PORT`).
