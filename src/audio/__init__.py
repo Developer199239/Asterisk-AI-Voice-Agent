@@ -4,4 +4,16 @@ Audio processing utilities for the Asterisk AI Voice Agent.
 This package contains audio processing helpers and utilities.
 """
 
-# Will be populated in Phase 2
+from .resampler import (
+    mulaw_to_pcm16le,
+    pcm16le_to_mulaw,
+    resample_audio,
+    convert_pcm16le_to_target_format,
+)
+
+__all__ = [
+    "mulaw_to_pcm16le",
+    "pcm16le_to_mulaw",
+    "resample_audio",
+    "convert_pcm16le_to_target_format",
+]

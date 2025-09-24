@@ -32,6 +32,7 @@ from .config import (
     load_config,
     LocalProviderConfig,
     DeepgramProviderConfig,
+    OpenAIRealtimeProviderConfig,
 )
 from .logging_config import get_logger
 from .rtp_server import RTPServer
@@ -39,6 +40,7 @@ from .audio.audiosocket_server import AudioSocketServer
 from .providers.base import AIProviderInterface
 from .providers.deepgram import DeepgramProvider
 from .providers.local import LocalProvider
+from .providers.openai_realtime import OpenAIRealtimeProvider
 from .core import SessionStore, PlaybackManager, ConversationCoordinator
 from .core.streaming_playback_manager import StreamingPlaybackManager
 from .core.models import CallSession
@@ -394,6 +396,14 @@ class Engine:
                     provider = DeepgramProvider(deepgram_config, self.config.llm, self.on_provider_event)
                     self.providers[name] = provider
                     logger.info("Provider 'deepgram' loaded successfully with OpenAI LLM dependency.")
+                elif name == "openai_realtime":
+                    openai_cfg = self._build_openai_realtime_config(provider_config_data)
+                    if not openai_cfg:
+                        continue
+
+                    provider = OpenAIRealtimeProvider(openai_cfg, self.on_provider_event)
+                    self.providers[name] = provider
+                    logger.info("Provider 'openai_realtime' loaded successfully.")
                 else:
                     logger.warning(f"Unknown provider type: {name}")
                     continue
@@ -1422,6 +1432,21 @@ class Engine:
             return cfg
         except Exception as exc:
             logger.error("Failed to build DeepgramProviderConfig", error=str(exc), exc_info=True)
+            return None
+
+    def _build_openai_realtime_config(self, provider_cfg: Dict[str, Any]) -> Optional[OpenAIRealtimeProviderConfig]:
+        """Construct an OpenAIRealtimeProviderConfig from raw provider settings."""
+        try:
+            cfg = OpenAIRealtimeProviderConfig(**provider_cfg)
+            if not cfg.enabled:
+                logger.info("OpenAI Realtime provider disabled in configuration; skipping initialization.")
+                return None
+            if not cfg.api_key:
+                logger.error("OpenAI Realtime provider API key missing (OPENAI_API_KEY)")
+                return None
+            return cfg
+        except Exception as exc:
+            logger.error("Failed to build OpenAIRealtimeProviderConfig", error=str(exc), exc_info=True)
             return None
 
     async def on_provider_event(self, event: Dict[str, Any]):

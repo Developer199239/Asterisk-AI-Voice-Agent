@@ -1,6 +1,6 @@
 # config/ai-agent.yaml
 # Default provider to use if not specified in the dialplan
-default_provider: "deepgram"
+default_provider: "openai_realtime"
 
 # Audio transport controls (AudioSocket-first, ExternalMedia as fallback)
 #
@@ -107,3 +107,20 @@ providers:
     input_sample_rate_hz: 8000    # Align to trunk sample rate (8 kHz for telephony)
     continuous_input: true        # Stream audio continuously for best responsiveness
                                   # TIP: Keep this true for real-time conversations
+  openai_realtime:
+    enabled: true
+    api_key: "${OPENAI_API_KEY}"
+    model: "gpt-4o-realtime-preview-2024-12-17"
+    voice: "${OPENAI_REALTIME_VOICE:-alloy}"
+    base_url: "${OPENAI_REALTIME_BASE_URL:-wss://api.openai.com/v1/realtime}"
+    instructions: "${OPENAI_REALTIME_INSTRUCTIONS:-You are a concise voice assistant. Respond clearly and keep answers under 20 words unless more detail is requested.}"
+    organization: "${OPENAI_ORG_ID:-}"
+    input_encoding: "slin16"          # AudioSocket inbound PCM16 @ 8 kHz
+    input_sample_rate_hz: 8000
+    output_encoding: "linear16"       # Provider emits PCM16 frames
+    output_sample_rate_hz: 24000
+    target_encoding: "${AUDIOSOCKET_FORMAT:-ulaw}"  # Match AudioSocket downstream format
+    target_sample_rate_hz: 8000
+    response_modalities:
+      - "audio"
+      - "text"

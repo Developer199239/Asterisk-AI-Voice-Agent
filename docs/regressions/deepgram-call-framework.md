@@ -1,5 +1,41 @@
 # Call Framework Analysis — Deepgram Provider
 
+## 2025-09-24 14:56 PDT — Two-way OK; residual self-echo; ARI cleanup errors gone
+
+**Outcome**
+- Two-way telephonic conversation is functional end-to-end.
+- Occasional agent self-echo observed: Deepgram hears some of the agent audio and starts answering itself in a few follow-on turns.
+- ARI cleanup errors (Bridge/Channel 404s) are gone; cleanup is idempotent.
+
+**Key Evidence (this call)**
+- Single bridge teardown per call; no error-level 404 logs for `DELETE /bridges/{id}` — when present, a DEBUG log appears: “Bridge destroy idempotent – already gone”.
+- Channel hangup 404s, when they occur, log at DEBUG: “likely already hung up.”
+- Exactly one “Disconnected from Deepgram Voice Agent.” info log at teardown (no duplicate disconnect logs).
+- Despite `post_tts_end_protection_ms=350`, intermittent self-echo persists on some turns.
+
+**Configuration Used (Highlights)**
+- `audiosocket.format: slin16` (upstream PCM16 @ 8 kHz)
+- `providers.deepgram.input_sample_rate_hz: 8000`
+- `barge_in.initial_protection_ms: 400`
+- `barge_in.post_tts_end_protection_ms: 350`
+- `streaming.provider_grace_ms: 500`
+
+**Diagnosis**
+- Residual leakage of agent audio into the uplink just after TTS playback ends. The 350 ms post‑TTS guard reduces feedback but does not fully eliminate it across all trunks/turn shapes. Likely causes include late provider chunks arriving during or just after gating clear, brief bridge mixback, or small trunk echo.
+
+**Next Tuning Options**
+- Increase `barge_in.post_tts_end_protection_ms` from 350 → 400–500 ms (start with 400 ms) and retest.
+- Sequence hardening: delay capture re‑enable until after `streaming.provider_grace_ms` in stream cleanup to absorb late provider frames.
+- Add VAD confirmation just after playback ends: only re‑enable capture when VAD indicates sustained silence or inbound energy drops below threshold for N frames.
+- Optional future: lightweight AEC evaluation if trunk echo remains a factor.
+
+**Verification (next run)**
+- Expect no error‑level ARI logs for idempotent operations; 404s remain at DEBUG only.
+- Exactly one Deepgram disconnect info log on teardown.
+- Fewer or no self‑echo incidents with `post_tts_end_protection_ms ≥ 400` and sequencing tightened.
+
+---
+
 ## 2025-09-24 13:17 PDT — Two-way Conversation Stable; Echo-Loop Resolved
 
 **Outcome**

@@ -8,7 +8,7 @@ using Pydantic v2 for validation and type safety.
 import os
 import yaml
 from pydantic import BaseModel, Field
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 # Determine the absolute path to the project root from this file's location
 # This makes the config loading independent of the current working directory.
@@ -53,6 +53,25 @@ class DeepgramProviderConfig(BaseModel):
     input_encoding: str = Field(default="linear16")
     input_sample_rate_hz: int = Field(default=16000)
     continuous_input: bool = Field(default=True)
+
+
+class OpenAIRealtimeProviderConfig(BaseModel):
+    enabled: bool = Field(default=True)
+    api_key: Optional[str] = None
+    model: str = Field(default="gpt-4o-realtime-preview-2024-12-17")
+    voice: str = Field(default="alloy")
+    base_url: str = Field(default="wss://api.openai.com/v1/realtime")
+    instructions: Optional[str] = None
+    organization: Optional[str] = None
+    input_encoding: str = Field(default="slin16")  # AudioSocket inbound default (8 kHz PCM16)
+    input_sample_rate_hz: int = Field(default=8000)  # AudioSocket source sample rate
+    provider_input_encoding: str = Field(default="linear16")  # Provider expects PCM16 LE
+    provider_input_sample_rate_hz: int = Field(default=16000)  # OpenAI Realtime input sample rate
+    output_encoding: str = Field(default="linear16")  # Provider emits PCM16 frames
+    output_sample_rate_hz: int = Field(default=24000)
+    target_encoding: str = Field(default="ulaw")  # Downstream AudioSocket expectations
+    target_sample_rate_hz: int = Field(default=8000)
+    response_modalities: List[str] = Field(default_factory=lambda: ["text", "audio"])
 
 class BargeInConfig(BaseModel):
     enabled: bool = Field(default=True)
