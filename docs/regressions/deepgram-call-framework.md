@@ -1,5 +1,44 @@
 # Call Framework Analysis — Deepgram Provider
 
+## 2025-09-24 12:23 PDT — Greeting OK; Caller Audio Not Reaching Deepgram (8k→16k mismatch)
+
+**Outcome**
+- Initial greeting heard cleanly.
+- No two-way conversation; caller audio not recognized/upstreamed by Deepgram.
+
+**Key Evidence (call_id=1758741664.993)**
+- Transport healthy and provider connected:
+  - `AudioSocket server listening ...`
+  - `✅ Successfully connected to Deepgram Voice Agent.`
+  - `Deepgram agent configured. input_encoding=linear16 input_sample_rate=16000 output_encoding=mulaw output_sample_rate=8000`
+- AudioSocket inbound confirmed at start of agent turn:
+  - `AudioSocket inbound first audio bytes=320` (20 ms of PCM16 at 8 kHz)
+- TTS protection window working as tuned (no early barge-in):
+  - `Dropping inbound during initial TTS protection window ... protect_ms=400`
+  - Later `Dropping inbound during TTS (candidate_ms=..., energy=...)` shows energy accumulating but not reaching `min_ms=400` — no `BARGE-IN triggered` in this run (as desired).
+- Gating cleared at end of greeting, enabling capture:
+  - `🔊 TTS GATING - Audio capture enabled (token removed) active_count=0 audio_capture_enabled=True`
+- After gating clears, there are no explicit logs of forwarding (by design), but Deepgram remains configured at input_sample_rate=16000 while inbound frames are 8 kHz PCM16.
+
+**Diagnosis**
+- Audio sample rate mismatch: we forward 8 kHz PCM16 frames from AudioSocket (`format: slin16`), but Deepgram is configured to expect 16 kHz linear16 input. This mismatch likely prevents the Voice Agent from properly ingesting caller speech after the greeting, yielding “no conversation.”
+- Barge-in guardrails are now working better (no spurious triggers during greeting), so the current blocker is upstream ingestion, not barge-in/gating.
+
+**Remediation Options**
+- Fast config alignment (recommended first):
+  - Set `providers.deepgram.input_sample_rate_hz: 8000` to match AudioSocket (8 kHz PCM16) and redeploy.
+- Robust engine-side fix (next):
+  - Resample inbound AudioSocket audio 8 kHz → 16 kHz in `src/engine.py::_audiosocket_handle_audio` using `audioop.ratecv`, keyed by `conn_id` to preserve state, then continue to send 16 kHz PCM16 to Deepgram regardless of dialplan sample rate.
+
+**Next Steps**
+- Apply the fast config fix (8 kHz) and redeploy with `make deploy-safe`, then place a short call to confirm two-way audio.
+- Implement engine resampling and richer decision logs:
+  - Add 8k→16k resample when provider requires 16 kHz.
+  - Log forwarded frame counts and effective sample rate at debug to accelerate future diagnosis.
+- Continue VAD integration work for barge-in reliability after upstream audio is flowing.
+
+---
+
 ## 2025-09-24 11:42 PDT — Greeting Only (server still on file); Switched to stream
 
 **Outcome**
