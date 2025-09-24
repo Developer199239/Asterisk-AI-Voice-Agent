@@ -147,6 +147,11 @@ class Engine:
                 'fallback_timeout_ms': config.streaming.fallback_timeout_ms,
                 'chunk_size_ms': config.streaming.chunk_size_ms,
             }
+        # Debug/diagnostics: allow broadcasting outbound frames to all AudioSocket conns
+        try:
+            streaming_config['audiosocket_broadcast_debug'] = bool(int(os.getenv('AUDIOSOCKET_BROADCAST_DEBUG', '0')))
+        except Exception:
+            streaming_config['audiosocket_broadcast_debug'] = False
         
         self.streaming_playback_manager = StreamingPlaybackManager(
             self.session_store,
@@ -1599,13 +1604,22 @@ class Engine:
         conns = self.channel_to_conns.get(caller_channel_id, set())
         conns.add(conn_id)
         self.channel_to_conns[caller_channel_id] = conns
-        # Do not pick primary yet; we'll select on first audio frame
+        # Record all connection IDs on the session for observability/broadcast-debug
+        try:
+            session.audiosocket_conns = list(conns)  # type: ignore[attr-defined]
+        except Exception:
+            pass
+        # Pin outbound to the FIRST bound connection for the lifetime of the call
         session.status = "audiosocket_connected"
-        # Provisional assignment so outbound streaming has a target
         if not getattr(session, "audiosocket_conn_id", None):
             session.audiosocket_conn_id = conn_id
+            # Mark as pinned so we never switch on first inbound frame
+            try:
+                session.audiosocket_outbound_pinned = True  # type: ignore[attr-defined]
+            except Exception:
+                pass
             logger.info(
-                "AudioSocket provisional connection set",
+                "AudioSocket outbound pinned to first bound connection",
                 channel_id=caller_channel_id,
                 conn_id=conn_id,
             )
@@ -1706,22 +1720,13 @@ class Engine:
                 channel_id=caller_channel_id,
                 bytes=len(pcm_8k_data),
             )
-            # Select primary conn for this channel on first audio frame
-            primary = self.audiosocket_primary_conn.get(caller_channel_id)
-            if not primary:
-                self.audiosocket_primary_conn[caller_channel_id] = conn_id
-                # Persist primary to session so downstream streaming uses correct conn
-                session = await self.session_store.get_by_call_id(caller_channel_id)
-                if session:
-                    session.audiosocket_conn_id = conn_id
-                    await self._save_session(session)
-                # Keep secondary connection(s) open to avoid Asterisk EPIPE on write
-                logger.debug(
-                    "AudioSocket primary selected; keeping secondary connections open",
-                    channel_id=caller_channel_id,
-                    primary_conn=conn_id,
-                    others=list(self.channel_to_conns.get(caller_channel_id, set() - {conn_id}))
-                )
+            # Do NOT switch outbound target on first inbound frame; keep pinned to first bound
+            logger.debug(
+                "AudioSocket first frame observed; outbound remains pinned to first bound",
+                channel_id=caller_channel_id,
+                pinned_conn=getattr(session, "audiosocket_conn_id", None),
+                observed_conn=conn_id,
+            )
 
         # Decode based on dialplan format, then resample to 16kHz for the VAD pipeline
         state = self.audiosocket_resample_state.get(conn_id)
@@ -1756,10 +1761,22 @@ class Engine:
         if caller_channel_id:
             self.channel_to_conn.pop(caller_channel_id, None)
             session = await self.session_store.get_by_call_id(caller_channel_id)
-            if session and session.audiosocket_conn_id == conn_id:
-                session.audiosocket_conn_id = None
-                session.provider_session_active = False
-                await self._save_session(session)
+            if session:
+                # Update tracked conn set on session
+                conns = self.channel_to_conns.get(caller_channel_id, set())
+                try:
+                    session.audiosocket_conns = list(conns)  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+                # If the pinned outbound conn closed, clear it so a future bind can repin
+                if session.audiosocket_conn_id == conn_id:
+                    session.audiosocket_conn_id = None
+                    session.provider_session_active = False
+                    try:
+                        session.audiosocket_outbound_pinned = False  # type: ignore[attr-defined]
+                    except Exception:
+                        pass
+                    await self._save_session(session)
 
         # Remove from per-channel conn set
         conns = self.channel_to_conns.get(caller_channel_id or "", set())

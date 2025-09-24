@@ -128,8 +128,9 @@ cython_debug/
 *.bin
 *.safetensors
 
-# Cursor IDE
+# Cursor/Windsruf IDE
 .cursor/
+.windsurf/
 
 # Archives and old documentation
 Archived/

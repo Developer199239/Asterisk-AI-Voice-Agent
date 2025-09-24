@@ -24,6 +24,58 @@
 
 ---
 
+## 2025-09-23 16:05 PDT — AudioSocket Deepgram Regression (no audio; outbound first-frame logged)
+
+**Observed Behaviour**
+- Caller heard no audio. Engine logs show:
+  - Deepgram session established and configured:
+    - `Deepgram agent configured. input_encoding=linear16 input_sample_rate=16000 output_encoding=mulaw output_sample_rate=8000`
+    - `Deepgram AgentAudio first chunk bytes=960`
+  - AudioSocket duplicate legs connected and bound for the same UUID:
+    - `AudioSocket connection accepted conn_id=f1777...`
+    - `AudioSocket UUID bound conn_id=f1777...`
+    - `AudioSocket connection accepted conn_id=b8cd7...`
+    - `AudioSocket UUID bound conn_id=b8cd7...`
+    - `AudioSocket inbound first audio bytes=320` for BOTH conn_ids (20 ms slin16@8k)
+  - Outbound streaming first frame logged:
+    - `🎵 STREAMING OUTBOUND - First frame audiosocket_format=slin16 frame_bytes=320 ... conn_id=f1777...`
+  - TTS gating active for a few seconds, then:
+    - `🎵 STREAMING PLAYBACK - End of stream` and cleanup
+
+**Diagnosis**
+- Codec alignment is correct (slin16@8k on AudioSocket wire; Deepgram output μ-law@8k converted to PCM16 by engine) and provider produced audio.
+- Transport was healthy (no send failures, no Asterisk buffer/translate errors).
+- Silence cause: Outbound likely streamed to the wrong AudioSocket leg after the second leg bound and sent the first inbound frame. Prior logic “selected primary on first inbound frame,” which can select the non-playback leg in Local ;1/;2 patterns. The first bound connection (f1777...) is typically the dialplan leg that should receive outbound audio.
+
+**Fixes Implemented**
+1. Pin outbound to the first bound connection
+   - In `src/engine.py::_audiosocket_handle_uuid`, the first conn_id that binds is now persisted to `session.audiosocket_conn_id` and marked pinned for the duration of the call. We no longer switch targets on the first inbound frame.
+   - Secondary legs remain open to avoid Asterisk EPIPE on write.
+2. Broadcast debug option (for one-call diagnostics)
+   - In `src/core/streaming_playback_manager.py`, added `audiosocket_broadcast_debug` flag to send each outbound frame to all tracked AudioSocket conn_ids in the session.
+   - Enable via environment: `AUDIOSOCKET_BROADCAST_DEBUG=1`.
+3. Codec/flow instrumentation (shipped earlier in the day)
+   - Deepgram: logs codec in/out and first output chunk bytes.
+   - AudioSocket server: logs first inbound audio frame bytes per conn.
+   - Streaming manager: logs first outbound frame with conn_id, format and frame size.
+
+**What to Verify Next Regression**
+- Expect these logs early in the call:
+  - `Deepgram agent configured. ... output_encoding=mulaw output_sample_rate=8000` (or linear16 if we switch)
+  - `Deepgram AgentAudio first chunk bytes=...` (960 ≈ ~120 ms at 8k μ-law)
+  - `AudioSocket UUID bound` for two conn_ids
+  - `🎵 STREAMING OUTBOUND - First frame ... conn_id=<first-bound>`
+  - If `AUDIOSOCKET_BROADCAST_DEBUG=1`: `AudioSocket broadcast sent recipients=2`
+- Caller should hear audio. If broadcast mode yields audio while pinned mode does not, we will capture which conn_id produced audio and harden the mapping policy accordingly.
+
+**Optional Codec Tuning**
+- To eliminate μ-law conversion entirely, set Deepgram TTS output to linear PCM:
+  - `providers.deepgram.output_encoding: "linear16"`
+  - `providers.deepgram.output_sample_rate_hz: 8000`
+  - Engine will then send slin16@8k frames without ulaw→lin conversion.
+
+---
+
 ## 2025-09-23 15:17 PDT — AudioSocket Deepgram Regression (1-minute call, no audio)
 
 **Observed Behaviour**

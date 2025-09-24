@@ -93,6 +93,8 @@ class StreamingPlaybackManager:
         self.rtp_server = rtp_server
         self.audiosocket_server = audiosocket_server
         self.audiosocket_format: str = "ulaw"  # default format expected by dialplan
+        # Debug: when True, send frames to all AudioSocket conns for the call
+        self.audiosocket_broadcast_debug: bool = bool(self.streaming_config.get('audiosocket_broadcast_debug', False))
         
         # Streaming state
         self.active_streams: Dict[str, Dict[str, Any]] = {}  # call_id -> stream_info
@@ -404,6 +406,20 @@ class StreamingPlaybackManager:
                         conn_id=conn_id,
                     )
                     self._first_send_logged.add(call_id)
+                # Optional broadcast mode for diagnostics
+                if self.audiosocket_broadcast_debug:
+                    conns = list(set(getattr(session, 'audiosocket_conns', []) or []))
+                    sent = 0
+                    for cid in conns or [conn_id]:
+                        if await self.audiosocket_server.send_audio(cid, chunk):
+                            sent += 1
+                    if sent == 0:
+                        logger.warning("AudioSocket broadcast send failed (no recipients)", call_id=call_id, stream_id=stream_id)
+                        return False
+                    if len(conns) > 1:
+                        logger.debug("AudioSocket broadcast sent", call_id=call_id, stream_id=stream_id, recipients=len(conns))
+                    return True
+                # Normal single-conn send
                 success = await self.audiosocket_server.send_audio(conn_id, chunk)
                 if not success:
                     logger.warning("AudioSocket streaming send failed", call_id=call_id, stream_id=stream_id)

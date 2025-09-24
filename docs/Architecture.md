@@ -349,6 +349,15 @@ When `audio_transport=audiosocket` and `downstream_mode=stream` are enabled, the
 - Inbound decode: if the dialplan sends μ-law (typical), the engine decodes μ-law → PCM16 at 8 kHz before resampling to 16 kHz for VAD.
 - Provider streaming events: providers emit `AgentAudio` bytes with `streaming_chunk=true` and a final `AgentAudioDone` with `streaming_done=true` to control the streaming window.
 
+#### AudioSocket Duplicate Legs and Outbound Selection
+
+- Local channels create two AudioSocket TCP connections (`;1` and `;2`) which will both bind with the same UUID.
+- The engine now pins the outbound streaming target to the first connection that successfully binds the UUID and keeps secondary legs open to avoid `EPIPE` write errors in Asterisk.
+- We no longer switch outbound targets on the first inbound frame; doing so can select the non-playback leg and cause silence.
+- For diagnostics, a broadcast mode can be enabled to send outbound frames to all bound legs for a call:
+  - Set environment variable `AUDIOSOCKET_BROADCAST_DEBUG=1` to enable temporary broadcast.
+  - When enabled, the `StreamingPlaybackManager` will send each frame to every connection listed in `session.audiosocket_conns` and log `AudioSocket broadcast sent` with recipient count.
+
 Implementation references:
 - `src/core/streaming_playback_manager.py` — format-aware conversion, 20 ms frame segmentation, pacing, remainder buffering
 - `src/engine.py::_audiosocket_handle_audio` — inbound μ-law decode and 8k→16k resample for VAD

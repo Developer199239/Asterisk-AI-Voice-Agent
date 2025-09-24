@@ -52,6 +52,8 @@ This roadmap tracks the open-source enablement work for the Asterisk AI Voice Ag
   - Wire format selection via `audiosocket.format` (env `AUDIOSOCKET_FORMAT`): `ulaw` (default) or `slin16`.
   - Provider streaming semantics: Deepgram now emits `AgentAudio` with `streaming_chunk=true` and `AgentAudioDone` with `streaming_done=true` and `call_id`.
   - Inbound AudioSocket decode: μ-law → PCM16 @8k prior to 8k→16k resample for VAD.
+  - Outbound leg selection fix: pin outbound to the first UUID-bound AudioSocket connection; do not switch targets on first inbound frame.
+  - Diagnostics: optional `AUDIOSOCKET_BROADCAST_DEBUG=1` to send outbound frames to all bound legs for a call and confirm which leg carries playback.
 - **Quick verify**:
   - Logs on start: `Runtime modes audio_transport=audiosocket downstream_mode=stream` and `AudioSocket server listening ...:8090`.
   - During call: `🎵 STREAMING PLAYBACK - Started` then steady frame sends (no buffer overrun warnings in Asterisk).
