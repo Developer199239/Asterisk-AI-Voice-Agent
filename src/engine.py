@@ -1183,6 +1183,99 @@ class Engine:
                         call_id=call_id,
                         error=str(e))
 
+    async def _audiosocket_handle_uuid(self, conn_id: str, uuid_str: str) -> bool:
+        """Bind inbound AudioSocket connection to the caller channel via UUID."""
+        try:
+            caller_channel_id = self.uuidext_to_channel.get(uuid_str)
+            if not caller_channel_id:
+                logger.warning("AudioSocket UUID not recognized", conn_id=conn_id, uuid=uuid_str)
+                return False
+
+            # Track mappings
+            self.conn_to_channel[conn_id] = caller_channel_id
+            self.channel_to_conn[caller_channel_id] = conn_id
+            self.channel_to_conns.setdefault(caller_channel_id, set()).add(conn_id)
+            if caller_channel_id not in self.audiosocket_primary_conn:
+                self.audiosocket_primary_conn[caller_channel_id] = conn_id
+
+            # Update session
+            session = await self.session_store.get_by_call_id(caller_channel_id)
+            if session:
+                session.audiosocket_uuid = uuid_str
+                session.status = "audiosocket_bound"
+                await self._save_session(session)
+
+            logger.info(
+                "AudioSocket connection bound to caller",
+                conn_id=conn_id,
+                uuid=uuid_str,
+                caller_channel_id=caller_channel_id,
+            )
+            return True
+        except Exception as exc:
+            logger.error("Error binding AudioSocket UUID", conn_id=conn_id, uuid=uuid_str, error=str(exc), exc_info=True)
+            return False
+
+    async def _audiosocket_handle_audio(self, conn_id: str, audio_bytes: bytes) -> None:
+        """Forward inbound AudioSocket audio to the active provider for the bound call."""
+        try:
+            caller_channel_id = self.conn_to_channel.get(conn_id)
+            if not caller_channel_id and self.audio_socket_server:
+                # Fallback: resolve via server's UUID registry
+                try:
+                    uuid_str = self.audio_socket_server.get_uuid_for_conn(conn_id)
+                    if uuid_str:
+                        caller_channel_id = self.uuidext_to_channel.get(uuid_str)
+                        if caller_channel_id:
+                            self.conn_to_channel[conn_id] = caller_channel_id
+                except Exception:
+                    pass
+
+            if not caller_channel_id:
+                logger.debug("AudioSocket audio received for unknown connection", conn_id=conn_id, bytes=len(audio_bytes))
+                return
+
+            session = await self.session_store.get_by_call_id(caller_channel_id)
+            if not session:
+                logger.debug("No session for caller; dropping AudioSocket audio", conn_id=conn_id, caller_channel_id=caller_channel_id)
+                return
+
+            provider_name = session.provider_name or self.config.default_provider
+            provider = self.providers.get(provider_name)
+            if not provider or not hasattr(provider, 'send_audio'):
+                logger.debug("Provider unavailable for audio", provider=provider_name)
+                return
+
+            await provider.send_audio(audio_bytes)
+        except Exception as exc:
+            logger.error("Error handling AudioSocket audio", conn_id=conn_id, error=str(exc), exc_info=True)
+
+    async def _audiosocket_handle_disconnect(self, conn_id: str) -> None:
+        """Cleanup mappings when an AudioSocket connection disconnects."""
+        try:
+            caller_channel_id = self.conn_to_channel.pop(conn_id, None)
+            if caller_channel_id:
+                conns = self.channel_to_conns.get(caller_channel_id, set())
+                conns.discard(conn_id)
+                if not conns:
+                    self.channel_to_conns.pop(caller_channel_id, None)
+                # Reset primary if needed
+                if self.audiosocket_primary_conn.get(caller_channel_id) == conn_id:
+                    self.audiosocket_primary_conn.pop(caller_channel_id, None)
+                    if conns:
+                        self.audiosocket_primary_conn[caller_channel_id] = next(iter(conns))
+            logger.info("AudioSocket connection disconnected", conn_id=conn_id, caller_channel_id=caller_channel_id)
+        except Exception as exc:
+            logger.error("Error during AudioSocket disconnect cleanup", conn_id=conn_id, error=str(exc), exc_info=True)
+
+    async def _audiosocket_handle_dtmf(self, conn_id: str, digit: str) -> None:
+        """Handle DTMF received over AudioSocket (informational)."""
+        try:
+            caller_channel_id = self.conn_to_channel.get(conn_id)
+            logger.info("AudioSocket DTMF received", conn_id=conn_id, caller_channel_id=caller_channel_id, digit=digit)
+        except Exception as exc:
+            logger.error("Error handling AudioSocket DTMF", conn_id=conn_id, error=str(exc), exc_info=True)
+
     def _build_deepgram_config(self, provider_cfg: Dict[str, Any]) -> Optional[DeepgramProviderConfig]:
         """Construct a DeepgramProviderConfig from raw provider settings with validation."""
         try:
@@ -1305,7 +1398,7 @@ class Engine:
                     "listening": audiosocket_listening,
                     "host": getattr(self.config.audiosocket, 'host', None) if self.config.audiosocket else None,
                     "port": getattr(self.config.audiosocket, 'port', None) if self.config.audiosocket else None,
-                    "active_connections": len(getattr(self.audio_socket_server, 'connections', {})) if self.audio_socket_server else 0,
+                    "active_connections": (self.audio_socket_server.get_connection_count() if self.audio_socket_server else 0),
                 },
                 "audiosocket_listening": audiosocket_listening,
                 "conversation": {
