@@ -514,8 +514,8 @@ class Engine:
                                bridge_id=bridge_id,
                                caller_channel_id=caller_channel_id)
                     
-                    # Start the provider session for ExternalMedia
-                    await self._start_provider_session_external_media(caller_channel_id, external_media_id)
+                    # Start the provider session now that media path is connected
+                    await self._start_provider_session(caller_channel_id)
                 else:
                     logger.error("🎯 EXTERNAL MEDIA - Failed to add ExternalMedia channel to bridge", 
                                external_media_id=external_media_id,
@@ -651,8 +651,8 @@ class Engine:
                 self.local_channels[caller_channel_id] = local_channel_id
                 
                 
-                # Start provider session
-                await self._start_provider_session_hybrid(caller_channel_id, local_channel_id)
+                # Start provider session now that media path is connected
+                await self._start_provider_session(caller_channel_id)
             else:
                 logger.error("🎯 HYBRID ARI - Failed to add Local channel to bridge", 
                            local_channel_id=local_channel_id,
@@ -729,7 +729,7 @@ class Engine:
             self.bridges[audiosocket_channel_id] = bridge_id
 
             if not session.provider_session_active:
-                await self._start_provider_session_hybrid(caller_channel_id, audiosocket_channel_id)
+                await self._start_provider_session(caller_channel_id)
         except Exception as exc:
             logger.error(
                 "🎯 HYBRID ARI - Failed to process AudioSocket channel",
@@ -1043,7 +1043,7 @@ class Engine:
                 provider_name = session.provider_name
                 provider = self.providers.get(provider_name)
                 if provider and hasattr(provider, "stop_session"):
-                    await provider.stop_session(call_id)
+                    await provider.stop_session()
             except Exception:
                 logger.debug("Provider stop_session failed during cleanup", call_id=call_id, exc_info=True)
 
@@ -1329,6 +1329,27 @@ class Engine:
 
         except Exception as exc:
             logger.error("Error handling provider event", error=str(exc), exc_info=True)
+
+    async def _start_provider_session(self, call_id: str) -> None:
+        """Start the provider session for a call when media path is ready."""
+        try:
+            session = await self.session_store.get_by_call_id(call_id)
+            if not session:
+                logger.error("Start provider session called for unknown call", call_id=call_id)
+                return
+
+            provider_name = session.provider_name or self.config.default_provider
+            provider = self.providers.get(provider_name)
+            if not provider:
+                logger.error("No provider found to start session", call_id=call_id, provider=provider_name)
+                return
+
+            await provider.start_session(call_id)
+            session.provider_session_active = True
+            await self._save_session(session)
+            logger.info("Provider session started", call_id=call_id, provider=provider_name)
+        except Exception as exc:
+            logger.error("Failed to start provider session", call_id=call_id, error=str(exc), exc_info=True)
 
     async def _on_playback_finished(self, event: Dict[str, Any]):
         """Delegate ARI PlaybackFinished to PlaybackManager for gating and cleanup."""
