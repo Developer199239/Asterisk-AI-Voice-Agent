@@ -1170,6 +1170,73 @@ class Engine:
                         call_id=call_id,
                         error=str(e))
 
+    def _build_deepgram_config(self, provider_cfg: Dict[str, Any]) -> Optional[DeepgramProviderConfig]:
+        """Construct a DeepgramProviderConfig from raw provider settings with validation."""
+        try:
+            cfg = DeepgramProviderConfig(**provider_cfg)
+            if not cfg.api_key:
+                logger.error("Deepgram provider API key missing (DEEPGRAM_API_KEY)")
+                return None
+            return cfg
+        except Exception as exc:
+            logger.error("Failed to build DeepgramProviderConfig", error=str(exc), exc_info=True)
+            return None
+
+    async def on_provider_event(self, event: Dict[str, Any]):
+        """Handle async events from the active provider (Deepgram/OpenAI/local).
+
+        For file-based downstream (current default), buffer AgentAudio bytes until
+        AgentAudioDone, then play the accumulated audio via PlaybackManager.
+        """
+        try:
+            etype = event.get("type")
+            call_id = event.get("call_id")
+            if not call_id:
+                return
+
+            session = await self.session_store.get_by_call_id(call_id)
+            if not session:
+                logger.warning("Provider event for unknown call", event_type=etype, call_id=call_id)
+                return
+
+            # Downstream strategy: default to file playback; streaming path to be enabled later
+            if etype == "AgentAudio":
+                chunk: bytes = event.get("data") or b""
+                if chunk:
+                    session.agent_audio_buffer.extend(chunk)
+                    session.last_agent_audio_ts = time.time()
+                    await self._save_session(session)
+            elif etype == "AgentAudioDone":
+                if session.agent_audio_buffer:
+                    audio = bytes(session.agent_audio_buffer)
+                    session.agent_audio_buffer = bytearray()
+                    await self._save_session(session)
+                    # Play the accumulated response
+                    playback_id = await self.playback_manager.play_audio(call_id, audio, "streaming-response")
+                    if not playback_id:
+                        logger.error("Failed to play provider audio", call_id=call_id, size=len(audio))
+                else:
+                    logger.debug("AgentAudioDone with empty buffer", call_id=call_id)
+            else:
+                # Log control/JSON events at debug for now
+                logger.debug("Provider control event", event=event)
+
+        except Exception as exc:
+            logger.error("Error handling provider event", error=str(exc), exc_info=True)
+
+    async def _on_playback_finished(self, event: Dict[str, Any]):
+        """Delegate ARI PlaybackFinished to PlaybackManager for gating and cleanup."""
+        try:
+            playback_id = None
+            playback = event.get("playback", {}) or {}
+            playback_id = playback.get("id") or event.get("playbackId")
+            if not playback_id:
+                logger.debug("PlaybackFinished without playback id", event=event)
+                return
+            await self.playback_manager.on_playback_finished(playback_id)
+        except Exception as exc:
+            logger.error("Error in PlaybackFinished handler", error=str(exc), exc_info=True)
+
 
 async def main():
     config = load_config()
