@@ -109,10 +109,20 @@ server-logs-snapshot:
 server-status:
 	ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && docker-compose ps'
 
-## server-clear-logs: Clear logs before testing
+## server-clear-logs: Truncate Docker logs on server and restart containers
 server-clear-logs:
-	@echo "--> Clearing logs on $(SERVER_HOST)..."
-	ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && docker-compose logs --tail=0 ai-engine && docker-compose logs --tail=0 local-ai-server'
+	@echo "--> Truncating Docker container logs on $(SERVER_HOST)..."
+	@ssh $(SERVER_USER)@$(SERVER_HOST) 'sudo sh -c "truncate -s 0 /var/lib/docker/containers/*/*-json.log"'
+	@echo "--> Restarting ai-engine and local-ai-server containers..."
+	@ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && docker-compose up -d ai-engine local-ai-server'
+	@echo "✅ Server logs cleared and containers restarted"
+
+## server-capture-logs: Capture full logs from server containers into timestamped files
+server-capture-logs:
+	@echo "--> Capturing ai-engine logs to logs/ai-engine-$$(date +%Y%m%d-%H%M%S).log"
+	@ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && docker-compose logs --no-color ai-engine' > logs/ai-engine-$$(date +%Y%m%d-%H%M%S).log
+	@echo "--> Capturing local-ai-server logs to logs/local-ai-server-$$(date +%Y%m%d-%H%M%S).log"
+	@ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && docker-compose logs --no-color local-ai-server' > logs/local-ai-server-$$(date +%Y%m%d-%H%M%S).log
 
 ## server-health: Check deployment health (ARI, ExternalMedia, Providers)
 server-health:

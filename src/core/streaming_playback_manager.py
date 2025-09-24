@@ -112,9 +112,22 @@ class StreamingPlaybackManager:
         self.jitter_buffer_ms = self.streaming_config.get('jitter_buffer_ms', 50)
         self.keepalive_interval_ms = self.streaming_config.get('keepalive_interval_ms', 5000)
         self.connection_timeout_ms = self.streaming_config.get('connection_timeout_ms', 10000)
-        self.fallback_timeout_ms = self.streaming_config.get('fallback_timeout_ms', 2000)
+        self.fallback_timeout_ms = self.streaming_config.get('fallback_timeout_ms', 4000)
         self.chunk_size_ms = self.streaming_config.get('chunk_size_ms', 20)
-        self.min_start_chunks = max(1, int(self.streaming_config.get('min_start_chunks', 2)))
+        # Derived configuration (chunk counts)
+        self.min_start_ms = max(0, int(self.streaming_config.get('min_start_ms', 120)))
+        self.low_watermark_ms = max(0, int(self.streaming_config.get('low_watermark_ms', 80)))
+        self.provider_grace_ms = max(0, int(self.streaming_config.get('provider_grace_ms', 500)))
+        self.min_start_chunks = max(1, int(math.ceil(self.min_start_ms / max(1, self.chunk_size_ms))))
+        self.low_watermark_chunks = max(0, int(math.ceil(self.low_watermark_ms / max(1, self.chunk_size_ms))))
+        # Logging verbosity override
+        self.logging_level = (self.streaming_config.get('logging_level') or "info").lower()
+        if self.logging_level == "debug":
+            logger.debug("Streaming playback logging level set to DEBUG")
+        elif self.logging_level == "warning":
+            logger.warning("Streaming playback logging level set to WARNING")
+        elif self.logging_level not in ("info", "debug", "warning"):
+            logger.info("Streaming playback logging level", value=self.logging_level)
         
         logger.info("StreamingPlaybackManager initialized",
                    sample_rate=self.sample_rate,
@@ -139,7 +152,7 @@ class StreamingPlaybackManager:
         """
         try:
             # Reuse active stream if one already exists
-            if call_id in self.active_streams:
+            if self.is_stream_active(call_id):
                 existing = self.active_streams[call_id]['stream_id']
                 logger.debug("Streaming already active for call", call_id=call_id, stream_id=existing)
                 return existing
@@ -232,7 +245,7 @@ class StreamingPlaybackManager:
         """Main streaming loop that processes audio chunks."""
         try:
             fallback_timeout = self.fallback_timeout_ms / 1000.0
-            last_chunk_time = time.time()
+            last_send_time = time.time()
             
             while True:
                 try:
@@ -249,9 +262,10 @@ class StreamingPlaybackManager:
                         break
                     
                     # Update timing
-                    last_chunk_time = time.time()
+                    now = time.time()
+                    last_send_time = now
                     if call_id in self.active_streams:
-                        self.active_streams[call_id]['last_chunk_time'] = last_chunk_time
+                        self.active_streams[call_id]['last_chunk_time'] = now
                         self.active_streams[call_id]['chunks_sent'] += 1
                     # Update metrics and session counters for queued chunk
                     try:
@@ -278,7 +292,7 @@ class StreamingPlaybackManager:
                     
                 except asyncio.TimeoutError:
                     # No audio chunk received within timeout
-                    if time.time() - last_chunk_time > fallback_timeout:
+                    if time.time() - last_send_time > fallback_timeout:
                         logger.warning("🎵 STREAMING PLAYBACK - Timeout, falling back to file playback",
                                      call_id=call_id,
                                      stream_id=stream_id,
@@ -324,6 +338,16 @@ class StreamingPlaybackManager:
 
             # Process available chunks with pacing to avoid flooding Asterisk
             while not jitter_buffer.empty():
+                # Low watermark check: if depth drops below threshold, pause to rebuild buffer
+                if self.low_watermark_chunks and jitter_buffer.qsize() < self.low_watermark_chunks and self._startup_ready.get(call_id, False):
+                    logger.debug("Streaming jitter buffer low watermark pause",
+                                 call_id=call_id,
+                                 stream_id=stream_id,
+                                 buffered_chunks=jitter_buffer.qsize(),
+                                 low_watermark=self.low_watermark_chunks)
+                    await asyncio.sleep(self.chunk_size_ms / 1000.0)
+                    _STREAMING_JITTER_DEPTH.labels(call_id).set(jitter_buffer.qsize())
+                    break
                 chunk = jitter_buffer.get_nowait()
 
                 # Convert audio format if needed
@@ -680,8 +704,27 @@ class StreamingPlaybackManager:
                     await self.session_store.upsert_call(sess)
             except Exception:
                 pass
-            # Clear any remainder buffer
+            # Clear any remainder buffer, respecting grace period for late provider chunks
+            if self.provider_grace_ms:
+                await asyncio.sleep(self.provider_grace_ms / 1000.0)
             self.frame_remainders.pop(call_id, None)
+            
+            # Emit tuning summary for observability
+            try:
+                sess = await self.session_store.get_by_call_id(call_id)
+                if sess:
+                    logger.info(
+                        "🎛️ STREAMING TUNING SUMMARY",
+                        call_id=call_id,
+                        stream_id=stream_id,
+                        fallback_count=sess.streaming_fallback_count,
+                        bytes_sent=sess.streaming_bytes_sent,
+                        low_watermark=self.low_watermark_ms,
+                        min_start=self.min_start_ms,
+                        provider_grace_ms=self.provider_grace_ms,
+                    )
+            except Exception:
+                logger.debug("Streaming tuning summary unavailable", call_id=call_id)
             
             logger.debug("Streaming cleanup completed",
                         call_id=call_id,
@@ -700,7 +743,11 @@ class StreamingPlaybackManager:
     
     def is_stream_active(self, call_id: str) -> bool:
         """Return True if a streaming playback is active for the call."""
-        return call_id in self.active_streams
+        info = self.active_streams.get(call_id)
+        if not info:
+            return False
+        task = info.get('streaming_task')
+        return task is not None and not task.done()
 
     async def get_active_streams(self) -> Dict[str, Dict[str, Any]]:
         """Get information about active streams."""

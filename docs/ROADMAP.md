@@ -36,28 +36,60 @@ This roadmap tracks the open-source enablement work for the Asterisk AI Voice Ag
 - **Verification**:
   - 2025-09-22 regression call shows coordinator toggling capture around playback, `ai_agent_tts_gating_active` returning to zero post-call, and `/metrics` scrape succeeding from the server.
 
-## Milestone 5 — Streaming Transport Preview (Feature Flag) (Planned)
-- **Goal**: Offer an experimental outbound streaming path to enable barge-in work.
-- **Tasks**:
-  - Add feature flag (e.g., `downstream_mode=stream`) with fall back to file playback.
-  - Implement minimal streaming pipeline (AudioSocket send or RTP) behind the flag.
-  - Document expected behaviour and how to revert to file mode.
+## Milestone 5 — Streaming Transport Production Readiness (In Progress)
+- **Goal**: Promote the AudioSocket streaming path to production quality with adaptive pacing, configurable defaults, and telemetry. Details and task breakdown live in `docs/milestones/milestone-5-streaming-transport.md`.
+- **Dependencies**: Milestones 1–4 complete; Deepgram AudioSocket path functional.
+- **Primary Tasks**:
+  - Add configurable streaming settings (`min_start_ms`, `low_watermark_ms`, `fallback_timeout_ms`, `provider_grace_ms`).
+  - Refine `StreamingPlaybackManager` to pause/recover instead of restarting on buffer dips.
+  - Capture streaming telemetry (buffer depth, restarts, codec) and emit post-call tuning hints.
+  - Update regression docs (`docs/regressions/deepgram-call-framework.md`, `call-framework.md`).
 - **Acceptance**:
-  - Enabling the flag starts streaming transport and logs readiness; disabling reverts cleanly.
-  - Regression call demonstrates that the pipeline either streams audio or falls back without error.
+  - Default configuration yields clean greeting and < 1 restart per turn during regression.
+  - `/metrics` exposes new streaming counters; INFO logs show tuning summary.
+  - Operators can tune behaviour via YAML without code changes.
 
-### Milestone 5 — Progress (2025-09-23)
-- **Shipped**:
-  - AudioSocket streaming pacing and frame segmentation (20 ms frames, real-time cadence) to prevent `translate.c: Out of buffer space`.
-  - Wire format selection via `audiosocket.format` (env `AUDIOSOCKET_FORMAT`): `ulaw` (default) or `slin16`.
-  - Provider streaming semantics: Deepgram now emits `AgentAudio` with `streaming_chunk=true` and `AgentAudioDone` with `streaming_done=true` and `call_id`.
-  - Inbound AudioSocket decode: μ-law → PCM16 @8k prior to 8k→16k resample for VAD.
-  - Outbound leg selection fix: pin outbound to the first UUID-bound AudioSocket connection; do not switch targets on first inbound frame.
-  - Diagnostics: optional `AUDIOSOCKET_BROADCAST_DEBUG=1` to send outbound frames to all bound legs for a call and confirm which leg carries playback.
-- **Quick verify**:
-  - Logs on start: `Runtime modes audio_transport=audiosocket downstream_mode=stream` and `AudioSocket server listening ...:8090`.
-  - During call: `🎵 STREAMING PLAYBACK - Started` then steady frame sends (no buffer overrun warnings in Asterisk).
-  - Audible agent audio on the call; if not, confirm `audiosocket.format` matches dialplan and adjust.
+## Milestone 6 — OpenAI Realtime Voice Agent (Planned)
+- **Goal**: Add an OpenAI Realtime provider so Deepgram ↔️ OpenAI switching happens via configuration alone. Milestone instructions: `docs/milestones/milestone-6-openai-realtime.md`.
+- **Dependencies**: Milestone 5 complete; OpenAI API credentials configured.
+- **Primary Tasks**:
+  - Implement `src/providers/openai_realtime.py` with streaming audio events.
+  - Extend configuration schema and env documentation (`README.md`, `docs/Architecture.md`).
+- **Acceptance**:
+  - Setting `default_provider: openai_realtime` results in a successful regression call.
+  - Streaming telemetry mirrors Deepgram baseline; codec negotiation automatic.
+
+## Milestone 7 — Configurable Pipelines & Hot Reload (Planned)
+- **Goal**: Support multiple named pipelines (STT/LLM/TTS) defined in YAML, with hot reload for rapid iteration. See `docs/milestones/milestone-7-configurable-pipelines.md`.
+- **Dependencies**: Milestones 5 and 6 complete; SessionStore authoritative for call state.
+- **Primary Tasks**:
+  - Extend configuration schema (pipelines + active_pipeline) and loader.
+  - Implement pipeline factory interfaces; ensure streaming components obey common contracts.
+  - Ensure config watcher reloads pipelines/logging levels safely.
+- **Acceptance**:
+  - Swapping `active_pipeline` applies on next call after reload.
+  - Regression call succeeds using a custom pipeline defined in YAML only.
+
+## Milestone 8 — Optional Monitoring & Analytics Stack (Planned)
+- **Goal**: Provide an opt-in Prometheus + Grafana stack for streaming metrics and future analytics. Instructions: `docs/milestones/milestone-8-monitoring-stack.md`.
+- **Dependencies**: Milestones 5–7 expose required telemetry.
+- **Primary Tasks**:
+  - Add monitoring services to `docker-compose.yml` and Make targets (`monitor-up`, `monitor-down`).
+  - Ship starter dashboards visualising streaming health and latency.
+  - Document setup in `docs/Monitoring.md` (or equivalent section in Architecture).
+- **Acceptance**:
+  - `make monitor-up` brings stack online; dashboards show live call metrics.
+  - Monitoring stack remains optional and does not impact base deployment when disabled.
+
+## GA Release Readiness
+- **Goal**: Tag the GA release once Milestones 5–8 are complete.
+- **Tasks**:
+  - Run regression suite for Deepgram and OpenAI providers with default config.
+  - Publish telemetry-backed tuning guide and finalise documentation (README, Architecture, Monitoring).
+  - Create release notes summarising milestone deliverables and upgrade steps.
+- **Acceptance**:
+  - GA tag published; quick-start instructions verified on clean environment.
+  - IDE rule files updated to reflect final workflow.
 
 ## Quick Regression Checklist
 1. Clear logs: `make logs --tail=0 ai-engine` (or `make server-clear-logs` remotely).

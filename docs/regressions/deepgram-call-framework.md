@@ -1,5 +1,65 @@
 # Call Framework Analysis — Deepgram Provider
 
+## 2025-09-24 11:12 PDT — Agent Cut‑offs; VAD + Barge‑in Evaluation
+
+**Outcome**
+- Audio pipeline intact; two-way conversation established, but agent responses frequently cut off.
+- Conversation quality low; interruptions prevent coherent turns.
+
+**Key Evidence (call_id=1758737312.949)**
+- Transport and provider OK:
+  - `AudioSocket server listening ...`
+  - `✅ Successfully connected to Deepgram Voice Agent.`
+  - `Deepgram agent configured. input_encoding=linear16 input_sample_rate=8000 output_encoding=mulaw output_sample_rate=8000`
+- Inbound gating during TTS protection window observed repeatedly:
+  - `Dropping inbound during initial TTS protection window protect_ms=200 tts_elapsed_ms=0`
+  - This indicates the server is still running with a 200 ms protection window (YAML with 400 ms not yet live on server for this call).
+- Missing barge‑in confirmations in the log:
+  - No `🎧 BARGE-IN triggered` or `Playback stopped` entries present in this capture, suggesting barge‑in did not trigger during the excerpted window.
+
+**What’s Implemented (Current State)**
+- Engine barge‑in detection (in `src/engine.py::_audiosocket_handle_audio`):
+  - Protection window after TTS start (`barge_in.initial_protection_ms` → target 400 ms).
+  - Energy‑based detection using `audioop.rms(...)` per 20 ms frame.
+  - Trigger when `candidate_ms ≥ barge_in.min_ms` (default 250 ms) and energy ≥ threshold (default 1000), with a cooldown.
+  - On trigger: stop active playback via ARI `DELETE /playbacks/{id}`, clear gating tokens, forward inbound frames.
+- Session/gating plumbing (`src/core/session_store.py`, `ConversationCoordinator`):
+  - `audio_capture_enabled` toggled via TTS gating tokens.
+  - Prometheus gauges/counters for gating and barge‑in attempts (ready for Milestone 8 charts).
+- VAD: `py-webrtcvad` available, but NOT yet consulted by barge‑in logic (energy only for now).
+
+**Diagnosis**
+- The 200 ms protection window (still effective on server during this call) caused early inbound frames to be dropped, which the caller perceived as cut‑offs. The intended 400 ms setting hadn’t been applied on server for this run.
+- Energy‑only barge‑in is brittle in telephony. Without VAD confirmation and with mixed downlink/uplink energy during playback, detection either under‑triggers (no barge‑in when user speaks softly) or over‑triggers (cuts playback due to leakage/noise). In this capture, no barge‑in triggers were logged; however, the perceived agent cut‑offs likely occurred later in the call when energy bursts crossed thresholds.
+
+**Actions Taken**
+- Local config updated to `barge_in.initial_protection_ms: 400` (see `config/ai-agent.yaml`).
+- Engine restarted earlier, but this call still showed `protect_ms=200`; synchronize repo on server (git pull) before next call to ensure 400 ms is active.
+
+**Next Steps (Plan to Achieve Smooth Full‑Duplex Turns)**
+- Parameters and deployment
+  - Ensure server uses latest YAML (pull repo, restart `ai-engine`).
+  - Start with: `initial_protection_ms=400`, `min_ms=350–400`, `energy_threshold=1200–1500`, `cooldown_ms=1000`.
+- Add VAD confirmation
+  - Introduce `barge_in.use_vad: true` and require VAD=True for N consecutive 20 ms frames in addition to energy/time thresholds.
+  - Keep VAD aggressiveness at 0 initially; tune if false positives persist.
+- Improve barge‑in logging and metrics
+  - Log candidate window, energy, thresholds, cooldown state, and explicit `BARGE-IN triggered` with playback IDs stopped.
+  - Expose counters for successful barge‑ins and near‑misses (attempts) to `/metrics`.
+- Optional echo mitigation (next sprint)
+  - Gate with a short protection window, then rely on VAD+energy to trigger.
+  - Evaluate lightweight AEC (SpeexDSP) to reduce downlink bleed that causes spurious energy.
+- Conversation design
+  - Keep agent prompts succinct; avoid long monologues.
+  - If cut‑offs persist, slightly raise `min_ms` and/or `energy_threshold`.
+
+**Verification on Next Call**
+- Confirm logs show `protect_ms=400` in the protection window messages.
+- If speaking over the first 0.3–0.5 s, expect no cut‑off; if user continues speaking ≥350 ms with VAD=True, expect `🎧 BARGE-IN triggered` and playback stopped.
+- Check `/metrics` for barge‑in counters; confirm fewer interruptions and coherent back‑and‑forth turns.
+
+---
+
 ## 2025-09-24 11:04 PDT — Barge-In Protection Window Tune (cut-offs; increased to 400 ms)
 
 **Outcome**

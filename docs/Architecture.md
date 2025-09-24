@@ -8,9 +8,15 @@ globs: src/**/*.py, *.py, docker-compose.yml, Dockerfile, config/ai-agent.yaml
 
 ## System Overview
 
-The Asterisk AI Voice Agent v3.0 is a **two-container, modular conversational AI system** that enables **real-time, two-way voice conversations** through Asterisk/FreePBX systems. The current release runs **AudioSocket-first upstream capture** (with ExternalMedia RTP available as a fallback path) and relies on **file-based playback** for downstream audio until streaming TTS is promoted.
+The Asterisk AI Voice Agent v3.0 is a **two-container, modular conversational AI system** that enables **real-time, two-way voice conversations** through Asterisk/FreePBX systems. The production stack runs an **AudioSocket-first upstream capture path**, maintains **ExternalMedia RTP** as a safety fallback, and now delivers downstream audio through a streaming transport that automatically falls back to file playback when the jitter buffer under-runs.
 
-Note: In the current release, downstream audio is delivered via file-based playback for maximum robustness. A full‑duplex streaming TTS path is planned as a next phase and will be gated by feature flags.
+The GA program focuses on three pillars:
+
+- **Streaming Quality** – adaptive jitter buffering, pacing, and provider hand-off so greetings and responses are clear out of the box (`docs/milestones/milestone-5-streaming-transport.md`).
+- **Provider Breadth** – first-class Deepgram and OpenAI Realtime integrations with codec-aware transport (`docs/milestones/milestone-6-openai-realtime.md`).
+- **Configurable Pipelines** – YAML-driven composition of STT/LLM/TTS components with safe hot reload (`docs/milestones/milestone-7-configurable-pipelines.md`).
+
+An optional **monitoring stack** (Prometheus + Grafana) ships as part of Milestone 8 so operators can visualise streaming health, latency, and provider performance before extending analytics (`docs/milestones/milestone-8-monitoring-stack.md`).
 
 ## Architecture Overview
 
@@ -28,6 +34,59 @@ This staged architecture provides:
 - **Type Safety for New Code**: New helpers work with dataclasses (`CallSession`, `PlaybackRef`) instead of ad-hoc dicts, while older handlers are refactored gradually.
 - **Observability**: `/metrics` now exposes `ai_agent_tts_gating_active`, `ai_agent_audio_capture_enabled`, and `ai_agent_barge_in_events_total` counters, while `/health` includes a `conversation` block summarising gating and capture status.
 - **Maintainability Path**: The separation between call control, state management, and observability is documented and enforced for new features, while older sections remain untouched until their migration tickets are completed.
+
+### Streaming Transport Defaults (Milestone 5)
+
+`StreamingPlaybackManager` converts provider output into paced 20 ms frames and enforces `streaming.*` settings from `config/ai-agent.yaml`:
+
+- **`min_start_ms`** – initial jitter buffer warm-up (default 120 ms) before the first frame is sent. If the buffer starts below this threshold the engine waits until enough audio arrives.
+- **`low_watermark_ms`** – when depth drops below this watermark playback pauses briefly to rebuild the buffer instead of restarting the transport.
+- **`fallback_timeout_ms`** – adaptive timer reset after each successful send; if no audio is transmitted within this window playback falls back to file mode.
+- **`provider_grace_ms`** – grace period after cleanup to absorb any late provider frames without logging warnings.
+- Defaults currently favour reliability: 120 ms warm-up, 80 ms low watermark, 4 s fallback timeout, and 500 ms grace for late provider chunks.
+
+Defaults align with Deepgram’s recommended 100–120 ms buffering window and can be overridden per deployment. Refer to `docs/milestones/milestone-5-streaming-transport.md` for implementation details and tuning guidance.
+
+### Configurable Pipelines (Milestone 7)
+
+`config/ai-agent.yaml` defines one or more named pipelines under the `pipelines` key:
+
+```yaml
+pipelines:
+  default:
+    stt: deepgram_streaming
+    llm: openai_realtime
+    tts: deepgram_tts
+    options:
+      language: en-US
+  sales:
+    stt: whisper_local
+    llm: local_llm
+    tts: azure_tts
+active_pipeline: default
+```
+
+The engine loads the active pipeline at startup (or reload) and instantiates the referenced adapters. Each component adheres to the streaming interfaces defined in `src/pipelines/base.py`, allowing local and cloud services to be mixed without code changes. Example configs live in `examples/pipelines/` once Milestone 7 lands.
+
+### Hot Reload Strategy
+
+Configuration changes propagate through the existing async watcher introduced in Milestone 1. When `config/ai-agent.yaml` changes:
+
+1. The watcher validates the schema via Pydantic models.
+2. Streaming parameters, logging levels, and pipeline definitions reload in memory.
+3. Active calls keep their current pipeline; new calls use the updated configuration.
+
+Operators can trigger a reload manually with `make engine-reload` (wrapper around `kill -HUP $(pgrep -f ai-engine)` on the host). This preserves uptime while enabling rapid iteration on streaming quality or provider selection.
+
+### Monitoring & Analytics (Milestone 8)
+
+An optional monitoring stack (Prometheus + Grafana) is defined in `docker-compose.yml` and managed via `make monitor-up` / `make monitor-down`. When enabled it provides:
+
+- Streaming dashboards (restart counts, jitter buffer depth, fallback rates)
+- Turn latency histograms and provider distribution panels
+- Hooks for future transcript/sentiment analytics (Deepgram Test Intelligence, etc.)
+
+Dashboards are stored under `monitoring/dashboards/`, and configuration instructions live in `docs/milestones/milestone-8-monitoring-stack.md`. The stack is disabled by default so standard deployments remain lightweight.
 
 ## Recent Progress and Current State
 
@@ -69,29 +128,18 @@ Configure via env:
 - TTS gating requires proper PlaybackFinished event handling for feedback prevention
 - Fallback audio processing uses 4-second intervals (`fallback_interval_ms=4000`) for reliable STT processing
 
-## Next Steps
+## GA Track & Next Steps
 
-- **Performance Optimization**
-  - Maintain sub-2 s turn latency by monitoring Prometheus histograms and adjusting prompts/models as changes land
-  - Switch to faster models (Phi-3-mini, Qwen2-0.5B) or reduce max_tokens
-  - Implement response caching for common queries
-- **Enhanced Observability**
-  - Add detailed logging for RTP packet processing and SSRC mapping
-  - Monitor fallback audio processing performance
-  - Track TTS gating effectiveness and PlaybackFinished events
-- **Streaming TTS (feature‑flagged)**
-  - Implement `downstream_mode=stream` for full-duplex streaming
-  - Add jitter buffer and barge-in support
-  - Keep file fallback for reliability
-- **Production Enhancements**
-  - Add comprehensive error monitoring and alerting
-  - Implement call quality metrics and reporting
-  - Add support for multiple concurrent calls
-- **Deepgram Full-Duplex Plan (GA target)**
-  1. **Transport Parity** *(shipped)* – provider-scoped `continuous_input` streams caller audio to Deepgram while the local provider keeps VAD gating; YAML now controls greeting, instructions, and input encoding/sample rate to match the streamed frames.
-  2. **Event Semantics** *(shipped)* – `Transcription` and `AgentResponse` updates persist in `CallSession` and surface through the coordinator.
-  3. **Streaming Downstream** *(next)* – add a `downstream_mode=stream` feature flag that pipes `AgentAudio` through AudioSocket/ExternalMedia instead of μ-law files, with automatic fallback for reliability.
-  4. **Observability & QA** *(next)* – expose Deepgram chunk counts, last transcript/response timestamps, and a GA regression script covering greeting → transcript → streamed reply → cleanup.
+1. **Milestone 5 – Streaming Transport Production Readiness**
+   - Harden pacing logic, expose configurable defaults, and ship telemetry so greetings/turns are clear by default.
+2. **Milestone 6 – OpenAI Realtime Voice Agent**
+   - Implement the OpenAI Realtime provider, align codecs, and document regression expectations alongside Deepgram.
+3. **Milestone 7 – Configurable Pipelines & Hot Reload**
+   - Enable YAML-driven STT/LLM/TTS composition, validate hot reload, and update examples/tests.
+4. **Milestone 8 – Optional Monitoring Stack**
+   - Provide Prometheus + Grafana dashboards with Makefile helpers and extension hooks for future analytics.
+5. **GA Release**
+   - Run full regression suite (Deepgram + OpenAI), publish telemetry-backed tuning guide, update quick-start/install docs, and tag the GA release.
 
 ### Roadmap Tracking
 Ongoing milestones and their acceptance criteria live in `docs/ROADMAP.md`. Update that file after each deliverable so any collaborator—or tool-specific assistant—can resume work without manual hand-off.
