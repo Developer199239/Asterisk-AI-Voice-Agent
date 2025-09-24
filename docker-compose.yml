@@ -5,6 +5,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    image: ai-engine:openai
     container_name: ai_engine
     user: "root"
     volumes:
