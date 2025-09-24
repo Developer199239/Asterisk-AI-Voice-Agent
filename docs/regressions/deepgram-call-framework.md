@@ -1,5 +1,25 @@
 # Call Framework Analysis — Deepgram Provider
 
+## 2025-09-24 11:42 PDT — Greeting Only (server still on file); Switched to stream
+
+**Outcome**
+- Only initial greeting heard; no subsequent agent responses.
+
+**Diagnosis**
+- Server `config/ai-agent.yaml` was still on `downstream_mode: "file"` during this call, so live provider audio was not streamed over AudioSocket.
+
+**Change Applied**
+- Switched local config to `downstream_mode: "stream"` and ran `make deploy-safe`.
+- Verified on server logs:
+  - `Runtime modes  audio_transport=audiosocket downstream_mode=stream`
+- `/ready` remained green post-restart.
+
+**Next Verification**
+- Place a new call; expect streaming logs from `StreamingPlaybackManager` and audible agent responses beyond the greeting.
+- If issues persist, capture server logs immediately after the call and update this section with evidence (stream IDs, start/stop, pacing).
+
+---
+
 ## 2025-09-24 11:12 PDT — Agent Cut‑offs; VAD + Barge‑in Evaluation
 
 **Outcome**

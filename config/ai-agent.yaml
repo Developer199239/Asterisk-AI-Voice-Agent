@@ -16,9 +16,9 @@ audiosocket:
 barge_in:
   enabled: true
   initial_protection_ms: 400   # Increase from 200ms to 400ms to avoid early cut-offs
-  min_ms: 250                  # Minimum sustained speech window to trigger barge-in
-  energy_threshold: 1000       # RMS threshold; tune empirically
-  cooldown_ms: 500             # Cooldown after a trigger to avoid flapping
+  min_ms: 400                  # Minimum sustained speech window to trigger barge-in
+  energy_threshold: 1800       # RMS threshold; tune empirically
+  cooldown_ms: 1000            # Cooldown after a trigger to avoid flapping
 
 # Streaming configuration (for downstream_mode=stream)
 streaming:
@@ -26,9 +26,9 @@ streaming:
   jitter_buffer_ms: 50       # Jitter buffer size in milliseconds
   keepalive_interval_ms: 5000 # Keepalive interval for streaming connections
   connection_timeout_ms: 10000 # Connection timeout for streaming
-  fallback_timeout_ms: 4000   # Timeout before falling back to file playback (ms)
+  fallback_timeout_ms: 8000   # Timeout before falling back to file playback (ms)
   chunk_size_ms: 20          # Audio chunk size for streaming
-  min_start_ms: 120          # Minimum buffered audio before playback begins
+  min_start_ms: 160          # Minimum buffered audio before playback begins
   low_watermark_ms: 80       # Pause playback when buffer drops below this threshold
   provider_grace_ms: 500     # Grace period to absorb late provider chunks post-cleanup
   logging_level: "info"      # Optional override for streaming logger verbosity
