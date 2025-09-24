@@ -989,6 +989,22 @@ class Engine:
         except Exception as exc:
             logger.error("Error handling ChannelDtmfReceived", error=str(exc), exc_info=True)
 
+    async def _handle_channel_varset(self, event: dict):
+        """Monitor ChannelVarset events for debugging configuration state."""
+        try:
+            channel = event.get("channel", {}) or {}
+            variable = event.get("variable")
+            value = event.get("value")
+            channel_id = channel.get("id")
+            logger.debug(
+                "Channel variable set",
+                channel_id=channel_id,
+                variable=variable,
+                value=value,
+            )
+        except Exception as exc:
+            logger.error("Error handling ChannelVarset", error=str(exc), exc_info=True)
+
     async def _cleanup_call(self, channel_or_call_id: str) -> None:
         """Shared cleanup for StasisEnd/ChannelDestroyed paths."""
         try:
