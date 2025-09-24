@@ -4,7 +4,7 @@ default_provider: "deepgram"
 
 # Audio transport controls (AudioSocket-first, ExternalMedia as fallback)
 audio_transport: "audiosocket"
-downstream_mode: "file"
+downstream_mode: "stream"
 
 # AudioSocket listener configuration (when audio_transport=audiosocket)
 audiosocket:
