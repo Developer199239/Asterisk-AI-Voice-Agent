@@ -6,6 +6,7 @@ Add first-class support for OpenAI’s Realtime voice agents so users can swap b
 ## Success Criteria
 - `config/ai-agent.yaml` can set `default_provider: openai_realtime` and a regression call completes with clear two-way conversation.
 - Provider exposes codec/sample-rate metadata so the streaming manager automatically resamples to the configured `audiosocket.format`.
+- Streaming pipeline successfully converts OpenAI PCM16 output (default 24 kHz) into the configured AudioSocket format without underruns.
 - Regression documentation includes an OpenAI voice call walkthrough with logs, metrics, and tuning guidance.
 
 ## Dependencies
@@ -16,8 +17,9 @@ Add first-class support for OpenAI’s Realtime voice agents so users can swap b
 
 ### 6.1 Provider Implementation
 - Create `src/providers/openai_realtime.py` implementing `AIProviderInterface`.
-- Establish the Realtime session (WebRTC or WebSocket) suitable for server-side telephony. Document chosen transport in the provider docstring.
-- Map inbound audio frames to OpenAI’s streaming input API; handle partial transcripts and final responses.
+- Establish the server-side Realtime WebSocket session (no WebRTC dependency) suitable for telephony workloads. Document this choice in the provider docstring.
+- Map inbound audio frames to OpenAI’s streaming input API (PCM16, 16 kHz) and base64-wrap chunks per protocol; handle partial transcripts and final responses.
+- Decode provider output events (base64 PCM16, default 24 kHz), resample to the configured AudioSocket format, and prepare streaming frames for playback.
 - Emit `ProviderEvent` objects consistent with Deepgram (`AgentAudio`, `AgentAudioDone`, transcripts).
 
 ### 6.2 Configuration & Secrets
@@ -26,9 +28,9 @@ Add first-class support for OpenAI’s Realtime voice agents so users can swap b
 - Document required env vars in `README.md` / `docs/Architecture.md` (e.g., `OPENAI_API_KEY`).
 
 ### 6.3 Codec & Transport Alignment
-- Ensure provider returns metadata (encoding, sample rate) to `StreamingPlaybackManager` and VAD.
-- Add automated downsampling/up-sampling or µ-law conversion as necessary.
-- Add regression assertions verifying that AudioSocket transport receives the correct frame size.
+- Ensure provider returns explicit metadata (encoding = PCM16 LE, input sample rate = 16 kHz, output default = 24 kHz unless overridden) to `StreamingPlaybackManager` and VAD.
+- Add automated downsampling/up-sampling plus µ-law/slin16 conversion so AudioSocket receives frames at the configured format (typically 8 kHz).
+- Add regression assertions verifying that resampled AudioSocket frames match the expected size for the configured format.
 
 ### 6.4 Regression & Documentation
 - Create `docs/regressions/openai-call-framework.md` mirroring the Deepgram guide (call steps, log snippets, metrics).

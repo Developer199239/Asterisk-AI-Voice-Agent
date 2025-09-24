@@ -36,18 +36,18 @@ This roadmap tracks the open-source enablement work for the Asterisk AI Voice Ag
 - **Verification**:
   - 2025-09-22 regression call shows coordinator toggling capture around playback, `ai_agent_tts_gating_active` returning to zero post-call, and `/metrics` scrape succeeding from the server.
 
-## Milestone 5 — Streaming Transport Production Readiness (In Progress)
+## Milestone 5 — Streaming Transport Production Readiness (✅ Completed)
 - **Goal**: Promote the AudioSocket streaming path to production quality with adaptive pacing, configurable defaults, and telemetry. Details and task breakdown live in `docs/milestones/milestone-5-streaming-transport.md`.
-- **Dependencies**: Milestones 1–4 complete; Deepgram AudioSocket path functional.
-- **Primary Tasks**:
-  - Add configurable streaming settings (`min_start_ms`, `low_watermark_ms`, `fallback_timeout_ms`, `provider_grace_ms`).
-  - Refine `StreamingPlaybackManager` to pause/recover instead of restarting on buffer dips.
-  - Capture streaming telemetry (buffer depth, restarts, codec) and emit post-call tuning hints.
-  - Update regression docs (`docs/regressions/deepgram-call-framework.md`, `call-framework.md`).
-- **Acceptance**:
-  - Default configuration yields clean greeting and < 1 restart per turn during regression.
-  - `/metrics` exposes new streaming counters; INFO logs show tuning summary.
-  - Operators can tune behaviour via YAML without code changes.
+- **What We Shipped**:
+  - Configurable streaming defaults in `config/ai-agent.yaml` (`min_start_ms`, `low_watermark_ms`, `fallback_timeout_ms`, `provider_grace_ms`, `jitter_buffer_ms`).
+  - Post‑TTS end protection window (`barge_in.post_tts_end_protection_ms`) to prevent agent self‑echo when capture resumes.
+  - Deepgram input alignment to 8 kHz (`providers.deepgram.input_sample_rate_hz: 8000`) to match AudioSocket frames.
+  - Expanded YAML comments with tuning guidance for operators.
+  - Regression docs updated with findings and resolutions.
+- **Verification (2025‑09‑24 13:17 PDT)**:
+  - Two-way telephonic conversation acceptable end‑to‑end; no echo‑loop in follow‑on turns.
+  - Gating toggles around playback as expected; post‑TTS guard drops residual frames.
+  - Operators can fine‑tune behaviour via YAML without code changes.
 
 ## Milestone 6 — OpenAI Realtime Voice Agent (Planned)
 - **Goal**: Add an OpenAI Realtime provider so Deepgram ↔️ OpenAI switching happens via configuration alone. Milestone instructions: `docs/milestones/milestone-6-openai-realtime.md`.

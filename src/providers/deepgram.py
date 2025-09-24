@@ -22,6 +22,8 @@ class DeepgramProvider(AIProviderInterface):
         self.call_id: Optional[str] = None
         self._in_audio_burst: bool = False
         self._first_output_chunk_logged: bool = False
+        self._closing: bool = False
+        self._closed: bool = False
 
     @property
     def supported_codecs(self) -> List[str]:
@@ -92,11 +94,20 @@ class DeepgramProvider(AIProviderInterface):
                 logger.error("An unexpected error occurred while sending audio chunk", exc_info=True)
 
     async def stop_session(self):
-        if self._keep_alive_task:
-            self._keep_alive_task.cancel()
-        if self.websocket:
-            await self.websocket.close()
-            logger.info("Disconnected from Deepgram Voice Agent.")
+        # Prevent duplicate disconnect logs/ops
+        if self._closed or self._closing:
+            return
+        self._closing = True
+        try:
+            if self._keep_alive_task:
+                self._keep_alive_task.cancel()
+            if self.websocket and not self.websocket.closed:
+                await self.websocket.close()
+            if not self._closed:
+                logger.info("Disconnected from Deepgram Voice Agent.")
+            self._closed = True
+        finally:
+            self._closing = False
 
     async def _keep_alive(self):
         while True:
@@ -152,7 +163,9 @@ class DeepgramProvider(AIProviderInterface):
                     if self.on_event:
                         await self.on_event(audio_event)
         except websockets.exceptions.ConnectionClosed as e:
-            logger.warning("Deepgram Voice Agent connection closed", reason=str(e))
+            # Only warn once; avoid info duplicate from stop_session
+            if not self._closed:
+                logger.warning("Deepgram Voice Agent connection closed", reason=str(e))
         except Exception:
             logger.error("Error receiving events from Deepgram Voice Agent", exc_info=True)
         finally:

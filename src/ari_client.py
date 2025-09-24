@@ -155,8 +155,19 @@ class ARIClient:
         if channel_id and digit:
             await dtmf_handler(channel_id, digit)
 
-    async def send_command(self, method: str, resource: str, data: Optional[Dict[str, Any]] = None, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """Send a command to the ARI HTTP endpoint."""
+    async def send_command(
+        self,
+        method: str,
+        resource: str,
+        data: Optional[Dict[str, Any]] = None,
+        params: Optional[Dict[str, Any]] = None,
+        tolerate_statuses: Optional[List[int]] = None,
+    ) -> Dict[str, Any]:
+        """Send a command to the ARI HTTP endpoint.
+
+        tolerate_statuses: Optional list of HTTP status codes that should not be logged as errors
+        (useful for idempotent cleanup cases like 404 on DELETE of already-gone resources).
+        """
         url = f"{self.http_url}/{resource}"
         
         # Handle channelVars specially - they need to be in the JSON body, not query params
@@ -170,8 +181,17 @@ class ARIClient:
             async with self.http_session.request(method, url, json=data, params=params) as response:
                 if response.status >= 400:
                     reason = await response.text()
-                    logger.error("ARI command failed", method=method, url=url, status=response.status, reason=reason)
-                    # To prevent crashing on expected 404s for hangup, we return a dict
+                    if tolerate_statuses and response.status in tolerate_statuses:
+                        logger.debug(
+                            "ARI command tolerated non-2xx",
+                            method=method,
+                            url=url,
+                            status=response.status,
+                            reason=reason,
+                        )
+                    else:
+                        logger.error("ARI command failed", method=method, url=url, status=response.status, reason=reason)
+                    # Return a dict regardless for callers to branch on status
                     return {"status": response.status, "reason": reason}
                 if response.status == 204: # No Content
                     return {"status": response.status}
@@ -191,7 +211,7 @@ class ARIClient:
         # We add a check here. If the command fails with a 404, we log it
         # as a debug message instead of an error, as this can happen in race
         # conditions during cleanup and is not necessarily a critical failure.
-        response = await self.send_command("DELETE", f"channels/{channel_id}")
+        response = await self.send_command("DELETE", f"channels/{channel_id}", tolerate_statuses=[404])
         if response and response.get("status") == 404:
             logger.debug("Channel hangup failed (404), likely already hung up.", channel_id=channel_id)
 
@@ -818,12 +838,15 @@ class ARIClient:
     async def destroy_bridge(self, bridge_id: str) -> bool:
         """Destroy a bridge."""
         try:
-            response = await self.send_command("DELETE", f"bridges/{bridge_id}")
+            response = await self.send_command("DELETE", f"bridges/{bridge_id}", tolerate_statuses=[404])
             
             status = response.get("status") if isinstance(response, dict) else None
             if status is not None:
                 if 200 <= int(status) < 300:
                     logger.info("Bridge destroyed", bridge_id=bridge_id, status=status)
+                    return True
+                if int(status) == 404:
+                    logger.debug("Bridge destroy idempotent - already gone", bridge_id=bridge_id)
                     return True
                 else:
                     logger.error("Failed to destroy bridge", bridge_id=bridge_id, status=status, response=response)

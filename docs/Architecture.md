@@ -47,6 +47,16 @@ This staged architecture provides:
 
 Defaults align with Deepgram’s recommended 100–120 ms buffering window and can be overridden per deployment. Refer to `docs/milestones/milestone-5-streaming-transport.md` for implementation details and tuning guidance.
 
+#### Post‑TTS End Protection (Echo‑Loop Mitigation)
+
+To prevent the agent from hearing itself immediately after a turn ends, the engine enforces a short, configurable guard window right after TTS playback completes:
+
+- `config/ai-agent.yaml`: `barge_in.post_tts_end_protection_ms` (default 350 ms in project YAML; model default 250 ms)
+- `src/core/session_store.py`: stamps `CallSession.tts_ended_ts` when the last gating token is cleared
+- `src/engine.py::_audiosocket_handle_audio()`: drops inbound frames while `now - tts_ended_ts < post_tts_end_protection_ms`
+
+This guard absorbs trailing provider frames and bridge mix artifacts that can arrive just after playback finishes, eliminating self‑echo loops on follow‑on turns. Operators can tune the window (250–500 ms typical) depending on trunk quality and desired barge‑in responsiveness.
+
 ### Configurable Pipelines (Milestone 7)
 
 `config/ai-agent.yaml` defines one or more named pipelines under the `pipelines` key:
@@ -105,6 +115,7 @@ Dashboards are stored under `monitoring/dashboards/`, and configuration instruct
 - **Greeting Compatibility**: Providers lacking `text_to_speech` (e.g., Deepgram Voice Agent) now skip engine-side greeting synthesis to avoid startup exceptions.
 - **Ongoing Cleanup**: Legacy dict-based state and verbose logging remain until remaining handlers are refactored to the new core abstractions.
 - **Fallback Audio Processing**: Configuration defaults to 4-second buffers (`fallback_interval_ms=4000`) to guarantee STT ingestion when VAD is silent.
+- **Echo‑Loop Resolved**: Added post‑TTS end protection (`barge_in.post_tts_end_protection_ms`) and aligned Deepgram input to 8 kHz; two‑way telephonic conversation confirmed stable (2025‑09‑24 13:17 PDT).
 
 ### Health Endpoint
 
