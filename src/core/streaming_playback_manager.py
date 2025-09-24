@@ -104,6 +104,8 @@ class StreamingPlaybackManager:
         self.frame_remainders: Dict[str, bytes] = {}
         # First outbound frame logged tracker
         self._first_send_logged: Set[str] = set()
+        # Startup gating to allow jitter buffers to fill before playback begins
+        self._startup_ready: Dict[str, bool] = {}
         
         # Configuration defaults
         self.sample_rate = self.streaming_config.get('sample_rate', 8000)
@@ -112,6 +114,7 @@ class StreamingPlaybackManager:
         self.connection_timeout_ms = self.streaming_config.get('connection_timeout_ms', 10000)
         self.fallback_timeout_ms = self.streaming_config.get('fallback_timeout_ms', 2000)
         self.chunk_size_ms = self.streaming_config.get('chunk_size_ms', 20)
+        self.min_start_chunks = max(1, int(self.streaming_config.get('min_start_chunks', 2)))
         
         logger.info("StreamingPlaybackManager initialized",
                    sample_rate=self.sample_rate,
@@ -135,6 +138,12 @@ class StreamingPlaybackManager:
             stream_id if successful, None if failed
         """
         try:
+            # Reuse active stream if one already exists
+            if call_id in self.active_streams:
+                existing = self.active_streams[call_id]['stream_id']
+                logger.debug("Streaming already active for call", call_id=call_id, stream_id=existing)
+                return existing
+
             # Get session to determine target channel
             session = await self.session_store.get_by_call_id(call_id)
             if not session:
@@ -194,7 +203,9 @@ class StreamingPlaybackManager:
                 'start_time': time.time(),
                 'chunks_sent': 0,
                 'last_chunk_time': time.time(),
+                'startup_ready': False,
             }
+            self._startup_ready[call_id] = False
             
             logger.info("🎵 STREAMING PLAYBACK - Started",
                        call_id=call_id,
@@ -296,6 +307,21 @@ class StreamingPlaybackManager:
     ) -> bool:
         """Process audio chunks from jitter buffer."""
         try:
+            # Hold playback until jitter buffer has the minimum startup chunks
+            ready = self._startup_ready.get(call_id, False)
+            if not ready:
+                if jitter_buffer.qsize() < self.min_start_chunks:
+                    return True
+                self._startup_ready[call_id] = True
+                if call_id in self.active_streams:
+                    self.active_streams[call_id]['startup_ready'] = True
+                logger.debug(
+                    "Streaming jitter buffer warm-up complete",
+                    call_id=call_id,
+                    stream_id=stream_id,
+                    buffered_chunks=jitter_buffer.qsize(),
+                )
+
             # Process available chunks with pacing to avoid flooding Asterisk
             while not jitter_buffer.empty():
                 chunk = jitter_buffer.get_nowait()
@@ -437,24 +463,6 @@ class StreamingPlaybackManager:
                         error=str(e),
                         exc_info=True)
             return False
-
-    def set_transport(
-        self,
-        *,
-        rtp_server: Optional[Any] = None,
-        audiosocket_server: Optional[Any] = None,
-        audio_transport: Optional[str] = None,
-        audiosocket_format: Optional[str] = None,
-    ) -> None:
-        """Configure streaming transport after engine initialization."""
-        if rtp_server is not None:
-            self.rtp_server = rtp_server
-        if audiosocket_server is not None:
-            self.audiosocket_server = audiosocket_server
-        if audio_transport is not None:
-            self.audio_transport = audio_transport
-        if audiosocket_format is not None:
-            self.audiosocket_format = audiosocket_format
 
     async def _record_fallback(self, call_id: str, reason: str) -> None:
         """Increment fallback counters and persist the last error."""
@@ -636,6 +644,7 @@ class StreamingPlaybackManager:
             # Clean up jitter buffer
             if call_id in self.jitter_buffers:
                 del self.jitter_buffers[call_id]
+            self._startup_ready.pop(call_id, None)
             # Reset metrics
             try:
                 _STREAMING_ACTIVE_GAUGE.labels(call_id).set(0)
@@ -671,6 +680,10 @@ class StreamingPlaybackManager:
         timestamp = int(time.time() * 1000)
         return f"stream:{playback_type}:{call_id}:{timestamp}"
     
+    def is_stream_active(self, call_id: str) -> bool:
+        """Return True if a streaming playback is active for the call."""
+        return call_id in self.active_streams
+
     async def get_active_streams(self) -> Dict[str, Dict[str, Any]]:
         """Get information about active streams."""
         return dict(self.active_streams)

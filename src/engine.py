@@ -3299,16 +3299,18 @@ class Engine:
             call_id = session.call_id
 
             # Initialize streaming if not already started
-            if not hasattr(session, "streaming_audio_queue"):
+            if not hasattr(session, "streaming_audio_queue") or session.streaming_audio_queue is None:
                 session.streaming_audio_queue = asyncio.Queue()
                 session.streaming_started = False
-                await self._save_session(session)
+            elif not session.streaming_started and not session.streaming_audio_queue.empty():
+                session.streaming_audio_queue = asyncio.Queue()
+            await self._save_session(session)
 
             # Add chunk to queue
             await session.streaming_audio_queue.put(audio_data)
 
             # Start streaming if not already started
-            if not session.streaming_started:
+            if not session.streaming_started and not self.streaming_playback_manager.is_stream_active(call_id):
                 # If using AudioSocket but connection not yet bound, delay streaming start
                 if self.config.audio_transport == "audiosocket" and not getattr(session, "audiosocket_conn_id", None):
                     logger.info(
@@ -3347,18 +3349,25 @@ class Engine:
             call_id = session.call_id
             
             # Signal end of stream
-            if hasattr(session, "streaming_audio_queue"):
-                await session.streaming_audio_queue.put(None)  # End of stream signal
+            queue = getattr(session, "streaming_audio_queue", None)
+            if queue:
+                await queue.put(None)  # End of stream signal
             
             # Stop streaming playback
             if hasattr(session, "current_stream_id"):
                 await self.streaming_playback_manager.stop_streaming_playback(call_id)
                 session.current_stream_id = None
                 session.streaming_started = False
-                await self._save_session(session)
-                
-                logger.info("🎵 STREAMING DONE - Real-time audio streaming completed",
-                           call_id=call_id)
+            
+            # Reset queue for the next response
+            session.streaming_audio_queue = asyncio.Queue()
+            await self._save_session(session)
+            await self._reset_vad_after_playback(session)
+
+            logger.info(
+                "🎵 STREAMING DONE - Real-time audio streaming completed",
+                call_id=call_id,
+            )
             
             # Update conversation state
             if session.conversation_state == "greeting":
