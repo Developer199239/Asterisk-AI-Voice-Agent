@@ -51,6 +51,7 @@ class CallSession:
     tts_active_count: int = 0
     # TTS timing for barge-in/protection windows
     tts_started_ts: float = 0.0
+    tts_ended_ts: float = 0.0
     # Barge-in detection accumulators
     barge_in_candidate_ms: int = 0
     last_barge_in_ts: float = 0.0

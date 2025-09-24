@@ -144,6 +144,11 @@ class SessionStore:
             if session.tts_active_count == 0:
                 session.tts_playing = False
                 session.audio_capture_enabled = True
+                # Record TTS end time so the engine can guard a short post-TTS window
+                try:
+                    session.tts_ended_ts = time.time()
+                except Exception:
+                    session.tts_ended_ts = 0.0
                 
                 # Update VAD state
                 if session.vad_state:

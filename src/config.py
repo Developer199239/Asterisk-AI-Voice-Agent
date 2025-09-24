@@ -60,6 +60,8 @@ class BargeInConfig(BaseModel):
     min_ms: int = Field(default=250)
     energy_threshold: int = Field(default=1000)
     cooldown_ms: int = Field(default=500)
+    # New: short guard window after TTS ends to avoid self-echo re-capture
+    post_tts_end_protection_ms: int = Field(default=250)
 
 
 class LLMConfig(BaseModel):
@@ -172,6 +174,8 @@ def load_config(path: str = "config/ai-agent.yaml") -> AppConfig:
                 barge_cfg['energy_threshold'] = int(os.getenv('BARGE_IN_ENERGY_THRESHOLD', '1000'))
             if 'BARGE_IN_COOLDOWN_MS' in os.environ:
                 barge_cfg['cooldown_ms'] = int(os.getenv('BARGE_IN_COOLDOWN_MS', '500'))
+            if 'BARGE_IN_POST_TTS_END_PROTECTION_MS' in os.environ:
+                barge_cfg['post_tts_end_protection_ms'] = int(os.getenv('BARGE_IN_POST_TTS_END_PROTECTION_MS', '250'))
         except ValueError:
             pass
         config_data['barge_in'] = barge_cfg

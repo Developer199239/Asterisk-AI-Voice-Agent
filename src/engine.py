@@ -1240,6 +1240,26 @@ class Engine:
                 logger.debug("No session for caller; dropping AudioSocket audio", conn_id=conn_id, caller_channel_id=caller_channel_id)
                 return
 
+            # Post-TTS end protection: drop inbound briefly after gating clears to avoid agent echo re-capture
+            try:
+                cfg = getattr(self.config, 'barge_in', None)
+                post_guard_ms = int(getattr(cfg, 'post_tts_end_protection_ms', 0)) if cfg else 0
+            except Exception:
+                post_guard_ms = 0
+            if post_guard_ms and getattr(session, 'tts_ended_ts', 0.0) and session.audio_capture_enabled:
+                try:
+                    elapsed_ms = int((time.time() - float(session.tts_ended_ts)) * 1000)
+                except Exception:
+                    elapsed_ms = post_guard_ms
+                if elapsed_ms < post_guard_ms:
+                    logger.debug(
+                        "Dropping inbound during post-TTS protection window",
+                        call_id=caller_channel_id,
+                        elapsed_ms=elapsed_ms,
+                        protect_ms=post_guard_ms,
+                    )
+                    return
+
             # Self-echo mitigation and barge-in detection
             # If TTS is playing (capture disabled), decide whether to drop or trigger barge-in
             if hasattr(session, 'audio_capture_enabled') and not session.audio_capture_enabled:

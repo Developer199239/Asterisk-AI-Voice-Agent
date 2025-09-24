@@ -19,6 +19,7 @@ barge_in:
   min_ms: 400                  # Minimum sustained speech window to trigger barge-in
   energy_threshold: 1800       # RMS threshold; tune empirically
   cooldown_ms: 1000            # Cooldown after a trigger to avoid flapping
+  post_tts_end_protection_ms: 350  # Short guard after TTS ends to avoid agent echo re-capture
 
 # Streaming configuration (for downstream_mode=stream)
 streaming:

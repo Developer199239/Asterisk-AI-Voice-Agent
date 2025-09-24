@@ -1,5 +1,34 @@
 # Call Framework Analysis — Deepgram Provider
 
+## 2025-09-24 12:47 PDT — Follow-on Echo Loop (Agent hears self)
+
+**Outcome**
+- Two-way audio now working; greeting clean.
+- During follow-on turns, Deepgram began to hear its own TTS and loop.
+
+**Key Evidence**
+- Gating logic: capture is disabled while TTS plays and re-enabled immediately at playback end (`🔊 TTS GATING - Audio capture enabled`).
+- Streaming path clears gating at stream cleanup before `provider_grace_ms` delay completes (`src/core/streaming_playback_manager.py::_cleanup_stream`). Late provider chunks may still egress to caller for up to `provider_grace_ms` after gating clears.
+- With `audiosocket.format: slin16`, outbound μ-law from provider is converted to PCM16 for AudioSocket, and those trailing frames can be re-captured immediately after gating clears in the bridge mix.
+
+**Diagnosis**
+- Residual agent TTS frames (late provider chunks and bridge mix) arrive just after gating clears, so inbound capture resumes too early and forwards the agent’s own audio to Deepgram, causing a feedback loop.
+
+**Change Implemented**
+- Added a short post-TTS end guard window in engine to drop inbound audio right after gating clears:
+  - `src/core/models.py`: add `tts_ended_ts` to `CallSession`.
+  - `src/core/session_store.py`: stamp `tts_ended_ts` when last gating token is cleared.
+  - `src/config.py`: add `barge_in.post_tts_end_protection_ms` (default 250 ms; env override supported).
+  - `src/engine.py::_audiosocket_handle_audio`: drop inbound frames while `now - tts_ended_ts < post_tts_end_protection_ms`.
+  - `config/ai-agent.yaml`: set `post_tts_end_protection_ms: 350`.
+
+**Next Steps**
+- Deploy and place a short call to validate no self-echo during handoffs between turns.
+- Optional: move gating clear in `StreamingPlaybackManager._cleanup_stream()` to after `provider_grace_ms` sleep for stricter sequencing (current guard should already mitigate).
+- Keep current barge-in thresholds; revisit only if genuine user barge-ins feel delayed.
+
+---
+
 ## 2025-09-24 12:23 PDT — Greeting OK; Caller Audio Not Reaching Deepgram (8k→16k mismatch)
 
 **Outcome**
