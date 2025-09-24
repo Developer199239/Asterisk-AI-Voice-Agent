@@ -1,5 +1,34 @@
 # Call Framework Analysis — Deepgram Provider
 
+## 2025-09-24 13:17 PDT — Two-way Conversation Stable; Echo-Loop Resolved
+
+**Outcome**
+- Two-way telephonic conversation is now acceptable end-to-end.
+- No self-echo or loop observed in follow-on turns.
+
+**What Changed Since Prior Run**
+- Post‑TTS end protection window added in engine (`post_tts_end_protection_ms`) to drop inbound audio momentarily after TTS ends.
+- Deepgram input sample rate aligned to 8 kHz to match AudioSocket upstream frames.
+
+**Key Observations (Summary)**
+- Gating toggles around TTS as expected; audio capture remains disabled during TTS, then re-enables post‑playback.
+- Immediately after TTS ends, inbound frames within the configured protection window are dropped; no agent audio is re‑captured.
+- Subsequent user speech is recognized normally and turns progress without runaway loops.
+
+**Configuration Used (Highlights)**
+- `audiosocket.format: slin16` (upstream PCM16 @ 8 kHz)
+- `providers.deepgram.input_sample_rate_hz: 8000`
+- `barge_in.initial_protection_ms: 400`
+- `barge_in.post_tts_end_protection_ms: 350`
+- `streaming.provider_grace_ms: 500`
+
+**Next Tuning Options**
+- If legitimate user barge-ins feel delayed: lower `post_tts_end_protection_ms` to 250–300 ms.
+- If rare echo slips through on noisy trunks: increase to 400–500 ms.
+- Optional sequencing hardening: clear gating after `provider_grace_ms` in streaming cleanup.
+
+---
+
 ## 2025-09-24 12:47 PDT — Follow-on Echo Loop (Agent hears self)
 
 **Outcome**

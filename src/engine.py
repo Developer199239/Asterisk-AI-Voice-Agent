@@ -1032,6 +1032,19 @@ class Engine:
             call_id = session.call_id
             logger.info("Cleaning up call", call_id=call_id)
 
+            # Idempotent re-entrancy guard
+            if getattr(session, "cleanup_completed", False):
+                logger.debug("Cleanup already completed", call_id=call_id)
+                return
+            if getattr(session, "cleanup_in_progress", False):
+                logger.debug("Cleanup already in progress", call_id=call_id)
+                return
+            try:
+                session.cleanup_in_progress = True
+                await self.session_store.upsert_call(session)
+            except Exception:
+                pass
+
             # Stop any active streaming playback.
             try:
                 await self.streaming_playback_manager.stop_streaming_playback(call_id)
@@ -1080,9 +1093,30 @@ class Engine:
             if self.conversation_coordinator:
                 await self.conversation_coordinator.unregister_call(call_id)
 
+            try:
+                # If the session still exists in store (rare race), mark completed; otherwise ignore
+                sess2 = await self.session_store.get_by_call_id(call_id)
+                if sess2:
+                    sess2.cleanup_completed = True
+                    sess2.cleanup_in_progress = False
+                    await self.session_store.upsert_call(sess2)
+            except Exception:
+                pass
+
             logger.info("Call cleanup completed", call_id=call_id)
         except Exception as exc:
             logger.error("Error cleaning up call", identifier=channel_or_call_id, error=str(exc), exc_info=True)
+        finally:
+            # Best-effort: if session still exists and we marked in-progress, clear it to unblock future attempts
+            try:
+                sess3 = await self.session_store.get_by_call_id(channel_or_call_id)
+                if not sess3:
+                    sess3 = await self.session_store.get_by_channel_id(channel_or_call_id)
+                if sess3 and getattr(sess3, "cleanup_in_progress", False) and not getattr(sess3, "cleanup_completed", False):
+                    sess3.cleanup_in_progress = False
+                    await self.session_store.upsert_call(sess3)
+            except Exception:
+                pass
 
     async def _create_bridge_and_connect(self, caller_channel_id: str, local_channel_id: str):
         """Create bridge and connect both channels."""
