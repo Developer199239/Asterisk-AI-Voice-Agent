@@ -975,6 +975,20 @@ class Engine:
         except Exception as exc:
             logger.error("Error handling ChannelDestroyed", error=str(exc), exc_info=True)
 
+    async def _handle_dtmf_received(self, event: dict):
+        """Handle ChannelDtmfReceived events (informational logging for now)."""
+        try:
+            channel = event.get("channel", {}) or {}
+            digit = event.get("digit")
+            channel_id = channel.get("id")
+            logger.info(
+                "Channel DTMF received",
+                channel_id=channel_id,
+                digit=digit,
+            )
+        except Exception as exc:
+            logger.error("Error handling ChannelDtmfReceived", error=str(exc), exc_info=True)
+
     async def _cleanup_call(self, channel_or_call_id: str) -> None:
         """Shared cleanup for StasisEnd/ChannelDestroyed paths."""
         try:

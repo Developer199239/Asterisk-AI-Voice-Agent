@@ -1,6 +1,6 @@
 # config/ai-agent.yaml
 # Default provider to use if not specified in the dialplan
-default_provider: "local"
+default_provider: "deepgram"
 
 # Audio transport controls (AudioSocket-first, ExternalMedia as fallback)
 audio_transport: "audiosocket"
@@ -18,8 +18,12 @@ streaming:
   jitter_buffer_ms: 50       # Jitter buffer size in milliseconds
   keepalive_interval_ms: 5000 # Keepalive interval for streaming connections
   connection_timeout_ms: 10000 # Connection timeout for streaming
-  fallback_timeout_ms: 2000   # Timeout before falling back to file playback
+  fallback_timeout_ms: 4000   # Timeout before falling back to file playback (ms)
   chunk_size_ms: 20          # Audio chunk size for streaming
+  min_start_ms: 120          # Minimum buffered audio before playback begins
+  low_watermark_ms: 80       # Pause playback when buffer drops below this threshold
+  provider_grace_ms: 500     # Grace period to absorb late provider chunks post-cleanup
+  logging_level: "info"      # Optional override for streaming logger verbosity
 
 # Asterisk connection settings (will be overridden by environment variables)
 asterisk:
@@ -65,7 +69,7 @@ vad:
 # Provider-specific configurations
 providers:
   local:
-    enabled: true
+    enabled: false
     stt_model: "models/stt/vosk-model-small-en-us-0.15"   # legacy placeholder (Local AI server now loads via env vars)
     llm_model: "models/llm/TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf"
     tts_voice: "models/tts/en_US-lessac-medium.onnx"
