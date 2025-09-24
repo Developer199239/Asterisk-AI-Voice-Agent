@@ -358,6 +358,14 @@ When `audio_transport=audiosocket` and `downstream_mode=stream` are enabled, the
   - Set environment variable `AUDIOSOCKET_BROADCAST_DEBUG=1` to enable temporary broadcast.
   - When enabled, the `StreamingPlaybackManager` will send each frame to every connection listed in `session.audiosocket_conns` and log `AudioSocket broadcast sent` with recipient count.
 
+#### AudioSocket Channel Interface (No Local Leg)
+
+- The Hybrid ARI flow now originates an `AudioSocket/<host:port>/<uuid>/c(slin)` channel directly via ARI and bridges it with the caller.
+- Dialplan responsibility is limited to answering the inbound call and running `Stasis(asterisk-ai-voice-agent)`; the `ai-agent-media-fork` Local context is no longer required.
+- The engine tracks the AudioSocket channel (`session.audiosocket_channel_id`) and ensures it enters the same mixing bridge as the caller before streaming begins.
+- UUID binding still happens via the AudioSocket server; `session.audiosocket_uuid` maps the TLV handshake back to the caller so outbound streaming remains aligned.
+- Cleanup tears down the AudioSocket channel, removes its bridge mapping, and disconnects the TCP connection to keep compatibility with both Deepgram and the local provider.
+
 Implementation references:
 - `src/core/streaming_playback_manager.py` — format-aware conversion, 20 ms frame segmentation, pacing, remainder buffering
 - `src/engine.py::_audiosocket_handle_audio` — inbound μ-law decode and 8k→16k resample for VAD

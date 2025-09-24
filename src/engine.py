@@ -183,7 +183,8 @@ class Engine:
         # Frame processing and VAD for optimized audio handling
         self.frame_processors: Dict[str, AudioFrameProcessor] = {}  # conn_id -> processor
         self.vad_detectors: Dict[str, VoiceActivityDetector] = {}  # conn_id -> VAD
-        self.local_channels: Dict[str, str] = {}  # channel_id -> local_channel_id
+        self.local_channels: Dict[str, str] = {}  # channel_id -> legacy local_channel_id
+        self.audiosocket_channels: Dict[str, str] = {}  # call_id -> audiosocket_channel_id
         
         # WebRTC VAD for robust speech detection
         self.webrtc_vad = None
@@ -202,6 +203,7 @@ class Engine:
         self.uuidext_to_channel: Dict[str, str] = {}
         # NEW: Caller channel tracking for dual StasisStart handling
         self.pending_local_channels: Dict[str, str] = {}  # local_channel_id -> caller_channel_id
+        self.pending_audiosocket_channels: Dict[str, str] = {}  # audiosocket_channel_id -> caller_channel_id
         self._audio_rx_debug: Dict[str, int] = {}
         self._keepalive_tasks: Dict[str, asyncio.Task] = {}
         # Active playbacks are now managed by SessionStore
@@ -400,6 +402,11 @@ class Engine:
         channel_name = channel.get('name', '')
         return channel_name.startswith('Local/')
 
+    def _is_audiosocket_channel(self, channel: dict) -> bool:
+        """Check if this is an AudioSocket channel (native channel interface)."""
+        channel_name = channel.get('name', '')
+        return channel_name.startswith('AudioSocket/')
+
     def _is_external_media_channel(self, channel: dict) -> bool:
         """Check if this is an ExternalMedia channel"""
         channel_name = channel.get('name', '')
@@ -437,12 +444,19 @@ class Engine:
             logger.info("🎯 HYBRID ARI - Processing caller channel", channel_id=channel_id)
             await self._handle_caller_stasis_start_hybrid(channel_id, channel)
         elif self._is_local_channel(channel):
-            # This is the Local channel entering Stasis - NOW EXPECTED!
-            logger.info("🎯 HYBRID ARI - Local channel entered Stasis", 
+            # This is the Local channel entering Stasis - legacy path
+            logger.info("🎯 HYBRID ARI - Local channel entered Stasis",
                        channel_id=channel_id,
                        channel_name=channel_name)
             # Now add the Local channel to the bridge
             await self._handle_local_stasis_start_hybrid(channel_id, channel)
+        elif self._is_audiosocket_channel(channel):
+            logger.info(
+                "🎯 HYBRID ARI - AudioSocket channel entered Stasis",
+                channel_id=channel_id,
+                channel_name=channel_name,
+            )
+            await self._handle_audiosocket_channel_stasis_start(channel_id, channel)
         elif self._is_external_media_channel(channel):
             # This is an ExternalMedia channel entering Stasis
             logger.info("🎯 EXTERNAL MEDIA - ExternalMedia channel entered Stasis", 
@@ -540,6 +554,7 @@ class Engine:
             logger.info("🎯 HYBRID ARI - Step 3: ✅ Caller added to bridge", 
                        channel_id=caller_channel_id, 
                        bridge_id=bridge_id)
+            self.bridges[caller_channel_id] = bridge_id
             
             # Step 4: Create CallSession and store in SessionStore
             session = CallSession(
@@ -570,8 +585,8 @@ class Engine:
                 else:
                     logger.error("🎯 EXTERNAL MEDIA - Failed to create ExternalMedia channel", channel_id=caller_channel_id)
             else:
-                logger.info("🎯 HYBRID ARI - Step 5: Originating Local channel", channel_id=caller_channel_id)
-                await self._originate_local_channel_hybrid(caller_channel_id)
+                logger.info("🎯 HYBRID ARI - Step 5: Originating AudioSocket channel", channel_id=caller_channel_id)
+                await self._originate_audiosocket_channel_hybrid(caller_channel_id)
             
         except Exception as e:
             logger.error("🎯 HYBRID ARI - Failed to handle caller StasisStart", 
@@ -632,6 +647,82 @@ class Engine:
                         local_channel_id=local_channel_id,
                         error=str(e), exc_info=True)
             await self.ari_client.hangup_channel(local_channel_id)
+
+    async def _handle_audiosocket_channel_stasis_start(self, audiosocket_channel_id: str, channel: dict):
+        """Handle AudioSocket channel entering Stasis when using channel interface."""
+        logger.info(
+            "🎯 HYBRID ARI - Processing AudioSocket channel StasisStart",
+            audiosocket_channel_id=audiosocket_channel_id,
+            channel_name=channel.get('name'),
+        )
+
+        caller_channel_id = self.pending_audiosocket_channels.pop(audiosocket_channel_id, None)
+        if not caller_channel_id:
+            # Fallback lookup via SessionStore
+            sessions = await self.session_store.get_all_sessions()
+            for s in sessions:
+                if getattr(s, 'audiosocket_channel_id', None) == audiosocket_channel_id:
+                    caller_channel_id = s.caller_channel_id
+                    break
+
+        if not caller_channel_id:
+            logger.error(
+                "🎯 HYBRID ARI - No caller found for AudioSocket channel",
+                audiosocket_channel_id=audiosocket_channel_id,
+            )
+            await self.ari_client.hangup_channel(audiosocket_channel_id)
+            return
+
+        session = await self.session_store.get_by_call_id(caller_channel_id)
+        if not session:
+            logger.error(
+                "🎯 HYBRID ARI - Session missing for AudioSocket channel",
+                audiosocket_channel_id=audiosocket_channel_id,
+                caller_channel_id=caller_channel_id,
+            )
+            await self.ari_client.hangup_channel(audiosocket_channel_id)
+            return
+
+        bridge_id = session.bridge_id
+        if not bridge_id:
+            logger.error(
+                "🎯 HYBRID ARI - No bridge available for AudioSocket channel",
+                audiosocket_channel_id=audiosocket_channel_id,
+                caller_channel_id=caller_channel_id,
+            )
+            await self.ari_client.hangup_channel(audiosocket_channel_id)
+            return
+
+        try:
+            added = await self.ari_client.add_channel_to_bridge(bridge_id, audiosocket_channel_id)
+            if not added:
+                raise RuntimeError("Failed to add AudioSocket channel to bridge")
+
+            logger.info(
+                "🎯 HYBRID ARI - ✅ AudioSocket channel added to bridge",
+                audiosocket_channel_id=audiosocket_channel_id,
+                bridge_id=bridge_id,
+                caller_channel_id=caller_channel_id,
+            )
+
+            session.audiosocket_channel_id = audiosocket_channel_id
+            session.status = "audiosocket_channel_connected"
+            await self._save_session(session)
+
+            self.audiosocket_channels[caller_channel_id] = audiosocket_channel_id
+            self.bridges[audiosocket_channel_id] = bridge_id
+
+            if not session.provider_session_active:
+                await self._start_provider_session_hybrid(caller_channel_id, audiosocket_channel_id)
+        except Exception as exc:
+            logger.error(
+                "🎯 HYBRID ARI - Failed to process AudioSocket channel",
+                audiosocket_channel_id=audiosocket_channel_id,
+                caller_channel_id=caller_channel_id,
+                error=str(exc),
+                exc_info=True,
+            )
+            await self.ari_client.hangup_channel(audiosocket_channel_id)
 
     async def _handle_caller_stasis_start(self, caller_channel_id: str, channel: dict):
         """Handle caller channel entering Stasis - LEGACY (kept for reference)."""
@@ -704,6 +795,71 @@ class Engine:
             if caller_channel_id:
                 await self._cleanup_call(caller_channel_id)
             await self.ari_client.hangup_channel(local_channel_id)
+
+    async def _originate_audiosocket_channel_hybrid(self, caller_channel_id: str):
+        """Originate an AudioSocket channel using the native channel interface."""
+        if not self.config.audiosocket:
+            logger.error(
+                "🎯 HYBRID ARI - AudioSocket config missing, cannot originate channel",
+                caller_channel_id=caller_channel_id,
+            )
+            raise RuntimeError("AudioSocket configuration missing")
+
+        audio_uuid = str(uuid.uuid4())
+        host = self.config.audiosocket.host or "127.0.0.1"
+        if host in ("0.0.0.0", "::"):
+            host = "127.0.0.1"
+        port = self.config.audiosocket.port
+        endpoint = f"AudioSocket/{host}:{port}/{audio_uuid}/c(slin)"
+
+        orig_params = {
+            "endpoint": endpoint,
+            "app": self.config.asterisk.app_name,
+            "timeout": "30",
+            "channelVars": {
+                "AUDIOSOCKET_UUID": audio_uuid,
+            },
+        }
+
+        logger.info(
+            "🎯 HYBRID ARI - Originating AudioSocket channel",
+            caller_channel_id=caller_channel_id,
+            endpoint=endpoint,
+            audio_uuid=audio_uuid,
+        )
+
+        try:
+            response = await self.ari_client.send_command("POST", "channels", params=orig_params)
+            if response and response.get("id"):
+                audiosocket_channel_id = response["id"]
+                self.pending_audiosocket_channels[audiosocket_channel_id] = caller_channel_id
+                self.uuidext_to_channel[audio_uuid] = caller_channel_id
+
+                session = await self.session_store.get_by_call_id(caller_channel_id)
+                if session:
+                    session.audiosocket_uuid = audio_uuid
+                    await self._save_session(session)
+                else:
+                    logger.warning(
+                        "🎯 HYBRID ARI - Session not found while recording AudioSocket UUID",
+                        caller_channel_id=caller_channel_id,
+                    )
+
+                logger.info(
+                    "🎯 HYBRID ARI - AudioSocket channel originated",
+                    caller_channel_id=caller_channel_id,
+                    audiosocket_channel_id=audiosocket_channel_id,
+                )
+            else:
+                raise RuntimeError("Failed to originate AudioSocket channel")
+        except Exception as e:
+            logger.error(
+                "🎯 HYBRID ARI - AudioSocket channel originate failed",
+                caller_channel_id=caller_channel_id,
+                error=str(e),
+                exc_info=True,
+            )
+            raise
 
     async def _originate_local_channel_hybrid(self, caller_channel_id: str):
         """Originate single Local channel - Dialplan approach."""
@@ -918,39 +1074,54 @@ class Engine:
 
         return session.vad_state
 
-    async def _start_provider_session_hybrid(self, caller_channel_id: str, local_channel_id: str):
+    async def _start_provider_session_hybrid(self, caller_channel_id: str, media_channel_id: str):
         """Start provider session - Hybrid ARI approach."""
         try:
-            logger.info("🎯 HYBRID ARI - Starting provider session", 
-                       local_channel_id=local_channel_id, 
-                       caller_channel_id=caller_channel_id)
-            
-            # Get provider
-            provider = self.providers.get(self.config.default_provider)
+            session = await self.session_store.get_by_call_id(caller_channel_id)
+            provider_name = self.config.default_provider
+            if session and session.provider_name in self.providers:
+                provider_name = session.provider_name
+
+            if session and session.provider_session_active:
+                logger.info(
+                    "🎯 HYBRID ARI - Provider session already active",
+                    caller_channel_id=caller_channel_id,
+                    provider=provider_name,
+                )
+                return
+
+            logger.info(
+                       "🎯 HYBRID ARI - Starting provider session",
+                       media_channel_id=media_channel_id,
+                       caller_channel_id=caller_channel_id,
+                       provider=provider_name)
+
+            provider = self.providers.get(provider_name)
             if not provider:
-                logger.error("🎯 HYBRID ARI - Default provider not found", provider=self.config.default_provider)
+                logger.error("🎯 HYBRID ARI - Provider not found", provider=provider_name)
                 return
             
             # Start provider session with canonical call_id (caller_channel_id)
-            logger.info("🎯 HYBRID ARI - Starting provider session", provider=self.config.default_provider)
             await provider.start_session(caller_channel_id)
             
-            # Get session from SessionStore and update with Local channel info
-            session = await self.session_store.get_by_call_id(caller_channel_id)
             if session:
-                session.local_channel_id = local_channel_id
-                session.status = "local_channel_created"
+                # Update session metadata for observability
+                session.provider_session_active = True
+                session.status = "provider_started"
                 await self._save_session(session)
-                logger.info("🎯 HYBRID ARI - Session updated with Local channel", 
-                           caller_channel_id=caller_channel_id, 
-                           local_channel_id=local_channel_id)
+                logger.info(
+                    "🎯 HYBRID ARI - Session updated after provider start",
+                    caller_channel_id=caller_channel_id,
+                    media_channel_id=media_channel_id,
+                    provider=provider_name,
+                )
             else:
                 logger.warning("🎯 HYBRID ARI - No session found for caller", caller_channel_id=caller_channel_id)
             
             logger.info("🎯 HYBRID ARI - ✅ Provider session started", 
-                       local_channel_id=local_channel_id, 
+                       media_channel_id=media_channel_id, 
                        caller_channel_id=caller_channel_id,
-                       provider=self.config.default_provider)
+                       provider=provider_name)
             
             # ARCHITECT FIX: Audio capture will be enabled after greeting playback completes
             # via PlaybackFinished event handler, not immediately after setup
@@ -958,20 +1129,20 @@ class Engine:
                        caller_channel_id=caller_channel_id)
             
             # Play initial greeting
-            await self._play_initial_greeting_hybrid(caller_channel_id, local_channel_id)
+            await self._play_initial_greeting_hybrid(caller_channel_id, media_channel_id)
             
         except Exception as e:
             logger.error("🎯 HYBRID ARI - Failed to start provider session", 
-                        local_channel_id=local_channel_id, 
+                        media_channel_id=media_channel_id, 
                         caller_channel_id=caller_channel_id,
                         error=str(e), exc_info=True)
 
-    async def _play_initial_greeting_hybrid(self, caller_channel_id: str, local_channel_id: str):
+    async def _play_initial_greeting_hybrid(self, caller_channel_id: str, media_channel_id: str):
         """Play initial greeting - Hybrid ARI approach with ExternalMedia streaming."""
         try:
-            logger.info("🎯 HYBRID ARI - Playing initial greeting via ExternalMedia", 
+            logger.info("🎯 HYBRID ARI - Playing initial greeting", 
                        caller_channel_id=caller_channel_id,
-                       local_channel_id=local_channel_id)
+                       media_channel_id=media_channel_id)
             
             # Get provider for greeting
             provider = self.providers.get(self.config.default_provider)
@@ -1021,7 +1192,7 @@ class Engine:
         except Exception as e:
             logger.error("🎯 HYBRID ARI - Failed to play initial greeting", 
                         caller_channel_id=caller_channel_id,
-                        local_channel_id=local_channel_id,
+                        media_channel_id=media_channel_id,
                         error=str(e), exc_info=True)
 
     async def _enable_audio_capture_after_delay(self, channel_id: str, delay_seconds: float):
@@ -2950,12 +3121,13 @@ class Engine:
         session = await self.session_store.get_by_call_id(channel_id)
         if session:
             logger.debug("Call found in SessionStore", channel_id=channel_id, call_id=session.call_id)
-            
+
             # Cancel any pending timeout tasks
             timeout_task = getattr(session, 'timeout_task', None)
             if timeout_task and not timeout_task.done():
                 timeout_task.cancel()
                 logger.debug("Cancelled timeout task", channel_id=channel_id)
+
             
             # Cancel provider timeout task
             provider_timeout_task = getattr(session, 'provider_timeout_task', None)
@@ -2976,6 +3148,22 @@ class Engine:
                     await provider.stop_session()
                     session.provider_session_active = False
 
+            # Hang up AudioSocket channel if present
+            if session.audiosocket_channel_id:
+                aso_channel_id = session.audiosocket_channel_id
+                try:
+                    await self.ari_client.hangup_channel(aso_channel_id)
+                except Exception:
+                    logger.debug(
+                        "AudioSocket channel hangup encountered issue",
+                        audiosocket_channel_id=aso_channel_id,
+                        exc_info=True,
+                    )
+                self.audiosocket_channels.pop(session.call_id, None)
+                self.bridges.pop(aso_channel_id, None)
+                self.pending_audiosocket_channels.pop(aso_channel_id, None)
+                session.audiosocket_channel_id = None
+
             if session.audiosocket_conn_id:
                 conn_id = session.audiosocket_conn_id
                 if self.audio_socket_server:
@@ -2988,6 +3176,14 @@ class Engine:
                     self.ssrc_to_caller.pop(ssrc, None)
                 self.audiosocket_resample_state.pop(conn_id, None)
                 session.audiosocket_conn_id = None
+
+            # Cleanup UUID mapping for AudioSocket
+            if session.audiosocket_uuid:
+                self.uuidext_to_channel.pop(session.audiosocket_uuid, None)
+                session.audiosocket_uuid = None
+
+            # Remove bridge mapping for caller
+            self.bridges.pop(session.call_id, None)
 
             # Clean up SSRC mapping
             ssrc_to_remove = []
