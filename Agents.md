@@ -3,14 +3,14 @@
 This document captures how I (the agent) work most effectively on this repo. It distills the project rules, adds hands‑on runbooks, and lists what I still need from you to build, deploy, and test quickly.
 
 ## Mission & Scope
-- Primary: Implement AudioSocket‑first upstream capture with file‑based playback downstream; stabilize for testing on the server.
-- Next phase (feature‑flagged): Streaming TTS over AudioSocket with barge‑in, jitter buffers, keepalives, telemetry.
+- **Current mandate (GA track)**: Execute Milestones 5–8 to deliver production‑ready streaming audio, dual cloud providers (Deepgram + OpenAI Realtime), configurable pipelines, and an optional monitoring stack. Each milestone has a dedicated instruction file under `docs/milestones/`.
+- **Always ensure** the system remains AudioSocket-first with file playback as fallback; streaming transport must be stable out of the box.
 
-## Current Status (2025-09-22)
-- Deepgram AudioSocket regression passes end-to-end with sub-2 s turn latency (see `call-framework.md` for the transcript and metrics notes).
-- Latency histograms/gauges (`ai_agent_turn_latency_seconds`, `ai_agent_transcription_to_audio_seconds`, `ai_agent_last_turn_latency_seconds`) are emitted during calls; scrape `/metrics` before restarting containers to keep the samples.
-- Greeting playback now skips engine-side TTS when the provider lacks `text_to_speech`, eliminating the Deepgram `AttributeError` observed earlier in the day.
-- Docs are aligned across IDEs: `call-framework.md`, `docs/regressions/deepgram-call-framework.md`, `.cursor/rules/…`, `.windsurf/rules/…`, and this guide carry the same assumptions.
+## Current Status (2025-09-23)
+- Deepgram AudioSocket regression passes end-to-end, but streaming transport still restarts after greeting; Milestone 5 addresses adaptive pacing and jitter buffering (`docs/milestones/milestone-5-streaming-transport.md`).
+- Latency histograms/gauges (`ai_agent_turn_latency_seconds`, `ai_agent_transcription_to_audio_seconds`, `ai_agent_last_turn_latency_seconds`) are emitted during calls; capture `/metrics` snapshots before restarting containers so dashboards (Milestone 8) have data.
+- Streaming defaults (`streaming.min_start_ms`, etc.) will be configurable via YAML; ensure documentation updates land in `docs/Architecture.md` and `docs/ROADMAP.md` after each change.
+- IDE rule files (`Agents.md`, `.windsurf/rules/...`, `Gemini.md`, `.cursor/rules/asterisk_ai_voice_agent.mdc`) must stay in sync; update them whenever workflow expectations shift.
 
 ## Architecture Snapshot (Current) — Runtime Contexts (Always Current)
 - Two containers: `ai-engine` (ARI + AudioSocket) and `local-ai-server` (models).
@@ -26,11 +26,11 @@ Active contexts and call path (server):
 - Engine binds socket to caller channel; sets upstream input mode `pcm16_8k`; provider greets immediately (no demo tone)
 
 ## Feature Flags & Config
-- `audio_transport`: `audiosocket` (default) | `legacy` (fallback to ARI snoop).
-- `downstream_mode`: `file` (default) | `stream` (next phase, not active yet).
-- `audiosocket`: configure bind address/port for engine-side AudioSocket server (`AUDIOSOCKET_HOST`, `AUDIOSOCKET_PORT`).
-- Streaming knobs (`config/ai-agent.yaml`): `streaming.sample_rate_hz`, `chunk_duration_ms`, `jitter_buffer_ms`, `keepalive_ms`, `timeouts`, `barge_in.*`.
-- Env overrides: `AUDIO_TRANSPORT`, `DOWNSTREAM_MODE`.
+- `audio_transport`: `audiosocket` (default) | `externalmedia` (fallback RTP path) | `legacy` (deprecated snoop path).
+- `downstream_mode`: `file` (default) | `stream` (enabled once Milestone 5 tasks complete; retains file fallback automatically).
+- `streaming.*` (Milestone 5): `min_start_ms`, `low_watermark_ms`, `fallback_timeout_ms`, `provider_grace_ms`, `chunk_size_ms`, `jitter_buffer_ms`.
+- `pipelines` (Milestone 7): defines STT/LLM/TTS combinations; `active_pipeline` selects which pipeline new calls use.
+- Logging levels are configurable per service via YAML once the hot-reload work lands; default is INFO for GA builds.
 
 ## Pre‑flight Checklist (Local or Server)
 - Asterisk:
@@ -124,11 +124,12 @@ exten => s,1,NoOp(Local)
   - Confirm Local originate and `AudioSocket(UUID,127.0.0.1:8090)` (no parse errors).
   - No `getaddrinfo(..., "8090,ulaw")` errors — use host:port only.
 
-## Next Moves — At A Glance
-- Two-way audio: Confirm transcripts appear in `local-ai-server` logs after you speak.
-  - If empty, verify engine shows `pcm16_8k` set and inbound chunk sizes align (~320 bytes typical for 20ms PCM16@8k).
-- Stability: Keepalive is enabled from engine to avoid AudioSocket idle timeouts.
-- Streaming phase: When ready, enable `downstream_mode=stream` (feature-flag) to return TTS over AudioSocket; keep file fallback.
+## GA Track — At A Glance
+- **Milestone 5**: Harden streaming transport, add telemetry, document tuning tips.
+- **Milestone 6**: Implement OpenAI Realtime provider; verify codec negotiation and regression docs (`docs/regressions/openai-call-framework.md`).
+- **Milestone 7**: Deliver configurable pipelines with hot reload; add pipeline examples and tests.
+- **Milestone 8**: Provide monitoring stack and dashboards; document `make monitor-up` workflow.
+- After these milestones, tag GA and update quick-start instructions.
 
 ## Common Commands
 - Build & run locally (both services): `docker-compose up -d --build`
@@ -139,9 +140,10 @@ exten => s,1,NoOp(Local)
 
 ## Development Workflow
 1) Edit code on `develop`.
-2) `docker-compose restart ai-engine` for code‑only changes.
-3) Full rebuild only on dependency/image changes.
-4) Keep `.env` out of git; configure providers via env and YAML.
+2) `docker-compose restart ai-engine` for local code-only spikes (do not use on the server).
+3) **Before touching the server**: commit + push to `develop`. Never rely on `scp` or manual edits; the server must `git pull` the exact commit you just pushed before any `docker-compose up --build` run.
+4) Full rebuild only on dependency/image changes.
+5) Keep `.env` out of git; configure providers via env and YAML.
 
 ## Testing Workflow
 - Smoke test AudioSocket ingest:
@@ -178,6 +180,8 @@ ssh root@voiprnd.nemtclouddispatch.com \
    docker-compose ps && \
    docker-compose logs -n 100 ai-engine'
 ```
+
+**Deployment rule**: the server must only run committed code. Before executing this runbook, ensure the local changes (e.g., `src/engine.py`, `config/ai-agent.yaml`) are committed and pushed so `git pull` brings them across.
 Then place a test call. Expect:
 - `AudioSocket connection accepted` → `bound to channel` → provider session → playback.
 If no connection arrives in time, the engine will fall back to legacy snoop (logged warning).

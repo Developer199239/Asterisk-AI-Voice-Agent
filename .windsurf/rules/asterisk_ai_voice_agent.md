@@ -9,6 +9,17 @@ globs: src/**/*.py, *.py, docker-compose.yml, Dockerfile, config/ai-agent.yaml
 ## Project Overview
 This is an open-source AI Voice Agent that integrates with Asterisk/FreePBX using the Asterisk REST Interface (ARI). It features a **two-container, modular architecture** that uses Asterisk's native **AudioSocket** feature for reliable real-time audio capture and **file-based playback** for robust media handling.
 
+
+## GA Roadmap & Milestones (MANDATORY READING)
+- Milestones 5–8 define the GA scope. Review the detailed instructions before writing code:
+  - `docs/milestones/milestone-5-streaming-transport.md` — streaming transport defaults, pacing, telemetry.
+  - `docs/milestones/milestone-6-openai-realtime.md` — OpenAI Realtime provider integration.
+  - `docs/milestones/milestone-7-configurable-pipelines.md` — YAML pipelines and hot reload.
+  - `docs/milestones/milestone-8-monitoring-stack.md` — optional monitoring stack.
+- Keep `docs/Architecture.md` and `docs/ROADMAP.md` open; update them when you land work.
+- All IDEs must log regression results in `call-framework.md` and provider-specific files under `docs/regressions/`.
+- Respect streaming defaults (`streaming.min_start_ms`, `low_watermark_ms`, `fallback_timeout_ms`, `provider_grace_ms`) and adjust only via YAML unless instructed otherwise.
+
 ## Development Workflow
 
 ### Test Server Configuration
@@ -28,6 +39,7 @@ This is an open-source AI Voice Agent that integrates with Asterisk/FreePBX usin
 3. **Server Testing**:
    - SSH to test server.
    - For isolated tests scp file to the server and then to the container
+   - **Before any server deployment, commit and push your changes.** The server must run `git pull` on the exact commit you just pushed; never rely on uncommitted work or manual file copies.
    - `git pull` the latest changes into `/root/Asterisk-Agent-Develop`.
    - **ALWAYS use `docker-compose up --build -d` for code changes** (rebuilds image with new code)
    - **NEVER use `docker-compose restart`** (uses old image without new code)

@@ -28,6 +28,7 @@ This is an open-source AI Voice Agent that integrates with Asterisk/FreePBX usin
 3. **Server Testing**:
    - SSH to test server.
    - For isolated tests scp file to the server and then to the container
+   - **Before any server deployment, commit and push your changes.** The server must run `git pull` on the exact commit you just pushed; never rely on uncommitted work or manual file copies.
    - `git pull` the latest changes into `/root/Asterisk-Agent-Develop`.
    - **ALWAYS use `docker-compose up --build -d` for code changes** (rebuilds image with new code)
    - **NEVER use `docker-compose restart`** (uses old image without new code)

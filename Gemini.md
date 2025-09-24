@@ -1,60 +1,81 @@
-# Gemini.md — My Build & Ops Guide
+# Gemini.md — GA Build & Ops Guide
 
-This document outlines my understanding of the project and the procedures I will follow to contribute effectively. It is based on the excellent `Agents.md` and the project's rule files.
+This playbook summarizes how Gemini should operate on the Asterisk AI Voice Agent project. It mirrors `Agents.md`, the Windsurf rules, and the milestone instruction files under `docs/milestones/`.
 
-## My Mission & Scope
-My primary mission is to **establish a functional two-way conversation with the local AI provider.**
+## Mission & Scope
+- **Primary objective**: Deliver the GA roadmap (Milestones 5–8) so the agent streams clean audio by default, supports both Deepgram and OpenAI Realtime, allows configurable pipelines, and exposes an optional monitoring stack.
+- Always verify that `audio_transport=audiosocket` remains the default, with file playback as fallback when streaming pauses.
+- Reference milestone instruction files before starting work:
+  - `docs/milestones/milestone-5-streaming-transport.md`
+  - `docs/milestones/milestone-6-openai-realtime.md`
+  - `docs/milestones/milestone-7-configurable-pipelines.md`
+  - `docs/milestones/milestone-8-monitoring-stack.md`
 
-The immediate goal is to ensure that a user can speak to the AI and receive a spoken response, completing the full audio-in -> AI -> audio-out loop. Achieving a functional pipeline is the priority, even if the initial version has noticeable latency.
+## Architectural Snapshot
+- Two containers: `ai-engine` (Hybrid ARI controller + AudioSocket server) and `local-ai-server` (local STT/LLM/TTS).
+- Upstream audio: Asterisk AudioSocket → `ai-engine` → provider (Deepgram/OpenAI/local).
+- Downstream audio: Streaming transport managed by `StreamingPlaybackManager`; automatic fallback to tmpfs-based file playback.
+- State: `SessionStore` + `ConversationCoordinator` orchestrate capture gating, playback, and metrics.
 
-## My Architectural Understanding
-I understand the project is a modular, two-container system:
+## Configuration Keys to Watch
+- `audio_transport`, `downstream_mode`, `audiosocket.format`.
+- Streaming defaults (`streaming.min_start_ms`, `low_watermark_ms`, `fallback_timeout_ms`, `provider_grace_ms`).
+- Pipeline definitions (`pipelines`, `active_pipeline`) once Milestone 7 lands.
+- Logging levels per component (set via YAML when hot reload is implemented).
 
-1.  **`ai-engine`**: The core orchestrator. It connects to Asterisk via ARI for call control and uses a dedicated `AudioSocket` TCP server for reliable, real-time audio capture from the caller.
-2.  **`local-ai-server`**: A separate container that hosts the local AI models (Vosk, Llama, Piper). It communicates with the `ai-engine` via a WebSocket connection.
-
-The core data flow for my mission is:
-*   **Audio Input**: Caller -> Asterisk -> `AudioSocket` -> `ai-engine` -> `LocalProvider` -> `local-ai-server`.
-*   **Audio Output**: `local-ai-server` -> `LocalProvider` -> `ai-engine` -> Save to file -> ARI command to play the file to the Caller.
-
-## My Development & Deployment Workflow
-
-I will follow the established workflow for this project:
-
-1.  **Branch**: I will perform all work directly on the `develop` branch.
-2.  **Code Changes**: I will make code changes to the local files in the project directory.
-3.  **Committing Code**: I will commit my changes to the `develop` branch. It is your responsibility to push these changes to the `origin` remote.
+## Development Workflow
+1. Work on the `develop` branch locally.
+2. Use Makefile targets for builds/deploys (`make deploy`, `make deploy-force`, `make server-logs`, etc.).
+3. Before touching the server, **commit and push** your changes; the server must `git pull` the exact commit you just pushed prior to any `docker-compose up --build`.
+4. Never use `docker-compose restart` for code updates—always rebuild.
 
 ### Deployment Environment
-*   **Server**: `root@voiprnd.nemtclouddispatch.com`
-*   **Project Folder**: `/root/Asterisk-Agent-Develop`
+- Server: `root@voiprnd.nemtclouddispatch.com`
+- Repo: `/root/Asterisk-Agent-Develop`
+- Shared media: `/mnt/asterisk_media`
 
-My deployment process will be to provide you with the necessary shell commands to execute on this server. A typical deployment will involve pulling the latest changes from the `develop` branch and restarting the appropriate Docker containers.
+### Key Commands (local or server)
+- `make deploy` / `make deploy-force`
+- `make server-logs`, `make server-clear-logs`
+- `make monitor-up` / `make monitor-down` (Milestone 8)
+- `docker-compose logs -f ai-engine`, `docker-compose logs -f local-ai-server`
 
-## Key Commands I Will Use
+## GA Milestones — Gemini Focus
+- **Milestone 5**: Implement streaming pacing config, telemetry, and documentation updates.
+- **Milestone 6**: Add OpenAI Realtime provider with codec-aware streaming.
+- **Milestone 7**: Support YAML-defined pipelines with hot reload.
+- **Milestone 8**: Ship optional Prometheus + Grafana monitoring stack.
+- After completion, assist with GA regression runs and documentation polish.
 
-*   **Local Restart for `ai-engine`**: `docker-compose restart ai-engine`
-*   **Local Rebuild for Dependencies**: `docker-compose up --build -d`
-*   **View Logs**: `docker-compose logs -f ai-engine` and `docker-compose logs -f local-ai-server`
-*   **Check Service Status**: `docker-compose ps`
+## Regression & Troubleshooting Workflow
+1. Clear logs (`make server-clear-logs`).
+2. Tail `ai-engine`, `local-ai-server`, and Asterisk logs during calls.
+3. Record call ID, streaming metrics, and tuning hints in `docs/regressions/*.md` and `call-framework.md`.
+4. For streaming issues, inspect buffer depth logs and fallback counters; adjust YAML settings accordingly.
 
-## Mission Focus Areas
+## Hot Reload Expectations
+- Configuration watcher (or `make engine-reload`) refreshes streaming defaults, logging levels, and pipeline definitions without dropping active calls.
+- Always validate config changes (`docs/milestones/milestone-7-configurable-pipelines.md`) before reloading.
 
-To achieve a functional two-way conversation, I will focus on these technical areas:
+## Monitoring Stack Notes
+- Optional services added in Milestone 8 expose dashboards at the configured HTTP port.
+- Ensure `/metrics` is reachable and that Grafana dashboards load streaming and latency panels.
+- Document sentiment/transcript hooks for future enhancements.
 
-1.  **Verify the Audio Input Path**: Ensure the raw audio from the `AudioSocket` is correctly received by the `engine` and passed to the `LocalProvider`.
-2.  **Trace the AI Pipeline**: Confirm that the `local-ai-server` receives the audio, successfully transcribes it (STT), gets a response from the language model (LLM), and synthesizes a reply (TTS).
-3.  **Verify the Audio Output Path**: Ensure the TTS audio from the provider is received by the `ai-engine`, saved to the shared media directory, and that the ARI `play` command is successfully executed.
-4.  **Instrument with Logging**: Add clear and concise logging at each major step of the conversation loop to trace the flow of data and identify points of failure or significant delay.
+## Logging & Metrics Etiquette
+- Run at INFO in GA mode; enable DEBUG only when instructed and remember to revert.
+- Capture `/metrics` snapshots after regression calls to populate dashboards.
 
-## My Troubleshooting Procedure
+## Deliverables Checklist Before Hand-off
+- Updated documentation (`docs/Architecture.md`, `docs/ROADMAP.md`, milestone files, rule files).
+- Regression notes logged with call IDs and audio quality assessment.
+- Telemetry hints reviewed; YAML defaults adjusted if streaming restarts persist.
 
-When debugging a failed call, I will follow this systematic procedure:
-
-1.  **Clear Logs**: I will ask you to clear all existing logs from the `ai-engine` and `local-ai-server` containers to ensure a clean slate for the test.
-2.  **Tail Logs**: I will ask you to simultaneously tail the logs from both containers and the Asterisk full log (`/var/log/asterisk/full`) during a test call and provide me the output.
-3.  **Create Timeline**: After the call, I will create a detailed, timestamped timeline of events. This timeline will correlate the logs from all three sources with the code's execution path.
-4.  **Analyze and Decide**: Based on the timeline, I will identify what worked and what failed, pinpoint the exact point of failure, and decide on the most effective next step to resolve the issue.
+## Troubleshooting Steps (Recap)
+1. Clear logs.
+2. Reproduce call while tailing `ai-engine`, `local-ai-server`, and `/var/log/asterisk/full`.
+3. Build a timeline; identify streaming restarts, buffer drops, or provider disconnects.
+4. Apply fixes guided by milestone docs, then rerun regression.
 
 ---
-*This is a living document. I will update it whenever I learn something new that will help me contribute to the project more effectively.*
+*Keep this file aligned with `Agents.md` and `.windsurf/rules/asterisk_ai_voice_agent.md`. Update it whenever milestone scope or workflow changes.*
