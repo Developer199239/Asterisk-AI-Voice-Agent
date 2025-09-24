@@ -464,6 +464,24 @@ class StreamingPlaybackManager:
                         exc_info=True)
             return False
 
+    def set_transport(
+        self,
+        *,
+        rtp_server: Optional[Any] = None,
+        audiosocket_server: Optional[Any] = None,
+        audio_transport: Optional[str] = None,
+        audiosocket_format: Optional[str] = None,
+    ) -> None:
+        """Configure transport dependencies after engine initialization."""
+        if rtp_server is not None:
+            self.rtp_server = rtp_server
+        if audiosocket_server is not None:
+            self.audiosocket_server = audiosocket_server
+        if audio_transport is not None:
+            self.audio_transport = audio_transport
+        if audiosocket_format is not None:
+            self.audiosocket_format = audiosocket_format
+
     async def _record_fallback(self, call_id: str, reason: str) -> None:
         """Increment fallback counters and persist the last error."""
         try:
