@@ -189,4 +189,11 @@ class DeepgramProvider(AIProviderInterface):
     
     def is_ready(self) -> bool:
         """Check if the provider is ready to process audio."""
-        return self.websocket is not None and self.event_handler is not None
+        # Configuration readiness: we consider the provider ready when it's properly
+        # configured and wired to emit events. A live websocket is only established
+        # after start_session(call_id) during an actual call.
+        try:
+            api_key_ok = bool(getattr(self.config, 'api_key', None))
+        except Exception:
+            api_key_ok = False
+        return api_key_ok and (self.on_event is not None)
