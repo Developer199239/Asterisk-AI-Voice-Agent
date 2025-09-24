@@ -1240,6 +1240,17 @@ class Engine:
                 logger.debug("No session for caller; dropping AudioSocket audio", conn_id=conn_id, caller_channel_id=caller_channel_id)
                 return
 
+            # Self-echo mitigation: drop inbound frames while TTS playback is active
+            # We gate on the session's audio_capture_enabled flag (set by ConversationCoordinator)
+            if hasattr(session, 'audio_capture_enabled') and not session.audio_capture_enabled:
+                logger.debug(
+                    "Dropping inbound AudioSocket audio during TTS playback",
+                    conn_id=conn_id,
+                    caller_channel_id=caller_channel_id,
+                    bytes=len(audio_bytes),
+                )
+                return
+
             provider_name = session.provider_name or self.config.default_provider
             provider = self.providers.get(provider_name)
             if not provider or not hasattr(provider, 'send_audio'):

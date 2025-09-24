@@ -82,8 +82,7 @@ class ARIClient:
 
         logger.info("Starting ARI event listener.")
         try:
-            # Subscribe to playback finished events
-            self.add_event_handler("PlaybackFinished", self._on_playback_finished)
+            # Note: PlaybackFinished is registered by Engine.start(). Avoid duplicate registration here.
 
             async for message in self.websocket:
                 try:
