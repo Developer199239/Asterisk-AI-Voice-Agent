@@ -12,6 +12,14 @@ audiosocket:
   port: 8090               # TCP port for AudioSocket connections
   format: "slin16"         # AudioSocket dialplan app uses 16-bit, 8 kHz PCM by default
 
+# Barge-in configuration
+barge_in:
+  enabled: true
+  initial_protection_ms: 400   # Increase from 200ms to 400ms to avoid early cut-offs
+  min_ms: 250                  # Minimum sustained speech window to trigger barge-in
+  energy_threshold: 1000       # RMS threshold; tune empirically
+  cooldown_ms: 500             # Cooldown after a trigger to avoid flapping
+
 # Streaming configuration (for downstream_mode=stream)
 streaming:
   sample_rate: 8000          # Output sample rate for streaming audio

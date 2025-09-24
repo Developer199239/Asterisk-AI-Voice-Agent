@@ -1,5 +1,90 @@
 # Call Framework Analysis — Deepgram Provider
 
+## 2025-09-24 11:04 PDT — Barge-In Protection Window Tune (cut-offs; increased to 400 ms)
+
+**Outcome**
+- Two-way conversation working; initial cut-offs observed at start of agent turns.
+- Increased barge-in protection window to 400 ms to reduce early downlink bleed and cut-offs.
+- No barge-in trigger occurred during this run; inbound speech within protection window was dropped as designed.
+
+**Key Evidence (call_id=1758703315.931)**
+- `AudioSocket server listening ...` and ARI connected lines present.
+- `Deepgram agent configured. input_encoding=linear16 input_sample_rate=8000 output_encoding=mulaw output_sample_rate=8000`
+- Multiple lines of `Dropping inbound during initial TTS protection window protect_ms=200 tts_elapsed_ms=0` before the change.
+- No `🎧 BARGE-IN triggered` lines in this call's logs.
+
+**Diagnosis**
+- Protection window of 200 ms was too short relative to agent playback onset and early uplink mix; caller’s first syllables landed during the protection period and were dropped, perceived as cut-offs.
+
+**Change Applied**
+- Set `barge_in.initial_protection_ms: 400` in `config/ai-agent.yaml` and restarted `ai-engine`.
+- `/ready` remained green after restart.
+
+**Next Verification**
+- Place a call and attempt to speak over the first 0.3–0.5 s of agent playback.
+- Expect reduced cut-offs and still no self-echo.
+- If brief cut-offs persist, tune:
+  - `barge_in.energy_threshold` (lower if under-triggering),
+  - `barge_in.min_ms` (reduce to 200 ms),
+  - or add VAD confirmation using `webrtcvad`.
+
+---
+
+## 2025-09-24 00:53 PDT — AudioSocket Deepgram Regression (8 kHz alignment; initial self‑echo)
+
+**Outcome**
+- Audio pipeline functional end-to-end. Two-way conversation achieved.
+- Deepgram input aligned to 8 kHz linear PCM; audible quality improved significantly.
+- Residual issue: Deepgram hears its own voice for the first few seconds on a turn (initial self-echo).
+
+**Key Evidence (call_id=1758700412.883)**
+- Provider session handshake and codec alignment:
+  - `Connecting to Deepgram Voice Agent...`
+  - `✅ Successfully connected to Deepgram Voice Agent.`
+  - `Deepgram agent configured. input_encoding=linear16 input_sample_rate=8000 output_encoding=mulaw output_sample_rate=8000`
+- AudioSocket bridge and media flow:
+  - `AudioSocket server listening host=0.0.0.0 port=8090`
+  - `AudioSocket connection accepted ...`
+  - `AudioSocket UUID bound ...`
+  - `🎯 HYBRID ARI - ✅ AudioSocket channel added to bridge`
+  - `AudioSocket inbound first audio bytes=320` (20 ms @ 8 kHz slin16)
+- File playback lifecycle (deterministic IDs) confirms greeting/response delivery:
+  - `🔇 TTS GATING - Audio capture disabled (token added)`
+  - `Bridge playback started with deterministic ID ... sound:ai-generated/...`
+  - `🔊 AUDIO PLAYBACK - Started ...`
+  - `🔊 PlaybackFinished - Audio playback completed ...`
+
+**Diagnosis**
+- The initial self-echo occurs because inbound AudioSocket audio is forwarded to the provider even while agent TTS playback is active on the bridge. Since AudioSocket is bridged with the caller, the downlink (agent audio) can be present on the uplink mix. Without gating on the AudioSocket inbound handler, Deepgram briefly hears its own audio at the start of a turn.
+
+**Fix (engine, targeted)**
+- In `src/engine.py::_audiosocket_handle_audio`, drop inbound frames when TTS gating is active for the call session (e.g., check `session.tts_active_count > 0` or `session.audio_capture_enabled == False` via `ConversationCoordinator/SessionStore`) before calling `provider.send_audio(...)`.
+- Also deduplicate `PlaybackFinished` handler registration (register once in `Engine.start()`); repeated events can jitter gating and produce “unknown playback ID” warnings.
+
+**Deepgram Provider Tuning (adopted and recommended)**
+- Input (adopted now):
+  - `providers.deepgram.input_encoding: linear16`
+  - `providers.deepgram.input_sample_rate_hz: 8000`
+- Output (file-playback path):
+  - `output_encoding: mulaw`
+  - `output_sample_rate_hz: 8000`
+- Conversation stability (recommended):
+  - Keep `continuous_input: true` on provider, but rely on engine-side gating to suppress capture during TTS playback windows.
+
+**Jitter Buffer and Engine Timing (recommended starting points)**
+- For current file-based playback (downstream_mode=`file`): jitter buffer has little impact on downlink, but keep Streaming config stable for future streaming tests:
+  - `streaming.sample_rate: 8000`
+  - `streaming.jitter_buffer_ms: 40` (range 40–60 ms is reasonable on host networking)
+  - `streaming.chunk_size_ms: 20`
+  - `streaming.min_start_ms: 120`
+  - `streaming.low_watermark_ms: 80`
+  - `streaming.fallback_timeout_ms: 4000`
+
+**Next Verification**
+- After gating change in `_audiosocket_handle_audio`, expect that Deepgram no longer hears its own voice at turn start. Logs should show the same codec alignment line with 8 kHz, stable playback lifecycle, and no duplicate `PlaybackFinished` warnings.
+
+---
+
 ## ✅ REGRESSION PASS — September 22, 2025 (AudioSocket Two-Way Conversation)
 
 **Outcome**
@@ -21,6 +106,136 @@
 - Capture Prometheus metrics immediately after regressions (before container restarts) so histogram buckets persist for trend analysis.
 - Prepare for downstream streaming by wiring feature-flag guards and jitter buffer defaults without regressing the current file playback path.
 - Cross-IDE note: mirror these findings into `.cursor/` and `.windsurf/` rules when behaviour changes so Cursor/Windsurf sessions inherit the same regression state.
+
+---
+
+## 2025-09-23 18:39 PDT — AudioSocket Deepgram Regression (multi-stream jitter)
+
+**Observed Behaviour**
+- 50-second call using the latest streaming fixes.
+- No greeting was heard at call start; Deepgram jumped straight into follow-on responses.
+- Two-way conversation proceeded but audio quality was intermittently garbled, especially at the start of each agent turn.
+
+**Key Evidence (call_id=1758677818.841)**
+- No greeting playback logged (`Deepgram AgentAudio first chunk bytes=960` appears without a preceding greeting entry).
+- Streaming restarted repeatedly within the first response:
+  - `🎵 STREAMING PLAYBACK - Started ... stream_id=stream:...:1758676582323`
+  - Immediately followed by `🎵 STREAMING PLAYBACK - Stopped` and new `stream_id` values.
+  - Multiple fallback entries (`timeout=2.0`) show the manager kept timing out and restarting.
+- VAD never reset to silence: `consecutive_speech_frames` climbed past 1,900 even after playback ended, indicating the session stayed in “speaking” state.
+
+**Diagnosis**
+- **Streaming debounce incomplete**: Even though we reuse queues, `_handle_streaming_audio_chunk()` still kicked off new streams while the previous task was winding down. Each restart introduced jitter into the opening frames, causing the garble.
+- **Fallback timeout too short**: The 2-second timeout triggered while we were refilling the jitter buffer, forcing a stream restart and bypassing the greeting.
+- **VAD reset missing**: After playback ended we didn’t reset `session.vad_state`, so VAD assumed continuous speech and Deepgram kept talking without the initial greeting phase.
+
+**Next Improvements**
+- **Streaming stability**:
+  - Guard `start_streaming_playback()` to reuse the existing task unless it has finished (implemented immediately after this regression).
+  - Increase the fallback timeout to accommodate jitter warm-up (implemented).
+- **VAD state reset**:
+  - Explicitly reset VAD and fallback counters after streaming (`_reset_vad_after_playback()` added to the engine).
+- **Retest** once these changes are deployed to confirm the greeting returns and stream IDs stay stable.
+
+**Status**
+- Partial success: audio and conversation flow work, but the repeated streaming restarts degrade quality. Fixes have been deployed to stabilize streaming and VAD before the next run.
+
+---
+
+## 2025-09-23 17:59 PDT — AudioSocket Deepgram Regression (channel interface; partial success)
+
+**Observed Behaviour**
+- 40-second test call with the new ARI-originated AudioSocket channel interface.
+- Agent audio was audible; caller and agent exchanged two turns, but the first few seconds of playback sounded garbled before stabilizing.
+- Conversation flow completed without crashes; cleanup released the AudioSocket TCP connection.
+
+**Key Evidence (call_id=1758675462.831)**
+- Channel interface path in action:
+  - `AudioSocket connection accepted conn_id=0288eeda97ca4c298004ad510c255d8f`
+  - `AudioSocket UUID bound ... uuid=7644fc76-70d9-46c3-9423-b4b1ad93152b`
+  - `Deepgram AgentAudio first chunk bytes=960`
+  - `🎵 STREAMING OUTBOUND - First frame ... frame_bytes=320 audiosocket_format=slin16`
+- VAD captured caller speech continuously: multiple `🎤 AUDIO CAPTURE - ENABLED` and `🎤 VAD - Consecutive speech frames ... webrtc_decision=True` entries.
+- Cleanup confirmed both the provider session and AudioSocket connection were closed cleanly.
+
+**Diagnosis**
+- **Successes**:
+  - New channel interface flow bridged AudioSocket to the caller; outbound audio was heard without manual dialplan involvement.
+  - Deepgram streaming handshake and codec configuration worked (`linear16` input / `mulaw` output, converted to slin16 on send).
+  - Two-way audio running end-to-end verified the architecture change.
+- **Quality issues**:
+  - Early-response garble suggests the first few AudioSocket frames may still be slightly mis-timed or converted before the jitter buffer stabilises. There were several back-to-back `🎵 STREAMING STARTED` logs during the first response (multiple stream IDs within the same second), implying the engine restarted the streaming playback manager when new chunks arrived faster than expected.
+  - VAD kept logging `consecutive_speech_frames` in the thousands before an utterance boundary, meaning we never triggered the speech-end condition quickly—likely why streaming restarts kept appearing (provider responses overlapped with long-running capture).
+
+**Next Improvements**
+- **Streaming stabilisation**:
+  - Ensure only one streaming session per call is active at a time. Investigate why multiple `stream:streaming-response:*` IDs were started within the first response and adjust `_handle_streaming_audio_chunk()` to reuse the existing stream.
+  - Add a small pre-stream delay or fade-in to the first 2–3 frames to mask jitter while Asterisk begins playback.
+- **VAD tuning**:
+  - After provider playback finishes, shorten the silence/end thresholds to avoid long stretches of `consecutive_speech_frames` that delay the next provider turn.
+  - Consider resetting `session.streaming_audio_queue` at the start of each provider response to prevent leftover chunks from triggering extra restarts.
+- **Monitoring**:
+  - Capture `/mnt/asterisk_media` audio output for the first agent response to confirm whether the garble originates on the engine side or from Asterisk playback.
+  - Add metrics/logs for average jitter-buffer depth and streaming restart counts to quantify improvements.
+
+**Status**
+- Partial success: AudioSocket channel interface works and audio is audible, but startup jitter and overlapping streaming sessions need smoothing before calling it production-ready.
+
+---
+
+## 2025-09-23 17:06 PDT — AudioSocket Deepgram Regression (pinned + broadcast; still silent)
+
+**Observed Behaviour**
+- Caller heard no audio despite both fixes enabled:
+  - Outbound pinned to first bound AudioSocket connection
+  - Broadcast debug on (frames sent to both conn_ids)
+- Engine logs during the call:
+  - `AudioSocket connection accepted conn_id=2a32acb4...`
+  - `Deepgram agent configured. input_encoding=linear16 input_sample_rate=16000 output_encoding=mulaw output_sample_rate=8000`
+  - `AudioSocket UUID bound conn_id=2a32acb4... uuid=8be64e2e-...`
+  - `Deepgram AgentAudio first chunk bytes=960`
+  - `🎵 STREAMING STARTED - Real-time audio streaming initiated ... stream_id=...7322`
+  - `🎵 STREAMING OUTBOUND - First frame audiosocket_format=slin16 frame_bytes=320 conn_id=2a32acb4...`
+  - `AudioSocket connection accepted conn_id=ec8fc00e...`
+  - `🎵 STREAMING STARTED - Began on AudioSocket bind ... stream_id=...7383`
+  - `AudioSocket UUID bound conn_id=ec8fc00e...`
+  - `AudioSocket inbound first audio bytes=320 conn_id=ec8fc00e...` and also for `2a32acb4...`
+  - `AudioSocket broadcast sent recipients=2 ...` repeated for ~3 seconds
+  - `🎵 STREAMING PLAYBACK - End of stream`
+- After streaming ended, VAD resumed and raised a separate bug:
+  - `Error in VAD processing ... KeyError: 'silence_duration_ms'` (post‑stream, not cause of silence)
+
+**What Worked**
+- **Provider output**: Deepgram produced agent audio (`AgentAudio first chunk bytes=960`).
+- **Codec alignment**: Outbound frames were slin16@8k, 320 bytes every 20 ms; inbound frames were also 320 bytes (slin16@8k).
+- **Transport**: Multiple `AudioSocket broadcast sent recipients=2` entries confirm the engine sent frames to both Local ;1/;2 legs without send failures.
+
+**What Failed (Likely Root Cause)**
+- **Local channel bridge membership is missing.**
+  - In working Hybrid ARI runs, we expect logs like:
+    - `🎯 HYBRID ARI - Local channel entered Stasis`
+    - `🎯 HYBRID ARI - Adding Local channel to bridge`
+    - `🎯 HYBRID ARI - ✅ Local channel added to bridge`
+  - For this call, those lines are absent. We only see caller bridge creation and caller added to the bridge, not the Local channel. If the Local channel executing `AudioSocket(...)` is not joined to the caller’s mixing bridge, Asterisk will not deliver the AudioSocket downlink frames to the caller—resulting in silence, even though the engine is streaming.
+
+**Why We Believe This**
+- With broadcast enabled, frames went to both sockets every 20 ms for several seconds—this rules out leg misselection and codec mismatch as primary causes.
+- No Asterisk write/translate errors appeared; inbound frames were received on both connections; the only remaining gate is mix/bridge wiring for the Local leg producing playback.
+
+**Next Diagnostic Checks (No Code Changes)**
+- Verify Local channel bridge membership during a call:
+  - Look for logs: `HYBRID ARI - Local channel entered Stasis` and `Local channel added to bridge`.
+  - If absent, the Local ;1 leg likely never enters Stasis and therefore is never bridged.
+- Inspect dialplan for `[ai-agent-media-fork]` currently used:
+  - If it only runs `AudioSocket(...); Hangup()`, the Local channel will not enter Stasis. In prior successful runs, the Local ;1 path also hit Stasis so ARI could add it to the caller bridge.
+- At call time, on Asterisk shell: `core show channels verbose` and check whether a `Local/...;1` is in the mixing bridge with the caller.
+- Optionally tail `/var/log/asterisk/full` during the call for any `app_audiosocket` messages indicating downlink handling.
+
+**Follow-ups (Separate Bug, not the cause of silence)**
+- The VAD pipeline threw `KeyError: 'silence_duration_ms'` after streaming ended; ensure VAD state bootstraps all keys when capture re-enables. This does not affect downlink audio during streaming.
+
+**Status**
+- Outbound streaming from the engine is confirmed healthy (frames paced/broadcast). The remaining blocker is within Asterisk call wiring: ensuring the Local channel executing `AudioSocket(...)` is properly joined to the caller’s bridge so downlink frames are audible to the caller.
 
 ---
 
