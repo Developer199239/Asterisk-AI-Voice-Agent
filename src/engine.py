@@ -257,70 +257,83 @@ class Engine:
 
     async def start(self):
         """Connect to ARI and start the engine."""
+        # 1) Load providers first (low risk)
         await self._load_providers()
-        # Log transport and downstream modes
-        logger.info("Runtime modes", audio_transport=self.config.audio_transport, downstream_mode=self.config.downstream_mode)
 
-        # Prepare AudioSocket transport
-        if self.config.audio_transport == "audiosocket":
-            if not self.config.audiosocket:
-                raise ValueError("AudioSocket configuration not found")
-
-            host = self.config.audiosocket.host
-            port = self.config.audiosocket.port
-            self.audio_socket_server = AudioSocketServer(
-                host=host,
-                port=port,
-                on_uuid=self._audiosocket_handle_uuid,
-                on_audio=self._audiosocket_handle_audio,
-                on_disconnect=self._audiosocket_handle_disconnect,
-                on_dtmf=self._audiosocket_handle_dtmf,
-            )
-            await self.audio_socket_server.start()
-            # Configure streaming manager with AudioSocket format expected by dialplan
-            as_format = None
-            try:
-                if self.config.audiosocket and hasattr(self.config.audiosocket, 'format'):
-                    as_format = self.config.audiosocket.format
-            except Exception:
-                as_format = None
-            self.streaming_playback_manager.set_transport(
-                audio_transport=self.config.audio_transport,
-                audiosocket_server=self.audio_socket_server,
-                audiosocket_format=as_format,
-            )
-
-        # Prepare RTP server for ExternalMedia transport
-        if self.config.audio_transport == "externalmedia":
-            if not self.config.external_media:
-                raise ValueError("ExternalMedia configuration not found")
-            
-            rtp_host = self.config.external_media.rtp_host
-            rtp_port = self.config.external_media.rtp_port
-            codec = self.config.external_media.codec
-            
-            # Create RTP server with callback to route audio to providers
-            self.rtp_server = RTPServer(
-                host=rtp_host,
-                port=rtp_port,
-                engine_callback=self._on_rtp_audio,
-                codec=codec
-            )
-            
-            # Start RTP server
-            await self.rtp_server.start()
-            logger.info("RTP server started for ExternalMedia transport", 
-                       host=rtp_host, port=rtp_port, codec=codec)
-            self.streaming_playback_manager.set_transport(
-                rtp_server=self.rtp_server,
-                audio_transport=self.config.audio_transport,
-            )
-
-        # Start lightweight health endpoint
+        # 2) Start health server EARLY so diagnostics are available even if transport/ARI fail
         try:
             asyncio.create_task(self._start_health_server())
         except Exception:
             logger.debug("Health server failed to start", exc_info=True)
+
+        # 3) Log transport and downstream modes
+        logger.info("Runtime modes", audio_transport=self.config.audio_transport, downstream_mode=self.config.downstream_mode)
+
+        # 4) Prepare AudioSocket transport (guarded)
+        if self.config.audio_transport == "audiosocket":
+            try:
+                if not self.config.audiosocket:
+                    raise ValueError("AudioSocket configuration not found")
+
+                host = self.config.audiosocket.host
+                port = self.config.audiosocket.port
+                self.audio_socket_server = AudioSocketServer(
+                    host=host,
+                    port=port,
+                    on_uuid=self._audiosocket_handle_uuid,
+                    on_audio=self._audiosocket_handle_audio,
+                    on_disconnect=self._audiosocket_handle_disconnect,
+                    on_dtmf=self._audiosocket_handle_dtmf,
+                )
+                await self.audio_socket_server.start()
+                logger.info("AudioSocket server listening", host=host, port=port)
+                # Configure streaming manager with AudioSocket format expected by dialplan
+                as_format = None
+                try:
+                    if self.config.audiosocket and hasattr(self.config.audiosocket, 'format'):
+                        as_format = self.config.audiosocket.format
+                except Exception:
+                    as_format = None
+                self.streaming_playback_manager.set_transport(
+                    audio_transport=self.config.audio_transport,
+                    audiosocket_server=self.audio_socket_server,
+                    audiosocket_format=as_format,
+                )
+            except Exception as exc:
+                logger.error("Failed to start AudioSocket transport", error=str(exc), exc_info=True)
+                self.audio_socket_server = None
+
+        # 5) Prepare RTP server for ExternalMedia transport (guarded)
+        if self.config.audio_transport == "externalmedia":
+            try:
+                if not self.config.external_media:
+                    raise ValueError("ExternalMedia configuration not found")
+                
+                rtp_host = self.config.external_media.rtp_host
+                rtp_port = self.config.external_media.rtp_port
+                codec = self.config.external_media.codec
+                
+                # Create RTP server with callback to route audio to providers
+                self.rtp_server = RTPServer(
+                    host=rtp_host,
+                    port=rtp_port,
+                    engine_callback=self._on_rtp_audio,
+                    codec=codec
+                )
+                
+                # Start RTP server
+                await self.rtp_server.start()
+                logger.info("RTP server started for ExternalMedia transport", 
+                           host=rtp_host, port=rtp_port, codec=codec)
+                self.streaming_playback_manager.set_transport(
+                    rtp_server=self.rtp_server,
+                    audio_transport=self.config.audio_transport,
+                )
+            except Exception as exc:
+                logger.error("Failed to start ExternalMedia RTP transport", error=str(exc), exc_info=True)
+                self.rtp_server = None
+
+        # 6) Connect to ARI regardless to keep readiness visible and allow Stasis handling
         await self.ari_client.connect()
         # Add PlaybackFinished event handler for timing control
         self.ari_client.add_event_handler("PlaybackFinished", self._on_playback_finished)
@@ -1236,6 +1249,116 @@ class Engine:
             await self.playback_manager.on_playback_finished(playback_id)
         except Exception as exc:
             logger.error("Error in PlaybackFinished handler", error=str(exc), exc_info=True)
+
+    async def _start_health_server(self):
+        """Start aiohttp health/metrics server on 0.0.0.0:15000."""
+        try:
+            app = web.Application()
+            app.router.add_get('/live', self._live_handler)
+            app.router.add_get('/ready', self._ready_handler)
+            app.router.add_get('/health', self._health_handler)
+            app.router.add_get('/metrics', self._metrics_handler)
+            runner = web.AppRunner(app)
+            await runner.setup()
+            site = web.TCPSite(runner, '0.0.0.0', 15000)
+            await site.start()
+            self._health_runner = runner
+            logger.info("Health endpoint started", host="0.0.0.0", port=15000)
+        except Exception as exc:
+            logger.error("Failed to start health endpoint", error=str(exc), exc_info=True)
+
+    async def _health_handler(self, request):
+        """Return JSON with engine/provider status."""
+        try:
+            providers = {}
+            for name, prov in (self.providers or {}).items():
+                ready = True
+                try:
+                    if hasattr(prov, 'is_ready'):
+                        ready = bool(prov.is_ready())
+                except Exception:
+                    ready = True
+                providers[name] = {"ready": ready}
+
+            # Compute readiness
+            default_ready = False
+            if self.config and getattr(self.config, 'default_provider', None) in (self.providers or {}):
+                prov = self.providers[self.config.default_provider]
+                try:
+                    default_ready = bool(prov.is_ready()) if hasattr(prov, 'is_ready') else True
+                except Exception:
+                    default_ready = True
+            ari_connected = bool(self.ari_client and self.ari_client.running)
+            audiosocket_listening = self.audio_socket_server is not None if self.config.audio_transport == 'audiosocket' else True
+            is_ready = ari_connected and audiosocket_listening and default_ready
+
+            payload = {
+                "status": "healthy" if is_ready else "degraded",
+                "ari_connected": ari_connected,
+                "rtp_server_running": bool(getattr(self, 'rtp_server', None)),
+                "audio_transport": self.config.audio_transport,
+                "active_calls": len(await self.session_store.get_all_sessions()),
+                "active_playbacks": 0,
+                "providers": providers,
+                "rtp_server": {},
+                "audiosocket": {
+                    "listening": audiosocket_listening,
+                    "host": getattr(self.config.audiosocket, 'host', None) if self.config.audiosocket else None,
+                    "port": getattr(self.config.audiosocket, 'port', None) if self.config.audiosocket else None,
+                    "active_connections": len(getattr(self.audio_socket_server, 'connections', {})) if self.audio_socket_server else 0,
+                },
+                "audiosocket_listening": audiosocket_listening,
+                "conversation": {
+                    "gating_active": 0,
+                    "capture_disabled": 0,
+                    "barge_in_total": 0,
+                },
+                "streaming": {},
+                "streaming_details": [],
+            }
+            return web.json_response(payload)
+        except Exception as exc:
+            return web.json_response({"status": "error", "error": str(exc)}, status=500)
+
+    async def _live_handler(self, request):
+        """Liveness probe: returns 200 if process is up."""
+        return web.Response(text="ok", status=200)
+
+    async def _ready_handler(self, request):
+        """Readiness probe: 200 only if ARI, transport, and default provider are ready."""
+        try:
+            ari_connected = bool(self.ari_client and self.ari_client.running)
+            transport_ok = True
+            if self.config.audio_transport == 'audiosocket':
+                transport_ok = self.audio_socket_server is not None
+            elif self.config.audio_transport == 'externalmedia':
+                transport_ok = self.rtp_server is not None
+            provider_ok = False
+            if self.config and getattr(self.config, 'default_provider', None) in (self.providers or {}):
+                prov = self.providers[self.config.default_provider]
+                try:
+                    provider_ok = bool(prov.is_ready()) if hasattr(prov, 'is_ready') else True
+                except Exception:
+                    provider_ok = True
+
+            is_ready = ari_connected and transport_ok and provider_ok
+            status = 200 if is_ready else 503
+            return web.json_response({
+                "ari_connected": ari_connected,
+                "transport_ok": transport_ok,
+                "provider_ok": provider_ok,
+                "ready": is_ready,
+            }, status=status)
+        except Exception as exc:
+            return web.json_response({"ready": False, "error": str(exc)}, status=500)
+
+    async def _metrics_handler(self, request):
+        """Expose Prometheus metrics."""
+        try:
+            data = generate_latest()
+            return web.Response(body=data, content_type=CONTENT_TYPE_LATEST)
+        except Exception as exc:
+            return web.Response(text=str(exc), status=500)
 
 
 async def main():
