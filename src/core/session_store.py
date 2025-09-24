@@ -104,6 +104,8 @@ class SessionStore:
             session.tts_active_count += 1
             session.tts_playing = True
             session.audio_capture_enabled = False
+            # Record TTS start time for barge-in protection window
+            session.tts_started_ts = time.time()
             
             # Update VAD state
             if session.vad_state:
@@ -182,6 +184,11 @@ class SessionStore:
         """Get a playback reference without removing it."""
         async with self._lock:
             return self._playbacks.get(playback_id)
+
+    async def list_playbacks_for_call(self, call_id: str) -> List[str]:
+        """List playback IDs associated with a given call_id."""
+        async with self._lock:
+            return [pid for pid, pref in self._playbacks.items() if pref.call_id == call_id]
     
     async def list_active_calls(self) -> List[str]:
         """Get list of active call IDs."""

@@ -1240,16 +1240,87 @@ class Engine:
                 logger.debug("No session for caller; dropping AudioSocket audio", conn_id=conn_id, caller_channel_id=caller_channel_id)
                 return
 
-            # Self-echo mitigation: drop inbound frames while TTS playback is active
-            # We gate on the session's audio_capture_enabled flag (set by ConversationCoordinator)
+            # Self-echo mitigation and barge-in detection
+            # If TTS is playing (capture disabled), decide whether to drop or trigger barge-in
             if hasattr(session, 'audio_capture_enabled') and not session.audio_capture_enabled:
-                logger.debug(
-                    "Dropping inbound AudioSocket audio during TTS playback",
-                    conn_id=conn_id,
-                    caller_channel_id=caller_channel_id,
-                    bytes=len(audio_bytes),
-                )
-                return
+                cfg = getattr(self.config, 'barge_in', None)
+                if not cfg or not getattr(cfg, 'enabled', True):
+                    logger.debug("Dropping inbound AudioSocket audio during TTS playback (barge-in disabled)",
+                                 conn_id=conn_id, caller_channel_id=caller_channel_id, bytes=len(audio_bytes))
+                    return
+
+                # Protection window from TTS start to avoid initial self-echo
+                now = time.time()
+                tts_elapsed_ms = 0
+                try:
+                    if getattr(session, 'tts_started_ts', 0.0) > 0:
+                        tts_elapsed_ms = int((now - session.tts_started_ts) * 1000)
+                except Exception:
+                    tts_elapsed_ms = 0
+
+                initial_protect = int(getattr(cfg, 'initial_protection_ms', 200))
+                if tts_elapsed_ms < initial_protect:
+                    logger.debug("Dropping inbound during initial TTS protection window",
+                                 conn_id=conn_id, caller_channel_id=caller_channel_id,
+                                 tts_elapsed_ms=tts_elapsed_ms, protect_ms=initial_protect)
+                    return
+
+                # Barge-in detection: accumulate candidate window based on energy
+                try:
+                    energy = audioop.rms(audio_bytes, 2)
+                except Exception:
+                    energy = 0
+
+                threshold = int(getattr(cfg, 'energy_threshold', 1000))
+                frame_ms = 20  # AudioSocket frames are 20 ms
+                if energy >= threshold:
+                    session.barge_in_candidate_ms = int(getattr(session, 'barge_in_candidate_ms', 0)) + frame_ms
+                else:
+                    session.barge_in_candidate_ms = 0
+
+                # Cooldown check to avoid flapping
+                cooldown_ms = int(getattr(cfg, 'cooldown_ms', 500))
+                last_barge_in_ts = float(getattr(session, 'last_barge_in_ts', 0.0) or 0.0)
+                in_cooldown = (now - last_barge_in_ts) * 1000 < cooldown_ms if last_barge_in_ts else False
+
+                min_ms = int(getattr(cfg, 'min_ms', 250))
+                if not in_cooldown and session.barge_in_candidate_ms >= min_ms:
+                    # Trigger barge-in: stop active playback(s), clear gating, and continue forwarding audio
+                    try:
+                        playback_ids = await self.session_store.list_playbacks_for_call(caller_channel_id)
+                        for pid in playback_ids:
+                            try:
+                                await self.ari_client.stop_playback(pid)
+                            except Exception:
+                                logger.debug("Playback stop error during barge-in", playback_id=pid, exc_info=True)
+
+                        # Clear all active gating tokens
+                        tokens = list(getattr(session, 'tts_tokens', set()) or [])
+                        for token in tokens:
+                            try:
+                                if self.conversation_coordinator:
+                                    await self.conversation_coordinator.on_tts_end(caller_channel_id, token, reason="barge-in")
+                            except Exception:
+                                logger.debug("Failed to clear gating token during barge-in", token=token, exc_info=True)
+
+                        session.barge_in_candidate_ms = 0
+                        session.last_barge_in_ts = now
+                        await self._save_session(session)
+                        logger.info("🎧 BARGE-IN triggered", call_id=caller_channel_id)
+                    except Exception:
+                        logger.error("Error triggering barge-in", call_id=caller_channel_id, exc_info=True)
+                    # After barge-in, fall through to forward this frame to provider
+                else:
+                    # Not yet triggered; drop inbound frame while TTS is active
+                    if energy > 0:
+                        if self.conversation_coordinator:
+                            try:
+                                self.conversation_coordinator.note_audio_during_tts(caller_channel_id)
+                            except Exception:
+                                pass
+                    logger.debug("Dropping inbound during TTS (candidate_ms=%d, energy=%d)",
+                                 session.barge_in_candidate_ms, energy)
+                    return
 
             provider_name = session.provider_name or self.config.default_provider
             provider = self.providers.get(provider_name)

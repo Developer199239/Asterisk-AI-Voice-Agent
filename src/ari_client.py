@@ -251,10 +251,27 @@ class ARIClient:
             else:
                 logger.error("Failed to create bridge", response=response)
                 return None
-                
         except Exception as e:
             logger.error("Error creating bridge", error=str(e))
             return None
+
+    async def stop_playback(self, playback_id: str) -> bool:
+        """Stop an active playback by its playbackId."""
+        try:
+            response = await self.send_command("DELETE", f"playbacks/{playback_id}")
+            status = response.get("status") if isinstance(response, dict) else None
+            if status is not None:
+                if 200 <= int(status) < 300:
+                    logger.info("Playback stopped", playback_id=playback_id, status=status)
+                    return True
+                logger.debug("Failed to stop playback (may already be finished)", playback_id=playback_id, response=response)
+                return False
+            # Some ARI implementations return empty body on success
+            logger.info("Playback stop response without status; assuming success", playback_id=playback_id)
+            return True
+        except Exception:
+            logger.error("Error stopping playback", playback_id=playback_id, exc_info=True)
+            return False
 
     async def add_channel_to_bridge(self, bridge_id: str, channel_id: str) -> bool:
         """Add a channel to a bridge."""

@@ -49,6 +49,11 @@ class CallSession:
     tts_playing: bool = False
     tts_tokens: Set[str] = field(default_factory=set)
     tts_active_count: int = 0
+    # TTS timing for barge-in/protection windows
+    tts_started_ts: float = 0.0
+    # Barge-in detection accumulators
+    barge_in_candidate_ms: int = 0
+    last_barge_in_ts: float = 0.0
     
     # VAD and audio processing state
     vad_state: Dict[str, Any] = field(default_factory=dict)

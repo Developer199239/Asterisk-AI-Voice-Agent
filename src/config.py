@@ -54,6 +54,13 @@ class DeepgramProviderConfig(BaseModel):
     input_sample_rate_hz: int = Field(default=16000)
     continuous_input: bool = Field(default=True)
 
+class BargeInConfig(BaseModel):
+    enabled: bool = Field(default=True)
+    initial_protection_ms: int = Field(default=200)
+    min_ms: int = Field(default=250)
+    energy_threshold: int = Field(default=1000)
+    cooldown_ms: int = Field(default=500)
+
 
 class LLMConfig(BaseModel):
     initial_greeting: str = "Hello, I am an AI Assistant for Jugaar LLC. How can I help you today."
@@ -84,8 +91,12 @@ class StreamingConfig(BaseModel):
     jitter_buffer_ms: int = Field(default=50)
     keepalive_interval_ms: int = Field(default=5000)
     connection_timeout_ms: int = Field(default=10000)
-    fallback_timeout_ms: int = Field(default=2000)
+    fallback_timeout_ms: int = Field(default=4000)
     chunk_size_ms: int = Field(default=20)
+    min_start_ms: int = Field(default=120)
+    low_watermark_ms: int = Field(default=80)
+    provider_grace_ms: int = Field(default=500)
+    logging_level: str = Field(default="info")
 
 
 class AppConfig(BaseModel):
@@ -99,6 +110,7 @@ class AppConfig(BaseModel):
     audiosocket: Optional[AudioSocketConfig] = Field(default_factory=AudioSocketConfig)
     vad: Optional[VADConfig] = Field(default_factory=VADConfig)
     streaming: Optional[StreamingConfig] = Field(default_factory=StreamingConfig)
+    barge_in: Optional[BargeInConfig] = Field(default_factory=BargeInConfig)
 
 def load_config(path: str = "config/ai-agent.yaml") -> AppConfig:
     # If the provided path is not absolute, resolve it relative to the project root.
@@ -146,6 +158,23 @@ def load_config(path: str = "config/ai-agent.yaml") -> AppConfig:
         # AudioSocket payload format expected by Asterisk dialplan (matches third arg to AudioSocket(...))
         audiosocket_cfg.setdefault('format', os.getenv('AUDIOSOCKET_FORMAT', audiosocket_cfg.get('format', 'ulaw')))
         config_data['audiosocket'] = audiosocket_cfg
+
+        # Barge-in configuration defaults + env overrides
+        barge_cfg = config_data.get('barge_in', {}) or {}
+        try:
+            if 'BARGE_IN_ENABLED' in os.environ:
+                barge_cfg['enabled'] = os.getenv('BARGE_IN_ENABLED', 'true').lower() in ('1','true','yes')
+            if 'BARGE_IN_INITIAL_PROTECTION_MS' in os.environ:
+                barge_cfg['initial_protection_ms'] = int(os.getenv('BARGE_IN_INITIAL_PROTECTION_MS', '200'))
+            if 'BARGE_IN_MIN_MS' in os.environ:
+                barge_cfg['min_ms'] = int(os.getenv('BARGE_IN_MIN_MS', '250'))
+            if 'BARGE_IN_ENERGY_THRESHOLD' in os.environ:
+                barge_cfg['energy_threshold'] = int(os.getenv('BARGE_IN_ENERGY_THRESHOLD', '1000'))
+            if 'BARGE_IN_COOLDOWN_MS' in os.environ:
+                barge_cfg['cooldown_ms'] = int(os.getenv('BARGE_IN_COOLDOWN_MS', '500'))
+        except ValueError:
+            pass
+        config_data['barge_in'] = barge_cfg
 
         return AppConfig(**config_data)
     except FileNotFoundError:
