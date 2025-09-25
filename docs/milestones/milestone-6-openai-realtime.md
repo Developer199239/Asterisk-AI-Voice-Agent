@@ -37,6 +37,54 @@ Add first-class support for OpenAI’s Realtime voice agents so users can swap b
 - Update `call-framework.md` with an OpenAI regression section and checklist.
 - Update `docs/ROADMAP.md` and `docs/Architecture.md` to reflect OpenAI support.
 
+### 6.5 OpenAI Realtime Schema Alignment (Important)
+- Use the nested session schema per the latest guide:
+
+```json
+{
+  "type": "session.update",
+  "session": {
+    "type": "realtime",
+    "model": "gpt-realtime",
+    "output_modalities": ["audio"],
+    "audio": {
+      "input": {
+        "format": {"type": "audio/pcm", "rate": 16000},
+        "turn_detection": {"type": "server_vad"}
+      },
+      "output": {
+        "format": {"type": "audio/pcm"},
+        "voice": "alloy"
+      }
+    },
+    "instructions": "Speak clearly and briefly."
+  }
+}
+```
+
+- Issue a greeting with `response.create` (no `response.audio` object):
+
+```json
+{
+  "type": "response.create",
+  "response": {
+    "output_modalities": ["audio"],
+    "instructions": "Please greet the user with the following: Hello, how can I help you today?",
+    "input": []
+  }
+}
+```
+
+- When VAD is enabled (default), stream with `input_audio_buffer.append` only. Do not send `input_audio_buffer.commit`.
+- Handle server events: `response.output_audio.delta`/`done`, `response.done`, transcript variants `response.output_audio_transcript.*`.
+
+### 6.6 Verification Signals (Expected in Logs)
+- `OpenAI send type=session.update` (nested audio schema)
+- `OpenAI send type=response.create` (no `response.audio`)
+- `response.created` → `response.output_item.added` → `response.output_audio.delta` → first audio chunk logged
+- Playback lifecycle: `AgentAudio` → `AgentAudioDone` → `PlaybackFinished`
+- No `unknown_parameter` errors; no `input_audio_buffer_commit_empty` when VAD is on
+
 ## Deliverables
 - New provider module, config schemas, and tests now wired into `Engine._load_providers`, complete with readiness checks and metrics label `openai_realtime`, validated alongside `python3 -m pytest tests/test_audio_resampler.py`.
 - Updated documentation (roadmap, architecture, regression guide, README env vars).

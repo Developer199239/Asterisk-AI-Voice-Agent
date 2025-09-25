@@ -55,9 +55,19 @@ This roadmap tracks the open-source enablement work for the Asterisk AI Voice Ag
 - **Primary Tasks**:
   - Implement `src/providers/openai_realtime.py` with streaming audio events.
   - Extend configuration schema and env documentation (`README.md`, `docs/Architecture.md`).
+  - Align provider payloads with the latest OpenAI Realtime guide:
+    - Use `session.update` with nested `audio` schema and `output_modalities` (e.g., `session.audio.input.format`, `session.audio.input.turn_detection`, `session.audio.output.format`, `session.audio.output.voice`).
+    - Remove deprecated/unknown fields (e.g., `session.input_audio_sample_rate_hz`).
+    - Use `response.create` without `response.audio`; rely on session audio settings. For greeting, send explicit `response.instructions`.
+    - Add `event_id` on client events and handle `response.done`, `response.output_audio.delta`, `response.output_audio_transcript.*`.
+  - Greeting behavior: send `response.create` immediately on connect with explicit directive (e.g., “Please greet the user with the following: …”).
+  - VAD/commit policy:
+    - When server VAD is enabled (`session.audio.input.turn_detection`), stream with `input_audio_buffer.append` only; do not `commit`.
+    - When VAD is disabled, serialize commits and aggregate ≥160 ms per commit.
 - **Acceptance**:
   - Setting `default_provider: openai_realtime` results in a successful regression call.
   - Streaming telemetry mirrors Deepgram baseline; codec negotiation automatic.
+  - Logs show: `session.update` (nested audio schema), `response.create` (no `response.audio`), `response.output_audio.delta` followed by playback; no `unknown_parameter` errors.
 
 ## Milestone 7 — Configurable Pipelines & Hot Reload (Planned)
 - **Goal**: Support multiple named pipelines (STT/LLM/TTS) defined in YAML, with hot reload for rapid iteration. See `docs/milestones/milestone-7-configurable-pipelines.md`.
@@ -66,9 +76,23 @@ This roadmap tracks the open-source enablement work for the Asterisk AI Voice Ag
   - Extend configuration schema (pipelines + active_pipeline) and loader.
   - Implement pipeline factory interfaces; ensure streaming components obey common contracts.
   - Ensure config watcher reloads pipelines/logging levels safely.
+  - Expose provider endpoints and runtime knobs via YAML (`config/ai-agent.yaml`):
+    - `providers.deepgram.ws_url` (default: `wss://agent.deepgram.com/v1/agent/converse`)
+    - `providers.openai_realtime.base_url` (already supported)
+    - Models/voices/greeting/instructions and logging levels
+    - Document defaults and allow hot reload for these fields
+  - Incorporate enhancements inspired by OpenSIPS AI Voice Connector:
+    - OpenAI server turn detection in `session.update` with YAML: `providers.openai_realtime.turn_detection.{type,silence_duration_ms,threshold,prefix_padding_ms}` (default `server_vad`).
+    - Serialize OpenAI input commits with an audio lock; expose `providers.openai_realtime.commit_threshold_ms` (default 160–200 ms) to avoid `input_audio_buffer_commit_empty`.
+    - Expand Realtime event compatibility: handle `response.output_audio.delta` and `response.audio.delta` variants, plus transcript events (`response.audio_transcript.*`).
+    - Optional tool/function-calling bridge: map `response.function_call_arguments.done` to engine actions (`terminate_call`, `transfer_call`); YAML: `providers.openai_realtime.tools`.
+    - Optional server-side transcription toggle: `providers.openai_realtime.input_audio_transcription.model` (e.g., `whisper-1`); surface transcript logs when enabled.
+    - Playback polish: optionally pad final 20 ms with silence to avoid end-of-utterance clicks.
 - **Acceptance**:
   - Swapping `active_pipeline` applies on next call after reload.
   - Regression call succeeds using a custom pipeline defined in YAML only.
+  - Changing Deepgram/OpenAI endpoints or voice/model via YAML takes effect on next call after reload.
+  - For OpenAI: greeting is heard on connect via `response.create` using `llm.initial_greeting`; no `input_audio_buffer_commit_empty` errors; outbound audio handled for both `response.output_audio.delta` and `response.audio.delta`; transcripts logged when enabled; tool calls (if enabled) trigger mapped actions.
 
 ## Milestone 8 — Optional Monitoring & Analytics Stack (Planned)
 - **Goal**: Provide an opt-in Prometheus + Grafana stack for streaming metrics and future analytics. Instructions: `docs/milestones/milestone-8-monitoring-stack.md`.
