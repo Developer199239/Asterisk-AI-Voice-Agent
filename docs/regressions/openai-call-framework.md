@@ -53,6 +53,32 @@
 
 ---
 
+## 2025-09-24 17:04 PDT — No Greeting; No Audio (pre-fix run showed invalid URL again)
+
+- **Outcome**
+- No initial greeting; no two-way audio; call cleaned up normally.
+
+- **Key Evidence (server logs)**
+- `Connecting to OpenAI Realtime  url=${OPENAI_REALTIME_BASE_URL:-wss://api.openai.com/v1/realtime}?model=gpt-4o-realtime-preview-2024-12-17`
+- `InvalidURI: ${OPENAI_REALTIME_BASE_URL:-wss://api.openai.com/v1/realtime}?model=... isn't a valid URI: scheme isn't ws or wss`
+- `AudioSocket inbound first audio bytes=320` (uplink frames arrived but were not forwarded due to capture gating)
+
+- **Diagnosis**
+- This call occurred before the latest config/provider fixes were activated on the server. The OpenAI URL still contained the `${...:-...}` placeholder syntax, so the provider never connected and upstream capture stayed disabled, leading to repeated protection-window drops.
+
+- **Remediation Applied Immediately After This Call**
+- YAML set to literal `base_url: "wss://api.openai.com/v1/realtime"`; `voice: "alloy"`; `organization: ""`.
+- Provider hardened `_build_ws_url()` to fall back to the default wss endpoint if placeholders or wrong scheme are detected.
+- Provider now requests an initial `response.create` at connect to produce a greeting.
+- Engine enables `audio_capture_enabled=True` after provider start when not gated.
+- Container restarted at 00:10:01Z with providers loaded and readiness green.
+
+- **Next Run (Expected)**
+- Logs should show `url=wss://api.openai.com/v1/realtime?...`, followed by `OpenAI Realtime session established` and `OpenAI Realtime first audio chunk ...`.
+- Caller should hear an initial greeting (provider-side `response.create`), then two-way turns.
+
+---
+
 ## Template for Future Regression Entries
 
 - **Outcome**

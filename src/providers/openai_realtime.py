@@ -70,6 +70,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         self._input_resample_state: Optional[tuple] = None
         self._output_resample_state: Optional[tuple] = None
         self._transcript_buffer: str = ""
+        self._input_info_logged: bool = False
 
     @property
     def supported_codecs(self):
@@ -129,9 +130,35 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             return
 
         try:
+            # Log input codec/config once for diagnosis
+            if not self._input_info_logged:
+                try:
+                    logger.info(
+                        "OpenAI input config",
+                        call_id=self._call_id,
+                        input_encoding=self.config.input_encoding,
+                        input_sample_rate_hz=self.config.input_sample_rate_hz,
+                        provider_input_sample_rate_hz=self.config.provider_input_sample_rate_hz,
+                    )
+                    self._input_info_logged = True
+                except Exception:
+                    pass
+
             pcm16 = self._convert_inbound_audio(audio_chunk)
             if not pcm16:
                 return
+
+            # Log first conversion sizes to verify resample
+            if self._input_info_logged is True and self._input_resample_state is not None:
+                try:
+                    logger.debug(
+                        "OpenAI input frame sizes",
+                        call_id=self._call_id,
+                        src_bytes=len(audio_chunk),
+                        dst_bytes=len(pcm16),
+                    )
+                except Exception:
+                    pass
 
             audio_b64 = base64.b64encode(pcm16).decode("ascii")
 
@@ -303,7 +330,8 @@ class OpenAIRealtimeProvider(AIProviderInterface):
 
         # Log top-level error events with full payload to diagnose API contract issues
         if event_type == "error":
-            logger.error("OpenAI Realtime error event", call_id=self._call_id, event=event)
+            # Use 'error_event' key to avoid structlog 'event' argument conflict
+            logger.error("OpenAI Realtime error event", call_id=self._call_id, error_event=event)
             return
 
         if event_type == "response.created":
