@@ -108,6 +108,14 @@ class OpenAIRealtimeProvider(AIProviderInterface):
 
         await self._send_session_update()
 
+        # Proactively request an initial response so the agent can greet
+        # even before user audio arrives. This leverages `instructions`
+        # if present in the config.
+        try:
+            await self._ensure_response_request()
+        except Exception:
+            logger.debug("Initial response.create request failed", call_id=call_id, exc_info=True)
+
         self._receive_task = asyncio.create_task(self._receive_loop())
         self._keepalive_task = asyncio.create_task(self._keepalive_loop())
 
@@ -185,7 +193,12 @@ class OpenAIRealtimeProvider(AIProviderInterface):
     # ------------------------------------------------------------------ #
 
     def _build_ws_url(self) -> str:
-        base = self.config.base_url.rstrip("/")
+        base = (self.config.base_url or "").strip()
+        # Fallback if unresolved placeholders exist or scheme isn't ws/wss
+        if base.startswith("${") or not base.startswith(("ws://", "wss://")):
+            logger.warning("Invalid OpenAI base_url in config; falling back to default", base_url=base)
+            base = "wss://api.openai.com/v1/realtime"
+        base = base.rstrip("/")
         return f"{base}?model={self.config.model}"
 
     async def _send_session_update(self):
