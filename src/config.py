@@ -72,6 +72,17 @@ class OpenAIRealtimeProviderConfig(BaseModel):
     target_encoding: str = Field(default="ulaw")  # Downstream AudioSocket expectations
     target_sample_rate_hz: int = Field(default=8000)
     response_modalities: List[str] = Field(default_factory=lambda: ["text", "audio"])
+    # Optional explicit greeting to speak immediately on connect
+    greeting: Optional[str] = None
+    # Optional server-side turn detection configuration
+    # If provided, will be sent in session.update
+    class TurnDetectionConfig(BaseModel):
+        type: str = Field(default="server_vad")
+        silence_duration_ms: int = Field(default=200)
+        threshold: float = Field(default=0.5)
+        prefix_padding_ms: int = Field(default=200)
+
+    turn_detection: Optional[TurnDetectionConfig] = None
 
 class BargeInConfig(BaseModel):
     enabled: bool = Field(default=True)

@@ -116,10 +116,13 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         await self._send_session_update()
 
         # Proactively request an initial response so the agent can greet
-        # even before user audio arrives. This leverages `instructions`
-        # if present in the config.
+        # even before user audio arrives. Prefer explicit greeting text
+        # when provided; otherwise fall back to generic instructions.
         try:
-            await self._ensure_response_request()
+            if (self.config.greeting or "").strip():
+                await self._send_explicit_greeting()
+            else:
+                await self._ensure_response_request()
         except Exception:
             logger.debug("Initial response.create request failed", call_id=call_id, exc_info=True)
 
@@ -269,7 +272,44 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         if self.config.instructions:
             payload["session"]["instructions"] = self.config.instructions
 
+        # Optional server-side turn detection
+        if getattr(self.config, "turn_detection", None):
+            try:
+                td = self.config.turn_detection
+                payload["session"]["turn_detection"] = {
+                    "type": td.type,
+                    "silence_duration_ms": td.silence_duration_ms,
+                    "threshold": td.threshold,
+                    "prefix_padding_ms": td.prefix_padding_ms,
+                }
+            except Exception:
+                logger.debug("Failed to include turn_detection in session.update", call_id=self._call_id, exc_info=True)
+
         await self._send_json(payload)
+
+    async def _send_explicit_greeting(self):
+        greeting = (self.config.greeting or "").strip()
+        if not greeting or not self.websocket or self.websocket.closed:
+            return
+
+        response_payload: Dict[str, Any] = {
+            "type": "response.create",
+            "response": {
+                # Force audio modality for greeting
+                "modalities": [m for m in self.config.response_modalities if m in ("audio", "text")] or ["audio"],
+                # Be explicit to ensure the model speaks immediately
+                "instructions": f"Say to the user: {greeting}",
+                "metadata": {"call_id": self._call_id, "purpose": "initial_greeting"},
+                "audio": {
+                    "voice": self.config.voice,
+                    "format": "pcm16",
+                    "sample_rate_hz": self.config.output_sample_rate_hz,
+                },
+            },
+        }
+
+        await self._send_json(response_payload)
+        self._pending_response = True
 
     async def _ensure_response_request(self):
         if self._pending_response or not self.websocket or self.websocket.closed:
@@ -396,6 +436,19 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             return
 
         if event_type == "response.output_audio.done":
+            await self._emit_audio_done()
+            return
+
+        # Additional modern variant used by some previews
+        if event_type == "response.audio.delta":
+            audio_b64 = event.get("delta")
+            if audio_b64:
+                await self._handle_output_audio(audio_b64)
+            else:
+                logger.debug("Missing audio in response.audio.delta", call_id=self._call_id)
+            return
+
+        if event_type == "response.audio.done":
             await self._emit_audio_done()
             return
 
