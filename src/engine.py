@@ -1507,7 +1507,19 @@ class Engine:
 
             await provider.start_session(call_id)
             session.provider_session_active = True
+            # Ensure upstream capture is enabled for real-time providers when not gated
+            try:
+                if not session.tts_playing and not session.audio_capture_enabled:
+                    session.audio_capture_enabled = True
+            except Exception:
+                pass
             await self._save_session(session)
+            # Sync gauges if coordinator is present
+            if self.conversation_coordinator:
+                try:
+                    await self.conversation_coordinator.sync_from_session(session)
+                except Exception:
+                    pass
             logger.info("Provider session started", call_id=call_id, provider=provider_name)
         except Exception as exc:
             logger.error("Failed to start provider session", call_id=call_id, error=str(exc), exc_info=True)

@@ -111,15 +111,15 @@ providers:
     enabled: true
     api_key: "${OPENAI_API_KEY}"
     model: "gpt-4o-realtime-preview-2024-12-17"
-    voice: "${OPENAI_REALTIME_VOICE:-alloy}"
-    base_url: "${OPENAI_REALTIME_BASE_URL:-wss://api.openai.com/v1/realtime}"
-    instructions: "${OPENAI_REALTIME_INSTRUCTIONS:-You are a concise voice assistant. Respond clearly and keep answers under 20 words unless more detail is requested.}"
-    organization: "${OPENAI_ORG_ID:-}"
+    voice: "alloy"
+    base_url: "wss://api.openai.com/v1/realtime"
+    instructions: "You are a concise voice assistant. Respond clearly and keep answers under 20 words unless more detail is requested."
+    organization: ""
     input_encoding: "slin16"          # AudioSocket inbound PCM16 @ 8 kHz
     input_sample_rate_hz: 8000
     output_encoding: "linear16"       # Provider emits PCM16 frames
     output_sample_rate_hz: 24000
-    target_encoding: "${AUDIOSOCKET_FORMAT:-ulaw}"  # Match AudioSocket downstream format
+    target_encoding: "ulaw"  # Explicit for file playback; update if enabling streaming PCM
     target_sample_rate_hz: 8000
     response_modalities:
       - "audio"
