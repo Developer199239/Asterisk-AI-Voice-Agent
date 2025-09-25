@@ -13,6 +13,7 @@ import asyncio
 import base64
 import contextlib
 import json
+import time
 from typing import Any, Dict, Optional
 
 import websockets
@@ -71,6 +72,9 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         self._output_resample_state: Optional[tuple] = None
         self._transcript_buffer: str = ""
         self._input_info_logged: bool = False
+        # Aggregate converted 16 kHz PCM16 bytes and commit in >=100ms chunks
+        self._pending_audio_16k: bytearray = bytearray()
+        self._last_commit_ts: float = 0.0
 
     @property
     def supported_codecs(self):
@@ -160,11 +164,29 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                 except Exception:
                     pass
 
-            audio_b64 = base64.b64encode(pcm16).decode("ascii")
+            # Accumulate until we have >= 120ms to satisfy >=100ms minimum
+            self._pending_audio_16k.extend(pcm16)
+            bytes_per_ms = int(self.config.provider_input_sample_rate_hz * 2 / 1000)
+            commit_threshold_ms = 120
+            commit_threshold_bytes = bytes_per_ms * commit_threshold_ms
 
-            await self._send_json({"type": "input_audio_buffer.append", "audio": audio_b64})
-            await self._send_json({"type": "input_audio_buffer.commit"})
-            await self._ensure_response_request()
+            if len(self._pending_audio_16k) >= commit_threshold_bytes:
+                chunk = bytes(self._pending_audio_16k)
+                self._pending_audio_16k.clear()
+                audio_b64 = base64.b64encode(chunk).decode("ascii")
+                try:
+                    await self._send_json({"type": "input_audio_buffer.append", "audio": audio_b64})
+                    await self._send_json({"type": "input_audio_buffer.commit"})
+                    self._last_commit_ts = time.monotonic()
+                    logger.debug(
+                        "OpenAI committed input audio",
+                        call_id=self._call_id,
+                        ms=len(chunk) // bytes_per_ms,
+                        bytes=len(chunk),
+                    )
+                except Exception:
+                    logger.error("Failed to append/commit input audio buffer", call_id=self._call_id, exc_info=True)
+                await self._ensure_response_request()
         except ConnectionClosedError:
             logger.warning("OpenAI Realtime socket closed while sending audio", call_id=self._call_id)
         except Exception:
