@@ -75,6 +75,8 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         # Aggregate converted 16 kHz PCM16 bytes and commit in >=100ms chunks
         self._pending_audio_16k: bytearray = bytearray()
         self._last_commit_ts: float = 0.0
+        # Serialize append/commit to avoid empty commits from races
+        self._audio_lock: asyncio.Lock = asyncio.Lock()
 
     @property
     def supported_codecs(self):
@@ -164,29 +166,31 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                 except Exception:
                     pass
 
-            # Accumulate until we have >= 120ms to satisfy >=100ms minimum
-            self._pending_audio_16k.extend(pcm16)
-            bytes_per_ms = int(self.config.provider_input_sample_rate_hz * 2 / 1000)
-            commit_threshold_ms = 120
-            commit_threshold_bytes = bytes_per_ms * commit_threshold_ms
+            # Serialize accumulation and commit to avoid empty commits due to races
+            async with self._audio_lock:
+                # Accumulate until we have >= 160ms to comfortably satisfy >=100ms minimum
+                self._pending_audio_16k.extend(pcm16)
+                bytes_per_ms = int(self.config.provider_input_sample_rate_hz * 2 / 1000)
+                commit_threshold_ms = 160
+                commit_threshold_bytes = bytes_per_ms * commit_threshold_ms
 
-            if len(self._pending_audio_16k) >= commit_threshold_bytes:
-                chunk = bytes(self._pending_audio_16k)
-                self._pending_audio_16k.clear()
-                audio_b64 = base64.b64encode(chunk).decode("ascii")
-                try:
-                    await self._send_json({"type": "input_audio_buffer.append", "audio": audio_b64})
-                    await self._send_json({"type": "input_audio_buffer.commit"})
-                    self._last_commit_ts = time.monotonic()
-                    logger.debug(
-                        "OpenAI committed input audio",
-                        call_id=self._call_id,
-                        ms=len(chunk) // bytes_per_ms,
-                        bytes=len(chunk),
-                    )
-                except Exception:
-                    logger.error("Failed to append/commit input audio buffer", call_id=self._call_id, exc_info=True)
-                await self._ensure_response_request()
+                if len(self._pending_audio_16k) >= commit_threshold_bytes:
+                    chunk = bytes(self._pending_audio_16k)
+                    self._pending_audio_16k.clear()
+                    audio_b64 = base64.b64encode(chunk).decode("ascii")
+                    try:
+                        await self._send_json({"type": "input_audio_buffer.append", "audio": audio_b64})
+                        await self._send_json({"type": "input_audio_buffer.commit"})
+                        self._last_commit_ts = time.monotonic()
+                        logger.debug(
+                            "OpenAI committed input audio",
+                            call_id=self._call_id,
+                            ms=len(chunk) // bytes_per_ms,
+                            bytes=len(chunk),
+                        )
+                    except Exception:
+                        logger.error("Failed to append/commit input audio buffer", call_id=self._call_id, exc_info=True)
+                    await self._ensure_response_request()
         except ConnectionClosedError:
             logger.warning("OpenAI Realtime socket closed while sending audio", call_id=self._call_id)
         except Exception:
@@ -377,6 +381,33 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             elif delta_type == "output_text.done":
                 if self._transcript_buffer:
                     await self._emit_transcript("", is_final=True)
+            return
+
+        # Modern event naming variants (top-level types)
+        if event_type == "response.output_audio.delta":
+            audio_b64 = (
+                event.get("audio")
+                or (event.get("delta") or {}).get("audio")
+            )
+            if audio_b64:
+                await self._handle_output_audio(audio_b64)
+            else:
+                logger.debug("Missing audio in response.output_audio.delta", call_id=self._call_id)
+            return
+
+        if event_type == "response.output_audio.done":
+            await self._emit_audio_done()
+            return
+
+        if event_type == "response.audio_transcript.delta":
+            text = event.get("text") or (event.get("delta") or {}).get("text")
+            if text:
+                await self._emit_transcript(text, is_final=False)
+            return
+
+        if event_type == "response.audio_transcript.done":
+            if self._transcript_buffer:
+                await self._emit_transcript("", is_final=True)
             return
 
         if event_type in ("response.completed", "response.error", "response.cancelled"):
