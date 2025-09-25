@@ -246,7 +246,7 @@ class Engine:
 
     async def _on_ari_event(self, event: Dict[str, Any]):
         """Default event handler for unhandled ARI events."""
-        logger.debug("Received unhandled ARI event", event_type=event.get("type"), event=event)
+        logger.debug("Received unhandled ARI event", event_type=event.get("type"), ari_event=event)
 
     async def _save_session(self, session: CallSession, *, new: bool = False) -> None:
         """Persist session updates and keep coordinator metrics in sync."""
@@ -1486,7 +1486,7 @@ class Engine:
                     logger.debug("AgentAudioDone with empty buffer", call_id=call_id)
             else:
                 # Log control/JSON events at debug for now
-                logger.debug("Provider control event", event=event)
+                logger.debug("Provider control event", provider_event=event)
 
         except Exception as exc:
             logger.error("Error handling provider event", error=str(exc), exc_info=True)
@@ -1531,7 +1531,7 @@ class Engine:
             playback = event.get("playback", {}) or {}
             playback_id = playback.get("id") or event.get("playbackId")
             if not playback_id:
-                logger.debug("PlaybackFinished without playback id", event=event)
+                logger.debug("PlaybackFinished without playback id", playback_event=event)
                 return
             await self.playback_manager.on_playback_finished(playback_id)
         except Exception as exc:

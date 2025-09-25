@@ -78,6 +78,8 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         self._last_commit_ts: float = 0.0
         # Serialize append/commit to avoid empty commits from races
         self._audio_lock: asyncio.Lock = asyncio.Lock()
+        # Track provider output format we requested in session.update
+        self._provider_output_format: str = "pcm16"
 
     @property
     def supported_codecs(self):
@@ -273,13 +275,15 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         if not output_modalities:
             output_modalities = ["audio"]
 
-        # Choose output format string based on target encoding (server-accepted strings)
-        enc = (self.config.target_encoding or "ulaw").lower()
+        # Choose OpenAI output format for this session:
+        # If downstream target is μ-law, request g711_ulaw from provider to test end-to-end μ-law.
+        # Otherwise keep PCM16.
         out_fmt = "pcm16"
-        if enc in ("ulaw", "mulaw", "g711_ulaw"):
-            out_fmt = "g711_ulaw"
-        elif enc in ("alaw", "g711_alaw"):
-            out_fmt = "g711_alaw"
+        try:
+            if (self.config.target_encoding or "").lower() in ("ulaw", "mulaw", "g711_ulaw"):
+                out_fmt = "g711_ulaw"
+        except Exception:
+            pass
 
         session: Dict[str, Any] = {
             # Model is selected via URL; keep accepted keys here
@@ -288,6 +292,8 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             "output_audio_format": out_fmt,
             "voice": self.config.voice,
         }
+        # Record provider output format for runtime handling
+        self._provider_output_format = out_fmt
         # Optional server-side VAD/turn detection at session level
         if getattr(self.config, "turn_detection", None):
             try:
@@ -547,17 +553,21 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         if not pcm_24k:
             return
 
-        target_rate = self.config.target_sample_rate_hz
-        pcm_target, self._output_resample_state = resample_audio(
-            pcm_24k,
-            self.config.output_sample_rate_hz,
-            target_rate,
-            state=self._output_resample_state,
-        )
+        # If provider is emitting μ-law (g711_ulaw), pass-through directly to downstream.
+        if (self._provider_output_format or "").lower() == "g711_ulaw":
+            outbound = pcm_24k  # Note: despite variable name, this holds μ-law bytes in this mode
+        else:
+            target_rate = self.config.target_sample_rate_hz
+            pcm_target, self._output_resample_state = resample_audio(
+                pcm_24k,
+                self.config.output_sample_rate_hz,
+                target_rate,
+                state=self._output_resample_state,
+            )
 
-        outbound = convert_pcm16le_to_target_format(pcm_target, self.config.target_encoding)
-        if not outbound:
-            return
+            outbound = convert_pcm16le_to_target_format(pcm_target, self.config.target_encoding)
+            if not outbound:
+                return
 
         if self.on_event:
             if not self._first_output_chunk_logged:
