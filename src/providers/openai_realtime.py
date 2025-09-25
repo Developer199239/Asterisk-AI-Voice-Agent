@@ -273,32 +273,26 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         if not output_modalities:
             output_modalities = ["audio"]
 
-        # Choose output format type based on target encoding (optional)
-        fmt_type = "audio/pcm"
+        # Choose output format string based on target encoding (server-accepted strings)
         enc = (self.config.target_encoding or "ulaw").lower()
+        out_fmt = "pcm16"
         if enc in ("ulaw", "mulaw", "g711_ulaw"):
-            fmt_type = "audio/pcmu"
+            out_fmt = "g711_ulaw"
         elif enc in ("alaw", "g711_alaw"):
-            fmt_type = "audio/pcma"
+            out_fmt = "g711_alaw"
 
         session: Dict[str, Any] = {
-            # Use 'modalities' per server-accepted shape; model is set in URL
+            # Model is selected via URL; keep accepted keys here
             "modalities": output_modalities,
-            "audio": {
-                "input": {
-                    "format": {"type": "audio/pcm", "rate": self.config.provider_input_sample_rate_hz},
-                },
-                "output": {
-                    "format": {"type": fmt_type},
-                    "voice": self.config.voice,
-                },
-            },
+            "input_audio_format": "pcm16",
+            "output_audio_format": out_fmt,
+            "voice": self.config.voice,
         }
-        # Optional server-side VAD
+        # Optional server-side VAD/turn detection at session level
         if getattr(self.config, "turn_detection", None):
             try:
                 td = self.config.turn_detection
-                session["audio"]["input"]["turn_detection"] = {
+                session["turn_detection"] = {
                     "type": td.type,
                     "silence_duration_ms": td.silence_duration_ms,
                     "threshold": td.threshold,
@@ -481,7 +475,13 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             return
 
         if event_type == "response.audio_transcript.delta":
-            text = event.get("text") or (event.get("delta") or {}).get("text")
+            delta = event.get("delta")
+            text = event.get("text")
+            if text is None:
+                if isinstance(delta, dict):
+                    text = delta.get("text")
+                elif isinstance(delta, str):
+                    text = delta
             if text:
                 await self._emit_transcript(text, is_final=False)
             return
@@ -520,7 +520,12 @@ class OpenAIRealtimeProvider(AIProviderInterface):
 
         # Additional transcript variants per guide
         if event_type == "response.output_audio_transcript.delta":
-            text = event.get("delta")
+            delta = event.get("delta")
+            text = None
+            if isinstance(delta, dict):
+                text = delta.get("text")
+            elif isinstance(delta, str):
+                text = delta
             if text:
                 await self._emit_transcript(text, is_final=False)
             return
