@@ -282,9 +282,8 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             fmt_type = "audio/pcma"
 
         session: Dict[str, Any] = {
-            "type": "realtime",
-            "model": self.config.model,
-            "output_modalities": output_modalities,
+            # Use 'modalities' per server-accepted shape; model is set in URL
+            "modalities": output_modalities,
             "audio": {
                 "input": {
                     "format": {"type": "audio/pcm", "rate": self.config.provider_input_sample_rate_hz},
@@ -332,7 +331,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             "event_id": f"resp-{uuid.uuid4()}",
             "response": {
                 # Force audio modality for greeting at response level (optional)
-                "output_modalities": output_modalities,
+                "modalities": output_modalities,
                 # Be explicit to ensure the model speaks immediately
                 "instructions": f"Please greet the user with the following: {greeting}",
                 "metadata": {"call_id": self._call_id, "purpose": "initial_greeting"},
@@ -352,8 +351,8 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             "type": "response.create",
             "event_id": f"resp-{uuid.uuid4()}",
             "response": {
-                # Align with guide naming
-                "output_modalities": [m for m in (self.config.response_modalities or []) if m in ("audio", "text")] or ["audio"],
+                # Use 'modalities' which is accepted by server
+                "modalities": [m for m in (self.config.response_modalities or []) if m in ("audio", "text")] or ["audio"],
                 "metadata": {"call_id": self._call_id},
             },
         }
