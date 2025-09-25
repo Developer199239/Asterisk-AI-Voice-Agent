@@ -638,9 +638,12 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                 if not self.websocket or self.websocket.closed:
                     break
                 try:
+                    # Use native WebSocket ping control frames instead of
+                    # sending an application-level {"type":"ping"} event,
+                    # which Realtime rejects with invalid_request_error.
                     async with self._send_lock:
                         if self.websocket and not self.websocket.closed:
-                            await self.websocket.send(json.dumps({"type": "ping"}))
+                            await self.websocket.ping()
                 except asyncio.CancelledError:
                     break
                 except Exception:
