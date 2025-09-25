@@ -49,7 +49,7 @@ This roadmap tracks the open-source enablement work for the Asterisk AI Voice Ag
   - Gating toggles around playback as expected; post‑TTS guard drops residual frames.
   - Operators can fine‑tune behaviour via YAML without code changes.
 
-## Milestone 6 — OpenAI Realtime Voice Agent (Planned)
+## Milestone 6 — OpenAI Realtime Voice Agent (✅ Completed)
 - **Goal**: Add an OpenAI Realtime provider so Deepgram ↔️ OpenAI switching happens via configuration alone. Milestone instructions: `docs/milestones/milestone-6-openai-realtime.md`.
 - **Dependencies**: Milestone 5 complete; OpenAI API credentials configured.
 - **Primary Tasks**:
@@ -64,10 +64,22 @@ This roadmap tracks the open-source enablement work for the Asterisk AI Voice Ag
   - VAD/commit policy:
     - When server VAD is enabled (`session.audio.input.turn_detection`), stream with `input_audio_buffer.append` only; do not `commit`.
     - When VAD is disabled, serialize commits and aggregate ≥160 ms per commit.
+- **What We Shipped**:
+  - Implemented `src/providers/openai_realtime.py` with robust event handling and transcript parsing.
+  - Fixed keepalive to use native WebSocket `ping()` frames (no invalid `{"type":"ping"}` payloads).
+  - μ-law alignment: requested `g711_ulaw` from OpenAI and passed μ-law bytes directly to Asterisk (file playback path), eliminating conversion artifacts.
+  - Greeting on connect using `response.create` with explicit instructions.
+  - Hardened error logging to avoid structlog conflicts; added correlation and visibility of `input_audio_buffer.*` acks.
+  - Added YAML streaming tuning knobs (`min_start_ms`, `low_watermark_ms`, `jitter_buffer_ms`, `provider_grace_ms`) and wired them into `StreamingPlaybackManager`.
+
+- **Verification (2025‑09‑25 08:59 PDT)**:
+  - Successful regression call with initial greeting; two-way conversation sustained.
+  - Multiple agent turns played cleanly (e.g., 16000B ≈2.0s and 40000B ≈5.0s μ-law files) with proper gating and `PlaybackFinished`.
+  - No OpenAI `invalid_request_error` on keepalive; ping fix validated.
+
 - **Acceptance**:
-  - Setting `default_provider: openai_realtime` results in a successful regression call.
-  - Streaming telemetry mirrors Deepgram baseline; codec negotiation automatic.
-  - Logs show: `session.update` (nested audio schema), `response.create` (no `response.audio`), `response.output_audio.delta` followed by playback; no `unknown_parameter` errors.
+  - Setting `default_provider: openai_realtime` results in a successful regression call with greeting and two-way audio.
+  - Logs show `response.created` → output audio chunks → playback start/finish with gating clear; no `unknown_parameter` errors.
 
 ## Milestone 7 — Configurable Pipelines & Hot Reload (Planned)
 - **Goal**: Support multiple named pipelines (STT/LLM/TTS) defined in YAML, with hot reload for rapid iteration. See `docs/milestones/milestone-7-configurable-pipelines.md`.

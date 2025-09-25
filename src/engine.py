@@ -148,6 +148,11 @@ class Engine:
                 'connection_timeout_ms': config.streaming.connection_timeout_ms,
                 'fallback_timeout_ms': config.streaming.fallback_timeout_ms,
                 'chunk_size_ms': config.streaming.chunk_size_ms,
+                # Additional tuning knobs
+                'min_start_ms': config.streaming.min_start_ms,
+                'low_watermark_ms': config.streaming.low_watermark_ms,
+                'provider_grace_ms': config.streaming.provider_grace_ms,
+                'logging_level': config.streaming.logging_level,
             }
         # Debug/diagnostics: allow broadcasting outbound frames to all AudioSocket conns
         try:

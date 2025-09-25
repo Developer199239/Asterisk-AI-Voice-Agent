@@ -36,14 +36,14 @@ barge_in:
 # Streaming configuration (for downstream_mode=stream)
 streaming:
   sample_rate: 8000          # Output sample rate for streaming audio
-  jitter_buffer_ms: 50       # Jitter buffer target depth; increase for jittery networks (e.g., 80–120)
+  jitter_buffer_ms: 100      # Jitter buffer target depth; increase for jittery networks (e.g., 80–150). Higher = more robust, slightly higher latency.
   keepalive_interval_ms: 5000 # Keepalive interval for streaming connections
   connection_timeout_ms: 10000 # Connection timeout for streaming
   fallback_timeout_ms: 8000   # No audio sent for this long → fall back to file playback
   chunk_size_ms: 20          # Frame size; 20 ms recommended for telephony cadence
-  min_start_ms: 160          # Warm-up buffer before first frame; 120–200 ms typical
-  low_watermark_ms: 80       # Pause streaming when buffer dips below this watermark
-  provider_grace_ms: 500     # Absorb late provider chunks after stream cleanup
+  min_start_ms: 300          # Warm-up buffer before first frame; 250–400 ms recommended for natural, click-free starts.
+  low_watermark_ms: 200      # Pause streaming when buffer dips below this watermark; rebuild depth to avoid underruns.
+  provider_grace_ms: 500     # Absorb late provider chunks after stream cleanup (ms); prevents tail-chop artifacts.
   logging_level: "info"      # Optional override for streaming logger verbosity
 
 # Asterisk connection settings (will be overridden by environment variables)

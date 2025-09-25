@@ -219,3 +219,42 @@
 
 - **Status**
 - Code updated locally; deployment scheduled next. Will verify on the next regression call and update this doc with results.
+
+---
+
+## 2025-09-25 08:59 PDT — Greeting heard; two-way working; pipeline stable; keepalive ping fixed; μ-law pass-through valid
+
+- **Outcome**
+- Initial greeting was heard immediately.
+- Two-way conversation succeeded across multiple turns.
+- Output audio was smooth and sustained; no corruption. μ-law pass-through path validated end-to-end.
+
+- **Key Evidence (ai_engine.log excerpts, call_id=1758776284.1207)**
+- Playback lifecycle for first agent turn:
+  - `🔊 AUDIO PLAYBACK - Started audio_size=16000 ... playback_id=streaming-response:...:1758776293134` (≈2.0s @ 8 kHz μ-law)
+  - `🔊 PlaybackFinished - Audio playback completed ... gating_cleared=True`
+- Provider transcript and second agent turn:
+  - `Provider control event {'type': 'Transcript', ... 'text': "I'm your voice assistant..." 'is_final': True}`
+  - `🔊 AUDIO PLAYBACK - Started audio_size=40000 ... playback_id=streaming-response:...:1758776300156` (≈5.0s)
+  - `🔊 PlaybackFinished - Audio playback completed ... gating_cleared=True`
+- VAD/turn events observed between turns:
+  - `input_audio_buffer.speech_started` → `speech_stopped` → `committed`
+
+- **Diagnosis**
+- The previous mid-call drop was caused by sending an application-level `{"type":"ping"}` to OpenAI Realtime, which the server rejected (`invalid_request_error`). This was fixed by using native WebSocket `ping()` frames inside the provider keepalive loop.
+- μ-law `g711_ulaw` output from OpenAI with pass-through to Asterisk played cleanly, confirming codec alignment.
+
+- **Remediation Applied**
+- `src/providers/openai_realtime.py::_keepalive_loop()` now uses `await websocket.ping()` under the send lock.
+- Streaming tuning knobs added to YAML and passed into `StreamingPlaybackManager`:
+  - `streaming.min_start_ms: 300`
+  - `streaming.low_watermark_ms: 200`
+  - `streaming.jitter_buffer_ms: 100`
+  - `streaming.provider_grace_ms: 500`
+
+- **Next Steps**
+- Run an extended (>3 turns) regression to validate stability over longer interactions.
+- Optionally increase `barge_in.post_tts_end_protection_ms` if echo observed; currently `350 ms` is performing well.
+
+- **Status**
+- OpenAI Realtime provider validated. Keepalive ping issue resolved. Proceeding to mark Milestone 6 as Completed.
