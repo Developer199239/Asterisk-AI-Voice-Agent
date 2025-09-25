@@ -244,6 +244,13 @@ class OpenAIRealtimeProvider(AIProviderInterface):
     async def _send_json(self, payload: Dict[str, Any]):
         if not self.websocket or self.websocket.closed:
             return
+        # Avoid logging base64 audio payloads; but log control message types
+        try:
+            ptype = payload.get("type")
+            if ptype and not ptype.startswith("input_audio_buffer."):
+                logger.debug("OpenAI send", call_id=self._call_id, type=ptype)
+        except Exception:
+            pass
         message = json.dumps(payload)
         async with self._send_lock:
             await self.websocket.send(message)
@@ -294,6 +301,11 @@ class OpenAIRealtimeProvider(AIProviderInterface):
     async def _handle_event(self, event: Dict[str, Any]):
         event_type = event.get("type")
 
+        # Log top-level error events with full payload to diagnose API contract issues
+        if event_type == "error":
+            logger.error("OpenAI Realtime error event", call_id=self._call_id, event=event)
+            return
+
         if event_type == "response.created":
             logger.debug("OpenAI response created", call_id=self._call_id)
             return
@@ -337,6 +349,11 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             text = delta.get("text")
             if text:
                 await self._emit_transcript(text, is_final=False)
+            return
+
+        # Optional acks/telemetry for audio buffer operations
+        if event_type and event_type.startswith("input_audio_buffer"):
+            logger.debug("OpenAI input_audio_buffer ack", call_id=self._call_id, event_type=event_type)
             return
 
         logger.debug("Unhandled OpenAI Realtime event", event_type=event_type)
