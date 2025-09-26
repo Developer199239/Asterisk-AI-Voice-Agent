@@ -136,6 +136,18 @@ class _LocalAdapterBase:
                 "call_id": call_id,
             },
         )
+        try:
+            # Diagnostic: confirm session index and mode after set_mode send
+            logger.info(
+                "Local adapter session opened",
+                component=self.component_key,
+                call_id=call_id,
+                mode=mode,
+                session_keys=list(self._sessions.keys()),
+                url=ws_url,
+            )
+        except Exception:
+            logger.debug("Local adapter session open logging failed", exc_info=True)
 
     async def close_call(self, call_id: str) -> None:
         session = self._sessions.pop(call_id, None)
@@ -253,6 +265,15 @@ class LocalSTTAdapter(STTComponent, _LocalAdapterBase):
     ) -> str:
         session = self._sessions.get(call_id)
         if not session:
+            try:
+                logger.error(
+                    "Local STT session not found",
+                    component=self.component_key,
+                    call_id=call_id,
+                    known_sessions=list(self._sessions.keys()),
+                )
+            except Exception:
+                logger.debug("Failed to log missing STT session details", exc_info=True)
             raise RuntimeError(f"Local STT session not found for call {call_id}")
 
         merged = self._compose_options(options)
@@ -315,6 +336,15 @@ class LocalLLMAdapter(LLMComponent, _LocalAdapterBase):
     ) -> str:
         session = self._sessions.get(call_id)
         if not session:
+            try:
+                logger.error(
+                    "Local LLM session not found",
+                    component=self.component_key,
+                    call_id=call_id,
+                    known_sessions=list(self._sessions.keys()),
+                )
+            except Exception:
+                logger.debug("Failed to log missing LLM session details", exc_info=True)
             raise RuntimeError(f"Local LLM session not found for call {call_id}")
 
         merged = self._compose_options(options)
@@ -378,6 +408,15 @@ class LocalTTSAdapter(TTSComponent, _LocalAdapterBase):
             return
         session = self._sessions.get(call_id)
         if not session:
+            try:
+                logger.error(
+                    "Local TTS session not found",
+                    component=self.component_key,
+                    call_id=call_id,
+                    known_sessions=list(self._sessions.keys()),
+                )
+            except Exception:
+                logger.debug("Failed to log missing TTS session details", exc_info=True)
             raise RuntimeError(f"Local TTS session not found for call {call_id}")
 
         merged = self._compose_options(options)

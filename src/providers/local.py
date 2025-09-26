@@ -257,6 +257,14 @@ class LocalProvider(AIProviderInterface):
                     audio_event = {'type': 'AgentAudio', 'data': message, 'call_id': self._active_call_id}
                     if self.on_event:
                         await self.on_event(audio_event)
+                        # Heuristic: treat each binary message as a complete utterance
+                        # so the engine will play it immediately. If the server later
+                        # streams multi-frame replies, we can switch to explicit JSON
+                        # delimiters (e.g., tts_start/tts_end) instead of this heuristic.
+                        await self.on_event({
+                            'type': 'AgentAudioDone',
+                            'call_id': self._active_call_id,
+                        })
                 # Handle JSON messages (TTS responses, etc.)
                 elif isinstance(message, str):
                     try:

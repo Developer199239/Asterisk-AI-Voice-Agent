@@ -1873,14 +1873,37 @@ class Engine:
                 await pipeline.stt_adapter.open_call(call_id, pipeline.stt_options)
             except Exception:
                 logger.debug("STT open_call failed", call_id=call_id, exc_info=True)
+            else:
+                logger.info("Pipeline STT adapter session opened", call_id=call_id)
             try:
                 await pipeline.llm_adapter.open_call(call_id, pipeline.llm_options)
             except Exception:
                 logger.debug("LLM open_call failed", call_id=call_id, exc_info=True)
+            else:
+                logger.info("Pipeline LLM adapter session opened", call_id=call_id)
             try:
                 await pipeline.tts_adapter.open_call(call_id, pipeline.tts_options)
             except Exception:
                 logger.debug("TTS open_call failed", call_id=call_id, exc_info=True)
+            else:
+                logger.info("Pipeline TTS adapter session opened", call_id=call_id)
+
+            # Pipeline-managed initial greeting (optional)
+            greeting = ""
+            try:
+                greeting = (getattr(self.config.llm, "initial_greeting", None) or "").strip()
+            except Exception:
+                greeting = ""
+            if greeting:
+                try:
+                    tts_bytes = bytearray()
+                    async for chunk in pipeline.tts_adapter.synthesize(call_id, greeting, pipeline.tts_options):
+                        if chunk:
+                            tts_bytes.extend(chunk)
+                    if tts_bytes:
+                        await self.playback_manager.play_audio(call_id, bytes(tts_bytes), "pipeline-tts-greeting")
+                except Exception:
+                    logger.debug("Pipeline greeting TTS synth failed", call_id=call_id, exc_info=True)
 
             # Accumulate into ~160ms chunks for STT
             buf = bytearray()
@@ -2059,6 +2082,24 @@ class Engine:
                     pipeline_resolution = await self._assign_pipeline_to_session(
                         session, pipeline_name=session.pipeline_name
                     )
+
+            # Pipeline-only mode: if a pipeline is selected for this call, do not start
+            # the legacy provider session or play the provider-managed greeting.
+            if pipeline_resolution:
+                logger.info(
+                    "Pipeline-only mode: skipping legacy provider session; greeting will be handled by pipeline",
+                    call_id=call_id,
+                    pipeline=pipeline_resolution.pipeline_name,
+                )
+                try:
+                    await self._ensure_pipeline_runner(session, forced=True)
+                except Exception:
+                    logger.debug(
+                        "Failed to ensure pipeline runner in _start_provider_session",
+                        call_id=call_id,
+                        exc_info=True,
+                    )
+                return
 
             provider_name = session.provider_name or self.config.default_provider
             provider = self.providers.get(provider_name)
