@@ -47,6 +47,26 @@ This playbook summarizes how Gemini should operate on the Asterisk AI Voice Agen
 - **Milestone 8**: Ship optional Prometheus + Grafana monitoring stack.
 - After completion, assist with GA regression runs and documentation polish.
 
+## GPT-5 Prompting Guidance
+- **Precision & consistency**: Ensure prompts in Gemini stay aligned with `Agents.md`, `.cursor/rules/…`, and `.windsurf/rules/…`; avoid conflicting directions when updating workflows.
+- **Structured prompts**: Use XML-style wrappers to organize guidance, for example:
+
+  ```xml
+  <code_editing_rules>
+    <guiding_principles>
+      - keep AudioSocket upstream primary; fall back to file playback automatically
+    </guiding_principles>
+    <reasoning_effort level="high" applies_to="streaming_changes"/>
+  </code_editing_rules>
+  ```
+
+- **Reasoning effort**: Call for `high` effort on milestone-sized changes (streaming transport, pipeline orchestration); prefer medium or low on incremental edits to keep responses focused.
+- **Tone calibration**: Favor cooperative language over rigid or all-caps directives so GPT-5 does not overreact to urgency cues.
+- **Planning & self-reflection**: When starting novel functionality, include a `<self_reflection>` block prompting the model to outline a brief plan before coding.
+- **Eagerness control**: Bound exploration with explicit tool budgets or `<persistence>` directives, specifying when to assume reasonable defaults versus re-querying the user.
+
+Mirror any edits to this section into `Agents.md`, `.cursor/rules/asterisk_ai_voice_agent.mdc`, and `.windsurf/rules/asterisk_ai_voice_agent.md`.
+
 ## Regression & Troubleshooting Workflow
 1. Clear logs (`make server-clear-logs`).
 2. Tail `ai-engine`, `local-ai-server`, and Asterisk logs during calls.

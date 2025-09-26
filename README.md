@@ -1,6 +1,6 @@
 # Asterisk AI Voice Agent v3.0
 
-An open-source AI Voice Agent that integrates with Asterisk/FreePBX using the Asterisk REST Interface (ARI). It features a **production-ready, two-container architecture** with **Hybrid ARI** call control, **SessionStore** state management, ExternalMedia RTP integration for reliable real-time audio capture and file-based TTS playback for robust conversation handling.
+An open-source AI Voice Agent that integrates with Asterisk/FreePBX using the Asterisk REST Interface (ARI). It features a **two-container, Hybrid ARI architecture** with **AudioSocket-first streaming capture**, **SessionStore** state management, and automatic fallback to tmpfs-based file playback for robust conversation handling.
 
 ## 🌟 Features
 
@@ -8,7 +8,8 @@ An open-source AI Voice Agent that integrates with Asterisk/FreePBX using the As
   - ✅ **Deepgram Voice Agent**: Fully implemented for a powerful cloud-based solution.
   - ✅ **Local AI Server**: A dedicated container that runs local models (Vosk for STT, Llama for LLM, and Piper for TTS) for full control and privacy.
 - **High-Performance Architecture**: A lean `ai-engine` for call control and a separate `local-ai-server` for heavy AI processing ensures stability and scalability.
-- **Hybrid ARI Architecture**: Call control using ARI with "answer caller → create mixing bridge → add caller → create ExternalMedia and add it to bridge" flow.
+- **Hybrid ARI Architecture**: Call control uses the AudioSocket-first Hybrid ARI flow (answer caller → create bridge → originate AudioSocket leg) with ExternalMedia kept only as a fallback.
+- **Streaming Transport Defaults**: `StreamingPlaybackManager` paces provider audio in 20 ms frames with configurable jitter buffering, start delay, and graceful fallback to file playback (`config/ai-agent.yaml` → `streaming.*`).
 - **SessionStore State Management**: Centralized, typed store for all call session state, replacing legacy dictionary-based state management.
 - **Real-time Communication**: ExternalMedia RTP upstream capture from Asterisk with ARI-commanded file-based playback; engine↔AI servers use WebSocket.
 - **Docker-based Deployment**: Simple, two-service orchestration using Docker Compose.
@@ -47,7 +48,7 @@ An open-source AI Voice Agent that integrates with Asterisk/FreePBX using the As
     ```bash
     docker-compose up --build -d
     ```
-    This will start both the `ai-engine` and the `local-ai-server`. If you only want to use a cloud provider like Deepgram, you can start just the engine: `docker-compose up -d ai-engine`.
+    This brings up both the `ai-engine` and the `local-ai-server`. If you’re running cloud-only (Deepgram or OpenAI Realtime), you may start just the engine: `docker-compose up -d ai-engine`. After the containers settle, confirm the AudioSocket listener in the logs (`AudioSocket server listening on 0.0.0.0:8090`).
 
 
 ## ⚙️ Configuration
@@ -74,7 +75,7 @@ The system is configured via `config/ai-agent.yaml` and a `.env` file for secret
 
 The application is split into two Docker containers for performance and scalability:
 
-1.  **`ai-engine`**: A lightweight service that connects to Asterisk via ARI, manages the call lifecycle, and communicates with AI providers.
+1.  **`ai-engine`**: A lightweight service that connects to Asterisk via ARI, manages the call lifecycle, hosts the AudioSocket TCP listener, and communicates with AI providers.
 2.  **`local-ai-server`**: A dedicated, powerful service that pre-loads and runs local STT, LLM, and TTS models, exposing them via a WebSocket interface.
 
 ```
@@ -91,7 +92,7 @@ The application is split into two Docker containers for performance and scalabil
                          └─────────────────┘
 ```
 
-This separation ensures that the resource-intensive AI models do not impact the real-time call handling performance of the `ai-engine`. The system uses ExternalMedia RTP for reliable audio capture and file-based TTS playback for robust conversation handling. Streaming TTS is planned as a future enhancement.
+This separation ensures that the resource-intensive AI models do not impact the real-time call handling performance of the `ai-engine`. The system now prefers AudioSocket streaming for upstream capture, falls back to file playback when buffer depth drops, and keeps ExternalMedia RTP as a safety path.
 
 ## 🧑‍💻 Development Workflow
 
@@ -109,21 +110,24 @@ Source code for the `ai-engine` is mounted as a volume, so there's no need to re
 -   **Development Directory**: `/root/Asterisk-Agent-Develop` (runs `develop` branch)
 -   **Server**: Configure your own Asterisk server
 
-## 🎯 Current Status
+## 🎯 GA Progress Snapshot
 
--   ✅ **PRODUCTION READY**: Full two-way conversation system working perfectly!
--   ✅ **Real-time Audio Processing**: ExternalMedia RTP with SSRC mapping
--   ✅ **State Management**: SessionStore-based centralized state management
--   ✅ **TTS Gating**: Perfect feedback prevention during AI responses
--   ✅ **Local AI Integration**: Vosk STT, TinyLlama LLM, Piper TTS
--   ✅ **Conversation Flow**: Complete STT → LLM → TTS pipeline working
--   ✅ **Architecture Validation**: Refactored codebase with clean separation of concerns
--   ✅ **Observability**: ConversationCoordinator drives `/health` + `/metrics` (Prometheus friendly)
+**Completed (Milestones 1–6)**
+- SessionStore-only state management and ConversationCoordinator metrics.
+- AudioSocket-first streaming transport with configurable pacing (`streaming.*`) and post-TTS guard rails.
+- Deepgram AudioSocket regression passing end-to-end with adaptive buffering.
+- OpenAI Realtime provider parity, μ-law alignment, and keepalive fixes.
 
-**Latest Test Results (September 22, 2025):**
-- **Duration**: 2 minutes
-- **Conversation Exchanges**: 4 complete sentences
-- **Status**: ✅ **FULLY FUNCTIONAL**
+**In Flight for GA (Milestones 7–8)**
+- YAML-defined pipelines with hot reload (`docs/milestones/milestone-7-configurable-pipelines.md`).
+- Optional monitoring stack (`docs/milestones/milestone-8-monitoring-stack.md`) and dashboards.
+
+**Launch Tasks (per open-source strategy)**
+- Finalize contributor assets (CONTRIBUTING, issue templates, GitHub Discussions/Discord setup).
+- Publish tuning guide, FreePBX integration updates, and GA release notes.
+- Prepare community launch collateral (blog/video/announcement copy) before tagging GA.
+
+Track detailed acceptance criteria in [`docs/ROADMAP.md`](docs/ROADMAP.md) and the launch checklist in `plan/Asterisk AI Voice Agent_ Your Comprehensive Open Source Launch Strategy.md`.
 
 ##  Roadmap
 

@@ -1,52 +1,83 @@
-# FreePBX Integration Guide (ExternalMedia Architecture)
+# FreePBX Integration Guide (AudioSocket-First Architecture)
 
-**Note:** This document describes the integration of the AI Voice Agent with FreePBX using the ExternalMedia RTP architecture. This provides reliable real-time audio capture and requires minimal dialplan modifications.
+**Note:** This guide reflects the GA-track deployment. AudioSocket is the default upstream transport, with automatic fallback to file playback. ExternalMedia RTP remains available for legacy scenarios and troubleshooting but is no longer the primary path.
 
 ## 1. Overview
 
-This guide explains how to integrate the AI Voice Agent with FreePBX using the ExternalMedia RTP architecture. The system provides reliable real-time audio capture through RTP server integration and requires minimal dialplan configuration.
+The Asterisk AI Voice Agent v3.0 integrates with FreePBX by combining ARI call control with an AudioSocket TCP listener hosted in the `ai-engine`. Each inbound call enters Stasis, the engine originates an AudioSocket leg, and `StreamingPlaybackManager` paces provider audio downstream while retaining tmpfs file playback as a fallback. ExternalMedia RTP can be preserved as an optional path when needed.
 
 ## 2. Prerequisites
 
--   A working FreePBX installation with Asterisk 16+ or FreePBX 15+
--   Docker and Docker Compose installed on the same server
--   The AI Voice Agent project cloned to a directory (e.g., `/root/Asterisk-AI-Voice-Agent`)
--   Port 18080 available for RTP server connections
--   ARI enabled in Asterisk with appropriate user permissions
+- FreePBX installation with Asterisk 16+ (or FreePBX 15+) and ARI enabled.
+- Docker and Docker Compose installed on the same host as FreePBX.
+- Repository cloned (e.g., `/root/Asterisk-AI-Voice-Agent`).
+- Port **8090/TCP** accessible for AudioSocket connections (plus 18080/UDP if retaining the legacy RTP path).
+- Valid `.env` containing ARI credentials and provider API keys.
 
 ## 3. Dialplan Configuration
 
-### Step 3.1: Add Dialplan Contexts
+### 3.1 AudioSocket Contexts
 
-Add the following dialplan contexts to your FreePBX system:
+Append the following contexts to `extensions_custom.conf` (or the appropriate custom include). Each context can be targeted from a FreePBX Custom Destination or IVR option so you can exercise a specific provider pipeline during testing.
 
 ```asterisk
 [from-ai-agent]
-exten => s,1,NoOp(Handing call directly to Stasis for AI processing)
+exten => s,1,NoOp(Handing call directly to AI engine (default provider))
+ same => n,Set(AI_PROVIDER=local_only)
  same => n,Stasis(asterisk-ai-voice-agent)
  same => n,Hangup()
 
-[ai-externalmedia]
-exten => s,1,NoOp(ExternalMedia + RTP AI Voice Agent)
- same => n,Answer()
- same => n,Wait(1)
+[from-ai-agent-custom]
+exten => s,1,NoOp(Handing call to AI engine with custom override)
+ same => n,Set(AI_PROVIDER=custom)
  same => n,Stasis(asterisk-ai-voice-agent)
+ same => n,Hangup()
+
+[from-ai-agent-deepgram]
+exten => s,1,NoOp(Handing call to AI engine with Deepgram override)
+ same => n,Set(AI_PROVIDER=deepgram)
+ same => n,Stasis(asterisk-ai-voice-agent)
+ same => n,Hangup()
+
+[from-ai-agent-openai]
+exten => s,1,NoOp(Handing call to AI engine with OpenAI Realtime override)
+ same => n,Set(AI_PROVIDER=openai_realtime)
+ same => n,Stasis(asterisk-ai-voice-agent)
+ same => n,Hangup()
+
+[ai-agent-media-fork]
+exten => _X.,1,NoOp(Local channel starting AudioSocket for ${EXTEN})
+ same => n,Answer()
+ same => n,Set(AUDIOSOCKET_HOST=127.0.0.1)
+ same => n,Set(AUDIOSOCKET_PORT=8090)
+ same => n,Set(AUDIOSOCKET_UUID=${EXTEN})
+ same => n,Set(AS_UUID_RAW=${SHELL(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen 2>/dev/null)})
+ same => n,Set(AS_UUID=${TOUPPER(${FILTER(0-9A-Fa-f-,${AS_UUID_RAW})})})
+ same => n,ExecIf($[${LEN(${AS_UUID})} != 36]?Set(AS_UUID=${TOUPPER(${FILTER(0-9A-Fa-f-,${SHELL(uuidgen 2>/dev/null)})})}))
+ same => n,NoOp(AS_UUID=${AS_UUID} LEN=${LEN(${AS_UUID})})
+ same => n,AudioSocket(${AS_UUID},${AUDIOSOCKET_HOST}:${AUDIOSOCKET_PORT})
+ same => n,Hangup()
+
+; keep ;1 leg alive while the engine streams audio
+exten => s,1,NoOp(Local)
+ same => n,Wait(60)
  same => n,Hangup()
 ```
 
-### Step 3.2: Configure Inbound Routes
+Map the desired context to a Custom Destination (for example, `from-ai-agent-openai,s,1`) and reuse it inside an IVR to give testers a menu of provider options. Use the `AI_PROVIDER` values above to align with the YAML pipelines you plan to exercise.
 
-1. **Log into FreePBX Admin Panel**
-2. **Navigate to**: Connectivity → Inbound Routes
-3. **Create New Route**:
-   - **Description**: AI Voice Agent
-   - **DID Number**: Your desired phone number
-   - **Set Destination**: Custom Destination
-   - **Custom Destination**: `from-ai-agent,s,1`
+> **Optional ExternalMedia Fallback**: Retain your previous `[ai-externalmedia]` context if you need the RTP-based path for troubleshooting. Swap transports via `config/ai-agent.yaml` when required.
 
-### Step 3.3: Verify ARI Configuration
+### 3.2 Inbound Route
 
-Ensure ARI is properly configured in `/etc/asterisk/ari.conf`:
+1. Open the FreePBX Admin panel.
+2. Navigate to **Connectivity → Inbound Routes**.
+3. Create or edit a route and set **Set Destination** → **Custom Destination** → `from-ai-agent,s,1`.
+4. Apply configuration changes and reload the dialplan.
+
+### 3.3 ARI Configuration
+
+Ensure `/etc/asterisk/ari.conf` includes:
 
 ```ini
 [general]
@@ -62,211 +93,129 @@ password = your_ari_password
 
 ## 4. AI Voice Agent Configuration
 
-### Step 4.1: Environment Setup
-
-Create a `.env` file in the project root:
+### 4.1 Environment (.env)
 
 ```bash
-# Asterisk Configuration
+# Asterisk
 ASTERISK_HOST=127.0.0.1
 ASTERISK_ARI_USERNAME=asterisk-ai-voice-agent
 ASTERISK_ARI_PASSWORD=your_ari_password
 
-# AI Provider Configuration (if using cloud providers)
+# Providers (set as needed)
 DEEPGRAM_API_KEY=your_deepgram_key
 OPENAI_API_KEY=your_openai_key
 ```
 
-### Step 4.2: Configuration File
+### 4.2 `config/ai-agent.yaml`
 
-Update `config/ai-agent.yaml`:
+Below is a minimal AudioSocket-first configuration. Adjust hosts, credentials, and providers to match your deployment. See `docs/milestones/milestone-5-streaming-transport.md` for tuning guidance and `docs/milestones/milestone-7-configurable-pipelines.md` for pipeline details once shipped.
 
 ```yaml
-# Application Configuration
-default_provider: "local"
-audio_transport: "externalmedia"
-downstream_mode: "file"
+# Application
+default_provider: deepgram
+audio_transport: audiosocket
+# keep downstream_mode=file until streaming defaults are tuned for your trunk
+downstream_mode: file
 
-# Asterisk Configuration
+# Asterisk
 asterisk:
-  host: "127.0.0.1"
+  host: 127.0.0.1
   port: 8088
-  username: "asterisk-ai-voice-agent"
-  password: "your_ari_password"
-  app_name: "asterisk-ai-voice-agent"
+  username: asterisk-ai-voice-agent
+  password: ${ASTERISK_ARI_PASSWORD}
+  app_name: asterisk-ai-voice-agent
 
-# ExternalMedia Configuration
-external_media:
-  host: "127.0.0.1"
-  port: 18080
-  codec: "ulaw"
+# AudioSocket listener
+audiosocket:
+  host: 0.0.0.0
+  port: 8090
+  format: pcm16_8k
 
-# VAD Configuration
-vad:
-  webrtc_aggressiveness: 0
-  webrtc_start_frames: 3
-  webrtc_end_silence_frames: 50
-  fallback_interval_ms: 2000
-  fallback_buffer_size: 128000
+# Streaming transport defaults (Milestone 5)
+streaming:
+  min_start_ms: 120
+  low_watermark_ms: 80
+  fallback_timeout_ms: 4000
+  provider_grace_ms: 500
+  jitter_buffer_ms: 160
 
-# Provider Configuration
+barge_in:
+  post_tts_end_protection_ms: 350
+
+# Providers (examples)
 providers:
+  deepgram:
+    api_key: ${DEEPGRAM_API_KEY}
+    input_sample_rate_hz: 8000
+  openai_realtime:
+    api_key: ${OPENAI_API_KEY}
+    turn_detection:
+      type: server_vad
+      silence_duration_ms: 400
   local:
-    enabled: true
-    stt_model: "vosk"
-    llm_model: "tinyllama"
-    tts_model: "piper"
+    enable_stt: true
+    enable_llm: true
+    enable_tts: true
 
-# LLM Configuration
-llm:
-  model: "tinyllama"
-  max_tokens: 100
-  temperature: 0.7
-  context_window: 2048
+# Pipelines (Milestone 7)
+pipelines:
+  default:
+    stt: deepgram_streaming
+    llm: openai_realtime
+    tts: deepgram_tts
+    options:
+      language: en-US
+active_pipeline: default
 ```
 
-## 5. Deployment
-
-### Step 5.1: Start the Services
+## 5. Deployment Workflow
 
 ```bash
-# Start both AI Engine and Local AI Server
+# Start services (both ai-engine + local-ai-server)
 docker-compose up -d
 
-# Check service status
-docker-compose ps
-
-# View logs
+# Watch logs for AudioSocket listener and ARI binding
 docker-compose logs -f ai-engine
-docker-compose logs -f local-ai-server
 ```
 
-### Step 5.2: Verify Health
+For cloud-only deployments you may run `docker-compose up -d ai-engine`. Ensure logs show `AudioSocket server listening` and `Successfully connected to ARI` before testing calls.
 
-Check the health endpoint:
+## 6. Verification & Testing
 
-```bash
-curl http://127.0.0.1:15000/health
-```
+1. **Health Check**
+   ```bash
+   curl http://127.0.0.1:15000/health
+   ```
+   Expect `audiosocket_listening: true`, `audio_transport: "audiosocket"`, and provider readiness.
 
-Expected response:
-```json
-{
-  "status": "healthy",
-  "ari_connected": true,
-  "rtp_server_running": true,
-  "audio_transport": "externalmedia",
-  "active_calls": 0,
-  "providers": {
-    "local": "ready"
-  }
-}
-```
+2. **Test Call**
+   - Place a call into the inbound route.
+   - Confirm log events: `AudioSocket connection accepted`, `AudioSocket connection bound to channel`, provider greeting, streaming buffer depth messages, and `PlaybackFinished` cleanup.
+   - Scrape `/metrics` to capture latency gauges (`ai_agent_turn_latency_seconds`, etc.) before stopping containers.
 
-## 6. Testing
-
-### Step 6.1: Test Call
-
-1. **Place a test call** to your configured DID number
-2. **Verify call flow**:
-   - Call should be answered immediately
-   - AI should play greeting: "Hello, how can I help you?"
-   - You should be able to speak and get AI responses
-   - Call should end normally when you hang up
-
-### Step 6.2: Monitor Logs
-
-```bash
-# Monitor AI Engine logs
-docker-compose logs -f ai-engine
-
-# Monitor Local AI Server logs
-docker-compose logs -f local-ai-server
-
-# Monitor Asterisk logs
-tail -f /var/log/asterisk/full
-```
+3. **Log Monitoring**
+   ```bash
+   docker-compose logs -f ai-engine
+   docker-compose logs -f local-ai-server
+   tail -f /var/log/asterisk/full
+   ```
 
 ## 7. Troubleshooting
 
-### Common Issues
+- **Call never binds to AudioSocket**: verify port 8090 reachability, ensure the Local originate made it into Asterisk logs, and confirm `AUDIOSOCKET_UUID` matches the EXTEN passed from the dialplan.
+- **Frequent streaming fallbacks**: adjust `streaming.min_start_ms` (higher warm-up) or `low_watermark_ms` (higher threshold). Capture logs and `/metrics` snapshots for regression notes.
+- **Provider-specific failures**: check API credentials in `.env`, confirm `default_provider` and `active_pipeline` align, and review provider logs for `invalid_request_error` or throttle messages.
+- **Need legacy RTP path**: swap `audio_transport` to `externalmedia`, ensure the RTP server is bound to port 18080, and route calls to `[ai-externalmedia]` while testing.
 
-**Call not reaching AI Engine**:
-- Check ARI configuration and credentials
-- Verify dialplan context is correct
-- Check firewall settings for port 8088
+## 8. GA Readiness Checklist (FreePBX)
 
-**No audio processing**:
-- Verify RTP server is running on port 18080
-- Check ExternalMedia configuration
-- Monitor RTP server logs for connection issues
+Use this checklist alongside `docs/ROADMAP.md` and the launch strategy under `plan/` to prepare your deployment for GA:
 
-**Poor STT accuracy**:
-- Check audio quality and volume
-- Verify VAD configuration
-- Consider adjusting fallback buffer size
+- [ ] Milestone 5 streaming defaults tuned for your trunk; regression notes captured in `docs/regressions/`.
+- [ ] Milestone 6 provider parity verified (Deepgram + OpenAI Realtime) with call IDs recorded in `call-framework.md`.
+- [ ] Pipelines (Milestone 7) validated on a staging extension once available; `active_pipeline` swaps succeed after hot reload.
+- [ ] Optional monitoring stack (Milestone 8) smoke-tested; `/metrics` snapshots archived before container restarts.
+- [ ] FreePBX operations docs updated and cross-linked with community/launch collateral per `plan/Asterisk AI Voice Agent_ Your Comprehensive Open Source Launch Strategy.md`.
+- [ ] Contributors and operators briefed on fallback procedures (`audio_transport`, `downstream_mode`, rollback plan).
 
-**Slow LLM responses**:
-- This is expected with TinyLlama model
-- Consider switching to faster models
-- Reduce max_tokens for faster generation
-
-### Debug Commands
-
-```bash
-# Check container status
-docker-compose ps
-
-# Check RTP server status
-netstat -tlnp | grep 18080
-
-# Check ARI connectivity
-curl -u asterisk-ai-voice-agent:password http://127.0.0.1:8088/ari/asterisk/info
-
-# Check Asterisk modules
-asterisk -rx "module show like externalmedia"
-```
-
-## 8. Production Considerations
-
-### Performance Optimization
-
-- **LLM Model**: Consider switching to faster models (Phi-3-mini, Qwen2-0.5B)
-- **Buffer Sizes**: Optimize VAD and fallback buffer sizes for your use case
-- **Resource Limits**: Set appropriate Docker resource limits
-- **Monitoring**: Implement proper logging and monitoring
-
-### Security
-
-- **ARI Credentials**: Use strong passwords and restrict access
-- **Network Security**: Consider VPN or firewall rules
-- **Container Security**: Keep Docker images updated
-- **File Permissions**: Secure configuration files
-
-### Scaling
-
-- **Multiple Calls**: System supports concurrent calls
-- **Load Balancing**: Consider multiple AI Engine instances
-- **Database**: Add database for call logging and analytics
-- **Monitoring**: Implement comprehensive monitoring and alerting
-
-## 9. Support
-
-For issues and support:
-
-1. **Check Logs**: Always check container and Asterisk logs first
-2. **Health Endpoint**: Use `/health` endpoint to verify system status
-3. **Configuration**: Verify all configuration files are correct
-4. **Documentation**: Review this guide and main project documentation
-
-## 10. Conclusion
-
-The ExternalMedia RTP architecture provides a robust, production-ready solution for AI voice agents with FreePBX. The minimal dialplan configuration makes it easy to integrate while the RTP server provides reliable audio processing.
-
-The system is now fully functional with:
-- ✅ Real-time audio capture via RTP server
-- ✅ Accurate STT processing with Vosk
-- ✅ Natural LLM responses with TinyLlama
-- ✅ High-quality TTS with Piper
-- ✅ Complete conversation flow
-- ✅ Production-ready architecture
+Keeping these items up to date ensures your FreePBX deployment stays aligned with the broader GA readiness plan.

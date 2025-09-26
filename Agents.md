@@ -165,6 +165,26 @@ exten => s,1,NoOp(Local)
 - **Windsurf**: `.windsurf/rules/asterisk_ai_voice_agent.md` references the roadmap; ensure milestone docs stay in sync so prompts remain accurate.
 - **Shared history**: Document every regression in `docs/regressions/` so all IDEs inherit the same context without log-diving.
 
+### GPT-5 Prompting Guidance
+- **Precision & consistency**: Keep instructions aligned across `Agents.md`, `.cursor/…`, `.windsurf/…`, and `Gemini.md`; avoid conflicting language when updating prompts or workflow notes.
+- **Structured prompts**: Wrap guidance in XML-style blocks when scripting Codex messaging, e.g.
+
+  ```xml
+  <code_editing_rules>
+    <guiding_principles>
+      - streaming transport stays AudioSocket-first with file fallback
+    </guiding_principles>
+    <tool_budget max_calls="6"/>
+  </code_editing_rules>
+  ```
+
+- **Reasoning effort**: Request `high` effort for complex streaming/pipeline work; prefer medium/low for routine edits to avoid over-analysis.
+- **Tone calibration**: Use collaborative wording instead of caps or forceful commands so GPT-5 balances initiative without overcorrecting.
+- **Planning & self-reflection**: For zero-to-one changes, include a `<self_reflection>` block or explicit planning cue before execution.
+- **Eagerness control**: Set exploration limits with tags such as `<persistence>` or explicit tool budgets; clarify when to assume-and-proceed versus re-asking.
+
+Mirror any updates to this guidance in `.cursor/rules/asterisk_ai_voice_agent.mdc`, `.windsurf/rules/asterisk_ai_voice_agent.md`, and `Gemini.md`.
+
 ## Ports & Paths
 - AudioSocket: TCP 8090 (default; configurable via `AUDIOSOCKET_PORT`).
 - ARI: default 8088 HTTP/WS (from Asterisk).
