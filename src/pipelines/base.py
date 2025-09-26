@@ -1,59 +1,73 @@
 """
-Foundational audio pipeline abstractions for in-memory, streaming STT/TTS.
+Foundational pipeline abstractions for composing STT, LLM, and TTS components.
 
-These interfaces allow us to swap implementations (local, cloud) while keeping
-the `Engine` and `ARI` layers stable. All implementations must be non-blocking
-and asyncio-friendly.
+This module defines lightweight async interfaces that individual adapters
+(local server, Deepgram, OpenAI, Google, etc.) can implement. The
+`PipelineOrchestrator` (see orchestrator.py) uses these contracts to build
+per-call pipelines that the Engine can drive without being tied to any single
+provider.
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import AsyncIterator, Optional
+from typing import AsyncIterator, Dict, Any
 
 
-class AudioPipeline(ABC):
-    """Abstract base class for streaming audio pipelines.
+class Component(ABC):
+    """Base class for all pipeline components."""
 
-    Implementations handle:
-    - Model lifecycle: start() to lazily load and warm models; stop() to cleanup
-    - STT: process incoming ulaw/pcm audio chunks and emit completed transcripts
-    - TTS: synthesize text as an async stream of ulaw/pcm chunks for playback
-    """
-
-    @abstractmethod
     async def start(self) -> None:
-        """Initialize and warm models/resources.
+        """Warm up component resources (optional)."""
 
-        Called once at application startup (or when the Engine initializes the
-        pipeline). Must return quickly or perform long work asynchronously.
-        """
-
-    @abstractmethod
     async def stop(self) -> None:
-        """Release resources and prepare for shutdown.
+        """Release resources (optional)."""
 
-        Implementations should gracefully release memory and handles; this may
-        be a no-op if models are intended to stay hot for the process lifetime.
-        """
+    async def open_call(self, call_id: str, options: Dict[str, Any]) -> None:
+        """Prepare per-call state (optional)."""
 
-    @abstractmethod
-    async def process_stt(self, audio_chunk: bytes) -> Optional[str]:
-        """Process an incoming audio chunk and return a transcript if utterance ended.
+    async def close_call(self, call_id: str) -> None:
+        """Release per-call state (optional)."""
 
-        - Input chunks should be raw ulaw or PCM bytes as produced by our AudioSocket
-          channel handler. Implementations may resample/convert as needed.
-        - Should buffer internally and use VAD/end-of-speech detection.
-        - Return a non-empty string only when a full utterance is recognized;
-          otherwise return None to indicate more audio is needed.
-        """
+
+class STTComponent(Component):
+    """Speech-to-text component."""
 
     @abstractmethod
-    async def process_tts(self, text: str) -> AsyncIterator[bytes]:
-        """Synthesize text to an async stream of audio chunks.
+    async def transcribe(
+        self,
+        call_id: str,
+        audio_pcm16: bytes,
+        sample_rate_hz: int,
+        options: Dict[str, Any],
+    ) -> str:
+        """Return a transcript for the provided PCM16 audio buffer."""
 
-        - Yield ulaw or PCM frames suitable for immediate playback/packetization.
-        - Streaming allows low-latency playback while synthesis continues.
-        """
+
+class LLMComponent(Component):
+    """Language model component."""
+
+    @abstractmethod
+    async def generate(
+        self,
+        call_id: str,
+        transcript: str,
+        context: Dict[str, Any],
+        options: Dict[str, Any],
+    ) -> str:
+        """Generate a response given transcript + context."""
+
+
+class TTSComponent(Component):
+    """Text-to-speech component."""
+
+    @abstractmethod
+    async def synthesize(
+        self,
+        call_id: str,
+        text: str,
+        options: Dict[str, Any],
+    ) -> AsyncIterator[bytes]:
+        """Yield audio frames (μ-law or PCM) for the supplied text."""
 
 

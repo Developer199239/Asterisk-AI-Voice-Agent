@@ -78,6 +78,64 @@ active_pipeline: default
 
 The engine loads the active pipeline at startup (or reload) and instantiates the referenced adapters. Each component adheres to the streaming interfaces defined in `src/pipelines/base.py`, allowing local and cloud services to be mixed without code changes. Example configs live in `examples/pipelines/` once Milestone 7 lands.
 
+#### Pipeline Architecture Overview
+
+| Layer | Responsibilities | Key Files / Types |
+| ----- | ---------------- | ----------------- |
+| Configuration (`YAML`) | Declare named pipelines and provider blocks (`providers.local`, `providers.deepgram`, `providers.google`, `providers.openai`, etc.). Each pipeline specifies `stt`, `llm`, `tts`, and an `options` map passed verbatim to adapters. | [`config/ai-agent.yaml`](config/ai-agent.yaml), [`docs/milestones/milestone-7-configurable-pipelines.md`](docs/milestones/milestone-7-configurable-pipelines.md) |
+| Pydantic Models | Validate YAML, normalize legacy configs, and expose typed access via `PipelineEntry`, `ProviderConfig`, `PipelineOptions`. | [`src/config.py`](src/config.py) |
+| Orchestrator | Resolve the active pipeline, look up component factories, and hydrate adapters with provider + pipeline options. Handles hot reload by rebuilding component bindings while leaving in-flight calls untouched. | [`src/pipelines/orchestrator.py`](src/pipelines/orchestrator.py) |
+| Component Adapters | Implement the STT / LLM / TTS interfaces for each provider. Adapters honor selective roles (e.g., `local_stt` can operate without LLM/TTS) and surface capability metadata to the orchestrator. | [`src/pipelines/local.py`](src/providers/local.py) (via adapters automatically registered), [`src/pipelines/deepgram.py`](src/pipelines/deepgram.py), [`src/pipelines/openai.py`](src/pipelines/openai.py), [`src/pipelines/google.py`](src/pipelines/google.py) |
+| Engine Integration | `PipelineOrchestrator` injects the instantiated adapters into the conversation coordinator for new calls. Hot reload swaps adapters for subsequent calls after config validation succeeds. | [`src/engine.py`](src/engine.py), [`src/core/conversation_coordinator.py`](src/core/conversation_coordinator.py) |
+
+##### Configuration Schema
+
+```yaml
+providers:
+  local:
+    enable_stt: true
+    enable_llm: true
+    enable_tts: true
+  deepgram:
+    api_key: ${DEEPGRAM_API_KEY}
+    tts_voice: aura-asteria-en
+pipelines:
+  local_only:
+    stt: local_stt
+    llm: local_llm
+    tts: local_tts
+    options:
+      locale: en-US
+  hybrid_support:
+    stt: local_stt
+    llm: openai_realtime
+    tts: deepgram_tts
+    options:
+      llm:
+        temperature: 0.6
+      tts:
+        format: ulaw
+active_pipeline: hybrid_support
+```
+
+- `providers.*` blocks define credentials and provider-wide defaults; adapters retrieve them through provider-specific config dataclasses. The local provider now accepts `ws_url`, `connect_timeout_sec`, `response_timeout_sec`, and `chunk_ms` so deployments can tune the WebSocket handshake and batching cadence without code changes.
+- `pipelines.*.options` is merged with provider defaults and handed to adapters via `AdapterContext`. Nested maps (e.g., `options.tts.voice`) are preserved.
+
+##### Adapter Mapping
+
+| YAML Value | Adapter Class | Notes |
+| ---------- | ------------- | ----- |
+| `local_stt`, `local_llm`, `local_tts` | `LocalSTTAdapter`, `LocalLLMAdapter`, `LocalTTSAdapter` (registered by the orchestrator when local provider is enabled) | Respect selective enable flags so unused roles do not bind WebSocket channels. |
+| `deepgram_streaming`, `deepgram_llm`, `deepgram_tts` | `DeepgramSTTAdapter`, `DeepgramLLMAdapter` (future), `DeepgramTTSAdapter` | STT uses WebSocket AudioSocket transport; TTS synthesizes via REST and converts to μ-law. |
+| `openai_realtime`, `openai_chat`, `openai_tts` | `OpenAISTTAdapter`, `OpenAILLMAdapter`, `OpenAITTSAdapter` | Realtime STT/LLM share WebRTC session IDs; chat + TTS use HTTPS endpoints. |
+| `google_stt`, `google_llm`, `google_tts` | `GoogleSTTAdapter`, `GoogleLLMAdapter`, `GoogleTTSAdapter` | REST-based integrations leveraging Google Speech-to-Text, Generative Language, and Text-to-Speech APIs. |
+
+When the configuration watcher detects a change, it:
+
+1. Reloads YAML via `load_config()`, producing a new `Config` instance with validated `PipelineEntry` objects.
+2. Instantiates a fresh `PipelineOrchestrator` with provider configs and the requested active pipeline.
+3. Swaps the orchestrator reference inside the engine; in-flight calls continue using the previous adapters, while new conversations resolve components from the updated pipeline.
+
 ### Hot Reload Strategy
 
 Configuration changes propagate through the existing async watcher introduced in Milestone 1. When `config/ai-agent.yaml` changes:

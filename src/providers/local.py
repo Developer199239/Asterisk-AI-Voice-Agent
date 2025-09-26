@@ -19,7 +19,10 @@ class LocalProvider(AIProviderInterface):
         super().__init__(on_event)
         self.config = config
         self.websocket: Optional[websockets.WebSocketClientProtocol] = None
-        self.ws_url = "ws://127.0.0.1:8765"
+        self.ws_url = config.ws_url or "ws://127.0.0.1:8765"
+        self.connect_timeout = float(getattr(config, "connect_timeout_sec", 5.0) or 5.0)
+        self.response_timeout = float(getattr(config, "response_timeout_sec", 5.0) or 5.0)
+        self._batch_ms = max(5, int(getattr(config, "chunk_ms", 200) or 200))
         self._listener_task: Optional[asyncio.Task] = None
         self._sender_task: Optional[asyncio.Task] = None
         self._send_queue: asyncio.Queue = asyncio.Queue(maxsize=200)
@@ -33,12 +36,15 @@ class LocalProvider(AIProviderInterface):
 
     async def _connect_ws(self):
         # Use conservative client settings; server will drive pings if needed
-        return await websockets.connect(
-            self.ws_url,
-            ping_interval=None,         # disable client pings to avoid false timeouts
-            ping_timeout=None,
-            close_timeout=10,
-            max_size=None
+        return await asyncio.wait_for(
+            websockets.connect(
+                self.ws_url,
+                ping_interval=None,         # disable client pings to avoid false timeouts
+                ping_timeout=None,
+                close_timeout=10,
+                max_size=None
+            ),
+            timeout=self.connect_timeout,
         )
 
     async def _reconnect(self):
@@ -107,7 +113,7 @@ class LocalProvider(AIProviderInterface):
                          error=str(e), bytes=len(audio_chunk), exc_info=True)
 
     async def _send_loop(self):
-        BATCH_MS = 20  # send cadence ~50fps
+        batch_ms = max(5, self._batch_ms)
         while True:
             try:
                 # Wait for first chunk
@@ -172,7 +178,7 @@ class LocalProvider(AIProviderInterface):
                 except Exception as e:
                     logger.error("WebSocket send error", error=str(e), exc_info=True)
                 # Pace the loop
-                await asyncio.sleep(BATCH_MS / 1000.0)
+                await asyncio.sleep(batch_ms / 1000.0)
             except asyncio.CancelledError:
                 break
             except Exception:
@@ -186,18 +192,24 @@ class LocalProvider(AIProviderInterface):
     async def play_initial_greeting(self, call_id: str):
         """Play an initial greeting message to the caller."""
         try:
-            # Send a greeting message to the local AI server
-            greeting_message = {
-                "type": "greeting",
+            # Ensure websocket connection exists
+            if not self.websocket or self.websocket.closed:
+                await self.initialize()
+
+            # Ensure the receive loop will attribute AgentAudio to this call
+            self._active_call_id = call_id
+
+            # Send a TTS request that the local AI server understands; it will
+            # reply with metadata (tts_audio) and then a binary payload, which
+            # our receive loop will emit as AgentAudio for this call.
+            tts_message = {
+                "type": "tts_request",
                 "call_id": call_id,
-                "message": "Hello! I'm your AI assistant. How can I help you today?"
+                "text": "Hello! I'm your AI assistant. How can I help you today?",
             }
-            
-            if self.websocket:
-                await self.websocket.send(json.dumps(greeting_message))
-                logger.info("Sent greeting message to Local AI Server", call_id=call_id)
-            else:
-                logger.warning("Cannot send greeting: WebSocket not connected", call_id=call_id)
+
+            await self.websocket.send(json.dumps(tts_message))
+            logger.info("Sent greeting TTS request to Local AI Server", call_id=call_id)
         except Exception as e:
             logger.error("Failed to send greeting message", call_id=call_id, error=str(e), exc_info=True)
 
@@ -311,7 +323,7 @@ class LocalProvider(AIProviderInterface):
             
             try:
                 # Wait for response with timeout
-                response_data = await asyncio.wait_for(response_future, timeout=10.0)
+                response_data = await asyncio.wait_for(response_future, timeout=self.response_timeout)
                 
                 if response_data.get("type") == "tts_response" and response_data.get("audio_data"):
                     # Decode base64 audio data

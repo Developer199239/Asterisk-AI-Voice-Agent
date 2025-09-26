@@ -2,6 +2,76 @@
 # Default provider to use if not specified in the dialplan
 default_provider: "openai_realtime"
 
+# Pipeline definitions specify which STT/LLM/TTS components power each call.
+# Pipelines can mix local and cloud services; the orchestrator selects components
+# based on `active_pipeline`. Per-component options override defaults (base URLs,
+# models, voices, codec formats, etc.).
+pipelines:
+  # Hosted OpenAI realtime stack across STT/LLM/TTS. Requires OPENAI_API_KEY for bearer auth.
+  default:
+    stt: openai_stt
+    llm: openai_llm
+    tts: openai_tts
+    options:
+      stt:
+        base_url: "https://api.openai.com/v1/realtime"  # Bearer auth with OPENAI_API_KEY
+      llm:
+        base_url: "https://api.openai.com/v1"
+        model: "gpt-4o-realtime-preview-2024-12-17"
+      tts:
+        base_url: "https://api.openai.com/v1/audio/speech"
+        format:
+          encoding: "linear16"  # Provider emits PCM16 frames used by streaming mode
+          sample_rate: 24000    # Engine resamples to downstream target sample rate as needed
+  # Fully local inference pipeline; runs entirely inside local_ai_server.
+  local_only:
+    stt: local_stt
+    llm: local_llm
+    tts: local_tts
+    options:
+      stt:
+        mode: "stt"  # Restrict local provider to speech recognition only
+      tts:
+        format:
+          encoding: "mulaw"  # Matches telephony trunks without resampling
+          sample_rate: 8000
+  # Hybrid pipeline: local STT + OpenAI LLM + Deepgram Aura TTS.
+  local_stt_cloud_tts:
+    stt: local_stt
+    llm: openai_llm
+    tts: deepgram_tts
+    options:
+      stt:
+        mode: "stt"  # Local provider ingests AudioSocket frames for recognition
+      llm:
+        base_url: "https://api.openai.com/v1"
+        model: "gpt-4o"  # Uses OPENAI_API_KEY via bearer auth
+      tts:
+        base_url: "https://api.deepgram.com"  # Requires DEEPGRAM_API_KEY
+        format:
+          encoding: "mulaw"  # Deepgram Aura emits 8 kHz μ-law ready for playback
+          sample_rate: 8000
+  # Cloud vendor mix: Deepgram STT + Google Gemini LLM + Google TTS.
+  cloud_only:
+    stt: deepgram_stt
+    llm: google_llm
+    tts: google_tts
+    options:
+      stt:
+        base_url: "https://api.deepgram.com"  # Authenticates with DEEPGRAM_API_KEY
+        language: "en-US"  # See Deepgram docs for supported locales
+      llm:
+        base_url: "https://generativelanguage.googleapis.com/v1"
+        model: "models/gemini-1.5-pro-latest"  # Requires Google API credentials
+      tts:
+        base_url: "https://texttospeech.googleapis.com/v1"
+        voice_name: "en-US-Neural2-C"
+        audio_config:
+          audio_encoding: "MULAW"  # Telephony μ-law output for direct playback
+          sample_rate_hz: 8000
+
+active_pipeline: "default"
+
 # Audio transport controls (AudioSocket-first, ExternalMedia as fallback)
 #
 # Tuning notes:
@@ -90,7 +160,11 @@ vad:
 # Provider-specific configurations
 providers:
   local:
-    enabled: false
+    enabled: true
+    ws_url: "${LOCAL_WS_URL:-ws://127.0.0.1:8765}"
+    connect_timeout_sec: ${LOCAL_WS_CONNECT_TIMEOUT:=2.0}
+    response_timeout_sec: ${LOCAL_WS_RESPONSE_TIMEOUT:=2.0}
+    chunk_ms: ${LOCAL_WS_CHUNK_MS:=200}
     stt_model: "models/stt/vosk-model-small-en-us-0.15"   # legacy placeholder (Local AI server now loads via env vars)
     llm_model: "models/llm/TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf"
     tts_voice: "models/tts/en_US-lessac-medium.onnx"
@@ -107,6 +181,26 @@ providers:
     input_sample_rate_hz: 8000    # Align to trunk sample rate (8 kHz for telephony)
     continuous_input: true        # Stream audio continuously for best responsiveness
                                   # TIP: Keep this true for real-time conversations
+  openai:
+    enabled: true
+    api_key: "${OPENAI_API_KEY}"
+    organization: "${OPENAI_ORG:-}"
+    project: "${OPENAI_PROJECT:-}"
+    realtime_base_url: "wss://api.openai.com/v1/realtime"
+    chat_base_url: "https://api.openai.com/v1"
+    tts_base_url: "https://api.openai.com/v1/audio/speech"
+    realtime_model: "gpt-4o-realtime-preview-2024-12-17"
+    chat_model: "gpt-4o-mini"
+    tts_model: "gpt-4o-mini-tts"
+    voice: "alloy"
+    default_modalities:
+      - "text"
+    input_encoding: "linear16"
+    input_sample_rate_hz: 16000
+    target_encoding: "mulaw"
+    target_sample_rate_hz: 8000
+    chunk_size_ms: 20
+    response_timeout_sec: 5.0
   openai_realtime:
     enabled: true
     api_key: "${OPENAI_API_KEY}"

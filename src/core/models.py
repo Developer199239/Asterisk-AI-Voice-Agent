@@ -39,6 +39,8 @@ class CallSession:
     
     # Provider and conversation state
     provider_name: str = "local"
+    pipeline_name: Optional[str] = None
+    pipeline_components: Dict[str, str] = field(default_factory=dict)
     conversation_state: str = "greeting"  # greeting | listening | processing
     status: str = "initializing"
     last_transcript: Optional[str] = None

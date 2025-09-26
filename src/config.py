@@ -37,9 +37,14 @@ class AudioSocketConfig(BaseModel):
 
 
 class LocalProviderConfig(BaseModel):
-    stt_model: str
-    llm_model: str
-    tts_voice: str
+    enabled: bool = Field(default=True)
+    ws_url: Optional[str] = Field(default="ws://127.0.0.1:8765")
+    connect_timeout_sec: float = Field(default=5.0)
+    response_timeout_sec: float = Field(default=5.0)
+    chunk_ms: int = Field(default=200)
+    stt_model: Optional[str] = None
+    llm_model: Optional[str] = None
+    tts_voice: Optional[str] = None
     temperature: float = Field(default=0.8)
     max_tokens: int = Field(default=150)
 
@@ -53,6 +58,43 @@ class DeepgramProviderConfig(BaseModel):
     input_encoding: str = Field(default="linear16")
     input_sample_rate_hz: int = Field(default=16000)
     continuous_input: bool = Field(default=True)
+    base_url: str = Field(default="https://api.deepgram.com")
+    tts_voice: Optional[str] = None
+    stt_language: str = Field(default="en-US")
+
+
+class OpenAIProviderConfig(BaseModel):
+    """# Milestone7: Canonical defaults for OpenAI pipeline adapters."""
+    api_key: Optional[str] = None
+    organization: Optional[str] = None
+    project: Optional[str] = None
+    realtime_base_url: str = Field(default="wss://api.openai.com/v1/realtime")
+    chat_base_url: str = Field(default="https://api.openai.com/v1")
+    tts_base_url: str = Field(default="https://api.openai.com/v1/audio/speech")
+    realtime_model: str = Field(default="gpt-4o-realtime-preview-2024-12-17")
+    chat_model: str = Field(default="gpt-4o-mini")
+    tts_model: str = Field(default="gpt-4o-mini-tts")
+    voice: str = Field(default="alloy")
+    default_modalities: List[str] = Field(default_factory=lambda: ["text"])
+    input_encoding: str = Field(default="linear16")
+    input_sample_rate_hz: int = Field(default=16000)
+    target_encoding: str = Field(default="mulaw")
+    target_sample_rate_hz: int = Field(default=8000)
+    chunk_size_ms: int = Field(default=20)
+    response_timeout_sec: float = Field(default=5.0)
+
+
+class GoogleProviderConfig(BaseModel):
+    api_key: Optional[str] = None
+    project_id: Optional[str] = None
+    stt_base_url: str = Field(default="https://speech.googleapis.com/v1")
+    tts_base_url: str = Field(default="https://texttospeech.googleapis.com/v1")
+    llm_base_url: str = Field(default="https://generativelanguage.googleapis.com/v1")
+    stt_language_code: str = Field(default="en-US")
+    tts_voice_name: str = Field(default="en-US-Neural2-C")
+    tts_audio_encoding: str = Field(default="MULAW")
+    tts_sample_rate_hz: int = Field(default=8000)
+    llm_model: str = Field(default="models/gemini-1.5-pro-latest")
 
 
 class OpenAIRealtimeProviderConfig(BaseModel):
@@ -131,6 +173,70 @@ class StreamingConfig(BaseModel):
     logging_level: str = Field(default="info")
 
 
+class PipelineEntry(BaseModel):
+    stt: str
+    llm: str
+    tts: str
+    options: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+
+
+# Milestone7: Compose canonical component names for provider-backed pipelines.
+def _compose_provider_components(provider: str) -> Dict[str, Any]:
+    return {
+        "stt": f"{provider}_stt",
+        "llm": f"{provider}_llm",
+        "tts": f"{provider}_tts",
+        "options": {}
+    }
+
+
+# Milestone7: Normalize pipeline definitions into the PipelineEntry schema.
+def _normalize_pipelines(config_data: Dict[str, Any]) -> None:
+    default_provider = config_data.get("default_provider", "openai_realtime")
+    pipelines_cfg = config_data.get("pipelines")
+
+    if not pipelines_cfg:
+        _generate_default_pipeline(config_data)
+        return
+
+    normalized: Dict[str, Dict[str, Any]] = {}
+
+    for pipeline_name, raw_entry in pipelines_cfg.items():
+        if raw_entry is None:
+            normalized[pipeline_name] = _compose_provider_components(default_provider)
+            continue
+
+        if isinstance(raw_entry, str):
+            normalized[pipeline_name] = _compose_provider_components(raw_entry)
+            continue
+
+        if isinstance(raw_entry, dict):
+            provider_hint = raw_entry.get("provider")
+            provider_for_defaults = provider_hint or default_provider
+            components = _compose_provider_components(provider_for_defaults)
+
+            options_block = raw_entry.get("options") or {}
+            if not isinstance(options_block, dict):
+                raise TypeError(
+                    f"Unsupported pipeline options type for '{pipeline_name}': {type(options_block).__name__}"
+                )
+
+            normalized_entry = {
+                "stt": raw_entry.get("stt", components["stt"]),
+                "llm": raw_entry.get("llm", components["llm"]),
+                "tts": raw_entry.get("tts", components["tts"]),
+                "options": options_block,
+            }
+
+            normalized[pipeline_name] = normalized_entry
+            continue
+
+        raise TypeError(f"Unsupported pipeline definition for '{pipeline_name}': {type(raw_entry).__name__}")
+
+    config_data["pipelines"] = normalized
+    config_data.setdefault("active_pipeline", next(iter(normalized.keys())))
+
+
 class AppConfig(BaseModel):
     default_provider: str
     providers: Dict[str, Any]
@@ -143,6 +249,34 @@ class AppConfig(BaseModel):
     vad: Optional[VADConfig] = Field(default_factory=VADConfig)
     streaming: Optional[StreamingConfig] = Field(default_factory=StreamingConfig)
     barge_in: Optional[BargeInConfig] = Field(default_factory=BargeInConfig)
+    pipelines: Dict[str, PipelineEntry] = Field(default_factory=dict)
+    active_pipeline: Optional[str] = None
+
+def _generate_default_pipeline(config_data: Dict[str, Any]) -> None:
+    """Populate a default pipeline entry when none are provided."""
+    default_provider = config_data.get("default_provider", "openai_realtime")
+    pipeline_name = "default"
+    # Milestone7: Align implicit defaults with the PipelineEntry schema.
+    default_components = _compose_provider_components(default_provider)
+
+    pipelines = config_data.setdefault("pipelines", {})
+    existing_entry = pipelines.get(pipeline_name)
+
+    if existing_entry is None:
+        pipelines[pipeline_name] = _compose_provider_components(default_provider)
+    elif isinstance(existing_entry, str):
+        pipelines[pipeline_name] = _compose_provider_components(existing_entry)
+    elif isinstance(existing_entry, dict):
+        existing_entry.setdefault("stt", default_components["stt"])
+        existing_entry.setdefault("llm", default_components["llm"])
+        existing_entry.setdefault("tts", default_components["tts"])
+        if not isinstance(existing_entry.get("options"), dict):
+            existing_entry["options"] = {}
+    else:
+        pipelines[pipeline_name] = _compose_provider_components(default_provider)
+
+    config_data.setdefault("active_pipeline", pipeline_name)
+
 
 def load_config(path: str = "config/ai-agent.yaml") -> AppConfig:
     # If the provided path is not absolute, resolve it relative to the project root.
@@ -190,6 +324,63 @@ def load_config(path: str = "config/ai-agent.yaml") -> AppConfig:
         # AudioSocket payload format expected by Asterisk dialplan (matches third arg to AudioSocket(...))
         audiosocket_cfg.setdefault('format', os.getenv('AUDIOSOCKET_FORMAT', audiosocket_cfg.get('format', 'ulaw')))
         config_data['audiosocket'] = audiosocket_cfg
+
+        # Milestone7: Normalize pipelines for PipelineEntry schema while keeping legacy configs valid.
+        _normalize_pipelines(config_data)
+
+        # Sanitize providers.local for Bash-style ${VAR:-default}/${VAR:=default} tokens.
+        # os.path.expandvars does not support these defaults and may leave tokens intact or empty.
+        # Extract and apply the default values so Pydantic receives valid scalars.
+        try:
+            providers_block = config_data.get('providers', {}) or {}
+            local_block = providers_block.get('local', {}) or {}
+
+            def _apply_default_token(val, *, default=None):
+                # If val is a token like "${NAME:-fallback}" or "${NAME:=fallback}", try to extract fallback.
+                if isinstance(val, str) and val.strip().startswith('${') and val.strip().endswith('}'):
+                    inner = val.strip()[2:-1]
+                    # Split on first ':' to isolate var name vs default part
+                    parts = inner.split(':', 1)
+                    if len(parts) == 2:
+                        default_part = parts[1]
+                        # Strip any leading '-', '=' used in Bash syntax
+                        default_part = default_part.lstrip('-=')
+                        return default_part
+                    return default
+                # If val is empty string after env expansion, use provided default
+                if val == '' and default is not None:
+                    return default
+                return val
+
+            # Apply defaults for known local provider keys
+            if isinstance(local_block, dict):
+                local_block['ws_url'] = _apply_default_token(local_block.get('ws_url'), default='ws://127.0.0.1:8765')
+                local_block['connect_timeout_sec'] = _apply_default_token(local_block.get('connect_timeout_sec'), default='5.0')
+                local_block['response_timeout_sec'] = _apply_default_token(local_block.get('response_timeout_sec'), default='5.0')
+                local_block['chunk_ms'] = _apply_default_token(local_block.get('chunk_ms'), default='200')
+
+                # Coerce numeric strings to proper types
+                try:
+                    if isinstance(local_block.get('connect_timeout_sec'), str):
+                        local_block['connect_timeout_sec'] = float(local_block['connect_timeout_sec'])
+                except Exception:
+                    local_block['connect_timeout_sec'] = 5.0
+                try:
+                    if isinstance(local_block.get('response_timeout_sec'), str):
+                        local_block['response_timeout_sec'] = float(local_block['response_timeout_sec'])
+                except Exception:
+                    local_block['response_timeout_sec'] = 5.0
+                try:
+                    if isinstance(local_block.get('chunk_ms'), str):
+                        local_block['chunk_ms'] = int(float(local_block['chunk_ms']))
+                except Exception:
+                    local_block['chunk_ms'] = 200
+
+                providers_block['local'] = local_block
+                config_data['providers'] = providers_block
+        except Exception:
+            # Non-fatal; Pydantic may still coerce correctly
+            pass
 
         # Barge-in configuration defaults + env overrides
         barge_cfg = config_data.get('barge_in', {}) or {}

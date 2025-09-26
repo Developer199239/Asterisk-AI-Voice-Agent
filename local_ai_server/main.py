@@ -6,8 +6,8 @@ import os
 import subprocess
 import tempfile
 import wave
-import io
-from typing import Optional
+from dataclasses import dataclass
+from typing import Any, Dict, Optional
 
 from websockets.server import serve
 from vosk import Model as VoskModel, KaldiRecognizer
@@ -16,54 +16,76 @@ from piper import PiperVoice
 
 logging.basicConfig(level=logging.INFO)
 
-# WhisperSTT class removed - using Vosk STT only for faster responses
+SUPPORTED_MODES = {"full", "stt", "llm", "tts"}
+DEFAULT_MODE = "full"
+ULAW_SAMPLE_RATE = 8000
+PCM16_TARGET_RATE = 16000
+
+
+@dataclass
+class SessionContext:
+    """# Milestone7: Track per-connection defaults for selective mode handling."""
+    call_id: str = "unknown"
+    mode: str = DEFAULT_MODE
+
 
 class AudioProcessor:
     """Handles audio format conversions for MVP uLaw 8kHz pipeline"""
-    
+
     @staticmethod
-    def resample_audio(input_data: bytes, input_rate: int, output_rate: int, 
-                      input_format: str = "raw", output_format: str = "raw") -> bytes:
+    def resample_audio(input_data: bytes,
+                       input_rate: int,
+                       output_rate: int,
+                       input_format: str = "raw",
+                       output_format: str = "raw") -> bytes:
         """Resample audio using sox"""
         try:
             with tempfile.NamedTemporaryFile(suffix=f".{input_format}", delete=False) as input_file:
                 input_file.write(input_data)
                 input_path = input_file.name
-            
+
             with tempfile.NamedTemporaryFile(suffix=f".{output_format}", delete=False) as output_file:
                 output_path = output_file.name
-            
+
             # Use sox to resample - specify input format for raw PCM data
             cmd = [
-                'sox',
-                '-t', 'raw',  # input format: raw
-                '-r', str(input_rate),  # input sample rate
-                '-e', 'signed-integer',  # input encoding
-                '-b', '16',  # input bit depth
-                '-c', '1',  # input channels
+                "sox",
+                "-t",
+                "raw",
+                "-r",
+                str(input_rate),
+                "-e",
+                "signed-integer",
+                "-b",
+                "16",
+                "-c",
+                "1",
                 input_path,
-                '-r', str(output_rate),  # output sample rate
-                '-c', '1',  # mono
-                '-e', 'signed-integer',
-                '-b', '16',
-                output_path
+                "-r",
+                str(output_rate),
+                "-c",
+                "1",
+                "-e",
+                "signed-integer",
+                "-b",
+                "16",
+                output_path,
             ]
-            
-            result = subprocess.run(cmd, capture_output=True, check=True)
-            
-            with open(output_path, 'rb') as f:
+
+            subprocess.run(cmd, capture_output=True, check=True)
+
+            with open(output_path, "rb") as f:
                 resampled_data = f.read()
-            
-            # Cleanup
+
             os.unlink(input_path)
             os.unlink(output_path)
-            
+
             return resampled_data
-            
-        except Exception as e:
-            logging.error(f"Audio resampling failed: {e}")
+
+        except Exception as exc:  # pragma: no cover - defensive guard
+            logging.error("Audio resampling failed: %s", exc)
             return input_data
-    
+
     @staticmethod
     def convert_to_ulaw_8k(input_data: bytes, input_rate: int) -> bytes:
         """Convert audio to uLaw 8kHz format for ARI playback"""
@@ -71,35 +93,38 @@ class AudioProcessor:
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as input_file:
                 input_file.write(input_data)
                 input_path = input_file.name
-            
+
             with tempfile.NamedTemporaryFile(suffix=".ulaw", delete=False) as output_file:
                 output_path = output_file.name
-            
-            # Use sox to convert to uLaw 8kHz
+
             cmd = [
-                'sox',
+                "sox",
                 input_path,
-                '-r', '8000',  # 8kHz
-                '-c', '1',      # mono
-                '-e', 'mu-law', # uLaw encoding
-                '-t', 'raw',    # raw format
-                output_path
+                "-r",
+                str(ULAW_SAMPLE_RATE),
+                "-c",
+                "1",
+                "-e",
+                "mu-law",
+                "-t",
+                "raw",
+                output_path,
             ]
-            
-            result = subprocess.run(cmd, capture_output=True, check=True)
-            
-            with open(output_path, 'rb') as f:
+
+            subprocess.run(cmd, capture_output=True, check=True)
+
+            with open(output_path, "rb") as f:
                 ulaw_data = f.read()
-            
-            # Cleanup
+
             os.unlink(input_path)
             os.unlink(output_path)
-            
+
             return ulaw_data
-            
-        except Exception as e:
-            logging.error(f"uLaw conversion failed: {e}")
+
+        except Exception as exc:  # pragma: no cover - defensive guard
+            logging.error("uLaw conversion failed: %s", exc)
             return input_data
+
 
 class LocalAIServer:
     def __init__(self):
@@ -107,16 +132,18 @@ class LocalAIServer:
         self.llm_model: Optional[Llama] = None
         self.tts_model: Optional[PiperVoice] = None
         self.audio_processor = AudioProcessor()
-        
-        # Initialize Vosk STT only - optimized for telephony audio
-        # Whisper STT completely removed for faster responses
-        
-        # Model paths
-        self.stt_model_path = os.getenv("LOCAL_STT_MODEL_PATH", "/app/models/stt/vosk-model-small-en-us-0.15")
-        self.llm_model_path = os.getenv("LOCAL_LLM_MODEL_PATH", "/app/models/llm/TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf")
-        self.tts_model_path = os.getenv("LOCAL_TTS_MODEL_PATH", "/app/models/tts/en_US-lessac-medium.onnx")
 
-        # LLM tuning knobs for latency vs. quality trade-offs
+        # Model paths
+        self.stt_model_path = os.getenv(
+            "LOCAL_STT_MODEL_PATH", "/app/models/stt/vosk-model-small-en-us-0.15"
+        )
+        self.llm_model_path = os.getenv(
+            "LOCAL_LLM_MODEL_PATH", "/app/models/llm/TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf"
+        )
+        self.tts_model_path = os.getenv(
+            "LOCAL_TTS_MODEL_PATH", "/app/models/tts/en_US-lessac-medium.onnx"
+        )
+
         default_threads = max(1, min(16, os.cpu_count() or 1))
         self.llm_threads = int(os.getenv("LOCAL_LLM_THREADS", str(default_threads)))
         self.llm_context = int(os.getenv("LOCAL_LLM_CONTEXT", "768"))
@@ -125,25 +152,20 @@ class LocalAIServer:
         self.llm_temperature = float(os.getenv("LOCAL_LLM_TEMPERATURE", "0.2"))
         self.llm_top_p = float(os.getenv("LOCAL_LLM_TOP_P", "0.85"))
         self.llm_repeat_penalty = float(os.getenv("LOCAL_LLM_REPEAT_PENALTY", "1.05"))
-        
+
         # Audio buffering for STT (20ms chunks need to be buffered for effective STT)
         self.audio_buffer = b""
-        self.buffer_size_bytes = 16000 * 2 * 1.0  # 1 second at 16kHz (32000 bytes)
+        self.buffer_size_bytes = PCM16_TARGET_RATE * 2 * 1.0  # 1 second at 16kHz (32000 bytes)
         self.buffer_timeout_ms = 1000  # Process buffer after 1 second of silence
 
     async def initialize_models(self):
         """Initialize all AI models with proper error handling"""
         logging.info("🚀 Initializing enhanced AI models for MVP...")
-        
-        # Initialize STT model
+
         await self._load_stt_model()
-        
-        # Initialize LLM model
         await self._load_llm_model()
-        
-        # Initialize TTS model
         await self._load_tts_model()
-        
+
         logging.info("✅ All models loaded successfully for MVP pipeline")
 
     async def _load_stt_model(self):
@@ -151,11 +173,11 @@ class LocalAIServer:
         try:
             if not os.path.exists(self.stt_model_path):
                 raise FileNotFoundError(f"STT model not found at {self.stt_model_path}")
-            
+
             self.stt_model = VoskModel(self.stt_model_path)
-            logging.info(f"✅ STT model loaded: {self.stt_model_path} (16kHz native)")
-        except Exception as e:
-            logging.error(f"❌ Failed to load STT model: {e}")
+            logging.info("✅ STT model loaded: %s (16kHz native)", self.stt_model_path)
+        except Exception as exc:
+            logging.error("❌ Failed to load STT model: %s", exc)
             raise
 
     async def _load_llm_model(self):
@@ -163,8 +185,7 @@ class LocalAIServer:
         try:
             if not os.path.exists(self.llm_model_path):
                 raise FileNotFoundError(f"LLM model not found at {self.llm_model_path}")
-            
-            # Optimized parameters for faster real-time voice responses
+
             self.llm_model = Llama(
                 model_path=self.llm_model_path,
                 n_ctx=self.llm_context,
@@ -173,9 +194,9 @@ class LocalAIServer:
                 n_gpu_layers=0,
                 verbose=False,
                 use_mmap=True,
-                use_mlock=True
+                use_mlock=True,
             )
-            logging.info(f"✅ LLM model loaded: {self.llm_model_path}")
+            logging.info("✅ LLM model loaded: %s", self.llm_model_path)
             logging.info(
                 "📊 LLM Config: ctx=%s, threads=%s, batch=%s, max_tokens=%s, temp=%s",
                 self.llm_context,
@@ -184,8 +205,8 @@ class LocalAIServer:
                 self.llm_max_tokens,
                 self.llm_temperature,
             )
-        except Exception as e:
-            logging.error(f"❌ Failed to load LLM model: {e}")
+        except Exception as exc:
+            logging.error("❌ Failed to load LLM model: %s", exc)
             raise
 
     async def _load_tts_model(self):
@@ -193,11 +214,11 @@ class LocalAIServer:
         try:
             if not os.path.exists(self.tts_model_path):
                 raise FileNotFoundError(f"TTS model not found at {self.tts_model_path}")
-            
+
             self.tts_model = PiperVoice.load(self.tts_model_path)
-            logging.info(f"✅ TTS model loaded: {self.tts_model_path} (22kHz native)")
-        except Exception as e:
-            logging.error(f"❌ Failed to load TTS model: {e}")
+            logging.info("✅ TTS model loaded: %s (22kHz native)", self.tts_model_path)
+        except Exception as exc:
+            logging.error("❌ Failed to load TTS model: %s", exc)
             raise
 
     async def reload_models(self):
@@ -206,21 +227,19 @@ class LocalAIServer:
         try:
             await self.initialize_models()
             logging.info("✅ Models reloaded successfully")
-        except Exception as e:
-            logging.error(f"❌ Model reload failed: {e}")
+        except Exception as exc:
+            logging.error("❌ Model reload failed: %s", exc)
             raise
 
     async def reload_llm_only(self):
         """Hot reload only the LLM model with optimized parameters"""
         logging.info("🔄 Hot reloading LLM model with optimizations...")
         try:
-            # Unload current model to free memory
             if self.llm_model:
                 del self.llm_model
                 self.llm_model = None
                 logging.info("🗑️ Previous LLM model unloaded")
-            
-            # Load with optimized parameters
+
             await self._load_llm_model()
             logging.info("✅ LLM model reloaded with optimizations")
             logging.info(
@@ -230,96 +249,96 @@ class LocalAIServer:
                 self.llm_temperature,
                 self.llm_max_tokens,
             )
-        except Exception as e:
-            logging.error(f"❌ LLM reload failed: {e}")
+        except Exception as exc:
+            logging.error("❌ LLM reload failed: %s", exc)
             raise
 
     async def process_stt_buffered(self, audio_data: bytes) -> str:
-        """Process STT with buffering for 20ms chunks - buffers until we have enough audio for reliable STT"""
+        """Process STT with buffering for 20ms chunks"""
         try:
             if not self.stt_model:
                 logging.error("STT model not loaded")
                 return ""
-            
-            # Add new audio to buffer
+
             self.audio_buffer += audio_data
-            logging.debug(f"🎵 STT BUFFER - Added {len(audio_data)} bytes, buffer now {len(self.audio_buffer)} bytes")
-            
-            # Check if we have enough audio for STT (at least 1 second)
+            logging.debug(
+                "🎵 STT BUFFER - Added %s bytes, buffer now %s bytes",
+                len(audio_data),
+                len(self.audio_buffer),
+            )
+
             if len(self.audio_buffer) < self.buffer_size_bytes:
-                logging.debug(f"🎵 STT BUFFER - Not enough audio yet ({len(self.audio_buffer)}/{self.buffer_size_bytes} bytes)")
+                logging.debug(
+                    "🎵 STT BUFFER - Not enough audio yet (%s/%s bytes)",
+                    len(self.audio_buffer),
+                    self.buffer_size_bytes,
+                )
                 return ""
-            
-            # Process buffered audio with STT
-            logging.info(f"🎵 STT PROCESSING - Processing buffered audio: {len(self.audio_buffer)} bytes")
-            
-            recognizer = KaldiRecognizer(self.stt_model, 16000)
-            
-            # Check if recognizer accepts the waveform
+
+            logging.info("🎵 STT PROCESSING - Processing buffered audio: %s bytes", len(self.audio_buffer))
+
+            recognizer = KaldiRecognizer(self.stt_model, PCM16_TARGET_RATE)
+
             if recognizer.AcceptWaveform(self.audio_buffer):
                 result = json.loads(recognizer.Result())
-                logging.debug(f"🎵 STT INTERMEDIATE - Partial result: {result}")
             else:
                 result = json.loads(recognizer.FinalResult())
-                logging.debug(f"🎵 STT FINAL - Final result: {result}")
-            
+
             transcript = result.get("text", "").strip()
             if transcript:
-                logging.info(f"📝 STT RESULT - Transcript: '{transcript}'")
+                logging.info("📝 STT RESULT - Transcript: '%s'", transcript)
             else:
                 logging.debug("📝 STT RESULT - Transcript empty after buffering")
-            
-            # Clear buffer after processing
+
             self.audio_buffer = b""
-            
             return transcript
-            
-        except Exception as e:
-            logging.error(f"Buffered STT processing failed: {e}", exc_info=True)
+
+        except Exception as exc:
+            logging.error("Buffered STT processing failed: %s", exc, exc_info=True)
             return ""
 
-    async def process_stt(self, audio_data: bytes, input_rate: int = 16000) -> str:
+    async def process_stt(self, audio_data: bytes, input_rate: int = PCM16_TARGET_RATE) -> str:
         """Process STT with Vosk only - optimized for telephony audio"""
         try:
-            # Use Vosk STT only (removed Whisper for faster responses)
             if not self.stt_model:
                 logging.error("STT model not loaded")
                 return ""
-            
-            logging.debug(f"🎤 STT INPUT - Using Vosk: {len(audio_data)} bytes at {input_rate}Hz")
-            
-            # Only resample if input rate is not 16kHz
-            if input_rate != 16000:
-                logging.debug(f"🎵 STT INPUT - Resampling {input_rate}Hz → 16kHz: {len(audio_data)} bytes")
-                resampled_audio = self.audio_processor.resample_audio(
-                    audio_data, input_rate, 16000, "raw", "raw"
+
+            logging.debug("🎤 STT INPUT - %s bytes at %s Hz", len(audio_data), input_rate)
+
+            if input_rate != PCM16_TARGET_RATE:
+                logging.debug(
+                    "🎵 STT INPUT - Resampling %s Hz → %s Hz: %s bytes",
+                    input_rate,
+                    PCM16_TARGET_RATE,
+                    len(audio_data),
                 )
-                logging.debug(f"🎵 STT RESAMPLED - Resampled audio: {len(resampled_audio)} bytes")
+                resampled_audio = self.audio_processor.resample_audio(
+                    audio_data, input_rate, PCM16_TARGET_RATE, "raw", "raw"
+                )
             else:
-                # Already 16kHz, use directly
                 resampled_audio = audio_data
-                logging.debug(f"🎵 STT INPUT - Using 16kHz audio directly: {len(audio_data)} bytes")
-            
-            # Process with Vosk at 16kHz
-            recognizer = KaldiRecognizer(self.stt_model, 16000)
-            
-            # Check if recognizer accepts the waveform
+
+            recognizer = KaldiRecognizer(self.stt_model, PCM16_TARGET_RATE)
+
             if recognizer.AcceptWaveform(resampled_audio):
                 result = json.loads(recognizer.Result())
-                logging.debug(f"🎵 STT INTERMEDIATE - Partial result: {result}")
             else:
                 result = json.loads(recognizer.FinalResult())
-                logging.debug(f"🎵 STT FINAL - Final result: {result}")
-            
+
             transcript = result.get("text", "").strip()
             if transcript:
-                logging.info(f"📝 STT RESULT - Vosk transcript: '{transcript}' (length: {len(transcript)})")
+                logging.info(
+                    "📝 STT RESULT - Vosk transcript: '%s' (length: %s)",
+                    transcript,
+                    len(transcript),
+                )
             else:
                 logging.debug("📝 STT RESULT - Vosk transcript empty")
             return transcript
-            
-        except Exception as e:
-            logging.error(f"STT processing failed: {e}", exc_info=True)
+
+        except Exception as exc:
+            logging.error("STT processing failed: %s", exc, exc_info=True)
             return ""
 
     async def process_llm(self, text: str) -> str:
@@ -328,15 +347,12 @@ class LocalAIServer:
             if not self.llm_model:
                 logging.warning("LLM model not loaded, using fallback")
                 return "I'm here to help you. How can I assist you today?"
-            
-            # Optimized prompt for faster, more focused responses
-            prompt = f"""You are a helpful AI voice assistant. Respond naturally and conversationally to the user's input.
 
-User: {text}
+            prompt = (
+                "You are a helpful AI voice assistant. Respond naturally and conversationally to the user's input.\n\n"
+                f"User: {text}\n\nAssistant:"
+            )
 
-Assistant:"""
-            
-            # Optimized generation parameters for speed and quality
             output = self.llm_model(
                 prompt,
                 max_tokens=self.llm_max_tokens,
@@ -346,22 +362,18 @@ Assistant:"""
                 top_p=self.llm_top_p,
                 repeat_penalty=self.llm_repeat_penalty,
             )
-            
-            choices = output.get('choices', []) if isinstance(output, dict) else []
+
+            choices = output.get("choices", []) if isinstance(output, dict) else []
             if not choices:
                 logging.warning("🤖 LLM RESULT - No choices returned, using fallback response")
                 return "I'm here to help you. How can I assist you today?"
 
-            response = choices[0].get('text', '').strip()
-            logging.info(
-                "🤖 LLM RESULT - Response: '%s' (tokens=%s)",
-                response,
-                len(response.split()),
-            )
+            response = choices[0].get("text", "").strip()
+            logging.info("🤖 LLM RESULT - Response: '%s'", response)
             return response
-            
-        except Exception as e:
-            logging.error(f"LLM processing failed: {e}", exc_info=True)
+
+        except Exception as exc:
+            logging.error("LLM processing failed: %s", exc, exc_info=True)
             return "I'm here to help you. How can I assist you today?"
 
     async def process_tts(self, text: str) -> bytes:
@@ -370,161 +382,361 @@ Assistant:"""
             if not self.tts_model:
                 logging.error("TTS model not loaded")
                 return b""
-            
-            # Generate WAV at 22kHz using Piper (native rate) then resample to 8kHz
-            logging.debug(f"🔊 TTS INPUT - Generating 22kHz audio for: '{text}'")
-            
+
+            logging.debug("🔊 TTS INPUT - Generating 22kHz audio for: '%s'", text)
+
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as wav_file:
                 wav_path = wav_file.name
-            
-            # Synthesize with Piper at native 22kHz rate - collect generator output
+
             with wave.open(wav_path, "wb") as wav_file:
-                wav_file.setnchannels(1)  # Mono
-                wav_file.setsampwidth(2)  # 16-bit
-                wav_file.setframerate(22050)  # 22kHz native rate for Piper
-                
-                # Piper.synthesize returns AudioChunk objects, collect all chunks
+                wav_file.setnchannels(1)
+                wav_file.setsampwidth(2)
+                wav_file.setframerate(22050)
+
                 audio_generator = self.tts_model.synthesize(text)
                 for audio_chunk in audio_generator:
                     wav_file.writeframes(audio_chunk.audio_int16_bytes)
-            
-            # Read the generated WAV
-            with open(wav_path, 'rb') as f:
-                wav_data = f.read()
-            
-            # Convert to uLaw 8kHz for ARI playback (proper resampling from 22kHz)
-            logging.debug(f"🔄 TTS CONVERSION - Converting 22kHz WAV → 8kHz uLaw")
+
+            with open(wav_path, "rb") as wav_file:
+                wav_data = wav_file.read()
+
             ulaw_data = self.audio_processor.convert_to_ulaw_8k(wav_data, 22050)
-            
-            # Cleanup
             os.unlink(wav_path)
-            
-            logging.info(f"🔊 TTS RESULT - Generated uLaw 8kHz audio: {len(ulaw_data)} bytes")
+
+            logging.info("🔊 TTS RESULT - Generated uLaw 8kHz audio: %s bytes", len(ulaw_data))
             return ulaw_data
-            
-        except Exception as e:
-            logging.error(f"TTS processing failed: {e}", exc_info=True)
+
+        except Exception as exc:
+            logging.error("TTS processing failed: %s", exc, exc_info=True)
             return b""
+
+    def _normalize_mode(self, data_mode: Optional[str], session: SessionContext) -> str:
+        if data_mode and data_mode in SUPPORTED_MODES:
+            session.mode = data_mode
+            return data_mode
+        return session.mode
+
+    async def _send_json(self, websocket, payload: Dict[str, Any]) -> None:
+        await websocket.send(json.dumps(payload))
+
+    async def _emit_stt_result(
+        self,
+        websocket,
+        transcript: str,
+        session: SessionContext,
+        request_id: Optional[str],
+        *,
+        source_mode: str,
+    ) -> None:
+        if not transcript:
+            return
+        payload = {
+            "type": "stt_result",
+            "text": transcript,
+            "call_id": session.call_id,
+            "mode": source_mode,
+        }
+        if request_id:
+            payload["request_id"] = request_id
+        await self._send_json(websocket, payload)
+
+    async def _emit_llm_response(
+        self,
+        websocket,
+        llm_response: str,
+        session: SessionContext,
+        request_id: Optional[str],
+        *,
+        source_mode: str,
+    ) -> None:
+        if not llm_response:
+            return
+        payload = {
+            "type": "llm_response",
+            "text": llm_response,
+            "call_id": session.call_id,
+            "mode": source_mode,
+        }
+        if request_id:
+            payload["request_id"] = request_id
+        await self._send_json(websocket, payload)
+
+    async def _emit_tts_audio(
+        self,
+        websocket,
+        audio_bytes: bytes,
+        session: SessionContext,
+        request_id: Optional[str],
+        *,
+        source_mode: str,
+    ) -> None:
+        if request_id:
+            # Milestone7: emit metadata event for selective TTS while keeping binary transport.
+            metadata = {
+                "type": "tts_audio",
+                "call_id": session.call_id,
+                "mode": source_mode,
+                "request_id": request_id,
+                "encoding": "mulaw",
+                "sample_rate_hz": ULAW_SAMPLE_RATE,
+                "byte_length": len(audio_bytes or b""),
+            }
+            await self._send_json(websocket, metadata)
+        if audio_bytes:
+            await websocket.send(audio_bytes)
+
+    async def _handle_audio_payload(
+        self,
+        websocket,
+        session: SessionContext,
+        data: Dict[str, Any],
+        *,
+        incoming_bytes: Optional[bytes] = None,
+    ) -> None:
+        """
+        Decode audio payload and route it through the pipeline according to the requested mode.
+        """
+        mode = self._normalize_mode(data.get("mode"), session)
+        request_id = data.get("request_id")
+        call_id = data.get("call_id")
+        if call_id:
+            session.call_id = call_id
+
+        if incoming_bytes is None:
+            encoded_audio = data.get("data", "")
+            if not encoded_audio:
+                logging.warning("Audio payload missing 'data'")
+                return
+            try:
+                audio_bytes = base64.b64decode(encoded_audio)
+            except Exception as exc:
+                logging.warning("Failed to decode base64 audio payload: %s", exc)
+                return
+        else:
+            audio_bytes = incoming_bytes
+
+        if not audio_bytes:
+            logging.debug("Audio payload empty after decoding")
+            return
+
+        input_rate = int(data.get("rate", PCM16_TARGET_RATE))
+
+        if mode == "stt":
+            # Milestone7: selective STT mode returns transcript without invoking downstream components.
+            transcript = await self.process_stt(audio_bytes, input_rate)
+            await self._emit_stt_result(
+                websocket,
+                transcript,
+                session,
+                request_id,
+                source_mode=mode,
+            )
+            return
+
+        if mode == "llm":
+            # Milestone7: STT + LLM without generating audio output.
+            transcript = await self.process_stt(audio_bytes, input_rate)
+            if not transcript:
+                logging.debug("Selective LLM mode received empty transcript")
+                return
+            llm_response = await self.process_llm(transcript)
+            await self._emit_llm_response(
+                websocket,
+                llm_response,
+                session,
+                request_id,
+                source_mode=mode,
+            )
+            return
+
+        if mode == "tts":
+            logging.warning("Received audio payload with mode=tts; expected text request. Skipping.")
+            return
+
+        # Default full pipeline (STT → LLM → TTS).
+        transcript = await self.process_stt(audio_bytes, input_rate)
+        if not transcript:
+            logging.debug("Full pipeline STT transcript empty, skipping downstream")
+            return
+
+        llm_response = await self.process_llm(transcript)
+        if not llm_response:
+            logging.debug("Full pipeline LLM produced empty response, skipping TTS")
+            return
+
+        audio_response = await self.process_tts(llm_response)
+        await self._emit_tts_audio(
+            websocket,
+            audio_response,
+            session,
+            request_id,
+            source_mode="full",
+        )
+
+    async def _handle_tts_request(
+        self,
+        websocket,
+        session: SessionContext,
+        data: Dict[str, Any],
+    ) -> None:
+        text = data.get("text", "").strip()
+        if not text:
+            logging.warning("TTS request missing 'text'")
+            return
+
+        mode = self._normalize_mode(data.get("mode"), session)
+        if mode not in {"tts", "full"}:
+            # Milestone7: allow callers to force binary TTS even outside default 'tts' mode.
+            logging.debug("Overriding session mode to 'tts' for explicit TTS request")
+            mode = "tts"
+
+        request_id = data.get("request_id")
+        call_id = data.get("call_id")
+        if call_id:
+            session.call_id = call_id
+
+        audio_response = await self.process_tts(text)
+        await self._emit_tts_audio(
+            websocket,
+            audio_response,
+            session,
+            request_id,
+            source_mode=mode,
+        )
+
+    async def _handle_llm_request(
+        self,
+        websocket,
+        session: SessionContext,
+        data: Dict[str, Any],
+    ) -> None:
+        text = data.get("text", "").strip()
+        if not text:
+            logging.warning("LLM request missing 'text'")
+            return
+
+        mode = self._normalize_mode(data.get("mode"), session)
+        request_id = data.get("request_id")
+        call_id = data.get("call_id")
+        if call_id:
+            session.call_id = call_id
+
+        llm_response = await self.process_llm(text)
+        await self._emit_llm_response(
+            websocket,
+            llm_response,
+            session,
+            request_id,
+            source_mode=mode or "llm",
+        )
+
+    async def _handle_json_message(self, websocket, session: SessionContext, message: str) -> None:
+        try:
+            data = json.loads(message)
+        except json.JSONDecodeError:
+            logging.warning("❓ Invalid JSON message: %s", message)
+            return
+
+        msg_type = data.get("type")
+        if not msg_type:
+            logging.warning("JSON payload missing 'type': %s", data)
+            return
+
+        if msg_type == "set_mode":
+            # Milestone7: allow clients to pre-select default mode for subsequent binary frames.
+            requested = data.get("mode", DEFAULT_MODE)
+            if requested in SUPPORTED_MODES:
+                session.mode = requested
+                logging.info("Session mode updated to %s", session.mode)
+            else:
+                logging.warning("Unsupported mode requested: %s", requested)
+            return
+
+        if msg_type == "audio":
+            await self._handle_audio_payload(websocket, session, data)
+            return
+
+        if msg_type == "tts_request":
+            await self._handle_tts_request(websocket, session, data)
+            return
+
+        if msg_type == "llm_request":
+            await self._handle_llm_request(websocket, session, data)
+            return
+
+        if msg_type == "reload_models":
+            logging.info("🔄 RELOAD REQUEST - Hot reloading all models...")
+            await self.reload_models()
+            response = {
+                "type": "reload_response",
+                "status": "success",
+                "message": "All models reloaded successfully",
+            }
+            await self._send_json(websocket, response)
+            return
+
+        if msg_type == "reload_llm":
+            logging.info("🔄 LLM RELOAD REQUEST - Hot reloading LLM with optimizations...")
+            await self.reload_llm_only()
+            response = {
+                "type": "reload_response",
+                "status": "success",
+                "message": (
+                    "LLM model reloaded with optimizations (ctx="
+                    f"{self.llm_context}, batch={self.llm_batch}, temp={self.llm_temperature}, "
+                    f"max_tokens={self.llm_max_tokens})"
+                ),
+            }
+            await self._send_json(websocket, response)
+            return
+
+        logging.warning("❓ Unknown message type: %s", msg_type)
+
+    async def _handle_binary_message(self, websocket, session: SessionContext, message: bytes) -> None:
+        logging.info("🎵 AUDIO INPUT - Received binary audio: %s bytes", len(message))
+        await self._handle_audio_payload(
+            websocket,
+            session,
+            data={"mode": session.mode},
+            incoming_bytes=message,
+        )
 
     async def handler(self, websocket):
         """Enhanced WebSocket handler with MVP pipeline and hot reloading"""
-        logging.info(f"🔌 New connection established: {websocket.remote_address}")
+        logging.info("🔌 New connection established: %s", websocket.remote_address)
+        session = SessionContext()
         try:
             async for message in websocket:
                 if isinstance(message, bytes):
-                    # Binary audio data from ExternalMedia
-                    logging.info(f"🎵 AUDIO INPUT - Received audio: {len(message)} bytes")
-                    transcript = await self.process_stt(message)
-                    if transcript.strip():
-                        llm_response = await self.process_llm(transcript)
-                        if llm_response.strip():
-                            audio_response = await self.process_tts(llm_response)
-                            if audio_response:
-                                await websocket.send(audio_response)
-                                logging.info("📤 AUDIO OUTPUT - Sent uLaw 8kHz response")
-                            else:
-                                logging.warning("🔊 TTS - No audio generated")
-                        else:
-                            logging.info("🤖 LLM - Empty response, skipping TTS")
-                    else:
-                        logging.debug("📝 STT - No speech detected, skipping pipeline")
-                
+                    await self._handle_binary_message(websocket, session, message)
                 else:
-                    # JSON messages
-                    try:
-                        data = json.loads(message)
-                        
-                        if data.get("type") == "tts_request":
-                            # Direct TTS request
-                            tts_text = data.get("text", "")
-                            call_id = data.get("call_id", "unknown")
-                            logging.info(f"🔊 TTS REQUEST - Call {call_id}: '{tts_text}'")
-                            
-                            audio_response = await self.process_tts(tts_text)
-                            
-                            response = {
-                                "type": "tts_response",
-                                "text": tts_text,
-                                "audio_data": base64.b64encode(audio_response).decode('utf-8'),
-                                "call_id": call_id
-                            }
-                            await websocket.send(json.dumps(response))
-                            logging.info(f"📤 TTS RESPONSE - Sent {len(audio_response)} bytes")
-                        
-                        elif data.get("type") == "audio":
-                            # Audio data from AI Engine (RTP format - 16kHz PCM)
-                            audio_data = base64.b64decode(data.get("data", ""))
-                            input_rate = int(data.get("rate", 16000))  # Default to 16kHz if not specified
-                            logging.info(f"🎵 AUDIO INPUT - Received audio: {len(audio_data)} bytes at {input_rate} Hz")
-                            
-                            # Process with STT (now receiving complete utterances from VAD) - CPU OFFLOADED
-                            transcript = await self.process_stt(audio_data, input_rate)
-                            
-                            if transcript.strip():
-                                llm_response = await self.process_llm(transcript)
-                                
-                                if llm_response.strip():
-                                    audio_response = await self.process_tts(llm_response)
-                                    
-                                    if audio_response:
-                                        # Send binary audio data directly (like working commit)
-                                        await websocket.send(audio_response)
-                                        logging.info("📤 AUDIO OUTPUT - Sent uLaw 8kHz response")
-                                    else:
-                                        logging.warning("🔊 TTS - No audio generated")
-                            else:
-                                logging.info("🤖 LLM - Empty response, skipping TTS")
-                    else:
-                        logging.debug("📝 STT - No speech detected, skipping pipeline")
-                        
-                        elif data.get("type") == "reload_models":
-                            # Hot reload all models
-                            logging.info("🔄 RELOAD REQUEST - Hot reloading all models...")
-                            await self.reload_models()
-                            
-                            response = {
-                                "type": "reload_response",
-                                "status": "success",
-                                "message": "All models reloaded successfully"
-                            }
-                            await websocket.send(json.dumps(response))
-                            logging.info("✅ RELOAD COMPLETE - All models reloaded")
-                        
-                        elif data.get("type") == "reload_llm":
-                            # Hot reload only LLM with optimizations
-                            logging.info("🔄 LLM RELOAD REQUEST - Hot reloading LLM with optimizations...")
-                            await self.reload_llm_only()
-                            
-                            response = {
-                                "type": "reload_response",
-                                "status": "success",
-                                "message": "LLM model reloaded with optimizations (ctx=1024, batch=512, temp=0.3, max_tokens=80)"
-                            }
-                            await websocket.send(json.dumps(response))
-                            logging.info("✅ LLM RELOAD COMPLETE - Optimized LLM loaded")
-                        
-                        else:
-                            logging.warning(f"❓ Unknown message type: {data.get('type')}")
-                    
-                    except json.JSONDecodeError:
-                        logging.warning(f"❓ Invalid JSON message: {message}")
-        
-        except Exception as e:
-            logging.error(f"❌ WebSocket handler error: {e}", exc_info=True)
+                    await self._handle_json_message(websocket, session, message)
+        except Exception as exc:
+            logging.error("❌ WebSocket handler error: %s", exc, exc_info=True)
         finally:
-            logging.info(f"🔌 Connection closed: {websocket.remote_address}")
+            logging.info("🔌 Connection closed: %s", websocket.remote_address)
+
 
 async def main():
     """Main server function"""
     server = LocalAIServer()
     await server.initialize_models()
-    
-    async with serve(server.handler, "0.0.0.0", 8765, ping_interval=30, ping_timeout=30, max_size=None):
+
+    async with serve(
+        server.handler,
+        "0.0.0.0",
+        8765,
+        ping_interval=30,
+        ping_timeout=30,
+        max_size=None,
+    ):
         logging.info("🚀 Enhanced Local AI Server started on ws://0.0.0.0:8765")
-        logging.info("📋 MVP Pipeline: ExternalMedia (8kHz) → STT (16kHz) → LLM → TTS (8kHz uLaw) - CPU Offloaded!")
-        logging.info("🔄 Hot Reload: Send {'type': 'reload_models'} to reload models")
-        logging.info("⚡ CPU Offloading: STT/LLM/TTS running in threads to prevent WebSocket timeouts")
+        logging.info(
+            "📋 Pipeline: ExternalMedia (8kHz) → STT (16kHz) → LLM → TTS (8kHz uLaw) "
+            "- now with #Milestone7 selective mode support"
+        )
         await asyncio.Future()  # Run forever
+
 
 if __name__ == "__main__":
     asyncio.run(main())

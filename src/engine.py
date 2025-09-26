@@ -34,6 +34,7 @@ from .config import (
     DeepgramProviderConfig,
     OpenAIRealtimeProviderConfig,
 )
+from .pipelines import PipelineOrchestrator, PipelineOrchestratorError, PipelineResolution
 from .logging_config import get_logger
 from .rtp_server import RTPServer
 from .audio.audiosocket_server import AudioSocketServer
@@ -77,6 +78,9 @@ class AudioFrameProcessor:
                         frame_size=self.frame_bytes)
         
         return frames
+
+    
+    
     
     def flush(self) -> bytes:
         """Flush remaining audio in buffer."""
@@ -169,6 +173,9 @@ class Engine:
             audio_transport=self.config.audio_transport,
         )
         
+        # Milestone7: Pipeline orchestrator coordinates per-call STT/LLM/TTS adapters.
+        self.pipeline_orchestrator = PipelineOrchestrator(config)
+        
         self.providers: Dict[str, AIProviderInterface] = {}
         self.conn_to_channel: Dict[str, str] = {}
         self.channel_to_conn: Dict[str, str] = {}
@@ -217,6 +224,11 @@ class Engine:
         # ExternalMedia to caller channel mapping is now managed by SessionStore
         # SSRC to caller channel mapping for RTP audio routing
         self.ssrc_to_caller: Dict[int, str] = {}  # ssrc -> caller_channel_id
+        # Pipeline runtime structures (Milestone 7): per-call audio queues and runner tasks
+        self._pipeline_queues: Dict[str, asyncio.Queue] = {}
+        self._pipeline_tasks: Dict[str, asyncio.Task] = {}
+        # Track calls where a pipeline was explicitly requested via AI_PROVIDER
+        self._pipeline_forced: Dict[str, bool] = {}
         # Health server runner
         self._health_runner: Optional[web.AppRunner] = None
 
@@ -266,6 +278,22 @@ class Engine:
         """Connect to ARI and start the engine."""
         # 1) Load providers first (low risk)
         await self._load_providers()
+
+        # Milestone7: Start pipeline orchestrator to prepare per-call component lookups.
+        try:
+            await self.pipeline_orchestrator.start()
+        except PipelineOrchestratorError as exc:
+            logger.error(
+                "Milestone7 pipeline orchestrator failed to start; legacy provider flow will be used",
+                error=str(exc),
+                exc_info=True,
+            )
+        except Exception as exc:
+            logger.error(
+                "Unexpected error starting pipeline orchestrator",
+                error=str(exc),
+                exc_info=True,
+            )
 
         # 2) Start health server EARLY so diagnostics are available even if transport/ARI fail
         try:
@@ -366,8 +394,11 @@ class Engine:
                 await self._health_runner.cleanup()
         except Exception:
             logger.debug("Health server cleanup error", exc_info=True)
-        # if self.pipeline: # This line is removed as per the edit hint
-        #     await self.pipeline.stop()
+        # Milestone7: ensure orchestrator releases component assignments before shutdown.
+        try:
+            await self.pipeline_orchestrator.stop()
+        except Exception:
+            logger.debug("Pipeline orchestrator stop error", exc_info=True)
         logger.info("Engine stopped.")
 
     async def _load_providers(self):
@@ -597,9 +628,91 @@ class Engine:
                 status="connected"
             )
             await self._save_session(session, new=True)
-            logger.info("🎯 HYBRID ARI - Step 4: ✅ Caller session created and stored", 
-                       channel_id=caller_channel_id, 
+            logger.info("🎯 HYBRID ARI - Step 4: ✅ Caller session created and stored",
+                       channel_id=caller_channel_id,
                        bridge_id=bridge_id)
+
+            # Milestone7: Per-call override via Asterisk channel var AI_PROVIDER.
+            # Values:
+            #   - openai_realtime | deepgram → full agent override
+            #   - customX (any other token) → pipeline name
+            ai_provider_value = None
+            try:
+                resp = await self.ari_client.send_command(
+                    "GET",
+                    f"channels/{caller_channel_id}/variable",
+                    params={"variable": "AI_PROVIDER"},
+                )
+                if isinstance(resp, dict):
+                    ai_provider_value = (resp.get("value") or "").strip()
+            except Exception:
+                logger.debug(
+                    "AI_PROVIDER read failed; continuing with defaults",
+                    channel_id=caller_channel_id,
+                    exc_info=True,
+                )
+
+            provider_aliases = {
+                "openai": "openai_realtime",
+                "deepgram_agent": "deepgram",
+            }
+            resolved_provider = (
+                provider_aliases.get(ai_provider_value, ai_provider_value)
+                if ai_provider_value
+                else None
+            )
+
+            pipeline_resolution = None
+            if resolved_provider and resolved_provider in self.providers:
+                # Full agent override for this call
+                previous = session.provider_name
+                session.provider_name = resolved_provider
+                await self._save_session(session)
+                logger.info(
+                    "AI provider override applied from channel variable",
+                    channel_id=caller_channel_id,
+                    variable="AI_PROVIDER",
+                    value=ai_provider_value,
+                    resolved_provider=resolved_provider,
+                    previous_provider=previous,
+                    resolved_mode="full_agent",
+                )
+            elif ai_provider_value:
+                # Treat as a pipeline name for this call
+                pipeline_resolution = await self._assign_pipeline_to_session(
+                    session, pipeline_name=ai_provider_value
+                )
+                if pipeline_resolution:
+                    logger.info(
+                        "AI pipeline selection applied from channel variable",
+                        channel_id=caller_channel_id,
+                        variable="AI_PROVIDER",
+                        value=ai_provider_value,
+                        pipeline=pipeline_resolution.pipeline_name,
+                        components=pipeline_resolution.component_summary(),
+                        resolved_mode="pipeline",
+                    )
+                    # Opt-in to adapter-driven pipeline execution for this call
+                    try:
+                        await self._ensure_pipeline_runner(session, forced=True)
+                    except Exception:
+                        logger.debug("Failed to start pipeline runner", call_id=caller_channel_id, exc_info=True)
+                elif getattr(self.pipeline_orchestrator, "started", False):
+                    logger.warning(
+                        "Requested pipeline via AI_PROVIDER not found; falling back",
+                        channel_id=caller_channel_id,
+                        requested_pipeline=ai_provider_value,
+                    )
+                    pipeline_resolution = await self._assign_pipeline_to_session(session)
+            else:
+                # Default behavior (use active_pipeline if configured)
+                pipeline_resolution = await self._assign_pipeline_to_session(session)
+                if not pipeline_resolution and getattr(self.pipeline_orchestrator, "started", False):
+                    logger.info(
+                        "Milestone7 pipeline orchestrator falling back to legacy provider flow",
+                        call_id=caller_channel_id,
+                        provider=session.provider_name,
+                    )
             
             # Step 5: Create ExternalMedia channel or originate Local channel
             if self.config.audio_transport == "externalmedia":
@@ -1102,6 +1215,36 @@ class Engine:
             if session.audiosocket_uuid:
                 self.uuidext_to_channel.pop(session.audiosocket_uuid, None)
 
+            # Cancel adapter pipeline runner, clear queue and forced flag
+            try:
+                task = self._pipeline_tasks.pop(call_id, None)
+                if task:
+                    task.cancel()
+                q = self._pipeline_queues.pop(call_id, None)
+                if q:
+                    try:
+                        q.put_nowait(None)
+                    except Exception:
+                        pass
+                self._pipeline_forced.pop(call_id, None)
+            except Exception:
+                logger.debug("Pipeline cleanup failed", call_id=call_id, exc_info=True)
+
+            # Remove SSRC mapping for this call (if any)
+            try:
+                to_delete = [ssrc for ssrc, cid in self.ssrc_to_caller.items() if cid == call_id]
+                for ssrc in to_delete:
+                    self.ssrc_to_caller.pop(ssrc, None)
+            except Exception:
+                pass
+
+            # Release pipeline components before dropping session.
+            if getattr(self, "pipeline_orchestrator", None) and self.pipeline_orchestrator.enabled:
+                try:
+                    await self.pipeline_orchestrator.release_pipeline(call_id)
+                except Exception:
+                    logger.debug("Milestone7 pipeline release failed during cleanup", call_id=call_id, exc_info=True)
+
             # Finally remove the session.
             await self.session_store.remove_call(call_id)
 
@@ -1391,6 +1534,18 @@ class Engine:
                                  session.barge_in_candidate_ms, energy)
                     return
 
+            # If pipeline execution is forced, route to pipeline queue after converting to PCM16 @ 16 kHz
+            if self._pipeline_forced.get(caller_channel_id):
+                q = self._pipeline_queues.get(caller_channel_id)
+                if q:
+                    try:
+                        pcm16 = self._as_to_pcm16_16k(audio_bytes)
+                        q.put_nowait(pcm16)
+                        return
+                    except asyncio.QueueFull:
+                        logger.debug("Pipeline queue full; dropping AudioSocket frame", call_id=caller_channel_id)
+                        return
+
             provider_name = session.provider_name or self.config.default_provider
             provider = self.providers.get(provider_name)
             if not provider or not hasattr(provider, 'send_audio'):
@@ -1426,6 +1581,166 @@ class Engine:
             logger.info("AudioSocket DTMF received", conn_id=conn_id, caller_channel_id=caller_channel_id, digit=digit)
         except Exception as exc:
             logger.error("Error handling AudioSocket DTMF", conn_id=conn_id, error=str(exc), exc_info=True)
+
+    async def _on_rtp_audio(self, ssrc: int, pcm_16k: bytes) -> None:
+        """Route inbound ExternalMedia RTP audio (PCM16 @ 16 kHz) to the active provider.
+
+        This mirrors the gating/barge-in logic of `_audiosocket_handle_audio` and
+        establishes an SSRC→call_id mapping the first time we see a new SSRC.
+        """
+        try:
+            # Resolve call_id from SSRC mapping or infer from sessions awaiting SSRC
+            caller_channel_id = self.ssrc_to_caller.get(ssrc)
+            if not caller_channel_id:
+                # Choose the most recent session that has an ExternalMedia channel and no SSRC yet
+                sessions = await self.session_store.get_all_sessions()
+                candidate = None
+                for s in sessions:
+                    try:
+                        if getattr(s, 'external_media_id', None) and not getattr(s, 'ssrc', None):
+                            if candidate is None or float(getattr(s, 'created_at', 0.0)) > float(getattr(candidate, 'created_at', 0.0)):
+                                candidate = s
+                    except Exception:
+                        continue
+                if candidate:
+                    caller_channel_id = candidate.caller_channel_id
+                    self.ssrc_to_caller[ssrc] = caller_channel_id
+                    try:
+                        candidate.ssrc = ssrc
+                        await self._save_session(candidate)
+                    except Exception:
+                        pass
+                    try:
+                        if getattr(self, 'rtp_server', None) and hasattr(self.rtp_server, 'map_ssrc_to_call_id'):
+                            self.rtp_server.map_ssrc_to_call_id(ssrc, caller_channel_id)
+                        
+                    except Exception:
+                        pass
+
+            if not caller_channel_id:
+                logger.debug("RTP audio received for unknown SSRC", ssrc=ssrc, bytes=len(pcm_16k))
+                return
+
+            session = await self.session_store.get_by_call_id(caller_channel_id)
+            if not session:
+                logger.debug("No session for caller; dropping RTP audio", ssrc=ssrc, caller_channel_id=caller_channel_id)
+                return
+
+            # Post-TTS end guard to avoid self-echo re-capture
+            try:
+                cfg = getattr(self.config, 'barge_in', None)
+                post_guard_ms = int(getattr(cfg, 'post_tts_end_protection_ms', 0)) if cfg else 0
+            except Exception:
+                post_guard_ms = 0
+            if post_guard_ms and getattr(session, 'tts_ended_ts', 0.0) and session.audio_capture_enabled:
+                try:
+                    elapsed_ms = int((time.time() - float(session.tts_ended_ts)) * 1000)
+                except Exception:
+                    elapsed_ms = post_guard_ms
+                if elapsed_ms < post_guard_ms:
+                    logger.debug(
+                        "Dropping inbound RTP during post-TTS protection window",
+                        call_id=caller_channel_id,
+                        elapsed_ms=elapsed_ms,
+                        protect_ms=post_guard_ms,
+                    )
+                    return
+
+            # If TTS is playing (capture disabled), decide whether to drop or barge-in
+            if hasattr(session, 'audio_capture_enabled') and not session.audio_capture_enabled:
+                cfg = getattr(self.config, 'barge_in', None)
+                if not cfg or not getattr(cfg, 'enabled', True):
+                    logger.debug("Dropping inbound RTP during TTS playback (barge-in disabled)",
+                                 ssrc=ssrc, caller_channel_id=caller_channel_id, bytes=len(pcm_16k))
+                    return
+
+                now = time.time()
+                tts_elapsed_ms = 0
+                try:
+                    if getattr(session, 'tts_started_ts', 0.0) > 0:
+                        tts_elapsed_ms = int((now - session.tts_started_ts) * 1000)
+                except Exception:
+                    tts_elapsed_ms = 0
+
+                initial_protect = int(getattr(cfg, 'initial_protection_ms', 200))
+                if tts_elapsed_ms < initial_protect:
+                    logger.debug("Dropping inbound RTP during initial TTS protection window",
+                                 ssrc=ssrc, caller_channel_id=caller_channel_id,
+                                 tts_elapsed_ms=tts_elapsed_ms, protect_ms=initial_protect)
+                    return
+
+                # Barge-in detection on PCM16 energy
+                try:
+                    energy = audioop.rms(pcm_16k, 2)
+                except Exception:
+                    energy = 0
+                threshold = int(getattr(cfg, 'energy_threshold', 1000))
+                frame_ms = 20
+                if energy >= threshold:
+                    session.barge_in_candidate_ms = int(getattr(session, 'barge_in_candidate_ms', 0)) + frame_ms
+                else:
+                    session.barge_in_candidate_ms = 0
+
+                cooldown_ms = int(getattr(cfg, 'cooldown_ms', 500))
+                last_barge_in_ts = float(getattr(session, 'last_barge_in_ts', 0.0) or 0.0)
+                in_cooldown = (now - last_barge_in_ts) * 1000 < cooldown_ms if last_barge_in_ts else False
+
+                min_ms = int(getattr(cfg, 'min_ms', 250))
+                if not in_cooldown and session.barge_in_candidate_ms >= min_ms:
+                    try:
+                        playback_ids = await self.session_store.list_playbacks_for_call(caller_channel_id)
+                        for pid in playback_ids:
+                            try:
+                                await self.ari_client.stop_playback(pid)
+                            except Exception:
+                                logger.debug("Playback stop error during RTP barge-in", playback_id=pid, exc_info=True)
+
+                        tokens = list(getattr(session, 'tts_tokens', set()) or [])
+                        for token in tokens:
+                            try:
+                                if self.conversation_coordinator:
+                                    await self.conversation_coordinator.on_tts_end(caller_channel_id, token, reason="barge-in")
+                            except Exception:
+                                logger.debug("Failed to clear gating token during RTP barge-in", token=token, exc_info=True)
+
+                        session.barge_in_candidate_ms = 0
+                        session.last_barge_in_ts = now
+                        await self._save_session(session)
+                        logger.info("🎧 BARGE-IN (RTP) triggered", call_id=caller_channel_id)
+                    except Exception:
+                        logger.error("Error triggering RTP barge-in", call_id=caller_channel_id, exc_info=True)
+                else:
+                    # Not yet triggered; drop inbound frame while TTS is active
+                    if energy > 0 and self.conversation_coordinator:
+                        try:
+                            self.conversation_coordinator.note_audio_during_tts(caller_channel_id)
+                        except Exception:
+                            pass
+                    logger.debug("Dropping inbound RTP during TTS (candidate_ms=%d, energy=%d)",
+                                 session.barge_in_candidate_ms, energy)
+                    return
+
+            # If a pipeline was explicitly requested for this call, route to pipeline queue
+            if self._pipeline_forced.get(caller_channel_id):
+                q = self._pipeline_queues.get(caller_channel_id)
+                if q:
+                    try:
+                        q.put_nowait(pcm_16k)
+                        return
+                    except asyncio.QueueFull:
+                        logger.debug("Pipeline queue full; dropping RTP frame", call_id=caller_channel_id)
+                        return
+
+            provider_name = session.provider_name or self.config.default_provider
+            provider = self.providers.get(provider_name)
+            if not provider or not hasattr(provider, 'send_audio'):
+                logger.debug("Provider unavailable for RTP audio", provider=provider_name)
+                return
+
+            # Forward PCM16 16k frames to provider
+            await provider.send_audio(pcm_16k)
+        except Exception as exc:
+            logger.error("Error handling RTP audio", ssrc=ssrc, error=str(exc), exc_info=True)
 
     def _build_deepgram_config(self, provider_cfg: Dict[str, Any]) -> Optional[DeepgramProviderConfig]:
         """Construct a DeepgramProviderConfig from raw provider settings with validation."""
@@ -1496,6 +1811,238 @@ class Engine:
         except Exception as exc:
             logger.error("Error handling provider event", error=str(exc), exc_info=True)
 
+    def _as_to_pcm16_16k(self, audio_bytes: bytes) -> bytes:
+        """Convert AudioSocket inbound bytes to PCM16 @ 16 kHz for pipeline STT.
+
+        Assumes AudioSocket format is 8 kHz μ-law (default) or PCM16.
+        """
+        try:
+            fmt = None
+            try:
+                if self.config and getattr(self.config, 'audiosocket', None):
+                    fmt = (self.config.audiosocket.format or 'ulaw').lower()
+            except Exception:
+                fmt = 'ulaw'
+            if fmt in ('ulaw', 'mulaw', 'g711_ulaw'):
+                pcm8k = audioop.ulaw2lin(audio_bytes, 2)
+            else:
+                # Treat as PCM16 8 kHz
+                pcm8k = audio_bytes
+            pcm16k, _ = audioop.ratecv(pcm8k, 2, 1, 8000, 16000, None)
+            return pcm16k
+        except Exception:
+            logger.debug("AudioSocket -> PCM16 16k conversion failed", exc_info=True)
+            return audio_bytes
+
+    async def _ensure_pipeline_runner(self, session: CallSession, *, forced: bool = False) -> None:
+        """Create per-call queue and start pipeline runner if not already started."""
+        call_id = session.call_id
+        if call_id in self._pipeline_tasks:
+            if forced:
+                self._pipeline_forced[call_id] = True
+            return
+        # Require orchestrator enabled and a selected pipeline
+        if not getattr(self, 'pipeline_orchestrator', None) or not self.pipeline_orchestrator.enabled:
+            return
+        if not getattr(session, 'pipeline_name', None):
+            return
+        # Create queue and start task
+        q: asyncio.Queue = asyncio.Queue(maxsize=200)
+        self._pipeline_queues[call_id] = q
+        self._pipeline_forced[call_id] = bool(forced)
+        task = asyncio.create_task(self._pipeline_runner(call_id))
+        self._pipeline_tasks[call_id] = task
+        logger.info("Pipeline runner started", call_id=call_id, pipeline=session.pipeline_name)
+
+    async def _pipeline_runner(self, call_id: str) -> None:
+        """Minimal adapter-driven loop: STT -> LLM -> TTS -> file playback.
+
+        Designed to be opt-in (forced via AI_PROVIDER=pipeline_name) to avoid
+        impacting the tested ExternalMedia + Local full-agent path.
+        """
+        try:
+            session = await self.session_store.get_by_call_id(call_id)
+            if not session:
+                return
+            pipeline = self.pipeline_orchestrator.get_pipeline(call_id, getattr(session, 'pipeline_name', None))
+            if not pipeline:
+                logger.debug("Pipeline runner: no pipeline resolved", call_id=call_id)
+                return
+            # Open per-call state for adapters (best-effort)
+            try:
+                await pipeline.stt_adapter.open_call(call_id, pipeline.stt_options)
+            except Exception:
+                logger.debug("STT open_call failed", call_id=call_id, exc_info=True)
+            try:
+                await pipeline.llm_adapter.open_call(call_id, pipeline.llm_options)
+            except Exception:
+                logger.debug("LLM open_call failed", call_id=call_id, exc_info=True)
+            try:
+                await pipeline.tts_adapter.open_call(call_id, pipeline.tts_options)
+            except Exception:
+                logger.debug("TTS open_call failed", call_id=call_id, exc_info=True)
+
+            # Accumulate into ~160ms chunks for STT
+            buf = bytearray()
+            bytes_per_ms = 32  # 16k Hz * 2 bytes / 1000 ms
+            commit_ms = 160
+            commit_bytes = bytes_per_ms * commit_ms
+            q = self._pipeline_queues.get(call_id)
+            if not q:
+                return
+
+            while True:
+                try:
+                    chunk = await q.get()
+                except asyncio.CancelledError:
+                    break
+                if chunk is None:
+                    break
+                buf.extend(chunk)
+                if len(buf) < commit_bytes:
+                    continue
+                audio_chunk = bytes(buf)
+                buf.clear()
+                # STT -> LLM -> TTS sequence
+                transcript = ""
+                try:
+                    transcript = await pipeline.stt_adapter.transcribe(call_id, audio_chunk, 16000, pipeline.stt_options)
+                except Exception:
+                    logger.debug("STT transcribe failed", call_id=call_id, exc_info=True)
+                    continue
+                transcript = (transcript or "").strip()
+                if not transcript:
+                    continue
+                response_text = ""
+                try:
+                    response_text = await pipeline.llm_adapter.generate(
+                        call_id,
+                        transcript,
+                        {"messages": [{"role": "user", "content": transcript}]},
+                        pipeline.llm_options,
+                    )
+                except Exception:
+                    logger.debug("LLM generate failed", call_id=call_id, exc_info=True)
+                    continue
+                response_text = (response_text or "").strip()
+                if not response_text:
+                    continue
+                # Synthesize and play via file playback
+                tts_bytes = bytearray()
+                try:
+                    async for chunk in pipeline.tts_adapter.synthesize(call_id, response_text, pipeline.tts_options):
+                        if chunk:
+                            tts_bytes.extend(chunk)
+                except Exception:
+                    logger.debug("TTS synth failed", call_id=call_id, exc_info=True)
+                    continue
+                if not tts_bytes:
+                    continue
+                try:
+                    playback_id = await self.playback_manager.play_audio(call_id, bytes(tts_bytes), "pipeline-tts")
+                    if not playback_id:
+                        logger.error("Pipeline playback failed", call_id=call_id, size=len(tts_bytes))
+                except Exception:
+                    logger.error("Pipeline playback exception", call_id=call_id, exc_info=True)
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.error("Pipeline runner crashed", call_id=call_id, exc_info=True)
+
+    async def _assign_pipeline_to_session(
+        self,
+        session: CallSession,
+        pipeline_name: Optional[str] = None,
+    ) -> Optional[PipelineResolution]:
+        """Milestone7: Resolve pipeline components for a session and persist metadata."""
+        if not getattr(self, "pipeline_orchestrator", None):
+            return None
+        if not self.pipeline_orchestrator.enabled:
+            return None
+        try:
+            resolution = self.pipeline_orchestrator.get_pipeline(session.call_id, pipeline_name)
+        except PipelineOrchestratorError as exc:
+            logger.error(
+                "Milestone7 pipeline resolution failed",
+                call_id=session.call_id,
+                requested_pipeline=pipeline_name,
+                error=str(exc),
+                exc_info=True,
+            )
+            return None
+        except Exception as exc:
+            logger.error(
+                "Milestone7 pipeline resolution unexpected error",
+                call_id=session.call_id,
+                requested_pipeline=pipeline_name,
+                error=str(exc),
+                exc_info=True,
+            )
+            return None
+ 
+        if not resolution:
+            logger.debug(
+                "Milestone7 pipeline orchestrator returned no resolution",
+                call_id=session.call_id,
+                requested_pipeline=pipeline_name,
+            )
+            return None
+ 
+        component_summary = resolution.component_summary()
+        updated = False
+ 
+        if session.pipeline_name != resolution.pipeline_name:
+            session.pipeline_name = resolution.pipeline_name
+            updated = True
+ 
+        if session.pipeline_components != component_summary:
+            session.pipeline_components = component_summary
+            updated = True
+ 
+        provider_override = resolution.primary_provider
+        if provider_override:
+            if provider_override in self.providers:
+                if session.provider_name != provider_override:
+                    logger.info(
+                        "Milestone7 pipeline overriding provider",
+                        call_id=session.call_id,
+                        previous_provider=session.provider_name,
+                        override_provider=provider_override,
+                    )
+                    session.provider_name = provider_override
+                    updated = True
+            else:
+                logger.warning(
+                    "Milestone7 pipeline requested provider not loaded; continuing with session provider",
+                    call_id=session.call_id,
+                    requested_provider=provider_override,
+                    current_provider=session.provider_name,
+                    available_providers=list(self.providers.keys()),
+                )
+ 
+        if updated:
+            await self._save_session(session)
+ 
+        if not resolution.prepared:
+            resolution.prepared = True
+            logger.info(
+                "Milestone7 pipeline resolved",
+                call_id=session.call_id,
+                pipeline=session.pipeline_name,
+                components=component_summary,
+                provider=session.provider_name,
+            )
+            options_summary = resolution.options_summary()
+            if any(options_summary.values()):
+                logger.debug(
+                    "Milestone7 pipeline options",
+                    call_id=session.call_id,
+                    pipeline=session.pipeline_name,
+                    options=options_summary,
+                )
+ 
+        return resolution
+ 
     async def _start_provider_session(self, call_id: str) -> None:
         """Start the provider session for a call when media path is ready."""
         try:
@@ -1504,11 +2051,65 @@ class Engine:
                 logger.error("Start provider session called for unknown call", call_id=call_id)
                 return
 
+            # Preserve any per-call override previously applied. Only assign a pipeline
+            # here if one has already been selected (e.g., via AI_PROVIDER or active_pipeline)
+            pipeline_resolution = None
+            if getattr(self.pipeline_orchestrator, "enabled", False):
+                if getattr(session, "pipeline_name", None):
+                    pipeline_resolution = await self._assign_pipeline_to_session(
+                        session, pipeline_name=session.pipeline_name
+                    )
+
             provider_name = session.provider_name or self.config.default_provider
             provider = self.providers.get(provider_name)
+
             if not provider:
-                logger.error("No provider found to start session", call_id=call_id, provider=provider_name)
-                return
+                fallback_name = self.config.default_provider
+                fallback_provider = self.providers.get(fallback_name)
+                if fallback_provider:
+                    logger.warning(
+                        "Milestone7 pipeline provider unavailable; falling back to default provider",
+                        call_id=call_id,
+                        requested_provider=provider_name,
+                        fallback_provider=fallback_name,
+                    )
+                    provider_name = fallback_name
+                    provider = fallback_provider
+                    if session.provider_name != fallback_name:
+                        session.provider_name = fallback_name
+                        await self._save_session(session)
+                else:
+                    logger.error(
+                        "No provider available to start session",
+                        call_id=call_id,
+                        requested_provider=provider_name,
+                        fallback_provider=fallback_name,
+                    )
+                    return
+
+            if pipeline_resolution:
+                logger.info(
+                    "Milestone7 pipeline starting provider session",
+                    call_id=call_id,
+                    pipeline=pipeline_resolution.pipeline_name,
+                    components=pipeline_resolution.component_summary(),
+                    provider=provider_name,
+                )
+            elif getattr(self.pipeline_orchestrator, "enabled", False):
+                logger.debug(
+                    "Milestone7 pipeline orchestrator did not return a resolution; using legacy provider flow",
+                    call_id=call_id,
+                    provider=provider_name,
+                )
+            # Set provider input mode based on transport so send_audio can convert properly
+            try:
+                if hasattr(provider, 'set_input_mode'):
+                    if self.config.audio_transport == 'externalmedia':
+                        provider.set_input_mode('pcm16_16k')
+                    else:
+                        provider.set_input_mode('mulaw8k')
+            except Exception:
+                logger.debug("Provider set_input_mode failed or unsupported", exc_info=True)
 
             await provider.start_session(call_id)
             session.provider_session_active = True

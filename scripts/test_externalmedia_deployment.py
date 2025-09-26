@@ -10,14 +10,15 @@ import asyncio
 import logging
 from pathlib import Path
 
-# Add src to path
-src_path = str(Path(__file__).parent.parent / "src")
-sys.path.insert(0, src_path)
+# Ensure project root is on sys.path so we can import 'src.<module>' as a package
+project_root = str(Path(__file__).parent.parent)
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
-# Import with proper module path
-from config import load_config
-from rtp_server import RTPServer
-from ari_client import ARIClient
+# Import with package path to preserve package-relative imports inside modules
+from src.config import load_config
+from src.rtp_server import RTPServer
+from src.ari_client import ARIClient
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
