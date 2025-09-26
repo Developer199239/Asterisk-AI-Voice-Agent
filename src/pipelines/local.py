@@ -329,7 +329,7 @@ class _LocalAdapterBase:
         raise RuntimeError(f"Local adapter session not available for call {call_id}")
 
 
-class LocalSTTAdapter(STTComponent, _LocalAdapterBase):
+class LocalSTTAdapter(_LocalAdapterBase, STTComponent):
     """# Milestone7: STT adapter backed by the local AI server."""
 
     def __init__(
@@ -397,7 +397,7 @@ class LocalSTTAdapter(STTComponent, _LocalAdapterBase):
             return transcript
 
 
-class LocalLLMAdapter(LLMComponent, _LocalAdapterBase):
+class LocalLLMAdapter(_LocalAdapterBase, LLMComponent):
     """# Milestone7: LLM adapter backed by the local AI server."""
 
     def __init__(
@@ -464,7 +464,7 @@ class LocalLLMAdapter(LLMComponent, _LocalAdapterBase):
             return response
 
 
-class LocalTTSAdapter(TTSComponent, _LocalAdapterBase):
+class LocalTTSAdapter(_LocalAdapterBase, TTSComponent):
     """# Milestone7: TTS adapter backed by the local AI server."""
 
     def __init__(
