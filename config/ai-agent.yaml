@@ -91,7 +91,7 @@ audiosocket:
 
 # Barge-in configuration
 barge_in:
-  enabled: true
+  enabled: false
   initial_protection_ms: 400   # Drop inbound during the initial TTS window (avoids early self-echo)
                                # Range: 200–600 ms (higher if trunks echo or agent intros are long)
   min_ms: 400                  # Sustained speech required to trigger barge-in (de-bounce)

@@ -91,30 +91,14 @@ class _LocalAdapterBase:
         if existing:
             if existing.websocket.closed:
                 self._sessions.pop(call_id, None)
-            elif existing.handshake_complete:
+            else:
+                # Reuse any open websocket session regardless of handshake status
                 logger.debug(
                     "Reusing existing local adapter session",
                     component=self.component_key,
                     call_id=call_id,
                 )
                 return
-            else:
-                try:
-                    await self._await_mode_ready(existing, merged)
-                except Exception:
-                    logger.warning(
-                        "Local adapter handshake retry required",
-                        component=self.component_key,
-                        call_id=call_id,
-                        exc_info=True,
-                    )
-                if existing.handshake_complete:
-                    return
-                try:
-                    await existing.websocket.close()
-                except Exception:
-                    pass
-                self._sessions.pop(call_id, None)
 
         ws_url = merged.get("ws_url") or _DEFAULT_WS_URL
         connect_timeout = float(merged.get("connect_timeout_sec", 5.0))
@@ -165,14 +149,24 @@ class _LocalAdapterBase:
             },
         )
         try:
+            logger.info(
+                "Local adapter set_mode sent",
+                component=self.component_key,
+                call_id=call_id,
+                mode=mode,
+            )
+        except Exception:
+            pass
+        try:
+            # Best-effort handshake; proceed without failing if ack not received
             await self._await_mode_ready(session, merged)
         except Exception:
-            self._sessions.pop(call_id, None)
-            try:
-                await session.websocket.close()
-            except Exception:
-                pass
-            raise
+            logger.warning(
+                "Local adapter handshake not confirmed; proceeding without mode_ready",
+                component=self.component_key,
+                call_id=call_id,
+                exc_info=True,
+            )
         try:
             # Diagnostic: confirm session index and mode after set_mode send
             logger.info(
@@ -321,7 +315,7 @@ class _LocalAdapterBase:
 
     async def _ensure_session(self, call_id: str, options: Dict[str, Any]) -> _LocalSessionState:
         session = self._sessions.get(call_id)
-        if session and not session.websocket.closed and session.handshake_complete:
+        if session and not session.websocket.closed:
             return session
 
         if session and session.websocket.closed:
@@ -329,7 +323,7 @@ class _LocalAdapterBase:
 
         await self.open_call(call_id, options)
         session = self._sessions.get(call_id)
-        if session and not session.websocket.closed and session.handshake_complete:
+        if session and not session.websocket.closed:
             return session
 
         raise RuntimeError(f"Local adapter session not available for call {call_id}")
@@ -364,6 +358,13 @@ class LocalSTTAdapter(STTComponent, _LocalAdapterBase):
         session = await self._ensure_session(call_id, runtime_options)
 
         merged = self._compose_options(runtime_options)
+        logger.debug(
+            "Sending STT audio chunk",
+            component=self.component_key,
+            call_id=call_id,
+            bytes=len(audio_pcm16),
+            rate=sample_rate_hz,
+        )
         payload = {
             "type": "audio",
             "mode": "stt",
@@ -425,6 +426,12 @@ class LocalLLMAdapter(LLMComponent, _LocalAdapterBase):
         session = await self._ensure_session(call_id, runtime_options)
 
         merged = self._compose_options(runtime_options)
+        logger.debug(
+            "Sending LLM request",
+            component=self.component_key,
+            call_id=call_id,
+            transcript_preview=(transcript or "")[:80],
+        )
         payload = {
             "type": "llm_request",
             "call_id": call_id,
@@ -487,6 +494,12 @@ class LocalTTSAdapter(TTSComponent, _LocalAdapterBase):
         session = await self._ensure_session(call_id, runtime_options)
 
         merged = self._compose_options(runtime_options)
+        logger.debug(
+            "Sending TTS request",
+            component=self.component_key,
+            call_id=call_id,
+            text_preview=(text or "")[:80],
+        )
         payload = {
             "type": "tts_request",
             "call_id": call_id,
