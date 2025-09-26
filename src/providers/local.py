@@ -274,6 +274,33 @@ class LocalProvider(AIProviderInterface):
                                     logger.warning("TTS response received but future already completed", text=text[:50])
                             else:
                                 logger.warning("TTS response received but no pending request found", text=text[:50])
+
+                            # Additionally, if the TTS response carries base64 audio, decode and emit as AgentAudio
+                            audio_b64 = data.get("audio_data") or data.get("audio")
+                            if audio_b64:
+                                try:
+                                    audio_bytes = base64.b64decode(audio_b64)
+                                except Exception:
+                                    logger.warning("Invalid base64 in tts_response from Local AI Server")
+                                    audio_bytes = b""
+
+                                if audio_bytes and self.on_event:
+                                    target_call_id = data.get("call_id") or self._active_call_id
+                                    if target_call_id:
+                                        try:
+                                            await self.on_event({
+                                                "type": "AgentAudio",
+                                                "data": audio_bytes,
+                                                "call_id": target_call_id,
+                                            })
+                                            await self.on_event({
+                                                "type": "AgentAudioDone",
+                                                "call_id": target_call_id,
+                                            })
+                                        except Exception:
+                                            logger.error("Failed to emit AgentAudio(/Done) for tts_response", exc_info=True)
+                                    else:
+                                        logger.debug("Dropping TTS audio - no active call to attribute", size=len(audio_bytes))
                         else:
                             logger.debug("Received JSON message from Local AI Server", message=data)
                     except json.JSONDecodeError:
