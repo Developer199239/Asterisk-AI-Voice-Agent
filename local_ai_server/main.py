@@ -650,6 +650,15 @@ class LocalAIServer:
                 logging.info("Session mode updated to %s", session.mode)
             else:
                 logging.warning("Unsupported mode requested: %s", requested)
+            call_id = data.get("call_id")
+            if call_id:
+                session.call_id = call_id
+            response = {
+                "type": "mode_ready",
+                "mode": session.mode,
+                "call_id": session.call_id,
+            }
+            await self._send_json(websocket, response)
             return
 
         if msg_type == "audio":

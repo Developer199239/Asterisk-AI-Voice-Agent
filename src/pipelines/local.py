@@ -45,6 +45,7 @@ class _LocalSessionState:
     options: Dict[str, Any]
     mode: str
     call_id: str
+    handshake_complete: bool = False
 
 
 class _LocalAdapterBase:
@@ -85,15 +86,36 @@ class _LocalAdapterBase:
         if self._closed:
             raise RuntimeError(f"Adapter {self.component_key} has been stopped")
 
-        if call_id in self._sessions:
-            logger.debug(
-                "Reusing existing local adapter session",
-                component=self.component_key,
-                call_id=call_id,
-            )
-            return
-
         merged = self._compose_options(options)
+        existing = self._sessions.get(call_id)
+        if existing:
+            if existing.websocket.closed:
+                self._sessions.pop(call_id, None)
+            elif existing.handshake_complete:
+                logger.debug(
+                    "Reusing existing local adapter session",
+                    component=self.component_key,
+                    call_id=call_id,
+                )
+                return
+            else:
+                try:
+                    await self._await_mode_ready(existing, merged)
+                except Exception:
+                    logger.warning(
+                        "Local adapter handshake retry required",
+                        component=self.component_key,
+                        call_id=call_id,
+                        exc_info=True,
+                    )
+                if existing.handshake_complete:
+                    return
+                try:
+                    await existing.websocket.close()
+                except Exception:
+                    pass
+                self._sessions.pop(call_id, None)
+
         ws_url = merged.get("ws_url") or _DEFAULT_WS_URL
         connect_timeout = float(merged.get("connect_timeout_sec", 5.0))
         mode = merged.get("mode", self._default_mode)
@@ -125,7 +147,13 @@ class _LocalAdapterBase:
             )
             raise
 
-        session = _LocalSessionState(websocket=websocket, options=merged, mode=mode, call_id=call_id)
+        session = _LocalSessionState(
+            websocket=websocket,
+            options=merged,
+            mode=mode,
+            call_id=call_id,
+            handshake_complete=False,
+        )
         self._sessions[call_id] = session
 
         await self._send_json(
@@ -136,6 +164,15 @@ class _LocalAdapterBase:
                 "call_id": call_id,
             },
         )
+        try:
+            await self._await_mode_ready(session, merged)
+        except Exception:
+            self._sessions.pop(call_id, None)
+            try:
+                await session.websocket.close()
+            except Exception:
+                pass
+            raise
         try:
             # Diagnostic: confirm session index and mode after set_mode send
             logger.info(
@@ -194,6 +231,51 @@ class _LocalAdapterBase:
             )
             raise
 
+    async def _await_mode_ready(self, session: _LocalSessionState, options: Dict[str, Any]) -> None:
+        handshake_timeout = float(
+            options.get(
+                "handshake_timeout_sec",
+                max(float(options.get("connect_timeout_sec", 5.0)), 5.0),
+            )
+        )
+        deadline = time.perf_counter() + handshake_timeout
+        while True:
+            remaining = deadline - time.perf_counter()
+            if remaining <= 0:
+                raise asyncio.TimeoutError("Local adapter handshake timed out")
+            kind, message = await self._recv_any(session, remaining)
+            if kind != "json":
+                logger.debug(
+                    "Ignoring non-JSON message during handshake",
+                    component=self.component_key,
+                    call_id=session.call_id,
+                    message_type=kind,
+                )
+                continue
+            msg_type = message.get("type")
+            if msg_type != "mode_ready":
+                logger.debug(
+                    "Unexpected JSON payload during handshake",
+                    component=self.component_key,
+                    call_id=session.call_id,
+                    payload_type=msg_type,
+                )
+                continue
+            ack_mode = message.get("mode")
+            if ack_mode:
+                session.mode = ack_mode
+            ack_call_id = message.get("call_id")
+            if ack_call_id:
+                session.call_id = ack_call_id
+            session.handshake_complete = True
+            logger.info(
+                "Local adapter handshake complete",
+                component=self.component_key,
+                call_id=session.call_id,
+                mode=session.mode,
+            )
+            return
+
     async def _recv_any(
         self,
         session: _LocalSessionState,
@@ -237,6 +319,21 @@ class _LocalAdapterBase:
         )
         return "unknown", message
 
+    async def _ensure_session(self, call_id: str, options: Dict[str, Any]) -> _LocalSessionState:
+        session = self._sessions.get(call_id)
+        if session and not session.websocket.closed and session.handshake_complete:
+            return session
+
+        if session and session.websocket.closed:
+            self._sessions.pop(call_id, None)
+
+        await self.open_call(call_id, options)
+        session = self._sessions.get(call_id)
+        if session and not session.websocket.closed and session.handshake_complete:
+            return session
+
+        raise RuntimeError(f"Local adapter session not available for call {call_id}")
+
 
 class LocalSTTAdapter(STTComponent, _LocalAdapterBase):
     """# Milestone7: STT adapter backed by the local AI server."""
@@ -263,20 +360,10 @@ class LocalSTTAdapter(STTComponent, _LocalAdapterBase):
         sample_rate_hz: int,
         options: Dict[str, Any],
     ) -> str:
-        session = self._sessions.get(call_id)
-        if not session:
-            try:
-                logger.error(
-                    "Local STT session not found",
-                    component=self.component_key,
-                    call_id=call_id,
-                    known_sessions=list(self._sessions.keys()),
-                )
-            except Exception:
-                logger.debug("Failed to log missing STT session details", exc_info=True)
-            raise RuntimeError(f"Local STT session not found for call {call_id}")
+        runtime_options = options or {}
+        session = await self._ensure_session(call_id, runtime_options)
 
-        merged = self._compose_options(options)
+        merged = self._compose_options(runtime_options)
         payload = {
             "type": "audio",
             "mode": "stt",
@@ -334,20 +421,10 @@ class LocalLLMAdapter(LLMComponent, _LocalAdapterBase):
         context: Dict[str, Any],
         options: Dict[str, Any],
     ) -> str:
-        session = self._sessions.get(call_id)
-        if not session:
-            try:
-                logger.error(
-                    "Local LLM session not found",
-                    component=self.component_key,
-                    call_id=call_id,
-                    known_sessions=list(self._sessions.keys()),
-                )
-            except Exception:
-                logger.debug("Failed to log missing LLM session details", exc_info=True)
-            raise RuntimeError(f"Local LLM session not found for call {call_id}")
+        runtime_options = options or {}
+        session = await self._ensure_session(call_id, runtime_options)
 
-        merged = self._compose_options(options)
+        merged = self._compose_options(runtime_options)
         payload = {
             "type": "llm_request",
             "call_id": call_id,
@@ -406,20 +483,10 @@ class LocalTTSAdapter(TTSComponent, _LocalAdapterBase):
     ) -> AsyncIterator[bytes]:
         if not text:
             return
-        session = self._sessions.get(call_id)
-        if not session:
-            try:
-                logger.error(
-                    "Local TTS session not found",
-                    component=self.component_key,
-                    call_id=call_id,
-                    known_sessions=list(self._sessions.keys()),
-                )
-            except Exception:
-                logger.debug("Failed to log missing TTS session details", exc_info=True)
-            raise RuntimeError(f"Local TTS session not found for call {call_id}")
+        runtime_options = options or {}
+        session = await self._ensure_session(call_id, runtime_options)
 
-        merged = self._compose_options(options)
+        merged = self._compose_options(runtime_options)
         payload = {
             "type": "tts_request",
             "call_id": call_id,
