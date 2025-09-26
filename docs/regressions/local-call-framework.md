@@ -35,3 +35,29 @@
 
 - **Status**
 - Config tuned locally; server deploy pending (resolve server repo local changes to apply config).
+
+## 2025-09-26 13:07 PDT — Post-handshake deploy, still no greeting or conversation
+
+- **Outcome**
+- No initial greeting; caller hears silence.
+- Continuous inbound audio dropped due to "initial TTS protection" because greeting never starts.
+
+- **Key Evidence (deployment `e4b4e72` + `deploy-full`)**
+- ai-engine (`logs/ai-engine-20250926-130926.log`):
+  - `Pipeline STT/LLM/TTS adapter session opened` logged, but immediately `Pipeline greeting retry after session error`.
+  - Both greeting attempts raise `RuntimeError: Local adapter session not available for call 1758917211.1343` from `src/pipelines/local.py::_ensure_session`.
+  - No `Local adapter handshake complete` or `mode_ready` messages ever logged.
+  - After greeting failure, inbound AudioSocket frames logged as "Dropping inbound during initial TTS protection window"; pipeline loop never runs.
+- local-ai-server (`logs/local-ai-server-20250926-130928.log`):
+  - Server restarts and accepts new connection (`New connection established: ('127.0.0.1', 38940)`).
+  - No `mode_ready` response or handshake logs emitted; connection later closes with `ConnectionClosedError`.
+
+- **Diagnosis**
+- The local server still does not send the expected `{"type": "mode_ready"}` after `set_mode`; clients never mark `handshake_complete=True`.
+- `_ensure_session()` therefore tears down and retries, but repeated `open_call()` attempts also hang until the connection drops, yielding "session not available".
+- Greeting playback never begins, so TTS guard logic keeps dropping caller audio and the conversation never progresses.
+
+- **Next Steps**
+- Instrument server to log `set_mode` requests vs responses to confirm execution in `local_ai_server/main.py::_handle_json_message`.
+- Verify the deployed `local-ai-server` image includes the ack patch (look for `mode_ready` in container logs or run `docker inspect` to confirm image hash).
+- Once ack emission is confirmed, retest local_only pipeline; expect to see `Local adapter handshake complete` logs followed by greeting playback.
