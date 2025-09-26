@@ -2107,11 +2107,28 @@ class Engine:
                     if self.config.audio_transport == 'externalmedia':
                         provider.set_input_mode('pcm16_16k')
                     else:
-                        provider.set_input_mode('mulaw8k')
+                        # Determine input mode from AudioSocket format
+                        as_fmt = None
+                        try:
+                            if self.config.audiosocket and hasattr(self.config.audiosocket, 'format'):
+                                as_fmt = (self.config.audiosocket.format or '').lower()
+                        except Exception:
+                            as_fmt = None
+                        if as_fmt in ('ulaw', 'mulaw', 'g711_ulaw'):
+                            provider.set_input_mode('mulaw8k')
+                        else:
+                            # Default to PCM16 at 8 kHz when AudioSocket is slin16 or unspecified
+                            provider.set_input_mode('pcm16_8k')
             except Exception:
                 logger.debug("Provider set_input_mode failed or unsupported", exc_info=True)
 
             await provider.start_session(call_id)
+            # If provider supports an explicit greeting (e.g., LocalProvider), trigger it now
+            try:
+                if hasattr(provider, 'play_initial_greeting'):
+                    await provider.play_initial_greeting(call_id)
+            except Exception:
+                logger.debug("Provider initial greeting failed or unsupported", exc_info=True)
             session.provider_session_active = True
             # Ensure upstream capture is enabled for real-time providers when not gated
             try:
