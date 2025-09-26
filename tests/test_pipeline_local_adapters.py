@@ -85,11 +85,22 @@ async def test_local_stt_adapter_transcribes(monkeypatch):
     task = asyncio.create_task(adapter.transcribe("call-1", audio_buffer, 8000, {}))
     await asyncio.sleep(0)
 
-    stt_payload = {
+    partial_payload = {
+        "type": "stt_result",
+        "text": "hello",
+        "is_partial": True,
+        "is_final": False,
+    }
+    final_payload = {
         "type": "stt_result",
         "text": "hello world",
+        "is_partial": False,
+        "is_final": True,
     }
-    mock_ws.push(json.dumps(stt_payload))
+
+    mock_ws.push(json.dumps(partial_payload))
+    await asyncio.sleep(0)
+    mock_ws.push(json.dumps(final_payload))
 
     transcript = await task
     assert transcript == "hello world"

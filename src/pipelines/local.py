@@ -377,15 +377,37 @@ class LocalSTTAdapter(_LocalAdapterBase, STTComponent):
 
         timeout = float(merged.get("response_timeout_sec", 5.0))
         started_at = time.perf_counter()
+        deadline = started_at + timeout
+        partial_text = ""
 
         while True:
-            kind, message = await self._recv_any(session, timeout)
+            remaining = deadline - time.perf_counter()
+            if remaining <= 0:
+                raise asyncio.TimeoutError("Local STT adapter timed out waiting for transcript")
+
+            kind, message = await self._recv_any(session, remaining)
             if kind != "json":
                 continue
             if message.get("type") != "stt_result":
                 continue
 
-            transcript = message.get("text", "").strip()
+            is_final = bool(message.get("is_final", not message.get("is_partial", False)))
+            is_partial = bool(message.get("is_partial", not is_final))
+            text = (message.get("text") or "").strip()
+
+            if is_partial:
+                if text:
+                    partial_text = text
+                deadline = time.perf_counter() + timeout
+                logger.debug(
+                    "Local STT partial received",
+                    component=self.component_key,
+                    call_id=call_id,
+                    transcript_preview=text[:80],
+                )
+                continue
+
+            transcript = text or partial_text
             latency_ms = (time.perf_counter() - started_at) * 1000.0
             logger.info(
                 "Local STT transcript received",

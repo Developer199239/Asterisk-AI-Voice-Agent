@@ -61,3 +61,54 @@
 - Instrument server to log `set_mode` requests vs responses to confirm execution in `local_ai_server/main.py::_handle_json_message`.
 - Verify the deployed `local-ai-server` image includes the ack patch (look for `mode_ready` in container logs or run `docker inspect` to confirm image hash).
 - Once ack emission is confirmed, retest local_only pipeline; expect to see `Local adapter handshake complete` logs followed by greeting playback.
+
+## 2025-09-26 14:25 PDT — Greeting succeeded, STT not receiving; inbound dropped then timeouts
+
+- **Outcome**
+- Initial greeting played successfully to caller (TTS path working end-to-end).
+- After greeting, caller audio did not reach STT processing; no two-way conversation.
+
+- **Key Evidence**
+- ai-engine (`logs/ai-engine-20250926-142800.log`):
+  - Adapters connected with handshake acks:
+    - `Opening local adapter session` → `Local adapter set_mode sent` → `Local adapter handshake complete` for `local_stt`, `local_llm`, `local_tts`.
+  - TTS greeting path:
+    - `Sending TTS request` → `Local TTS audio chunk received bytes=13282 latency_ms=518.71`
+    - File created at `/mnt/asterisk_media/ai-generated/audio-pipeline-tts-greeting-<call>.ulaw`
+    - `🔊 AUDIO PLAYBACK - Started` and later `PlaybackFinished ... gating_cleared=true`
+  - AudioSocket inbound during greeting:
+    - Multiple `Dropping inbound AudioSocket audio during TTS playback (barge-in disabled)` as expected.
+  - After gating cleared:
+    - `Sending STT audio chunk bytes=5742 rate=16000` (repeated)
+    - Each followed by `STT transcribe failed` with `TimeoutError` waiting for `stt_result`.
+    - `Pipeline queue full; dropping AudioSocket frame` repeated (STT not consuming → backpressure and drops).
+- local-ai-server (`logs/local-ai-server-20250926-142802.log`):
+  - Multiple `New connection established` + `Session mode updated to stt/llm/tts`.
+  - `🔊 TTS RESULT - Generated uLaw 8kHz audio: 13282 bytes`.
+  - Immediately after, `Connection closed` for the new sockets. No `AUDIO INPUT` or `stt_result` logs seen.
+
+- **Diagnosis**
+- Client-side adapters now function (WS connect + handshake + TTS request/receive worked), but the STT leg returns no responses, timing out repeatedly.
+- The server appears to close the newly opened sockets soon after the TTS result. Given the `Session mode updated to ...` logs lack a `call_id` and appear global, it’s likely the server maintains a single global session state instead of per-connection state. This would cause new connections (e.g., LLM/TTS) to overwrite mode and disrupt the STT socket.
+- Additionally, the STT `response_timeout_sec` is 2.0s (from `providers.local.response_timeout_sec: ${LOCAL_WS_RESPONSE_TIMEOUT:=2.0}`), which may be tight under load. However, the absence of any STT logs on server strongly suggests the server didn’t process the STT audio at all.
+
+- **Next Steps**
+- Server (priority):
+  - Maintain per-connection session state keyed by the websocket (store `call_id`/`mode` per connection). Do not treat `mode` as global.
+  - Keep STT/LLM/TTS connections open for the lifetime of the call or until client close; don’t auto-close after TTS result.
+  - Instrument STT handler to log each inbound `audio` message with `call_id`, `len(data)`, `rate`, and emit `stt_result` promptly.
+  - Confirm that multiple `audio` messages are accepted and processed sequentially for streaming STT.
+- Client (secondary):
+  - Consider increasing local `response_timeout_sec` (e.g., to 5–8s) to avoid premature timeouts.
+  - Add reconnect-on-close for adapter sockets if the server unexpectedly closes them during a call.
+  - Keep barge-in disabled until STT path is verified stable, then re-enable and tune thresholds.
+
+### 2025-09-27 10:10 PDT — Local streaming STT aligned with cloud providers
+
+- **Fixes applied**
+  - Local AI server now maintains a persistent Vosk recognizer per WebSocket session and emits `stt_result` updates with `is_partial`/`is_final` markers, matching the Deepgram/OpenAI contract.
+  - Partial results, including empty keep-alives, prevent the engine from timing out while audio accumulates; final transcripts reset recognizer state for the next utterance.
+  - Local STT adapter consumes the new contract, resetting its timeout on partials and returning once a final transcript arrives. Default `response_timeout_sec` increased to 5 s to accommodate longer turns.
+- **Validation**
+  - Unit coverage extends to partial+final flows (`tests/test_pipeline_local_adapters.py`) ensuring adapters honor the streaming contract.
+  - Pending: re-run end-to-end call regression to confirm AudioSocket frames now advance beyond STT and drive LLM/TTS responses.

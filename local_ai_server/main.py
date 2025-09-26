@@ -6,8 +6,8 @@ import os
 import subprocess
 import tempfile
 import wave
-from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional
 
 from websockets.server import serve
 from vosk import Model as VoskModel, KaldiRecognizer
@@ -27,6 +27,9 @@ class SessionContext:
     """# Milestone7: Track per-connection defaults for selective mode handling."""
     call_id: str = "unknown"
     mode: str = DEFAULT_MODE
+    recognizer: Optional[KaldiRecognizer] = None
+    last_partial: str = ""
+    partial_emitted: bool = False
 
 
 class AudioProcessor:
@@ -410,6 +413,100 @@ class LocalAIServer:
             logging.error("TTS processing failed: %s", exc, exc_info=True)
             return b""
 
+    def _reset_stt_session(self, session: SessionContext) -> None:
+        """Clear recognizer state after emitting a final transcript."""
+        session.recognizer = None
+        session.last_partial = ""
+        session.partial_emitted = False
+
+    def _ensure_stt_recognizer(self, session: SessionContext) -> Optional[KaldiRecognizer]:
+        if not self.stt_model:
+            logging.error("STT model not loaded")
+            return None
+        if session.recognizer is None:
+            session.recognizer = KaldiRecognizer(self.stt_model, PCM16_TARGET_RATE)
+            session.last_partial = ""
+            session.partial_emitted = False
+        return session.recognizer
+
+    async def _process_stt_stream(
+        self,
+        session: SessionContext,
+        audio_data: bytes,
+        input_rate: int,
+    ) -> List[Dict[str, Any]]:
+        """Feed audio into the session recognizer and return transcript updates."""
+        recognizer = self._ensure_stt_recognizer(session)
+        if not recognizer:
+            return []
+
+        if input_rate != PCM16_TARGET_RATE:
+            logging.debug(
+                "🎵 STT INPUT - Resampling %s Hz → %s Hz: %s bytes",
+                input_rate,
+                PCM16_TARGET_RATE,
+                len(audio_data),
+            )
+            audio_bytes = self.audio_processor.resample_audio(
+                audio_data, input_rate, PCM16_TARGET_RATE, "raw", "raw"
+            )
+        else:
+            audio_bytes = audio_data
+
+        updates: List[Dict[str, Any]] = []
+
+        try:
+            has_final = recognizer.AcceptWaveform(audio_bytes)
+        except Exception as exc:  # pragma: no cover - defensive guard
+            logging.error("STT recognition failed: %s", exc, exc_info=True)
+            return updates
+
+        if has_final:
+            try:
+                result = json.loads(recognizer.Result() or "{}")
+            except json.JSONDecodeError:
+                result = {}
+            text = (result.get("text") or "").strip()
+            confidence = result.get("confidence")
+            logging.info(
+                "📝 STT RESULT - Vosk final transcript: '%s'",
+                text,
+            )
+            updates.append(
+                {
+                    "text": text,
+                    "is_final": True,
+                    "is_partial": False,
+                    "confidence": confidence,
+                }
+            )
+            self._reset_stt_session(session)
+            return updates
+
+        # Emit partial result to mirror remote streaming providers.
+        try:
+            partial_payload = json.loads(recognizer.PartialResult() or "{}")
+        except json.JSONDecodeError:
+            partial_payload = {}
+        partial_text = (partial_payload.get("partial") or "").strip()
+        if partial_text != session.last_partial or not session.partial_emitted:
+            session.last_partial = partial_text
+            session.partial_emitted = True
+            logging.debug(
+                "📝 STT PARTIAL - '%s'",
+                partial_text,
+            )
+            updates.append(
+                {
+                    "text": partial_text,
+                    "is_final": False,
+                    "is_partial": True,
+                    "confidence": None,
+                }
+            )
+
+        return updates
+
     def _normalize_mode(self, data_mode: Optional[str], session: SessionContext) -> str:
         if data_mode and data_mode in SUPPORTED_MODES:
             session.mode = data_mode
@@ -427,15 +524,20 @@ class LocalAIServer:
         request_id: Optional[str],
         *,
         source_mode: str,
+        is_final: bool,
+        is_partial: bool,
+        confidence: Optional[float],
     ) -> None:
-        if not transcript:
-            return
         payload = {
             "type": "stt_result",
             "text": transcript,
             "call_id": session.call_id,
             "mode": source_mode,
+            "is_final": is_final,
+            "is_partial": is_partial,
         }
+        if confidence is not None:
+            payload["confidence"] = confidence
         if request_id:
             payload["request_id"] = request_id
         await self._send_json(websocket, payload)
@@ -521,32 +623,49 @@ class LocalAIServer:
 
         input_rate = int(data.get("rate", PCM16_TARGET_RATE))
 
-        if mode == "stt":
-            # Milestone7: selective STT mode returns transcript without invoking downstream components.
-            transcript = await self.process_stt(audio_bytes, input_rate)
-            await self._emit_stt_result(
-                websocket,
-                transcript,
-                session,
-                request_id,
-                source_mode=mode,
-            )
-            return
-
-        if mode == "llm":
-            # Milestone7: STT + LLM without generating audio output.
-            transcript = await self.process_stt(audio_bytes, input_rate)
-            if not transcript:
-                logging.debug("Selective LLM mode received empty transcript")
+        if mode in {"stt", "llm", "full"}:
+            stt_events = await self._process_stt_stream(session, audio_bytes, input_rate)
+            if not stt_events:
                 return
-            llm_response = await self.process_llm(transcript)
-            await self._emit_llm_response(
-                websocket,
-                llm_response,
-                session,
-                request_id,
-                source_mode=mode,
-            )
+
+            for event in stt_events:
+                await self._emit_stt_result(
+                    websocket,
+                    event.get("text", ""),
+                    session,
+                    request_id,
+                    source_mode=mode,
+                    is_final=event.get("is_final", False),
+                    is_partial=event.get("is_partial", False),
+                    confidence=event.get("confidence"),
+                )
+
+                if not event.get("is_final"):
+                    continue
+
+                final_text = (event.get("text") or "").strip()
+                if not final_text:
+                    continue
+
+                if mode in {"llm", "full"}:
+                    llm_response = await self.process_llm(final_text)
+                    await self._emit_llm_response(
+                        websocket,
+                        llm_response,
+                        session,
+                        request_id,
+                        source_mode=mode if mode != "full" else "llm",
+                    )
+
+                    if mode == "full" and llm_response:
+                        audio_response = await self.process_tts(llm_response)
+                        await self._emit_tts_audio(
+                            websocket,
+                            audio_response,
+                            session,
+                            request_id,
+                            source_mode="full",
+                        )
             return
 
         if mode == "tts":
@@ -554,24 +673,38 @@ class LocalAIServer:
             return
 
         # Default full pipeline (STT → LLM → TTS).
-        transcript = await self.process_stt(audio_bytes, input_rate)
-        if not transcript:
-            logging.debug("Full pipeline STT transcript empty, skipping downstream")
-            return
+        stt_events = await self._process_stt_stream(session, audio_bytes, input_rate)
+        for event in stt_events:
+            await self._emit_stt_result(
+                websocket,
+                event.get("text", ""),
+                session,
+                request_id,
+                source_mode="full",
+                is_final=event.get("is_final", False),
+                is_partial=event.get("is_partial", False),
+                confidence=event.get("confidence"),
+            )
 
-        llm_response = await self.process_llm(transcript)
-        if not llm_response:
-            logging.debug("Full pipeline LLM produced empty response, skipping TTS")
-            return
+            if not event.get("is_final"):
+                continue
 
-        audio_response = await self.process_tts(llm_response)
-        await self._emit_tts_audio(
-            websocket,
-            audio_response,
-            session,
-            request_id,
-            source_mode="full",
-        )
+            final_text = (event.get("text") or "").strip()
+            if not final_text:
+                continue
+
+            llm_response = await self.process_llm(final_text)
+            if not llm_response:
+                continue
+
+            audio_response = await self.process_tts(llm_response)
+            await self._emit_tts_audio(
+                websocket,
+                audio_response,
+                session,
+                request_id,
+                source_mode="full",
+            )
 
     async def _handle_tts_request(
         self,
@@ -723,6 +856,7 @@ class LocalAIServer:
         except Exception as exc:
             logging.error("❌ WebSocket handler error: %s", exc, exc_info=True)
         finally:
+            self._reset_stt_session(session)
             logging.info("🔌 Connection closed: %s", websocket.remote_address)
 
 
