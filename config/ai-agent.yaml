@@ -35,7 +35,7 @@ pipelines:
         streaming: true  # Enable continuous streaming via send_audio/iter_results
         stream_format: "pcm16_16k"
       llm:
-        llm_response_timeout_sec: 30.0  # Allow slower local LLM to respond within this window
+        llm_response_timeout_sec: 60.0  # Allow slower local LLM to respond within this window
       tts:
         format:
           encoding: "mulaw"  # Matches telephony trunks without resampling

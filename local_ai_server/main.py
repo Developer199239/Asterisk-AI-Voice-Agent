@@ -684,7 +684,36 @@ class LocalAIServer:
         if mode == "stt":
             return
 
-        llm_response = await self.process_llm(clean_text)
+        # LLM path for llm/full modes: instrument, guard with timeout, and fallback on failure
+        infer_timeout = float(os.getenv("LOCAL_LLM_INFER_TIMEOUT_SEC", "20.0"))
+        try:
+            logging.info(
+                "🧠 LLM START - Generating response call_id=%s mode=%s preview=%s",
+                session.call_id,
+                mode,
+                clean_text[:80],
+            )
+            llm_response = await asyncio.wait_for(
+                self.process_llm(clean_text), timeout=infer_timeout
+            )
+        except asyncio.TimeoutError:
+            logging.warning(
+                "🧠 LLM TIMEOUT - Using fallback call_id=%s mode=%s timeout=%.1fs",
+                session.call_id,
+                mode,
+                infer_timeout,
+            )
+            llm_response = "I'm here to help you. Could you please repeat that?"
+        except Exception as exc:
+            logging.error(
+                "🧠 LLM ERROR - Using fallback call_id=%s mode=%s error=%s",
+                session.call_id,
+                mode,
+                str(exc),
+                exc_info=True,
+            )
+            llm_response = "I'm here to help you. Could you please repeat that?"
+
         await self._emit_llm_response(
             websocket,
             llm_response,
@@ -882,7 +911,41 @@ class LocalAIServer:
         if call_id:
             session.call_id = call_id
 
-        llm_response = await self.process_llm(text)
+        logging.info(
+            "🧠 LLM REQUEST - Received call_id=%s mode=%s preview=%s",
+            session.call_id,
+            mode or "llm",
+            text[:80],
+        )
+
+        infer_timeout = float(os.getenv("LOCAL_LLM_INFER_TIMEOUT_SEC", "20.0"))
+        try:
+            logging.info(
+                "🧠 LLM START - Generating response call_id=%s mode=%s",
+                session.call_id,
+                mode or "llm",
+            )
+            llm_response = await asyncio.wait_for(
+                self.process_llm(text), timeout=infer_timeout
+            )
+        except asyncio.TimeoutError:
+            logging.warning(
+                "🧠 LLM TIMEOUT - Using fallback call_id=%s mode=%s timeout=%.1fs",
+                session.call_id,
+                mode or "llm",
+                infer_timeout,
+            )
+            llm_response = "I'm here to help you. Could you please repeat that?"
+        except Exception as exc:
+            logging.error(
+                "🧠 LLM ERROR - Using fallback call_id=%s mode=%s error=%s",
+                session.call_id,
+                mode or "llm",
+                str(exc),
+                exc_info=True,
+            )
+            llm_response = "I'm here to help you. Could you please repeat that?"
+
         await self._emit_llm_response(
             websocket,
             llm_response,
