@@ -114,7 +114,7 @@ server-clear-logs:
 	@echo "--> Truncating Docker container logs on $(SERVER_HOST)..."
 	@ssh $(SERVER_USER)@$(SERVER_HOST) 'sudo sh -c "truncate -s 0 /var/lib/docker/containers/*/*-json.log"'
 	@echo "--> Restarting ai-engine and local-ai-server containers..."
-	@ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && docker restart local-ai-server && sleep 10 && docker restart ai_engine'
+	@ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && docker restart local_ai_server && sleep 10 && docker restart ai_engine'
 	@echo "✅ Server logs cleared and containers restarted"
 
 ## server-capture-logs: Capture full logs from server containers into timestamped files
