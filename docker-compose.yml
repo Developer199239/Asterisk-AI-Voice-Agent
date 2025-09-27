@@ -33,7 +33,7 @@ services:
       - ./models:/app/models
     environment:
       - PYTHONUNBUFFERED=1
-      - LOCAL_STT_IDLE_MS=750
+      - LOCAL_STT_IDLE_MS=1200
       - LOCAL_LLM_MODEL_PATH=${LOCAL_LLM_MODEL_PATH:-/app/models/llm/TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf}
       - LOCAL_LLM_THREADS=${LOCAL_LLM_THREADS:-16}
       - LOCAL_LLM_CONTEXT=${LOCAL_LLM_CONTEXT:-768}

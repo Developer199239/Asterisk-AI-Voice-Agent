@@ -16,13 +16,13 @@ This playbook summarizes how Gemini should operate on the Asterisk AI Voice Agen
 - Upstream audio: Asterisk AudioSocket → `ai-engine` → provider (Deepgram/OpenAI/local).
 - Downstream audio: Streaming transport managed by `StreamingPlaybackManager`; automatic fallback to tmpfs-based file playback.
 - State: `SessionStore` + `ConversationCoordinator` orchestrate capture gating, playback, and metrics.
-- Local provider: idle-finalize STT after ~750 ms silence, run TinyLlama via `asyncio.to_thread`, and rely on the engine’s ingest/transcript queues so slow LLM responses never block AudioSocket.
+- Local provider: idle-finalize STT after ~1.2 s of silence, run TinyLlama via `asyncio.to_thread`, and rely on the engine’s ingest/transcript queues with transcript aggregation (≥ 3 words or ≥ 12 chars) so slow LLM responses never block AudioSocket or trigger premature replies.
 
 ## Configuration Keys to Watch
 - `audio_transport`, `downstream_mode`, `audiosocket.format`.
 - Streaming defaults (`streaming.min_start_ms`, `low_watermark_ms`, `fallback_timeout_ms`, `provider_grace_ms`).
 - Pipeline definitions (`pipelines`, `active_pipeline`) once Milestone 7 lands.
-- Local overrides: `LOCAL_WS_CHUNK_MS` now defaults to 320 ms and `LOCAL_WS_RESPONSE_TIMEOUT` to 5 s; adjust per environment if latency warrants.
+- Local overrides: `LOCAL_WS_CHUNK_MS` defaults to 320 ms, `LOCAL_WS_RESPONSE_TIMEOUT` to 5 s, and `LOCAL_STT_IDLE_MS` now defaults to 1200 ms (tune per environment as needed).
 - Logging levels per component (set via YAML when hot reload is implemented).
 
 ## Development Workflow

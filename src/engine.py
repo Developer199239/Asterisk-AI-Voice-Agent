@@ -2036,70 +2036,138 @@ class Engine:
                     pass
 
             async def dialog_worker() -> None:
+                pending_segments: List[str] = []
+                flush_task: Optional[asyncio.Task] = None
+                accumulation_timeout = float(
+                    (pipeline.llm_options or {}).get("aggregation_timeout_sec", 2.0)
+                )
+
+                async def cancel_flush() -> None:
+                    nonlocal flush_task
+                    if flush_task and not flush_task.done():
+                        current = asyncio.current_task()
+                        if flush_task is not current:
+                            flush_task.cancel()
+                    flush_task = None
+
+                async def run_turn(transcript_text: str) -> None:
+                    response_text = ""
+                    try:
+                        response_text = await pipeline.llm_adapter.generate(
+                            call_id,
+                            transcript_text,
+                            {"messages": [{"role": "user", "content": transcript_text}]},
+                            pipeline.llm_options,
+                        )
+                    except Exception:
+                        logger.debug("LLM generate failed", call_id=call_id, exc_info=True)
+                        return
+                    response_text = (response_text or "").strip()
+                    if not response_text:
+                        return
+                    tts_bytes = bytearray()
+                    try:
+                        async for tts_chunk in pipeline.tts_adapter.synthesize(
+                            call_id,
+                            response_text,
+                            pipeline.tts_options,
+                        ):
+                            if tts_chunk:
+                                tts_bytes.extend(tts_chunk)
+                    except Exception:
+                        logger.debug("TTS synth failed", call_id=call_id, exc_info=True)
+                        return
+                    if not tts_bytes:
+                        return
+                    try:
+                        playback_id = await self.playback_manager.play_audio(
+                            call_id,
+                            bytes(tts_bytes),
+                            "pipeline-tts",
+                        )
+                        if not playback_id:
+                            logger.error(
+                                "Pipeline playback failed",
+                                call_id=call_id,
+                                size=len(tts_bytes),
+                            )
+                    except Exception:
+                        logger.error("Pipeline playback exception", call_id=call_id, exc_info=True)
+
+                async def maybe_respond(force: bool, from_flush: bool = False) -> None:
+                    nonlocal pending_segments, flush_task
+                    if not pending_segments:
+                        if from_flush:
+                            flush_task = None
+                        else:
+                            await cancel_flush()
+                        return
+                    aggregated = " ".join(pending_segments).strip()
+                    if not aggregated:
+                        pending_segments.clear()
+                        if from_flush:
+                            flush_task = None
+                        else:
+                            await cancel_flush()
+                        return
+                    words = len([w for w in aggregated.split() if w])
+                    chars = len(aggregated.replace(" ", ""))
+                    threshold_met = words >= 3 or chars >= 12
+                    if not threshold_met:
+                        if force:
+                            pending_segments.clear()
+                            if from_flush:
+                                flush_task = None
+                            else:
+                                await cancel_flush()
+                        else:
+                            logger.debug(
+                                "Accumulating transcript before LLM",
+                                call_id=call_id,
+                                preview=aggregated[:80],
+                                chars=chars,
+                                words=words,
+                            )
+                        return
+                    if from_flush:
+                        flush_task = None
+                    else:
+                        await cancel_flush()
+                    await run_turn(aggregated)
+                    pending_segments.clear()
+
+                async def schedule_flush() -> None:
+                    nonlocal flush_task
+                    await cancel_flush()
+
+                    async def _flush() -> None:
+                        try:
+                            await asyncio.sleep(accumulation_timeout)
+                            await maybe_respond(force=True, from_flush=True)
+                        except asyncio.CancelledError:
+                            pass
+
+                    flush_task = asyncio.create_task(_flush())
+
                 try:
                     while True:
                         transcript = await transcript_queue.get()
                         if transcript is None:
+                            await maybe_respond(force=True)
                             break
-                        # Gate LLM on minimum transcript length to avoid firing on fragments
                         normalized = (transcript or "").strip()
-                        try:
-                            word_count = len([w for w in normalized.split() if w])
-                        except Exception:
-                            word_count = 0
-                        if len(normalized) < 12 or word_count < 3:
-                            logger.debug(
-                                "Skipping LLM for short transcript",
-                                call_id=call_id,
-                                preview=normalized[:80],
-                                chars=len(normalized),
-                                words=word_count,
-                            )
+                        if not normalized:
+                            if pending_segments and flush_task is None:
+                                await schedule_flush()
                             continue
-                        response_text = ""
-                        try:
-                            response_text = await pipeline.llm_adapter.generate(
-                                call_id,
-                                transcript,
-                                {"messages": [{"role": "user", "content": transcript}]},
-                                pipeline.llm_options,
-                            )
-                        except Exception:
-                            logger.debug("LLM generate failed", call_id=call_id, exc_info=True)
-                            continue
-                        response_text = (response_text or "").strip()
-                        if not response_text:
-                            continue
-                        tts_bytes = bytearray()
-                        try:
-                            async for tts_chunk in pipeline.tts_adapter.synthesize(
-                                call_id,
-                                response_text,
-                                pipeline.tts_options,
-                            ):
-                                if tts_chunk:
-                                    tts_bytes.extend(tts_chunk)
-                        except Exception:
-                            logger.debug("TTS synth failed", call_id=call_id, exc_info=True)
-                            continue
-                        if not tts_bytes:
-                            continue
-                        try:
-                            playback_id = await self.playback_manager.play_audio(
-                                call_id,
-                                bytes(tts_bytes),
-                                "pipeline-tts",
-                            )
-                            if not playback_id:
-                                logger.error(
-                                    "Pipeline playback failed",
-                                    call_id=call_id,
-                                    size=len(tts_bytes),
-                                )
-                        except Exception:
-                            logger.error("Pipeline playback exception", call_id=call_id, exc_info=True)
+                        pending_segments.append(normalized)
+                        await maybe_respond(force=False)
+                        if pending_segments:
+                            await schedule_flush()
                 except asyncio.CancelledError:
                     pass
+                finally:
+                    await cancel_flush()
 
             ingest_task = asyncio.create_task(ingest_audio())
             stt_task = asyncio.create_task(stt_worker())

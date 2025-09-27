@@ -91,15 +91,26 @@
   - Adapter unit coverage exercises partial→final flows (`tests/test_pipeline_local_adapters.py`), confirming the client consumes the new events.
   - Pending: capture fresh call logs with successful partial/final hand-off end-to-end.
 
+## 2025-09-27 18:30 PDT — Local-only pipeline stable with slow LLM responses
 
 - **Fixes applied**
   - Local AI server now idle-promotes partial transcripts to finals after ~750 ms of silence and runs TinyLlama via `asyncio.to_thread`, keeping the WebSocket handler responsive even when LLM latency exceeds 30 s.
   - Engine pipeline drains AudioSocket frames in a dedicated ingest task and feeds transcripts through a bounded queue so LLM/TTS work no longer starves STT; `Pipeline queue full` drops disappeared in post-fix smoke tests.
   - Local configuration raises `chunk_ms` to 320 ms and tightens LLM defaults (temperature/max tokens) to gather more speech per chunk while keeping replies concise.
-  - **Next steps**
+- **Next steps**
   - Re-run the regression call in `local_only` mode with a deliberately slow LLM build; attach the resulting `ai-engine`/`local-ai-server` logs to this record.
   - Watch for `Pipeline audio buffer overflow` warnings during load; tune queue sizes if they appear frequently under production traffic.
- 
+
+## 2025-09-27 21:40 PDT — Utterance aggregation enabled for local-only pipeline
+
+- **Fixes applied**
+  - Local AI server default idle finalizer bumped to 1200 ms (still overrideable via `LOCAL_STT_IDLE_MS`) so callers can finish multi-word phrases before a final is emitted.
+  - Engine `dialog_worker` now accumulates consecutive STT finals until they reach ≥ 3 words or ≥ 12 characters, flushing sooner only after 2 s of silence. Short fragments are logged as “Accumulating transcript before LLM” instead of triggering an immediate request.
+  - Aggregated prompts reuse the existing LLM/TTS path; no adapter or pipeline schema changes required.
+- **Validation plan**
+  - Place a local-only regression call (e.g., “hello what is your name”) and confirm a single aggregated prompt drives the LLM/TTS turn.
+  - Ensure ai-engine logs show the new aggregation debug message and no longer emit `Skipping LLM for short transcript` unless callers genuinely stop at a fragment.
+
 ## 2025-09-26 17:56 PDT — Greeting OK; STT minimal; LLM timed out; no two-way conversation
 
 - **Outcome**

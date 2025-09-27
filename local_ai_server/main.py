@@ -163,7 +163,7 @@ class LocalAIServer:
         self.audio_buffer = b""
         self.buffer_size_bytes = PCM16_TARGET_RATE * 2 * 1.0  # 1 second at 16kHz (32000 bytes)
         # Process buffer after N ms of silence (idle finalizer). Configurable via env.
-        self.buffer_timeout_ms = int(os.getenv("LOCAL_STT_IDLE_MS", "1000"))
+        self.buffer_timeout_ms = int(os.getenv("LOCAL_STT_IDLE_MS", "1200"))
 
     async def initialize_models(self):
         """Initialize all AI models with proper error handling"""
