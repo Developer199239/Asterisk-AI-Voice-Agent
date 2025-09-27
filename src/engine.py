@@ -2041,6 +2041,21 @@ class Engine:
                         transcript = await transcript_queue.get()
                         if transcript is None:
                             break
+                        # Gate LLM on minimum transcript length to avoid firing on fragments
+                        normalized = (transcript or "").strip()
+                        try:
+                            word_count = len([w for w in normalized.split() if w])
+                        except Exception:
+                            word_count = 0
+                        if len(normalized) < 12 or word_count < 3:
+                            logger.debug(
+                                "Skipping LLM for short transcript",
+                                call_id=call_id,
+                                preview=normalized[:80],
+                                chars=len(normalized),
+                                words=word_count,
+                            )
+                            continue
                         response_text = ""
                         try:
                             response_text = await pipeline.llm_adapter.generate(

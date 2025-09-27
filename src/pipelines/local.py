@@ -374,7 +374,7 @@ class LocalSTTAdapter(_LocalAdapterBase, STTComponent):
         }
 
         await self._send_json(session, payload)
-
+        # STT should use its own response timeout
         timeout = float(merged.get("response_timeout_sec", 5.0))
         started_at = time.perf_counter()
         deadline = started_at + timeout
@@ -464,7 +464,8 @@ class LocalLLMAdapter(_LocalAdapterBase, LLMComponent):
 
         await self._send_json(session, payload)
 
-        timeout = float(merged.get("response_timeout_sec", 5.0))
+        # Prefer a dedicated LLM timeout when provided (pipeline or provider level)
+        timeout = float(merged.get("llm_response_timeout_sec", merged.get("response_timeout_sec", 5.0)))
         started_at = time.perf_counter()
 
         while True:

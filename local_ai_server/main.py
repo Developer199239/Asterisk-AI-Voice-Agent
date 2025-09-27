@@ -162,7 +162,8 @@ class LocalAIServer:
         # Audio buffering for STT (20ms chunks need to be buffered for effective STT)
         self.audio_buffer = b""
         self.buffer_size_bytes = PCM16_TARGET_RATE * 2 * 1.0  # 1 second at 16kHz (32000 bytes)
-        self.buffer_timeout_ms = 1000  # Process buffer after 1 second of silence
+        # Process buffer after N ms of silence (idle finalizer). Configurable via env.
+        self.buffer_timeout_ms = int(os.getenv("LOCAL_STT_IDLE_MS", "1000"))
 
     async def initialize_models(self):
         """Initialize all AI models with proper error handling"""
@@ -625,6 +626,18 @@ class LocalAIServer:
         confidence: Optional[float],
         idle_promoted: bool = False,
     ) -> None:
+        clean_text = (text or "").strip()
+        if not clean_text:
+            # Suppress finals with empty transcripts; keep recognizer alive for more audio
+            reason = "idle-timeout" if idle_promoted else "recognizer-final"
+            logging.info(
+                "📝 STT FINAL SUPPRESSED - Empty transcript call_id=%s mode=%s reason=%s",
+                session.call_id,
+                mode,
+                reason,
+            )
+            return
+
         reason = "idle-timeout" if idle_promoted else "recognizer-final"
         logging.info(
             "📝 STT FINAL - Emitting transcript call_id=%s mode=%s reason=%s confidence=%s preview=%s",
@@ -632,12 +645,12 @@ class LocalAIServer:
             mode,
             reason,
             confidence,
-            text[:80],
+            clean_text[:80],
         )
 
         await self._emit_stt_result(
             websocket,
-            text,
+            clean_text,
             session,
             request_id,
             source_mode=mode,
@@ -648,8 +661,7 @@ class LocalAIServer:
 
         self._reset_stt_session(session)
 
-        clean_text = text.strip()
-        if not clean_text or mode == "stt":
+        if mode == "stt":
             return
 
         llm_response = await self.process_llm(clean_text)
