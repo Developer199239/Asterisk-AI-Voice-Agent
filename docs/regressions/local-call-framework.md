@@ -45,70 +45,58 @@
 - **Key Evidence (deployment `e4b4e72` + `deploy-full`)**
 - ai-engine (`logs/ai-engine-20250926-130926.log`):
   - `Pipeline STT/LLM/TTS adapter session opened` logged, but immediately `Pipeline greeting retry after session error`.
-  - Both greeting attempts raise `RuntimeError: Local adapter session not available for call 1758917211.1343` from `src/pipelines/local.py::_ensure_session`.
-  - No `Local adapter handshake complete` or `mode_ready` messages ever logged.
-  - After greeting failure, inbound AudioSocket frames logged as "Dropping inbound during initial TTS protection window"; pipeline loop never runs.
-- local-ai-server (`logs/local-ai-server-20250926-130928.log`):
-  - Server restarts and accepts new connection (`New connection established: ('127.0.0.1', 38940)`).
-  - No `mode_ready` response or handshake logs emitted; connection later closes with `ConnectionClosedError`.
 
-- **Diagnosis**
-- The local server still does not send the expected `{"type": "mode_ready"}` after `set_mode`; clients never mark `handshake_complete=True`.
-- `_ensure_session()` therefore tears down and retries, but repeated `open_call()` attempts also hang until the connection drops, yielding "session not available".
-- Greeting playback never begins, so TTS guard logic keeps dropping caller audio and the conversation never progresses.
-
-- **Next Steps**
-- Instrument server to log `set_mode` requests vs responses to confirm execution in `local_ai_server/main.py::_handle_json_message`.
-- Verify the deployed `local-ai-server` image includes the ack patch (look for `mode_ready` in container logs or run `docker inspect` to confirm image hash).
-- Once ack emission is confirmed, retest local_only pipeline; expect to see `Local adapter handshake complete` logs followed by greeting playback.
-
-## 2025-09-26 14:25 PDT — Greeting succeeded, STT not receiving; inbound dropped then timeouts
-
-- **Outcome**
-- Initial greeting played successfully to caller (TTS path working end-to-end).
-- After greeting, caller audio did not reach STT processing; no two-way conversation.
+- **What Failed**
+- STT did not produce a final transcript for the caller’s first turn.
+- Audio pipeline suffered backpressure, dropping AudioSocket frames while waiting for STT.
 
 - **Key Evidence**
-- ai-engine (`logs/ai-engine-20250926-142800.log`):
-  - Adapters connected with handshake acks:
-    - `Opening local adapter session` → `Local adapter set_mode sent` → `Local adapter handshake complete` for `local_stt`, `local_llm`, `local_tts`.
-  - TTS greeting path:
-    - `Sending TTS request` → `Local TTS audio chunk received bytes=13282 latency_ms=518.71`
-    - File created at `/mnt/asterisk_media/ai-generated/audio-pipeline-tts-greeting-<call>.ulaw`
-    - `🔊 AUDIO PLAYBACK - Started` and later `PlaybackFinished ... gating_cleared=true`
-  - AudioSocket inbound during greeting:
-    - Multiple `Dropping inbound AudioSocket audio during TTS playback (barge-in disabled)` as expected.
-  - After gating cleared:
-    - `Sending STT audio chunk bytes=5742 rate=16000` (repeated)
-    - Each followed by `STT transcribe failed` with `TimeoutError` waiting for `stt_result`.
-    - `Pipeline queue full; dropping AudioSocket frame` repeated (STT not consuming → backpressure and drops).
-- local-ai-server (`logs/local-ai-server-20250926-142802.log`):
-  - Multiple `New connection established` + `Session mode updated to stt/llm/tts`.
-  - `🔊 TTS RESULT - Generated uLaw 8kHz audio: 13282 bytes`.
-  - Immediately after, `Connection closed` for the new sockets. No `AUDIO INPUT` or `stt_result` logs seen.
+- `logs/ai-engine-20250926-162558.log`:
+  - Post-greeting: `Sending STT audio chunk bytes=5742 rate=16000 component=local_stt` (~line 390)
+  - `Local STT partial received transcript_preview=` (empty) (~line 391)
+  - Many `Pipeline queue full; dropping AudioSocket frame` for several seconds (~392–448+)
+  - `STT transcribe failed TimeoutError` (~449–479); then another send (~480) with more backpressure lines.
+- `logs/local-ai-server-20250926-162601.log`:
+  - Server initialized; models loaded; `Session mode updated to stt/llm/tts`; `🔊 TTS RESULT` logged.
+  - Connections then closed; no INFO-level STT partial/final logs present.
 
 - **Diagnosis**
-- Client-side adapters now function (WS connect + handshake + TTS request/receive worked), but the STT leg returns no responses, timing out repeatedly.
-- The server appears to close the newly opened sockets soon after the TTS result. Given the `Session mode updated to ...` logs lack a `call_id` and appear global, it’s likely the server maintains a single global session state instead of per-connection state. This would cause new connections (e.g., LLM/TTS) to overwrite mode and disrupt the STT socket.
-- Additionally, the STT `response_timeout_sec` is 2.0s (from `providers.local.response_timeout_sec: ${LOCAL_WS_RESPONSE_TIMEOUT:=2.0}`), which may be tight under load. However, the absence of any STT logs on server strongly suggests the server didn’t process the STT audio at all.
+- The engine sent a very short (~200 ms) audio chunk to STT and then blocked, awaiting a final. Vosk yielded a partial but not a final; absent additional audio or an explicit flush, no final was produced. While waiting, inbound AudioSocket frames queued up and were dropped; the STT adapter timed out (5 s).
 
-- **Next Steps**
-- Server (priority):
-  - Maintain per-connection session state keyed by the websocket (store `call_id`/`mode` per connection). Do not treat `mode` as global.
-  - Keep STT/LLM/TTS connections open for the lifetime of the call or until client close; don’t auto-close after TTS result.
-  - Instrument STT handler to log each inbound `audio` message with `call_id`, `len(data)`, `rate`, and emit `stt_result` promptly.
-  - Confirm that multiple `audio` messages are accepted and processed sequentially for streaming STT.
-- Client (secondary):
-  - Consider increasing local `response_timeout_sec` (e.g., to 5–8s) to avoid premature timeouts.
-  - Add reconnect-on-close for adapter sockets if the server unexpectedly closes them during a call.
-  - Keep barge-in disabled until STT path is verified stable, then re-enable and tune thresholds.
+- **Root Cause**
+- Contract mismatch: engine behavior approximated "single-chunk, wait-for-final," whereas the local server’s streaming STT expects continuous audio or a flush/end-of-utterance signal to finalize.
+- Missing idle-finalizer server-side to promote partial → final after a period of silence.
+- Possible premature WS closures further reduce robustness.
 
-### 2025-09-27 10:10 PDT — Local streaming STT aligned with cloud providers
+- **Proposed Fixes**
+- Server (high):
+  - Implement idle finalizer (~600–800 ms silence) to emit `stt_result` with `is_final=true`, then reset recognizer.
+  - Keep per-connection WS sessions open for the full call; do not auto-close STT/LLM/TTS sockets after greeting.
+  - Elevate STT logging to INFO: log inbound `audio` (bytes, rate, call/session id) and each partial/final.
+- Engine (near-term):
+  - Stream audio continuously while awaiting STT; on partial, reset the timeout; on final, proceed to LLM/TTS.
+  - Optionally send explicit `flush`/`end_utterance` when VAD detects speech end.
+  - Improve backpressure handling (bounded buffer/coalescing) and add reconnect-on-close.
+
+- **Validation Plan**
+- Re-run regression; expect multiple partials then a final, no sustained `Pipeline queue full` spam, and LLM/TTS response turn-taking.
+
+## 2025-09-27 10:10 PDT — Local streaming STT aligned with cloud providers
 
 - **Fixes applied**
-  - Local AI server now maintains a persistent Vosk recognizer per WebSocket session and emits `stt_result` updates with `is_partial`/`is_final` markers, matching the Deepgram/OpenAI contract.
-  - Partial results, including empty keep-alives, prevent the engine from timing out while audio accumulates; final transcripts reset recognizer state for the next utterance.
-  - Local STT adapter consumes the new contract, resetting its timeout on partials and returning once a final transcript arrives. Default `response_timeout_sec` increased to 5 s to accommodate longer turns.
+  - Local AI server maintains a persistent Vosk recognizer per WebSocket session and emits `stt_result` updates with `is_partial`/`is_final` markers so the engine mirrors Deepgram/OpenAI behavior.
+  - Partial keep-alives prevent the engine from timing out while speech accumulates; finals reset recognizer state for the next utterance.
+  - Local STT adapter honors the streaming contract, resetting its timeout on partials and returning immediately once a final transcript arrives. Default `response_timeout_sec` raised to 5 s for longer turns.
 - **Validation**
-  - Unit coverage extends to partial+final flows (`tests/test_pipeline_local_adapters.py`) ensuring adapters honor the streaming contract.
-  - Pending: re-run end-to-end call regression to confirm AudioSocket frames now advance beyond STT and drive LLM/TTS responses.
+  - Adapter unit coverage exercises partial→final flows (`tests/test_pipeline_local_adapters.py`), confirming the client consumes the new events.
+  - Pending: capture fresh call logs with successful partial/final hand-off end-to-end.
+
+## 2025-09-27 18:30 PDT — Local-only pipeline stable with slow LLM responses
+
+- **Fixes applied**
+  - Local AI server now idle-promotes partial transcripts to finals after ~750 ms of silence and runs TinyLlama via `asyncio.to_thread`, keeping the WebSocket handler responsive even when LLM latency exceeds 30 s.
+  - Engine pipeline drains AudioSocket frames in a dedicated ingest task and feeds transcripts through a bounded queue so LLM/TTS work no longer starves STT; `Pipeline queue full` drops disappeared in post-fix smoke tests.
+  - Local configuration raises `chunk_ms` to 320 ms and tightens LLM defaults (temperature/max tokens) to gather more speech per chunk while keeping replies concise.
+- **Next steps**
+  - Re-run the regression call in `local_only` mode with a deliberately slow LLM build; attach the resulting `ai-engine`/`local-ai-server` logs to this record.
+  - Watch for `Pipeline audio buffer overflow` warnings during load; tune queue sizes if they appear frequently under production traffic.

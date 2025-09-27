@@ -1947,68 +1947,155 @@ class Engine:
                         )
                         break
 
-            # Accumulate into ~160ms chunks for STT
-            buf = bytearray()
+            # Accumulate into ~160ms chunks for STT while keeping ingestion responsive
             bytes_per_ms = 32  # 16k Hz * 2 bytes / 1000 ms
-            commit_ms = 160
+            base_commit_ms = 160
+            stt_chunk_ms = int(pipeline.stt_options.get("chunk_ms", base_commit_ms)) if pipeline.stt_options else base_commit_ms
+            commit_ms = max(stt_chunk_ms, 80)
             commit_bytes = bytes_per_ms * commit_ms
-            q = self._pipeline_queues.get(call_id)
-            if not q:
+
+            inbound_queue = self._pipeline_queues.get(call_id)
+            if not inbound_queue:
                 return
 
-            while True:
+            buffer_queue: asyncio.Queue[Optional[bytes]] = asyncio.Queue(maxsize=50)
+            transcript_queue: asyncio.Queue[Optional[str]] = asyncio.Queue(maxsize=2)
+
+            async def enqueue_buffer(item: Optional[bytes]) -> None:
+                if item is None:
+                    await buffer_queue.put(None)
+                    return
+                while True:
+                    if buffer_queue.full():
+                        dropped = await buffer_queue.get()
+                        if dropped is not None:
+                            logger.debug(
+                                "Pipeline audio buffer overflow; dropping oldest frame",
+                                call_id=call_id,
+                            )
+                        continue
+                    await buffer_queue.put(item)
+                    return
+
+            async def ingest_audio() -> None:
                 try:
-                    chunk = await q.get()
+                    while True:
+                        chunk = await inbound_queue.get()
+                        if chunk is None:
+                            await enqueue_buffer(None)
+                            break
+                        await enqueue_buffer(chunk)
                 except asyncio.CancelledError:
-                    break
-                if chunk is None:
-                    break
-                buf.extend(chunk)
-                if len(buf) < commit_bytes:
-                    continue
-                audio_chunk = bytes(buf)
-                buf.clear()
-                # STT -> LLM -> TTS sequence
+                    pass
+
+            async def process_audio(audio_chunk: bytes) -> None:
                 transcript = ""
                 try:
-                    transcript = await pipeline.stt_adapter.transcribe(call_id, audio_chunk, 16000, pipeline.stt_options)
-                except Exception:
-                    logger.debug("STT transcribe failed", call_id=call_id, exc_info=True)
-                    continue
-                transcript = (transcript or "").strip()
-                if not transcript:
-                    continue
-                response_text = ""
-                try:
-                    response_text = await pipeline.llm_adapter.generate(
+                    transcript = await pipeline.stt_adapter.transcribe(
                         call_id,
-                        transcript,
-                        {"messages": [{"role": "user", "content": transcript}]},
-                        pipeline.llm_options,
+                        audio_chunk,
+                        16000,
+                        pipeline.stt_options,
                     )
                 except Exception:
-                    logger.debug("LLM generate failed", call_id=call_id, exc_info=True)
-                    continue
-                response_text = (response_text or "").strip()
-                if not response_text:
-                    continue
-                # Synthesize and play via file playback
-                tts_bytes = bytearray()
+                    logger.debug("STT transcribe failed", call_id=call_id, exc_info=True)
+                    return
+                transcript = (transcript or "").strip()
+                if not transcript:
+                    return
                 try:
-                    async for chunk in pipeline.tts_adapter.synthesize(call_id, response_text, pipeline.tts_options):
-                        if chunk:
-                            tts_bytes.extend(chunk)
-                except Exception:
-                    logger.debug("TTS synth failed", call_id=call_id, exc_info=True)
-                    continue
-                if not tts_bytes:
-                    continue
+                    transcript_queue.put_nowait(transcript)
+                except asyncio.QueueFull:
+                    try:
+                        dropped = transcript_queue.get_nowait()
+                        logger.warning(
+                            "Pipeline transcript backlog full; dropping oldest transcript",
+                            call_id=call_id,
+                            dropped_preview=(dropped or "")[:80] if dropped else "",
+                        )
+                    except asyncio.QueueEmpty:
+                        pass
+                    await transcript_queue.put(transcript)
+
+            async def stt_worker() -> None:
+                local_buf = bytearray()
                 try:
-                    playback_id = await self.playback_manager.play_audio(call_id, bytes(tts_bytes), "pipeline-tts")
-                    if not playback_id:
-                        logger.error("Pipeline playback failed", call_id=call_id, size=len(tts_bytes))
-                except Exception:
-                    logger.error("Pipeline playback exception", call_id=call_id, exc_info=True)
+                    while True:
+                        frame = await buffer_queue.get()
+                        if frame is None:
+                            if local_buf:
+                                await process_audio(bytes(local_buf))
+                            await transcript_queue.put(None)
+                            break
+                        local_buf.extend(frame)
+                        if len(local_buf) < commit_bytes:
+                            continue
+                        await process_audio(bytes(local_buf))
+                        local_buf.clear()
+                except asyncio.CancelledError:
+                    pass
+
+            async def dialog_worker() -> None:
+                try:
+                    while True:
+                        transcript = await transcript_queue.get()
+                        if transcript is None:
+                            break
+                        response_text = ""
+                        try:
+                            response_text = await pipeline.llm_adapter.generate(
+                                call_id,
+                                transcript,
+                                {"messages": [{"role": "user", "content": transcript}]},
+                                pipeline.llm_options,
+                            )
+                        except Exception:
+                            logger.debug("LLM generate failed", call_id=call_id, exc_info=True)
+                            continue
+                        response_text = (response_text or "").strip()
+                        if not response_text:
+                            continue
+                        tts_bytes = bytearray()
+                        try:
+                            async for tts_chunk in pipeline.tts_adapter.synthesize(
+                                call_id,
+                                response_text,
+                                pipeline.tts_options,
+                            ):
+                                if tts_chunk:
+                                    tts_bytes.extend(tts_chunk)
+                        except Exception:
+                            logger.debug("TTS synth failed", call_id=call_id, exc_info=True)
+                            continue
+                        if not tts_bytes:
+                            continue
+                        try:
+                            playback_id = await self.playback_manager.play_audio(
+                                call_id,
+                                bytes(tts_bytes),
+                                "pipeline-tts",
+                            )
+                            if not playback_id:
+                                logger.error(
+                                    "Pipeline playback failed",
+                                    call_id=call_id,
+                                    size=len(tts_bytes),
+                                )
+                        except Exception:
+                            logger.error("Pipeline playback exception", call_id=call_id, exc_info=True)
+                except asyncio.CancelledError:
+                    pass
+
+            ingest_task = asyncio.create_task(ingest_audio())
+            stt_task = asyncio.create_task(stt_worker())
+            dialog_task = asyncio.create_task(dialog_worker())
+
+            try:
+                await dialog_task
+            finally:
+                ingest_task.cancel()
+                stt_task.cancel()
+                await asyncio.gather(ingest_task, stt_task, return_exceptions=True)
         except asyncio.CancelledError:
             pass
         except Exception:

@@ -24,6 +24,7 @@ globs: src/**/*.py, *.py, docker-compose.yml, Dockerfile, config/ai-agent.yaml
 - Register new STT/LLM/TTS adapters via `src/pipelines/orchestrator.py`, extend the YAML schema, update examples in `examples/pipelines/`, and refresh milestone docs.
 - Providers must honour μ-law/8 kHz input from AudioSocket, emit events compatible with Prometheus metrics, and expose readiness through `/health`.
 - Capture regression details (call IDs, tuning outcomes) in `docs/regressions/` and keep `call-framework.md` aligned.
+- Local provider: rely on the new idle-finalized STT, async TinyLlama execution, and the engine’s ingest/transcript queues so slow local LLM responses never starve AudioSocket.
 
 ## Testing & Observability
 - Regression loop: clear logs, place an AudioSocket call, watch streaming depth/fallback logs, scrape `/metrics` for latency histograms, then archive findings.

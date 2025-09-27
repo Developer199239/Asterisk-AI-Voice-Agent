@@ -11,6 +11,7 @@ This document captures how I (the agent) work most effectively on this repo. It 
 - Latency histograms/gauges (`ai_agent_turn_latency_seconds`, `ai_agent_transcription_to_audio_seconds`, `ai_agent_last_turn_latency_seconds`) are emitted during calls; capture `/metrics` snapshots before restarting containers so dashboards (Milestone 8) have data.
 - Streaming defaults (`streaming.min_start_ms`, etc.) will be configurable via YAML; ensure documentation updates land in `docs/Architecture.md` and `docs/ROADMAP.md` after each change.
 - IDE rule files (`Agents.md`, `.windsurf/rules/...`, `Gemini.md`, `.cursor/rules/asterisk_ai_voice_agent.mdc`) must stay in sync; update them whenever workflow expectations shift.
+- Local-only pipeline now has idle-finalized STT and decoupled ingest: local server promotes partials to finals after ~750 ms silence and the engine drains AudioSocket frames in a background task, so slow TinyLlama responses no longer stall STT.
 
 ## Architecture Snapshot (Current) — Runtime Contexts (Always Current)
 - Two containers: `ai-engine` (ARI + AudioSocket) and `local-ai-server` (models).

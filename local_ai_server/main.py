@@ -30,6 +30,9 @@ class SessionContext:
     recognizer: Optional[KaldiRecognizer] = None
     last_partial: str = ""
     partial_emitted: bool = False
+    last_audio_at: float = 0.0
+    idle_task: Optional[asyncio.Task] = None
+    last_request_meta: Dict[str, Any] = field(default_factory=dict)
 
 
 class AudioProcessor:
@@ -356,7 +359,10 @@ class LocalAIServer:
                 f"User: {text}\n\nAssistant:"
             )
 
-            output = self.llm_model(
+            loop = asyncio.get_running_loop()
+            started = loop.time()
+            output = await asyncio.to_thread(
+                self.llm_model,
                 prompt,
                 max_tokens=self.llm_max_tokens,
                 stop=["User:", "\n\n", "Assistant:"],
@@ -372,7 +378,12 @@ class LocalAIServer:
                 return "I'm here to help you. How can I assist you today?"
 
             response = choices[0].get("text", "").strip()
-            logging.info("🤖 LLM RESULT - Response: '%s'", response)
+            latency_ms = round((loop.time() - started) * 1000.0, 2)
+            logging.info(
+                "🤖 LLM RESULT - Completed in %s ms tokens=%s",
+                latency_ms,
+                len(response.split()),
+            )
             return response
 
         except Exception as exc:
@@ -413,11 +424,23 @@ class LocalAIServer:
             logging.error("TTS processing failed: %s", exc, exc_info=True)
             return b""
 
+    def _cancel_idle_timer(self, session: SessionContext) -> None:
+        if session.idle_task and not session.idle_task.done():
+            try:
+                current_task = asyncio.current_task()
+            except RuntimeError:
+                current_task = None
+            if session.idle_task is not current_task:
+                session.idle_task.cancel()
+        session.idle_task = None
+
     def _reset_stt_session(self, session: SessionContext) -> None:
         """Clear recognizer state after emitting a final transcript."""
+        self._cancel_idle_timer(session)
         session.recognizer = None
         session.last_partial = ""
         session.partial_emitted = False
+        session.last_request_meta.clear()
 
     def _ensure_stt_recognizer(self, session: SessionContext) -> Optional[KaldiRecognizer]:
         if not self.stt_model:
@@ -456,6 +479,11 @@ class LocalAIServer:
         updates: List[Dict[str, Any]] = []
 
         try:
+            session.last_audio_at = asyncio.get_running_loop().time()
+        except RuntimeError:
+            session.last_audio_at = 0.0
+
+        try:
             has_final = recognizer.AcceptWaveform(audio_bytes)
         except Exception as exc:  # pragma: no cover - defensive guard
             logging.error("STT recognition failed: %s", exc, exc_info=True)
@@ -480,7 +508,6 @@ class LocalAIServer:
                     "confidence": confidence,
                 }
             )
-            self._reset_stt_session(session)
             return updates
 
         # Emit partial result to mirror remote streaming providers.
@@ -587,6 +614,109 @@ class LocalAIServer:
         if audio_bytes:
             await websocket.send(audio_bytes)
 
+    async def _handle_final_transcript(
+        self,
+        websocket,
+        session: SessionContext,
+        request_id: Optional[str],
+        *,
+        mode: str,
+        text: str,
+        confidence: Optional[float],
+        idle_promoted: bool = False,
+    ) -> None:
+        reason = "idle-timeout" if idle_promoted else "recognizer-final"
+        logging.info(
+            "📝 STT FINAL - Emitting transcript call_id=%s mode=%s reason=%s confidence=%s preview=%s",
+            session.call_id,
+            mode,
+            reason,
+            confidence,
+            text[:80],
+        )
+
+        await self._emit_stt_result(
+            websocket,
+            text,
+            session,
+            request_id,
+            source_mode=mode,
+            is_final=True,
+            is_partial=False,
+            confidence=confidence,
+        )
+
+        self._reset_stt_session(session)
+
+        clean_text = text.strip()
+        if not clean_text or mode == "stt":
+            return
+
+        llm_response = await self.process_llm(clean_text)
+        await self._emit_llm_response(
+            websocket,
+            llm_response,
+            session,
+            request_id,
+            source_mode=mode if mode != "full" else "llm",
+        )
+
+        if mode == "full" and llm_response:
+            audio_response = await self.process_tts(llm_response)
+            await self._emit_tts_audio(
+                websocket,
+                audio_response,
+                session,
+                request_id,
+                source_mode="full",
+            )
+
+    def _schedule_idle_finalizer(
+        self,
+        websocket,
+        session: SessionContext,
+        request_id: Optional[str],
+        mode: str,
+    ) -> None:
+        self._cancel_idle_timer(session)
+        session.last_request_meta = {"mode": mode, "request_id": request_id}
+
+        async def _idle_promote() -> None:
+            try:
+                timeout_sec = max(self.buffer_timeout_ms / 1000.0, 0.1)
+                await asyncio.sleep(timeout_sec)
+                recognizer = session.recognizer
+                if recognizer is None:
+                    return
+                try:
+                    result = json.loads(recognizer.FinalResult() or "{}")
+                except json.JSONDecodeError:
+                    result = {}
+                text = (result.get("text") or "").strip()
+                confidence = result.get("confidence")
+                logging.info(
+                    "📝 STT IDLE FINALIZER - Triggering final after %s ms silence call_id=%s mode=%s preview=%s",
+                    self.buffer_timeout_ms,
+                    session.call_id,
+                    mode,
+                    text[:80],
+                )
+                await self._handle_final_transcript(
+                    websocket,
+                    session,
+                    request_id,
+                    mode=mode,
+                    text=text,
+                    confidence=confidence,
+                    idle_promoted=True,
+                )
+            except asyncio.CancelledError:
+                return
+            finally:
+                session.idle_task = None
+
+        session.idle_task = asyncio.create_task(_idle_promote())
+
     async def _handle_audio_payload(
         self,
         websocket,
@@ -623,88 +753,54 @@ class LocalAIServer:
 
         input_rate = int(data.get("rate", PCM16_TARGET_RATE))
 
-        if mode in {"stt", "llm", "full"}:
+        stt_modes = {"stt", "llm", "full"}
+        if mode in stt_modes:
+            session.last_request_meta = {"mode": mode, "request_id": request_id}
             stt_events = await self._process_stt_stream(session, audio_bytes, input_rate)
-            if not stt_events:
-                return
+
+            final_emitted = False
+            partial_seen = False
 
             for event in stt_events:
-                await self._emit_stt_result(
-                    websocket,
-                    event.get("text", ""),
-                    session,
-                    request_id,
-                    source_mode=mode,
-                    is_final=event.get("is_final", False),
-                    is_partial=event.get("is_partial", False),
-                    confidence=event.get("confidence"),
-                )
-
-                if not event.get("is_final"):
-                    continue
-
-                final_text = (event.get("text") or "").strip()
-                if not final_text:
-                    continue
-
-                if mode in {"llm", "full"}:
-                    llm_response = await self.process_llm(final_text)
-                    await self._emit_llm_response(
+                text = event.get("text", "")
+                confidence = event.get("confidence")
+                if event.get("is_partial"):
+                    partial_seen = True
+                    await self._emit_stt_result(
                         websocket,
-                        llm_response,
+                        text,
                         session,
                         request_id,
-                        source_mode=mode if mode != "full" else "llm",
+                        source_mode=mode,
+                        is_final=False,
+                        is_partial=True,
+                        confidence=confidence,
+                    )
+                    continue
+
+                if event.get("is_final"):
+                    final_emitted = True
+                    await self._handle_final_transcript(
+                        websocket,
+                        session,
+                        request_id,
+                        mode=mode,
+                        text=text,
+                        confidence=confidence,
+                        idle_promoted=False,
                     )
 
-                    if mode == "full" and llm_response:
-                        audio_response = await self.process_tts(llm_response)
-                        await self._emit_tts_audio(
-                            websocket,
-                            audio_response,
-                            session,
-                            request_id,
-                            source_mode="full",
-                        )
+            if final_emitted:
+                return
+
+            # No final yet; keep an idle finalizer running so short utterances resolve.
+            if session.recognizer is not None or partial_seen:
+                self._schedule_idle_finalizer(websocket, session, request_id, mode)
             return
 
         if mode == "tts":
             logging.warning("Received audio payload with mode=tts; expected text request. Skipping.")
             return
-
-        # Default full pipeline (STT → LLM → TTS).
-        stt_events = await self._process_stt_stream(session, audio_bytes, input_rate)
-        for event in stt_events:
-            await self._emit_stt_result(
-                websocket,
-                event.get("text", ""),
-                session,
-                request_id,
-                source_mode="full",
-                is_final=event.get("is_final", False),
-                is_partial=event.get("is_partial", False),
-                confidence=event.get("confidence"),
-            )
-
-            if not event.get("is_final"):
-                continue
-
-            final_text = (event.get("text") or "").strip()
-            if not final_text:
-                continue
-
-            llm_response = await self.process_llm(final_text)
-            if not llm_response:
-                continue
-
-            audio_response = await self.process_tts(llm_response)
-            await self._emit_tts_audio(
-                websocket,
-                audio_response,
-                session,
-                request_id,
-                source_mode="full",
-            )
 
     async def _handle_tts_request(
         self,

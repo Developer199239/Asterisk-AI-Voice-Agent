@@ -25,6 +25,7 @@ alwaysApply: true
 - Register new adapters through `src/pipelines/orchestrator.py` and expose them in the YAML schema; align examples in `examples/pipelines/*.yaml` and document changes in milestone files.
 - Providers must emit metrics/events compatible with existing Prometheus gauges (latency, barge-in, streaming health) and update `/health` readiness fields.
 - When adjusting Deepgram or OpenAI settings, keep AudioSocket at μ-law/8 kHz, ensure downstream fallback is functional, and capture findings in `docs/regressions/`.
+- Local provider specifics: idle-finalize STT after ~750 ms of silence, keep LLM calls off the event loop, and rely on the engine’s new ingest/transcript queues so slow TinyLlama runs never block AudioSocket.
 
 ## Testing & Observability
 - Before regressions: clear logs, place an AudioSocket call, verify streaming logs (`AudioSocket connection accepted`, buffer depth, fallback counters), then scrape `/metrics` to archive latency histograms.

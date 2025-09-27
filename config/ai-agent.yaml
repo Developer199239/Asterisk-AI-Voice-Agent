@@ -164,7 +164,7 @@ providers:
     ws_url: "${LOCAL_WS_URL:-ws://127.0.0.1:8765}"
     connect_timeout_sec: ${LOCAL_WS_CONNECT_TIMEOUT:=2.0}
     response_timeout_sec: ${LOCAL_WS_RESPONSE_TIMEOUT:=5.0}
-    chunk_ms: ${LOCAL_WS_CHUNK_MS:=200}
+    chunk_ms: ${LOCAL_WS_CHUNK_MS:=320}
     stt_model: "models/stt/vosk-model-small-en-us-0.15"   # legacy placeholder (Local AI server now loads via env vars)
     llm_model: "models/llm/TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf"
     tts_voice: "models/tts/en_US-lessac-medium.onnx"
