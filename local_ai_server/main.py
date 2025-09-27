@@ -628,8 +628,28 @@ class LocalAIServer:
     ) -> None:
         clean_text = (text or "").strip()
         if not clean_text:
-            # Suppress finals with empty transcripts; keep recognizer alive for more audio
             reason = "idle-timeout" if idle_promoted else "recognizer-final"
+            if mode == "stt":
+                # For STT mode, emit an empty final so the engine adapter can complete cleanly.
+                logging.info(
+                    "📝 STT FINAL - Emitting empty transcript call_id=%s mode=%s reason=%s",
+                    session.call_id,
+                    mode,
+                    reason,
+                )
+                await self._emit_stt_result(
+                    websocket,
+                    "",
+                    session,
+                    request_id,
+                    source_mode=mode,
+                    is_final=True,
+                    is_partial=False,
+                    confidence=confidence,
+                )
+                self._reset_stt_session(session)
+                return
+            # For llm/full modes, continue suppressing empty finals to avoid downstream work
             logging.info(
                 "📝 STT FINAL SUPPRESSED - Empty transcript call_id=%s mode=%s reason=%s",
                 session.call_id,
