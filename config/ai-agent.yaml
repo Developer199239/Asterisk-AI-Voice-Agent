@@ -31,7 +31,9 @@ pipelines:
     options:
       stt:
         mode: "stt"  # Restrict local provider to speech recognition only
-        chunk_ms: 320  # Coalesce audio into ~320ms chunks for better partials/finals
+        chunk_ms: 160  # Lower chunk size for faster cadence while streaming
+        streaming: true  # Enable continuous streaming via send_audio/iter_results
+        stream_format: "pcm16_16k"
       llm:
         llm_response_timeout_sec: 30.0  # Allow slower local LLM to respond within this window
       tts:
@@ -103,7 +105,7 @@ barge_in:
                                # Range: 1000–3000 (raise on noisy lines)
   cooldown_ms: 1000            # Ignore new barge-in triggers for this period after one fires
                                # Range: 500–1500 ms
-  post_tts_end_protection_ms: 350  # NEW: Drop inbound right after TTS ends to prevent self-echo loops
+  post_tts_end_protection_ms: 250  # Shorter guard so callers aren't clipped after playback
                                    # Range: 250–500 ms (lower to allow faster user pickup)
 
 # Streaming configuration (for downstream_mode=stream)

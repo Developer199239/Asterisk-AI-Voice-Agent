@@ -19,6 +19,8 @@ pipelines:
       locale: en-US
       stt:
         chunk_ms: 320
+        streaming: true
+        stream_format: "pcm16_16k"
       llm:
         temperature: 0.4
         max_tokens: 64

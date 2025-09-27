@@ -1958,8 +1958,34 @@ class Engine:
             if not inbound_queue:
                 return
 
-            buffer_queue: asyncio.Queue[Optional[bytes]] = asyncio.Queue(maxsize=50)
-            transcript_queue: asyncio.Queue[Optional[str]] = asyncio.Queue(maxsize=2)
+            buffer_queue: asyncio.Queue[Optional[bytes]] = asyncio.Queue(maxsize=200)
+            transcript_queue: asyncio.Queue[Optional[str]] = asyncio.Queue(maxsize=8)
+
+            use_streaming = bool((pipeline.stt_options or {}).get("streaming", False))
+            if use_streaming:
+                streaming_supported = all(
+                    hasattr(pipeline.stt_adapter, attr)
+                    for attr in ("start_stream", "send_audio", "iter_results", "stop_stream")
+                )
+                if not streaming_supported:
+                    logger.warning(
+                        "Streaming STT requested but adapter does not support streaming APIs; falling back to chunked mode",
+                        call_id=call_id,
+                        component=getattr(pipeline.stt_adapter, "component_key", "unknown"),
+                    )
+                    use_streaming = False
+            stream_format = (pipeline.stt_options or {}).get("stream_format", "pcm16_16k")
+            if use_streaming:
+                try:
+                    logger.info(
+                        "Streaming STT enabled",
+                        call_id=call_id,
+                        commit_ms=commit_ms,
+                        stream_format=stream_format,
+                        buffer_max=getattr(buffer_queue, "_maxsize", 200) if hasattr(buffer_queue, "_maxsize") else 200,
+                    )
+                except Exception:
+                    logger.debug("Streaming STT info log failed", exc_info=True)
 
             async def enqueue_buffer(item: Optional[bytes]) -> None:
                 if item is None:
@@ -1988,52 +2014,136 @@ class Engine:
                 except asyncio.CancelledError:
                     pass
 
-            async def process_audio(audio_chunk: bytes) -> None:
-                transcript = ""
-                try:
-                    transcript = await pipeline.stt_adapter.transcribe(
-                        call_id,
-                        audio_chunk,
-                        16000,
-                        pipeline.stt_options,
-                    )
-                except Exception:
-                    logger.debug("STT transcribe failed", call_id=call_id, exc_info=True)
-                    return
-                transcript = (transcript or "").strip()
-                if not transcript:
-                    return
-                try:
-                    transcript_queue.put_nowait(transcript)
-                except asyncio.QueueFull:
-                    try:
-                        dropped = transcript_queue.get_nowait()
-                        logger.warning(
-                            "Pipeline transcript backlog full; dropping oldest transcript",
-                            call_id=call_id,
-                            dropped_preview=(dropped or "")[:80] if dropped else "",
-                        )
-                    except asyncio.QueueEmpty:
-                        pass
-                    await transcript_queue.put(transcript)
+            if not use_streaming:
 
-            async def stt_worker() -> None:
-                local_buf = bytearray()
-                try:
-                    while True:
-                        frame = await buffer_queue.get()
-                        if frame is None:
-                            if local_buf:
-                                await process_audio(bytes(local_buf))
-                            await transcript_queue.put(None)
-                            break
-                        local_buf.extend(frame)
-                        if len(local_buf) < commit_bytes:
-                            continue
-                        await process_audio(bytes(local_buf))
-                        local_buf.clear()
-                except asyncio.CancelledError:
-                    pass
+                async def process_audio(audio_chunk: bytes) -> None:
+                    transcript = ""
+                    try:
+                        transcript = await pipeline.stt_adapter.transcribe(
+                            call_id,
+                            audio_chunk,
+                            16000,
+                            pipeline.stt_options,
+                        )
+                    except Exception:
+                        logger.debug("STT transcribe failed", call_id=call_id, exc_info=True)
+                        return
+                    transcript = (transcript or "").strip()
+                    if not transcript:
+                        return
+                    try:
+                        transcript_queue.put_nowait(transcript)
+                    except asyncio.QueueFull:
+                        try:
+                            dropped = transcript_queue.get_nowait()
+                            logger.warning(
+                                "Pipeline transcript backlog full; dropping oldest transcript",
+                                call_id=call_id,
+                                dropped_preview=(dropped or "")[:80] if dropped else "",
+                            )
+                        except asyncio.QueueEmpty:
+                            pass
+                        await transcript_queue.put(transcript)
+
+                async def stt_worker() -> None:
+                    local_buf = bytearray()
+                    try:
+                        while True:
+                            frame = await buffer_queue.get()
+                            if frame is None:
+                                if local_buf:
+                                    await process_audio(bytes(local_buf))
+                                await transcript_queue.put(None)
+                                break
+                            local_buf.extend(frame)
+                            if len(local_buf) < commit_bytes:
+                                continue
+                            await process_audio(bytes(local_buf))
+                            local_buf.clear()
+                    except asyncio.CancelledError:
+                        pass
+
+            else:
+
+                async def stt_sender() -> None:
+                    local_buf = bytearray()
+                    try:
+                        while True:
+                            frame = await buffer_queue.get()
+                            if frame is None:
+                                if local_buf:
+                                    try:
+                                        await pipeline.stt_adapter.send_audio(
+                                            call_id,
+                                            bytes(local_buf),
+                                            fmt=stream_format,
+                                        )
+                                    except Exception:
+                                        logger.debug(
+                                            "Streaming STT final send failed",
+                                            call_id=call_id,
+                                            exc_info=True,
+                                        )
+                                    local_buf.clear()
+                                break
+                            local_buf.extend(frame)
+                            if len(local_buf) < commit_bytes:
+                                continue
+                            chunk = bytes(local_buf)
+                            local_buf.clear()
+                            try:
+                                await pipeline.stt_adapter.send_audio(
+                                    call_id,
+                                    chunk,
+                                    fmt=stream_format,
+                                )
+                            except Exception:
+                                logger.debug(
+                                    "Streaming STT send failed",
+                                    call_id=call_id,
+                                    exc_info=True,
+                                )
+                    except asyncio.CancelledError:
+                        pass
+                    finally:
+                        if local_buf:
+                            try:
+                                await pipeline.stt_adapter.send_audio(
+                                    call_id,
+                                    bytes(local_buf),
+                                    fmt=stream_format,
+                                )
+                            except Exception:
+                                logger.debug(
+                                    "Streaming STT residual send failed",
+                                    call_id=call_id,
+                                    exc_info=True,
+                                )
+
+                async def stt_receiver() -> None:
+                    try:
+                        async for final in pipeline.stt_adapter.iter_results(call_id):
+                            try:
+                                transcript_queue.put_nowait(final)
+                            except asyncio.QueueFull:
+                                try:
+                                    transcript_queue.get_nowait()
+                                except asyncio.QueueEmpty:
+                                    pass
+                                await transcript_queue.put(final)
+                    except asyncio.CancelledError:
+                        pass
+                    except Exception:
+                        logger.debug(
+                            "Streaming STT receive loop error",
+                            call_id=call_id,
+                            exc_info=True,
+                        )
+                    finally:
+                        try:
+                            transcript_queue.put_nowait(None)
+                        except asyncio.QueueFull:
+                            pass
 
             async def dialog_worker() -> None:
                 pending_segments: List[str] = []
@@ -2170,15 +2280,47 @@ class Engine:
                     await cancel_flush()
 
             ingest_task = asyncio.create_task(ingest_audio())
-            stt_task = asyncio.create_task(stt_worker())
-            dialog_task = asyncio.create_task(dialog_worker())
 
-            try:
-                await dialog_task
-            finally:
-                ingest_task.cancel()
-                stt_task.cancel()
-                await asyncio.gather(ingest_task, stt_task, return_exceptions=True)
+            if use_streaming:
+                stt_send_task: Optional[asyncio.Task] = None
+                stt_recv_task: Optional[asyncio.Task] = None
+                dialog_task: Optional[asyncio.Task] = None
+                stop_called = False
+
+                try:
+                    await pipeline.stt_adapter.start_stream(call_id, pipeline.stt_options or {})
+                    stt_send_task = asyncio.create_task(stt_sender())
+                    stt_recv_task = asyncio.create_task(stt_receiver())
+                    dialog_task = asyncio.create_task(dialog_worker())
+
+                    if stt_send_task:
+                        await stt_send_task
+                    await pipeline.stt_adapter.stop_stream(call_id)
+                    stop_called = True
+                    await asyncio.gather(
+                        *(task for task in (stt_recv_task, dialog_task) if task is not None),
+                        return_exceptions=True,
+                    )
+                finally:
+                    ingest_task.cancel()
+                    tasks_to_cancel = []
+                    for task in (stt_send_task, stt_recv_task, dialog_task):
+                        if task and not task.done():
+                            task.cancel()
+                            tasks_to_cancel.append(task)
+                    await asyncio.gather(ingest_task, *tasks_to_cancel, return_exceptions=True)
+                    if not stop_called:
+                        await pipeline.stt_adapter.stop_stream(call_id)
+            else:
+                stt_task = asyncio.create_task(stt_worker())
+                dialog_task = asyncio.create_task(dialog_worker())
+
+                try:
+                    await dialog_task
+                finally:
+                    ingest_task.cancel()
+                    stt_task.cancel()
+                    await asyncio.gather(ingest_task, stt_task, return_exceptions=True)
         except asyncio.CancelledError:
             pass
         except Exception:

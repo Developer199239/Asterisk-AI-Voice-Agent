@@ -12,6 +12,7 @@ import asyncio
 import base64
 import json
 import time
+import audioop
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Dict, Optional, Tuple
 
@@ -46,6 +47,9 @@ class _LocalSessionState:
     mode: str
     call_id: str
     handshake_complete: bool = False
+    result_queue: Optional[asyncio.Queue] = None
+    receiver_task: Optional[asyncio.Task] = None
+    send_lock: Optional[asyncio.Lock] = None
 
 
 class _LocalAdapterBase:
@@ -273,10 +277,13 @@ class _LocalAdapterBase:
     async def _recv_any(
         self,
         session: _LocalSessionState,
-        timeout: float,
+        timeout: Optional[float],
     ) -> Tuple[str, Any]:
         try:
-            message = await asyncio.wait_for(session.websocket.recv(), timeout=timeout)
+            if timeout is None:
+                message = await session.websocket.recv()
+            else:
+                message = await asyncio.wait_for(session.websocket.recv(), timeout=timeout)
         except ConnectionClosed as exc:
             logger.warning(
                 "Local AI server connection closed",
@@ -346,6 +353,164 @@ class LocalSTTAdapter(_LocalAdapterBase, STTComponent):
             options,
             default_mode="stt",
         )
+
+    async def start_stream(
+        self,
+        call_id: str,
+        options: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        runtime_options = options or {}
+        session = await self._ensure_session(call_id, runtime_options)
+        if session.send_lock is None:
+            session.send_lock = asyncio.Lock()
+        if session.result_queue is None:
+            maxsize = int(runtime_options.get("stream_queue_maxsize", 16))
+            session.result_queue = asyncio.Queue(max(maxsize, 1))
+        if session.receiver_task and not session.receiver_task.done():
+            return
+        session.receiver_task = asyncio.create_task(
+            self._stream_receive_loop(session, runtime_options)
+        )
+        logger.debug(
+            "Local STT streaming started",
+            component=self.component_key,
+            call_id=call_id,
+        )
+
+    async def send_audio(
+        self,
+        call_id: str,
+        audio: bytes,
+        *,
+        fmt: str = "pcm16_16k",
+    ) -> None:
+        if not audio:
+            return
+        session = self._sessions.get(call_id)
+        if not session or session.send_lock is None:
+            raise RuntimeError(
+                f"Streaming session not started for call {call_id}; call start_stream first"
+            )
+        pcm16 = self._to_pcm16_16k(audio, fmt)
+        if not pcm16:
+            return
+        payload = {
+            "type": "audio",
+            "mode": "stt",
+            "call_id": call_id,
+            "rate": 16000,
+            "format": "pcm16le",
+            "data": base64.b64encode(pcm16).decode("ascii"),
+        }
+        async with session.send_lock:
+            await self._send_json(session, payload)
+
+    async def iter_results(self, call_id: str) -> AsyncIterator[str]:
+        session = self._sessions.get(call_id)
+        if not session or session.result_queue is None:
+            raise RuntimeError(
+                f"Streaming session not started for call {call_id}; call start_stream first"
+            )
+        while True:
+            result = await session.result_queue.get()
+            if result is None:
+                break
+            yield result
+
+    async def stop_stream(self, call_id: str) -> None:
+        session = self._sessions.get(call_id)
+        if not session:
+            return
+        if session.receiver_task:
+            session.receiver_task.cancel()
+            try:
+                await session.receiver_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                logger.debug(
+                    "Local STT receive loop error during shutdown",
+                    component=self.component_key,
+                    call_id=call_id,
+                    exc_info=True,
+                )
+        if session.result_queue:
+            try:
+                session.result_queue.put_nowait(None)
+            except asyncio.QueueFull:
+                pass
+        session.receiver_task = None
+        session.result_queue = None
+        session.send_lock = None
+
+    async def close_call(self, call_id: str) -> None:
+        await self.stop_stream(call_id)
+        await super().close_call(call_id)
+
+    async def _stream_receive_loop(
+        self,
+        session: _LocalSessionState,
+        options: Dict[str, Any],
+    ) -> None:
+        queue = session.result_queue
+        if queue is None:
+            return
+        timeout = options.get("streaming_result_timeout_sec")
+        timeout_val = float(timeout) if timeout is not None else None
+        try:
+            while True:
+                try:
+                    kind, message = await self._recv_any(session, timeout_val)
+                except asyncio.TimeoutError:
+                    continue
+                if kind != "json":
+                    continue
+                if message.get("type") != "stt_result":
+                    continue
+                if message.get("is_partial", False):
+                    logger.debug(
+                        "Local STT partial received",
+                        component=self.component_key,
+                        call_id=session.call_id,
+                        transcript_preview=(message.get("text") or "")[:80],
+                    )
+                    continue
+                text = (message.get("text") or "")
+                try:
+                    queue.put_nowait(text)
+                except asyncio.QueueFull:
+                    await queue.put(text)
+        except asyncio.CancelledError:
+            pass
+        except ConnectionClosed:
+            pass
+        except Exception:
+            logger.debug(
+                "Local STT streaming receive loop error",
+                component=self.component_key,
+                call_id=session.call_id,
+                exc_info=True,
+            )
+        finally:
+            try:
+                queue.put_nowait(None)
+            except asyncio.QueueFull:
+                pass
+
+    def _to_pcm16_16k(self, audio: bytes, fmt: str) -> bytes:
+        if not audio:
+            return audio
+        fmt = fmt.lower()
+        if fmt in {"pcm16", "pcm16_16k", "pcm16-16k"}:
+            return audio
+        if fmt in {"pcm16_8k", "pcm16-8k"}:
+            converted, _ = audioop.ratecv(audio, 2, 1, 8000, 16000, None)
+            return converted
+        if fmt in {"mulaw8k", "ulaw8k"}:
+            linear = audioop.ulaw2lin(audio, 2)
+            converted, _ = audioop.ratecv(linear, 2, 1, 8000, 16000, None)
+            return converted
+        raise ValueError(f"Unsupported audio format '{fmt}' for local STT streaming")
 
     async def transcribe(
         self,
