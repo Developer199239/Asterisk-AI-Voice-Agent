@@ -141,7 +141,7 @@ For cloud-only deployments you may run `docker-compose up -d ai-engine`. Ensure 
 
 ## 8. GA Readiness Checklist (FreePBX)
 
-Use this checklist alongside `docs/ROADMAP.md` and the launch strategy under `plan/` to prepare your deployment for GA:
+Use this checklist alongside `docs/plan/ROADMAP.md` and the launch strategy under `docs/plan/` to prepare your deployment for GA:
 {{ ... }}
 ```yaml
 # Application

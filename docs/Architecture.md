@@ -211,13 +211,13 @@ Configure via env:
    - Run full regression suite (Deepgram + OpenAI), publish telemetry-backed tuning guide, update quick-start/install docs, and tag the GA release.
 
 ### Roadmap Tracking
-Ongoing milestones and their acceptance criteria live in `docs/ROADMAP.md`. Update that file after each deliverable so any collaborator—or tool-specific assistant—can resume work without manual hand-off.
+Ongoing milestones and their acceptance criteria live in `docs/plan/ROADMAP.md`. Update that file after each deliverable so any collaborator—or tool-specific assistant—can resume work without manual hand-off.
 
 ### IDE Playbooks
 - **Codex / CLI**: `Agents.md` and `call-framework.md` summarize deployment runbooks and regression expectations for terminal-first workflows.
 - **Cursor**: `.cursor/rules/asterisk_ai_voice_agent.mdc` mirrors the same guardrails, emphasising SessionStore usage and AudioSocket-first assumptions.
 - **Windsurf**: `.windsurf/rules/asterisk_ai_voice_agent.md` keeps IDE prompts aligned with the roadmap so code and documentation stays in sync.
-- **Shared artifacts**: Regression notes (`docs/regressions/*.md`) and architecture snapshots (`docs/Architecture.md`, `docs/ROADMAP.md`) are the canonical hand-off regardless of editor; update them after every call so all IDEs inherit the latest context.
+- **Shared artifacts**: Regression notes (`docs/regressions/*.md`) and architecture snapshots (`docs/Architecture.md`, `docs/plan/ROADMAP.md`) are the canonical hand-off regardless of editor; update them after every call so all IDEs inherit the latest context.
 
 ## Architecture Diagrams
 

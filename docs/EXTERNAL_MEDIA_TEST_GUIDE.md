@@ -22,22 +22,19 @@ This test script verifies the complete audio pipeline using External Media chann
 
 ## Usage
 
-### Basic Test (Debug Mode Enabled)
+### Basic Test (Call Flow)
 ```bash
-python3 test_external_media_pipeline.py
+python3 scripts/test_externalmedia_call.py
 ```
 
-### Production Mode (Minimal Logging)
+### Deployment Sanity (RTP + ARI wiring)
 ```bash
-DEBUG_MODE=false python3 test_external_media_pipeline.py
+python3 scripts/test_externalmedia_deployment.py
 ```
 
-### With Custom ARI Credentials
+### With Custom Health Endpoint (non-default URL)
 ```bash
-ASTERISK_HOST=192.168.1.100 \
-ASTERISK_ARI_USERNAME=myuser \
-ASTERISK_ARI_PASSWORD=mypass \
-python3 test_external_media_pipeline.py
+python3 scripts/test_externalmedia_call.py --url http://127.0.0.1:15000/health
 ```
 
 ## What the Test Does
@@ -129,9 +126,9 @@ python3 test_external_media_pipeline.py
 - Track WebSocket connection states
 
 ## File Locations
-- **Test Script**: `test_external_media_pipeline.py`
-- **Server Copy**: `/app/test_external_media_pipeline.py` (inside container)
-- **Logs**: Container logs via `docker-compose logs -f ai-engine`
+- **Test Scripts**: `scripts/test_externalmedia_call.py`, `scripts/test_externalmedia_deployment.py`
+- **In-Container Paths**: `/app/scripts/test_externalmedia_call.py`, `/app/scripts/test_externalmedia_deployment.py`
+- **Logs**: `docker-compose logs -f ai-engine`
 
 ## Next Steps
-Once this test passes successfully, the External Media approach can be integrated into the main `ai-engine` codebase as a replacement for the problematic AudioSocket implementation.
+Once these tests pass, your ExternalMedia + RTP path is validated end-to-end (ARI, RTP server, and playback lifecycle) for the current configuration.

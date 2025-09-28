@@ -65,7 +65,7 @@ This project is designed to be the most powerful, flexible, and easy-to-use open
 The system is configured via `config/ai-agent.yaml` and a `.env` file for secrets.
 
 ### Key `ai-agent.yaml` settings:
-- `default_provider`: `deepgram` or `local`
+- `default_provider`: `openai_realtime` (monolithic fallback; pipelines are the default path via `active_pipeline`)
 - `asterisk`: Connection details for ARI.
 - `providers`: Specific configurations for each AI provider.
 
@@ -121,7 +121,7 @@ This separation ensures that the resource-intensive AI models do not impact the 
 
 ## 🗺️ Roadmap
 
-Current milestones and acceptance criteria live in [`docs/ROADMAP.md`](docs/ROADMAP.md). Update that file after each deliverable so anyone (or any AI assistant) can resume the project with a single reference.
+Current milestones and acceptance criteria live in [`docs/plan/ROADMAP.md`](docs/plan/ROADMAP.md). Update that file after each deliverable so anyone (or any AI assistant) can resume the project with a single reference.
 
 ## 🤝 Contributing
 
