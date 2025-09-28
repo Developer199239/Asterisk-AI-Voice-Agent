@@ -28,13 +28,9 @@ This project is designed to be the most powerful, flexible, and easy-to-use open
 
 ### Prerequisites
 
-- **Asterisk 16+** or **FreePBX 15+** with ARI enabled.
+- **Asterisk 18+** or **FreePBX 15+** with ARI enabled.
 - **Docker** and **Docker Compose** installed.
 - **Git** for cloning the repository.
-- **Local AI Models** (Optional): If you want to use local AI, run the download script:
-  ```bash
-  ./scripts/download_models.sh
-  ```
 
 ### Installation
 
@@ -114,14 +110,11 @@ This separation ensures that the resource-intensive AI models do not impact the 
 -   ✅ **Architecture Validation**: Refactored codebase with clean separation of concerns
 -   ✅ **Observability**: ConversationCoordinator drives `/health` + `/metrics` (Prometheus friendly)
 
-**Latest Test Results (September 22, 2025):**
-- **Duration**: 2 minutes
-- **Conversation Exchanges**: 4 complete sentences
-- **Status**: ✅ **FULLY FUNCTIONAL**
+
 
 ## 🗺️ Roadmap
 
-Current milestones and acceptance criteria live in [`docs/ROADMAP.md`](docs/ROADMAP.md). Update that file after each deliverable so anyone (or any AI assistant) can resume the project with a single reference.
+Current milestones and acceptance criteria live in [`docs/plan/ROADMAP.md`](docs/plan/ROADMAP.md). Update that file after each deliverable so anyone (or any AI assistant) can resume the project with a single reference.
 
 ## 🤝 Contributing
 

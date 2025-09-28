@@ -7,11 +7,50 @@ This guide provides detailed instructions for setting up the Asterisk AI Voice A
 Before you begin, ensure your system meets the following requirements:
 
 -   **Operating System**: A modern Linux distribution (e.g., Ubuntu 20.04+, CentOS 7+).
--   **Asterisk**: Version 16 or newer. FreePBX 15+ is also supported.
+-   **Asterisk**: Version 18 or newer. FreePBX 15+ is also supported.
 -   **ARI (Asterisk REST Interface)**: Enabled and configured on your Asterisk server.
 -   **Docker**: Latest stable version of Docker and Docker Compose.
 -   **Git**: Required to clone the project repository.
 -   **Network Access**: Your server must be able to make outbound connections to the internet for Docker image downloads and API access to AI providers.
+
+### Prerequisite checks
+
+- Verify required Asterisk modules are loaded:
+  ```bash
+  asterisk -rx "module show like res_ari_applications"
+  asterisk -rx "module show like app_audiosocket"
+  ```
+  Expected example output:
+  ```
+  Module                         Description                               Use Count  Status   Support Level
+  res_ari_applications.so        RESTful API module - Stasis application   0          Running  core
+  1 modules loaded
+
+  Module                         Description                               Use Count  Status   Support Level
+  app_audiosocket.so             AudioSocket Application                    20         Running  extended
+  1 modules loaded
+  ```
+  If Asterisk < 18, on FreePBX Distro run:
+  ```bash
+  asterisk-switch-version   # aka asterisk-version-switch
+  ```
+  and select Asterisk 18+.
+
+- Quick install Docker
+  - Ubuntu:
+    ```bash
+    curl -fsSL https://get.docker.com | sudo sh
+    sudo usermod -aG docker $USER && newgrp docker
+    docker --version && docker compose version
+    ```
+  - CentOS/Rocky/Alma:
+    ```bash
+    sudo dnf -y install dnf-plugins-core
+    sudo dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+    sudo dnf install -y docker-ce docker-ce-cli containerd.io
+    sudo systemctl enable --now docker
+    docker --version && docker compose version
+    ```
 
 ## 2. Installation Steps
 

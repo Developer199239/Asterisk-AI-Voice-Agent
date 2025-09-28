@@ -28,9 +28,45 @@ This project is designed to be the most powerful, flexible, and easy-to-use open
 
 ### Prerequisites
 
-- **Asterisk 16+** or **FreePBX 15+** with ARI enabled.
+- **Asterisk 18+** or **FreePBX 15+** with ARI enabled.
 - **Docker** and **Docker Compose** installed.
 - **Git** for cloning the repository.
+
+#### Prerequisite checks
+
+- Verify required Asterisk modules are loaded:
+  ```bash
+  asterisk -rx "module show like res_ari_applications"
+  asterisk -rx "module show like app_audiosocket"
+  ```
+  Expect both to show Status: Running. If Asterisk < 18, upgrade or on FreePBX Distro run: `asterisk-switch-version` (aka `asterisk-version-switch`) to select 18+.
+
+  Example output:
+  ```
+  Module                         Description                               Use Count  Status   Support Level
+  res_ari_applications.so        RESTful API module - Stasis application   0          Running  core
+  1 modules loaded
+
+  Module                         Description                               Use Count  Status   Support Level
+  app_audiosocket.so             AudioSocket Application                    20         Running  extended
+  1 modules loaded
+  ```
+
+- Quick install Docker
+  - Ubuntu (convenience script):
+    ```bash
+    curl -fsSL https://get.docker.com | sudo sh
+    sudo usermod -aG docker $USER && newgrp docker
+    docker --version && docker compose version
+    ```
+  - CentOS/Rocky/Alma (repo method):
+    ```bash
+    sudo dnf -y install dnf-plugins-core
+    sudo dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+    sudo dnf install -y docker-ce docker-ce-cli containerd.io
+    sudo systemctl enable --now docker
+    docker --version && docker compose version
+    ```
 
 ### Installation
 
@@ -117,10 +153,7 @@ This separation ensures that the resource-intensive AI models do not impact the 
 -   ✅ **Architecture Validation**: Refactored codebase with clean separation of concerns
 -   ✅ **Observability**: ConversationCoordinator drives `/health` + `/metrics` (Prometheus friendly)
 
-**Latest Test Results (September 22, 2025):**
-- **Duration**: 2 minutes
-- **Conversation Exchanges**: 4 complete sentences
-- **Status**: ✅ **FULLY FUNCTIONAL**
+
 
 ## 🗺️ Roadmap
 

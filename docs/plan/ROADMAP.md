@@ -109,21 +109,4 @@ This roadmap tracks the open-source enablement work for the Asterisk AI Voice Ag
   - `make monitor-up` brings stack online; dashboards show live call metrics.
   - Monitoring stack remains optional and does not impact base deployment when disabled.
 
-## GA Release Readiness
-- **Goal**: Tag the GA release once Milestones 5–8 are complete.
-- **Tasks**:
-  - Run regression suite for Deepgram and OpenAI providers with default config.
-  - Publish telemetry-backed tuning guide and finalise documentation (README, Architecture, Monitoring).
-  - Create release notes summarising milestone deliverables and upgrade steps.
-- **Acceptance**:
-  - GA tag published; quick-start instructions verified on clean environment.
-  - IDE rule files updated to reflect final workflow.
-
-## Quick Regression Checklist
-1. Clear logs: `make logs --tail=0 ai-engine` (or `make server-clear-logs` remotely).
-2. Call into the AI context.
-3. Confirm logs for: ExternalMedia channel creation, RTP audio, provider input, playback start/finish, cleanup.
-4. Run `make test-health` (or `curl $HEALTH_URL`) to ensure `active_calls: 0`.
-5. Archive findings in `call-framework.md`.
-
 Keep this roadmap updated after each milestone to help any collaborator—or future AI assistant—pick up where we left off.

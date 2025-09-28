@@ -8,11 +8,35 @@ The Asterisk AI Voice Agent v3.0 integrates with FreePBX by combining ARI call c
 
 ## 2. Prerequisites
 
-- FreePBX installation with Asterisk 16+ (or FreePBX 15+) and ARI enabled.
+- FreePBX installation with Asterisk 18+ (or FreePBX 15+) and ARI enabled.
 - Docker and Docker Compose installed on the same host as FreePBX.
 - Repository cloned (e.g., `/root/Asterisk-AI-Voice-Agent`).
 - Port **8090/TCP** accessible for AudioSocket connections (plus 18080/UDP if retaining the legacy RTP path).
 - Valid `.env` containing ARI credentials and provider API keys.
+
+### 2.1 Prerequisite checks
+
+- Verify ARI and AudioSocket modules:
+  ```bash
+  asterisk -rx "module show like res_ari_applications"
+  asterisk -rx "module show like app_audiosocket"
+  ```
+  Expect both to show Status: Running. If your Asterisk is <18, on FreePBX Distro use:
+  ```bash
+  asterisk-switch-version   # aka asterisk-version-switch
+  ```
+  and select Asterisk 18+.
+
+  Example output:
+  ```
+  Module                         Description                               Use Count  Status   Support Level
+  res_ari_applications.so        RESTful API module - Stasis application   0          Running  core
+  1 modules loaded
+
+  Module                         Description                               Use Count  Status   Support Level
+  app_audiosocket.so             AudioSocket Application                    20         Running  extended
+  1 modules loaded
+  ```
 
 ## 3. Dialplan Configuration
 
