@@ -152,13 +152,37 @@
 - Server (supporting):
   - Keep LLM off the event loop (already done). Add a soft deadline (e.g., 5–8 s) in `process_llm()` and return a fallback if exceeded; log that the background compute exceeded the deadline.
   - Idle finalizer: emit finals only when `last_partial` has meaningful content (≥ N characters/tokens). Empty partials should not be promoted to finals; continue waiting for more audio.
-  - Optionally lower `buffer_timeout_ms` from 1000 ms to 750 ms to encourage quicker finals once meaningful speech stops; make it configurable via `LOCAL_STT_IDLE_MS`.
 - Tuning:
   - Consider increasing `chunk_ms` to 480–640 ms during experiments to gather more speech per commit and reduce tiny partials.
   - Keep buffer overflow logs at DEBUG; they indicate backpressure working as designed.
 
 - **Validation Plan**
-- After the above changes:
-  - Expect `Sending LLM request ...` followed by a timely `LLM response` (either a real response within extended timeout or a fallback).
-  - Expect `Local TTS audio chunk received` to follow the LLM response, with `Bridge playback started` for the reply.
-  - Reduced or no finals on empty content; fewer `Pipeline audio buffer overflow` messages during normal turn-taking.
+  - After the above changes:
+    - Expect `Sending LLM request ...` followed by a timely `LLM response` (either a real response within extended timeout or a fallback).
+    - Expect `Local TTS audio chunk received` to follow the LLM response, with `Bridge playback started` for the reply.
+    - Reduced or no finals on empty content; fewer `Pipeline audio buffer overflow` messages during normal turn-taking.
+
+## 2025-09-28 12:52 PDT — Hybrid pipeline (local STT, OpenAI LLM, Deepgram TTS) regression
+
+- **Outcome**
+  - Greeting rendered immediately via Deepgram Aura TTS; AudioSocket bridge remained stable.
+  - Local STT streaming produced aggregated finals (`"hello how are you"`, `"what can you do for me"`, etc.) with idle finalizer suppressing empties between turns.
+  - OpenAI LLM (`gpt-4o-mini`) responded within ≈1.4 s per turn; Deepgram TTS returned μ-law audio (12–18 KB greeting, 40–60 KB replies) that played back cleanly.
+  - Two conversational turns completed with correct gating transitions and no websocket reconnects.
+- **Event Timeline (PDT)**
+  - 12:52:52 — `ai-engine` answers caller, resolves `hybrid_support` pipeline (`local_stt`, `openai_llm`, `deepgram_tts`).
+  - 12:52:53 — Deepgram TTS greeting synthesized (`12829` B) and played while AudioSocket channel (`conn_id=6b2014ef…`) binds to caller.
+  - 12:52:55 — Local STT begins emitting partials; OpenAI chat completion request sent for first user utterance.
+  - 12:52:56 — OpenAI response received; Deepgram TTS reply (`~48 KB`) streamed back to caller.
+  - 12:52:59 — Second caller turn captured; subsequent OpenAI/Deepgram round trip completes; session cleaned up after farewell.
+- **Key Evidence**
+  - `logs/ai-engine-20250928-125448.log`: pipeline resolution (`components={'stt': 'local_stt', 'llm': 'openai_llm', 'tts': 'deepgram_tts'}`), Deepgram synthesis events (`request_id=dg-tts-*`), OpenAI completion logs, gating transitions.
+  - `logs/local-ai-server-20250928-125451.log`: STT finals, idle finalizer suppressions, mode handshakes (`Session mode updated to stt/tts`).
+- **Config Snapshot**
+  - Pipeline: `hybrid_support` active; STT `chunk_ms=320`, streaming enabled.
+  - OpenAI LLM: `gpt-4o-mini`, `temperature=0.6`, `max_tokens=120`, `response_timeout_sec=15`.
+  - Deepgram TTS: `voice=aura-asteria-en`, μ-law 8 kHz target via `https://api.deepgram.com`.
+- **Next Steps**
+  - Compare Deepgram TTS round-trip latency versus local TTS and document in `docs/regressions/milestone-7.md`.
+  - Monitor Deepgram API usage/quotas during longer calls; add retry/backoff handling if failures appear.
+  - Re-run with barge-in enabled once hybrid defaults are finalized to confirm prompt playback interruption behavior.

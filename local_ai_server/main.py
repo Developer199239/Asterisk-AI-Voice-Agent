@@ -16,7 +16,10 @@ from vosk import Model as VoskModel, KaldiRecognizer
 from llama_cpp import Llama
 from piper import PiperVoice
 
-logging.basicConfig(level=logging.INFO)
+# Configure logging level from environment (default INFO)
+_level_name = os.getenv("LOCAL_LOG_LEVEL", "INFO").upper()
+_level = getattr(logging, _level_name, logging.INFO)
+logging.basicConfig(level=_level)
 
 SUPPORTED_MODES = {"full", "stt", "llm", "tts"}
 DEFAULT_MODE = "full"

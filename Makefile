@@ -2,7 +2,7 @@
 
 # Default values - can be overridden from the command line
 SERVER_USER := root
-SERVER_HOST := voiprnd.nemtclouddispatch.com
+SERVER_HOST := your-server.example.com
 PROJECT_PATH := /root/Asterisk-Agent-Develop
 SERVICE ?= ai-engine
 provider ?= local
@@ -30,6 +30,10 @@ logs:
 ## logs-all: Tail the logs of all services
 logs-all:
 	docker-compose logs -f
+
+## engine-reload: Restart ai-engine locally to pick up config changes
+engine-reload:
+	docker-compose up -d ai-engine
 
 ## ps: Show the status of running services
 ps:

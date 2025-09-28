@@ -47,9 +47,9 @@ The wizard will prompt you for the following information.
 
 You will be asked to choose an AI provider.
 
--   **[1] Deepgram Voice Agent (Recommended)**: An all-in-one provider for real-time, high-quality conversations. This is the only option fully implemented in the current version.
--   **[2] OpenAI Stack**: A modular option using OpenAI's services for STT, LLM, and TTS. (In development)
--   **[3] Local Models**: An offline option for privacy and no recurring costs. (Planned)
+-   **[1] OpenAI Realtime (Default, GA)**: Out-of-the-box realtime voice path.
+-   **[2] Deepgram Voice Agent**: Cloud STT/TTS with strong latency/quality.
+-   **[3] Local Models**: Offline option (Vosk STT, TinyLlama/other LLM, Piper TTS).
 
 #### Provider Configuration
 

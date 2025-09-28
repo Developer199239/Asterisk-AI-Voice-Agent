@@ -14,12 +14,12 @@ providers:
     tts_format: ulaw
   openai:
     api_key: ${OPENAI_API_KEY}
-    realtime_model: gpt-4o-realtime-preview
+    realtime_model: gpt-4o-realtime-preview-2024-12-17
     chat_model: gpt-4o-mini
 pipelines:
   hybrid_deepgram_openai:
     stt: local_stt
-    llm: openai_realtime
+    llm: openai_llm
     tts: deepgram_tts
     options:
       stt:

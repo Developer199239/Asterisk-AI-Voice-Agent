@@ -14,7 +14,7 @@ pipelines:
     tts: openai_tts
     options:
       stt:
-        base_url: "https://api.openai.com/v1/realtime"  # Bearer auth with OPENAI_API_KEY
+        base_url: "wss://api.openai.com/v1/realtime"  # Bearer auth with OPENAI_API_KEY
       llm:
         base_url: "https://api.openai.com/v1"
         model: "gpt-4o-realtime-preview-2024-12-17"
@@ -39,6 +39,29 @@ pipelines:
       tts:
         format:
           encoding: "mulaw"  # Matches telephony trunks without resampling
+          sample_rate: 8000
+  # Hybrid support: local STT/TTS with OpenAI LLM. Targets milestone 7 validation.
+  hybrid_support:
+    stt: local_stt
+    llm: openai_llm
+    tts: deepgram_tts
+    options:
+      stt:
+        mode: "stt"
+        chunk_ms: 320
+        streaming: true
+        stream_format: "pcm16_16k"
+      llm:
+        base_url: "https://api.openai.com/v1"
+        model: "gpt-4o-mini"
+        temperature: 0.6
+        max_tokens: 120
+        response_timeout_sec: 15.0
+      tts:
+        base_url: "https://api.deepgram.com"
+        voice: "aura-asteria-en"
+        format:
+          encoding: "mulaw"
           sample_rate: 8000
   # Hybrid pipeline: local STT + OpenAI LLM + Deepgram Aura TTS.
   local_stt_cloud_tts:
@@ -75,7 +98,7 @@ pipelines:
           audio_encoding: "MULAW"  # Telephony μ-law output for direct playback
           sample_rate_hz: 8000
 
-active_pipeline: "local_only"
+active_pipeline: "default"
 
 # Audio transport controls (AudioSocket-first, ExternalMedia as fallback)
 #
@@ -91,7 +114,7 @@ downstream_mode: "stream"
 audiosocket:
   host: "0.0.0.0"          # Bind address (use 127.0.0.1 when engine and Asterisk share a host)
   port: 8090               # TCP port for AudioSocket connections
-  format: "slin16"         # Wire format from Asterisk: `ulaw` (160B/20ms) or `slin16` (320B/20ms) at 8 kHz
+  format: "ulaw"           # Wire format from Asterisk: `ulaw` (160B/20ms) or `slin16` (320B/20ms) at 8 kHz
                            # TIP: Keep provider input sample rate aligned to 8 kHz when using telephony trunks.
 
 # Barge-in configuration
@@ -189,8 +212,8 @@ providers:
   openai:
     enabled: true
     api_key: "${OPENAI_API_KEY}"
-    organization: "${OPENAI_ORG:-}"
-    project: "${OPENAI_PROJECT:-}"
+    organization: ""
+    project: ""
     realtime_base_url: "wss://api.openai.com/v1/realtime"
     chat_base_url: "https://api.openai.com/v1"
     tts_base_url: "https://api.openai.com/v1/audio/speech"

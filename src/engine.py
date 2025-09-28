@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import math
 import os
 import random
@@ -35,7 +36,7 @@ from .config import (
     OpenAIRealtimeProviderConfig,
 )
 from .pipelines import PipelineOrchestrator, PipelineOrchestratorError, PipelineResolution
-from .logging_config import get_logger
+from .logging_config import get_logger, configure_logging
 from .rtp_server import RTPServer
 from .audio.audiosocket_server import AudioSocketServer
 from .providers.base import AIProviderInterface
@@ -954,7 +955,17 @@ class Engine:
         if host in ("0.0.0.0", "::"):
             host = "127.0.0.1"
         port = self.config.audiosocket.port
-        endpoint = f"AudioSocket/{host}:{port}/{audio_uuid}/c(slin)"
+        # Match channel interface codec to YAML audiosocket.format
+        codec = "slin"
+        try:
+            fmt = (getattr(self.config.audiosocket, 'format', '') or '').lower()
+            if fmt in ("ulaw", "mulaw", "g711_ulaw"):
+                codec = "ulaw"
+            else:
+                codec = "slin"
+        except Exception:
+            codec = "slin"
+        endpoint = f"AudioSocket/{host}:{port}/{audio_uuid}/c({codec})"
 
         orig_params = {
             "endpoint": endpoint,
@@ -2668,6 +2679,14 @@ class Engine:
 
 async def main():
     config = load_config()
+    # Initialize structured logging according to YAML-configured level (default INFO)
+    try:
+        level_name = str(getattr(getattr(config, 'logging', None), 'level', 'info')).upper()
+        level = getattr(logging, level_name, logging.INFO)
+        configure_logging(log_level=level)
+    except Exception:
+        # Fallback to INFO if configuration not yet available
+        configure_logging(log_level="INFO")
     engine = Engine(config)
 
     shutdown_event = asyncio.Event()

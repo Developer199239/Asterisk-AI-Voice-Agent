@@ -45,19 +45,23 @@ check_docker() {
 configure_env() {
     print_info "Starting interactive configuration..."
     
-    # AI Provider
-    echo "Select an AI Provider:"
-    echo "  [1] Deepgram Voice Agent (Recommended, Implemented)"
-    echo "  [2] OpenAI Stack (In Development)"
+    # AI Provider (GA default: OpenAI Realtime via pipeline adapters)
+    echo "Select an AI Provider (default: OpenAI Realtime):"
+    echo "  [1] OpenAI Realtime (Default, GA)"
+    echo "  [2] Deepgram Voice Agent"
+    echo "  [3] Local Models (offline)"
     read -p "Enter your choice [1]: " ai_provider_choice
     case "$ai_provider_choice" in
-        2) AI_PROVIDER="openai" ;;
-        *) AI_PROVIDER="deepgram" ;;
+        2) AI_PROVIDER="deepgram" ;;
+        3) AI_PROVIDER="local" ;;
+        *) AI_PROVIDER="openai" ;;
     esac
 
-    # API Keys
-    read -p "Enter your OpenAI API Key: " OPENAI_API_KEY
-    if [ "$AI_PROVIDER" == "deepgram" ]; then
+    # API Keys (prompt per selection)
+    if [ "$AI_PROVIDER" = "openai" ] || [ "$AI_PROVIDER" = "deepgram" ]; then
+        read -p "Enter your OpenAI API Key (required for OpenAI pipeline or hybrid): " OPENAI_API_KEY
+    fi
+    if [ "$AI_PROVIDER" = "deepgram" ]; then
         read -p "Enter your Deepgram API Key: " DEEPGRAM_API_KEY
     fi
 
@@ -101,6 +105,7 @@ GREETING="${GREETING}"
 
 # --- Logging ---
 LOG_LEVEL=INFO
+LOCAL_LOG_LEVEL=INFO
 EOL
 
     print_success "Configuration saved to .env file."

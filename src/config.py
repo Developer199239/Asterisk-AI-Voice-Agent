@@ -173,6 +173,11 @@ class StreamingConfig(BaseModel):
     logging_level: str = Field(default="info")
 
 
+class LoggingConfig(BaseModel):
+    """Top-level logging configuration for the ai-engine service."""
+    level: str = Field(default="info")  # debug|info|warning|error|critical
+
+
 class PipelineEntry(BaseModel):
     stt: str
     llm: str
@@ -249,6 +254,7 @@ class AppConfig(BaseModel):
     vad: Optional[VADConfig] = Field(default_factory=VADConfig)
     streaming: Optional[StreamingConfig] = Field(default_factory=StreamingConfig)
     barge_in: Optional[BargeInConfig] = Field(default_factory=BargeInConfig)
+    logging: Optional[LoggingConfig] = Field(default_factory=LoggingConfig)
     pipelines: Dict[str, PipelineEntry] = Field(default_factory=dict)
     active_pipeline: Optional[str] = None
 

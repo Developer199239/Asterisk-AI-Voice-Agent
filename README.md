@@ -5,6 +5,7 @@ An open-source AI Voice Agent that integrates with Asterisk/FreePBX using the As
 ## 🌟 Features
 
 - **Modular AI Providers**: Easily switch between cloud and local AI providers.
+  - ✅ **OpenAI Realtime (Default)**: Out-of-the-box, production-ready realtime voice provider.
   - ✅ **Deepgram Voice Agent**: Fully implemented for a powerful cloud-based solution.
   - ✅ **Local AI Server**: A dedicated container that runs local models (Vosk for STT, Llama for LLM, and Piper for TTS) for full control and privacy.
 - **High-Performance Architecture**: A lean `ai-engine` for call control and a separate `local-ai-server` for heavy AI processing ensures stability and scalability.
@@ -36,7 +37,7 @@ An open-source AI Voice Agent that integrates with Asterisk/FreePBX using the As
     ```
 
 2.  **Configure your environment**:
-    Copy the example config file `config/ai-agent.example.yaml` to `config/ai-agent.yaml` and the `.env.example` to `.env`. Edit them to match your setup, including Asterisk connection details and API keys.
+    Copy `.env.example` to `.env`, then edit `config/ai-agent.yaml` directly to match your setup (Asterisk connection details and API keys). The default provider is OpenAI Realtime.
 
 3.  **Download local models (optional but recommended for the local provider)**:
     ```bash
@@ -56,9 +57,19 @@ An open-source AI Voice Agent that integrates with Asterisk/FreePBX using the As
 The system is configured via `config/ai-agent.yaml` and a `.env` file for secrets.
 
 ### Key `ai-agent.yaml` settings:
-- `default_provider`: `deepgram` or `local`
+- `default_provider`: `openai_realtime` (monolithic fallback; pipelines are the default path via `active_pipeline`)
 - `asterisk`: Connection details for ARI.
 - `providers`: Specific configurations for each AI provider.
+
+### Logging configuration (default INFO)
+Add this block to control engine verbosity without code changes:
+
+```yaml
+logging:
+  level: info  # debug|info|warning|error|critical
+```
+
+Set `LOCAL_LOG_LEVEL=INFO` (or `DEBUG`) for the local AI server when needed.
 
 ### Required `.env` variables:
 - `ASTERISK_ARI_USERNAME` & `ASTERISK_ARI_PASSWORD`
