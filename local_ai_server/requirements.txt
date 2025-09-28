@@ -1,6 +1,6 @@
 websockets
 vosk
-llama-cpp-python
+llama-cpp-python==0.2.90
 piper-tts
 webrtcvad-wheels
 pydantic

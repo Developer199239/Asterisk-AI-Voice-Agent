@@ -7,8 +7,10 @@ import subprocess
 import tempfile
 import wave
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from time import monotonic
+from typing import Any, Dict, List, Optional, Tuple
 
+from websockets.exceptions import ConnectionClosed
 from websockets.server import serve
 from vosk import Model as VoskModel, KaldiRecognizer
 from llama_cpp import Llama
@@ -22,6 +24,10 @@ ULAW_SAMPLE_RATE = 8000
 PCM16_TARGET_RATE = 16000
 
 
+def _normalize_text(value: str) -> str:
+    return " ".join((value or "").strip().lower().split())
+
+
 @dataclass
 class SessionContext:
     """# Milestone7: Track per-connection defaults for selective mode handling."""
@@ -33,6 +39,11 @@ class SessionContext:
     last_audio_at: float = 0.0
     idle_task: Optional[asyncio.Task] = None
     last_request_meta: Dict[str, Any] = field(default_factory=dict)
+    last_final_text: str = ""
+    last_final_norm: str = ""
+    last_final_at: float = 0.0
+    llm_user_turns: List[str] = field(default_factory=list)
+    audio_buffer: bytes = b""
 
 
 class AudioProcessor:
@@ -144,7 +155,7 @@ class LocalAIServer:
             "LOCAL_STT_MODEL_PATH", "/app/models/stt/vosk-model-small-en-us-0.15"
         )
         self.llm_model_path = os.getenv(
-            "LOCAL_LLM_MODEL_PATH", "/app/models/llm/TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf"
+            "LOCAL_LLM_MODEL_PATH", "/app/models/llm/phi-3-mini-4k-instruct.Q4_K_M.gguf"
         )
         self.tts_model_path = os.getenv(
             "LOCAL_TTS_MODEL_PATH", "/app/models/tts/en_US-lessac-medium.onnx"
@@ -158,12 +169,26 @@ class LocalAIServer:
         self.llm_temperature = float(os.getenv("LOCAL_LLM_TEMPERATURE", "0.2"))
         self.llm_top_p = float(os.getenv("LOCAL_LLM_TOP_P", "0.85"))
         self.llm_repeat_penalty = float(os.getenv("LOCAL_LLM_REPEAT_PENALTY", "1.05"))
+        self.llm_system_prompt = os.getenv(
+            "LOCAL_LLM_SYSTEM_PROMPT",
+            "You are a helpful AI voice assistant. Respond naturally and conversationally to the caller."
+        )
+        self.llm_stop_tokens = [
+            token.strip()
+            for token in os.getenv(
+                "LOCAL_LLM_STOP_TOKENS",
+                "<|user|>,<|assistant|>,<|end|>"
+            ).split(",")
+            if token.strip()
+        ]
+        if not self.llm_stop_tokens:
+            self.llm_stop_tokens = ["<|user|>", "<|assistant|>", "<|end|>"]
 
         # Audio buffering for STT (20ms chunks need to be buffered for effective STT)
         self.audio_buffer = b""
         self.buffer_size_bytes = PCM16_TARGET_RATE * 2 * 1.0  # 1 second at 16kHz (32000 bytes)
         # Process buffer after N ms of silence (idle finalizer). Configurable via env.
-        self.buffer_timeout_ms = int(os.getenv("LOCAL_STT_IDLE_MS", "1200"))
+        self.buffer_timeout_ms = int(os.getenv("LOCAL_STT_IDLE_MS", "3000"))
 
     async def initialize_models(self):
         """Initialize all AI models with proper error handling"""
@@ -171,6 +196,7 @@ class LocalAIServer:
 
         await self._load_stt_model()
         await self._load_llm_model()
+        await self.run_startup_latency_check()
         await self._load_tts_model()
 
         logging.info("✅ All models loaded successfully for MVP pipeline")
@@ -202,6 +228,7 @@ class LocalAIServer:
                 verbose=False,
                 use_mmap=True,
                 use_mlock=True,
+                add_bos=False,
             )
             logging.info("✅ LLM model loaded: %s", self.llm_model_path)
             logging.info(
@@ -215,6 +242,46 @@ class LocalAIServer:
         except Exception as exc:
             logging.error("❌ Failed to load LLM model: %s", exc)
             raise
+
+    async def run_startup_latency_check(self) -> None:
+        """Run a lightweight LLM inference at startup to log baseline latency."""
+        if not self.llm_model:
+            return
+
+        try:
+            session = SessionContext(call_id="startup-latency")
+            sample_text = "Hello, can you hear me?"
+            prompt, prompt_tokens, truncated, raw_tokens = self._prepare_llm_prompt(
+                session, sample_text
+            )
+            loop = asyncio.get_running_loop()
+            started = loop.time()
+
+            await asyncio.to_thread(
+                self.llm_model,
+                prompt,
+                max_tokens=min(self.llm_max_tokens, 32),
+                stop=self.llm_stop_tokens,
+                echo=False,
+                temperature=self.llm_temperature,
+                top_p=self.llm_top_p,
+                repeat_penalty=self.llm_repeat_penalty,
+            )
+
+            latency_ms = round((loop.time() - started) * 1000.0, 2)
+            logging.info(
+                "🤖 LLM STARTUP LATENCY - %.2f ms (prompt_tokens=%s raw_tokens=%s truncated=%s)",
+                latency_ms,
+                prompt_tokens,
+                raw_tokens,
+                truncated,
+            )
+        except Exception as exc:  # pragma: no cover - best-effort metric
+            logging.warning(
+                "🤖 LLM STARTUP LATENCY CHECK FAILED: %s",
+                exc,
+                exc_info=True,
+            )
 
     async def _load_tts_model(self):
         """Load TTS model (Piper) with 22kHz support"""
@@ -348,17 +415,12 @@ class LocalAIServer:
             logging.error("STT processing failed: %s", exc, exc_info=True)
             return ""
 
-    async def process_llm(self, text: str) -> str:
-        """Process LLM with optimized parameters for faster real-time responses"""
+    async def process_llm(self, prompt: str) -> str:
+        """Run LLM inference using the prepared Phi-style prompt."""
         try:
             if not self.llm_model:
                 logging.warning("LLM model not loaded, using fallback")
                 return "I'm here to help you. How can I assist you today?"
-
-            prompt = (
-                "You are a helpful AI voice assistant. Respond naturally and conversationally to the user's input.\n\n"
-                f"User: {text}\n\nAssistant:"
-            )
 
             loop = asyncio.get_running_loop()
             started = loop.time()
@@ -366,7 +428,7 @@ class LocalAIServer:
                 self.llm_model,
                 prompt,
                 max_tokens=self.llm_max_tokens,
-                stop=["User:", "\n\n", "Assistant:"],
+                stop=self.llm_stop_tokens,
                 echo=False,
                 temperature=self.llm_temperature,
                 top_p=self.llm_top_p,
@@ -390,6 +452,59 @@ class LocalAIServer:
         except Exception as exc:
             logging.error("LLM processing failed: %s", exc, exc_info=True)
             return "I'm here to help you. How can I assist you today?"
+
+    def _count_prompt_tokens(self, text: str) -> int:
+        if not text:
+            return 0
+        if self.llm_model and hasattr(self.llm_model, "tokenize"):
+            try:
+                tokens = self.llm_model.tokenize(text.encode("utf-8"), add_bos=False)
+                return len(tokens)
+            except Exception as exc:  # pragma: no cover - defensive guard
+                logging.debug("Tokenization failed, falling back to whitespace split: %s", exc)
+        return len(text.split())
+
+    def _build_phi_prompt(self, user_text: str) -> str:
+        user_text = (user_text or "").strip()
+        segments = ["<|system|>", self.llm_system_prompt.strip(), "<|user|>"]
+        segments.append(user_text if user_text else "Hello")
+        segments.append("<|assistant|>")
+        return "\n".join(segments) + "\n"
+
+    @staticmethod
+    def _strip_leading_bos(prompt: str) -> str:
+        if not prompt:
+            return prompt
+        cleaned = prompt.lstrip()
+        for marker in ("<s>", "<|bos|>"):
+            while cleaned.startswith(marker):
+                cleaned = cleaned[len(marker):].lstrip()
+        return cleaned
+
+    def _prepare_llm_prompt(
+        self, session: SessionContext, new_turn: str
+    ) -> Tuple[str, int, bool, int]:
+        """Append a user turn, trim history to fit context, and report token counts."""
+        candidate_turns = list(session.llm_user_turns) + [new_turn]
+        raw_user_text = "\n\n".join(candidate_turns).strip()
+        raw_prompt = self._build_phi_prompt(raw_user_text)
+        raw_tokens = self._count_prompt_tokens(raw_prompt)
+
+        max_prompt_tokens = max(self.llm_context - self.llm_max_tokens - 64, 128)
+        trimmed_turns = list(candidate_turns)
+        truncated = False
+        while trimmed_turns and self._count_prompt_tokens(
+            self._build_phi_prompt("\n\n".join(trimmed_turns).strip())
+        ) > max_prompt_tokens:
+            trimmed_turns.pop(0)
+            truncated = True
+
+        trimmed_user_text = "\n\n".join(trimmed_turns).strip()
+        prompt_text = self._build_phi_prompt(trimmed_user_text)
+        prompt_text = self._strip_leading_bos(prompt_text)
+        prompt_tokens = self._count_prompt_tokens(prompt_text)
+        session.llm_user_turns = trimmed_turns
+        return prompt_text, prompt_tokens, truncated, raw_tokens
 
     async def process_tts(self, text: str) -> bytes:
         """Process TTS with 8kHz uLaw generation directly"""
@@ -435,18 +550,23 @@ class LocalAIServer:
                 session.idle_task.cancel()
         session.idle_task = None
 
-    def _reset_stt_session(self, session: SessionContext) -> None:
+    def _reset_stt_session(self, session: SessionContext, last_text: str = "") -> None:
         """Clear recognizer state after emitting a final transcript."""
         self._cancel_idle_timer(session)
         session.recognizer = None
         session.last_partial = ""
         session.partial_emitted = False
+        session.audio_buffer = b""
         session.last_request_meta.clear()
+        session.last_final_text = last_text
+        session.last_final_norm = _normalize_text(last_text)
+        session.last_final_at = monotonic()
 
     def _ensure_stt_recognizer(self, session: SessionContext) -> Optional[KaldiRecognizer]:
         if not self.stt_model:
             logging.error("STT model not loaded")
             return None
+
         if session.recognizer is None:
             session.recognizer = KaldiRecognizer(self.stt_model, PCM16_TARGET_RATE)
             session.last_partial = ""
@@ -541,8 +661,25 @@ class LocalAIServer:
             return data_mode
         return session.mode
 
-    async def _send_json(self, websocket, payload: Dict[str, Any]) -> None:
-        await websocket.send(json.dumps(payload))
+    async def _send_json(self, websocket, payload: Dict[str, Any]) -> bool:
+        try:
+            await websocket.send(json.dumps(payload))
+            return True
+        except ConnectionClosed:
+            logging.warning(
+                "🌐 WS CLOSED - Failed to send JSON payload type=%s", payload.get("type")
+            )
+            return False
+
+    async def _send_bytes(self, websocket, data: bytes) -> bool:
+        if not data:
+            return True
+        try:
+            await websocket.send(data)
+            return True
+        except ConnectionClosed:
+            logging.warning("🌐 WS CLOSED - Failed to send binary payload (%s bytes)", len(data))
+            return False
 
     async def _emit_stt_result(
         self,
@@ -555,7 +692,7 @@ class LocalAIServer:
         is_final: bool,
         is_partial: bool,
         confidence: Optional[float],
-    ) -> None:
+    ) -> bool:
         payload = {
             "type": "stt_result",
             "text": transcript,
@@ -568,7 +705,7 @@ class LocalAIServer:
             payload["confidence"] = confidence
         if request_id:
             payload["request_id"] = request_id
-        await self._send_json(websocket, payload)
+        return await self._send_json(websocket, payload)
 
     async def _emit_llm_response(
         self,
@@ -578,18 +715,24 @@ class LocalAIServer:
         request_id: Optional[str],
         *,
         source_mode: str,
-    ) -> None:
-        if not llm_response:
-            return
+    ) -> bool:
+        text = (llm_response or "").strip()
+        if not text:
+            logging.info(
+                "🤖 LLM RESULT - Empty response, using fallback call_id=%s mode=%s",
+                session.call_id,
+                source_mode,
+            )
+            text = "I'm here to help you."
         payload = {
             "type": "llm_response",
-            "text": llm_response,
+            "text": text,
             "call_id": session.call_id,
             "mode": source_mode,
         }
         if request_id:
             payload["request_id"] = request_id
-        await self._send_json(websocket, payload)
+        return await self._send_json(websocket, payload)
 
     async def _emit_tts_audio(
         self,
@@ -611,9 +754,10 @@ class LocalAIServer:
                 "sample_rate_hz": ULAW_SAMPLE_RATE,
                 "byte_length": len(audio_bytes or b""),
             }
-            await self._send_json(websocket, metadata)
+            if not await self._send_json(websocket, metadata):
+                return
         if audio_bytes:
-            await websocket.send(audio_bytes)
+            await self._send_bytes(websocket, audio_bytes)
 
     async def _handle_final_transcript(
         self,
@@ -627,9 +771,25 @@ class LocalAIServer:
         idle_promoted: bool = False,
     ) -> None:
         clean_text = (text or "").strip()
+        normalized_text = _normalize_text(clean_text)
+        last_final_text = session.last_final_text
+        last_final_norm = session.last_final_norm
+        last_final_at = session.last_final_at
+        recent_empty = (
+            last_final_text == ""
+            and last_final_at > 0.0
+            and monotonic() - last_final_at < 0.5
+        )
         if not clean_text:
             reason = "idle-timeout" if idle_promoted else "recognizer-final"
             if mode == "stt":
+                if recent_empty or (idle_promoted and last_final_text == ""):
+                    logging.info(
+                        "📝 STT FINAL SUPPRESSED - Repeated empty transcript call_id=%s mode=%s",
+                        session.call_id,
+                        mode,
+                    )
+                    return
                 # For STT mode, emit an empty final so the engine adapter can complete cleanly.
                 logging.info(
                     "📝 STT FINAL - Emitting empty transcript call_id=%s mode=%s reason=%s",
@@ -637,7 +797,7 @@ class LocalAIServer:
                     mode,
                     reason,
                 )
-                await self._emit_stt_result(
+                if await self._emit_stt_result(
                     websocket,
                     "",
                     session,
@@ -646,8 +806,8 @@ class LocalAIServer:
                     is_final=True,
                     is_partial=False,
                     confidence=confidence,
-                )
-                self._reset_stt_session(session)
+                ):
+                    self._reset_stt_session(session, "")
                 return
             # For llm/full modes, continue suppressing empty finals to avoid downstream work
             logging.info(
@@ -655,6 +815,15 @@ class LocalAIServer:
                 session.call_id,
                 mode,
                 reason,
+            )
+            return
+
+        if idle_promoted and normalized_text and normalized_text == last_final_norm:
+            logging.info(
+                "📝 STT FINAL SUPPRESSED - Duplicate idle transcript call_id=%s mode=%s text=%s",
+                session.call_id,
+                mode,
+                clean_text[:80],
             )
             return
 
@@ -668,7 +837,7 @@ class LocalAIServer:
             clean_text[:80],
         )
 
-        await self._emit_stt_result(
+        stt_sent = await self._emit_stt_result(
             websocket,
             clean_text,
             session,
@@ -679,22 +848,48 @@ class LocalAIServer:
             confidence=confidence,
         )
 
-        self._reset_stt_session(session)
+        if stt_sent:
+            self._reset_stt_session(session, clean_text)
 
         if mode == "stt":
             return
 
         # LLM path for llm/full modes: instrument, guard with timeout, and fallback on failure
+        if normalized_text and session.llm_user_turns:
+            last_turn_norm = _normalize_text(session.llm_user_turns[-1])
+            if normalized_text == last_turn_norm:
+                logging.info(
+                    "🧠 LLM SKIPPED - Duplicate final transcript call_id=%s mode=%s text=%s",
+                    session.call_id,
+                    mode,
+                    clean_text[:80],
+                )
+                return
+
+        prompt_text, prompt_tokens, truncated, raw_tokens = self._prepare_llm_prompt(
+            session, clean_text
+        )
+        logging.info(
+            "🧠 LLM PROMPT - call_id=%s tokens=%s raw_tokens=%s max_ctx=%s turns=%s truncated=%s preview=%s",
+            session.call_id,
+            prompt_tokens,
+            raw_tokens,
+            self.llm_context,
+            len(session.llm_user_turns),
+            truncated,
+            prompt_text[:120],
+        )
+
         infer_timeout = float(os.getenv("LOCAL_LLM_INFER_TIMEOUT_SEC", "20.0"))
         try:
             logging.info(
                 "🧠 LLM START - Generating response call_id=%s mode=%s preview=%s",
                 session.call_id,
                 mode,
-                clean_text[:80],
+                prompt_text[:80],
             )
             llm_response = await asyncio.wait_for(
-                self.process_llm(clean_text), timeout=infer_timeout
+                self.process_llm(prompt_text), timeout=infer_timeout
             )
         except asyncio.TimeoutError:
             logging.warning(
@@ -714,13 +909,14 @@ class LocalAIServer:
             )
             llm_response = "I'm here to help you. Could you please repeat that?"
 
-        await self._emit_llm_response(
+        if not await self._emit_llm_response(
             websocket,
             llm_response,
             session,
             request_id,
             source_mode=mode if mode != "full" else "llm",
-        )
+        ):
+            return
 
         if mode == "full" and llm_response:
             audio_response = await self.process_tts(llm_response)
