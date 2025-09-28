@@ -1,0 +1,40 @@
+# Local-only pipeline configuration
+# Copy to config/ai-agent.yaml for a fully local setup (no cloud keys needed).
+
+default_provider: "openai_realtime"  # Monolithic fallback (not used when pipeline forced)
+
+pipelines:
+  local_only:
+    stt: local_stt
+    llm: local_llm
+    tts: local_tts
+    options:
+      stt:
+        chunk_ms: 320
+        streaming: true
+        stream_format: "pcm16_16k"
+      llm:
+        temperature: 0.4
+        max_tokens: 64
+      tts:
+        format:
+          encoding: ulaw
+          sample_rate: 8000
+
+active_pipeline: local_only
+
+audio_transport: "audiosocket"
+downstream_mode: "stream"
+
+audiosocket:
+  host: "0.0.0.0"
+  port: 8090
+  format: "ulaw"
+
+providers:
+  local:
+    enabled: true
+    ws_url: "${LOCAL_WS_URL:-ws://127.0.0.1:8765}"
+    connect_timeout_sec: ${LOCAL_WS_CONNECT_TIMEOUT:=2.0}
+    response_timeout_sec: ${LOCAL_WS_RESPONSE_TIMEOUT:=5.0}
+    chunk_ms: ${LOCAL_WS_CHUNK_MS:=320}

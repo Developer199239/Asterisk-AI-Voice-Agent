@@ -1,0 +1,35 @@
+# Monolithic Deepgram Voice Agent configuration
+# Copy to config/ai-agent.yaml to run Deepgram's voice agent end-to-end.
+# Requires DEEPGRAM_API_KEY in .env and OPENAI_API_KEY for the agent's "think" stage.
+
+default_provider: "deepgram"
+
+# Transport modes
+audio_transport: "audiosocket"   # audiosocket | externalmedia
+downstream_mode: "file"          # file is more tolerant; set to stream when ready
+
+audiosocket:
+  host: "0.0.0.0"
+  port: 8090
+  format: "ulaw"
+
+# Optional tuning
+barge_in:
+  enabled: false
+  initial_protection_ms: 400
+  min_ms: 400
+  energy_threshold: 1800
+  cooldown_ms: 1000
+  post_tts_end_protection_ms: 250
+
+providers:
+  deepgram:
+    enabled: true
+    api_key: "${DEEPGRAM_API_KEY}"
+    model: "nova-2-general"
+    tts_model: "aura-asteria-en"
+    input_encoding: "linear16"
+    input_sample_rate_hz: 8000
+    # Output μ-law for telephony playback; engine converts to files or stream per mode
+    output_encoding: "mulaw"
+    output_sample_rate_hz: 8000

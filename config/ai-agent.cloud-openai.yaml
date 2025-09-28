@@ -1,0 +1,36 @@
+# Cloud-only OpenAI pipeline configuration
+# Copy to config/ai-agent.yaml to use OpenAI for STT, LLM, and TTS.
+
+default_provider: "openai_realtime"  # Monolithic fallback; pipelines recommended
+
+pipelines:
+  cloud_only_openai:
+    stt: openai_stt
+    llm: openai_llm
+    tts: openai_tts
+    options:
+      stt:
+        base_url: "wss://api.openai.com/v1/realtime"
+      llm:
+        base_url: "https://api.openai.com/v1"
+        model: "gpt-4o-realtime-preview-2024-12-17"
+      tts:
+        base_url: "https://api.openai.com/v1/audio/speech"
+        format:
+          encoding: linear16
+          sample_rate: 24000
+
+active_pipeline: cloud_only_openai
+
+audio_transport: "audiosocket"
+downstream_mode: "stream"
+
+audiosocket:
+  host: "0.0.0.0"
+  port: 8090
+  format: "ulaw"
+
+providers:
+  openai:
+    enabled: true
+    api_key: "${OPENAI_API_KEY}"

@@ -1,0 +1,50 @@
+# Hybrid configuration: Local STT + OpenAI LLM + Deepgram TTS
+# Copy to config/ai-agent.yaml for a hybrid setup mixing local and cloud.
+
+default_provider: "openai_realtime"  # Monolithic fallback; pipeline is primary
+
+pipelines:
+  hybrid:
+    stt: local_stt
+    llm: openai_llm
+    tts: deepgram_tts
+    options:
+      stt:
+        chunk_ms: 320
+        streaming: true
+        stream_format: "pcm16_16k"
+      llm:
+        base_url: "https://api.openai.com/v1"
+        model: "gpt-4o-mini"
+        temperature: 0.6
+        max_tokens: 120
+      tts:
+        base_url: "https://api.deepgram.com"
+        voice: "aura-asteria-en"
+        format:
+          encoding: mulaw
+          sample_rate: 8000
+
+active_pipeline: hybrid
+
+audio_transport: "audiosocket"
+downstream_mode: "stream"
+
+audiosocket:
+  host: "0.0.0.0"
+  port: 8090
+  format: "ulaw"
+
+providers:
+  local:
+    enabled: true
+    ws_url: "${LOCAL_WS_URL:-ws://127.0.0.1:8765}"
+    connect_timeout_sec: ${LOCAL_WS_CONNECT_TIMEOUT:=2.0}
+    response_timeout_sec: ${LOCAL_WS_RESPONSE_TIMEOUT:=5.0}
+    chunk_ms: ${LOCAL_WS_CHUNK_MS:=320}
+  openai:
+    enabled: true
+    api_key: "${OPENAI_API_KEY}"
+  deepgram:
+    enabled: true
+    api_key: "${DEEPGRAM_API_KEY}"

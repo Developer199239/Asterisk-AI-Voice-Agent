@@ -31,10 +31,6 @@ This project is designed to be the most powerful, flexible, and easy-to-use open
 - **Asterisk 16+** or **FreePBX 15+** with ARI enabled.
 - **Docker** and **Docker Compose** installed.
 - **Git** for cloning the repository.
-- **Local AI Models** (Optional): If you want to use local AI, run the download script:
-  ```bash
-  ./scripts/download_models.sh
-  ```
 
 ### Installation
 
@@ -44,14 +40,21 @@ This project is designed to be the most powerful, flexible, and easy-to-use open
     cd Asterisk-AI-Voice-Agent
     ```
 
-2.  **Configure your environment**:
-    Copy the example config file `config/ai-agent.example.yaml` to `config/ai-agent.yaml` and the `.env.example` to `.env`. Edit them to match your setup, including Asterisk connection details and API keys.
-
-3.  **Download local models (optional but recommended for the local provider)**:
+2.  **Download local models (optional; only if you plan to use the Local provider)**:
     ```bash
     make model-setup
     ```
-    The helper invokes `scripts/model_setup.py`, detects your hardware tier, downloads the STT/LLM/TTS bundles listed in `models/registry.json`, and skips work when everything is already cached. Light systems take ~60–90 seconds per response; heavy systems can respond in ~20 seconds.
+    The helper invokes `scripts/model_setup.py`, detects your hardware tier, downloads the STT/LLM/TTS bundles listed in `models/registry.json`, and skips work when everything is already cached.
+
+3.  **Configure your environment and select a config template**:
+    - Copy `.env.example` to `.env` and set your values (Asterisk ARI, provider API keys). See `.env.example` comments.
+    - Choose ONE of the example configs under `config/` and copy to `config/ai-agent.yaml`:
+      - `config/ai-agent.example.yaml` (general; pipelines + monolithic fallback)
+      - `config/ai-agent.local.yaml` (Local-only pipeline)
+      - `config/ai-agent.cloud-openai.yaml` (OpenAI-only pipeline)
+      - `config/ai-agent.hybrid.yaml` (Local STT + OpenAI LLM + Deepgram TTS)
+      - `config/ai-agent.openai-agent.yaml` (Monolithic OpenAI Realtime agent)
+      - `config/ai-agent.deepgram-agent.yaml` (Monolithic Deepgram Voice Agent)
 
 4.  **Start the services**:
     ```bash
