@@ -7,6 +7,29 @@ PROJECT_PATH := /root/Asterisk-Agent-Develop
 SERVICE ?= ai-engine
 provider ?= local
 
+# ------------------------------------------------------------------------------
+# Localhost vs Remote operation
+# - If SERVER_HOST is this machine (localhost/127.0.0.1/::1 or matches hostname),
+#   deploy/servers targets run LOCALLY: we cd into $(PROJECT_PATH) and execute.
+# - Otherwise we SSH to $(SERVER_USER)@$(SERVER_HOST) and run the same commands.
+# Tip: When running on the same server where the repo is cloned, prefer setting:
+#   make <target> SERVER_HOST=localhost PROJECT_PATH=$(PWD)
+# ------------------------------------------------------------------------------
+HOSTNAME := $(shell hostname)
+FQDN := $(shell hostname -f 2>/dev/null || echo)
+
+# Helper to run a command locally or remotely depending on SERVER_HOST
+define run_remote
+	@if [ "$(SERVER_HOST)" = "localhost" ] || [ "$(SERVER_HOST)" = "127.0.0.1" ] || [ "$(SERVER_HOST)" = "::1" ] \
+	     || [ "$(SERVER_HOST)" = "$(HOSTNAME)" ] || [ "$(SERVER_HOST)" = "$(FQDN)" ]; then \
+		echo "--> [local] $(1)"; \
+		cd $(PROJECT_PATH) && sh -lc '$(1)'; \
+	else \
+		echo "--> [remote $(SERVER_USER)@$(SERVER_HOST)] $(1)"; \
+		ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && sh -lc '\''$(1)'\'''; \
+	fi
+endef
+
 # ==============================================================================
 # LOCAL DEVELOPMENT
 # ==============================================================================
@@ -52,7 +75,7 @@ deploy:
 	@echo "--> Deploying latest code to $(SERVER_HOST) with --no-cache..."
 	@echo "⚠️  WARNING: This will deploy uncommitted changes if any exist!"
 	@echo "   Use 'make deploy-safe' for validation, or 'make deploy-force' to skip checks"
-	ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && git pull && docker-compose build --no-cache ai-engine && docker-compose up -d ai-engine'
+	$(call run_remote, git pull && docker-compose build --no-cache ai-engine && docker-compose up -d ai-engine)
 
 ## deploy-safe: Validate changes are committed before deploying
 deploy-safe:
@@ -73,7 +96,7 @@ deploy-safe:
 	@echo "🔍 Verifying remote has latest commit..."
 	@make verify-remote-sync
 	@echo "📦 Deploying to server with --no-cache..."
-	ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && git pull && docker-compose build --no-cache ai-engine && docker-compose up -d ai-engine'
+	$(call run_remote, git pull && docker-compose build --no-cache ai-engine && docker-compose up -d ai-engine)
 	@echo "🔍 Verifying server has latest commit..."
 	@make verify-server-commit
 	@echo "🔍 Verifying deployment..."
@@ -85,7 +108,7 @@ deploy-force:
 	@echo "⚠️  WARNING: This will deploy even with uncommitted changes!"
 	@echo "⏳ Waiting 5 seconds before deployment..."
 	sleep 5
-	ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && git pull && docker-compose build --no-cache ai-engine && docker-compose up -d ai-engine'
+	$(call run_remote, git pull && docker-compose build --no-cache ai-engine && docker-compose up -d ai-engine)
 	@echo "🔍 Verifying server has latest commit..."
 	@make verify-server-commit
 	@echo "🔍 Verifying deployment..."
@@ -94,51 +117,61 @@ deploy-force:
 ## deploy-full: Pull latest and rebuild all services on the server
 deploy-full:
 	@echo "--> Performing a full rebuild and deployment on $(SERVER_HOST)..."
-	ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && git pull && docker-compose up --build -d'
+	$(call run_remote, git pull && docker-compose up --build -d)
 
 ## deploy-no-cache: Pull latest and force a no-cache rebuild of ai-engine
 deploy-no-cache:
 	@echo "--> Forcing a no-cache rebuild and deployment of ai-engine on $(SERVER_HOST)..."
-	ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && git pull && docker-compose build --no-cache ai-engine && docker-compose up -d ai-engine'
+	$(call run_remote, git pull && docker-compose build --no-cache ai-engine && docker-compose up -d ai-engine)
 
 ## server-logs: View live logs for a service on the server (follow mode - use Ctrl+C to exit)
 server-logs:
-	ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && docker-compose logs -f $(SERVICE)'
+	$(call run_remote, docker-compose logs -f $(SERVICE))
 
 ## server-logs-snapshot: View last N lines of logs and exit (default: 50)
 server-logs-snapshot:
-	ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && docker-compose logs --tail=$(LINES) $(SERVICE)'
+	$(call run_remote, docker-compose logs --tail=$(LINES) $(SERVICE))
 
 ## server-status: Check the status of services on the server
 server-status:
-	ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && docker-compose ps'
+	$(call run_remote, docker-compose ps)
 
 ## server-clear-logs: Truncate Docker logs on server and restart containers
 server-clear-logs:
 	@echo "--> Truncating Docker container logs on $(SERVER_HOST)..."
-	@ssh $(SERVER_USER)@$(SERVER_HOST) 'sudo sh -c "truncate -s 0 /var/lib/docker/containers/*/*-json.log"'
-	@echo "--> Restarting ai-engine and local-ai-server containers..."
-	@ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && docker restart local_ai_server && sleep 10 && docker restart ai_engine'
+	@$(call run_remote, sudo sh -c "truncate -s 0 /var/lib/docker/containers/*/*-json.log")
+	@echo "--> Restarting ai-engine and local-ai-server services via docker-compose..."
+	@$(call run_remote, docker-compose restart local-ai-server ai-engine)
 	@echo "✅ Server logs cleared and containers restarted"
 
 ## server-capture-logs: Capture full logs from server containers into timestamped files
 server-capture-logs:
 	@echo "--> Capturing ai-engine logs to logs/ai-engine-$$(date +%Y%m%d-%H%M%S).log"
-	@ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && docker-compose logs --no-color ai-engine' > logs/ai-engine-$$(date +%Y%m%d-%H%M%S).log
+	@if [ "$(SERVER_HOST)" = "localhost" ] || [ "$(SERVER_HOST)" = "127.0.0.1" ] || [ "$(SERVER_HOST)" = "::1" ] \
+	     || [ "$(SERVER_HOST)" = "$(HOSTNAME)" ] || [ "$(SERVER_HOST)" = "$(FQDN)" ]; then \
+		(cd $(PROJECT_PATH) && docker-compose logs --no-color ai-engine) > logs/ai-engine-$$(date +%Y%m%d-%H%M%S).log; \
+	else \
+		ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && docker-compose logs --no-color ai-engine' > logs/ai-engine-$$(date +%Y%m%d-%H%M%S).log; \
+	fi
 	@echo "--> Capturing local-ai-server logs to logs/local-ai-server-$$(date +%Y%m%d-%H%M%S).log"
-	@ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && docker-compose logs --no-color local-ai-server' > logs/local-ai-server-$$(date +%Y%m%d-%H%M%S).log
+	@if [ "$(SERVER_HOST)" = "localhost" ] || [ "$(SERVER_HOST)" = "127.0.0.1" ] || [ "$(SERVER_HOST)" = "::1" ] \
+	     || [ "$(SERVER_HOST)" = "$(HOSTNAME)" ] || [ "$(SERVER_HOST)" = "$(FQDN)" ]; then \
+		(cd $(PROJECT_PATH) && docker-compose logs --no-color local-ai-server) > logs/local-ai-server-$$(date +%Y%m%d-%H%M%S).log; \
+	else \
+		ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && docker-compose logs --no-color local-ai-server' > logs/local-ai-server-$$(date +%Y%m%d-%H%M%S).log; \
+	fi
 
 ## server-health: Check deployment health (ARI, ExternalMedia, Providers)
 server-health:
 	@echo "--> Checking deployment health on $(SERVER_HOST)..."
 	@echo "🔍 Checking ARI connections..."
-	@ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && docker-compose logs --tail=200 ai-engine | grep -E "(Successfully connected to ARI HTTP endpoint|Successfully connected to ARI WebSocket)" || echo "❌ ARI connection issues"'
+	@$(call run_remote, docker-compose logs --tail=200 ai-engine | grep -E "(Successfully connected to ARI HTTP endpoint|Successfully connected to ARI WebSocket)" || echo "❌ ARI connection issues")
 	@echo "🔍 Checking RTP server..."
-	@ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && docker-compose logs --tail=200 ai-engine | grep -E "(RTP server started|RTP server listening)" || echo "❌ RTP server issues"'
+	@$(call run_remote, docker-compose logs --tail=200 ai-engine | grep -E "(RTP server started|RTP server listening)" || echo "❌ RTP server issues")
 	@echo "🔍 Checking provider loading..."
-	@ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && docker-compose logs --tail=200 ai-engine | grep -E "(Provider.*loaded successfully|Default provider.*is available)" || echo "❌ Provider loading issues"'
+	@$(call run_remote, docker-compose logs --tail=200 ai-engine | grep -E "(Provider.*loaded successfully|Default provider.*is available)" || echo "❌ Provider loading issues")
 	@echo "🔍 Checking engine status..."
-	@ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && docker-compose logs --tail=200 ai-engine | grep -E "(Engine started and listening for calls)" || echo "❌ Engine startup issues"'
+	@$(call run_remote, docker-compose logs --tail=200 ai-engine | grep -E "(Engine started and listening for calls)" || echo "❌ Engine startup issues")
 	@echo "✅ Health check complete"
 
 # ==============================================================================
@@ -156,7 +189,7 @@ test-integration:
 
 ## test-ari: Test ARI commands
 test-ari:
-	ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && docker-compose exec ai-engine python /app/test_ari_commands.py'
+	$(call run_remote, docker-compose exec -T ai-engine python /app/test_ari_commands.py)
 
 ## test-externalmedia: Test ExternalMedia + RTP implementation
 test-externalmedia:
@@ -200,23 +233,23 @@ provider-switch-remote:
 		echo "Usage: make provider=<name> provider-switch-remote"; \
 		exit 1; \
 	fi
-	@ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && docker-compose exec -T ai-engine python /app/scripts/switch_provider.py --config /app/config/ai-agent.yaml --provider $(provider)'
+	@$(call run_remote, docker-compose exec -T ai-engine python /app/scripts/switch_provider.py --config /app/config/ai-agent.yaml --provider $(provider))
 
 ## provider-reload: Switch provider on server, restart ai-engine, and run health check
 provider-reload:
 	@$(MAKE) --no-print-directory provider-switch-remote provider=$(provider)
-	@ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && docker-compose up -d ai-engine'
+	@$(call run_remote, docker-compose up -d ai-engine)
 	@$(MAKE) --no-print-directory server-health
 
 ## verify-deployment: Verify that deployment was successful
 verify-deployment:
 	@echo "🔍 Verifying deployment..."
 	@echo "📊 Checking container status..."
-	@ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && docker-compose ps'
+	@$(call run_remote, docker-compose ps)
 	@echo "📋 Checking recent logs for errors..."
-	@ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && docker-compose logs --tail=10 ai-engine | grep -E "(ERROR|CRITICAL|Exception|Traceback)" || echo "✅ No errors found in recent logs"'
+	@$(call run_remote, docker-compose logs --tail=10 ai-engine | grep -E "(ERROR|CRITICAL|Exception|Traceback)" || echo "✅ No errors found in recent logs")
 	@echo "⚙️  Checking configuration..."
-	@ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && docker-compose logs --tail=20 ai-engine | grep -E "(audio_transport|RTP Server|ExternalMedia)" || echo "⚠️  Configuration logs not found"'
+	@$(call run_remote, docker-compose logs --tail=20 ai-engine | grep -E "(audio_transport|RTP Server|ExternalMedia)" || echo "⚠️  Configuration logs not found")
 	@echo "✅ Deployment verification complete"
 
 ## verify-remote-sync: Verify that remote repository has the latest commit
@@ -252,7 +285,12 @@ verify-server-commit:
 	@LOCAL_COMMIT=$$(git rev-parse HEAD); \
 	echo "Local commit: $$LOCAL_COMMIT"; \
 	echo "📋 Getting server commit hash..."; \
-	SERVER_COMMIT=$$(ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && git rev-parse HEAD'); \
+	if [ "$(SERVER_HOST)" = "localhost" ] || [ "$(SERVER_HOST)" = "127.0.0.1" ] || [ "$(SERVER_HOST)" = "::1" ] \
+	     || [ "$(SERVER_HOST)" = "$(HOSTNAME)" ] || [ "$(SERVER_HOST)" = "$(FQDN)" ]; then \
+		SERVER_COMMIT=$$(cd $(PROJECT_PATH) && git rev-parse HEAD); \
+	else \
+		SERVER_COMMIT=$$(ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && git rev-parse HEAD'); \
+	fi; \
 	echo "Server commit: $$SERVER_COMMIT"; \
 	if [ "$$LOCAL_COMMIT" = "$$SERVER_COMMIT" ]; then \
 		echo "✅ Server has the latest commit"; \
@@ -269,7 +307,7 @@ verify-config:
 	@echo "📋 Local configuration:"
 	@python3 scripts/validate_externalmedia_config.py
 	@echo "📋 Server configuration:"
-	@ssh $(SERVER_USER)@$(SERVER_HOST) 'cd $(PROJECT_PATH) && python3 scripts/validate_externalmedia_config.py'
+	@$(call run_remote, python3 scripts/validate_externalmedia_config.py)
 
 ## monitor-externalmedia: Monitor ExternalMedia + RTP status
 monitor-externalmedia:
