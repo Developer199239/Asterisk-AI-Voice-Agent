@@ -214,7 +214,13 @@ select_config_template() {
             if command -v make >/dev/null 2>&1; then
                 make model-setup || true
             else
-                python3 scripts/model_setup.py --assume-yes || true
+                if command -v python3 >/dev/null 2>&1; then
+                    print_info "Running model setup with host python3..."
+                    python3 scripts/model_setup.py --assume-yes || true
+                else
+                    print_info "Host python3 not found; running one-off container for model setup."
+                    $COMPOSE run --rm ai-engine python /app/scripts/model_setup.py --assume-yes || true
+                fi
             fi
         fi
     fi

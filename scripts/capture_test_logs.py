@@ -37,23 +37,10 @@ class TestLogCapture:
         
         self.start_time = datetime.now()
         
-        # Start AI Engine log capture
-        ai_engine_cmd = [
-            "ssh", "root@voiprnd.nemtclouddispatch.com",
-            "cd /root/Asterisk-Agent-Develop && docker-compose logs -f ai-engine"
-        ]
-        
-        # Start Local AI Server log capture
-        local_ai_cmd = [
-            "ssh", "root@voiprnd.nemtclouddispatch.com", 
-            "cd /root/Asterisk-Agent-Develop && docker-compose logs -f local-ai-server"
-        ]
-        
-        # Start Asterisk log capture
-        asterisk_cmd = [
-            "ssh", "root@voiprnd.nemtclouddispatch.com",
-            "tail -f /var/log/asterisk/full"
-        ]
+        # Local log capture commands (no hardcoded remote host)
+        ai_engine_cmd = ["docker-compose", "logs", "-f", "ai-engine"]
+        local_ai_cmd = ["docker-compose", "logs", "-f", "local-ai-server"]
+        asterisk_cmd = ["tail", "-f", "/var/log/asterisk/full"]
         
         try:
             # Start AI Engine log capture
