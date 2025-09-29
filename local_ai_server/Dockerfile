@@ -22,7 +22,6 @@ RUN apt-get update && apt-get install -y \
     libasound2 \
     libportaudio2 \
     libgomp1 \
-    espeak-ng \
     sox \
     && rm -rf /var/lib/apt/lists/*
 

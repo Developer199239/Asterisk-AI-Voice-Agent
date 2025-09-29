@@ -179,6 +179,8 @@ Response:
 
 ## Client Examples
 
+Additional example code (including an espeak-ng based lightweight TTS demo) lives under `docs/local-ai-server/examples/`.
+
 ### Python: TTS request and save μ-law file
 ```python
 import asyncio, websockets, json
