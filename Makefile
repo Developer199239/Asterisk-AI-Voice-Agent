@@ -30,6 +30,13 @@ define run_remote
 	fi
 endef
 
+# ----------------------------------------------------------------------------
+# Python runner shim
+# Prefer host python3; if absent, use containerized python via docker-compose.
+# Also emit a helpful message when falling back.
+PY := $(shell if command -v python3 >/dev/null 2>&1; then echo python3; else echo "docker-compose exec -T ai-engine python"; fi)
+PY_INFO := $(shell if command -v python3 >/dev/null 2>&1; then echo ""; else echo "Host python3 not found; using 'docker-compose exec -T ai-engine python' inside the ai-engine container."; fi)
+
 # ==============================================================================
 # LOCAL DEVELOPMENT
 # ==============================================================================
@@ -64,7 +71,8 @@ ps:
 
 ## model-setup: Detect host tier, download required local provider models, and skip if cached
 model-setup:
-	python3 scripts/model_setup.py --assume-yes
+	@echo "$(PY_INFO)"; \
+	$(PY) scripts/model_setup.py --assume-yes
 
 # ==============================================================================
 # DEPLOYMENT & SERVER MANAGEMENT
@@ -194,8 +202,9 @@ test-ari:
 ## test-externalmedia: Test ExternalMedia + RTP implementation
 test-externalmedia:
 	@echo "--> Testing ExternalMedia + RTP implementation..."
-	python3 scripts/validate_externalmedia_config.py
-	python3 scripts/test_externalmedia_call.py
+	@echo "$(PY_INFO)"; \
+	$(PY) scripts/validate_externalmedia_config.py
+	$(PY) scripts/test_externalmedia_call.py
 
 ## test-health: Check the local health endpoint (defaults to http://127.0.0.1:15000/health)
 test-health:
@@ -312,30 +321,35 @@ verify-config:
 ## monitor-externalmedia: Monitor ExternalMedia + RTP status
 monitor-externalmedia:
 	@echo "--> Starting ExternalMedia + RTP monitoring..."
-	python3 scripts/monitor_externalmedia.py
+	@echo "$(PY_INFO)"; \
+	$(PY) scripts/monitor_externalmedia.py
 
 ## monitor-externalmedia-once: Check ExternalMedia + RTP status once
 monitor-externalmedia-once:
 	@echo "--> Checking ExternalMedia + RTP status..."
-	python3 scripts/monitor_externalmedia.py --once
+	@echo "$(PY_INFO)"; \
+	$(PY) scripts/monitor_externalmedia.py --once
 
 ## capture-logs: Capture structured logs during test call (default: 40 seconds)
 capture-logs:
 	@echo "--> Starting structured log capture for test call..."
 	@echo "📞 Make your test call now!"
-	python3 scripts/capture_test_logs.py --duration 40
+	@echo "$(PY_INFO)"; \
+	$(PY) scripts/capture_test_logs.py --duration 40
 
 ## capture-logs-short: Capture logs for 30 seconds
 capture-logs-short:
 	@echo "--> Starting 30-second log capture..."
 	@echo "📞 Make your test call now!"
-	python3 scripts/capture_test_logs.py --duration 30
+	@echo "$(PY_INFO)"; \
+	$(PY) scripts/capture_test_logs.py --duration 30
 
 ## capture-logs-long: Capture logs for 60 seconds
 capture-logs-long:
 	@echo "--> Starting 60-second log capture..."
 	@echo "📞 Make your test call now!"
-	python3 scripts/capture_test_logs.py --duration 60
+	@echo "$(PY_INFO)"; \
+	$(PY) scripts/capture_test_logs.py --duration 60
 
 ## analyze-logs: Analyze the most recent captured logs
 analyze-logs:
@@ -343,7 +357,8 @@ analyze-logs:
 	@if [ -d "logs" ] && [ "$$(ls -A logs/*.json 2>/dev/null)" ]; then \
 		LATEST_LOG=$$(ls -t logs/*.json | head -1); \
 		echo "📊 Analyzing: $$LATEST_LOG"; \
-		python3 scripts/analyze_logs.py "$$LATEST_LOG"; \
+		echo "$(PY_INFO)"; \
+		$(PY) scripts/analyze_logs.py "$$LATEST_LOG"; \
 	else \
 		echo "❌ No log files found in logs/ directory"; \
 	fi
@@ -353,7 +368,8 @@ test-call:
 	@echo "--> Starting complete test call workflow..."
 	@echo "📞 Make your test call now!"
 	@echo "⏱️  Capturing logs for 40 seconds..."
-	python3 scripts/capture_test_logs.py --duration 40
+	@echo "$(PY_INFO)"; \
+	$(PY) scripts/capture_test_logs.py --duration 40
 	@echo "🔍 Analyzing captured logs..."
 	@if [ -d "logs" ] && [ "$$(ls -A logs/*.json 2>/dev/null)" ]; then \
 		LATEST_LOG=$$(ls -t logs/*.json | head -1); \
@@ -363,6 +379,20 @@ test-call:
 		echo "📋 Framework analysis: $$LATEST_FRAMEWORK"; \
 		echo "🔍 View framework analysis:"; \
 		echo "   cat $$LATEST_FRAMEWORK"; \
+	fi
+
+## check-python: Check for host python3 and print fallback guidance
+check-python:
+	@if command -v python3 >/dev/null 2>&1; then \
+		echo "✅ Host python3 detected: $$(python3 --version)"; \
+	else \
+		echo "⚠️ Host python3 not found."; \
+		echo "   You can run all helper scripts via container Python, e.g.:"; \
+		echo "   docker-compose exec -T ai-engine python /app/scripts/validate_externalmedia_config.py"; \
+		echo "   docker-compose exec -T ai-engine python /app/scripts/test_externalmedia_call.py"; \
+		echo "   docker-compose exec -T ai-engine python /app/scripts/monitor_externalmedia.py"; \
+		echo "   docker-compose exec -T ai-engine python /app/scripts/capture_test_logs.py --duration 40"; \
+		echo "   docker-compose exec -T ai-engine python /app/scripts/analyze_logs.py /app/logs/latest.json"; \
 	fi
 
 # ==============================================================================
