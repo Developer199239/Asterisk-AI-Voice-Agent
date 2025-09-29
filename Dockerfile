@@ -16,8 +16,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # --- Stage 2: Final Runtime Image ---
 FROM python:3.11
 
-# Install sox for audio format conversion
-RUN apt-get update && apt-get install -y sox && rm -rf /var/lib/apt/lists/*
+# Install sox (audio), curl (downloads), unzip (model extraction)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends sox curl unzip \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 

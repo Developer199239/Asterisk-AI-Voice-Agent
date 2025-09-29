@@ -209,3 +209,6 @@ venv/
 # Documentation-only rule files (keep local, not in GA branch)
 Agents.md
 Gemini.md
+
+# Local diagnostics bundles
+server_diagnostics/
