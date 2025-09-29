@@ -123,6 +123,16 @@ Once the configuration is complete, the script will prompt you to build and star
 docker-compose up --build -d
 ```
 
+> IMPORTANT: First startup time (local models)
+>
+> If you selected a Local or Hybrid workflow, the `local-ai-server` may take 15–20 minutes on first startup to load LLM/TTS models depending on your CPU, RAM, and disk speed. This is expected and readiness may show degraded until models have fully loaded. Monitor with:
+>
+> ```bash
+> docker-compose logs -f local-ai-server
+> ```
+>
+> Subsequent restarts are typically much faster due to OS page cache. If startup is too slow for your hardware, consider using MEDIUM or LIGHT tier models and update the `.env` model paths accordingly.
+
 ## 3. Verifying the Installation
 
 After starting the service, you can check that it is running correctly.
@@ -188,5 +198,20 @@ exten => 1234,1,NoOp(Sending call to AI Voice Agent)
     -   Confirm AudioSocket is connected (see Asterisk CLI and `ai-engine` logs).
     -   Use a tmpfs for media files (e.g., `/mnt/asterisk_media`) to minimize I/O latency for file-based playback.
     -   Verify you are not appending file extensions to ARI `sound:` URIs (Asterisk will add them automatically).
+
+-   **No host Python 3 installed (scripts/Makefile)**:
+    -   The Makefile auto-falls back to running helper scripts inside the `ai-engine` container. You’ll see a hint when it does.
+    -   Check your environment:
+        ```bash
+        make check-python
+        ```
+    -   Run helpers directly in the container if desired:
+        ```bash
+        docker-compose exec -T ai-engine python /app/scripts/validate_externalmedia_config.py
+        docker-compose exec -T ai-engine python /app/scripts/test_externalmedia_call.py
+        docker-compose exec -T ai-engine python /app/scripts/monitor_externalmedia.py
+        docker-compose exec -T ai-engine python /app/scripts/capture_test_logs.py --duration 40
+        docker-compose exec -T ai-engine python /app/scripts/analyze_logs.py /app/logs/latest.json
+        ```
 
 For more advanced troubleshooting, refer to the project's main `README.md` or open an issue in the repository.

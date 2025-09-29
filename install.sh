@@ -146,6 +146,62 @@ upsert_env() {
     fi
 }
 
+# --- Local model helpers ---
+autodetect_local_models() {
+    print_info "Auto-detecting local model artifacts under ./models to set .env paths..."
+    local stt="" llm="" tts=""
+    # STT preference: 0.22 > small 0.15
+    if [ -d models/stt/vosk-model-en-us-0.22 ]; then
+        stt="/app/models/stt/vosk-model-en-us-0.22"
+    elif [ -d models/stt/vosk-model-small-en-us-0.15 ]; then
+        stt="/app/models/stt/vosk-model-small-en-us-0.15"
+    fi
+    # LLM preference: 13b > 7b > tiny/phi3
+    if [ -f models/llm/llama-2-13b-chat.Q4_K_M.gguf ]; then
+        llm="/app/models/llm/llama-2-13b-chat.Q4_K_M.gguf"
+    elif [ -f models/llm/llama-2-7b-chat.Q4_K_M.gguf ]; then
+        llm="/app/models/llm/llama-2-7b-chat.Q4_K_M.gguf"
+    elif [ -f models/llm/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf ]; then
+        llm="/app/models/llm/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf"
+    elif [ -f models/llm/phi-3-mini-4k-instruct.Q4_K_M.gguf ]; then
+        llm="/app/models/llm/phi-3-mini-4k-instruct.Q4_K_M.gguf"
+    fi
+    # TTS preference: high > medium
+    if [ -f models/tts/en_US-lessac-high.onnx ]; then
+        tts="/app/models/tts/en_US-lessac-high.onnx"
+    elif [ -f models/tts/en_US-lessac-medium.onnx ]; then
+        tts="/app/models/tts/en_US-lessac-medium.onnx"
+    fi
+
+    if [ -n "$stt" ]; then upsert_env LOCAL_STT_MODEL_PATH "$stt"; fi
+    if [ -n "$llm" ]; then upsert_env LOCAL_LLM_MODEL_PATH "$llm"; fi
+    if [ -n "$tts" ]; then upsert_env LOCAL_TTS_MODEL_PATH "$tts"; fi
+
+    # Clean sed backup if created
+    [ -f .env.bak ] && rm -f .env.bak || true
+    print_success "Local model paths updated in .env (if detected)."
+}
+
+wait_for_local_ai_health() {
+    print_info "Waiting for local-ai-server to become healthy (port 8765)..."
+    # Ensure service started (build if needed)
+    $COMPOSE up -d --build local-ai-server
+    # Up to ~20 minutes (120 * 10s)
+    for i in $(seq 1 120); do
+        status=$(docker inspect -f '{{.State.Health.Status}}' local_ai_server 2>/dev/null || echo "starting")
+        if [ "$status" = "healthy" ]; then
+            print_success "local-ai-server is healthy."
+            return 0
+        fi
+        if (( i % 6 == 0 )); then
+            print_info "Still waiting for local models to load (elapsed ~$((i/6*1)) min). This can take 15–20 minutes on first start..."
+        fi
+        sleep 10
+    done
+    print_warning "local-ai-server did not report healthy within ~20 minutes; continuing. Use: $COMPOSE logs -f local-ai-server to monitor."
+    return 1
+}
+
 # --- Configuration ---
 configure_env() {
     print_info "Starting interactive configuration (.env updates)..."
@@ -173,6 +229,7 @@ configure_env() {
     [ -f .env.bak ] && rm -f .env.bak || true
 
     print_success ".env updated."
+    print_info "If you don't have API keys now, you can add them later to .env and then recreate containers: 'docker-compose up -d' (use '--build' if images changed). Note: simple 'restart' will not pick up new .env values."
 }
 
 select_config_template() {
@@ -223,14 +280,24 @@ select_config_template() {
                 fi
             fi
         fi
+        # Auto-detect and set .env model paths to match downloaded artifacts
+        autodetect_local_models
     fi
 }
 
 start_services() {
     read -p "Build and start services now? [Y/n]: " start_service
     if [[ "$start_service" =~ ^[Yy]$|^$ ]]; then
-        print_info "Building and starting services..."
-        $COMPOSE up --build -d
+        if [ "$PROFILE" = "local" ] || [ "$PROFILE" = "hybrid" ]; then
+            print_info "Starting local-ai-server first..."
+            print_info "Note: first startup of local models may take 15–20 minutes depending on CPU/RAM/disk. Monitor: $COMPOSE logs -f local-ai-server"
+            wait_for_local_ai_health
+            print_info "Starting ai-engine..."
+            $COMPOSE up -d --build ai-engine
+        else
+            print_info "Building and starting services..."
+            $COMPOSE up --build -d
+        fi
         print_success "Services started."
         print_info "Logs:   $COMPOSE logs -f ai-engine"
         print_info "Health: curl http://127.0.0.1:15000/health"

@@ -186,6 +186,8 @@ class LocalAIServer:
         ]
         if not self.llm_stop_tokens:
             self.llm_stop_tokens = ["<|user|>", "<|assistant|>", "<|end|>"]
+        # Allow disabling mlock by env to avoid startup failures on some hosts
+        self.llm_use_mlock = bool(int(os.getenv("LOCAL_LLM_USE_MLOCK", "0")))
 
         # Audio buffering for STT (20ms chunks need to be buffered for effective STT)
         self.audio_buffer = b""
@@ -230,7 +232,7 @@ class LocalAIServer:
                 n_gpu_layers=0,
                 verbose=False,
                 use_mmap=True,
-                use_mlock=True,
+                use_mlock=self.llm_use_mlock,
                 add_bos=False,
             )
             logging.info("✅ LLM model loaded: %s", self.llm_model_path)

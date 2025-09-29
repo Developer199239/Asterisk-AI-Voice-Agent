@@ -21,12 +21,17 @@ services:
     stdin_open: true
     restart: unless-stopped
     network_mode: "host"
+    depends_on:
+      local-ai-server:
+        condition: service_healthy
 
   local-ai-server:
     build:
       context: ./local_ai_server
       dockerfile: Dockerfile
     container_name: local_ai_server
+    env_file:
+      - .env
     volumes:
       - ./models:/app/models
     environment:
@@ -41,9 +46,16 @@ services:
       - LOCAL_LLM_TEMPERATURE=${LOCAL_LLM_TEMPERATURE:-0.2}
       - LOCAL_LLM_TOP_P=${LOCAL_LLM_TOP_P:-0.85}
       - LOCAL_LLM_REPEAT_PENALTY=${LOCAL_LLM_REPEAT_PENALTY:-1.05}
-      - LOCAL_STT_MODEL_PATH=${LOCAL_STT_MODEL_PATH:-/app/models/stt/vosk-model-small-en-us-0.15}
+      - LOCAL_STT_MODEL_PATH=${LOCAL_STT_MODEL_PATH:-/app/models/stt/vosk-model-en-us-0.22}
       - LOCAL_TTS_MODEL_PATH=${LOCAL_TTS_MODEL_PATH:-/app/models/tts/en_US-lessac-medium.onnx}
+      - LOCAL_LLM_USE_MLOCK=${LOCAL_LLM_USE_MLOCK:-0}
     tty: true
     stdin_open: true
     restart: unless-stopped
     network_mode: "host"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import socket; s=socket.socket(); s.settimeout(1); s.connect(('127.0.0.1',8765)); s.close()\""]
+      interval: 5s
+      timeout: 2s
+      retries: 60
+      start_period: 10s
