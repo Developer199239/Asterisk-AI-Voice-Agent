@@ -42,7 +42,7 @@ providers:
     connect_timeout_sec: ${LOCAL_WS_CONNECT_TIMEOUT:=2.0}
     response_timeout_sec: ${LOCAL_WS_RESPONSE_TIMEOUT:=5.0}
     chunk_ms: ${LOCAL_WS_CHUNK_MS:=320}
-  openai:
+  openai_realtime:
     enabled: true
     api_key: "${OPENAI_API_KEY}"
   deepgram:
