@@ -219,6 +219,15 @@ Ongoing milestones and their acceptance criteria live in `docs/plan/ROADMAP.md`.
 - **Windsurf**: `.windsurf/rules/asterisk_ai_voice_agent.md` keeps IDE prompts aligned with the roadmap so code and documentation stays in sync.
 - **Shared artifacts**: Regression notes (`docs/regressions/*.md`) and architecture snapshots (`docs/Architecture.md`, `docs/plan/ROADMAP.md`) are the canonical hand-off regardless of editor; update them after every call so all IDEs inherit the latest context.
 
+## Contributing
+
+- See the repository-level [Contributing Guide](../CONTRIBUTING.md) for branching strategy and PR workflow.
+- Typical flow:
+  - Fork and branch from `develop`.
+  - Open a PR against `staging` with a clear description and testing notes.
+  - Keep changes small and documented; update `docs/` where behavior changes.
+- License: MIT. See [LICENSE](../LICENSE).
+
 ## Architecture Diagrams
 
 ### 1. EXTERNALMEDIA CALL FLOW 
