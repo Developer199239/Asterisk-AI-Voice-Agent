@@ -40,9 +40,26 @@ The Asterisk AI Voice Agent v3.0 integrates with FreePBX by combining ARI call c
 
 ## 3. Dialplan Configuration
 
+### 3.0 Edit extensions_custom.conf via FreePBX UI
+
+Use the built‑in editor to add the contexts below.
+
+Steps:
+- Navigate to: Admin → Config Edit.
+- In the left tree, expand “Asterisk Custom Configuration Files”.
+- Click `extensions_custom.conf`.
+- Paste the contexts from the next section, Save, then click “Apply Config”.
+
+Snapshot 1:
+
+![Config Edit - extensions_custom.conf](freepbx/img/snapshot-1-config-edit.png)
+
 ### 3.1 AudioSocket Contexts
 
 Append the following contexts to `extensions_custom.conf` (or the appropriate custom include). Each context can be targeted from a FreePBX Custom Destination or IVR option so you can exercise a specific provider pipeline during testing.
+
+Note:
+- The `AI_PROVIDER` value must match a pipeline name in your active `config/ai-agent.yaml`. Example names provided below exist in `config/ai-agent.yaml` or the example templates under `config/`.
 
 ```asterisk
 [from-ai-agent]
@@ -81,20 +98,42 @@ exten => _X.,1,NoOp(Local channel starting AudioSocket for ${EXTEN})
 exten => s,1,NoOp(Local keepalive for AudioSocket leg)
  same => n,Wait(60)
  same => n,Hangup()
-{{ ... }}
+```
+
+### 3.2 Create Custom Destinations
+
+Create a FreePBX Custom Destination for each context you want to expose to IVRs or inbound routes.
+
+Steps:
+- Navigate to: Admin → Custom Destination.
+- Click “Add” to create a new destination.
+- Set Target to your dialplan entry, e.g.:
+  - `from-ai-agent,s,1` (local pipeline)
+  - `from-ai-agent-custom,s,1` (hybrid pipeline override)
+  - `from-ai-agent-deepgram,s,1` (Deepgram agent)
+  - `from-ai-agent-openai,s,1` (OpenAI pipeline)
+- Give it a Description (e.g., “OpenAI Agent”).
+- Submit and Apply Config.
+
+Snapshot 2:
+
+![Custom Destination - Target](freepbx/img/snapshot-2-custom-destination.png)
+
+### 3.3 Example ai-agent.yaml excerpt
+
+```yaml
+asterisk:
   host: 127.0.0.1
   port: 8088
   username: asterisk-ai-voice-agent
   password: ${ASTERISK_ARI_PASSWORD}
   app_name: asterisk-ai-voice-agent
 
-# AudioSocket listener
 audiosocket:
   host: 0.0.0.0
   port: 8090
   format: ulaw
 
-# Streaming transport defaults (Milestone 5)
 streaming:
   min_start_ms: 120
   low_watermark_ms: 80
@@ -104,7 +143,6 @@ streaming:
 barge_in:
   post_tts_end_protection_ms: 350
 
-# Providers (examples)
 providers:
   deepgram:
     api_key: ${DEEPGRAM_API_KEY}
@@ -116,7 +154,6 @@ providers:
     enable_llm: true
     enable_tts: true
 
-# Pipelines (Milestone 7)
 pipelines:
   default:
     stt: openai_stt
