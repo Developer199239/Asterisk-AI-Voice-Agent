@@ -76,23 +76,21 @@ This project is designed to be the most powerful, flexible, and easy-to-use open
     cd Asterisk-AI-Voice-Agent
     ```
 
-2.  **Download local models (optional; only if you plan to use the Local provider)**:
+2.  **Run the installer (recommended)**:
     ```bash
-    make model-setup
+    ./install.sh
     ```
-    The helper invokes `scripts/model_setup.py`, detects your hardware tier, downloads the STT/LLM/TTS bundles listed in `models/registry.json`, and skips work when everything is already cached.
+    The installer will:
+    - Verify Docker, detect Compose (`docker-compose` vs `docker compose`).
+    - Run Asterisk module preflight checks.
+    - Copy `.env.example` to `.env` (if needed) and prompt for ARI and API keys.
+    - Let you pick a config template under `config/` and write `config/ai-agent.yaml`.
+    - Offer to download local models if you choose a Local/Hybrid profile.
+    - Optionally build and start the stack.
 
-3.  **Configure your environment and select a config template**:
-    - Copy `.env.example` to `.env` and set your values (Asterisk ARI, provider API keys). See `.env.example` comments.
-    - Choose ONE of the example configs under `config/` and copy to `config/ai-agent.yaml`:
-      - `config/ai-agent.example.yaml` (general; pipelines + monolithic fallback)
-      - `config/ai-agent.local.yaml` (Local-only pipeline)
-      - `config/ai-agent.cloud-openai.yaml` (OpenAI-only pipeline)
-      - `config/ai-agent.hybrid.yaml` (Local STT + OpenAI LLM + Deepgram TTS)
-      - `config/ai-agent.openai-agent.yaml` (Monolithic OpenAI Realtime agent)
-      - `config/ai-agent.deepgram-agent.yaml` (Monolithic Deepgram Voice Agent)
+    If you prefer manual setup, follow the steps in the Configuration section below.
 
-4.  **Start the services**:
+3.  **Start the services** (if you didn’t let the installer do it):
     ```bash
     docker-compose up --build -d
     ```
