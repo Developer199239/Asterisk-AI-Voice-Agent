@@ -118,7 +118,7 @@ Current milestones and acceptance criteria live in [`docs/plan/ROADMAP.md`](docs
 
 ## 🤝 Contributing
 
-Contributions are welcome! Please see our [Contributing Guide](CONTRIBUTING.md) for more details on how to get involved.
+Contributions are welcome! Please see our [Contributing Guide](../../CONTRIBUTING.md) for more details on how to get involved.
 
 ## 💬 Community
 
@@ -129,7 +129,7 @@ Have questions or want to chat with other users? Join our community:
 
 ## 📝 License
 
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License. See the [LICENSE](../../LICENSE) file for details.
 
 ## 🙏 Show Your Support
 
