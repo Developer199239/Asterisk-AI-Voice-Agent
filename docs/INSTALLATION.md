@@ -149,18 +149,19 @@ Use an AudioSocket-first dialplan so Asterisk streams raw audio to the agent bef
 
 **Example Dialplan (`extensions.conf`):**
 
-```
 [from-internal]
 exten => 1234,1,NoOp(Sending call to AI Voice Agent)
  same => n,Set(AUDIOSOCKET_HOST=127.0.0.1)
  same => n,Set(AUDIOSOCKET_PORT=8090)
  same => n,AudioSocket(${AUDIOSOCKET_HOST}:${AUDIOSOCKET_PORT},ulaw)
+ same => n,Stasis(asterisk-ai-voice-agent)
+ same => n,Hangup()
+
 ## 4. Troubleshooting
 
 - **Media path not found (Playback fails on sound:ai-generated/...)**:
   - Ensure the media directory and symlink exist on the host:
     ```bash
-    sudo mkdir -p /mnt/asterisk_media/ai-generated
     sudo mkdir -p /var/lib/asterisk/sounds
     # Use real asterisk UID/GID if present; FreePBX often uses 995:995
     AST_UID=$(id -u asterisk 2>/dev/null || echo 995)
