@@ -195,6 +195,24 @@ class LocalAIServer:
         # Process buffer after N ms of silence (idle finalizer). Configurable via env.
         self.buffer_timeout_ms = int(os.getenv("LOCAL_STT_IDLE_MS", "3000"))
 
+    def _resolve_vosk_model_path(self, path: str) -> str:
+        """Resolve the correct Vosk model directory.
+
+        Some archives extract with an extra nesting level. We prefer a directory
+        that contains a 'conf' subdirectory which is expected by Vosk.
+        """
+        try:
+            if os.path.isdir(path) and os.path.isdir(os.path.join(path, "conf")):
+                return path
+            if os.path.isdir(path):
+                for entry in os.listdir(path):
+                    candidate = os.path.join(path, entry)
+                    if os.path.isdir(candidate) and os.path.isdir(os.path.join(candidate, "conf")):
+                        return candidate
+        except Exception as exc:  # pragma: no cover - defensive
+            logging.debug("Vosk model path resolution skipped", exc_info=True)
+        return path
+
     async def initialize_models(self):
         """Initialize all AI models with proper error handling"""
         logging.info("🚀 Initializing enhanced AI models for MVP...")
@@ -209,10 +227,25 @@ class LocalAIServer:
     async def _load_stt_model(self):
         """Load STT model with 16kHz support"""
         try:
-            if not os.path.exists(self.stt_model_path):
-                raise FileNotFoundError(f"STT model not found at {self.stt_model_path}")
+            # Resolve nested model directory if needed
+            resolved_path = self._resolve_vosk_model_path(self.stt_model_path)
+            if not os.path.exists(resolved_path):
+                raise FileNotFoundError(f"STT model not found at {resolved_path}")
 
-            self.stt_model = VoskModel(self.stt_model_path)
+            # Extra sanity: require 'conf' folder inside the model dir
+            if not os.path.isdir(os.path.join(resolved_path, "conf")):
+                # Provide a helpful listing for debugging
+                try:
+                    listing = ", ".join(os.listdir(resolved_path))
+                except Exception:
+                    listing = "<unavailable>"
+                raise FileNotFoundError(
+                    f"STT model at {resolved_path} does not appear to be a valid Vosk model (missing 'conf'). Contents: {listing}"
+                )
+
+            self.stt_model = VoskModel(resolved_path)
+            # Keep the resolved path for reference
+            self.stt_model_path = resolved_path
             logging.info("✅ STT model loaded: %s (16kHz native)", self.stt_model_path)
         except Exception as exc:
             logging.error("❌ Failed to load STT model: %s", exc)
