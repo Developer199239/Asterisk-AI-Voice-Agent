@@ -71,8 +71,12 @@ ps:
 
 ## model-setup: Detect host tier, download required local provider models, and skip if cached
 model-setup:
-	@echo "$(PY_INFO)"; \
-	$(PY) scripts/model_setup.py --assume-yes
+	@if command -v python3 >/dev/null 2>&1; then \
+		python3 scripts/model_setup.py --assume-yes; \
+	else \
+		echo "Host python3 not found; running one-off container for model setup."; \
+		docker-compose run --rm ai-engine python /app/scripts/model_setup.py --assume-yes; \
+	fi
 
 # ==============================================================================
 # DEPLOYMENT & SERVER MANAGEMENT
