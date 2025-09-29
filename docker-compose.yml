@@ -10,6 +10,7 @@ services:
       - ./main.py:/app/main.py
       - ./config:/app/config
       - ./scripts:/app/scripts
+      - ./models:/app/models
       - /mnt/asterisk_media:/mnt/asterisk_media
     env_file:
       - .env

@@ -71,11 +71,14 @@ ps:
 
 ## model-setup: Detect host tier, download required local provider models, and skip if cached
 model-setup:
-	@if command -v python3 >/dev/null 2>&1; then \
+	@if [ -f scripts/model_setup.sh ]; then \
+		echo "Using bash-based model setup"; \
+		bash scripts/model_setup.sh --assume-yes; \
+	elif command -v python3 >/dev/null 2>&1; then \
 		python3 scripts/model_setup.py --assume-yes; \
 	else \
-		echo "Host python3 not found; running one-off container for model setup."; \
-		docker-compose run --rm ai-engine python /app/scripts/model_setup.py --assume-yes; \
+		echo "No host bash/python found or script missing; running one-off container for model setup."; \
+		docker-compose run --rm ai-engine bash /app/scripts/model_setup.sh --assume-yes || docker-compose run --rm ai-engine python /app/scripts/model_setup.py --assume-yes; \
 	fi
 
 # ==============================================================================
