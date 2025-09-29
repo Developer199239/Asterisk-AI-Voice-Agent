@@ -23,7 +23,7 @@ services:
     network_mode: "host"
     depends_on:
       local-ai-server:
-        condition: service_healthy
+        condition: service_started
 
   local-ai-server:
     build:
@@ -55,7 +55,7 @@ services:
     network_mode: "host"
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import socket; s=socket.socket(); s.settimeout(1); s.connect(('127.0.0.1',8765)); s.close()\""]
-      interval: 5s
-      timeout: 2s
-      retries: 60
-      start_period: 10s
+      interval: 10s
+      timeout: 5s
+      retries: 180
+      start_period: 60s
