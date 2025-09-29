@@ -14,6 +14,32 @@ The Asterisk AI Voice Agent v3.0 integrates with FreePBX by combining ARI call c
 - Port **8090/TCP** accessible for AudioSocket connections (plus 18080/UDP if retaining the legacy RTP path).
 - Valid `.env` containing ARI credentials and provider API keys.
 
+### 2.2 Create/Verify ARI User in FreePBX
+
+You must have a non-readonly ARI user for the engine to control calls.
+
+Steps (FreePBX UI):
+
+1. Navigate to: `Settings → Asterisk REST Interface Users`.
+2. Click `+ Add User` (or edit an existing one).
+3. Set:
+   - User Name: e.g., `AIAgent`
+   - User Password: a strong password
+   - Password Type: `Crypt` or `Plain Text`
+   - Read Only: `No`
+4. Save Changes and “Apply Config”.
+
+Use these in your `.env`:
+
+```env
+ASTERISK_ARI_USERNAME=AIAgent
+ASTERISK_ARI_PASSWORD=your-strong-password
+```
+
+Snapshot:
+
+![FreePBX ARI User](freepbx/img/snapshot-3-ari-user.png)
+
 ### 2.1 Prerequisite checks
 
 - Verify ARI and AudioSocket modules:

@@ -16,6 +16,7 @@ This project is designed to be the most powerful, flexible, and easy-to-use open
 
 - **Modular AI Providers**: Easily switch between cloud and local AI providers.
   - ✅ **Deepgram Voice Agent**: Fully implemented for a powerful cloud-based solution.
+  - ✅ **OpenAI Realtime**: Works out of the box—just set `OPENAI_API_KEY` in `.env` and select the OpenAI template/provider.
   - ✅ **Local AI Server**: A dedicated container that runs local models (Vosk for STT, Llama for LLM, and Piper for TTS) for full control and privacy.
 - **High-Performance Architecture**: A lean `ai-engine` for call control and a separate `local-ai-server` for heavy AI processing ensures stability and scalability.
 - **Hybrid ARI Architecture**: Call control using ARI with "answer caller → create mixing bridge → add caller → create ExternalMedia and add it to bridge" flow.
@@ -50,6 +51,21 @@ Hello World (optional, Local AI):
 python3 tests/test_local_ai_server_protocol.py  # With local-ai-server running
 ```
 Should report `3/3` tests passed.
+
+#### OpenAI Realtime quick start (cloud-only)
+
+If you want to use OpenAI Realtime out of the box:
+
+1) During `./install.sh`, select the OpenAI template when prompted (it writes `config/ai-agent.openai-agent.yaml` to `config/ai-agent.yaml`).
+2) Add your API key in `.env`:
+   ```bash
+   echo "OPENAI_API_KEY=sk-..." >> .env
+   ```
+3) Start just the engine (no local models needed):
+   ```bash
+   docker-compose up -d ai-engine
+   ```
+4) Route a test call as in the FreePBX guide.
 
 ### Prerequisites
 
