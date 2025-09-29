@@ -6,14 +6,13 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: ai_engine
-    user: "root"
+    user: "appuser"
     volumes:
       - ./src:/app/src
       - ./main.py:/app/main.py
       - ./config:/app/config
       - ./scripts:/app/scripts
       - /mnt/asterisk_media:/mnt/asterisk_media
-      - /var/lib/asterisk/sounds:/var/lib/asterisk/sounds
     env_file:
       - .env
     environment:

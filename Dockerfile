@@ -21,9 +21,10 @@ RUN apt-get update && apt-get install -y sox && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Create non-root user for security
-RUN useradd --create-home appuser
-USER appuser
+# Create non-root user for security and grant access to asterisk group (GID 995)
+RUN groupadd -g 995 asterisk || true \
+    && useradd --create-home appuser \
+    && usermod -aG 995 appuser
 
 # Copy the virtual environment from builder
 COPY --from=builder /opt/venv /opt/venv
@@ -37,4 +38,5 @@ COPY --chown=appuser:appuser main.py ./
 ENV PATH="/opt/venv/bin:$PATH"
 
 # Run the application
+USER appuser
 CMD ["python", "main.py"]

@@ -26,6 +26,31 @@ This project is designed to be the most powerful, flexible, and easy-to-use open
 
 ## 🚀 Quick Start
 
+Follow these 3 steps to get a working agent.
+
+1) Clone and install
+```bash
+git clone https://github.com/hkjarral/Asterisk-AI-Voice-Agent.git
+cd Asterisk-AI-Voice-Agent
+./install.sh
+```
+Pick a config template when prompted. The installer will set up the media path symlink and optionally start services.
+
+2) Verify health
+```bash
+curl http://127.0.0.1:15000/health
+```
+Expect `"audiosocket_listening": true`.
+
+3) FreePBX dialplan (AudioSocket-first)
+Add the context from `docs/FreePBX-Integration-Guide.md` (`from-ai-agent`, etc.), then route a test call to it.
+
+Hello World (optional, Local AI):
+```bash
+python3 tests/test_local_ai_server_protocol.py  # With local-ai-server running
+```
+Should report `3/3` tests passed.
+
 ### Prerequisites
 
 - **Asterisk 18+** or **FreePBX 15+** with ARI enabled.

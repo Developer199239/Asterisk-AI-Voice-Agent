@@ -5,6 +5,10 @@ from typing import Callable, Optional, List, Dict, Any
 import websockets.exceptions
 
 from structlog import get_logger
+from ..audio.resampler import (
+    mulaw_to_pcm16le,
+    resample_audio,
+)
 from ..config import LLMConfig
 from .base import AIProviderInterface
 
@@ -24,6 +28,13 @@ class DeepgramProvider(AIProviderInterface):
         self._first_output_chunk_logged: bool = False
         self._closing: bool = False
         self._closed: bool = False
+        # Maintain resample state for smoother conversion
+        self._input_resample_state = None
+        # Cache declared Deepgram input settings
+        try:
+            self._dg_input_rate = int(getattr(self.config, 'input_sample_rate_hz', 8000) or 8000)
+        except Exception:
+            self._dg_input_rate = 8000
 
     @property
     def supported_codecs(self) -> List[str]:
@@ -56,7 +67,7 @@ class DeepgramProvider(AIProviderInterface):
         """Builds and sends the V1 Settings message to the Deepgram Voice Agent."""
         # Derive codec settings from config with safe defaults
         input_encoding = getattr(self.config, 'input_encoding', None) or 'linear16'
-        input_sample_rate = int(getattr(self.config, 'input_sample_rate_hz', 16000) or 16000)
+        input_sample_rate = int(getattr(self.config, 'input_sample_rate_hz', 8000) or 8000)
         output_encoding = getattr(self.config, 'output_encoding', None) or 'mulaw'
         output_sample_rate = int(getattr(self.config, 'output_sample_rate_hz', 8000) or 8000)
 
@@ -84,10 +95,23 @@ class DeepgramProvider(AIProviderInterface):
         )
 
     async def send_audio(self, audio_chunk: bytes):
-        if self.websocket:
+        """Send caller audio to Deepgram in the declared input format.
+
+        Engine upstream uses AudioSocket with μ-law 8 kHz by default. Convert to
+        linear16 at the configured Deepgram input sample rate before sending.
+        """
+        if self.websocket and audio_chunk:
             try:
                 self._is_audio_flowing = True
-                await self.websocket.send(audio_chunk)
+                # 1) μ-law 8kHz -> PCM16 8kHz
+                pcm8k = mulaw_to_pcm16le(audio_chunk)
+                payload = pcm8k
+                # 2) Resample if Deepgram expects 16k (or another rate)
+                if int(self._dg_input_rate) != 8000:
+                    payload, self._input_resample_state = resample_audio(
+                        pcm8k, 8000, int(self._dg_input_rate), state=self._input_resample_state
+                    )
+                await self.websocket.send(payload)
             except websockets.exceptions.ConnectionClosed as e:
                 logger.debug("Could not send audio packet: Connection closed.", code=e.code, reason=e.reason)
             except Exception:

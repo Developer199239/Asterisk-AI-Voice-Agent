@@ -61,8 +61,8 @@ The installation is handled by an interactive script that will guide you through
 First, clone the project repository to a directory on your server.
 
 ```bash
-git clone https://github.com/your-repo/asterisk-ai-voice-agent.git
-cd asterisk-ai-voice-agent
+git clone https://github.com/hkjarral/Asterisk-AI-Voice-Agent.git
+cd Asterisk-AI-Voice-Agent
 ```
 
 ### Step 2.2: Run the Installation Script
@@ -95,7 +95,7 @@ You will be asked to choose an AI provider.
 Based on your selection, you will need to provide API keys.
 
 -   **Deepgram API Key**: Required if you select the Deepgram provider.
--   **OpenAI API Key**: Required for both Deepgram (for the LLM) and the planned OpenAI provider.
+-   **OpenAI API Key**: Required if you select any OpenAI-based pipeline.
 
 #### Asterisk ARI Configuration
 
@@ -105,13 +105,11 @@ You will need to provide the connection details for your Asterisk server's ARI.
 -   **ARI Username**: The username for an ARI user.
 -   **ARI Password**: The password for the ARI user.
 
-#### Business Configuration
+### What You'll Need (at a glance)
 
-Customize the AI's personality.
-
--   **Company Name**: The name of your company (e.g., "Jugaar LLC").
--   **AI Role**: The role the AI will play (e.g., "Customer Service Assistant").
--   **Greeting**: The initial greeting the AI will say to the caller.
+- A Linux server with Docker + Docker Compose
+- Asterisk 18+ or FreePBX 15+ with ARI enabled
+- API keys for your chosen provider (optional): `OPENAI_API_KEY`, `DEEPGRAM_API_KEY`
 
 ### Step 2.4: Configuration File Generation
 
@@ -157,19 +155,34 @@ exten => 1234,1,NoOp(Sending call to AI Voice Agent)
  same => n,Set(AUDIOSOCKET_HOST=127.0.0.1)
  same => n,Set(AUDIOSOCKET_PORT=8090)
  same => n,AudioSocket(${AUDIOSOCKET_HOST}:${AUDIOSOCKET_PORT},ulaw)
- same => n,Stasis(asterisk-ai-voice-agent)
- same => n,Hangup()
-```
-
 ## 4. Troubleshooting
 
+- **Media path not found (Playback fails on sound:ai-generated/...)**:
+  - Ensure the media directory and symlink exist on the host:
+    ```bash
+    sudo mkdir -p /mnt/asterisk_media/ai-generated
+    sudo mkdir -p /var/lib/asterisk/sounds
+    # Use real asterisk UID/GID if present; FreePBX often uses 995:995
+    AST_UID=$(id -u asterisk 2>/dev/null || echo 995)
+    AST_GID=$(id -g asterisk 2>/dev/null || echo 995)
+    sudo chown -R $AST_UID:$AST_GID /mnt/asterisk_media
+    sudo chmod 775 /mnt/asterisk_media /mnt/asterisk_media/ai-generated
+    sudo ln -sfn /mnt/asterisk_media/ai-generated /var/lib/asterisk/sounds/ai-generated
+    ls -ld /var/lib/asterisk/sounds/ai-generated
+    ```
+  - Optional for performance (Linux): mount tmpfs
+    ```bash
+    sudo mount -t tmpfs -o size=128m,mode=0775,uid=$AST_UID,gid=$AST_GID tmpfs /mnt/asterisk_media
+    ```
+  - Verify at runtime that `ai-engine` logs show files being written to `/mnt/asterisk_media/ai-generated` and calls can play `sound:ai-generated/<name>`.
+
+## 4. Troubleshooting
 -   **Cannot connect to ARI**:
     -   Verify that your Asterisk `host`, `username`, and `password` are correct in the `.env` file.
     -   Ensure that the ARI port (usually 8088) is accessible from the Docker container.
     -   Check your `ari.conf` and `http.conf` in Asterisk.
 -   **AI does not respond**:
     -   Check that your API keys in the `.env` file are correct.
-    -   View the container logs (`docker-compose logs -f ai-engine`) for any provider/API errors.
 -   **Audio Quality Issues**:
     -   Confirm AudioSocket is connected (see Asterisk CLI and `ai-engine` logs).
     -   Use a tmpfs for media files (e.g., `/mnt/asterisk_media`) to minimize I/O latency for file-based playback.

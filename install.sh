@@ -15,6 +15,62 @@ print_info() {
     echo -e "${COLOR_BLUE}INFO: $1${COLOR_RESET}"
 }
 
+# --- Media path setup ---
+setup_media_paths() {
+    print_info "Setting up media directories and symlink for Asterisk playback..."
+
+    # Determine sudo
+    if [ "$(id -u)" -ne 0 ]; then SUDO="sudo"; else SUDO=""; fi
+
+    # Resolve asterisk uid/gid (fall back to 995 which is common on FreePBX)
+    AST_UID=$(id -u asterisk 2>/dev/null || echo 995)
+    AST_GID=$(id -g asterisk 2>/dev/null || echo 995)
+
+    # Create host media directories
+    $SUDO mkdir -p /mnt/asterisk_media/ai-generated || true
+    $SUDO mkdir -p /var/lib/asterisk/sounds || true
+
+    # Ownership and permissions for fast file IO and Asterisk readability
+    $SUDO chown -R "$AST_UID:$AST_GID" /mnt/asterisk_media || true
+    $SUDO chmod 775 /mnt/asterisk_media /mnt/asterisk_media/ai-generated || true
+
+    # Create/update symlink so sound:ai-generated/... resolves
+    if [ -L /var/lib/asterisk/sounds/ai-generated ] || [ -e /var/lib/asterisk/sounds/ai-generated ]; then
+        $SUDO rm -rf /var/lib/asterisk/sounds/ai-generated || true
+    fi
+    $SUDO ln -sfn /mnt/asterisk_media/ai-generated /var/lib/asterisk/sounds/ai-generated
+    print_success "Linked /var/lib/asterisk/sounds/ai-generated -> /mnt/asterisk_media/ai-generated"
+
+    # Optional tmpfs mount for performance (Linux only)
+    if command -v mount >/dev/null 2>&1 && uname | grep -qi linux; then
+        read -p "Mount /mnt/asterisk_media as tmpfs for low‑latency playback? [y/N]: " mount_tmpfs
+        if [[ "$mount_tmpfs" =~ ^[Yy]$ ]]; then
+            if ! mountpoint -q /mnt/asterisk_media 2>/dev/null; then
+                $SUDO mount -t tmpfs -o size=128m,mode=0775,uid=$AST_UID,gid=$AST_GID tmpfs /mnt/asterisk_media && \
+                print_success "Mounted tmpfs at /mnt/asterisk_media (128M)."
+            else
+                print_info "/mnt/asterisk_media is already a mountpoint; skipping tmpfs mount."
+            fi
+            read -p "Persist tmpfs in /etc/fstab (advanced)? [y/N]: " persist_tmpfs
+            if [[ "$persist_tmpfs" =~ ^[Yy]$ ]]; then
+                FSTAB_LINE="tmpfs /mnt/asterisk_media tmpfs defaults,size=128m,mode=0775,uid=$AST_UID,gid=$AST_GID 0 0"
+                if ! grep -q "/mnt/asterisk_media" /etc/fstab 2>/dev/null; then
+                    echo "$FSTAB_LINE" | $SUDO tee -a /etc/fstab >/dev/null && print_success "Added tmpfs entry to /etc/fstab."
+                else
+                    print_info "/etc/fstab already contains an entry for /mnt/asterisk_media; skipping."
+                fi
+            fi
+        fi
+    fi
+
+    # Quick verification
+    if [ -d /var/lib/asterisk/sounds/ai-generated ]; then
+        print_success "Media path ready: /var/lib/asterisk/sounds/ai-generated -> /mnt/asterisk_media/ai-generated"
+    else
+        print_warning "Media path symlink missing; please ensure permissions and rerun setup."
+    fi
+}
+
 print_success() {
     echo -e "${COLOR_GREEN}SUCCESS: $1${COLOR_RESET}"
 }
@@ -188,6 +244,7 @@ main() {
     check_asterisk_modules
     configure_env
     select_config_template
+    setup_media_paths
     start_services
 }
 

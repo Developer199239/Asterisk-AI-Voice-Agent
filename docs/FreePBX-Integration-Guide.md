@@ -61,6 +61,20 @@ Append the following contexts to `extensions_custom.conf` (or the appropriate cu
 Note:
 - The `AI_PROVIDER` value must match a pipeline name in your active `config/ai-agent.yaml`. Example names provided below exist in `config/ai-agent.yaml` or the example templates under `config/`.
 
+#### 3.1.1 AI_PROVIDER name mapping (by template)
+
+| Template you copied to `config/ai-agent.yaml` | Use these `AI_PROVIDER` values in dialplan | Where they come from |
+| --- | --- | --- |
+| `config/ai-agent.yaml` (default) | `local_only`, `hybrid_support`, `default` | Pipelines defined in `config/ai-agent.yaml` |
+| `config/ai-agent.hybrid.yaml` | `hybrid` | `pipelines.hybrid` in that template |
+| `config/ai-agent.cloud-openai.yaml` | `cloud_only_openai` | `pipelines.cloud_only_openai` in that template |
+| `config/ai-agent.openai-agent.yaml` | Provider override: `openai` | Monolithic provider (no pipeline needed) |
+| `config/ai-agent.deepgram-agent.yaml` | Provider override: `deepgram` (or `deepgram_agent`) | Monolithic provider (no pipeline needed) |
+
+Provider overrides vs Pipelines:
+- If you set `AI_PROVIDER` to a known provider alias/name (e.g., `openai`, `deepgram`), the engine uses that provider directly for this call.
+- Otherwise, `AI_PROVIDER` is treated as a pipeline name and must exactly match `pipelines.<name>` in your active config.
+
 ```asterisk
 [from-ai-agent]
 exten => s,1,NoOp(Handing call directly to AI engine (default provider))
@@ -174,6 +188,22 @@ docker-compose logs -f ai-engine
 ```
 
 For cloud-only deployments you may run `docker-compose up -d ai-engine`. Ensure logs show `AudioSocket server listening` and `Successfully connected to ARI` before testing calls.
+
+### Media path quick check (required for file playback)
+
+Verify Asterisk can see generated files:
+
+```bash
+ls -ld /var/lib/asterisk/sounds/ai-generated
+ls -l  /var/lib/asterisk/sounds/ai-generated | head
+```
+
+If the directory is missing or empty while calls run, rerun `./install.sh` and accept the media path setup, or manually create the symlink:
+
+```bash
+sudo mkdir -p /mnt/asterisk_media/ai-generated /var/lib/asterisk/sounds
+sudo ln -sfn /mnt/asterisk_media/ai-generated /var/lib/asterisk/sounds/ai-generated
+```
 
 ## 6. Verification & Testing
 
