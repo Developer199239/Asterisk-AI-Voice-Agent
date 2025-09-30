@@ -198,9 +198,17 @@ setup_light_cpu() {
   else
     echo "STT model already exists, skipping download"
   fi
-  # LLM (TinyLlama)
-  download "https://huggingface.co/jartine/tinyllama-1.1b-chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf" \
-           "$MODELS_DIR/llm/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf" "tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf"
+  # LLM (TinyLlama) - primary URL and fallback mirror
+  # Store consistently as: tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf
+  local tiny_dst="$MODELS_DIR/llm/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf"
+  # Prefer TheBloke repo
+  if ! download "https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf" \
+                 "$tiny_dst" "tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf"; then
+    echo "Primary TinyLlama URL failed, trying fallback mirror..." >&2
+    # Fallback mirror (file name differs slightly; we still save to $tiny_dst)
+    download "https://huggingface.co/hieupt/TinyLlama-1.1B-Chat-v1.0-Q4_K_M-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0-q4_k_m.gguf" \
+             "$tiny_dst" "tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf (mirror)"
+  fi
   # TTS (Piper Lessac medium)
   download "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx" \
            "$MODELS_DIR/tts/en_US-lessac-medium.onnx" "en_US-lessac-medium.onnx"

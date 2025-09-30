@@ -28,7 +28,28 @@ audio_transport: "audiosocket"
 downstream_mode: "stream"
 
 barge_in:
-  enabled: false
+  enabled: true
+  initial_protection_ms: 350
+  min_ms: 300
+  energy_threshold: 1500
+  cooldown_ms: 800
+  post_tts_end_protection_ms: 250
+
+vad:
+  # WebRTC VAD settings tuned for telephony
+  webrtc_aggressiveness: 1
+  webrtc_start_frames: 2
+  webrtc_end_silence_frames: 25   # ~500 ms end-silence
+  
+  # Utterance settings — allow short 1–2 s replies
+  min_utterance_duration_ms: 2000
+  max_utterance_duration_ms: 10000
+  utterance_padding_ms: 200
+  
+  # Fallback settings — faster fallback to ensure progress
+  fallback_enabled: true
+  fallback_interval_ms: 2000
+  fallback_buffer_size: 64000
 
 audiosocket:
   host: "0.0.0.0"
