@@ -233,27 +233,15 @@ setup_medium_cpu() {
 }
 
 setup_heavy_cpu() {
-  # STT (Vosk 0.22)
-  local stt_zip="$MODELS_DIR/stt/vosk-model-en-us-0.22.zip"
-  if [ ! -d "$MODELS_DIR/stt/vosk-model-en-us-0.22" ]; then
-    download "https://alphacephei.com/vosk/models/vosk-model-en-us-0.22.zip" "$stt_zip" "vosk-model-en-us-0.22"
-    extract_zip "$stt_zip" "$MODELS_DIR/stt/vosk-model-en-us-0.22"
-    rm -f "$stt_zip"
-  else
-    echo "STT model already exists, skipping download"
-  fi
-  # LLM (Llama-2 7B - NOT 13B for CPU-only!)
-  if [ ! -f "$MODELS_DIR/llm/llama-2-7b-chat.Q4_K_M.gguf" ]; then
-    download "https://huggingface.co/TheBloke/Llama-2-7B-Chat-GGUF/resolve/main/llama-2-7b-chat.Q4_K_M.gguf" \
-             "$MODELS_DIR/llm/llama-2-7b-chat.Q4_K_M.gguf" "llama-2-7b-chat.Q4_K_M.gguf"
-  else
-    echo "LLM model already exists, skipping download"
-  fi
-  # TTS (Piper Lessac high)
-  download "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/high/en_US-lessac-high.onnx" \
-           "$MODELS_DIR/tts/en_US-lessac-high.onnx" "en_US-lessac-high.onnx"
-  download "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/high/en_US-lessac-high.onnx.json" \
-           "$MODELS_DIR/tts/en_US-lessac-high.onnx.json" "en_US-lessac-high.onnx.json"
+  # Use Phi-3-mini by default for better out-of-box experience
+  # Llama-2-7B often too slow on older CPUs despite high core count
+  echo "⚠️  Note: HEAVY_CPU tier uses Phi-3-mini (3.8B) for reliability."
+  echo "   Llama-2-7B requires modern CPUs with AVX-512 and often times out."
+  echo "   Phi-3-mini provides 90% of the quality at 50% of the latency."
+  echo ""
+  
+  # Reuse MEDIUM_CPU setup (Phi-3-mini)
+  setup_medium_cpu
 }
 
 setup_medium_gpu() {
@@ -316,12 +304,12 @@ main() {
       echo "  LOCAL_LLM_INFER_TIMEOUT_SEC=20"
       ;;
     HEAVY_CPU)
-      echo "Expected performance: 20-25 seconds per conversational turn (Llama-2-7B)"
-      echo "Note: Requires modern CPU (2020+) for best results"
+      echo "Expected performance: 15-20 seconds per conversational turn (Phi-3-mini)"
+      echo "Note: Now uses Phi-3-mini instead of Llama-2-7B for reliability"
       echo "Recommended .env settings:"
-      echo "  LOCAL_LLM_CONTEXT=768"
-      echo "  LOCAL_LLM_MAX_TOKENS=32"
-      echo "  LOCAL_LLM_INFER_TIMEOUT_SEC=25"
+      echo "  LOCAL_LLM_CONTEXT=512"
+      echo "  LOCAL_LLM_MAX_TOKENS=28"
+      echo "  LOCAL_LLM_INFER_TIMEOUT_SEC=20"
       ;;
     MEDIUM_GPU)
       echo "Expected performance: 8-12 seconds per conversational turn (GPU-accelerated)"
@@ -355,7 +343,6 @@ main() {
   
   echo ""
   echo "✅ Models ready under $MODELS_DIR."
-  echo ""
   echo "Next steps:"
   echo "1. Update .env to point to downloaded models (or run install.sh autodetect)"
   echo "2. Start services: docker-compose up -d"

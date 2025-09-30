@@ -259,12 +259,14 @@ set_performance_params_for_llm() {
             print_info "  → Context: 512, Max tokens: 32, Timeout: 20s (optimized for Phi-3-mini)"
             ;;
         HEAVY_CPU)
-            upsert_env LOCAL_LLM_CONTEXT "768"
+            # Conservative settings - use Phi-3 params even for HEAVY_CPU
+            # Llama-2-7B often too slow without modern CPU features (AVX-512)
+            upsert_env LOCAL_LLM_CONTEXT "512"
             upsert_env LOCAL_LLM_BATCH "512"
-            upsert_env LOCAL_LLM_MAX_TOKENS "32"
+            upsert_env LOCAL_LLM_MAX_TOKENS "28"
             upsert_env LOCAL_LLM_TEMPERATURE "0.3"
-            upsert_env LOCAL_LLM_INFER_TIMEOUT_SEC "25"
-            print_info "  → Context: 768, Max tokens: 32, Timeout: 25s (optimized for Llama-2-7B CPU)"
+            upsert_env LOCAL_LLM_INFER_TIMEOUT_SEC "20"
+            print_info "  → Context: 512, Max tokens: 28, Timeout: 20s (conservative for reliability)"
             ;;
         HEAVY_GPU)
             upsert_env LOCAL_LLM_CONTEXT "1024"
