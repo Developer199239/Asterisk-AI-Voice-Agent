@@ -13,12 +13,13 @@ pipelines:
         base_url: "wss://api.openai.com/v1/realtime"
       llm:
         base_url: "https://api.openai.com/v1"
-        model: "gpt-4o-realtime-preview-2024-12-17"
+        chat_model: "gpt-4o-mini"
+        timeout_sec: 15.0
       tts:
         base_url: "https://api.openai.com/v1/audio/speech"
         format:
-          encoding: linear16
-          sample_rate: 24000
+          encoding: mulaw
+          sample_rate: 8000
 
 active_pipeline: cloud_only_openai
 
@@ -29,6 +30,26 @@ audiosocket:
   host: "0.0.0.0"
   port: 8090
   format: "ulaw"
+
+# Telephony-tuned barge-in and VAD
+barge_in:
+  enabled: true
+  initial_protection_ms: 350
+  min_ms: 300
+  energy_threshold: 1800
+  cooldown_ms: 800
+  post_tts_end_protection_ms: 250
+
+vad:
+  webrtc_aggressiveness: 1
+  webrtc_start_frames: 2
+  webrtc_end_silence_frames: 25
+  min_utterance_duration_ms: 2000
+  max_utterance_duration_ms: 10000
+  utterance_padding_ms: 200
+  fallback_enabled: true
+  fallback_interval_ms: 2000
+  fallback_buffer_size: 64000
 
 providers:
   openai:
