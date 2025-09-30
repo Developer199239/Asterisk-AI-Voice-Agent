@@ -59,6 +59,10 @@ class PlaybackManager:
             )
             self.media_dir = fallback
         
+        # Internal counters for unique playback IDs even within the same ns tick
+        self._last_playback_ts = 0
+        self._playback_seq = 0
+
         logger.info("PlaybackManager initialized",
                    media_dir=self.media_dir)
     
@@ -203,9 +207,15 @@ class PlaybackManager:
             return False
     
     def _generate_playback_id(self, call_id: str, playback_type: str) -> str:
-        """Generate deterministic playback ID."""
-        timestamp = int(time.time() * 1000)
-        return f"{playback_type}:{call_id}:{timestamp}"
+        """Generate deterministic, unique playback ID with ns resolution and sequence."""
+        ts = time.time_ns()
+        if ts == self._last_playback_ts:
+            self._playback_seq += 1
+        else:
+            self._last_playback_ts = ts
+            self._playback_seq = 0
+        suffix = f"-{self._playback_seq}" if self._playback_seq else ""
+        return f"{playback_type}:{call_id}:{ts}{suffix}"
     
     async def _create_audio_file(self, audio_bytes: bytes, playback_id: str) -> Optional[str]:
         """Create audio file from bytes."""
@@ -275,9 +285,6 @@ class PlaybackManager:
                            bridge_id=session.bridge_id,
                            media_uri=sound_uri,
                            playback_id=playback_id)
-            
-            logger.info("Final media directory",
-                        media_dir=self.media_dir)
             return success
             
         except Exception as e:
