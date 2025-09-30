@@ -61,14 +61,111 @@ ram_gb() {
   fi
 }
 
+detect_gpu() {
+  # Check NVIDIA GPU
+  if command -v nvidia-smi >/dev/null 2>&1; then
+    if nvidia-smi >/dev/null 2>&1; then
+      echo 1
+      return
+    fi
+  fi
+  # Check AMD GPU
+  if command -v rocm-smi >/dev/null 2>&1; then
+    if rocm-smi >/dev/null 2>&1; then
+      echo 1
+      return
+    fi
+  fi
+  echo 0
+}
+
+benchmark_cpu() {
+  # Quick CPU benchmark using simple computation (no model needed)
+  # Returns score: 1.0 = old CPU, 3.0 = mid-range, 5.0+ = modern high-end
+  local start end elapsed score
+  
+  # Time a simple CPU-intensive task
+  start=$(date +%s%N 2>/dev/null || echo 0)
+  if [ "$start" -eq 0 ]; then
+    # Fallback if nanoseconds not available
+    echo "2.5"
+    return
+  fi
+  
+  # CPU benchmark: calculate primes (simple but CPU-intensive)
+  awk 'BEGIN {
+    count = 0
+    for (i = 2; i <= 50000; i++) {
+      is_prime = 1
+      for (j = 2; j * j <= i; j++) {
+        if (i % j == 0) {
+          is_prime = 0
+          break
+        }
+      }
+      if (is_prime) count++
+    }
+  }' >/dev/null 2>&1
+  
+  end=$(date +%s%N)
+  elapsed=$(( (end - start) / 1000000 ))  # Convert to milliseconds
+  
+  # Score based on time (faster = higher score)
+  # Baseline: 5000ms = score 1.0, 1000ms = score 5.0
+  if [ "$elapsed" -gt 0 ]; then
+    score=$(awk -v t="$elapsed" 'BEGIN { printf "%.1f\n", 5000.0 / t }')
+  else
+    score="2.5"
+  fi
+  
+  echo "$score"
+}
+
 select_tier() {
-  local cores ram
+  local cores ram gpu cpu_score
   cores=$(cpu_cores)
   ram=$(ram_gb)
+  gpu=$(detect_gpu)
+  
   if [ -n "$TIER_OVERRIDE" ]; then echo "$TIER_OVERRIDE"; return; fi
-  if [ "$ram" -ge 32 ] && [ "$cores" -ge 8 ]; then echo HEAVY; return; fi
-  if [ "$ram" -ge 16 ] && [ "$cores" -ge 4 ]; then echo MEDIUM; return; fi
-  echo LIGHT
+  
+  # GPU-accelerated tiers
+  if [ "$gpu" -eq 1 ]; then
+    if [ "$ram" -ge 32 ] && [ "$cores" -ge 8 ]; then echo HEAVY_GPU; return; fi
+    if [ "$ram" -ge 16 ] && [ "$cores" -ge 4 ]; then echo MEDIUM_GPU; return; fi
+    echo LIGHT_CPU; return  # GPU but low resources, use CPU tier
+  fi
+  
+  # CPU-only tiers - benchmark CPU performance
+  echo "Benchmarking CPU performance..." >&2
+  cpu_score=$(benchmark_cpu)
+  echo "CPU benchmark score: $cpu_score (higher is better)" >&2
+  
+  # Select tier based on resources AND performance
+  if [ "$ram" -ge 32 ] && [ "$cores" -ge 16 ]; then
+    # Check if CPU is fast enough for HEAVY_CPU
+    if awk -v score="$cpu_score" 'BEGIN { exit !(score >= 4.0) }'; then
+      echo HEAVY_CPU
+      return
+    else
+      echo "⚠️  CPU performance too low for HEAVY_CPU tier (score: $cpu_score < 4.0)" >&2
+      echo "   Falling back to MEDIUM_CPU for better reliability" >&2
+      echo MEDIUM_CPU
+      return
+    fi
+  fi
+  
+  if [ "$ram" -ge 16 ] && [ "$cores" -ge 8 ]; then
+    echo MEDIUM_CPU
+    return
+  fi
+  
+  if [ "$ram" -ge 8 ] && [ "$cores" -ge 4 ]; then
+    echo LIGHT_CPU
+    return
+  fi
+  
+  echo LIGHT_CPU
 }
 
 download() { # url dest_path label
@@ -91,12 +188,16 @@ extract_zip() { # zip_path target_dir
   fi
 }
 
-setup_light() {
+setup_light_cpu() {
   # STT (Vosk small)
   local stt_zip="$MODELS_DIR/stt/vosk-model-small-en-us-0.15.zip"
-  download "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip" "$stt_zip" "vosk-model-small-en-us-0.15"
-  extract_zip "$stt_zip" "$MODELS_DIR/stt/vosk-model-small-en-us-0.15"
-  rm -f "$stt_zip"
+  if [ ! -d "$MODELS_DIR/stt/vosk-model-small-en-us-0.15" ]; then
+    download "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip" "$stt_zip" "vosk-model-small-en-us-0.15"
+    extract_zip "$stt_zip" "$MODELS_DIR/stt/vosk-model-small-en-us-0.15"
+    rm -f "$stt_zip"
+  else
+    echo "STT model already exists, skipping download"
+  fi
   # LLM (TinyLlama)
   download "https://huggingface.co/jartine/tinyllama-1.1b-chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf" \
            "$MODELS_DIR/llm/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf" "tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf"
@@ -107,15 +208,23 @@ setup_light() {
            "$MODELS_DIR/tts/en_US-lessac-medium.onnx.json" "en_US-lessac-medium.onnx.json"
 }
 
-setup_medium() {
+setup_medium_cpu() {
   # STT (Vosk 0.22)
   local stt_zip="$MODELS_DIR/stt/vosk-model-en-us-0.22.zip"
-  download "https://alphacephei.com/vosk/models/vosk-model-en-us-0.22.zip" "$stt_zip" "vosk-model-en-us-0.22"
-  extract_zip "$stt_zip" "$MODELS_DIR/stt/vosk-model-en-us-0.22"
-  rm -f "$stt_zip"
-  # LLM (Llama-2 7B)
-  download "https://huggingface.co/TheBloke/Llama-2-7B-Chat-GGUF/resolve/main/llama-2-7b-chat.Q4_K_M.gguf" \
-           "$MODELS_DIR/llm/llama-2-7b-chat.Q4_K_M.gguf" "llama-2-7b-chat.Q4_K_M.gguf"
+  if [ ! -d "$MODELS_DIR/stt/vosk-model-en-us-0.22" ]; then
+    download "https://alphacephei.com/vosk/models/vosk-model-en-us-0.22.zip" "$stt_zip" "vosk-model-en-us-0.22"
+    extract_zip "$stt_zip" "$MODELS_DIR/stt/vosk-model-en-us-0.22"
+    rm -f "$stt_zip"
+  else
+    echo "STT model already exists, skipping download"
+  fi
+  # LLM (Phi-3-mini - better than Llama-2-7B for CPU)
+  if [ ! -f "$MODELS_DIR/llm/phi-3-mini-4k-instruct.Q4_K_M.gguf" ]; then
+    download "https://huggingface.co/microsoft/Phi-3-mini-4k-instruct-gguf/resolve/main/Phi-3-mini-4k-instruct-q4.gguf" \
+             "$MODELS_DIR/llm/phi-3-mini-4k-instruct.Q4_K_M.gguf" "phi-3-mini-4k-instruct.Q4_K_M.gguf"
+  else
+    echo "LLM model already exists, skipping download"
+  fi
   # TTS (Piper Lessac medium)
   download "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx" \
            "$MODELS_DIR/tts/en_US-lessac-medium.onnx" "en_US-lessac-medium.onnx"
@@ -123,15 +232,52 @@ setup_medium() {
            "$MODELS_DIR/tts/en_US-lessac-medium.onnx.json" "en_US-lessac-medium.onnx.json"
 }
 
-setup_heavy() {
+setup_heavy_cpu() {
   # STT (Vosk 0.22)
   local stt_zip="$MODELS_DIR/stt/vosk-model-en-us-0.22.zip"
-  download "https://alphacephei.com/vosk/models/vosk-model-en-us-0.22.zip" "$stt_zip" "vosk-model-en-us-0.22"
-  extract_zip "$stt_zip" "$MODELS_DIR/stt/vosk-model-en-us-0.22"
-  rm -f "$stt_zip"
-  # LLM (Llama-2 13B)
-  download "https://huggingface.co/TheBloke/Llama-2-13B-chat-GGUF/resolve/main/llama-2-13b-chat.Q4_K_M.gguf" \
-           "$MODELS_DIR/llm/llama-2-13b-chat.Q4_K_M.gguf" "llama-2-13b-chat.Q4_K_M.gguf"
+  if [ ! -d "$MODELS_DIR/stt/vosk-model-en-us-0.22" ]; then
+    download "https://alphacephei.com/vosk/models/vosk-model-en-us-0.22.zip" "$stt_zip" "vosk-model-en-us-0.22"
+    extract_zip "$stt_zip" "$MODELS_DIR/stt/vosk-model-en-us-0.22"
+    rm -f "$stt_zip"
+  else
+    echo "STT model already exists, skipping download"
+  fi
+  # LLM (Llama-2 7B - NOT 13B for CPU-only!)
+  if [ ! -f "$MODELS_DIR/llm/llama-2-7b-chat.Q4_K_M.gguf" ]; then
+    download "https://huggingface.co/TheBloke/Llama-2-7B-Chat-GGUF/resolve/main/llama-2-7b-chat.Q4_K_M.gguf" \
+             "$MODELS_DIR/llm/llama-2-7b-chat.Q4_K_M.gguf" "llama-2-7b-chat.Q4_K_M.gguf"
+  else
+    echo "LLM model already exists, skipping download"
+  fi
+  # TTS (Piper Lessac high)
+  download "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/high/en_US-lessac-high.onnx" \
+           "$MODELS_DIR/tts/en_US-lessac-high.onnx" "en_US-lessac-high.onnx"
+  download "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/high/en_US-lessac-high.onnx.json" \
+           "$MODELS_DIR/tts/en_US-lessac-high.onnx.json" "en_US-lessac-high.onnx.json"
+}
+
+setup_medium_gpu() {
+  # Same as MEDIUM_CPU but with note about GPU usage
+  setup_heavy_cpu  # Use Llama-2-7B for GPU tiers too
+}
+
+setup_heavy_gpu() {
+  # STT (Vosk 0.22)
+  local stt_zip="$MODELS_DIR/stt/vosk-model-en-us-0.22.zip"
+  if [ ! -d "$MODELS_DIR/stt/vosk-model-en-us-0.22" ]; then
+    download "https://alphacephei.com/vosk/models/vosk-model-en-us-0.22.zip" "$stt_zip" "vosk-model-en-us-0.22"
+    extract_zip "$stt_zip" "$MODELS_DIR/stt/vosk-model-en-us-0.22"
+    rm -f "$stt_zip"
+  else
+    echo "STT model already exists, skipping download"
+  fi
+  # LLM (Llama-2 13B - only for GPU)
+  if [ ! -f "$MODELS_DIR/llm/llama-2-13b-chat.Q4_K_M.gguf" ]; then
+    download "https://huggingface.co/TheBloke/Llama-2-13B-chat-GGUF/resolve/main/llama-2-13b-chat.Q4_K_M.gguf" \
+             "$MODELS_DIR/llm/llama-2-13b-chat.Q4_K_M.gguf" "llama-2-13b-chat.Q4_K_M.gguf"
+  else
+    echo "LLM model already exists, skipping download"
+  fi
   # TTS (Piper Lessac high)
   download "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/high/en_US-lessac-high.onnx" \
            "$MODELS_DIR/tts/en_US-lessac-high.onnx" "en_US-lessac-high.onnx"
@@ -141,21 +287,59 @@ setup_heavy() {
 
 main() {
   mkdir -p "$MODELS_DIR"/stt "$MODELS_DIR"/llm "$MODELS_DIR"/tts
-  local tier
+  local tier gpu_status
+  gpu_status=$(detect_gpu)
   tier="$(select_tier)"
+  
   echo "=== System detection (bash) ==="
   echo "CPU cores: $(cpu_cores)"
   echo "Total RAM: $(ram_gb) GB"
+  echo "GPU detected: $([ "$gpu_status" -eq 1 ] && echo 'Yes' || echo 'No')"
   echo "Selected tier: ${tier}${TIER_OVERRIDE:+ (override)}"
+  echo ""
+  
+  # Show expected performance
+  case "$tier" in
+    LIGHT_CPU)
+      echo "Expected performance: 10-15 seconds per conversational turn (TinyLlama)"
+      ;;
+    MEDIUM_CPU)
+      echo "Expected performance: 15-20 seconds per conversational turn (Phi-3-mini)"
+      echo "Note: Optimized for CPU-only environments"
+      ;;
+    HEAVY_CPU)
+      echo "Expected performance: 20-25 seconds per conversational turn (Llama-2-7B)"
+      echo "Note: Requires modern CPU (2020+) for best results"
+      ;;
+    MEDIUM_GPU)
+      echo "Expected performance: 8-12 seconds per conversational turn (GPU-accelerated)"
+      ;;
+    HEAVY_GPU)
+      echo "Expected performance: 10-15 seconds per conversational turn (GPU-accelerated)"
+      ;;
+  esac
+  echo ""
+  
   if ! confirm "Proceed with model download/setup?"; then
     echo "Aborted by user."; exit 0
   fi
+  
   case "$tier" in
-    LIGHT) setup_light ;;
-    MEDIUM) setup_medium ;;
-    HEAVY) setup_heavy ;;
+    LIGHT_CPU) setup_light_cpu ;;
+    MEDIUM_CPU) setup_medium_cpu ;;
+    HEAVY_CPU) setup_heavy_cpu ;;
+    MEDIUM_GPU) setup_medium_gpu ;;
+    HEAVY_GPU) setup_heavy_gpu ;;
+    *) echo "Unknown tier: $tier"; exit 1 ;;
   esac
-  echo "\nModels ready under $MODELS_DIR."
+  
+  echo ""
+  echo "✅ Models ready under $MODELS_DIR."
+  echo ""
+  echo "Next steps:"
+  echo "1. Update .env to point to downloaded models (or run install.sh autodetect)"
+  echo "2. Start services: docker-compose up -d"
+  echo "3. Place test call to verify performance"
 }
 
 main "$@"
