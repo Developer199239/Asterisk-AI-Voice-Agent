@@ -60,8 +60,9 @@ class LocalProvider(AIProviderInterface):
                 if self._sender_task is None or self._sender_task.done():
                     self._sender_task = asyncio.create_task(self._send_loop())
                 return True
-            except Exception:
-                logger.warning("Reconnect attempt failed", exc_info=True)
+            except Exception as e:
+                # Intentionally avoid traceback at non-debug levels; summarize the reason instead
+                logger.warning("Reconnect attempt failed", delay=delay, error=str(e))
                 await asyncio.sleep(delay)
         return False
 
