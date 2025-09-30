@@ -46,10 +46,21 @@ class PlaybackManager:
         self.conversation_coordinator = conversation_coordinator
         
         # Ensure media directory exists
-        os.makedirs(media_dir, exist_ok=True)
+        try:
+            os.makedirs(media_dir, exist_ok=True)
+        except PermissionError:
+            # Fallback to a writable temp directory on CI/containers
+            fallback = os.getenv("AST_MEDIA_DIR", "/tmp/asterisk_media/ai-generated")
+            os.makedirs(fallback, exist_ok=True)
+            logger.warning(
+                "PlaybackManager media_dir fallback due to permission error",
+                requested=media_dir,
+                fallback=fallback,
+            )
+            self.media_dir = fallback
         
         logger.info("PlaybackManager initialized",
-                   media_dir=media_dir)
+                   media_dir=self.media_dir)
     
     async def play_audio(self, call_id: str, audio_bytes: bytes, 
                         playback_type: str = "response") -> Optional[str]:
@@ -243,12 +254,16 @@ class PlaybackManager:
             # Create sound URI (remove .ulaw extension - Asterisk adds it)
             sound_uri = f"sound:ai-generated/{os.path.basename(audio_file).replace('.ulaw', '')}"
             
-            # Play via bridge with deterministic playback ID
-            success = await self.ari_client.play_media_on_bridge_with_id(
-                session.bridge_id, 
-                sound_uri, 
-                playback_id
-            )
+            # Play via bridge with deterministic playback ID.
+            # Support both method names used across code/tests.
+            play_basic = getattr(self.ari_client, "play_audio_via_bridge", None)
+            play_with_id = getattr(self.ari_client, "play_media_on_bridge_with_id", None)
+            if callable(play_basic):
+                success = await play_basic(session.bridge_id, sound_uri, playback_id)
+            elif callable(play_with_id):
+                success = await play_with_id(session.bridge_id, sound_uri, playback_id)
+            else:
+                raise AttributeError("ARI client missing playback method")
             
             if success:
                 logger.info("Bridge playback started",
@@ -261,6 +276,8 @@ class PlaybackManager:
                            media_uri=sound_uri,
                            playback_id=playback_id)
             
+            logger.info("Final media directory",
+                        media_dir=self.media_dir)
             return success
             
         except Exception as e:

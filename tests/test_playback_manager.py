@@ -7,7 +7,7 @@ Tests the audio playback and TTS gating functionality.
 import pytest
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
-from src.core.models import CallSession
+from src.core.models import CallSession, PlaybackRef
 from src.core.session_store import SessionStore
 from src.core.playback_manager import PlaybackManager
 
@@ -116,10 +116,16 @@ class TestPlaybackManager:
         """Test successful PlaybackFinished handling."""
         # Set up gating token and playback reference
         await playback_manager.session_store.set_gating_token("test_call_123", "test_playback_123")
-        
-        playback_ref = await playback_manager.session_store.add_playback(
-            await playback_manager.session_store.get_playback("test_playback_123")
+        # Create playback ref explicitly and add it
+        playback_ref = PlaybackRef(
+            playback_id="test_playback_123",
+            call_id="test_call_123",
+            channel_id="1758498324.399",
+            bridge_id="bridge_123",
+            media_uri="sound:ai-generated/test",
+            audio_file="/tmp/test.ulaw",
         )
+        await playback_manager.session_store.add_playback(playback_ref)
         
         with patch.object(playback_manager, '_cleanup_audio_file') as mock_cleanup:
             success = await playback_manager.on_playback_finished("test_playback_123")
