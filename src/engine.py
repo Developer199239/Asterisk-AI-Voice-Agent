@@ -1390,8 +1390,28 @@ class Engine:
         """Bind inbound AudioSocket connection to the caller channel via UUID."""
         try:
             caller_channel_id = self.uuidext_to_channel.get(uuid_str)
+
+            # Handle race where the TCP client connects before we finish recording
+            # the UUID mapping. Give the originate path a brief window to catch up.
             if not caller_channel_id:
-                logger.warning("AudioSocket UUID not recognized", conn_id=conn_id, uuid=uuid_str)
+                for attempt in range(3):
+                    await asyncio.sleep(0.05)
+                    caller_channel_id = self.uuidext_to_channel.get(uuid_str)
+                    if caller_channel_id:
+                        logger.debug(
+                            "AudioSocket UUID resolved after retry",
+                            conn_id=conn_id,
+                            uuid=uuid_str,
+                            attempt=attempt + 1,
+                        )
+                        break
+
+            if not caller_channel_id:
+                logger.warning(
+                    "AudioSocket UUID not recognized",
+                    conn_id=conn_id,
+                    uuid=uuid_str,
+                )
                 return False
 
             # Track mappings
