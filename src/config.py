@@ -258,6 +258,21 @@ class AppConfig(BaseModel):
     pipelines: Dict[str, PipelineEntry] = Field(default_factory=dict)
     active_pipeline: Optional[str] = None
 
+    # Ensure tests that construct AppConfig(**dict) directly still get normalized pipelines
+    # similar to load_config(), which calls _normalize_pipelines().
+    from pydantic import model_validator  # local import to keep top clear
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_before(cls, data: Any):  # type: ignore[override]
+        try:
+            if isinstance(data, dict):
+                _normalize_pipelines(data)
+        except Exception:
+            # Non-fatal: if normalization fails, Pydantic will raise a more specific error later
+            pass
+        return data
+
 def _generate_default_pipeline(config_data: Dict[str, Any]) -> None:
     """Populate a default pipeline entry when none are provided."""
     default_provider = config_data.get("default_provider", "openai_realtime")

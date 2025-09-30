@@ -395,11 +395,13 @@ class DeepgramTTSAdapter(TTSComponent):
             "api_key": runtime_options.get("api_key", self._pipeline_defaults.get("api_key", self._provider_defaults.api_key)),
             "format": merged_format,
         }
-
+        # Default the provider output (source_format) sample rate to the target sample rate
+        # so we request 8 kHz from Deepgram when our downstream is μ-law 8 kHz.
         source_cfg = runtime_options.get("source_format", self._pipeline_defaults.get("source_format", {}))
+        default_source_rate = int(merged_format.get("sample_rate", 8000))
         merged["source_format"] = {
             "encoding": source_cfg.get("encoding", "linear16"),
-            "sample_rate": int(source_cfg.get("sample_rate", 16000)),
+            "sample_rate": int(source_cfg.get("sample_rate", default_source_rate)),
         }
         return merged
 
@@ -417,7 +419,8 @@ class DeepgramTTSAdapter(TTSComponent):
         }
         source_format = options.get("source_format", {})
         params["encoding"] = source_format.get("encoding", "linear16")
-        params["sample_rate"] = int(source_format.get("sample_rate", max(target_sample_rate, 16000)))
+        # Request provider to emit audio at the downstream target sample rate by default
+        params["sample_rate"] = int(source_format.get("sample_rate", target_sample_rate))
         params["target_encoding"] = target_encoding
         params["target_sample_rate"] = target_sample_rate
         # Remove None values
