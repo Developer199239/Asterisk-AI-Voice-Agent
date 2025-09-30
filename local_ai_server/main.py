@@ -556,14 +556,26 @@ class LocalAIServer:
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as wav_file:
                 wav_path = wav_file.name
 
+            # Write WAV data either by letting Piper stream into the wave writer
+            # or by consuming a generator for backward compatibility.
             with wave.open(wav_path, "wb") as wav_file:
+                # Mono, 16-bit, 22.05 kHz (typical Piper voice rate)
                 wav_file.setnchannels(1)
                 wav_file.setsampwidth(2)
                 wav_file.setframerate(22050)
-
-                audio_generator = self.tts_model.synthesize(text)
-                for audio_chunk in audio_generator:
-                    wav_file.writeframes(audio_chunk.audio_int16_bytes)
+                try:
+                    # Newer Piper API: synthesize(text, wav_file)
+                    self.tts_model.synthesize(text, wav_file)
+                except TypeError:
+                    # Fallback: older API returns a generator of frames
+                    audio_generator = self.tts_model.synthesize(text)
+                    for chunk in audio_generator:
+                        if isinstance(chunk, (bytes, bytearray)):
+                            wav_file.writeframes(chunk)
+                        else:
+                            data = getattr(chunk, "audio_int16_bytes", None)
+                            if data:
+                                wav_file.writeframes(data)
 
             with open(wav_path, "rb") as wav_file:
                 wav_data = wav_file.read()
