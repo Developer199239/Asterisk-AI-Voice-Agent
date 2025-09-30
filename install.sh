@@ -353,11 +353,7 @@ select_config_template() {
         exit 1
     fi
     if [ -f "$CFG_DST" ]; then
-        read -p "config/ai-agent.yaml exists. Overwrite with $CFG_SRC? [Y/n]: " ow
-        if [[ ! "$ow" =~ ^[Yy]$|^$ ]]; then
-            print_info "Keeping existing config/ai-agent.yaml"
-            return
-        fi
+        print_info "Overwriting existing config/ai-agent.yaml with $CFG_SRC"
     fi
     cp "$CFG_SRC" "$CFG_DST"
     print_success "Wrote $CFG_DST from $CFG_SRC"
@@ -378,8 +374,7 @@ select_config_template() {
                 fi
             fi
         fi
-        # Auto-detect and set .env model paths to match downloaded artifacts
-        autodetect_local_models
+        # Note: LLM/STT/TTS settings are configured in YAML; .env is not mutated for models.
     fi
 }
 
@@ -402,6 +397,87 @@ start_services() {
     else
         print_info "Setup complete. Start later with: $COMPOSE up --build -d"
     fi
+
+    # Always print recommended Asterisk dialplan snippet to test the chosen pipeline/provider
+    print_asterisk_dialplan_snippet
+}
+
+# --- Output recommended Asterisk dialplan for the chosen profile ---
+print_asterisk_dialplan_snippet() {
+    echo
+    echo "=========================================="
+    echo " Asterisk Dialplan Snippet (copy/paste)"
+    echo "=========================================="
+
+    APP_NAME="asterisk-ai-voice-agent"
+    PIPELINE_NAME=""
+    PROVIDER_OVERRIDE=""
+
+    case "$PROFILE" in
+        local)
+            PIPELINE_NAME="local_only"
+            ;;
+        hybrid)
+            PIPELINE_NAME="hybrid"
+            ;;
+        cloud-openai)
+            PIPELINE_NAME="cloud_only_openai"
+            ;;
+        openai-agent)
+            PROVIDER_OVERRIDE="openai"
+            ;;
+        deepgram-agent)
+            PROVIDER_OVERRIDE="deepgram"
+            ;;
+        *)
+            # Example template defaults to cloud_openai pipeline
+            PIPELINE_NAME="cloud_openai"
+            ;;
+    esac
+
+    echo "Add this to your extensions_custom.conf (or via FreePBX Config Edit):"
+    echo
+    if [ -n "$PROVIDER_OVERRIDE" ]; then
+        cat <<EOF
+[from-ai-agent-test]
+exten => s,1,NoOp(Test AI engine with provider override: $PROVIDER_OVERRIDE)
+ same => n,Set(AI_PROVIDER=$PROVIDER_OVERRIDE)
+ same => n,Stasis($APP_NAME)
+ same => n,Hangup()
+EOF
+    else
+        cat <<EOF
+[from-ai-agent-test]
+exten => s,1,NoOp(Test AI engine with pipeline: $PIPELINE_NAME)
+ same => n,Set(AI_PROVIDER=$PIPELINE_NAME)
+ same => n,Stasis($APP_NAME)
+ same => n,Hangup()
+EOF
+    fi
+
+    cat <<'EOF'
+
+; Optional: AudioSocket helper context for media transport (telephony μ-law 8kHz)
+[from-ai-agent-audiosocket]
+exten => _X.,1,NoOp(Local channel starting AudioSocket for ${EXTEN})
+ same => n,Answer()
+ same => n,Set(AUDIOSOCKET_HOST=127.0.0.1)
+ same => n,Set(AUDIOSOCKET_PORT=8090)
+ same => n,Set(AUDIOSOCKET_UUID=${EXTEN})
+ same => n,AudioSocket(${AUDIOSOCKET_UUID},${AUDIOSOCKET_HOST}:${AUDIOSOCKET_PORT},ulaw)
+ same => n,Hangup()
+
+; Keepalive leg for ;1 while engine streams audio (optional)
+exten => s,1,NoOp(Local keepalive for AudioSocket leg)
+ same => n,Wait(60)
+ same => n,Hangup()
+EOF
+
+    echo
+    echo "Next steps:"
+    echo " - Create a FreePBX Custom Destination to from-ai-agent-test,s,1 and route a test call to it."
+    echo " - Ensure modules are loaded: asterisk -rx 'module show like res_ari_applications' and 'module show like app_audiosocket'"
+    echo " - Watch logs: $COMPOSE logs -f ai-engine | sed -n '1,200p'"
 }
 
 # --- Main ---
