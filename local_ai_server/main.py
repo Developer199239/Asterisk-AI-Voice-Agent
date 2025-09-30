@@ -294,6 +294,37 @@ class LocalAIServer:
             )
             loop = asyncio.get_running_loop()
             started = loop.time()
+            logging.info(
+                "🧪 LLM WARMUP START - Running startup latency check (prompt_tokens=%s raw_tokens=%s model=%s ctx=%s batch=%s max_tokens<=%s)",
+                prompt_tokens,
+                raw_tokens,
+                os.path.basename(self.llm_model_path),
+                self.llm_context,
+                self.llm_batch,
+                min(self.llm_max_tokens, 32),
+            )
+
+            # Heartbeat: log progress while the warm-up runs so users see activity
+            done = asyncio.Event()
+
+            async def _heartbeat():
+                elapsed = 0
+                interval = 5
+                try:
+                    while not done.is_set():
+                        await asyncio.sleep(interval)
+                        elapsed += interval
+                        logging.info(
+                            "⏳ LLM WARMUP - In progress (~%ss elapsed, model=%s ctx=%s batch=%s)",
+                            elapsed,
+                            os.path.basename(self.llm_model_path),
+                            self.llm_context,
+                            self.llm_batch,
+                        )
+                except asyncio.CancelledError:
+                    pass
+
+            hb_task = asyncio.create_task(_heartbeat())
 
             await asyncio.to_thread(
                 self.llm_model,
@@ -307,6 +338,11 @@ class LocalAIServer:
             )
 
             latency_ms = round((loop.time() - started) * 1000.0, 2)
+            done.set()
+            try:
+                hb_task.cancel()
+            except Exception:
+                pass
             logging.info(
                 "🤖 LLM STARTUP LATENCY - %.2f ms (prompt_tokens=%s raw_tokens=%s truncated=%s)",
                 latency_ms,
