@@ -15,8 +15,12 @@ import logging
 from typing import Optional
 
 import websockets
+import pytest
 
 WS_URL = os.getenv("LOCAL_WS_URL", "ws://127.0.0.1:8765")
+
+# Mark as integration: requires a running local-ai-server WebSocket
+pytestmark = pytest.mark.integration
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
