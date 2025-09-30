@@ -264,14 +264,14 @@ class PlaybackManager:
             # Create sound URI (remove .ulaw extension - Asterisk adds it)
             sound_uri = f"sound:ai-generated/{os.path.basename(audio_file).replace('.ulaw', '')}"
             
-            # Play via bridge with deterministic playback ID.
-            # Support both method names used across code/tests.
-            play_basic = getattr(self.ari_client, "play_audio_via_bridge", None)
+            # Play via bridge. Prefer deterministic ID method when available.
             play_with_id = getattr(self.ari_client, "play_media_on_bridge_with_id", None)
-            if callable(play_basic):
-                success = await play_basic(session.bridge_id, sound_uri, playback_id)
-            elif callable(play_with_id):
+            play_basic = getattr(self.ari_client, "play_audio_via_bridge", None)
+            if callable(play_with_id):
                 success = await play_with_id(session.bridge_id, sound_uri, playback_id)
+            elif callable(play_basic):
+                result = await play_basic(session.bridge_id, sound_uri)
+                success = bool(result)
             else:
                 raise AttributeError("ARI client missing playback method")
             
