@@ -298,24 +298,44 @@ main() {
   echo "Selected tier: ${tier}${TIER_OVERRIDE:+ (override)}"
   echo ""
   
-  # Show expected performance
+  # Show expected performance and recommended settings
   case "$tier" in
     LIGHT_CPU)
       echo "Expected performance: 10-15 seconds per conversational turn (TinyLlama)"
+      echo "Recommended .env settings:"
+      echo "  LOCAL_LLM_CONTEXT=512"
+      echo "  LOCAL_LLM_MAX_TOKENS=24"
+      echo "  LOCAL_LLM_INFER_TIMEOUT_SEC=15"
       ;;
     MEDIUM_CPU)
       echo "Expected performance: 15-20 seconds per conversational turn (Phi-3-mini)"
       echo "Note: Optimized for CPU-only environments"
+      echo "Recommended .env settings:"
+      echo "  LOCAL_LLM_CONTEXT=512"
+      echo "  LOCAL_LLM_MAX_TOKENS=32"
+      echo "  LOCAL_LLM_INFER_TIMEOUT_SEC=20"
       ;;
     HEAVY_CPU)
       echo "Expected performance: 20-25 seconds per conversational turn (Llama-2-7B)"
       echo "Note: Requires modern CPU (2020+) for best results"
+      echo "Recommended .env settings:"
+      echo "  LOCAL_LLM_CONTEXT=768"
+      echo "  LOCAL_LLM_MAX_TOKENS=32"
+      echo "  LOCAL_LLM_INFER_TIMEOUT_SEC=25"
       ;;
     MEDIUM_GPU)
       echo "Expected performance: 8-12 seconds per conversational turn (GPU-accelerated)"
+      echo "Recommended .env settings:"
+      echo "  LOCAL_LLM_CONTEXT=1024"
+      echo "  LOCAL_LLM_MAX_TOKENS=48"
+      echo "  LOCAL_LLM_INFER_TIMEOUT_SEC=20"
       ;;
     HEAVY_GPU)
       echo "Expected performance: 10-15 seconds per conversational turn (GPU-accelerated)"
+      echo "Recommended .env settings:"
+      echo "  LOCAL_LLM_CONTEXT=1024"
+      echo "  LOCAL_LLM_MAX_TOKENS=48"
+      echo "  LOCAL_LLM_INFER_TIMEOUT_SEC=20"
       ;;
   esac
   echo ""

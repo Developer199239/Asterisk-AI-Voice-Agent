@@ -150,21 +150,56 @@ upsert_env() {
 autodetect_local_models() {
     print_info "Auto-detecting local model artifacts under ./models to set .env paths..."
     local stt="" llm="" tts=""
+
+    local has_gpu=0
+    if command -v nvidia-smi >/dev/null 2>&1; then
+        if nvidia-smi -L >/dev/null 2>&1; then
+            has_gpu=1
+        fi
+    elif command -v rocm-smi >/dev/null 2>&1; then
+        if rocm-smi -i >/dev/null 2>&1; then
+            has_gpu=1
+        fi
+    fi
+
+
+    local has_gpu=0
+    if command -v nvidia-smi >/dev/null 2>&1; then
+        if nvidia-smi -L >/dev/null 2>&1; then
+            has_gpu=1
+        fi
+    elif command -v rocm-smi >/dev/null 2>&1; then
+        if rocm-smi -i >/dev/null 2>&1; then
+            has_gpu=1
+        fi
+    fi
     # STT preference: 0.22 > small 0.15
     if [ -d models/stt/vosk-model-en-us-0.22 ]; then
         stt="/app/models/stt/vosk-model-en-us-0.22"
     elif [ -d models/stt/vosk-model-small-en-us-0.15 ]; then
         stt="/app/models/stt/vosk-model-small-en-us-0.15"
     fi
-    # LLM preference: 13b > 7b > tiny/phi3
-    if [ -f models/llm/llama-2-13b-chat.Q4_K_M.gguf ]; then
-        llm="/app/models/llm/llama-2-13b-chat.Q4_K_M.gguf"
-    elif [ -f models/llm/llama-2-7b-chat.Q4_K_M.gguf ]; then
-        llm="/app/models/llm/llama-2-7b-chat.Q4_K_M.gguf"
-    elif [ -f models/llm/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf ]; then
-        llm="/app/models/llm/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf"
-    elif [ -f models/llm/phi-3-mini-4k-instruct.Q4_K_M.gguf ]; then
-        llm="/app/models/llm/phi-3-mini-4k-instruct.Q4_K_M.gguf"
+    # LLM preference: favor smaller GGUFs on CPU-only hosts for responsiveness
+    if [ "$has_gpu" -eq 1 ]; then
+        if [ -f models/llm/llama-2-13b-chat.Q4_K_M.gguf ]; then
+            llm="/app/models/llm/llama-2-13b-chat.Q4_K_M.gguf"
+        elif [ -f models/llm/llama-2-7b-chat.Q4_K_M.gguf ]; then
+            llm="/app/models/llm/llama-2-7b-chat.Q4_K_M.gguf"
+        elif [ -f models/llm/phi-3-mini-4k-instruct.Q4_K_M.gguf ]; then
+            llm="/app/models/llm/phi-3-mini-4k-instruct.Q4_K_M.gguf"
+        elif [ -f models/llm/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf ]; then
+            llm="/app/models/llm/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf"
+        fi
+    else
+        if [ -f models/llm/phi-3-mini-4k-instruct.Q4_K_M.gguf ]; then
+            llm="/app/models/llm/phi-3-mini-4k-instruct.Q4_K_M.gguf"
+        elif [ -f models/llm/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf ]; then
+            llm="/app/models/llm/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf"
+        elif [ -f models/llm/llama-2-7b-chat.Q4_K_M.gguf ]; then
+            llm="/app/models/llm/llama-2-7b-chat.Q4_K_M.gguf"
+        elif [ -f models/llm/llama-2-13b-chat.Q4_K_M.gguf ]; then
+            llm="/app/models/llm/llama-2-13b-chat.Q4_K_M.gguf"
+        fi
     fi
     # TTS preference: high > medium
     if [ -f models/tts/en_US-lessac-high.onnx ]; then
@@ -177,9 +212,69 @@ autodetect_local_models() {
     if [ -n "$llm" ]; then upsert_env LOCAL_LLM_MODEL_PATH "$llm"; fi
     if [ -n "$tts" ]; then upsert_env LOCAL_TTS_MODEL_PATH "$tts"; fi
 
+    # Set performance parameters based on detected tier
+    set_performance_params_for_llm "$llm"
+
     # Clean sed backup if created
     [ -f .env.bak ] && rm -f .env.bak || true
-    print_success "Local model paths updated in .env (if detected)."
+    print_success "Local model paths and performance tuning updated in .env (if detected)."
+}
+
+set_performance_params_for_llm() {
+    local llm_path="$1"
+    
+    # Skip if no LLM detected
+    [ -z "$llm_path" ] && return 0
+    
+    # Determine tier based on model name
+    local tier="LIGHT_CPU"
+    if echo "$llm_path" | grep -q "tinyllama"; then
+        tier="LIGHT_CPU"
+    elif echo "$llm_path" | grep -q "phi-3-mini"; then
+        tier="MEDIUM_CPU"
+    elif echo "$llm_path" | grep -q "llama-2-7b"; then
+        tier="HEAVY_CPU"
+    elif echo "$llm_path" | grep -q "llama-2-13b"; then
+        tier="HEAVY_GPU"
+    fi
+    
+    print_info "Setting performance parameters for tier: $tier"
+    
+    # Set tier-appropriate parameters
+    case "$tier" in
+        LIGHT_CPU)
+            upsert_env LOCAL_LLM_CONTEXT "512"
+            upsert_env LOCAL_LLM_BATCH "512"
+            upsert_env LOCAL_LLM_MAX_TOKENS "24"
+            upsert_env LOCAL_LLM_TEMPERATURE "0.3"
+            upsert_env LOCAL_LLM_INFER_TIMEOUT_SEC "15"
+            print_info "  → Context: 512, Max tokens: 24, Timeout: 15s (optimized for TinyLlama)"
+            ;;
+        MEDIUM_CPU)
+            upsert_env LOCAL_LLM_CONTEXT "512"
+            upsert_env LOCAL_LLM_BATCH "512"
+            upsert_env LOCAL_LLM_MAX_TOKENS "32"
+            upsert_env LOCAL_LLM_TEMPERATURE "0.3"
+            upsert_env LOCAL_LLM_INFER_TIMEOUT_SEC "20"
+            print_info "  → Context: 512, Max tokens: 32, Timeout: 20s (optimized for Phi-3-mini)"
+            ;;
+        HEAVY_CPU)
+            upsert_env LOCAL_LLM_CONTEXT "768"
+            upsert_env LOCAL_LLM_BATCH "512"
+            upsert_env LOCAL_LLM_MAX_TOKENS "32"
+            upsert_env LOCAL_LLM_TEMPERATURE "0.3"
+            upsert_env LOCAL_LLM_INFER_TIMEOUT_SEC "25"
+            print_info "  → Context: 768, Max tokens: 32, Timeout: 25s (optimized for Llama-2-7B CPU)"
+            ;;
+        HEAVY_GPU)
+            upsert_env LOCAL_LLM_CONTEXT "1024"
+            upsert_env LOCAL_LLM_BATCH "512"
+            upsert_env LOCAL_LLM_MAX_TOKENS "48"
+            upsert_env LOCAL_LLM_TEMPERATURE "0.3"
+            upsert_env LOCAL_LLM_INFER_TIMEOUT_SEC "20"
+            print_info "  → Context: 1024, Max tokens: 48, Timeout: 20s (optimized for GPU acceleration)"
+            ;;
+    esac
 }
 
 wait_for_local_ai_health() {
