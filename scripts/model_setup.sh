@@ -289,27 +289,28 @@ main() {
   # Show expected performance and recommended settings
   case "$tier" in
     LIGHT_CPU)
-      echo "Expected performance: 10-15 seconds per conversational turn (TinyLlama)"
+      echo "Expected performance: 25-40 seconds per conversational turn (TinyLlama)"
+      echo "Note: Slower response time due to CPU limitations, but reliable"
       echo "Recommended .env settings:"
       echo "  LOCAL_LLM_CONTEXT=512"
       echo "  LOCAL_LLM_MAX_TOKENS=24"
-      echo "  LOCAL_LLM_INFER_TIMEOUT_SEC=15"
+      echo "  LOCAL_LLM_INFER_TIMEOUT_SEC=45"
       ;;
     MEDIUM_CPU)
-      echo "Expected performance: 15-20 seconds per conversational turn (Phi-3-mini)"
+      echo "Expected performance: 20-30 seconds per conversational turn (Phi-3-mini)"
       echo "Note: Optimized for CPU-only environments"
       echo "Recommended .env settings:"
       echo "  LOCAL_LLM_CONTEXT=512"
       echo "  LOCAL_LLM_MAX_TOKENS=32"
-      echo "  LOCAL_LLM_INFER_TIMEOUT_SEC=20"
+      echo "  LOCAL_LLM_INFER_TIMEOUT_SEC=30"
       ;;
     HEAVY_CPU)
-      echo "Expected performance: 15-20 seconds per conversational turn (Phi-3-mini)"
+      echo "Expected performance: 25-35 seconds per conversational turn (Phi-3-mini)"
       echo "Note: Now uses Phi-3-mini instead of Llama-2-7B for reliability"
       echo "Recommended .env settings:"
       echo "  LOCAL_LLM_CONTEXT=512"
       echo "  LOCAL_LLM_MAX_TOKENS=28"
-      echo "  LOCAL_LLM_INFER_TIMEOUT_SEC=20"
+      echo "  LOCAL_LLM_INFER_TIMEOUT_SEC=35"
       ;;
     MEDIUM_GPU)
       echo "Expected performance: 8-12 seconds per conversational turn (GPU-accelerated)"

@@ -247,16 +247,16 @@ set_performance_params_for_llm() {
             upsert_env LOCAL_LLM_BATCH "512"
             upsert_env LOCAL_LLM_MAX_TOKENS "24"
             upsert_env LOCAL_LLM_TEMPERATURE "0.3"
-            upsert_env LOCAL_LLM_INFER_TIMEOUT_SEC "15"
-            print_info "  → Context: 512, Max tokens: 24, Timeout: 15s (optimized for TinyLlama)"
+            upsert_env LOCAL_LLM_INFER_TIMEOUT_SEC "45"
+            print_info "  → Context: 512, Max tokens: 24, Timeout: 45s (conservative for older CPUs)"
             ;;
         MEDIUM_CPU)
             upsert_env LOCAL_LLM_CONTEXT "512"
             upsert_env LOCAL_LLM_BATCH "512"
             upsert_env LOCAL_LLM_MAX_TOKENS "32"
             upsert_env LOCAL_LLM_TEMPERATURE "0.3"
-            upsert_env LOCAL_LLM_INFER_TIMEOUT_SEC "20"
-            print_info "  → Context: 512, Max tokens: 32, Timeout: 20s (optimized for Phi-3-mini)"
+            upsert_env LOCAL_LLM_INFER_TIMEOUT_SEC "30"
+            print_info "  → Context: 512, Max tokens: 32, Timeout: 30s (optimized for Phi-3-mini)"
             ;;
         HEAVY_CPU)
             # Conservative settings - use Phi-3 params even for HEAVY_CPU
@@ -265,8 +265,8 @@ set_performance_params_for_llm() {
             upsert_env LOCAL_LLM_BATCH "512"
             upsert_env LOCAL_LLM_MAX_TOKENS "28"
             upsert_env LOCAL_LLM_TEMPERATURE "0.3"
-            upsert_env LOCAL_LLM_INFER_TIMEOUT_SEC "20"
-            print_info "  → Context: 512, Max tokens: 28, Timeout: 20s (conservative for reliability)"
+            upsert_env LOCAL_LLM_INFER_TIMEOUT_SEC "35"
+            print_info "  → Context: 512, Max tokens: 28, Timeout: 35s (conservative for reliability)"
             ;;
         HEAVY_GPU)
             upsert_env LOCAL_LLM_CONTEXT "1024"
