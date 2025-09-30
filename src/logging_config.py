@@ -69,6 +69,24 @@ def configure_logging(log_level="INFO", log_to_file=False, log_file_path="servic
     log_format = os.getenv("LOG_FORMAT", "json").strip().lower()
     log_color = os.getenv("LOG_COLOR", "1").strip() not in ("0", "false", "False")
 
+    # Determine when to render tracebacks
+    # Default policy: only show stack traces when LOG_LEVEL=debug
+    log_level_upper = log_level.upper() if isinstance(log_level, str) else str(log_level)
+    tb_mode = os.getenv("LOG_SHOW_TRACEBACKS", "auto").strip().lower()  # auto|always|never
+    if tb_mode == "always":
+        show_tracebacks = True
+    elif tb_mode == "never":
+        show_tracebacks = False
+    else:
+        show_tracebacks = (log_level_upper == "DEBUG")
+
+    def suppress_exc_info_if_disabled(logger, method_name, event_dict):
+        """Remove exc_info from event when tracebacks are disabled by policy."""
+        if not show_tracebacks and event_dict.get("exc_info"):
+            # Drop exc_info so downstream formatters won't render a traceback
+            event_dict.pop("exc_info", None)
+        return event_dict
+
     # Set up processors for structlog
     processors = [
         structlog.processors.add_log_level,
@@ -76,7 +94,9 @@ def configure_logging(log_level="INFO", log_to_file=False, log_file_path="servic
         # Add service name and correlation ID
         add_service_context,
         add_correlation_id,
-        # Render exceptions
+        # Conditionally suppress tracebacks unless enabled
+        suppress_exc_info_if_disabled,
+        # Render exceptions (will be a no-op if exc_info was suppressed)
         structlog.processors.format_exc_info,
     ]
 
