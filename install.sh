@@ -191,10 +191,11 @@ autodetect_local_models() {
             llm="/app/models/llm/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf"
         fi
     else
-        if [ -f models/llm/phi-3-mini-4k-instruct.Q4_K_M.gguf ]; then
-            llm="/app/models/llm/phi-3-mini-4k-instruct.Q4_K_M.gguf"
-        elif [ -f models/llm/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf ]; then
+        # Prefer TinyLlama first on CPU-only systems for best responsiveness.
+        if [ -f models/llm/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf ]; then
             llm="/app/models/llm/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf"
+        elif [ -f models/llm/phi-3-mini-4k-instruct.Q4_K_M.gguf ]; then
+            llm="/app/models/llm/phi-3-mini-4k-instruct.Q4_K_M.gguf"
         elif [ -f models/llm/llama-2-7b-chat.Q4_K_M.gguf ]; then
             llm="/app/models/llm/llama-2-7b-chat.Q4_K_M.gguf"
         elif [ -f models/llm/llama-2-13b-chat.Q4_K_M.gguf ]; then

@@ -16,6 +16,7 @@ pipelines:
       llm:
         temperature: 0.4
         max_tokens: 64
+        llm_response_timeout_sec: 60.0
       tts:
         format:
           encoding: ulaw
@@ -25,6 +26,9 @@ active_pipeline: local_only
 
 audio_transport: "audiosocket"
 downstream_mode: "stream"
+
+barge_in:
+  enabled: false
 
 audiosocket:
   host: "0.0.0.0"
