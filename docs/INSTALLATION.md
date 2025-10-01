@@ -157,13 +157,29 @@ Look for a message indicating a successful connection to the Asterisk ARI and th
 
 Use an AudioSocket-first dialplan so Asterisk streams raw audio to the agent before handing control to the Stasis app.
 
-**Example Dialplan (`extensions.conf`):**
+**Example Dialplan (`extensions_custom.conf`):**
 
-[from-internal]
-exten => 1234,1,NoOp(Sending call to AI Voice Agent)
- same => n,Set(AUDIOSOCKET_HOST=127.0.0.1)
- same => n,Set(AUDIOSOCKET_PORT=8090)
- same => n,AudioSocket(${AUDIOSOCKET_HOST}:${AUDIOSOCKET_PORT},ulaw)
+[from-ai-agent]
+exten => s,1,NoOp(Handing call directly to AI engine (default provider))
+  same => n,Set(AI_PROVIDER=local_only)
+  same => n,Stasis(asterisk-ai-voice-agent)
+  same => n,Hangup()
+
+[from-ai-agent-custom]
+exten => s,1,NoOp(Handing call to AI engine with Deepgram override)
+ same => n,Set(AI_PROVIDER=hybrid_support)
+ same => n,Stasis(asterisk-ai-voice-agent)
+ same => n,Hangup()
+
+[from-ai-agent-deepgram]
+exten => s,1,NoOp(Handing call to AI engine with Deepgram override)
+ same => n,Set(AI_PROVIDER=deepgram)
+ same => n,Stasis(asterisk-ai-voice-agent)
+ same => n,Hangup()
+
+[from-ai-agent-openai]
+exten => s,1,NoOp(Handing call to AI engine with Deepgram override)
+ same => n,Set(AI_PROVIDER=openai_realtime)
  same => n,Stasis(asterisk-ai-voice-agent)
  same => n,Hangup()
 
