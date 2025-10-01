@@ -39,11 +39,15 @@ def add_correlation_id(logger, method_name, event_dict):
 def add_service_context(logger, method_name, event_dict):
     """Add service context to the log record."""
     event_dict['service'] = 'ai-engine'
-    # Handle different logger types that may not have a 'name' attribute
-    try:
-        event_dict['component'] = logger.name
-    except AttributeError:
-        event_dict['component'] = 'unknown'
+    # Prefer stdlib logger name injected by structlog.stdlib.add_logger_name
+    component = event_dict.get('logger')
+    if not component:
+        # Fallbacks for various logger wrappers
+        try:
+            component = getattr(getattr(logger, 'logger', None), 'name', None) or getattr(logger, 'name')
+        except Exception:
+            component = 'unknown'
+    event_dict['component'] = component
     return event_dict
 
 def configure_logging(log_level="INFO", log_to_file=False, log_file_path="service.log", service_name="ai-engine"):
@@ -83,49 +87,61 @@ def configure_logging(log_level="INFO", log_to_file=False, log_file_path="servic
     def suppress_exc_info_if_disabled(logger, method_name, event_dict):
         """Remove exc_info from event when tracebacks are disabled by policy."""
         if not show_tracebacks and event_dict.get("exc_info"):
-            # Drop exc_info so downstream formatters won't render a traceback
             event_dict.pop("exc_info", None)
         return event_dict
 
-    # Set up processors for structlog
-    processors = [
-        structlog.processors.add_log_level,
-        structlog.processors.TimeStamper(fmt="iso"),
-        # Add service name and correlation ID
-        add_service_context,
-        add_correlation_id,
-        # Conditionally suppress tracebacks unless enabled
-        suppress_exc_info_if_disabled,
-        # Render exceptions (will be a no-op if exc_info was suppressed)
-        structlog.processors.format_exc_info,
-    ]
+    # Derive numeric level for stdlib root logger
+    try:
+        level_value = getattr(logging, log_level_upper, logging.INFO) if isinstance(log_level, str) else int(log_level)
+    except Exception:
+        level_value = logging.INFO
 
-    if log_format == "console":
-        processors.append(structlog_dev.ConsoleRenderer(colors=log_color))
-    else:
-        processors.append(structlog.processors.JSONRenderer())
-
+    # Configure structlog to integrate with stdlib logging
     structlog.configure(
-        processors=processors,
+        processors=[
+            structlog.stdlib.filter_by_level,
+            structlog.stdlib.add_logger_name,
+            structlog.processors.add_log_level,
+            structlog.processors.TimeStamper(fmt="iso"),
+            add_service_context,
+            add_correlation_id,
+            suppress_exc_info_if_disabled,
+            structlog.processors.format_exc_info,
+            structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
+        ],
         context_class=structlog.threadlocal.wrap_dict(dict),
-        logger_factory=structlog.PrintLoggerFactory(),
+        logger_factory=structlog.stdlib.LoggerFactory(),
         wrapper_class=structlog.stdlib.BoundLogger,
         cache_logger_on_first_use=True,
     )
-    # Set up root logger
-    root_logger = logging.getLogger()
-    root_logger.setLevel(log_level)
 
-    # Set up console handler (structlog already renders the message)
+    # Choose final renderer
+    renderer = structlog_dev.ConsoleRenderer(colors=log_color) if log_format == "console" else structlog.processors.JSONRenderer()
+
+    # Stdlib ProcessorFormatter for both structlog and foreign loggers
+    processor_formatter = structlog.stdlib.ProcessorFormatter(
+        processor=renderer,
+        foreign_pre_chain=[
+            structlog.stdlib.add_logger_name,
+            structlog.processors.add_log_level,
+            structlog.processors.TimeStamper(fmt="iso"),
+        ],
+    )
+
+    # Set up root logger and handlers
+    root_logger = logging.getLogger()
+    root_logger.handlers.clear()
+    root_logger.setLevel(level_value)
+
     console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setFormatter(logging.Formatter("%(message)s"))
+    console_handler.setFormatter(processor_formatter)
     root_logger.addHandler(console_handler)
 
     if log_to_file:
         file_handler = RotatingFileHandler(
             log_file_path, maxBytes=10*1024*1024, backupCount=5
         )
-        file_handler.setFormatter(logging.Formatter("%(message)s"))
+        file_handler.setFormatter(processor_formatter)
         root_logger.addHandler(file_handler)
 
     # Reduce noisy third-party loggers
