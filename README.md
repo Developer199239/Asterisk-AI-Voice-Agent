@@ -161,7 +161,7 @@ This ensures all providers and pipelines stay aligned unless you intentionally o
 
 ### Installer behavior (GREETING/AI_ROLE)
 
-- [`./install.sh`](install.sh) prompts for Greeting and AI Role and writes them to [`.env`](.env.example). It also updates [`config/ai-agent.yaml`](config/ai-agent.yml) `llm.*` via `yq` (Linux-first) or appends a YAML `llm` block as a fallback when `yq` cannot be installed.
+- [`./install.sh`](install.sh) prompts for Greeting and AI Role and writes them to [`.env`](.env.example). It also updates [`config/ai-agent.yaml`](config/ai-agent.yaml) `llm.*` via `yq` (Linux-first) or appends a YAML `llm` block as a fallback when `yq` cannot be installed.
 - Reruns are idempotent: prompts are prefilled from existing `.env`.
 - `${VAR}` placeholders in YAML remain supported; the loader expands these at runtime.
 
