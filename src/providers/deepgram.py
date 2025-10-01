@@ -71,6 +71,19 @@ class DeepgramProvider(AIProviderInterface):
         output_encoding = getattr(self.config, 'output_encoding', None) or 'mulaw'
         output_sample_rate = int(getattr(self.config, 'output_sample_rate_hz', 8000) or 8000)
 
+        # Determine greeting precedence: provider override > global LLM greeting > safe default
+        try:
+            greeting_val = (getattr(self.config, 'greeting', None) or "").strip()
+        except Exception:
+            greeting_val = ""
+        if not greeting_val:
+            try:
+                greeting_val = (getattr(self.llm_config, 'initial_greeting', None) or "").strip()
+            except Exception:
+                greeting_val = ""
+        if not greeting_val:
+            greeting_val = "Hello, how can I help you today?"
+
         settings = {
             "type": "Settings",
             "audio": {
@@ -78,7 +91,7 @@ class DeepgramProvider(AIProviderInterface):
                 "output": { "encoding": output_encoding, "sample_rate": output_sample_rate, "container": "none" }
             },
             "agent": {
-                "greeting": "Hello, I am an AI Assistant for Jugaar LLC. How can I help you today.",
+                "greeting": greeting_val,
                 "language": "en",
                 "listen": { "provider": { "type": "deepgram", "model": self.config.model, "smart_format": True } },
                 "think": { "provider": { "type": "open_ai", "model": self.llm_config.model }, "prompt": self.llm_config.prompt },

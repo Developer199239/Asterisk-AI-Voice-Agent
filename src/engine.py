@@ -416,6 +416,13 @@ class Engine:
                     self.providers[name] = provider
                     logger.info(f"Provider '{name}' loaded successfully.")
                     
+                    # Provide initial greeting from global LLM config
+                    try:
+                        if hasattr(provider, 'set_initial_greeting'):
+                            provider.set_initial_greeting(getattr(self.config.llm, 'initial_greeting', None))
+                    except Exception:
+                        logger.debug("Failed to set initial greeting on LocalProvider", exc_info=True)
+
                     # Initialize persistent connection for local provider
                     if hasattr(provider, 'initialize'):
                         await provider.initialize()
@@ -1788,7 +1795,22 @@ class Engine:
     def _build_openai_realtime_config(self, provider_cfg: Dict[str, Any]) -> Optional[OpenAIRealtimeProviderConfig]:
         """Construct an OpenAIRealtimeProviderConfig from raw provider settings."""
         try:
-            cfg = OpenAIRealtimeProviderConfig(**provider_cfg)
+            # Respect provider overrides; only fill when missing/empty
+            merged = dict(provider_cfg)
+            try:
+                instr = (merged.get("instructions") or "").strip()
+            except Exception:
+                instr = ""
+            if not instr:
+                merged["instructions"] = getattr(self.config.llm, "prompt", None)
+            try:
+                greet = (merged.get("greeting") or "").strip()
+            except Exception:
+                greet = ""
+            if not greet:
+                merged["greeting"] = getattr(self.config.llm, "initial_greeting", None)
+
+            cfg = OpenAIRealtimeProviderConfig(**merged)
             if not cfg.enabled:
                 logger.info("OpenAI Realtime provider disabled in configuration; skipping initialization.")
                 return None

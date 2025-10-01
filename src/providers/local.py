@@ -29,6 +29,15 @@ class LocalProvider(AIProviderInterface):
         self._active_call_id: Optional[str] = None
         self.input_mode: str = 'mulaw8k'  # or 'pcm16_8k' or 'pcm16_16k'
         self._pending_tts_responses: Dict[str, asyncio.Future] = {}  # Track pending TTS responses
+        # Initial greeting text provided by engine/config (optional)
+        self._initial_greeting: Optional[str] = None
+
+    def set_initial_greeting(self, text: Optional[str]) -> None:
+        try:
+            value = (text or "").strip()
+        except Exception:
+            value = ""
+        self._initial_greeting = value or None
 
     @property
     def supported_codecs(self) -> List[str]:
@@ -200,13 +209,19 @@ class LocalProvider(AIProviderInterface):
             # Ensure the receive loop will attribute AgentAudio to this call
             self._active_call_id = call_id
 
+            # Compute greeting to speak; skip if none
+            greeting_text = self._initial_greeting or ""
+            if not greeting_text.strip():
+                logger.info("No initial greeting configured; skipping greeting playback", call_id=call_id)
+                return
+
             # Send a TTS request that the local AI server understands; it will
             # reply with metadata (tts_audio) and then a binary payload, which
             # our receive loop will emit as AgentAudio for this call.
             tts_message = {
                 "type": "tts_request",
                 "call_id": call_id,
-                "text": "Hello! I'm your AI assistant. How can I help you today?",
+                "text": greeting_text,
             }
 
             await self.websocket.send(json.dumps(tts_message))

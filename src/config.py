@@ -313,7 +313,7 @@ def load_config(path: str = "config/ai-agent.yaml") -> AppConfig:
         
         config_data = yaml.safe_load(config_str_expanded)
 
-        # Manually construct and inject the Asterisk and LLM configs from environment variables.
+        # Manually construct and inject the Asterisk config from environment variables.
         # This keeps secrets out of the YAML file and aligns with the Pydantic model.
         config_data['asterisk'] = {
             "host": os.getenv("ASTERISK_HOST"),
@@ -321,12 +321,41 @@ def load_config(path: str = "config/ai-agent.yaml") -> AppConfig:
             "password": os.getenv("ASTERISK_ARI_PASSWORD"),
             "app_name": "asterisk-ai-voice-agent"
         }
-        
+
+        # Merge YAML LLM section with environment variables without clobbering YAML values.
+        # Precedence: YAML llm.* (if non-empty) > env vars > hardcoded defaults.
+        llm_yaml = (config_data.get('llm') or {}) if isinstance(config_data.get('llm'), dict) else {}
+
+        def _nonempty_string(val: Any) -> bool:
+            return isinstance(val, str) and val.strip() != ""
+
+        # Resolve initial_greeting
+        initial_greeting = llm_yaml.get('initial_greeting')
+        if not _nonempty_string(initial_greeting):
+            initial_greeting = os.getenv("GREETING", "Hello, how can I help you?")
+        # Resolve prompt/persona
+        prompt_val = llm_yaml.get('prompt')
+        if not _nonempty_string(prompt_val):
+            prompt_val = os.getenv("AI_ROLE", "You are a helpful assistant.")
+        # Resolve model and api_key
+        model_val = llm_yaml.get('model') or "gpt-4o"
+        api_key_val = llm_yaml.get('api_key') or os.getenv("OPENAI_API_KEY")
+
+        # Apply environment variable interpolation to final strings to support ${VAR} placeholders
+        try:
+            initial_greeting = os.path.expandvars(initial_greeting or "")
+        except Exception:
+            pass
+        try:
+            prompt_val = os.path.expandvars(prompt_val or "")
+        except Exception:
+            pass
+
         config_data['llm'] = {
-            "initial_greeting": os.getenv("GREETING", "Hello, how can I help you?"),
-            "prompt": os.getenv("AI_ROLE", "You are a helpful assistant."),
-            "model": "gpt-4o",
-            "api_key": os.getenv("OPENAI_API_KEY")
+            "initial_greeting": initial_greeting,
+            "prompt": prompt_val,
+            "model": model_val,
+            "api_key": api_key_val,
         }
 
         # Defaults for new flags if not present in YAML

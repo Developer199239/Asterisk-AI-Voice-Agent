@@ -87,23 +87,25 @@ external_media:
 # Optional VAD/barge-in and streaming tuning
 barge_in:
   enabled: false
-  initial_protection_ms: 400
-  min_ms: 400
-  energy_threshold: 1800
-  cooldown_ms: 1000
-  post_tts_end_protection_ms: 250
+  initial_protection_ms: 400    # Drop inbound during agent intro; 200–600 ms. Higher = less echo, more delay.
+  min_ms: 400                   # Sustained speech required to trigger; 250–600 ms. Lower = more sensitive.
+  energy_threshold: 1800        # RMS threshold for speech detection; 1000–3000. Raise on noisy lines.
+  cooldown_ms: 1000             # Ignore retriggers for this period after one fires; 500–1500 ms.
+  post_tts_end_protection_ms: 250  # Guard after TTS ends to avoid clipping callers; 250–500 ms.
 
 streaming:
   sample_rate: 8000
-  jitter_buffer_ms: 100
+  jitter_buffer_ms: 100         # 80–150 ms. Higher = more robust to jitter, slightly more latency.
   keepalive_interval_ms: 5000
   connection_timeout_ms: 10000
   fallback_timeout_ms: 8000
   chunk_size_ms: 20
-  min_start_ms: 300
-  low_watermark_ms: 200
-  provider_grace_ms: 500
+  min_start_ms: 300             # 250–400 ms. Warm-up buffer; too low risks underruns.
+  low_watermark_ms: 200         # Pause when buffer dips below this; raise if underruns occur.
+  provider_grace_ms: 500        # Absorb late chunks after cleanup; avoids tail-chop.
   logging_level: "info"
+
+# VAD: add a `vad:` block if you need utterance segmentation control; see docs/Configuration-Reference.md
 
 # Providers (secrets from .env)
 providers:
@@ -127,3 +129,9 @@ providers:
     api_key: "${DEEPGRAM_API_KEY}"
     model: "nova-2-general"
     tts_model: "aura-asteria-en"
+
+# Canonical LLM defaults (used by providers/pipelines unless overridden)
+llm:
+  initial_greeting: "Hello, how can I help you today?"
+  prompt: "You are a concise and helpful voice assistant. Keep replies under 20 words unless asked for detail."
+  model: "gpt-4o"

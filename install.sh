@@ -15,6 +15,9 @@ print_info() {
     echo -e "${COLOR_BLUE}INFO: $1${COLOR_RESET}"
 }
 
+# Determine sudo usable globally
+if [ "$(id -u)" -ne 0 ]; then SUDO="sudo"; else SUDO=""; fi
+
 # --- Media path setup ---
 setup_media_paths() {
     print_info "Setting up media directories and symlink for Asterisk playback..."
@@ -144,6 +147,86 @@ upsert_env() {
     else
         echo "${KEY}=${VAL}" >> .env
     fi
+}
+
+# Ensure yq exists on Ubuntu/CentOS, otherwise try to install a static binary; fallback will be used if all fail.
+ensure_yq() {
+    if command -v yq >/dev/null 2>&1; then
+        return 0
+    fi
+    print_info "yq not found; attempting installation..."
+    if command -v apt-get >/dev/null 2>&1; then
+        $SUDO apt-get update && $SUDO apt-get install -y yq || true
+    elif command -v yum >/dev/null 2>&1; then
+        $SUDO yum -y install epel-release || true
+        $SUDO yum -y install yq || true
+    elif command -v dnf >/dev/null 2>&1; then
+        $SUDO dnf -y install yq || true
+    elif command -v snap >/dev/null 2>&1; then
+        $SUDO snap install yq || true
+    fi
+    if command -v yq >/dev/null 2>&1; then
+        print_success "yq installed."
+        return 0
+    fi
+    # Download static binary as last resort
+    print_info "Falling back to installing yq static binary..."
+    ARCH=$(uname -m)
+    case "$ARCH" in
+        x86_64|amd64) YQ_BIN="yq_linux_amd64" ;;
+        aarch64|arm64) YQ_BIN="yq_linux_arm64" ;;
+        *) YQ_BIN="yq_linux_amd64" ;;
+    esac
+    TMP_YQ="/tmp/${YQ_BIN}"
+    if command -v curl >/dev/null 2>&1; then
+        curl -L "https://github.com/mikefarah/yq/releases/latest/download/${YQ_BIN}" -o "$TMP_YQ" || true
+    elif command -v wget >/dev/null 2>&1; then
+        wget -O "$TMP_YQ" "https://github.com/mikefarah/yq/releases/latest/download/${YQ_BIN}" || true
+    fi
+    if [ -f "$TMP_YQ" ]; then
+        $SUDO mv "$TMP_YQ" /usr/local/bin/yq && $SUDO chmod +x /usr/local/bin/yq || true
+    fi
+    if command -v yq >/dev/null 2>&1; then
+        print_success "yq installed (static)."
+        return 0
+    fi
+    print_warning "yq could not be installed; will use sed/awk fallback."
+    return 1
+}
+
+# Update config/ai-agent.yaml llm block with GREETING and AI_ROLE.
+update_yaml_llm() {
+    local CFG_DST="config/ai-agent.yaml"
+    if [ ! -f "$CFG_DST" ]; then
+        print_warning "YAML not found at $CFG_DST; skipping llm update."
+        return 0
+    fi
+    if command -v yq >/dev/null 2>&1; then
+        # Use env() in yq to avoid quoting issues
+        GREETING="${GREETING}"
+        AI_ROLE="${AI_ROLE}"
+        export GREETING AI_ROLE
+        if yq -i '.llm.initial_greeting = env(GREETING) | .llm.prompt = env(AI_ROLE) | (.llm.model //= "gpt-4o")' "$CFG_DST"; then
+            print_success "Updated llm.* in $CFG_DST via yq."
+            return 0
+        else
+            print_warning "yq update failed; falling back to append llm block."
+        fi
+    fi
+    # Fallback: append an llm block at end (last key wins in PyYAML)
+    local G_ESC
+    local R_ESC
+    G_ESC=$(printf '%s' "$GREETING" | sed 's/"/\\"/g')
+    R_ESC=$(printf '%s' "$AI_ROLE" | sed 's/"/\\"/g')
+    cat >> "$CFG_DST" <<EOF
+
+# llm block inserted by install.sh (fallback path)
+llm:
+  initial_greeting: "$G_ESC"
+  prompt: "$R_ESC"
+  model: "gpt-4o"
+EOF
+    print_success "Appended llm block to $CFG_DST (fallback)."
 }
 
 # --- Local model helpers ---
@@ -323,6 +406,27 @@ configure_env() {
     if [ -n "$OPENAI_API_KEY" ]; then upsert_env OPENAI_API_KEY "$OPENAI_API_KEY"; fi
     if [ -n "$DEEPGRAM_API_KEY" ]; then upsert_env DEEPGRAM_API_KEY "$DEEPGRAM_API_KEY"; fi
 
+    # Greeting and AI Role prompts (idempotent; prefill from .env if present)
+    local GREETING_DEFAULT AI_ROLE_DEFAULT
+    if [ -f .env ]; then
+        GREETING_DEFAULT=$(grep -E '^[# ]*GREETING=' .env | tail -n1 | sed -E 's/^[# ]*GREETING=//' | sed -E 's/^"(.*)"$/\1/')
+        AI_ROLE_DEFAULT=$(grep -E '^[# ]*AI_ROLE=' .env | tail -n1 | sed -E 's/^[# ]*AI_ROLE=//' | sed -E 's/^"(.*)"$/\1/')
+    fi
+    [ -z "$GREETING_DEFAULT" ] && GREETING_DEFAULT="Hello, how can I help you today?"
+    [ -z "$AI_ROLE_DEFAULT" ] && AI_ROLE_DEFAULT="You are a concise and helpful voice assistant. Keep replies under 20 words unless asked for detail."
+
+    read -p "Enter initial Greeting [${GREETING_DEFAULT}]: " GREETING
+    GREETING=${GREETING:-$GREETING_DEFAULT}
+    read -p "Enter AI Role/Persona [${AI_ROLE_DEFAULT}]: " AI_ROLE
+    AI_ROLE=${AI_ROLE:-$AI_ROLE_DEFAULT}
+
+    # Escape quotes for .env
+    local G_ESC R_ESC
+    G_ESC=$(printf '%s' "$GREETING" | sed 's/"/\\"/g')
+    R_ESC=$(printf '%s' "$AI_ROLE" | sed 's/"/\\"/g')
+    upsert_env GREETING "\"$G_ESC\""
+    upsert_env AI_ROLE "\"$R_ESC\""
+
     # Clean sed backup if created
     [ -f .env.bak ] && rm -f .env.bak || true
 
@@ -357,6 +461,10 @@ select_config_template() {
     fi
     cp "$CFG_SRC" "$CFG_DST"
     print_success "Wrote $CFG_DST from $CFG_SRC"
+
+    # Ensure yq is available and update llm.* from the values captured earlier
+    ensure_yq || true
+    update_yaml_llm || true
 
     # Offer local model setup for Local or Hybrid
     if [ "$PROFILE" = "local" ] || [ "$PROFILE" = "hybrid" ]; then

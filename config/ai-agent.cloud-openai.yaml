@@ -34,11 +34,13 @@ audiosocket:
 # Telephony-tuned barge-in and VAD
 barge_in:
   enabled: true
-  initial_protection_ms: 350
-  min_ms: 300
-  energy_threshold: 1800
-  cooldown_ms: 800
-  post_tts_end_protection_ms: 250
+  initial_protection_ms: 350    # Drop inbound during agent intro; 200–600 ms. Higher = less echo, more delay.
+  min_ms: 300                   # Sustained speech required to trigger; 250–600 ms. Lower = more sensitive.
+  energy_threshold: 1800        # RMS threshold for speech detection; 1000–3000. Raise on noisy lines.
+  cooldown_ms: 800              # Ignore retriggers for this period after one fires; 500–1500 ms.
+  post_tts_end_protection_ms: 250  # Guard after TTS ends to avoid clipping callers; 250–500 ms.
+
+# VAD: add a `vad:` block if you need utterance segmentation control; see docs/Configuration-Reference.md
 
 vad:
   webrtc_aggressiveness: 1
@@ -55,3 +57,9 @@ providers:
   openai:
     enabled: true
     api_key: "${OPENAI_API_KEY}"
+
+# Canonical LLM defaults (used by providers/pipelines unless overridden)
+llm:
+  initial_greeting: "Hello, how can I help you today?"
+  prompt: "You are a concise and helpful voice assistant. Keep replies under 20 words unless asked for detail."
+  model: "gpt-4o"

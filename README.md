@@ -142,10 +142,30 @@ If you want to use OpenAI Realtime out of the box:
 
 The system is configured via `config/ai-agent.yaml` and a `.env` file for secrets.
 
+### Canonical persona and greeting
+
+- The canonical source for the agent greeting and persona lives in `config/ai-agent.yaml` under the `llm` block:
+  - `llm.initial_greeting`
+  - `llm.prompt`
+- Precedence rules at runtime:
+  1) Provider or pipeline-specific overrides (e.g., `providers.openai_realtime.instructions` or `providers.deepgram.greeting`) if explicitly set
+  2) `llm.prompt` and `llm.initial_greeting` in YAML
+  3) Environment variables `AI_ROLE` and `GREETING` as defaults
+
+This ensures all providers and pipelines stay aligned unless you intentionally override them per provider/pipeline.
+
+### Installer behavior (GREETING/AI_ROLE)
+
+- `./install.sh` prompts for Greeting and AI Role and writes them to `.env`. It also updates `config/ai-agent.yaml` `llm.*` via `yq` (Linux-first) or appends a YAML `llm` block as a fallback when `yq` cannot be installed.
+- Reruns are idempotent: prompts are prefilled from existing `.env`.
+- `${VAR}` placeholders in YAML remain supported; the loader expands these at runtime.
+
 ### Key `ai-agent.yaml` settings:
 - `default_provider`: `openai_realtime` (monolithic fallback; pipelines are the default path via `active_pipeline`)
 - `asterisk`: Connection details for ARI.
 - `providers`: Specific configurations for each AI provider.
+
+For a full, option-by-option reference (with recommended ranges and impact), see `docs/Configuration-Reference.md`. For practical presets, see `docs/Tuning-Recipes.md`.
 
 ### Required `.env` variables:
 - `ASTERISK_ARI_USERNAME` & `ASTERISK_ARI_PASSWORD`
