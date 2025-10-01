@@ -16,11 +16,11 @@ audiosocket:
 # Optional: barge-in and streaming tuning
 barge_in:
   enabled: false
-  initial_protection_ms: 400
-  min_ms: 400
-  energy_threshold: 1800
-  cooldown_ms: 1000
-  post_tts_end_protection_ms: 250
+  initial_protection_ms: 400    # Drop inbound during agent intro; 200–600 ms. Higher = less echo, more delay.
+  min_ms: 400                   # Sustained speech required to trigger; 250–600 ms. Lower = more sensitive.
+  energy_threshold: 1800        # RMS threshold for speech detection; 1000–3000. Raise on noisy lines.
+  cooldown_ms: 1000             # Ignore retriggers for this period after one fires; 500–1500 ms.
+  post_tts_end_protection_ms: 250  # Guard after TTS ends to avoid clipping callers; 250–500 ms.
 
 streaming:
   sample_rate: 8000
@@ -41,3 +41,15 @@ providers:
     model: "gpt-4o-realtime-preview-2024-12-17"
     voice: "alloy"
     base_url: "wss://api.openai.com/v1/realtime"
+    # Optional: enable server-side VAD turn detection for improved turn-taking.
+    # turn_detection:
+    #   type: "server_vad"
+    #   silence_duration_ms: 200
+    #   threshold: 0.5
+    #   prefix_padding_ms: 200
+
+# Canonical LLM defaults (used by provider unless overridden)
+llm:
+  initial_greeting: "Hello, how can I help you today?"
+  prompt: "You are a concise and helpful voice assistant. Keep replies under 20 words unless asked for detail."
+  model: "gpt-4o"

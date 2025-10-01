@@ -297,6 +297,16 @@ class OpenAISTTAdapter(STTComponent):
             ),
             "prompt_override": runtime_options.get("prompt_override"),
         }
+        # Fallback persona when instructions not provided
+        try:
+            instr = (merged.get("instructions") or "").strip()
+        except Exception:
+            instr = ""
+        if not instr:
+            try:
+                merged["instructions"] = getattr(self._app_config.llm, "prompt", None)
+            except Exception:
+                merged["instructions"] = None
         return merged
 
 
@@ -486,6 +496,25 @@ class OpenAILLMAdapter(LLMComponent):
             "timeout_sec": float(runtime_options.get("timeout_sec", self._pipeline_defaults.get("timeout_sec", self._default_timeout))),
             "use_realtime": runtime_options.get("use_realtime", self._pipeline_defaults.get("use_realtime", False)),
         }
+        # Fallback persona when missing
+        try:
+            sys_p = (merged.get("system_prompt") or "").strip()
+        except Exception:
+            sys_p = ""
+        if not sys_p:
+            try:
+                merged["system_prompt"] = getattr(self._app_config.llm, "prompt", None)
+            except Exception:
+                merged["system_prompt"] = None
+        try:
+            instr = (merged.get("instructions") or "").strip()
+        except Exception:
+            instr = ""
+        if not instr:
+            try:
+                merged["instructions"] = getattr(self._app_config.llm, "prompt", None)
+            except Exception:
+                merged["instructions"] = None
         return merged
 
     def _build_chat_payload(self, transcript: str, context: Dict[str, Any], merged: Dict[str, Any]) -> Dict[str, Any]:

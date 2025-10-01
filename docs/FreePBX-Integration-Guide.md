@@ -101,6 +101,8 @@ Provider overrides vs Pipelines:
 - If you set `AI_PROVIDER` to a known provider alias/name (e.g., `openai`, `deepgram`), the engine uses that provider directly for this call.
 - Otherwise, `AI_PROVIDER` is treated as a pipeline name and must exactly match `pipelines.<name>` in your active config.
 
+Tip: For a full explanation of each option (barge-in, VAD, streaming, transports, providers) see `docs/Configuration-Reference.md`. For ready-to-use tuning presets, see `docs/Tuning-Recipes.md`.
+
 ```asterisk
 [from-ai-agent]
 exten => s,1,NoOp(Handing call directly to AI engine (default provider))

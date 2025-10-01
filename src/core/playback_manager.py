@@ -9,6 +9,7 @@ token-aware gating.
 import asyncio
 import time
 import os
+import inspect
 from typing import Optional, Dict, TYPE_CHECKING
 import structlog
 
@@ -48,12 +49,17 @@ class PlaybackManager:
         # Ensure media directory exists
         try:
             os.makedirs(media_dir, exist_ok=True)
-        except PermissionError:
-            # Fallback to a writable temp directory on CI/containers
+        except (PermissionError, OSError):
+            # Fallback to a writable temp directory on CI/containers (handles read-only FS too)
             fallback = os.getenv("AST_MEDIA_DIR", "/tmp/asterisk_media/ai-generated")
-            os.makedirs(fallback, exist_ok=True)
+            try:
+                os.makedirs(fallback, exist_ok=True)
+            except Exception:
+                # Last resort within /tmp
+                fallback = "/tmp/ai-generated"
+                os.makedirs(fallback, exist_ok=True)
             logger.warning(
-                "PlaybackManager media_dir fallback due to permission error",
+                "PlaybackManager media_dir fallback due to permission/ROFS",
                 requested=media_dir,
                 fallback=fallback,
             )
@@ -265,12 +271,19 @@ class PlaybackManager:
             sound_uri = f"sound:ai-generated/{os.path.basename(audio_file).replace('.ulaw', '')}"
             
             # Play via bridge. Prefer deterministic ID method when available.
-            play_with_id = getattr(self.ari_client, "play_media_on_bridge_with_id", None)
             play_basic = getattr(self.ari_client, "play_audio_via_bridge", None)
-            if callable(play_with_id):
-                success = await play_with_id(session.bridge_id, sound_uri, playback_id)
-            elif callable(play_basic):
-                result = await play_basic(session.bridge_id, sound_uri)
+            play_with_id = getattr(self.ari_client, "play_media_on_bridge_with_id", None)
+
+            success = False
+            if play_basic and callable(play_basic):
+                result = play_basic(session.bridge_id, sound_uri)
+                if inspect.isawaitable(result):
+                    result = await result
+                success = bool(result)
+            elif play_with_id and callable(play_with_id):
+                result = play_with_id(session.bridge_id, sound_uri, playback_id)
+                if inspect.isawaitable(result):
+                    result = await result
                 success = bool(result)
             else:
                 raise AttributeError("ARI client missing playback method")

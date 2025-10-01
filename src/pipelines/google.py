@@ -368,13 +368,23 @@ class GoogleLLMAdapter(LLMComponent):
 
     def _compose_options(self, runtime_options: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         merged = _merge_dicts(self._pipeline_defaults, runtime_options)
+        # Determine system instruction precedence: runtime > pipeline > app_config.llm.prompt
+        try:
+            sys_instr = (merged.get("system_instruction") or merged.get("system_prompt") or "").strip()
+        except Exception:
+            sys_instr = ""
+        if not sys_instr:
+            try:
+                sys_instr = getattr(self._app_config.llm, "prompt", None) or None
+            except Exception:
+                sys_instr = None
         return {
             "model": merged.get("model", self._provider_defaults.llm_model),
             "temperature": merged.get("temperature", 0.7),
             "top_p": merged.get("top_p"),
             "candidate_count": int(merged.get("candidate_count", 1)),
             "max_output_tokens": merged.get("max_output_tokens"),
-            "system_instruction": merged.get("system_instruction") or merged.get("system_prompt"),
+            "system_instruction": sys_instr,
             "safety_settings": merged.get("safety_settings"),
             "request_overrides": dict(merged.get("request_overrides") or merged.get("request") or {}),
             "timeout_sec": float(merged.get("timeout_sec", 10.0)),
