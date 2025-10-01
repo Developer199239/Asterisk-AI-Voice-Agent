@@ -170,7 +170,7 @@ This ensures all providers and pipelines stay aligned unless you intentionally o
 - `asterisk`: Connection details for ARI.
 - `providers`: Specific configurations for each AI provider.
 
-For a full, option-by-option reference (with recommended ranges and impact), see [`docs/Configuration-Reference.md`](docs/Configuration-Reference.md). For practical presets, see [`docs/Tuning-Recipes.md`](docs/Tuning-Recipes).
+For a full, option-by-option reference (with recommended ranges and impact), see [`docs/Configuration-Reference.md`](docs/Configuration-Reference.md). For practical presets, see [`docs/Tuning-Recipes.md`](docs/Tuning-Recipes.md).
 
 ### Required `.env` variables:
 - `ASTERISK_ARI_USERNAME` & `ASTERISK_ARI_PASSWORD`
