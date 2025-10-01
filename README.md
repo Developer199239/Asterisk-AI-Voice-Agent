@@ -25,6 +25,11 @@ This project is designed to be the most powerful, flexible, and easy-to-use open
 - **Docker-based Deployment**: Simple, two-service orchestration using Docker Compose.
 - **Customizable**: Configure greetings, AI roles, and voice personalities in a simple YAML file.
 
+## 🎥 Demo
+
+[![Watch the demo](https://img.youtube.com/vi/ZQVny8wfCeY/hqdefault.jpg)](https://youtu.be/ZQVny8wfCeY "Asterisk AI Voice Agent demo")
+
+
 ## 🚀 Quick Start
 
 Follow these 3 steps to get a working agent.
