@@ -40,7 +40,13 @@ git clone https://github.com/hkjarral/Asterisk-AI-Voice-Agent.git
 cd Asterisk-AI-Voice-Agent
 ./install.sh
 ```
-Pick a config template when prompted. The installer will set up the media path symlink and optionally start services.
+When prompted, choose your preferred configuration. The installer will:
+- Create/update `.env` (prefilled from existing values on reruns; blank keeps current).
+- Write `config/ai-agent.yaml` from the canonical pipelines template and set your selection as the active default (pipeline or monolithic provider).
+- Set up the media path symlink.
+- Start only what is required for your selection:
+  - Local/Hybrid: start `local-ai-server` (wait for health), then `ai-engine`.
+  - Cloud-only/Monolithic: start `ai-engine` only.
 
 2) Verify health
 ```bash
@@ -55,100 +61,28 @@ Hello World (optional, Local AI):
 ```bash
 python3 tests/test_local_ai_server_protocol.py  # With local-ai-server running
 ```
-Should report `3/3` tests passed.
-
 #### OpenAI Realtime quick start (cloud-only)
 
 If you want to use OpenAI Realtime out of the box:
 
-1) During `./install.sh`, select the OpenAI template when prompted (it writes `config/ai-agent.openai-agent.yaml` to `config/ai-agent.yaml`).
+1) During `./install.sh`, select the OpenAI Realtime option when prompted (the installer keeps the pipelines template and sets `default_provider` to OpenAI Realtime for monolithic operation).
 2) Add your API key in `.env`:
    ```bash
    echo "OPENAI_API_KEY=sk-..." >> .env
    ```
 3) Start just the engine (no local models needed):
-   ```bash
-   docker-compose up -d ai-engine
-   ```
-4) Route a test call as in the FreePBX guide.
-
-### Prerequisites
-
-- **Asterisk 18+** or **FreePBX 15+** with ARI enabled.
-- **Docker** and **Docker Compose** installed.
-- **Git** for cloning the repository.
-
-#### Prerequisite checks
-
-- Verify required Asterisk modules are loaded:
-  ```bash
-  asterisk -rx "module show like res_ari_applications"
-  asterisk -rx "module show like app_audiosocket"
-  ```
-  Expect both to show Status: Running. If Asterisk < 18, upgrade or on FreePBX Distro run: `asterisk-switch-version` (aka `asterisk-version-switch`) to select 18+.
-
-  Example output:
-  ```
-  Module                         Description                               Use Count  Status   Support Level
-  res_ari_applications.so        RESTful API module - Stasis application   0          Running  core
-  1 modules loaded
-
-  Module                         Description                               Use Count  Status   Support Level
-  app_audiosocket.so             AudioSocket Application                    20         Running  extended
-  1 modules loaded
-  ```
-
-- Quick install Docker
-  - Ubuntu (convenience script):
     ```bash
-    curl -fsSL https://get.docker.com | sudo sh
-    sudo usermod -aG docker $USER && newgrp docker
-    docker --version && docker compose version
+    docker-compose up --build -d ai-engine
     ```
-  - CentOS/Rocky/Alma (repo method):
-    ```bash
-    sudo dnf -y install dnf-plugins-core
-    sudo dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
-    sudo dnf install -y docker-ce docker-ce-cli containerd.io
-    sudo systemctl enable --now docker
-    docker --version && docker compose version
-    ```
-
-### Installation
-
-1.  **Clone the repository**:
-    ```bash
-    git clone https://github.com/hkjarral/Asterisk-AI-Voice-Agent.git
-    cd Asterisk-AI-Voice-Agent
-    ```
-
-2.  **Run the installer (recommended)**:
-    ```bash
-    ./install.sh
-    ```
-    The installer will:
-    - Verify Docker, detect Compose (`docker-compose` vs `docker compose`).
-    - Run Asterisk module preflight checks.
-    - Copy `.env.example` to `.env` (if needed) and prompt for ARI and API keys.
-    - Let you pick a config template under `config/` and write `config/ai-agent.yaml`.
-    - Offer to download local models if you choose a Local/Hybrid profile.
-    - Optionally build and start the stack.
-
-    If you prefer manual setup, follow the steps in the Configuration section below.
-
-3.  **Start the services** (if you didn’t let the installer do it):
-    ```bash
-    docker-compose up --build -d
-    ```
-    This will start both the `ai-engine` and the `local-ai-server`. If you only want to use a cloud provider like Deepgram, you can start just the engine: `docker-compose up -d ai-engine`.
-
 
 ## ⚙️ Configuration
 
 The system is configured via `config/ai-agent.yaml` and a `.env` file for secrets.
-
+The installer is idempotent and pipeline-aware. It always writes `config/ai-agent.yaml` from the canonical pipelines template and then:
+- Sets `active_pipeline` for Local/Hybrid/Cloud-OpenAI choices.
+- Sets `default_provider` for monolithic choices (OpenAI Realtime or Deepgram).
+- Updates `llm.initial_greeting` and `llm.prompt` via `yq` when available, with a safe append fallback otherwise.
 ### Canonical persona and greeting
-
 - The canonical source for the agent greeting and persona lives in `config/ai-agent.yaml` under the `llm` block:
   - `llm.initial_greeting`
   - `llm.prompt`
@@ -159,11 +93,18 @@ The system is configured via `config/ai-agent.yaml` and a `.env` file for secret
 
 This ensures all providers and pipelines stay aligned unless you intentionally override them per provider/pipeline.
 
-### Installer behavior (GREETING/AI_ROLE)
+### Installer behavior (idempotent and pipeline-aware)
 
-- [`./install.sh`](install.sh) prompts for Greeting and AI Role and writes them to [`.env`](.env.example). It also updates [`config/ai-agent.yaml`](config/ai-agent.yaml) `llm.*` via `yq` (Linux-first) or appends a YAML `llm` block as a fallback when `yq` cannot be installed.
-- Reruns are idempotent: prompts are prefilled from existing `.env`.
+- [`./install.sh`](install.sh) prompts for ARI credentials, API keys, Greeting, and AI Role.
+  - All prompts are prefilled from `.env` on reruns; leaving a field blank keeps its existing value.
+- The installer always writes `config/ai-agent.yaml` from the canonical pipelines template and then:
+  - Sets `active_pipeline` for Local/Hybrid/Cloud-OpenAI choices.
+  - Sets `default_provider` for monolithic choices (OpenAI Realtime or Deepgram).
+- It updates `llm.initial_greeting` and `llm.prompt` via `yq` when available, with a safe append fallback otherwise.
 - `${VAR}` placeholders in YAML remain supported; the loader expands these at runtime.
+- Service startup is selection-aware:
+  - Local/Hybrid: `local-ai-server` is started first and waited on, then `ai-engine`.
+  - Cloud-only/Monolithic: only `ai-engine` is started.
 
 ### Key `ai-agent.yaml` settings:
 - `default_provider`: `openai_realtime` (monolithic fallback; pipelines are the default path via `active_pipeline`)
