@@ -1,26 +1,22 @@
 # Monolithic OpenAI Realtime Voice Agent configuration
-# Copy to config/ai-agent.yaml to run the OpenAI Realtime agent (no pipelines required).
 # Requires OPENAI_API_KEY in .env
 
 default_provider: "openai_realtime"
-
-# Transport modes
-audio_transport: "audiosocket"   # audiosocket | externalmedia
-downstream_mode: "stream"        # stream | file
+audio_transport: "audiosocket"
+downstream_mode: "stream"
 
 audiosocket:
   host: "0.0.0.0"
   port: 8090
   format: "ulaw"
 
-# Optional: barge-in and streaming tuning
 barge_in:
-  enabled: false
-  initial_protection_ms: 400    # Drop inbound during agent intro; 200–600 ms. Higher = less echo, more delay.
-  min_ms: 400                   # Sustained speech required to trigger; 250–600 ms. Lower = more sensitive.
-  energy_threshold: 1800        # RMS threshold for speech detection; 1000–3000. Raise on noisy lines.
-  cooldown_ms: 1000             # Ignore retriggers for this period after one fires; 500–1500 ms.
-  post_tts_end_protection_ms: 250  # Guard after TTS ends to avoid clipping callers; 250–500 ms.
+  enabled: true
+  initial_protection_ms: 200
+  min_ms: 250
+  energy_threshold: 1200
+  cooldown_ms: 500
+  post_tts_end_protection_ms: 100
 
 streaming:
   sample_rate: 8000
@@ -41,15 +37,29 @@ providers:
     model: "gpt-4o-realtime-preview-2024-12-17"
     voice: "alloy"
     base_url: "wss://api.openai.com/v1/realtime"
-    # Optional: enable server-side VAD turn detection for improved turn-taking.
-    # turn_detection:
-    #   type: "server_vad"
-    #   silence_duration_ms: 200
-    #   threshold: 0.5
-    #   prefix_padding_ms: 200
+    instructions: "You are a concise voice assistant. Respond clearly and keep answers under 20 words unless more detail is requested."
+    organization: ""
+    input_encoding: "ulaw"
+    input_sample_rate_hz: 8000
+    provider_input_sample_rate_hz: 16000
+    output_encoding: "linear16"
+    output_sample_rate_hz: 24000
+    target_encoding: "ulaw"
+    target_sample_rate_hz: 8000
+    response_modalities:
+      - "audio"
+      - "text"
+    greeting: "${OPENAI_GREETING:-Hello, I am a Voice Assistant. How can I help you today?}"
+    turn_detection:
+      type: "server_vad"
+      silence_duration_ms: 300
+      threshold: 0.5
+      prefix_padding_ms: 200
 
-# Canonical LLM defaults (used by provider unless overridden)
+  local:
+    enabled: false
+
 llm:
-  initial_greeting: "Hello, how can I help you today?"
-  prompt: "You are a concise and helpful voice assistant. Keep replies under 20 words unless asked for detail."
+  initial_greeting: "Hello I am an AI assistant for Jugaar LLC, How can I help you today?"
+  prompt: "You are a concise and helpful voice assistant.Keep your answers under 20 words or less."
   model: "gpt-4o"
