@@ -169,12 +169,15 @@ ensure_yq() {
         print_success "yq installed."
         return 0
     fi
-    # Download static binary as last resort
+    # Download static binary as last resort (detect OS/ARCH)
     print_info "Falling back to installing yq static binary..."
     ARCH=$(uname -m)
-    case "$ARCH" in
-        x86_64|amd64) YQ_BIN="yq_linux_amd64" ;;
-        aarch64|arm64) YQ_BIN="yq_linux_arm64" ;;
+    OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+    case "${OS}-${ARCH}" in
+        linux-x86_64|linux-amd64) YQ_BIN="yq_linux_amd64" ;;
+        linux-aarch64|linux-arm64) YQ_BIN="yq_linux_arm64" ;;
+        darwin-x86_64|darwin-amd64) YQ_BIN="yq_darwin_amd64" ;;
+        darwin-arm64) YQ_BIN="yq_darwin_arm64" ;;
         *) YQ_BIN="yq_linux_amd64" ;;
     esac
     TMP_YQ="/tmp/${YQ_BIN}"
@@ -233,18 +236,6 @@ EOF
 autodetect_local_models() {
     print_info "Auto-detecting local model artifacts under ./models to set .env paths..."
     local stt="" llm="" tts=""
-
-    local has_gpu=0
-    if command -v nvidia-smi >/dev/null 2>&1; then
-        if nvidia-smi -L >/dev/null 2>&1; then
-            has_gpu=1
-        fi
-    elif command -v rocm-smi >/dev/null 2>&1; then
-        if rocm-smi -i >/dev/null 2>&1; then
-            has_gpu=1
-        fi
-    fi
-
 
     local has_gpu=0
     if command -v nvidia-smi >/dev/null 2>&1; then
@@ -388,23 +379,39 @@ configure_env() {
     print_info "Starting interactive configuration (.env updates)..."
     ensure_env_file
 
-    # Asterisk
-    read -p "Enter your Asterisk Host [127.0.0.1]: " ASTERISK_HOST
-    ASTERISK_HOST=${ASTERISK_HOST:-127.0.0.1}
-    read -p "Enter your ARI Username [asterisk]: " ASTERISK_ARI_USERNAME
-    ASTERISK_ARI_USERNAME=${ASTERISK_ARI_USERNAME:-asterisk}
-    read -s -p "Enter your ARI Password: " ASTERISK_ARI_PASSWORD
-    echo
+    # Prefill from existing .env if present
+    local ASTERISK_HOST_DEFAULT="" ASTERISK_ARI_USERNAME_DEFAULT="" ASTERISK_ARI_PASSWORD_DEFAULT=""
+    local OPENAI_API_KEY_DEFAULT="" DEEPGRAM_API_KEY_DEFAULT=""
+    if [ -f .env ]; then
+        ASTERISK_HOST_DEFAULT=$(grep -E '^[# ]*ASTERISK_HOST=' .env | tail -n1 | sed -E 's/^[# ]*ASTERISK_HOST=//')
+        ASTERISK_ARI_USERNAME_DEFAULT=$(grep -E '^[# ]*ASTERISK_ARI_USERNAME=' .env | tail -n1 | sed -E 's/^[# ]*ASTERISK_ARI_USERNAME=//')
+        ASTERISK_ARI_PASSWORD_DEFAULT=$(grep -E '^[# ]*ASTERISK_ARI_PASSWORD=' .env | tail -n1 | sed -E 's/^[# ]*ASTERISK_ARI_PASSWORD=//')
+        OPENAI_API_KEY_DEFAULT=$(grep -E '^[# ]*OPENAI_API_KEY=' .env | tail -n1 | sed -E 's/^[# ]*OPENAI_API_KEY=//')
+        DEEPGRAM_API_KEY_DEFAULT=$(grep -E '^[# ]*DEEPGRAM_API_KEY=' .env | tail -n1 | sed -E 's/^[# ]*DEEPGRAM_API_KEY=//')
+    fi
 
-    # API Keys (optional; set if applicable)
-    read -p "Enter your OpenAI API Key (leave blank to skip): " OPENAI_API_KEY
-    read -p "Enter your Deepgram API Key (leave blank to skip): " DEEPGRAM_API_KEY
+    # Asterisk (blank keeps existing)
+    read -p "Enter your Asterisk Host [${ASTERISK_HOST_DEFAULT:-127.0.0.1}]: " ASTERISK_HOST_INPUT
+    ASTERISK_HOST=${ASTERISK_HOST_INPUT:-${ASTERISK_HOST_DEFAULT:-127.0.0.1}}
+    read -p "Enter your ARI Username [${ASTERISK_ARI_USERNAME_DEFAULT:-asterisk}]: " ASTERISK_ARI_USERNAME_INPUT
+    ASTERISK_ARI_USERNAME=${ASTERISK_ARI_USERNAME_INPUT:-${ASTERISK_ARI_USERNAME_DEFAULT:-asterisk}}
+    read -s -p "Enter your ARI Password [unchanged if blank]: " ASTERISK_ARI_PASSWORD_INPUT
+    echo
+    if [ -n "$ASTERISK_ARI_PASSWORD_INPUT" ]; then
+        ASTERISK_ARI_PASSWORD="$ASTERISK_ARI_PASSWORD_INPUT"
+    else
+        ASTERISK_ARI_PASSWORD="$ASTERISK_ARI_PASSWORD_DEFAULT"
+    fi
+
+    # API Keys (optional; blank keeps existing)
+    read -p "Enter your OpenAI API Key (leave blank to keep existing): " OPENAI_API_KEY_INPUT
+    read -p "Enter your Deepgram API Key (leave blank to keep existing): " DEEPGRAM_API_KEY_INPUT
 
     upsert_env ASTERISK_HOST "$ASTERISK_HOST"
     upsert_env ASTERISK_ARI_USERNAME "$ASTERISK_ARI_USERNAME"
     upsert_env ASTERISK_ARI_PASSWORD "$ASTERISK_ARI_PASSWORD"
-    if [ -n "$OPENAI_API_KEY" ]; then upsert_env OPENAI_API_KEY "$OPENAI_API_KEY"; fi
-    if [ -n "$DEEPGRAM_API_KEY" ]; then upsert_env DEEPGRAM_API_KEY "$DEEPGRAM_API_KEY"; fi
+    if [ -n "$OPENAI_API_KEY_INPUT" ]; then upsert_env OPENAI_API_KEY "$OPENAI_API_KEY_INPUT"; fi
+    if [ -n "$DEEPGRAM_API_KEY_INPUT" ]; then upsert_env DEEPGRAM_API_KEY "$DEEPGRAM_API_KEY_INPUT"; fi
 
     # Greeting and AI Role prompts (idempotent; prefill from .env if present)
     local GREETING_DEFAULT AI_ROLE_DEFAULT
@@ -443,13 +450,17 @@ select_config_template() {
     echo "  [5] Monolithic OpenAI Realtime agent"
     echo "  [6] Monolithic Deepgram Voice Agent"
     read -p "Enter your choice [1]: " cfg_choice
+    # Always start from the canonical pipelines template, then set active/defaults
+    CFG_SRC="config/ai-agent.example.yaml"
+    PROFILE="example"
+    PIPELINE_CHOICE=""
     case "$cfg_choice" in
-        2) CFG_SRC="config/ai-agent.local.yaml"; PROFILE="local" ;;
-        3) CFG_SRC="config/ai-agent.cloud-openai.yaml"; PROFILE="cloud-openai" ;;
-        4) CFG_SRC="config/ai-agent.hybrid.yaml"; PROFILE="hybrid" ;;
-        5) CFG_SRC="config/ai-agent.openai-agent.yaml"; PROFILE="openai-agent" ;;
-        6) CFG_SRC="config/ai-agent.deepgram-agent.yaml"; PROFILE="deepgram-agent" ;;
-        *) CFG_SRC="config/ai-agent.example.yaml"; PROFILE="example" ;;
+        2) PROFILE="local"; PIPELINE_CHOICE="local_only" ;;
+        3) PROFILE="cloud-openai"; PIPELINE_CHOICE="cloud_openai" ;;
+        4) PROFILE="hybrid"; PIPELINE_CHOICE="hybrid_deepgram_openai" ;;
+        5) PROFILE="openai-agent" ;;
+        6) PROFILE="deepgram-agent" ;;
+        *) PROFILE="example"; PIPELINE_CHOICE="cloud_openai" ;;
     esac
     CFG_DST="config/ai-agent.yaml"
     if [ ! -f "$CFG_SRC" ]; then
@@ -461,6 +472,38 @@ select_config_template() {
     fi
     cp "$CFG_SRC" "$CFG_DST"
     print_success "Wrote $CFG_DST from $CFG_SRC"
+
+    # Set active_pipeline or default_provider based on selection
+    if [ -n "$PIPELINE_CHOICE" ]; then
+        if command -v yq >/dev/null 2>&1; then
+            yq -i ".active_pipeline = \"$PIPELINE_CHOICE\"" "$CFG_DST" || true
+        else
+            # sed fallback
+            if grep -qE '^[# ]*active_pipeline:' "$CFG_DST"; then
+                sed -i.bak -E "s|^([# ]*active_pipeline: ).*|\1$PIPELINE_CHOICE|" "$CFG_DST" || true
+            else
+                echo "active_pipeline: $PIPELINE_CHOICE" >> "$CFG_DST"
+            fi
+        fi
+    else
+        # Monolithic choices: adjust default_provider accordingly
+        case "$PROFILE" in
+            openai-agent)
+                if command -v yq >/dev/null 2>&1; then
+                    yq -i '.default_provider = "openai_realtime"' "$CFG_DST" || true
+                else
+                    sed -i.bak -E 's|^([# ]*default_provider: ).*|\1"openai_realtime"|' "$CFG_DST" || true
+                fi
+                ;;
+            deepgram-agent)
+                if command -v yq >/dev/null 2>&1; then
+                    yq -i '.default_provider = "deepgram"' "$CFG_DST" || true
+                else
+                    sed -i.bak -E 's|^([# ]*default_provider: ).*|\1"deepgram"|' "$CFG_DST" || true
+                fi
+                ;;
+        esac
+    fi
 
     # Ensure yq is available and update llm.* from the values captured earlier
     ensure_yq || true
@@ -496,8 +539,8 @@ start_services() {
             print_info "Starting ai-engine..."
             $COMPOSE up -d --build ai-engine
         else
-            print_info "Building and starting services..."
-            $COMPOSE up --build -d
+            print_info "Building and starting ai-engine only (no local models required)..."
+            $COMPOSE up --build -d ai-engine
         fi
         print_success "Services started."
         print_info "Logs:   $COMPOSE logs -f ai-engine"
@@ -526,10 +569,10 @@ print_asterisk_dialplan_snippet() {
             PIPELINE_NAME="local_only"
             ;;
         hybrid)
-            PIPELINE_NAME="hybrid"
+            PIPELINE_NAME="hybrid_deepgram_openai"
             ;;
         cloud-openai)
-            PIPELINE_NAME="cloud_only_openai"
+            PIPELINE_NAME="cloud_openai"
             ;;
         openai-agent)
             PROVIDER_OVERRIDE="openai"
