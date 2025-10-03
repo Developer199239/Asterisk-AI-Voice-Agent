@@ -128,9 +128,13 @@ cython_debug/
 *.bin
 *.safetensors
 
-# Cursor/Windsruf IDE
+# Cursor/Windsurf IDE
 .cursor/
 .windsurf/
+!.cursor/rules/
+!.cursor/rules/asterisk_ai_voice_agent.mdc
+!.windsurf/rules/
+!.windsurf/rules/asterisk_ai_voice_agent.md
 
 # Archives and old documentation
 Archived/
@@ -207,8 +211,9 @@ venv/
 !examples/*.py
 
 # Documentation-only rule files (keep local, not in GA branch)
-Agents.md
-Gemini.md
+# (Allow these specific artifacts to track on `develop` when needed.)
+!Agents.md
+!Gemini.md
 
 # Local diagnostics bundles
 server_diagnostics/
