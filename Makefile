@@ -333,15 +333,29 @@ monitor-externalmedia:
 
 ## monitor-externalmedia-once: Check ExternalMedia + RTP status once
 monitor-externalmedia-once:
-	@echo "--> Checking ExternalMedia + RTP status..."
-	@echo "$(PY_INFO)"; \
-	$(PY) scripts/monitor_externalmedia.py --once
+\t@echo "--> Checking ExternalMedia + RTP status..."
+\t@echo "$(PY_INFO)"; \
+\t$(PY) scripts/monitor_externalmedia.py --once
+
+## monitor-up: Start Prometheus + Grafana monitoring stack (host network)
+monitor-up:
+\t@echo "--> Starting monitoring stack (Prometheus + Grafana) on host network..."
+\tdocker-compose -f docker-compose.yml -f docker-compose.monitor.yml up -d prometheus grafana
+
+## monitor-down: Stop monitoring stack
+monitor-down:
+\t@echo "--> Stopping monitoring stack..."
+\tdocker-compose -f docker-compose.yml -f docker-compose.monitor.yml down
+
+## monitor-logs: Tail monitoring stack logs
+monitor-logs:
+\t@echo "--> Tailing Prometheus + Grafana logs... (Ctrl+C to exit)"
+\tdocker-compose -f docker-compose.yml -f docker-compose.monitor.yml logs -f prometheus grafana
 
 ## capture-logs: Capture structured logs during test call (default: 40 seconds)
 capture-logs:
 	@echo "--> Starting structured log capture for test call..."
-	@echo "📞 Make your test call now!"
-	@echo "$(PY_INFO)"; \
+	@echo "Make your test call now!"
 	$(PY) scripts/capture_test_logs.py --duration 40
 
 ## capture-logs-short: Capture logs for 30 seconds
@@ -413,4 +427,4 @@ help:
 	@echo "Targets:"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
-.PHONY: build up down logs logs-all ps deploy deploy-safe deploy-force deploy-full deploy-no-cache server-logs server-logs-snapshot server-status server-clear-logs server-health test-local test-integration test-ari test-externalmedia verify-deployment verify-remote-sync verify-server-commit verify-config monitor-externalmedia monitor-externalmedia-once help
+.PHONY: build up down logs logs-all ps deploy deploy-safe deploy-force deploy-full deploy-no-cache server-logs server-logs-snapshot server-status server-clear-logs server-health test-local test-integration test-ari test-externalmedia verify-deployment verify-remote-sync verify-server-commit verify-config monitor-externalmedia monitor-externalmedia-once monitor-up monitor-down monitor-logs help

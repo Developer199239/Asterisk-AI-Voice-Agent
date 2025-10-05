@@ -98,15 +98,30 @@ This roadmap tracks the open-source enablement work for the Asterisk AI Voice Ag
   - Custom pipeline regressions succeed using YAML only.
   - Changing OpenAI/Deepgram endpoints or voice/model via YAML takes effect on next call.
 
-## Milestone 8 — Optional Monitoring & Analytics Stack (Planned)
-- **Goal**: Provide an opt-in Prometheus + Grafana stack for streaming metrics and future analytics. Instructions: `docs/milestones/milestone-8-monitoring-stack.md`.
-- **Dependencies**: Milestones 5–7 expose required telemetry.
-- **Primary Tasks**:
-  - Add monitoring services to `docker-compose.yml` and Make targets (`monitor-up`, `monitor-down`).
-  - Ship starter dashboards visualising streaming health and latency.
-  - Document setup in `docs/Monitoring.md` (or equivalent section in Architecture).
-- **Acceptance**:
-  - `make monitor-up` brings stack online; dashboards show live call metrics.
-  - Monitoring stack remains optional and does not impact base deployment when disabled.
+## Milestone 8 — Monitoring, Feedback & Guided Setup (Planned)
+- **Goal**: Ship an opt-in monitoring + analytics experience that is turnkey, captures per-call transcripts/metrics, and surfaces actionable YAML tuning guidance. Implementation details live in `docs/milestones/milestone-8-monitoring-stack.md`.
+- **Dependencies**: Milestones 5–7 in place so streaming telemetry, pipeline metadata, and configuration hot-reload already work.
+- **Workstreams & Tasks**:
+  1. **Observability Foundation**
+     - Add Prometheus & Grafana services to `docker-compose.yml` with persistent volumes and optional compose profile.
+     - Expose Make targets (`monitor-up`, `monitor-down`, `monitor-logs`, `monitor-status`) plus SSH-friendly variants in `tools/ide/Makefile.ide` if needed.
+     - Ensure `ai-engine` and `local-ai-server` `/metrics` export call/pipeline labels (`session_uuid`, `pipeline_name`, `provider_id`, `model_variant`).
+  2. **Call Analytics & Storage**
+     - Extend `SessionStore` (or dedicated collector) to emit end-of-call summaries: duration, turn count, fallback/jitter totals, sentiment score placeholder, pipeline + model names.
+     - Archive transcripts and the associated config snapshot per call (e.g., `monitoring/call_sessions/<uuid>.jsonl` + `settings.json`).
+     - Publish Prometheus metrics for recommendations (`ai_agent_setting_recommendation_total{field="streaming.low_watermark_ms"}`) and sentiment/quality trends.
+  3. **Recommendations & Feedback Loop**
+     - Implement rule-based analyzer that inspects call summaries and suggests YAML tweaks (buffer warmup, fallback timeouts, pipeline swaps) exposed via Prometheus labels and a lightweight `/feedback/latest` endpoint.
+     - Document how to interpret each recommendation and where to edit (`config/ai-agent.yaml`).
+  4. **Dashboards & UX**
+     - Curate Grafana dashboards: real-time call board, pipeline/model leaderboards, sentiment timeline, recommendation feed, transcript quick links.
+     - Keep dashboards auto-provisioned (`monitoring/dashboards/`) so `make monitor-up` renders data without manual import.
+  5. **Guided Setup for Non-Linux Users**
+     - Deliver a helper script (e.g., `scripts/setup_monitoring.py`) that checks Docker, scaffolds `.env`, snapshots current YAML, enables the monitoring profile, and prints Grafana credentials/URL.
+     - Update docs/Architecture, Agents.md, `.cursor/…`, `.windsurf/…`, `Gemini.md` to mention the optional workflow.
+- **Acceptance & Fast Verification**:
+  - `make monitor-up` (or helper script) starts Prometheus + Grafana; Grafana reachable on documented port with dashboards populated during a smoke call.
+  - After a call, a transcript + metrics artifact is created and the recommendation endpoint lists at least one actionable suggestion referencing YAML keys.
+  - Disabling the stack (`make monitor-down`) leaves core services unaffected and removes Prometheus/Grafana containers.
 
 Keep this roadmap updated after each milestone to help any collaborator—or future AI assistant—pick up where we left off.
