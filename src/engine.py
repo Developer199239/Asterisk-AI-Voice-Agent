@@ -22,7 +22,7 @@ except ImportError:
     WEBRTC_VAD_AVAILABLE = False
     webrtcvad = None
 
-from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest, Histogram
 
 from .ari_client import ARIClient
 from aiohttp import web
@@ -48,6 +48,22 @@ from .core.streaming_playback_manager import StreamingPlaybackManager
 from .core.models import CallSession
 
 logger = get_logger(__name__)
+
+# -----------------------------------------------------------------------------
+# Prometheus latency histograms (module scope, registered once)
+# -----------------------------------------------------------------------------
+_TURN_STT_TO_TTS = Histogram(
+    "ai_agent_stt_to_tts_seconds",
+    "Time from STT final transcript to first TTS bytes",
+    buckets=(0.1, 0.2, 0.3, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 5.0),
+    labelnames=("pipeline", "provider"),
+)
+_TURN_RESPONSE_SECONDS = Histogram(
+    "ai_agent_turn_response_seconds",
+    "Approx time from STT final transcript to ARI playback start",
+    buckets=(0.2, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 5.0, 8.0),
+    labelnames=("pipeline", "provider"),
+)
 
 class AudioFrameProcessor:
     """Processes audio in 40ms frames to prevent voice queue backlog."""
@@ -142,6 +158,8 @@ class Engine:
             conversation_coordinator=self.conversation_coordinator,
         )
         self.conversation_coordinator.set_playback_manager(self.playback_manager)
+        # Per-call transcript timing cache for latency histograms
+        self._last_transcript_ts: Dict[str, float] = {}
         
         # Initialize streaming playback manager
         streaming_config = {}
@@ -2084,6 +2102,11 @@ class Engine:
                     transcript = (transcript or "").strip()
                     if not transcript:
                         return
+                    # Record time when a final transcript is obtained
+                    try:
+                        self._last_transcript_ts[call_id] = time.time()
+                    except Exception:
+                        pass
                     try:
                         transcript_queue.put_nowait(transcript)
                     except asyncio.QueueFull:
@@ -2177,6 +2200,8 @@ class Engine:
                     try:
                         async for final in pipeline.stt_adapter.iter_results(call_id):
                             try:
+                                # Record time when a final transcript arrives
+                                self._last_transcript_ts[call_id] = time.time()
                                 transcript_queue.put_nowait(final)
                             except asyncio.QueueFull:
                                 try:
@@ -2215,6 +2240,9 @@ class Engine:
 
                 async def run_turn(transcript_text: str) -> None:
                     response_text = ""
+                    pipeline_label = getattr(session, 'pipeline_name', None) or 'none'
+                    provider_label = getattr(session, 'provider_name', None) or 'unknown'
+                    t_start = self._last_transcript_ts.get(call_id)
                     try:
                         response_text = await pipeline.llm_adapter.generate(
                             call_id,
@@ -2229,6 +2257,7 @@ class Engine:
                     if not response_text:
                         return
                     tts_bytes = bytearray()
+                    first_tts_ts: Optional[float] = None
                     try:
                         async for tts_chunk in pipeline.tts_adapter.synthesize(
                             call_id,
@@ -2236,6 +2265,13 @@ class Engine:
                             pipeline.tts_options,
                         ):
                             if tts_chunk:
+                                if first_tts_ts is None:
+                                    first_tts_ts = time.time()
+                                    try:
+                                        if t_start is not None:
+                                            _TURN_STT_TO_TTS.labels(pipeline_label, provider_label).observe(max(0.0, first_tts_ts - t_start))
+                                    except Exception:
+                                        pass
                                 tts_bytes.extend(tts_chunk)
                     except Exception:
                         logger.debug("TTS synth failed", call_id=call_id, exc_info=True)
@@ -2248,6 +2284,11 @@ class Engine:
                             bytes(tts_bytes),
                             "pipeline-tts",
                         )
+                        try:
+                            if playback_id and t_start is not None:
+                                _TURN_RESPONSE_SECONDS.labels(pipeline_label, provider_label).observe(max(0.0, time.time() - t_start))
+                        except Exception:
+                            pass
                         if not playback_id:
                             logger.error(
                                 "Pipeline playback failed",
