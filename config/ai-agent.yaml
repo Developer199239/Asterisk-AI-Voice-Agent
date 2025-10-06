@@ -135,8 +135,8 @@ streaming:
   connection_timeout_ms: 10000 # Connection timeout for streaming
   fallback_timeout_ms: 12000  # Allow longer gaps before falling back
   chunk_size_ms: 20          # Frame size; 20 ms recommended for telephony cadence
-  min_start_ms: 350          # Slightly longer warm-up to reduce stutter at start
-  low_watermark_ms: 200      # Pause streaming when buffer dips below this watermark; rebuild depth to avoid underruns.
+  min_start_ms: 400          # Slightly longer warm-up to reduce stutter at start
+  low_watermark_ms: 250      # Pause streaming when buffer dips below this watermark; rebuild depth to avoid underruns.
   provider_grace_ms: 500     # Absorb late provider chunks after stream cleanup (ms); prevents tail-chop artifacts.
   logging_level: "info"      # Optional override for streaming logger verbosity
 
@@ -247,7 +247,7 @@ providers:
   # Optional: enable server-side VAD turn detection to improve turn handling
   turn_detection:
     type: "server_vad"
-    silence_duration_ms: 400
-    threshold: 0.5
-    prefix_padding_ms: 120
+    silence_duration_ms: 650   # Avoid early stream cutoffs
+    threshold: 0.6             # Slightly less sensitive
+    prefix_padding_ms: 150     # More context before speech
     greeting_protection_ms: 2500
