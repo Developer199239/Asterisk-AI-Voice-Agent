@@ -196,6 +196,8 @@ class Engine:
         self.pipeline_orchestrator = PipelineOrchestrator(config)
         
         self.providers: Dict[str, AIProviderInterface] = {}
+        # Per-call provider streaming queues (AgentAudio -> streaming playback)
+        self._provider_stream_queues: Dict[str, asyncio.Queue] = {}
         self.conn_to_channel: Dict[str, str] = {}
         self.channel_to_conn: Dict[str, str] = {}
         self.conn_to_caller: Dict[str, str] = {}  # conn_id -> caller_channel_id
@@ -1857,24 +1859,48 @@ class Engine:
                 logger.warning("Provider event for unknown call", event_type=etype, call_id=call_id)
                 return
 
-            # Downstream strategy: default to file playback; streaming path to be enabled later
+            # Downstream strategy: stream provider audio in near-real time via StreamingPlaybackManager
             if etype == "AgentAudio":
                 chunk: bytes = event.get("data") or b""
-                if chunk:
-                    session.agent_audio_buffer.extend(chunk)
-                    session.last_agent_audio_ts = time.time()
-                    await self._save_session(session)
+                if not chunk:
+                    return
+                # Ensure a streaming queue exists and streaming is started
+                q = self._provider_stream_queues.get(call_id)
+                if q is None:
+                    q = asyncio.Queue(maxsize=256)
+                    self._provider_stream_queues[call_id] = q
+                    # Kick off streaming playback; manager is idempotent if already active
+                    try:
+                        await self.streaming_playback_manager.start_streaming_playback(call_id, q, playback_type="streaming-response")
+                    except Exception:
+                        logger.error("Failed to start streaming playback", call_id=call_id, exc_info=True)
+                        # Fallback to file playback if streaming cannot start
+                        try:
+                            playback_id = await self.playback_manager.play_audio(call_id, chunk, "streaming-response")
+                            if not playback_id:
+                                logger.error("Fallback file playback failed", call_id=call_id, size=len(chunk))
+                            return
+                        except Exception:
+                            logger.error("Fallback file playback exception", call_id=call_id, exc_info=True)
+                            return
+                # Enqueue chunk (drop on full to avoid backpressure loops)
+                try:
+                    q.put_nowait(chunk)
+                except asyncio.QueueFull:
+                    logger.debug("Provider streaming queue full; dropping chunk", call_id=call_id)
             elif etype == "AgentAudioDone":
-                if session.agent_audio_buffer:
-                    audio = bytes(session.agent_audio_buffer)
-                    session.agent_audio_buffer = bytearray()
-                    await self._save_session(session)
-                    # Play the accumulated response
-                    playback_id = await self.playback_manager.play_audio(call_id, audio, "streaming-response")
-                    if not playback_id:
-                        logger.error("Failed to play provider audio", call_id=call_id, size=len(audio))
+                q = self._provider_stream_queues.get(call_id)
+                if q is not None:
+                    # Signal end of stream
+                    try:
+                        q.put_nowait(None)  # sentinel for StreamingPlaybackManager
+                    except asyncio.QueueFull:
+                        # Even if full, attempt graceful end later
+                        asyncio.create_task(q.put(None))
+                    # Clear saved queue reference
+                    self._provider_stream_queues.pop(call_id, None)
                 else:
-                    logger.debug("AgentAudioDone with empty buffer", call_id=call_id)
+                    logger.debug("AgentAudioDone with no active stream queue", call_id=call_id)
             else:
                 # Log control/JSON events at debug for now
                 logger.debug("Provider control event", provider_event=event)

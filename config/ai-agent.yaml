@@ -237,8 +237,8 @@ providers:
     base_url: "wss://api.openai.com/v1/realtime"
     instructions: "You are a concise voice assistant. Respond clearly and keep answers under 20 words unless more detail is requested."
     organization: ""
-    input_encoding: "slin16"          # AudioSocket inbound PCM16 @ 8 kHz
-    input_sample_rate_hz: 8000
+    input_encoding: "ulaw"             # Match AudioSocket wire format (μ-law 8 kHz)
+    input_sample_rate_hz: 8000         # Engine will resample to provider_input_sample_rate_hz as needed
     output_encoding: "linear16"       # Provider emits PCM16 frames
     output_sample_rate_hz: 24000
     target_encoding: "ulaw"  # Explicit for file playback; update if enabling streaming PCM
