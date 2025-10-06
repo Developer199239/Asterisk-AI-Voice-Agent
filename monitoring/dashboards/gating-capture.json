@@ -11,7 +11,7 @@
       "title": "TTS Gating Active (sum)",
       "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
       "targets": [
-        {"expr": "sum(ai_agent_tts_gating_active)", "refId": "A"}
+        {"expr": "sum(sum_over_time(ai_agent_tts_gating_active[$__range])) or vector(0)", "refId": "A"}
       ]
     },
     {
@@ -19,7 +19,7 @@
       "title": "Audio Capture Enabled (sum)",
       "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0},
       "targets": [
-        {"expr": "sum(ai_agent_audio_capture_enabled)", "refId": "A"}
+        {"expr": "sum(sum_over_time(ai_agent_audio_capture_enabled[$__range])) or vector(0)", "refId": "A"}
       ]
     },
     {
@@ -27,7 +27,7 @@
       "title": "Gating Active over time",
       "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
       "targets": [
-        {"expr": "sum(ai_agent_tts_gating_active)", "refId": "A"}
+        {"expr": "max_over_time(sum without (call_id) (ai_agent_tts_gating_active)[$__rate_interval]) or vector(0)", "refId": "A"}
       ]
     },
     {
@@ -35,7 +35,7 @@
       "title": "Audio Capture Enabled over time",
       "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
       "targets": [
-        {"expr": "sum(ai_agent_audio_capture_enabled)", "refId": "A"}
+        {"expr": "max_over_time(sum without (call_id) (ai_agent_audio_capture_enabled)[$__rate_interval]) or vector(0)", "refId": "A"}
       ]
     },
     {
@@ -43,7 +43,7 @@
       "title": "Barge-in Events (rate 5m)",
       "gridPos": {"h": 8, "w": 12, "x": 0, "y": 12},
       "targets": [
-        {"expr": "rate(ai_agent_barge_in_events_total[5m])", "refId": "A"}
+        {"expr": "rate(ai_agent_barge_in_events_total[5m]) or vector(0)", "refId": "A"}
       ]
     }
   ]
