@@ -179,8 +179,8 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                 except Exception:
                     pass
 
-            # If server VAD is enabled, just append frames; do not commit.
-            vad_enabled = getattr(self.config, "turn_detection", None) is not None
+            # If server VAD is enabled (and currently active), just append frames; do not commit.
+            vad_enabled = bool(getattr(self.config, "turn_detection", None)) and self._td_enabled
             if vad_enabled:
                 try:
                     audio_b64 = base64.b64encode(pcm16).decode("ascii")

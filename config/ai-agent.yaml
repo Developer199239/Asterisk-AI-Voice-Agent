@@ -114,7 +114,7 @@ downstream_mode: "stream"
 audiosocket:
   host: "0.0.0.0"          # Bind address (use 127.0.0.1 when engine and Asterisk share a host)
   port: 8090               # TCP port for AudioSocket connections
-  format: "ulaw"           # Wire format from Asterisk: `ulaw` (160B/20ms) or `slin16` (320B/20ms) at 8 kHz
+  format: "slin16"         # Wire format from Asterisk: `ulaw` (160B/20ms) or `slin16` (320B/20ms) at 8 kHz
                            # TIP: Keep provider input sample rate aligned to 8 kHz when using telephony trunks.
 
 # Barge-in configuration
