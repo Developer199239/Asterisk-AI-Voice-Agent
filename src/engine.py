@@ -1547,6 +1547,14 @@ class Engine:
                     tts_elapsed_ms = 0
 
                 initial_protect = int(getattr(cfg, 'initial_protection_ms', 200))
+                # Greeting-specific extra protection to avoid self-echo barge-in
+                try:
+                    if getattr(session, 'conversation_state', None) == 'greeting':
+                        greet_ms = int(getattr(cfg, 'greeting_protection_ms', 0))
+                        if greet_ms > initial_protect:
+                            initial_protect = greet_ms
+                except Exception:
+                    pass
                 if tts_elapsed_ms < initial_protect:
                     logger.debug("Dropping inbound during initial TTS protection window",
                                  conn_id=conn_id, caller_channel_id=caller_channel_id,
@@ -1747,6 +1755,13 @@ class Engine:
                     tts_elapsed_ms = 0
 
                 initial_protect = int(getattr(cfg, 'initial_protection_ms', 200))
+                try:
+                    if getattr(session, 'conversation_state', None) == 'greeting':
+                        greet_ms = int(getattr(cfg, 'greeting_protection_ms', 0))
+                        if greet_ms > initial_protect:
+                            initial_protect = greet_ms
+                except Exception:
+                    pass
                 if tts_elapsed_ms < initial_protect:
                     logger.debug("Dropping inbound RTP during initial TTS protection window",
                                  ssrc=ssrc, caller_channel_id=caller_channel_id,
