@@ -120,26 +120,21 @@ audiosocket:
 # Barge-in configuration
 barge_in:
   enabled: true
-  initial_protection_ms: 300   # Drop inbound during initial TTS to avoid echo; slightly shorter
-                               # Range: 200–600 ms (higher if trunks echo or agent intros are long)
-  min_ms: 300                  # Require ~300ms sustained speech to trigger barge-in
-                               # Range: 250–600 ms (lower = more sensitive barge-in)
-  energy_threshold: 1600       # Slightly more sensitive vs 1800 for telephony RMS
-                               # Range: 1200–2500 (raise on noisy lines)
-  cooldown_ms: 800             # Shorter cooldown for quicker re-entry to speech
-                               # Range: 500–1500 ms
-  post_tts_end_protection_ms: 200  # Faster pickup after TTS ends
-                                   # Range: 200–400 ms
+  initial_protection_ms: 1000  # Longer guard to prevent self-echo barge-in during greeting
+  min_ms: 700                   # Require sustained ~700ms speech to trigger barge-in
+  energy_threshold: 2200        # Higher threshold to resist background/echo
+  cooldown_ms: 1200             # Avoid immediate retriggers
+  post_tts_end_protection_ms: 250  # Small guard after playback ends
 
 # Streaming configuration (for downstream_mode=stream)
 streaming:
   sample_rate: 8000          # Output sample rate for streaming audio
-  jitter_buffer_ms: 100      # Jitter buffer target depth; increase for jittery networks (e.g., 80–150). Higher = more robust, slightly higher latency.
+  jitter_buffer_ms: 120      # Slightly deeper buffer for stability
   keepalive_interval_ms: 5000 # Keepalive interval for streaming connections
   connection_timeout_ms: 10000 # Connection timeout for streaming
-  fallback_timeout_ms: 8000   # No audio sent for this long → fall back to file playback
+  fallback_timeout_ms: 12000  # Allow longer gaps before falling back
   chunk_size_ms: 20          # Frame size; 20 ms recommended for telephony cadence
-  min_start_ms: 300          # Warm-up buffer before first frame; 250–400 ms recommended for natural, click-free starts.
+  min_start_ms: 350          # Slightly longer warm-up to reduce stutter at start
   low_watermark_ms: 200      # Pause streaming when buffer dips below this watermark; rebuild depth to avoid underruns.
   provider_grace_ms: 500     # Absorb late provider chunks after stream cleanup (ms); prevents tail-chop artifacts.
   logging_level: "info"      # Optional override for streaming logger verbosity
