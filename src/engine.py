@@ -22,7 +22,7 @@ except ImportError:
     WEBRTC_VAD_AVAILABLE = False
     webrtcvad = None
 
-from prometheus_client import CONTENT_TYPE_LATEST, generate_latest, Histogram, Counter
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest, Histogram, Counter, Gauge
 
 from .ari_client import ARIClient
 from aiohttp import web
@@ -63,6 +63,41 @@ _TURN_RESPONSE_SECONDS = Histogram(
     "Approx time from STT final transcript to ARI playback start",
     buckets=(0.2, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 5.0, 8.0),
     labelnames=("pipeline", "provider"),
+)
+
+# Config exposure gauges (per call at session start)
+_CFG_BARGE_MS = Gauge(
+    "ai_agent_config_barge_in_ms",
+    "Configured barge-in timing values (ms)",
+    labelnames=("call_id", "param"),
+)
+_CFG_BARGE_THRESHOLD = Gauge(
+    "ai_agent_config_barge_in_threshold",
+    "Configured barge-in energy threshold",
+    labelnames=("call_id",),
+)
+_CFG_STREAM_MS = Gauge(
+    "ai_agent_config_streaming_ms",
+    "Configured streaming timing values (ms)",
+    labelnames=("call_id", "param"),
+)
+_CFG_TD_MS = Gauge(
+    "ai_agent_config_turn_detection_ms",
+    "Configured provider turn detection timing values (ms)",
+    labelnames=("call_id", "param"),
+)
+_CFG_TD_THRESHOLD = Gauge(
+    "ai_agent_config_turn_detection_threshold",
+    "Configured provider turn detection threshold",
+    labelnames=("call_id",),
+)
+
+# Barge-in reaction latency (seconds) from first energy to trigger
+_BARGE_REACTION_SECONDS = Histogram(
+    "ai_agent_barge_in_reaction_seconds",
+    "Time from first speech energy to barge-in trigger",
+    buckets=(0.1, 0.2, 0.3, 0.5, 0.8, 1.2, 2.0),
+    labelnames=("call_id",),
 )
 
 # Per-call audio byte counters (ingress)
@@ -663,6 +698,11 @@ class Engine:
                 status="connected"
             )
             await self._save_session(session, new=True)
+            # Export config metrics for this call
+            try:
+                await self._export_config_metrics(caller_channel_id)
+            except Exception:
+                logger.debug("Failed to export config metrics for call", call_id=caller_channel_id, exc_info=True)
             logger.info("🎯 HYBRID ARI - Step 4: ✅ Caller session created and stored",
                        channel_id=caller_channel_id,
                        bridge_id=bridge_id)
@@ -1570,6 +1610,12 @@ class Engine:
                 threshold = int(getattr(cfg, 'energy_threshold', 1000))
                 frame_ms = 20  # AudioSocket frames are 20 ms
                 if energy >= threshold:
+                    # Start of potential barge-in window
+                    if int(getattr(session, 'barge_in_candidate_ms', 0)) == 0:
+                        try:
+                            session.barge_start_ts = now
+                        except Exception:
+                            session.barge_start_ts = 0.0
                     session.barge_in_candidate_ms = int(getattr(session, 'barge_in_candidate_ms', 0)) + frame_ms
                 else:
                     session.barge_in_candidate_ms = 0
@@ -1601,6 +1647,14 @@ class Engine:
 
                         session.barge_in_candidate_ms = 0
                         session.last_barge_in_ts = now
+                        # Observe reaction latency if we captured onset
+                        try:
+                            if float(getattr(session, 'barge_start_ts', 0.0) or 0.0) > 0.0:
+                                reaction_s = max(0.0, now - float(session.barge_start_ts))
+                                _BARGE_REACTION_SECONDS.labels(caller_channel_id).observe(reaction_s)
+                                session.barge_start_ts = 0.0
+                        except Exception:
+                            pass
                         await self._save_session(session)
                         logger.info("🎧 BARGE-IN triggered", call_id=caller_channel_id)
                     except Exception:
@@ -1639,6 +1693,41 @@ class Engine:
             await provider.send_audio(audio_bytes)
         except Exception as exc:
             logger.error("Error handling AudioSocket audio", conn_id=conn_id, error=str(exc), exc_info=True)
+
+    async def _export_config_metrics(self, call_id: str) -> None:
+        """Expose configured knobs as Prometheus gauges for this call."""
+        try:
+            b = getattr(self.config, 'barge_in', None)
+            if b:
+                _CFG_BARGE_MS.labels(call_id, "initial_protection_ms").set(int(getattr(b, 'initial_protection_ms', 0)))
+                _CFG_BARGE_MS.labels(call_id, "min_ms").set(int(getattr(b, 'min_ms', 0)))
+                _CFG_BARGE_MS.labels(call_id, "post_tts_end_protection_ms").set(int(getattr(b, 'post_tts_end_protection_ms', 0)))
+                _CFG_BARGE_MS.labels(call_id, "greeting_protection_ms").set(int(getattr(b, 'greeting_protection_ms', 0)))
+                _CFG_BARGE_THRESHOLD.labels(call_id).set(int(getattr(b, 'energy_threshold', 0)))
+        except Exception:
+            pass
+        try:
+            s = getattr(self.config, 'streaming', None)
+            if s:
+                _CFG_STREAM_MS.labels(call_id, "min_start_ms").set(int(getattr(s, 'min_start_ms', 0)))
+                _CFG_STREAM_MS.labels(call_id, "greeting_min_start_ms").set(int(getattr(s, 'greeting_min_start_ms', 0)))
+                _CFG_STREAM_MS.labels(call_id, "low_watermark_ms").set(int(getattr(s, 'low_watermark_ms', 0)))
+                _CFG_STREAM_MS.labels(call_id, "jitter_buffer_ms").set(int(getattr(s, 'jitter_buffer_ms', 0)))
+                _CFG_STREAM_MS.labels(call_id, "fallback_timeout_ms").set(int(getattr(s, 'fallback_timeout_ms', 0)))
+        except Exception:
+            pass
+        try:
+            pblock = (getattr(self.config, 'providers', {}) or {}).get('openai_realtime', {})
+            td = (pblock or {}).get('turn_detection') or {}
+            if td:
+                _CFG_TD_MS.labels(call_id, "silence_duration_ms").set(int(td.get('silence_duration_ms', 0)))
+                _CFG_TD_MS.labels(call_id, "prefix_padding_ms").set(int(td.get('prefix_padding_ms', 0)))
+                try:
+                    _CFG_TD_THRESHOLD.labels(call_id).set(float(td.get('threshold', 0.0)))
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     async def _audiosocket_handle_disconnect(self, conn_id: str) -> None:
         """Cleanup mappings when an AudioSocket connection disconnects."""
@@ -1776,6 +1865,11 @@ class Engine:
                 threshold = int(getattr(cfg, 'energy_threshold', 1000))
                 frame_ms = 20
                 if energy >= threshold:
+                    if int(getattr(session, 'barge_in_candidate_ms', 0)) == 0:
+                        try:
+                            session.barge_start_ts = now
+                        except Exception:
+                            session.barge_start_ts = 0.0
                     session.barge_in_candidate_ms = int(getattr(session, 'barge_in_candidate_ms', 0)) + frame_ms
                 else:
                     session.barge_in_candidate_ms = 0
@@ -1804,6 +1898,13 @@ class Engine:
 
                         session.barge_in_candidate_ms = 0
                         session.last_barge_in_ts = now
+                        try:
+                            if float(getattr(session, 'barge_start_ts', 0.0) or 0.0) > 0.0:
+                                reaction_s = max(0.0, now - float(session.barge_start_ts))
+                                _BARGE_REACTION_SECONDS.labels(caller_channel_id).observe(reaction_s)
+                                session.barge_start_ts = 0.0
+                        except Exception:
+                            pass
                         await self._save_session(session)
                         logger.info("🎧 BARGE-IN (RTP) triggered", call_id=caller_channel_id)
                     except Exception:
@@ -1912,7 +2013,8 @@ class Engine:
                     self._provider_stream_queues[call_id] = q
                     # Kick off streaming playback; manager is idempotent if already active
                     try:
-                        await self.streaming_playback_manager.start_streaming_playback(call_id, q, playback_type="streaming-response")
+                        playback_type = "greeting" if getattr(session, "conversation_state", "") == "greeting" else "streaming-response"
+                        await self.streaming_playback_manager.start_streaming_playback(call_id, q, playback_type=playback_type)
                     except Exception:
                         logger.error("Failed to start streaming playback", call_id=call_id, exc_info=True)
                         # Fallback to file playback if streaming cannot start

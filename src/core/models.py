@@ -57,6 +57,7 @@ class CallSession:
     # Barge-in detection accumulators
     barge_in_candidate_ms: int = 0
     last_barge_in_ts: float = 0.0
+    barge_start_ts: float = 0.0
     
     # VAD and audio processing state
     vad_state: Dict[str, Any] = field(default_factory=dict)

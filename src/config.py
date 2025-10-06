@@ -134,6 +134,8 @@ class BargeInConfig(BaseModel):
     cooldown_ms: int = Field(default=500)
     # New: short guard window after TTS ends to avoid self-echo re-capture
     post_tts_end_protection_ms: int = Field(default=250)
+    # Extra protection during the first greeting turn
+    greeting_protection_ms: int = Field(default=0)
 
 
 class LLMConfig(BaseModel):
@@ -171,6 +173,8 @@ class StreamingConfig(BaseModel):
     low_watermark_ms: int = Field(default=80)
     provider_grace_ms: int = Field(default=500)
     logging_level: str = Field(default="info")
+    # Smaller warm-up only for the initial greeting to get first audio out sooner
+    greeting_min_start_ms: int = Field(default=0)
 
 
 class LoggingConfig(BaseModel):

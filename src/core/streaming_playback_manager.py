@@ -10,7 +10,7 @@ import asyncio
 import time
 from typing import Optional, Dict, Any, TYPE_CHECKING, Set
 import structlog
-from prometheus_client import Counter, Gauge
+from prometheus_client import Counter, Gauge, Histogram
 import math
 import audioop
 
@@ -63,6 +63,30 @@ _STREAM_TX_BYTES = Counter(
     "ai_agent_stream_tx_bytes_total",
     "Outbound audio bytes sent to caller (per call)",
     labelnames=("call_id",),
+)
+
+# New observability metrics for tuning
+_STREAM_STARTED_TOTAL = Counter(
+    "ai_agent_stream_started_total",
+    "Number of streaming segments started",
+    labelnames=("call_id", "playback_type"),
+)
+_STREAM_FIRST_FRAME_SECONDS = Histogram(
+    "ai_agent_stream_first_frame_seconds",
+    "Time from stream start to first outbound frame",
+    buckets=(0.05, 0.1, 0.2, 0.3, 0.5, 1.0, 2.0),
+    labelnames=("call_id", "playback_type"),
+)
+_STREAM_SEGMENT_DURATION_SECONDS = Histogram(
+    "ai_agent_stream_segment_duration_seconds",
+    "Streaming segment duration",
+    buckets=(0.5, 1.0, 2.0, 3.0, 5.0, 8.0, 15.0, 30.0),
+    labelnames=("call_id", "playback_type"),
+)
+_STREAM_END_REASON_TOTAL = Counter(
+    "ai_agent_stream_end_reason_total",
+    "Count of stream end reasons",
+    labelnames=("call_id", "reason"),
 )
 
 
@@ -125,6 +149,15 @@ class StreamingPlaybackManager:
         self.provider_grace_ms = max(0, int(self.streaming_config.get('provider_grace_ms', 500)))
         self.min_start_chunks = max(1, int(math.ceil(self.min_start_ms / max(1, self.chunk_size_ms))))
         self.low_watermark_chunks = max(0, int(math.ceil(self.low_watermark_ms / max(1, self.chunk_size_ms))))
+        # Greeting-specific warm-up (optional)
+        try:
+            self.greeting_min_start_ms = int(self.streaming_config.get('greeting_min_start_ms', 0))
+        except Exception:
+            self.greeting_min_start_ms = 0
+        self.greeting_min_start_chunks = (
+            max(1, int(math.ceil(self.greeting_min_start_ms / max(1, self.chunk_size_ms))))
+            if self.greeting_min_start_ms > 0 else self.min_start_chunks
+        )
         # Logging verbosity override
         self.logging_level = (self.streaming_config.get('logging_level') or "info").lower()
         if self.logging_level == "debug":
@@ -222,8 +255,15 @@ class StreamingPlaybackManager:
                 'chunks_sent': 0,
                 'last_chunk_time': time.time(),
                 'startup_ready': False,
+                'first_frame_observed': False,
+                'min_start_chunks': (self.greeting_min_start_chunks if playback_type == "greeting" else self.min_start_chunks),
+                'end_reason': None,
             }
             self._startup_ready[call_id] = False
+            try:
+                _STREAM_STARTED_TOTAL.labels(call_id, playback_type).inc()
+            except Exception:
+                pass
             
             logger.info("🎵 STREAMING PLAYBACK - Started",
                        call_id=call_id,
@@ -264,6 +304,11 @@ class StreamingPlaybackManager:
                         logger.info("🎵 STREAMING PLAYBACK - End of stream",
                                    call_id=call_id,
                                    stream_id=stream_id)
+                        try:
+                            if call_id in self.active_streams:
+                                self.active_streams[call_id]['end_reason'] = 'end-of-stream'
+                        except Exception:
+                            pass
                         break
                     
                     # Update timing
@@ -293,6 +338,11 @@ class StreamingPlaybackManager:
                     if not success:
                         await self._record_fallback(call_id, "transport-failure")
                         await self._fallback_to_file_playback(call_id, stream_id)
+                        try:
+                            if call_id in self.active_streams:
+                                self.active_streams[call_id]['end_reason'] = 'transport-failure'
+                        except Exception:
+                            pass
                         break
                     
                 except asyncio.TimeoutError:
@@ -329,7 +379,13 @@ class StreamingPlaybackManager:
             # Hold playback until jitter buffer has the minimum startup chunks
             ready = self._startup_ready.get(call_id, False)
             if not ready:
-                if jitter_buffer.qsize() < self.min_start_chunks:
+                min_need = self.min_start_chunks
+                try:
+                    if call_id in self.active_streams:
+                        min_need = int(self.active_streams[call_id].get('min_start_chunks', self.min_start_chunks))
+                except Exception:
+                    min_need = self.min_start_chunks
+                if jitter_buffer.qsize() < min_need:
                     return True
                 self._startup_ready[call_id] = True
                 if call_id in self.active_streams:
@@ -488,6 +544,16 @@ class StreamingPlaybackManager:
                         _STREAM_TX_BYTES.labels(call_id).inc(len(chunk))
                     except Exception:
                         pass
+                # First-frame observability
+                try:
+                    if call_id in self.active_streams and not self.active_streams[call_id].get('first_frame_observed', False) and success:
+                        start_time = float(self.active_streams[call_id].get('start_time', time.time()))
+                        pb_type = str(self.active_streams[call_id].get('playback_type', 'response'))
+                        first_s = max(0.0, time.time() - start_time)
+                        _STREAM_FIRST_FRAME_SECONDS.labels(call_id, pb_type).observe(first_s)
+                        self.active_streams[call_id]['first_frame_observed'] = True
+                except Exception:
+                    pass
                 return success
 
             logger.warning("Streaming transport not implemented for audio_transport",
@@ -619,6 +685,11 @@ class StreamingPlaybackManager:
                                  time_since_last_chunk=time_since_last_chunk)
                     _STREAMING_KEEPALIVE_TIMEOUTS_TOTAL.labels(call_id).inc()
                     try:
+                        if call_id in self.active_streams:
+                            self.active_streams[call_id]['end_reason'] = 'keepalive-timeout'
+                    except Exception:
+                        pass
+                    try:
                         sess = await self.session_store.get_by_call_id(call_id)
                         if sess:
                             sess.streaming_keepalive_timeouts += 1
@@ -694,6 +765,17 @@ class StreamingPlaybackManager:
             else:
                 await self.session_store.clear_gating_token(call_id, stream_id)
             
+            # Observe segment duration and end reason
+            try:
+                if call_id in self.active_streams:
+                    info = self.active_streams[call_id]
+                    pb_type = str(info.get('playback_type', 'response'))
+                    dur = max(0.0, time.time() - float(info.get('start_time', time.time())))
+                    _STREAM_SEGMENT_DURATION_SECONDS.labels(call_id, pb_type).observe(dur)
+                    reason = str(info.get('end_reason') or 'streaming-ended')
+                    _STREAM_END_REASON_TOTAL.labels(call_id, reason).inc()
+            except Exception:
+                pass
             # Remove from active streams
             if call_id in self.active_streams:
                 del self.active_streams[call_id]
