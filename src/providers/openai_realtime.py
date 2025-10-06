@@ -80,6 +80,10 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         self._audio_lock: asyncio.Lock = asyncio.Lock()
         # Track provider output format we requested in session.update
         self._provider_output_format: str = "pcm16"
+        # Greeting-only server VAD deferral
+        self._defer_turn_detection: bool = False
+        self._greeting_phase: bool = False
+        self._td_enabled: bool = False
 
     @property
     def supported_codecs(self):
@@ -116,7 +120,10 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             logger.error("Failed to connect to OpenAI Realtime", call_id=call_id, exc_info=True)
             raise
 
-        await self._send_session_update()
+        # For the greeting, defer server-side VAD to avoid early segmentation
+        self._defer_turn_detection = bool(getattr(self.config, "turn_detection", None))
+        self._greeting_phase = self._defer_turn_detection
+        await self._send_session_update(include_turn_detection=not self._defer_turn_detection)
 
         # Proactively request an initial response so the agent can greet
         # even before user audio arrives. Prefer explicit greeting text
@@ -269,7 +276,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         base = base.rstrip("/")
         return f"{base}?model={self.config.model}"
 
-    async def _send_session_update(self):
+    async def _send_session_update(self, *, include_turn_detection: bool = True):
         # Map config modalities to output_modalities per latest guide
         output_modalities = [m for m in (self.config.response_modalities or []) if m in ("audio", "text")]
         if not output_modalities:
@@ -295,7 +302,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         # Record provider output format for runtime handling
         self._provider_output_format = out_fmt
         # Optional server-side VAD/turn detection at session level
-        if getattr(self.config, "turn_detection", None):
+        if include_turn_detection and getattr(self.config, "turn_detection", None):
             try:
                 td = self.config.turn_detection
                 session["turn_detection"] = {
@@ -609,6 +616,15 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             self._in_audio_burst = False
             self._output_resample_state = None
             self._first_output_chunk_logged = False
+            # After the first provider output completes, enable server-side VAD if deferred
+            if self._defer_turn_detection and self._greeting_phase and not self._td_enabled:
+                try:
+                    await self._enable_turn_detection()
+                except Exception:
+                    logger.debug("Failed to enable turn_detection after greeting", call_id=self._call_id, exc_info=True)
+                finally:
+                    self._greeting_phase = False
+                    self._defer_turn_detection = False
 
     async def _emit_transcript(self, text: str, *, is_final: bool):
         if not self.on_event or not self._call_id:
@@ -630,6 +646,29 @@ class OpenAIRealtimeProvider(AIProviderInterface):
 
         if is_final:
             self._transcript_buffer = ""
+
+    async def _enable_turn_detection(self):
+        """Enable server-side turn detection via session.update after greeting."""
+        if not getattr(self.config, "turn_detection", None):
+            return
+        if not self.websocket or self.websocket.closed:
+            return
+        td = self.config.turn_detection
+        payload: Dict[str, Any] = {
+            "type": "session.update",
+            "event_id": f"sess-td-{uuid.uuid4()}",
+            "session": {
+                "turn_detection": {
+                    "type": td.type,
+                    "silence_duration_ms": td.silence_duration_ms,
+                    "threshold": td.threshold,
+                    "prefix_padding_ms": td.prefix_padding_ms,
+                }
+            },
+        }
+        await self._send_json(payload)
+        self._td_enabled = True
+        logger.info("OpenAI Realtime turn_detection enabled after greeting", call_id=self._call_id)
 
     async def _keepalive_loop(self):
         try:
