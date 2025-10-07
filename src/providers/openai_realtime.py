@@ -147,6 +147,14 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         if not self.websocket or self.websocket.closed:
             logger.debug("Dropping inbound audio: websocket not ready", call_id=self._call_id)
             return
+        # During the initial greeting, avoid touching input_audio_buffer to prevent
+        # empty commits and reduce provider-side latency before first output.
+        if self._greeting_phase:
+            try:
+                logger.debug("Dropping inbound audio during greeting", call_id=self._call_id)
+            except Exception:
+                pass
+            return
 
         try:
             # Log input codec/config once for diagnosis

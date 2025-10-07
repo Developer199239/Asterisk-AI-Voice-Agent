@@ -135,9 +135,10 @@ streaming:
   connection_timeout_ms: 10000 # Connection timeout for streaming
   fallback_timeout_ms: 12000  # Allow longer gaps before falling back
   chunk_size_ms: 20          # Frame size; 20 ms recommended for telephony cadence
-  min_start_ms: 400          # Slightly longer warm-up to reduce stutter at start
-  low_watermark_ms: 250      # Pause streaming when buffer dips below this watermark; rebuild depth to avoid underruns.
-  provider_grace_ms: 500     # Absorb late provider chunks after stream cleanup (ms); prevents tail-chop artifacts.
+  min_start_ms: 200          # Faster start for general playback
+  greeting_min_start_ms: 120 # Even faster start specifically for greeting
+  low_watermark_ms: 300      # Slightly higher to avoid underruns during streaming
+  provider_grace_ms: 1000    # Longer grace to avoid tail clipping on stop
   logging_level: "info"      # Optional override for streaming logger verbosity
 
 # Asterisk connection settings (will be overridden by environment variables)
