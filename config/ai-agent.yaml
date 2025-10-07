@@ -120,11 +120,11 @@ audiosocket:
 # Barge-in configuration
 barge_in:
   enabled: true
-  initial_protection_ms: 1000  # Longer guard to prevent self-echo barge-in during greeting
-  min_ms: 700                   # Require sustained ~700ms speech to trigger barge-in
-  energy_threshold: 2200        # Higher threshold to resist background/echo
-  cooldown_ms: 1200             # Avoid immediate retriggers
-  post_tts_end_protection_ms: 250  # Small guard after playback ends
+  initial_protection_ms: 2000   # Stronger guard to prevent self-echo barge-in during greeting
+  min_ms: 1000                  # Require sustained ~1s speech to trigger barge-in
+  energy_threshold: 2600        # Less sensitive to noise/echo
+  cooldown_ms: 1500             # Avoid immediate retriggers
+  post_tts_end_protection_ms: 400  # Longer guard after playback ends
   greeting_protection_ms: 2500  # Extra protection while first greeting TTS is playing
 
 # Streaming configuration (for downstream_mode=stream)
@@ -133,12 +133,12 @@ streaming:
   jitter_buffer_ms: 120      # Slightly deeper buffer for stability
   keepalive_interval_ms: 5000 # Keepalive interval for streaming connections
   connection_timeout_ms: 10000 # Connection timeout for streaming
-  fallback_timeout_ms: 12000  # Allow longer gaps before falling back
+  fallback_timeout_ms: 20000  # Avoid premature fallback during greeting
   chunk_size_ms: 20          # Frame size; 20 ms recommended for telephony cadence
   min_start_ms: 200          # Faster start for general playback
-  greeting_min_start_ms: 120 # Even faster start specifically for greeting
-  low_watermark_ms: 300      # Slightly higher to avoid underruns during streaming
-  provider_grace_ms: 1000    # Longer grace to avoid tail clipping on stop
+  greeting_min_start_ms: 100 # Faster start specifically for greeting
+  low_watermark_ms: 340      # Slightly higher to avoid underruns during streaming
+  provider_grace_ms: 1400    # Longer grace to avoid tail clipping on stop
   logging_level: "info"      # Optional override for streaming logger verbosity
 
 # Asterisk connection settings (will be overridden by environment variables)
