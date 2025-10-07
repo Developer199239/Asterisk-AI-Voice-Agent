@@ -151,7 +151,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         # empty commits and reduce provider-side latency before first output.
         if self._greeting_phase:
             try:
-                logger.debug("Dropping inbound audio during greeting", call_id=self._call_id)
+                logger.info("Dropping inbound audio during greeting", call_id=self._call_id)
             except Exception:
                 pass
             return
@@ -187,40 +187,18 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                 except Exception:
                     pass
 
-            # If server VAD is enabled (and currently active), just append frames; do not commit.
-            vad_enabled = bool(getattr(self.config, "turn_detection", None)) and self._td_enabled
-            if vad_enabled:
-                try:
-                    audio_b64 = base64.b64encode(pcm16).decode("ascii")
+            # When server-side VAD is configured, operate append-only and never commit.
+            # We rely on the provider turn detection to segment and trigger responses.
+            append_only = bool(getattr(self.config, "turn_detection", None))
+            try:
+                audio_b64 = base64.b64encode(pcm16).decode("ascii")
+                if append_only:
                     await self._send_json({"type": "input_audio_buffer.append", "audio": audio_b64})
-                except Exception:
-                    logger.error("Failed to append input audio buffer (VAD)", call_id=self._call_id, exc_info=True)
-            else:
-                # Serialize accumulation and commit to avoid empty commits due to races
-                async with self._audio_lock:
-                    # Accumulate until we have >= 160ms to comfortably satisfy >=100ms minimum
-                    self._pending_audio_16k.extend(pcm16)
-                    bytes_per_ms = int(self.config.provider_input_sample_rate_hz * 2 / 1000)
-                    commit_threshold_ms = 160
-                    commit_threshold_bytes = bytes_per_ms * commit_threshold_ms
-
-                    if len(self._pending_audio_16k) >= commit_threshold_bytes:
-                        chunk = bytes(self._pending_audio_16k)
-                        self._pending_audio_16k.clear()
-                        audio_b64 = base64.b64encode(chunk).decode("ascii")
-                        try:
-                            await self._send_json({"type": "input_audio_buffer.append", "audio": audio_b64})
-                            await self._send_json({"type": "input_audio_buffer.commit"})
-                            self._last_commit_ts = time.monotonic()
-                            logger.debug(
-                                "OpenAI committed input audio",
-                                call_id=self._call_id,
-                                ms=len(chunk) // bytes_per_ms,
-                                bytes=len(chunk),
-                            )
-                        except Exception:
-                            logger.error("Failed to append/commit input audio buffer", call_id=self._call_id, exc_info=True)
-                        await self._ensure_response_request()
+                else:
+                    # Fallback path if turn_detection is disabled in config: still avoid commits; append-only.
+                    await self._send_json({"type": "input_audio_buffer.append", "audio": audio_b64})
+            except Exception:
+                logger.error("Failed to append input audio buffer", call_id=self._call_id, exc_info=True)
         except ConnectionClosedError:
             logger.warning("OpenAI Realtime socket closed while sending audio", call_id=self._call_id)
         except Exception:
