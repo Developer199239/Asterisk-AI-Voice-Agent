@@ -754,7 +754,34 @@ class StreamingPlaybackManager:
     async def _cleanup_stream(self, call_id: str, stream_id: str) -> None:
         """Clean up streaming resources."""
         try:
-            # Clear TTS gating
+            # Before clearing gating/state, give provider a grace period and flush any remaining audio
+            # to avoid chopping off the tail of the playback.
+            try:
+                if self.provider_grace_ms:
+                    await asyncio.sleep(self.provider_grace_ms / 1000.0)
+            except Exception:
+                pass
+
+            # Flush any remainder bytes as a final frame
+            try:
+                rem = self.frame_remainders.get(call_id, b"") or b""
+                if rem:
+                    if self.audio_transport == "audiosocket":
+                        fmt = (self.audiosocket_format or "ulaw").lower()
+                        bytes_per_sample = 1 if fmt in ("ulaw", "mulaw", "mu-law") else 2
+                        frame_size = int(self.sample_rate * (self.chunk_size_ms / 1000.0) * bytes_per_sample) or (160 if bytes_per_sample == 1 else 320)
+                        # Zero-pad to a full frame boundary to avoid truncation artifacts
+                        if len(rem) < frame_size:
+                            rem = rem + (b"\x00" * (frame_size - len(rem)))
+                        await self._send_audio_chunk(call_id, stream_id, rem[:frame_size])
+                        # small pacing to let Asterisk play the last frame
+                        await asyncio.sleep(self.chunk_size_ms / 1000.0)
+                    else:
+                        await self._send_audio_chunk(call_id, stream_id, rem)
+            except Exception:
+                logger.debug("Remainder flush failed", call_id=call_id, stream_id=stream_id)
+
+            # Clear TTS gating after flushing
             if self.conversation_coordinator:
                 await self.conversation_coordinator.on_tts_end(
                     call_id, stream_id, "streaming-ended"
@@ -801,9 +828,7 @@ class StreamingPlaybackManager:
                     await self.session_store.upsert_call(sess)
             except Exception:
                 pass
-            # Clear any remainder buffer, respecting grace period for late provider chunks
-            if self.provider_grace_ms:
-                await asyncio.sleep(self.provider_grace_ms / 1000.0)
+            # Clear any remainder record after flushing
             self.frame_remainders.pop(call_id, None)
             
             # Emit tuning summary for observability

@@ -385,6 +385,8 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             ptype = payload.get("type")
             if ptype and not ptype.startswith("input_audio_buffer."):
                 logger.debug("OpenAI send", call_id=self._call_id, type=ptype)
+            elif ptype == "input_audio_buffer.commit":
+                logger.debug("OpenAI send commit", call_id=self._call_id, type=ptype)
         except Exception:
             pass
         message = json.dumps(payload)
