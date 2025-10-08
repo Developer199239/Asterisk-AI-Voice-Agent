@@ -239,9 +239,9 @@ providers:
     organization: ""
     input_encoding: "slin16"
     input_sample_rate_hz: 8000
-    output_encoding: "linear16"       # Provider emits PCM16 frames
-    output_sample_rate_hz: 24000
-    target_encoding: "ulaw"  # Explicit for file playback; update if enabling streaming PCM
+    output_encoding: "slin16"
+    output_sample_rate_hz: 8000
+    target_encoding: "slin16"
     target_sample_rate_hz: 8000
     response_modalities:
       - "audio"

@@ -279,11 +279,6 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         # If downstream target is μ-law, request g711_ulaw from provider to test end-to-end μ-law.
         # Otherwise keep PCM16.
         out_fmt = "pcm16"
-        try:
-            if (self.config.target_encoding or "").lower() in ("ulaw", "mulaw", "g711_ulaw"):
-                out_fmt = "g711_ulaw"
-        except Exception:
-            pass
 
         session: Dict[str, Any] = {
             # Model is selected via URL; keep accepted keys here
@@ -553,21 +548,17 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         if not pcm_24k:
             return
 
-        # If provider is emitting μ-law (g711_ulaw), pass-through directly to downstream.
-        if (self._provider_output_format or "").lower() == "g711_ulaw":
-            outbound = pcm_24k  # Note: despite variable name, this holds μ-law bytes in this mode
-        else:
-            target_rate = self.config.target_sample_rate_hz
-            pcm_target, self._output_resample_state = resample_audio(
-                pcm_24k,
-                self.config.output_sample_rate_hz,
-                target_rate,
-                state=self._output_resample_state,
-            )
+        target_rate = self.config.target_sample_rate_hz
+        pcm_target, self._output_resample_state = resample_audio(
+            pcm_24k,
+            self.config.output_sample_rate_hz,
+            target_rate,
+            state=self._output_resample_state,
+        )
 
-            outbound = convert_pcm16le_to_target_format(pcm_target, self.config.target_encoding)
-            if not outbound:
-                return
+        outbound = convert_pcm16le_to_target_format(pcm_target, self.config.target_encoding)
+        if not outbound:
+            return
 
         if self.on_event:
             if not self._first_output_chunk_logged:
