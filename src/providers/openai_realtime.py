@@ -462,29 +462,28 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         elapsed_since_error = now - self._last_commit_error_ts if self._last_commit_error_ts else None
         elapsed_since_append = now - self._last_audio_append_ts if self._last_audio_append_ts else 0.0
 
-        if pending_speech_ms < self._commit_min_ms:
-            if force:
-                logger.debug(
-                    "OpenAI force-commit skipped: insufficient speech",
-                    call_id=self._call_id,
-                    pending_bytes=pending_bytes,
-                    pending_ms=pending_ms,
-                    pending_speech_ms=pending_speech_ms,
-                    min_ms=self._commit_min_ms,
-                )
-            else:
-                logger.debug(
-                    "OpenAI commit skip: insufficient speech",
-                    call_id=self._call_id,
-                    pending_bytes=pending_bytes,
-                    pending_ms=pending_ms,
-                    pending_speech_ms=pending_speech_ms,
-                    min_ms=self._commit_min_ms,
-                    elapsed_since_append=elapsed_since_append,
-                    elapsed_since_last_commit=elapsed_since_last_commit,
-                    elapsed_since_error=elapsed_since_error,
-                    force=force,
-                )
+        speech_ready = pending_speech_ms >= self._commit_min_ms
+        if not speech_ready:
+            # Flush if we've held the buffer longer than grace or accumulated a large backlog.
+            if (
+                elapsed_since_append >= self._commit_grace_seconds
+                or (pending_ms >= (self._commit_min_ms * 3))
+            ):
+                speech_ready = True
+
+        if not speech_ready and not force:
+            logger.debug(
+                "OpenAI commit skip: waiting for speech",
+                call_id=self._call_id,
+                pending_bytes=pending_bytes,
+                pending_ms=pending_ms,
+                pending_speech_ms=pending_speech_ms,
+                min_ms=self._commit_min_ms,
+                elapsed_since_append=elapsed_since_append,
+                elapsed_since_last_commit=elapsed_since_last_commit,
+                elapsed_since_error=elapsed_since_error,
+                force=force,
+            )
             return
 
         logger.info(
