@@ -305,7 +305,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         # Choose OpenAI output format for this session:
         # If downstream target is μ-law, request g711_ulaw from provider to test end-to-end μ-law.
         # Otherwise keep PCM16.
-        out_fmt = "pcm16"
+        out_fmt = "pcm_s16le_24000"
         try:
             if (self.config.target_encoding or "").lower() in ("ulaw", "mulaw", "g711_ulaw"):
                 out_fmt = "g711_ulaw"
@@ -315,7 +315,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         session: Dict[str, Any] = {
             # Model is selected via URL; keep accepted keys here
             "modalities": output_modalities,
-            "input_audio_format": "pcm16",
+            "input_audio_format": "pcm_s16le_24000",
             "output_audio_format": out_fmt,
             "voice": self.config.voice,
         }

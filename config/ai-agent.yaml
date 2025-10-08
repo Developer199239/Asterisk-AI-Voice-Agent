@@ -243,6 +243,7 @@ providers:
     organization: ""
     input_encoding: "ulaw"             # Match AudioSocket wire format (μ-law 8 kHz)
     input_sample_rate_hz: 8000         # Engine will resample to provider_input_sample_rate_hz as needed
+    provider_input_sample_rate_hz: 24000
     output_encoding: "linear16"       # Provider emits PCM16 frames
     output_sample_rate_hz: 24000
     target_encoding: "ulaw"  # Explicit for file playback; update if enabling streaming PCM
