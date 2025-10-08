@@ -12,7 +12,6 @@ from typing import Optional, Dict, Any, TYPE_CHECKING, Set
 import structlog
 from prometheus_client import Counter, Gauge, Histogram
 import math
-import audioop
 
 from src.core.session_store import SessionStore
 from src.core.models import CallSession, PlaybackRef
@@ -520,11 +519,8 @@ class StreamingPlaybackManager:
             return None
         try:
             if self.audio_transport == "audiosocket":
-                fmt = (self.audiosocket_format or "ulaw").lower()
-                if fmt in ("slin16", "slinear", "pcm16", "linear16", "slin"):
-                    # Convert μ-law (provider) to 16-bit PCM for AudioSocket downstream
-                    return audioop.ulaw2lin(chunk, 2)
-                # If dialplan expects μ-law, pass through unchanged
+                # Provider already emits audio that matches the configured AudioSocket format
+                # (e.g., slin16 or ulaw). Pass-through to avoid double conversion.
                 return chunk
             # ExternalMedia/RTP path: pass-through
             return chunk
