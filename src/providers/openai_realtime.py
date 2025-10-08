@@ -77,6 +77,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         # Aggregate converted 16 kHz PCM16 bytes and commit in >=100ms chunks
         self._pending_audio_16k: bytearray = bytearray()
         self._last_commit_ts: float = 0.0
+        self._last_commit_error_ts: float = 0.0
         self._last_audio_append_ts: float = 0.0
         bytes_per_sample = 2  # PCM16
         provider_rate = int(getattr(self.config, "provider_input_sample_rate_hz", 16000) or 16000)
@@ -410,6 +411,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         min_bytes = self._commit_min_bytes
         now = time.time()
         elapsed_since_last_commit = now - self._last_commit_ts if self._last_commit_ts else None
+        elapsed_since_error = now - self._last_commit_error_ts if self._last_commit_error_ts else None
         elapsed_since_append = now - self._last_audio_append_ts if self._last_audio_append_ts else 0.0
 
         should_commit = pending_bytes >= min_bytes
@@ -422,6 +424,8 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             else:
                 if elapsed_since_last_commit is not None and elapsed_since_last_commit < _COMMIT_INTERVAL_SEC:
                     return
+                if elapsed_since_error is not None and elapsed_since_error < self._commit_grace_seconds:
+                    return
                 if elapsed_since_append < self._commit_grace_seconds:
                     return
                 missing = max(0, min_bytes - pending_bytes)
@@ -432,6 +436,17 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         if not should_commit:
             return
 
+        logger.debug(
+            "OpenAI commit pending",
+            call_id=self._call_id,
+            pending_bytes=pending_bytes,
+            min_bytes=min_bytes,
+            elapsed_since_append=elapsed_since_append,
+            elapsed_since_last_commit=elapsed_since_last_commit,
+            elapsed_since_error=elapsed_since_error,
+            force=force,
+        )
+
         await self._send_json({"type": "input_audio_buffer.commit"})
         logger.debug(
             "OpenAI committed input audio",
@@ -440,6 +455,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         )
         self._pending_audio_16k.clear()
         self._last_commit_ts = time.time()
+        self._last_commit_error_ts = 0.0
 
     def _convert_inbound_audio(self, audio_chunk: bytes) -> Optional[bytes]:
         fmt = (self.config.input_encoding or "slin16").lower()
@@ -503,11 +519,10 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             error = event.get("error") or {}
             code = (error.get("code") or "").strip()
             if code == "input_audio_buffer_commit_empty":
-                # Provider rejected commit because the buffer was too small; wait for
-                # more audio before trying again to avoid a tight error loop.
+                # Provider rejected commit: mark error timestamp and allow
+                # additional audio to accumulate before retrying.
                 async with self._audio_lock:
-                    self._pending_audio_16k.clear()
-                    self._last_commit_ts = time.time()
+                    self._last_commit_error_ts = time.time()
                 logger.warning(
                     "OpenAI commit rejected due to insufficient audio",
                     call_id=self._call_id,
@@ -833,4 +848,3 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                     break
         except asyncio.CancelledError:
             pass
-
