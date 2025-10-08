@@ -10,6 +10,7 @@ resampled to the configured downstream AudioSocket format (µ-law or PCM16 8 kHz
 from __future__ import annotations
 
 import asyncio
+import audioop
 import base64
 import contextlib
 import json
@@ -37,6 +38,7 @@ logger = get_logger(__name__)
 _COMMIT_INTERVAL_SEC = 0.2
 _KEEPALIVE_INTERVAL_SEC = 15.0
 _COMMIT_MIN_MS = 120.0  # ensure provider receives >=120 ms per commit
+_SPEECH_RMS_THRESHOLD = 200  # simple energy gate for classifying speech frames
 
 
 class OpenAIRealtimeProvider(AIProviderInterface):
@@ -89,6 +91,8 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             bytes_per_sample,
             int(provider_rate * (self._commit_min_ms / 1000.0) * bytes_per_sample),
         )
+        self._pending_speech_ms: float = 0.0
+        self._speech_rms_threshold: int = _SPEECH_RMS_THRESHOLD
         self._commit_grace_seconds: float = 0.35  # allow short pauses before padding with silence
         # Serialize append/commit to avoid empty commits from races
         self._audio_lock: asyncio.Lock = asyncio.Lock()
@@ -213,6 +217,9 @@ class OpenAIRealtimeProvider(AIProviderInterface):
 
                 self._pending_audio_16k.extend(pcm16)
                 pending_bytes = len(self._pending_audio_16k)
+                speech_ms = self._estimate_speech_ms(pcm16)
+                if speech_ms > 0.0:
+                    self._pending_speech_ms += speech_ms
                 self._last_audio_append_ts = time.time()
 
                 logger.debug(
@@ -417,11 +424,24 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             return 0.0
         return (len(self._pending_audio_16k) / (self._bytes_per_sample * self._provider_rate)) * 1000.0
 
+    def _estimate_speech_ms(self, pcm16: bytes) -> float:
+        if not pcm16 or not self._provider_rate or not self._bytes_per_sample:
+            return 0.0
+        try:
+            rms = audioop.rms(pcm16, self._bytes_per_sample)
+        except Exception:
+            logger.debug("Failed to compute RMS for speech estimate", call_id=self._call_id, exc_info=True)
+            return 0.0
+        if rms < self._speech_rms_threshold:
+            return 0.0
+        return (len(pcm16) / (self._bytes_per_sample * self._provider_rate)) * 1000.0
+
     async def _maybe_commit_audio(self, *, force: bool = False) -> None:
         if not self.websocket or self.websocket.closed:
             return
         pending_bytes = len(self._pending_audio_16k)
         pending_ms = self._pending_audio_duration_ms()
+        pending_speech_ms = self._pending_speech_ms
         if pending_bytes <= 0:
             logger.debug(
                 "OpenAI commit skip: no pending audio",
@@ -436,49 +456,37 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         elapsed_since_error = now - self._last_commit_error_ts if self._last_commit_error_ts else None
         elapsed_since_append = now - self._last_audio_append_ts if self._last_audio_append_ts else 0.0
 
-        should_commit = pending_bytes >= min_bytes
-        if not should_commit:
+        if pending_speech_ms < self._commit_min_ms:
             if force:
-                missing = max(0, min_bytes - pending_bytes)
-                if missing > 0:
-                    await self._append_silence(missing)
-                    pending_bytes = len(self._pending_audio_16k)
-                    pending_ms = self._pending_audio_duration_ms()
-                should_commit = pending_bytes >= min_bytes
+                logger.debug(
+                    "OpenAI force-commit skipped: insufficient speech",
+                    call_id=self._call_id,
+                    pending_bytes=pending_bytes,
+                    pending_ms=pending_ms,
+                    pending_speech_ms=pending_speech_ms,
+                    min_ms=self._commit_min_ms,
+                )
             else:
-                if elapsed_since_last_commit is not None and elapsed_since_last_commit < _COMMIT_INTERVAL_SEC:
-                    return
-                if elapsed_since_error is not None and elapsed_since_error < self._commit_grace_seconds:
-                    return
-                if elapsed_since_append < self._commit_grace_seconds:
-                    return
-                missing = max(0, min_bytes - pending_bytes)
-                if missing > 0:
-                    await self._append_silence(missing)
-                    pending_bytes = len(self._pending_audio_16k)
-                    pending_ms = self._pending_audio_duration_ms()
-                should_commit = pending_bytes >= min_bytes
-
-        if not should_commit:
-            logger.debug(
-                "OpenAI commit skip",
-                call_id=self._call_id,
-                pending_bytes=pending_bytes,
-                pending_ms=pending_ms,
-                min_bytes=min_bytes,
-                min_ms=self._commit_min_ms,
-                elapsed_since_append=elapsed_since_append,
-                elapsed_since_last_commit=elapsed_since_last_commit,
-                elapsed_since_error=elapsed_since_error,
-                force=force,
-            )
+                logger.debug(
+                    "OpenAI commit skip: insufficient speech",
+                    call_id=self._call_id,
+                    pending_bytes=pending_bytes,
+                    pending_ms=pending_ms,
+                    pending_speech_ms=pending_speech_ms,
+                    min_ms=self._commit_min_ms,
+                    elapsed_since_append=elapsed_since_append,
+                    elapsed_since_last_commit=elapsed_since_last_commit,
+                    elapsed_since_error=elapsed_since_error,
+                    force=force,
+                )
             return
 
-        logger.debug(
+        logger.info(
             "OpenAI commit pending",
             call_id=self._call_id,
             pending_bytes=pending_bytes,
             pending_ms=pending_ms,
+            pending_speech_ms=pending_speech_ms,
             min_bytes=min_bytes,
             min_ms=self._commit_min_ms,
             elapsed_since_append=elapsed_since_append,
@@ -495,8 +503,10 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             call_id=self._call_id,
             bytes_committed=committed_bytes,
             ms_committed=committed_ms,
+            speech_ms_committed=pending_speech_ms,
         )
         self._pending_audio_16k.clear()
+        self._pending_speech_ms = 0.0
         self._last_commit_ts = time.time()
         self._last_commit_error_ts = 0.0
 
