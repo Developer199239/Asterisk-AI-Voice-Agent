@@ -214,6 +214,39 @@ class StreamingPlaybackManager:
                 jb_chunks = 10
             jitter_buffer = asyncio.Queue(maxsize=jb_chunks)
             self.jitter_buffers[call_id] = jitter_buffer
+            # Derive per-stream warm-up thresholds so we never demand
+            # more buffered chunks than the queue can hold.
+            configured_min_start = (
+                self.greeting_min_start_chunks if playback_type == "greeting" else self.min_start_chunks
+            )
+            min_start_chunks = max(1, min(configured_min_start, jb_chunks))
+            if configured_min_start > min_start_chunks:
+                logger.debug(
+                    "Streaming min_start clamped",
+                    call_id=call_id,
+                    playback_type=playback_type,
+                    configured_chunks=configured_min_start,
+                    jitter_chunks=jb_chunks,
+                    applied_chunks=min_start_chunks,
+                )
+
+            configured_low_watermark = self.low_watermark_chunks
+            low_watermark_chunks = 0
+            if configured_low_watermark:
+                max_drainable = max(0, jb_chunks - 1)
+                low_watermark_chunks = min(configured_low_watermark, max_drainable)
+                if low_watermark_chunks <= 0:
+                    low_watermark_chunks = 0
+                elif configured_low_watermark > low_watermark_chunks:
+                    logger.debug(
+                        "Streaming low_watermark clamped",
+                        call_id=call_id,
+                        playback_type=playback_type,
+                        configured_chunks=configured_low_watermark,
+                        jitter_chunks=jb_chunks,
+                        applied_chunks=low_watermark_chunks,
+                    )
+
             # Mark streaming active in metrics and session
             _STREAMING_ACTIVE_GAUGE.labels(call_id).set(1)
             if session:
@@ -256,7 +289,9 @@ class StreamingPlaybackManager:
                 'last_chunk_time': time.time(),
                 'startup_ready': False,
                 'first_frame_observed': False,
-                'min_start_chunks': (self.greeting_min_start_chunks if playback_type == "greeting" else self.min_start_chunks),
+                'min_start_chunks': min_start_chunks,
+                'low_watermark_chunks': low_watermark_chunks,
+                'jitter_buffer_chunks': jb_chunks,
                 'end_reason': None,
             }
             self._startup_ready[call_id] = False
@@ -400,12 +435,25 @@ class StreamingPlaybackManager:
             # Process available chunks with pacing to avoid flooding Asterisk
             while not jitter_buffer.empty():
                 # Low watermark check: if depth drops below threshold, pause to rebuild buffer
-                if self.low_watermark_chunks and jitter_buffer.qsize() < self.low_watermark_chunks and self._startup_ready.get(call_id, False):
+                low_watermark_chunks = self.low_watermark_chunks
+                try:
+                    if call_id in self.active_streams:
+                        low_watermark_chunks = int(
+                            self.active_streams[call_id].get('low_watermark_chunks', low_watermark_chunks)
+                        )
+                except Exception:
+                    low_watermark_chunks = self.low_watermark_chunks
+
+                if (
+                    low_watermark_chunks
+                    and jitter_buffer.qsize() < low_watermark_chunks
+                    and self._startup_ready.get(call_id, False)
+                ):
                     logger.debug("Streaming jitter buffer low watermark pause",
                                  call_id=call_id,
                                  stream_id=stream_id,
                                  buffered_chunks=jitter_buffer.qsize(),
-                                 low_watermark=self.low_watermark_chunks)
+                                 low_watermark=low_watermark_chunks)
                     await asyncio.sleep(self.chunk_size_ms / 1000.0)
                     _STREAMING_JITTER_DEPTH.labels(call_id).set(jitter_buffer.qsize())
                     break
