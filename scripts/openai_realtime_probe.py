@@ -79,7 +79,7 @@ async def main() -> None:
         session_update = {
             "type": "session.update",
             "session": {
-                "modalities": ["audio"],
+                "modalities": ["audio", "text"],
                 "voice": VOICE,
                 "input_audio_format": {"type": "pcm16", "sample_rate_hz": SAMPLE_RATE},
                 "output_audio_format": {"type": "pcm16", "sample_rate_hz": SAMPLE_RATE},
@@ -94,7 +94,10 @@ async def main() -> None:
                 {
                     "type": "response.create",
                     "event_id": "probe-greeting",
-                    "response": {"modalities": ["audio"], "instructions": "Please greet the caller clearly."},
+                    "response": {
+                        "modalities": ["audio", "text"],
+                        "instructions": "Please greet the caller clearly.",
+                    },
                 }
             )
         )
