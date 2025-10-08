@@ -114,7 +114,7 @@ downstream_mode: "stream"
 audiosocket:
   host: "0.0.0.0"          # Bind address (use 127.0.0.1 when engine and Asterisk share a host)
   port: 8090               # TCP port for AudioSocket connections
-  format: "ulaw"           # Wire format from Asterisk: `ulaw` (160B/20ms) or `slin16` (320B/20ms) at 8 kHz
+  format: "slin16"         # Wire format from Asterisk: `ulaw` (160B/20ms) or `slin16` (320B/20ms) at 8 kHz
                            # TIP: Keep provider input sample rate aligned to 8 kHz when using telephony trunks.
 
 # Barge-in configuration
@@ -237,7 +237,7 @@ providers:
     base_url: "wss://api.openai.com/v1/realtime"
     instructions: "You are a concise voice assistant. Respond clearly and keep answers under 20 words unless more detail is requested."
     organization: ""
-    input_encoding: "slin16"          # AudioSocket inbound PCM16 @ 8 kHz
+    input_encoding: "slin16"
     input_sample_rate_hz: 8000
     output_encoding: "linear16"       # Provider emits PCM16 frames
     output_sample_rate_hz: 24000
