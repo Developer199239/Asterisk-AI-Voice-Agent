@@ -88,7 +88,16 @@ async def main() -> None:
         await ws.send(json.dumps(session_update))
         print("sent session.update")
 
-        # send a response request so we force the model to speak
+        for frame in iter_frames(pcm):
+            payload = {
+                "type": "input_audio_buffer.append",
+                "audio": base64.b64encode(frame).decode("ascii"),
+            }
+            await ws.send(json.dumps(payload))
+        await ws.send(json.dumps({"type": "input_audio_buffer.commit"}))
+        print("sent append+commit (tone)")
+
+        # after committing input audio, request a response so we can hear the greeting
         await ws.send(
             json.dumps(
                 {
@@ -102,15 +111,6 @@ async def main() -> None:
             )
         )
         print("sent response.create (probe greeting)")
-
-        for frame in iter_frames(pcm):
-            payload = {
-                "type": "input_audio_buffer.append",
-                "audio": base64.b64encode(frame).decode("ascii"),
-            }
-            await ws.send(json.dumps(payload))
-        await ws.send(json.dumps({"type": "input_audio_buffer.commit"}))
-        print("sent append+commit (tone)")
 
         OUTPUT_FILE.unlink(missing_ok=True)
         async for message in ws:
