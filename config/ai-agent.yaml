@@ -141,6 +141,10 @@ streaming:
   provider_grace_ms: 1400    # Longer grace to avoid tail clipping on stop
   logging_level: "debug"     # Optional override for streaming logger verbosity
 
+# Logging configuration for this run
+logging:
+  level: "debug"
+
 # Asterisk connection settings (will be overridden by environment variables)
 asterisk:
   host: "your_asterisk_host"
@@ -242,15 +246,14 @@ providers:
     output_sample_rate_hz: 24000
     target_encoding: "ulaw"  # Explicit for file playback; update if enabling streaming PCM
     target_sample_rate_hz: 8000
-  response_modalities:
-    - "audio"
-    - "text"
-  # Explicit greeting said immediately on connect via response.create
-  greeting: "${OPENAI_GREETING:-Hello, how can I help you today?}"
-  # Optional: enable server-side VAD turn detection to improve turn handling
-  turn_detection:
-    type: "server_vad"
-    silence_duration_ms: 650   # Avoid early stream cutoffs
-    threshold: 0.6             # Slightly less sensitive
-    prefix_padding_ms: 150     # More context before speech
-    greeting_protection_ms: 2500
+    response_modalities:
+      - "audio"
+      - "text"
+    # Explicit greeting said immediately on connect via response.create
+    greeting: "${OPENAI_GREETING:-Hello, how can I help you today?}"
+    # Optional: enable server-side VAD turn detection to improve turn handling
+    turn_detection:
+      type: "server_vad"
+      silence_duration_ms: 650   # Avoid early stream cutoffs
+      threshold: 0.6             # Slightly less sensitive
+      prefix_padding_ms: 150     # More context before speech
