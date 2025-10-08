@@ -32,6 +32,7 @@ Active contexts and call path (server):
 - `downstream_mode`: `file` (default) | `stream` (enabled once Milestone 5 tasks complete; retains file fallback automatically).
 - `streaming.*` (Milestone 5): `min_start_ms`, `low_watermark_ms`, `fallback_timeout_ms`, `provider_grace_ms`, `chunk_size_ms`, `jitter_buffer_ms`.
 - `pipelines` (Milestone 7): defines STT/LLM/TTS combinations; `active_pipeline` selects which pipeline new calls use.
+- `vad.use_provider_vad`: when `true`, rely on provider (e.g., OpenAI server VAD) and disable local WebRTC/Enhanced VAD.
 - Logging levels are configurable per service via YAML once the hot-reload work lands; default is INFO for GA builds.
 
 ## Pre‑flight Checklist (Local or Server)

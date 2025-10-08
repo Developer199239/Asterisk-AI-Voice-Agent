@@ -265,9 +265,13 @@ class Engine:
         self.audiosocket_channels: Dict[str, str] = {}  # call_id -> audiosocket_channel_id
         
         self.vad_manager: Optional[EnhancedVADManager] = None
+        self.webrtc_vad = None
         try:
             vad_cfg = getattr(config, "vad", None)
-            if vad_cfg and getattr(vad_cfg, "enhanced_enabled", False):
+            use_provider_vad = bool(getattr(vad_cfg, "use_provider_vad", False)) if vad_cfg else False
+            if use_provider_vad:
+                logger.info("Using provider-managed VAD; local VAD disabled")
+            elif vad_cfg and getattr(vad_cfg, "enhanced_enabled", False):
                 self.vad_manager = EnhancedVADManager(
                     energy_threshold=int(getattr(vad_cfg, "energy_threshold", 1500)),
                     confidence_threshold=float(getattr(vad_cfg, "confidence_threshold", 0.6)),
@@ -283,22 +287,19 @@ class Engine:
                     confidence_threshold=self.vad_manager.confidence_threshold,
                     adaptive=self.vad_manager.adaptive_threshold_enabled,
                 )
-        except Exception:
-            logger.error("Failed to initialize Enhanced VAD", exc_info=True)
 
-        # WebRTC VAD for robust speech detection
-        self.webrtc_vad = None
-        if WEBRTC_VAD_AVAILABLE:
-            try:
-                # Use VAD configuration section
-                aggressiveness = config.vad.webrtc_aggressiveness
-                self.webrtc_vad = webrtcvad.Vad(aggressiveness)
-                logger.info("🎤 WebRTC VAD initialized", aggressiveness=aggressiveness)
-            except Exception as e:
-                logger.warning("🎤 WebRTC VAD initialization failed", error=str(e))
-                self.webrtc_vad = None
-        else:
-            logger.warning("🎤 WebRTC VAD not available - install py-webrtcvad")
+            if not use_provider_vad and WEBRTC_VAD_AVAILABLE:
+                try:
+                    aggressiveness = config.vad.webrtc_aggressiveness
+                    self.webrtc_vad = webrtcvad.Vad(aggressiveness)
+                    logger.info("🎤 WebRTC VAD initialized", aggressiveness=aggressiveness)
+                except Exception as e:
+                    logger.warning("🎤 WebRTC VAD initialization failed", error=str(e))
+                    self.webrtc_vad = None
+            elif not use_provider_vad:
+                logger.warning("🎤 WebRTC VAD not available - install py-webrtcvad")
+        except Exception:
+            logger.error("Failed to initialize VAD components", exc_info=True)
         # Map our synthesized UUID extension to the real ARI caller channel id
         self.uuidext_to_channel: Dict[str, str] = {}
         # NEW: Caller channel tracking for dual StasisStart handling

@@ -170,7 +170,8 @@ llm:
 
 # VAD Configuration - Optimized for 4+ second utterances
 vad:
-  enhanced_enabled: true      # Enable enhanced VAD + multi-criteria barge-in (feature flag)
+  use_provider_vad: true      # Defer speech detection to provider (OpenAI server-side VAD)
+  enhanced_enabled: false     # Disable local enhanced VAD; leave settings for fallback tuning
   # WebRTC VAD settings - optimized for real-time conversation
   webrtc_aggressiveness: 1   # Slightly more aggressive (0-3) for telephony audio
   webrtc_start_frames: 2     # Consecutive frames to start recording (40ms)

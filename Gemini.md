@@ -22,6 +22,7 @@ This playbook summarizes how Gemini should operate on the Asterisk AI Voice Agen
 - `audio_transport`, `downstream_mode`, `audiosocket.format`.
 - Streaming defaults (`streaming.min_start_ms`, `low_watermark_ms`, `fallback_timeout_ms`, `provider_grace_ms`).
 - Pipeline definitions (`pipelines`, `active_pipeline`) once Milestone 7 lands.
+- `vad.use_provider_vad` toggles provider-managed speech detection; leave local WebRTC/Enhanced VAD disabled when this is true.
 - Local overrides: `LOCAL_WS_CHUNK_MS` defaults to 320 ms, `LOCAL_WS_RESPONSE_TIMEOUT` to 5 s, and `LOCAL_STT_IDLE_MS` now defaults to 1200 ms (tune per environment as needed).
 - Logging levels per component (set via YAML when hot reload is implemented).
 

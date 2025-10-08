@@ -146,6 +146,7 @@ class LLMConfig(BaseModel):
 
 
 class VADConfig(BaseModel):
+    use_provider_vad: bool = Field(default=False)
     enhanced_enabled: bool = Field(default=False)
     # WebRTC VAD settings - optimized for real-time conversation
     webrtc_aggressiveness: int = 1
