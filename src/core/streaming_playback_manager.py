@@ -296,6 +296,7 @@ class StreamingPlaybackManager:
                 'min_start_chunks': min_start_chunks,
                 'low_watermark_chunks': low_watermark_chunks,
                 'jitter_buffer_chunks': jb_chunks,
+                'buffered_bytes': 0,
                 'end_reason': None,
             }
             self._startup_ready[call_id] = False
@@ -368,10 +369,16 @@ class StreamingPlaybackManager:
                             await self.session_store.upsert_call(sess)
                     except Exception:
                         logger.debug("Streaming metrics update failed", call_id=call_id)
-                    
+
                     # Add to jitter buffer
                     await jitter_buffer.put(chunk)
-                    
+                    try:
+                        if call_id in self.active_streams:
+                            info = self.active_streams[call_id]
+                            info['buffered_bytes'] = int(info.get('buffered_bytes', 0)) + len(chunk)
+                    except Exception:
+                        pass
+
                     # Process jitter buffer
                     success = await self._process_jitter_buffer(call_id, stream_id, jitter_buffer)
                     if not success:
@@ -424,7 +431,8 @@ class StreamingPlaybackManager:
                         min_need = int(self.active_streams[call_id].get('min_start_chunks', self.min_start_chunks))
                 except Exception:
                     min_need = self.min_start_chunks
-                if jitter_buffer.qsize() < min_need:
+                available_frames = self._estimate_available_frames(call_id, jitter_buffer, include_remainder=True)
+                if available_frames < min_need:
                     return True
                 self._startup_ready[call_id] = True
                 if call_id in self.active_streams:
@@ -439,24 +447,17 @@ class StreamingPlaybackManager:
             # Process available chunks with pacing to avoid flooding Asterisk
             while not jitter_buffer.empty():
                 # Low watermark check: if depth drops below threshold, pause to rebuild buffer
-                low_watermark_chunks = self.low_watermark_chunks
-                try:
-                    if call_id in self.active_streams:
-                        low_watermark_chunks = int(
-                            self.active_streams[call_id].get('low_watermark_chunks', low_watermark_chunks)
-                        )
-                except Exception:
-                    low_watermark_chunks = self.low_watermark_chunks
+                low_watermark_chunks = self._get_low_watermark_frames(call_id)
 
                 if (
                     low_watermark_chunks
-                    and jitter_buffer.qsize() < low_watermark_chunks
+                    and self._estimate_available_frames(call_id, jitter_buffer, include_remainder=True) <= low_watermark_chunks
                     and self._startup_ready.get(call_id, False)
                 ):
                     logger.debug("Streaming jitter buffer low watermark pause",
                                  call_id=call_id,
                                  stream_id=stream_id,
-                                 buffered_chunks=jitter_buffer.qsize(),
+                                 buffered_frames=self._estimate_available_frames(call_id, jitter_buffer, include_remainder=False),
                                  low_watermark=low_watermark_chunks)
                     await asyncio.sleep(self.chunk_size_ms / 1000.0)
                     _STREAMING_JITTER_DEPTH.labels(call_id).set(jitter_buffer.qsize())
@@ -466,6 +467,7 @@ class StreamingPlaybackManager:
                 # Convert audio format if needed
                 processed_chunk = await self._process_audio_chunk(chunk)
                 if not processed_chunk:
+                    self._decrement_buffered_bytes(call_id, len(chunk))
                     continue
 
                 if self.audio_transport == "audiosocket":
@@ -485,6 +487,7 @@ class StreamingPlaybackManager:
                         success = await self._send_audio_chunk(call_id, stream_id, frame)
                         if not success:
                             return False
+                        self._decrement_buffered_bytes(call_id, frame_size)
                         # Pacing: sleep for chunk duration to avoid overrun
                         await asyncio.sleep(self.chunk_size_ms / 1000.0)
 
@@ -495,6 +498,8 @@ class StreamingPlaybackManager:
                     success = await self._send_audio_chunk(call_id, stream_id, processed_chunk)
                     if not success:
                         return False
+                    # Treat entire chunk as consumed bytes
+                    self._decrement_buffered_bytes(call_id, len(processed_chunk))
 
         except Exception as e:
             logger.error("Error processing jitter buffer",
@@ -526,7 +531,7 @@ class StreamingPlaybackManager:
         except Exception as e:
             logger.error("Audio chunk processing failed", error=str(e), exc_info=True)
             return None
-    
+
     async def _send_audio_chunk(self, call_id: str, stream_id: str, chunk: bytes) -> bool:
         """Send audio chunk via configured streaming transport."""
         try:
@@ -621,6 +626,60 @@ class StreamingPlaybackManager:
                         exc_info=True)
             return False
 
+    def _frame_size_bytes(self) -> int:
+        fmt = (self.audiosocket_format or "ulaw").lower()
+        bytes_per_sample = 1 if fmt in ("ulaw", "mulaw", "g711_ulaw", "mu-law") else 2
+        frame_size = int(self.sample_rate * (self.chunk_size_ms / 1000.0) * bytes_per_sample)
+        if frame_size <= 0:
+            frame_size = 160 if bytes_per_sample == 1 else 320
+        return frame_size
+
+    def _estimate_available_frames(
+        self,
+        call_id: str,
+        jitter_buffer: asyncio.Queue,
+        *,
+        include_remainder: bool = False,
+    ) -> int:
+        frame_size = self._frame_size_bytes()
+        try:
+            info = self.active_streams.get(call_id, {})
+            buffered_bytes = int(info.get('buffered_bytes', 0))
+        except Exception:
+            buffered_bytes = 0
+
+        if buffered_bytes <= 0:
+            # Approximate using queue depth when buffered_bytes not yet initialised
+            buffered_bytes = jitter_buffer.qsize() * frame_size
+
+        if include_remainder:
+            remainder = self.frame_remainders.get(call_id, b"")
+            if remainder:
+                buffered_bytes += len(remainder)
+
+        frames = int(buffered_bytes / max(1, frame_size))
+        return max(0, frames)
+
+    def _get_low_watermark_frames(self, call_id: str) -> int:
+        try:
+            info = self.active_streams.get(call_id, {})
+            lw = int(info.get('low_watermark_chunks', self.low_watermark_chunks))
+        except Exception:
+            lw = self.low_watermark_chunks
+        return max(0, lw)
+
+    def _decrement_buffered_bytes(self, call_id: str, byte_count: int) -> None:
+        if byte_count <= 0:
+            return
+        try:
+            info = self.active_streams.get(call_id)
+            if info is None:
+                return
+            current = int(info.get('buffered_bytes', 0))
+            info['buffered_bytes'] = max(0, current - byte_count)
+        except Exception:
+            pass
+
     def set_transport(
         self,
         *,
@@ -679,6 +738,7 @@ class StreamingPlaybackManager:
                     chunk = jitter_buffer.get_nowait()
                     if chunk:
                         remaining_audio.extend(chunk)
+                        self._decrement_buffered_bytes(call_id, len(chunk))
             
             if remaining_audio:
                 mulaw_audio = bytes(remaining_audio)
@@ -818,6 +878,7 @@ class StreamingPlaybackManager:
             try:
                 rem = self.frame_remainders.get(call_id, b"") or b""
                 if rem:
+                    self._decrement_buffered_bytes(call_id, len(rem))
                     if self.audio_transport == "audiosocket":
                         fmt = (self.audiosocket_format or "ulaw").lower()
                         bytes_per_sample = 1 if fmt in ("ulaw", "mulaw", "mu-law") else 2

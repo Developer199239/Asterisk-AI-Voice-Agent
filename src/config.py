@@ -325,11 +325,20 @@ def load_config(path: str = "config/ai-agent.yaml") -> AppConfig:
 
         # Manually construct and inject the Asterisk config from environment variables.
         # This keeps secrets out of the YAML file and aligns with the Pydantic model.
+        asterisk_yaml = (config_data.get('asterisk') or {}) if isinstance(config_data.get('asterisk'), dict) else {}
         config_data['asterisk'] = {
-            "host": os.getenv("ASTERISK_HOST"),
-            "username": os.getenv("ASTERISK_ARI_USERNAME"),
-            "password": os.getenv("ASTERISK_ARI_PASSWORD"),
-            "app_name": "asterisk-ai-voice-agent"
+            "host": os.getenv("ASTERISK_HOST", asterisk_yaml.get("host")),
+            "username": (
+                os.getenv("ASTERISK_ARI_USERNAME")
+                or os.getenv("ARI_USERNAME")
+                or asterisk_yaml.get("username")
+            ),
+            "password": (
+                os.getenv("ASTERISK_ARI_PASSWORD")
+                or os.getenv("ARI_PASSWORD")
+                or asterisk_yaml.get("password")
+            ),
+            "app_name": asterisk_yaml.get("app_name", "asterisk-ai-voice-agent")
         }
 
         # Merge YAML LLM section with environment variables without clobbering YAML values.
