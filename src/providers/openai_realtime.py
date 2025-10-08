@@ -10,11 +10,9 @@ resampled to the configured downstream AudioSocket format (µ-law or PCM16 8 kHz
 from __future__ import annotations
 
 import asyncio
-import audioop
 import base64
 import contextlib
 import json
-import logging
 import time
 import uuid
 from typing import Any, Dict, Optional
@@ -37,8 +35,6 @@ logger = get_logger(__name__)
 
 _COMMIT_INTERVAL_SEC = 0.2
 _KEEPALIVE_INTERVAL_SEC = 15.0
-_COMMIT_MIN_MS = 120.0  # ensure provider receives >=120 ms per commit
-_SPEECH_RMS_THRESHOLD = 200  # simple energy gate for classifying speech frames
 
 
 class OpenAIRealtimeProvider(AIProviderInterface):
@@ -80,33 +76,10 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         # Aggregate converted 16 kHz PCM16 bytes and commit in >=100ms chunks
         self._pending_audio_16k: bytearray = bytearray()
         self._last_commit_ts: float = 0.0
-        self._last_commit_error_ts: float = 0.0
-        self._last_audio_append_ts: float = 0.0
-        bytes_per_sample = 2  # PCM16
-        provider_rate = int(getattr(self.config, "provider_input_sample_rate_hz", 16000) or 16000)
-        self._bytes_per_sample: int = bytes_per_sample
-        self._provider_rate: int = provider_rate
-        self._commit_min_ms: float = float(getattr(self.config, "commit_min_ms", None) or _COMMIT_MIN_MS)
-        self._commit_min_bytes: int = max(
-            bytes_per_sample,
-            int(provider_rate * (self._commit_min_ms / 1000.0) * bytes_per_sample),
-        )
-        self._pending_speech_ms: float = 0.0
-        self._speech_rms_threshold: int = _SPEECH_RMS_THRESHOLD
-        self._commit_grace_seconds: float = 0.35  # allow short pauses before padding with silence
         # Serialize append/commit to avoid empty commits from races
         self._audio_lock: asyncio.Lock = asyncio.Lock()
         # Track provider output format we requested in session.update
         self._provider_output_format: str = "pcm16"
-        self._provider_output_rate: int = int(getattr(self.config, "output_sample_rate_hz", 24000) or 24000)
-        # Greeting-only server VAD deferral
-        self._defer_turn_detection: bool = False
-        self._greeting_phase: bool = False
-        self._td_enabled: bool = False
-        # Telemetry counters (debug logging only)
-        self._event_seq: int = 0
-        self._audio_chunk_seq: int = 0
-        self._text_chunk_seq: int = 0
 
     @property
     def supported_codecs(self):
@@ -127,9 +100,6 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         self._transcript_buffer = ""
         self._closing = False
         self._closed = False
-        self._event_seq = 0
-        self._audio_chunk_seq = 0
-        self._text_chunk_seq = 0
 
         url = self._build_ws_url()
         headers = [
@@ -146,10 +116,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             logger.error("Failed to connect to OpenAI Realtime", call_id=call_id, exc_info=True)
             raise
 
-        # For the greeting, defer server-side VAD to avoid early segmentation
-        self._defer_turn_detection = bool(getattr(self.config, "turn_detection", None))
-        self._greeting_phase = self._defer_turn_detection
-        await self._send_session_update(include_turn_detection=not self._defer_turn_detection)
+        await self._send_session_update()
 
         # Proactively request an initial response so the agent can greet
         # even before user audio arrives. Prefer explicit greeting text
@@ -172,14 +139,6 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             return
         if not self.websocket or self.websocket.closed:
             logger.debug("Dropping inbound audio: websocket not ready", call_id=self._call_id)
-            return
-        # During the initial greeting, avoid touching input_audio_buffer to prevent
-        # empty commits and reduce provider-side latency before first output.
-        if self._greeting_phase:
-            try:
-                logger.info("Dropping inbound audio during greeting", call_id=self._call_id)
-            except Exception:
-                pass
             return
 
         try:
@@ -213,24 +172,40 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                 except Exception:
                     pass
 
-            async with self._audio_lock:
-                await self._append_audio_buffer(pcm16)
+            # If server VAD is enabled, just append frames; do not commit.
+            vad_enabled = getattr(self.config, "turn_detection", None) is not None
+            if vad_enabled:
+                try:
+                    audio_b64 = base64.b64encode(pcm16).decode("ascii")
+                    await self._send_json({"type": "input_audio_buffer.append", "audio": audio_b64})
+                except Exception:
+                    logger.error("Failed to append input audio buffer (VAD)", call_id=self._call_id, exc_info=True)
+            else:
+                # Serialize accumulation and commit to avoid empty commits due to races
+                async with self._audio_lock:
+                    # Accumulate until we have >= 160ms to comfortably satisfy >=100ms minimum
+                    self._pending_audio_16k.extend(pcm16)
+                    bytes_per_ms = int(self.config.provider_input_sample_rate_hz * 2 / 1000)
+                    commit_threshold_ms = 160
+                    commit_threshold_bytes = bytes_per_ms * commit_threshold_ms
 
-                self._pending_audio_16k.extend(pcm16)
-                pending_bytes = len(self._pending_audio_16k)
-                speech_ms = self._estimate_speech_ms(pcm16)
-                if speech_ms > 0.0:
-                    self._pending_speech_ms += speech_ms
-                self._last_audio_append_ts = time.time()
-
-                logger.debug(
-                    "OpenAI inbound audio buffered",
-                    call_id=self._call_id,
-                    appended_bytes=len(pcm16),
-                    pending_bytes=pending_bytes,
-                )
-
-                await self._maybe_commit_audio()
+                    if len(self._pending_audio_16k) >= commit_threshold_bytes:
+                        chunk = bytes(self._pending_audio_16k)
+                        self._pending_audio_16k.clear()
+                        audio_b64 = base64.b64encode(chunk).decode("ascii")
+                        try:
+                            await self._send_json({"type": "input_audio_buffer.append", "audio": audio_b64})
+                            await self._send_json({"type": "input_audio_buffer.commit"})
+                            self._last_commit_ts = time.monotonic()
+                            logger.debug(
+                                "OpenAI committed input audio",
+                                call_id=self._call_id,
+                                ms=len(chunk) // bytes_per_ms,
+                                bytes=len(chunk),
+                            )
+                        except Exception:
+                            logger.error("Failed to append/commit input audio buffer", call_id=self._call_id, exc_info=True)
+                        await self._ensure_response_request()
         except ConnectionClosedError:
             logger.warning("OpenAI Realtime socket closed while sending audio", call_id=self._call_id)
         except Exception:
@@ -250,9 +225,6 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                 self._keepalive_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await self._keepalive_task
-
-            async with self._audio_lock:
-                await self._maybe_commit_audio(force=True)
 
             if self.websocket and not self.websocket.closed:
                 await self.websocket.close()
@@ -297,7 +269,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         base = base.rstrip("/")
         return f"{base}?model={self.config.model}"
 
-    async def _send_session_update(self, *, include_turn_detection: bool = True):
+    async def _send_session_update(self):
         # Map config modalities to output_modalities per latest guide
         output_modalities = [m for m in (self.config.response_modalities or []) if m in ("audio", "text")]
         if not output_modalities:
@@ -306,29 +278,24 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         # Choose OpenAI output format for this session:
         # If downstream target is μ-law, request g711_ulaw from provider to test end-to-end μ-law.
         # Otherwise keep PCM16.
-        provider_rate = int(getattr(self.config, "provider_input_sample_rate_hz", 24000) or 24000)
-        output_rate = int(getattr(self.config, "output_sample_rate_hz", 24000) or 24000)
-        input_audio_format: Dict[str, Any] = {
-            "type": "pcm16",
-            "sample_rate_hz": provider_rate,
-        }
-        output_audio_format: Dict[str, Any] = {
-            "type": "pcm16",
-            "sample_rate_hz": output_rate,
-        }
+        out_fmt = "pcm16"
+        try:
+            if (self.config.target_encoding or "").lower() in ("ulaw", "mulaw", "g711_ulaw"):
+                out_fmt = "g711_ulaw"
+        except Exception:
+            pass
 
         session: Dict[str, Any] = {
             # Model is selected via URL; keep accepted keys here
             "modalities": output_modalities,
-            "input_audio_format": input_audio_format,
-            "output_audio_format": output_audio_format,
+            "input_audio_format": "pcm16",
+            "output_audio_format": out_fmt,
             "voice": self.config.voice,
         }
         # Record provider output format for runtime handling
-        self._provider_output_format = output_audio_format.get("type", "pcm16")
-        self._provider_output_rate = output_audio_format.get("sample_rate_hz", output_rate)
+        self._provider_output_format = out_fmt
         # Optional server-side VAD/turn detection at session level
-        if include_turn_detection and getattr(self.config, "turn_detection", None):
+        if getattr(self.config, "turn_detection", None):
             try:
                 td = self.config.turn_detection
                 session["turn_detection"] = {
@@ -403,117 +370,11 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             ptype = payload.get("type")
             if ptype and not ptype.startswith("input_audio_buffer."):
                 logger.debug("OpenAI send", call_id=self._call_id, type=ptype)
-            elif ptype == "input_audio_buffer.commit":
-                logger.debug("OpenAI send commit", call_id=self._call_id, type=ptype)
         except Exception:
             pass
         message = json.dumps(payload)
         async with self._send_lock:
             await self.websocket.send(message)
-
-    async def _append_audio_buffer(self, pcm16: bytes) -> None:
-        if not pcm16:
-            return
-        audio_b64 = base64.b64encode(pcm16).decode("ascii")
-        await self._send_json({"type": "input_audio_buffer.append", "audio": audio_b64})
-
-    async def _append_silence(self, byte_count: int) -> None:
-        if byte_count <= 0:
-            return
-        silence = b"\x00" * byte_count
-        await self._append_audio_buffer(silence)
-        self._pending_audio_16k.extend(silence)
-        self._last_audio_append_ts = time.time()
-
-    def _pending_audio_duration_ms(self) -> float:
-        if not self._provider_rate or not self._bytes_per_sample:
-            return 0.0
-        return (len(self._pending_audio_16k) / (self._bytes_per_sample * self._provider_rate)) * 1000.0
-
-    def _estimate_speech_ms(self, pcm16: bytes) -> float:
-        if not pcm16 or not self._provider_rate or not self._bytes_per_sample:
-            return 0.0
-        try:
-            rms = audioop.rms(pcm16, self._bytes_per_sample)
-        except Exception:
-            logger.debug("Failed to compute RMS for speech estimate", call_id=self._call_id, exc_info=True)
-            return 0.0
-        if rms < self._speech_rms_threshold:
-            return 0.0
-        return (len(pcm16) / (self._bytes_per_sample * self._provider_rate)) * 1000.0
-
-    async def _maybe_commit_audio(self, *, force: bool = False) -> None:
-        if not self.websocket or self.websocket.closed:
-            return
-        pending_bytes = len(self._pending_audio_16k)
-        pending_ms = self._pending_audio_duration_ms()
-        pending_speech_ms = self._pending_speech_ms
-        if pending_bytes <= 0:
-            logger.debug(
-                "OpenAI commit skip: no pending audio",
-                call_id=self._call_id,
-                force=force,
-            )
-            return
-
-        min_bytes = self._commit_min_bytes
-        now = time.time()
-        elapsed_since_last_commit = now - self._last_commit_ts if self._last_commit_ts else None
-        elapsed_since_error = now - self._last_commit_error_ts if self._last_commit_error_ts else None
-        elapsed_since_append = now - self._last_audio_append_ts if self._last_audio_append_ts else 0.0
-
-        speech_ready = pending_speech_ms >= self._commit_min_ms
-        if not speech_ready:
-            # Flush if we've held the buffer longer than grace or accumulated a large backlog.
-            if (
-                elapsed_since_append >= self._commit_grace_seconds
-                or (pending_ms >= (self._commit_min_ms * 3))
-            ):
-                speech_ready = True
-
-        if not speech_ready and not force:
-            logger.debug(
-                "OpenAI commit skip: waiting for speech",
-                call_id=self._call_id,
-                pending_bytes=pending_bytes,
-                pending_ms=pending_ms,
-                pending_speech_ms=pending_speech_ms,
-                min_ms=self._commit_min_ms,
-                elapsed_since_append=elapsed_since_append,
-                elapsed_since_last_commit=elapsed_since_last_commit,
-                elapsed_since_error=elapsed_since_error,
-                force=force,
-            )
-            return
-
-        logger.info(
-            "OpenAI commit pending",
-            call_id=self._call_id,
-            pending_bytes=pending_bytes,
-            pending_ms=pending_ms,
-            pending_speech_ms=pending_speech_ms,
-            min_bytes=min_bytes,
-            min_ms=self._commit_min_ms,
-            elapsed_since_append=elapsed_since_append,
-            elapsed_since_last_commit=elapsed_since_last_commit,
-            elapsed_since_error=elapsed_since_error,
-            force=force,
-        )
-
-        committed_bytes = pending_bytes
-        committed_ms = pending_ms
-        await self._send_json({"type": "input_audio_buffer.commit"})
-        logger.debug(
-            "OpenAI committed input audio",
-            call_id=self._call_id,
-            bytes_committed=committed_bytes,
-            ms_committed=committed_ms,
-            speech_ms_committed=pending_speech_ms,
-        )
-        self._pending_audio_16k.clear()
-        self._pending_speech_ms = 0.0
-        self._last_commit_ts = time.time()
-        self._last_commit_error_ts = 0.0
 
     def _convert_inbound_audio(self, audio_chunk: bytes) -> Optional[bytes]:
         fmt = (self.config.input_encoding or "slin16").lower()
@@ -560,32 +421,9 @@ class OpenAIRealtimeProvider(AIProviderInterface):
 
     async def _handle_event(self, event: Dict[str, Any]):
         event_type = event.get("type")
-        debug_enabled = logging.getLogger("src.providers.openai_realtime").isEnabledFor(logging.DEBUG)
-
-        if debug_enabled:
-            self._event_seq += 1
-            logger.debug(
-                "OpenAI event received",
-                call_id=self._call_id,
-                seq=self._event_seq,
-                event_type=event_type,
-                payload_keys=sorted(event.keys()),
-            )
 
         # Log top-level error events with full payload to diagnose API contract issues
         if event_type == "error":
-            error = event.get("error") or {}
-            code = (error.get("code") or "").strip()
-            if code == "input_audio_buffer_commit_empty":
-                # Provider rejected commit: mark error timestamp and allow
-                # additional audio to accumulate before retrying.
-                async with self._audio_lock:
-                    self._last_commit_error_ts = time.time()
-                logger.warning(
-                    "OpenAI commit rejected due to insufficient audio",
-                    call_id=self._call_id,
-                    provider_message=error.get("message"),
-                )
             # Use 'error_event' key to avoid structlog 'event' argument conflict
             logger.error("OpenAI Realtime error event", call_id=self._call_id, error_event=event)
             return
@@ -607,15 +445,6 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             elif delta_type == "output_text.delta":
                 text = delta.get("text")
                 if text:
-                    if debug_enabled:
-                        self._text_chunk_seq += 1
-                        logger.debug(
-                            "OpenAI text delta received",
-                            call_id=self._call_id,
-                            seq=self._text_chunk_seq,
-                            chars=len(text),
-                            is_final=False,
-                        )
                     await self._emit_transcript(text, is_final=False)
             elif delta_type == "output_text.done":
                 if self._transcript_buffer:
@@ -687,15 +516,6 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             delta = event.get("delta") or {}
             text = delta.get("text")
             if text:
-                if debug_enabled:
-                    self._text_chunk_seq += 1
-                    logger.debug(
-                        "OpenAI text delta received",
-                        call_id=self._call_id,
-                        seq=self._text_chunk_seq,
-                        chars=len(text),
-                        is_final=False,
-                    )
                 await self._emit_transcript(text, is_final=False)
             return
 
@@ -713,25 +533,10 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             elif isinstance(delta, str):
                 text = delta
             if text:
-                if debug_enabled:
-                    self._text_chunk_seq += 1
-                    logger.debug(
-                        "OpenAI text delta received",
-                        call_id=self._call_id,
-                        seq=self._text_chunk_seq,
-                        chars=len(text),
-                        is_final=False,
-                    )
                 await self._emit_transcript(text, is_final=False)
             return
 
         if event_type == "response.output_audio_transcript.done":
-            if debug_enabled and self._transcript_buffer:
-                logger.debug(
-                    "OpenAI text stream completed",
-                    call_id=self._call_id,
-                    total_chars=len(self._transcript_buffer),
-                )
             if self._transcript_buffer:
                 await self._emit_transcript("", is_final=True)
             return
@@ -739,14 +544,6 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         logger.debug("Unhandled OpenAI Realtime event", event_type=event_type)
 
     async def _handle_output_audio(self, audio_b64: str):
-        if logging.getLogger("src.providers.openai_realtime").isEnabledFor(logging.DEBUG):
-            self._audio_chunk_seq += 1
-            logger.debug(
-                "OpenAI audio delta received",
-                call_id=self._call_id,
-                chunk_index=self._audio_chunk_seq,
-                payload_bytes=len(audio_b64 or ""),
-            )
         try:
             pcm_24k = base64.b64decode(audio_b64)
         except Exception:
@@ -757,19 +554,20 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             return
 
         # If provider is emitting μ-law (g711_ulaw), pass-through directly to downstream.
-        target_rate = self.config.target_sample_rate_hz
-        pcm_target, self._output_resample_state = resample_audio(
-            pcm_24k,
-            self._provider_output_rate,
-            target_rate,
-            state=self._output_resample_state,
-        )
+        if (self._provider_output_format or "").lower() == "g711_ulaw":
+            outbound = pcm_24k  # Note: despite variable name, this holds μ-law bytes in this mode
+        else:
+            target_rate = self.config.target_sample_rate_hz
+            pcm_target, self._output_resample_state = resample_audio(
+                pcm_24k,
+                self.config.output_sample_rate_hz,
+                target_rate,
+                state=self._output_resample_state,
+            )
 
-        outbound = convert_pcm16le_to_target_format(pcm_target, self.config.target_encoding)
-        if not outbound:
-            return
-
-        debug_enabled = logging.getLogger("src.providers.openai_realtime").isEnabledFor(logging.DEBUG)
+            outbound = convert_pcm16le_to_target_format(pcm_target, self.config.target_encoding)
+            if not outbound:
+                return
 
         if self.on_event:
             if not self._first_output_chunk_logged:
@@ -780,15 +578,6 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                     target_encoding=self.config.target_encoding,
                 )
                 self._first_output_chunk_logged = True
-
-            if debug_enabled:
-                logger.debug(
-                    "Emitting AgentAudio chunk",
-                    call_id=self._call_id,
-                    chunk_index=self._audio_chunk_seq,
-                    outbound_bytes=len(outbound),
-                    provider_format=self._provider_output_format,
-                )
 
             self._in_audio_burst = True
             try:
@@ -806,13 +595,6 @@ class OpenAIRealtimeProvider(AIProviderInterface):
     async def _emit_audio_done(self):
         if not self._in_audio_burst or not self.on_event or not self._call_id:
             return
-        debug_enabled = logging.getLogger("src.providers.openai_realtime").isEnabledFor(logging.DEBUG)
-        if debug_enabled:
-            logger.debug(
-                "Agent audio burst completed",
-                call_id=self._call_id,
-                chunks=self._audio_chunk_seq,
-            )
         try:
             await self.on_event(
                 {
@@ -827,17 +609,6 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             self._in_audio_burst = False
             self._output_resample_state = None
             self._first_output_chunk_logged = False
-            self._audio_chunk_seq = 0
-            self._text_chunk_seq = 0
-            # After the first provider output completes, enable server-side VAD if deferred
-            if self._defer_turn_detection and self._greeting_phase and not self._td_enabled:
-                try:
-                    await self._enable_turn_detection()
-                except Exception:
-                    logger.debug("Failed to enable turn_detection after greeting", call_id=self._call_id, exc_info=True)
-                finally:
-                    self._greeting_phase = False
-                    self._defer_turn_detection = False
 
     async def _emit_transcript(self, text: str, *, is_final: bool):
         if not self.on_event or not self._call_id:
@@ -859,29 +630,6 @@ class OpenAIRealtimeProvider(AIProviderInterface):
 
         if is_final:
             self._transcript_buffer = ""
-
-    async def _enable_turn_detection(self):
-        """Enable server-side turn detection via session.update after greeting."""
-        if not getattr(self.config, "turn_detection", None):
-            return
-        if not self.websocket or self.websocket.closed:
-            return
-        td = self.config.turn_detection
-        payload: Dict[str, Any] = {
-            "type": "session.update",
-            "event_id": f"sess-td-{uuid.uuid4()}",
-            "session": {
-                "turn_detection": {
-                    "type": td.type,
-                    "silence_duration_ms": td.silence_duration_ms,
-                    "threshold": td.threshold,
-                    "prefix_padding_ms": td.prefix_padding_ms,
-                }
-            },
-        }
-        await self._send_json(payload)
-        self._td_enabled = True
-        logger.info("OpenAI Realtime turn_detection enabled after greeting", call_id=self._call_id)
 
     async def _keepalive_loop(self):
         try:
