@@ -98,6 +98,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         self._audio_lock: asyncio.Lock = asyncio.Lock()
         # Track provider output format we requested in session.update
         self._provider_output_format: str = "pcm16"
+        self._provider_output_rate: int = int(getattr(self.config, "output_sample_rate_hz", 24000) or 24000)
         # Greeting-only server VAD deferral
         self._defer_turn_detection: bool = False
         self._greeting_phase: bool = False
@@ -305,22 +306,27 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         # Choose OpenAI output format for this session:
         # If downstream target is μ-law, request g711_ulaw from provider to test end-to-end μ-law.
         # Otherwise keep PCM16.
-        out_fmt = "pcm_s16le_24000"
-        try:
-            if (self.config.target_encoding or "").lower() in ("ulaw", "mulaw", "g711_ulaw"):
-                out_fmt = "g711_ulaw"
-        except Exception:
-            pass
+        provider_rate = int(getattr(self.config, "provider_input_sample_rate_hz", 24000) or 24000)
+        output_rate = int(getattr(self.config, "output_sample_rate_hz", 24000) or 24000)
+        input_audio_format: Dict[str, Any] = {
+            "type": "pcm16",
+            "sample_rate_hz": provider_rate,
+        }
+        output_audio_format: Dict[str, Any] = {
+            "type": "pcm16",
+            "sample_rate_hz": output_rate,
+        }
 
         session: Dict[str, Any] = {
             # Model is selected via URL; keep accepted keys here
             "modalities": output_modalities,
-            "input_audio_format": "pcm_s16le_24000",
-            "output_audio_format": out_fmt,
+            "input_audio_format": input_audio_format,
+            "output_audio_format": output_audio_format,
             "voice": self.config.voice,
         }
         # Record provider output format for runtime handling
-        self._provider_output_format = out_fmt
+        self._provider_output_format = output_audio_format.get("type", "pcm16")
+        self._provider_output_rate = output_audio_format.get("sample_rate_hz", output_rate)
         # Optional server-side VAD/turn detection at session level
         if include_turn_detection and getattr(self.config, "turn_detection", None):
             try:
@@ -752,20 +758,17 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             return
 
         # If provider is emitting μ-law (g711_ulaw), pass-through directly to downstream.
-        if (self._provider_output_format or "").lower() == "g711_ulaw":
-            outbound = pcm_24k  # Note: despite variable name, this holds μ-law bytes in this mode
-        else:
-            target_rate = self.config.target_sample_rate_hz
-            pcm_target, self._output_resample_state = resample_audio(
-                pcm_24k,
-                self.config.output_sample_rate_hz,
-                target_rate,
-                state=self._output_resample_state,
-            )
+        target_rate = self.config.target_sample_rate_hz
+        pcm_target, self._output_resample_state = resample_audio(
+            pcm_24k,
+            self._provider_output_rate,
+            target_rate,
+            state=self._output_resample_state,
+        )
 
-            outbound = convert_pcm16le_to_target_format(pcm_target, self.config.target_encoding)
-            if not outbound:
-                return
+        outbound = convert_pcm16le_to_target_format(pcm_target, self.config.target_encoding)
+        if not outbound:
+            return
 
         debug_enabled = logging.getLogger("src.providers.openai_realtime").isEnabledFor(logging.DEBUG)
 

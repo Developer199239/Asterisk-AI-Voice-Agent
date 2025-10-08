@@ -34,6 +34,7 @@ Active contexts and call path (server):
 - `pipelines` (Milestone 7): defines STT/LLM/TTS combinations; `active_pipeline` selects which pipeline new calls use.
 - `vad.use_provider_vad`: when `true`, rely on provider (e.g., OpenAI server VAD) and disable local WebRTC/Enhanced VAD.
 - `openai_realtime.provider_input_sample_rate_hz`: set to `24000` so ingested audio is upsampled to the Realtime API’s expected 24 kHz linear PCM before commit.
+- OpenAI session config should advertise `input_audio_format` / `output_audio_format` as PCM16 24 kHz; the engine handles μ-law conversion at the AudioSocket edges.
 - Logging levels are configurable per service via YAML once the hot-reload work lands; default is INFO for GA builds.
 
 ## Pre‑flight Checklist (Local or Server)
