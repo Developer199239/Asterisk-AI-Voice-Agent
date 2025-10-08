@@ -114,6 +114,9 @@ async def main() -> None:
             data = json.loads(message)
             msg_type = data.get("type")
             print("recv", msg_type)
+            if msg_type == "error":
+                print("error payload:", data)
+                break
             if msg_type == "response.delta":
                 delta = data.get("delta", {})
                 if delta.get("type") == "output_audio.delta":
