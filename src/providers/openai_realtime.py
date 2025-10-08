@@ -77,6 +77,11 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         # Aggregate converted 16 kHz PCM16 bytes and commit in >=100ms chunks
         self._pending_audio_16k: bytearray = bytearray()
         self._last_commit_ts: float = 0.0
+        self._last_audio_append_ts: float = 0.0
+        bytes_per_sample = 2  # PCM16
+        provider_rate = int(getattr(self.config, "provider_input_sample_rate_hz", 16000) or 16000)
+        self._commit_min_bytes: int = max(bytes_per_sample, int(provider_rate * 0.1 * bytes_per_sample))
+        self._commit_grace_seconds: float = 0.35  # allow short pauses before padding with silence
         # Serialize append/commit to avoid empty commits from races
         self._audio_lock: asyncio.Lock = asyncio.Lock()
         # Track provider output format we requested in session.update
@@ -195,18 +200,17 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                 except Exception:
                     pass
 
-            # When server-side VAD is configured, operate append-only and never commit.
-            # We rely on the provider turn detection to segment and trigger responses.
-            append_only = bool(getattr(self.config, "turn_detection", None))
-            try:
-                audio_b64 = base64.b64encode(pcm16).decode("ascii")
-                if append_only:
-                    await self._send_json({"type": "input_audio_buffer.append", "audio": audio_b64})
-                else:
-                    # Fallback path if turn_detection is disabled in config: still avoid commits; append-only.
-                    await self._send_json({"type": "input_audio_buffer.append", "audio": audio_b64})
-            except Exception:
-                logger.error("Failed to append input audio buffer", call_id=self._call_id, exc_info=True)
+            async with self._audio_lock:
+                try:
+                    await self._append_audio_buffer(pcm16)
+                except Exception:
+                    logger.error("Failed to append input audio buffer", call_id=self._call_id, exc_info=True)
+                    return
+
+                self._pending_audio_16k.extend(pcm16)
+                self._last_audio_append_ts = time.time()
+
+                await self._maybe_commit_audio()
         except ConnectionClosedError:
             logger.warning("OpenAI Realtime socket closed while sending audio", call_id=self._call_id)
         except Exception:
@@ -226,6 +230,9 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                 self._keepalive_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await self._keepalive_task
+
+            async with self._audio_lock:
+                await self._maybe_commit_audio(force=True)
 
             if self.websocket and not self.websocket.closed:
                 await self.websocket.close()
@@ -379,6 +386,61 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         async with self._send_lock:
             await self.websocket.send(message)
 
+    async def _append_audio_buffer(self, pcm16: bytes) -> None:
+        if not pcm16:
+            return
+        audio_b64 = base64.b64encode(pcm16).decode("ascii")
+        await self._send_json({"type": "input_audio_buffer.append", "audio": audio_b64})
+
+    async def _append_silence(self, byte_count: int) -> None:
+        if byte_count <= 0:
+            return
+        silence = b"\x00" * byte_count
+        await self._append_audio_buffer(silence)
+        self._pending_audio_16k.extend(silence)
+        self._last_audio_append_ts = time.time()
+
+    async def _maybe_commit_audio(self, *, force: bool = False) -> None:
+        if not self.websocket or self.websocket.closed:
+            return
+        pending_bytes = len(self._pending_audio_16k)
+        if pending_bytes <= 0:
+            return
+
+        min_bytes = self._commit_min_bytes
+        now = time.time()
+        elapsed_since_last_commit = now - self._last_commit_ts if self._last_commit_ts else None
+        elapsed_since_append = now - self._last_audio_append_ts if self._last_audio_append_ts else 0.0
+
+        should_commit = pending_bytes >= min_bytes
+        if not should_commit:
+            if force:
+                missing = max(0, min_bytes - pending_bytes)
+                if missing > 0:
+                    await self._append_silence(missing)
+                should_commit = True
+            else:
+                if elapsed_since_last_commit is not None and elapsed_since_last_commit < _COMMIT_INTERVAL_SEC:
+                    return
+                if elapsed_since_append < self._commit_grace_seconds:
+                    return
+                missing = max(0, min_bytes - pending_bytes)
+                if missing > 0:
+                    await self._append_silence(missing)
+                should_commit = len(self._pending_audio_16k) >= min_bytes
+
+        if not should_commit:
+            return
+
+        await self._send_json({"type": "input_audio_buffer.commit"})
+        logger.debug(
+            "OpenAI committed input audio",
+            call_id=self._call_id,
+            bytes_committed=len(self._pending_audio_16k),
+        )
+        self._pending_audio_16k.clear()
+        self._last_commit_ts = time.time()
+
     def _convert_inbound_audio(self, audio_chunk: bytes) -> Optional[bytes]:
         fmt = (self.config.input_encoding or "slin16").lower()
         pcm_8k = audio_chunk
@@ -438,6 +500,19 @@ class OpenAIRealtimeProvider(AIProviderInterface):
 
         # Log top-level error events with full payload to diagnose API contract issues
         if event_type == "error":
+            error = event.get("error") or {}
+            code = (error.get("code") or "").strip()
+            if code == "input_audio_buffer_commit_empty":
+                # Provider rejected commit because the buffer was too small; wait for
+                # more audio before trying again to avoid a tight error loop.
+                async with self._audio_lock:
+                    self._pending_audio_16k.clear()
+                    self._last_commit_ts = time.time()
+                logger.warning(
+                    "OpenAI commit rejected due to insufficient audio",
+                    call_id=self._call_id,
+                    provider_message=error.get("message"),
+                )
             # Use 'error_event' key to avoid structlog 'event' argument conflict
             logger.error("OpenAI Realtime error event", call_id=self._call_id, error_event=event)
             return
@@ -758,3 +833,4 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                     break
         except asyncio.CancelledError:
             pass
+
