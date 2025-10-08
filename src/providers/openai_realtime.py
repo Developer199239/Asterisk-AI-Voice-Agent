@@ -13,6 +13,7 @@ import asyncio
 import base64
 import contextlib
 import json
+import logging
 import time
 import uuid
 from typing import Any, Dict, Optional
@@ -84,6 +85,10 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         self._defer_turn_detection: bool = False
         self._greeting_phase: bool = False
         self._td_enabled: bool = False
+        # Telemetry counters (debug logging only)
+        self._event_seq: int = 0
+        self._audio_chunk_seq: int = 0
+        self._text_chunk_seq: int = 0
 
     @property
     def supported_codecs(self):
@@ -104,6 +109,9 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         self._transcript_buffer = ""
         self._closing = False
         self._closed = False
+        self._event_seq = 0
+        self._audio_chunk_seq = 0
+        self._text_chunk_seq = 0
 
         url = self._build_ws_url()
         headers = [
@@ -416,6 +424,17 @@ class OpenAIRealtimeProvider(AIProviderInterface):
 
     async def _handle_event(self, event: Dict[str, Any]):
         event_type = event.get("type")
+        debug_enabled = logging.getLogger("src.providers.openai_realtime").isEnabledFor(logging.DEBUG)
+
+        if debug_enabled:
+            self._event_seq += 1
+            logger.debug(
+                "OpenAI event received",
+                call_id=self._call_id,
+                seq=self._event_seq,
+                event_type=event_type,
+                payload_keys=sorted(event.keys()),
+            )
 
         # Log top-level error events with full payload to diagnose API contract issues
         if event_type == "error":
@@ -440,6 +459,15 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             elif delta_type == "output_text.delta":
                 text = delta.get("text")
                 if text:
+                    if debug_enabled:
+                        self._text_chunk_seq += 1
+                        logger.debug(
+                            "OpenAI text delta received",
+                            call_id=self._call_id,
+                            seq=self._text_chunk_seq,
+                            chars=len(text),
+                            is_final=False,
+                        )
                     await self._emit_transcript(text, is_final=False)
             elif delta_type == "output_text.done":
                 if self._transcript_buffer:
@@ -511,6 +539,15 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             delta = event.get("delta") or {}
             text = delta.get("text")
             if text:
+                if debug_enabled:
+                    self._text_chunk_seq += 1
+                    logger.debug(
+                        "OpenAI text delta received",
+                        call_id=self._call_id,
+                        seq=self._text_chunk_seq,
+                        chars=len(text),
+                        is_final=False,
+                    )
                 await self._emit_transcript(text, is_final=False)
             return
 
@@ -528,10 +565,25 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             elif isinstance(delta, str):
                 text = delta
             if text:
+                if debug_enabled:
+                    self._text_chunk_seq += 1
+                    logger.debug(
+                        "OpenAI text delta received",
+                        call_id=self._call_id,
+                        seq=self._text_chunk_seq,
+                        chars=len(text),
+                        is_final=False,
+                    )
                 await self._emit_transcript(text, is_final=False)
             return
 
         if event_type == "response.output_audio_transcript.done":
+            if debug_enabled and self._transcript_buffer:
+                logger.debug(
+                    "OpenAI text stream completed",
+                    call_id=self._call_id,
+                    total_chars=len(self._transcript_buffer),
+                )
             if self._transcript_buffer:
                 await self._emit_transcript("", is_final=True)
             return
@@ -539,6 +591,14 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         logger.debug("Unhandled OpenAI Realtime event", event_type=event_type)
 
     async def _handle_output_audio(self, audio_b64: str):
+        if logging.getLogger("src.providers.openai_realtime").isEnabledFor(logging.DEBUG):
+            self._audio_chunk_seq += 1
+            logger.debug(
+                "OpenAI audio delta received",
+                call_id=self._call_id,
+                chunk_index=self._audio_chunk_seq,
+                payload_bytes=len(audio_b64 or ""),
+            )
         try:
             pcm_24k = base64.b64decode(audio_b64)
         except Exception:
@@ -564,6 +624,8 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             if not outbound:
                 return
 
+        debug_enabled = logging.getLogger("src.providers.openai_realtime").isEnabledFor(logging.DEBUG)
+
         if self.on_event:
             if not self._first_output_chunk_logged:
                 logger.info(
@@ -573,6 +635,15 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                     target_encoding=self.config.target_encoding,
                 )
                 self._first_output_chunk_logged = True
+
+            if debug_enabled:
+                logger.debug(
+                    "Emitting AgentAudio chunk",
+                    call_id=self._call_id,
+                    chunk_index=self._audio_chunk_seq,
+                    outbound_bytes=len(outbound),
+                    provider_format=self._provider_output_format,
+                )
 
             self._in_audio_burst = True
             try:
@@ -590,6 +661,13 @@ class OpenAIRealtimeProvider(AIProviderInterface):
     async def _emit_audio_done(self):
         if not self._in_audio_burst or not self.on_event or not self._call_id:
             return
+        debug_enabled = logging.getLogger("src.providers.openai_realtime").isEnabledFor(logging.DEBUG)
+        if debug_enabled:
+            logger.debug(
+                "Agent audio burst completed",
+                call_id=self._call_id,
+                chunks=self._audio_chunk_seq,
+            )
         try:
             await self.on_event(
                 {
@@ -604,6 +682,8 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             self._in_audio_burst = False
             self._output_resample_state = None
             self._first_output_chunk_logged = False
+            self._audio_chunk_seq = 0
+            self._text_chunk_seq = 0
             # After the first provider output completes, enable server-side VAD if deferred
             if self._defer_turn_detection and self._greeting_phase and not self._td_enabled:
                 try:
