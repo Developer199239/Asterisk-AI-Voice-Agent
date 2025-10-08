@@ -32,8 +32,8 @@ This playbook summarizes how Gemini should operate on the Asterisk AI Voice Agen
 4. Never use `docker-compose restart` for code updates—always rebuild.
 
 ### Deployment Environment
-- Server: `root@voiprnd.testserverdispatch.com`
-- Repo: `/root/Asterisk-Agent-Develop`
+- Server: `root@voiprnd.nemtclouddispatch.com`
+- Repo: `/root/Asterisk-AI-Voice-Agent`
 - Shared media: `/mnt/asterisk_media`
 
 ### Key Commands (local or server)
@@ -72,8 +72,9 @@ Mirror any edits to this section into `Agents.md`, `.cursor/rules/asterisk_ai_vo
 ## Regression & Troubleshooting Workflow
 1. Clear logs (`make server-clear-logs`).
 2. Tail `ai-engine`, `local-ai-server`, and Asterisk logs during calls.
-3. Record call ID, streaming metrics, and tuning hints in `docs/regressions/*.md` and `call-framework.md`.
-4. For streaming issues, inspect buffer depth logs and fallback counters; adjust YAML settings accordingly.
+3. Pull remote `ai-engine` logs when needed: `timestamp=$(date +%Y%m%d-%H%M%S); ssh root@voiprnd.nemtclouddispatch.com "cd /root/Asterisk-AI-Voice-Agent && docker-compose logs ai-engine --since 30m --no-color" > logs/ai-engine-voiprnd-$timestamp.log`.
+4. Record call ID, streaming metrics, and tuning hints in `docs/regressions/*.md` and `call-framework.md`.
+5. For streaming issues, inspect buffer depth logs and fallback counters; adjust YAML settings accordingly.
 
 ## Hot Reload Expectations
 - Configuration watcher (or `make engine-reload`) refreshes streaming defaults, logging levels, and pipeline definitions without dropping active calls.

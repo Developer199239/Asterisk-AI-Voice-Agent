@@ -36,6 +36,7 @@ logger = get_logger(__name__)
 
 _COMMIT_INTERVAL_SEC = 0.2
 _KEEPALIVE_INTERVAL_SEC = 15.0
+_COMMIT_MIN_MS = 120.0  # ensure provider receives >=120 ms per commit
 
 
 class OpenAIRealtimeProvider(AIProviderInterface):
@@ -81,7 +82,13 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         self._last_audio_append_ts: float = 0.0
         bytes_per_sample = 2  # PCM16
         provider_rate = int(getattr(self.config, "provider_input_sample_rate_hz", 16000) or 16000)
-        self._commit_min_bytes: int = max(bytes_per_sample, int(provider_rate * 0.1 * bytes_per_sample))
+        self._bytes_per_sample: int = bytes_per_sample
+        self._provider_rate: int = provider_rate
+        self._commit_min_ms: float = float(getattr(self.config, "commit_min_ms", None) or _COMMIT_MIN_MS)
+        self._commit_min_bytes: int = max(
+            bytes_per_sample,
+            int(provider_rate * (self._commit_min_ms / 1000.0) * bytes_per_sample),
+        )
         self._commit_grace_seconds: float = 0.35  # allow short pauses before padding with silence
         # Serialize append/commit to avoid empty commits from races
         self._audio_lock: asyncio.Lock = asyncio.Lock()
@@ -405,10 +412,16 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         self._pending_audio_16k.extend(silence)
         self._last_audio_append_ts = time.time()
 
+    def _pending_audio_duration_ms(self) -> float:
+        if not self._provider_rate or not self._bytes_per_sample:
+            return 0.0
+        return (len(self._pending_audio_16k) / (self._bytes_per_sample * self._provider_rate)) * 1000.0
+
     async def _maybe_commit_audio(self, *, force: bool = False) -> None:
         if not self.websocket or self.websocket.closed:
             return
         pending_bytes = len(self._pending_audio_16k)
+        pending_ms = self._pending_audio_duration_ms()
         if pending_bytes <= 0:
             logger.debug(
                 "OpenAI commit skip: no pending audio",
@@ -429,7 +442,9 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                 missing = max(0, min_bytes - pending_bytes)
                 if missing > 0:
                     await self._append_silence(missing)
-                should_commit = True
+                    pending_bytes = len(self._pending_audio_16k)
+                    pending_ms = self._pending_audio_duration_ms()
+                should_commit = pending_bytes >= min_bytes
             else:
                 if elapsed_since_last_commit is not None and elapsed_since_last_commit < _COMMIT_INTERVAL_SEC:
                     return
@@ -440,14 +455,18 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                 missing = max(0, min_bytes - pending_bytes)
                 if missing > 0:
                     await self._append_silence(missing)
-                should_commit = len(self._pending_audio_16k) >= min_bytes
+                    pending_bytes = len(self._pending_audio_16k)
+                    pending_ms = self._pending_audio_duration_ms()
+                should_commit = pending_bytes >= min_bytes
 
         if not should_commit:
             logger.debug(
                 "OpenAI commit skip",
                 call_id=self._call_id,
                 pending_bytes=pending_bytes,
+                pending_ms=pending_ms,
                 min_bytes=min_bytes,
+                min_ms=self._commit_min_ms,
                 elapsed_since_append=elapsed_since_append,
                 elapsed_since_last_commit=elapsed_since_last_commit,
                 elapsed_since_error=elapsed_since_error,
@@ -459,18 +478,23 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             "OpenAI commit pending",
             call_id=self._call_id,
             pending_bytes=pending_bytes,
+            pending_ms=pending_ms,
             min_bytes=min_bytes,
+            min_ms=self._commit_min_ms,
             elapsed_since_append=elapsed_since_append,
             elapsed_since_last_commit=elapsed_since_last_commit,
             elapsed_since_error=elapsed_since_error,
             force=force,
         )
 
+        committed_bytes = pending_bytes
+        committed_ms = pending_ms
         await self._send_json({"type": "input_audio_buffer.commit"})
         logger.debug(
             "OpenAI committed input audio",
             call_id=self._call_id,
-            bytes_committed=len(self._pending_audio_16k),
+            bytes_committed=committed_bytes,
+            ms_committed=committed_ms,
         )
         self._pending_audio_16k.clear()
         self._last_commit_ts = time.time()

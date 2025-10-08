@@ -160,6 +160,7 @@ exten => s,1,NoOp(Local)
 - Asterisk logs: `/var/log/asterisk/full` — verify actual playback and errors.
 - Known gotcha: Do not append `.ulaw` to `sound:` URIs (Asterisk adds extensions automatically).
 - Metrics: hit `curl http://127.0.0.1:15000/metrics` after each regression to capture latency histograms and `ai_agent_last_*` gauges before recycling containers.
+- Remote logs: from the local repo run `timestamp=$(date +%Y%m%d-%H%M%S); ssh root@voiprnd.nemtclouddispatch.com "cd /root/Asterisk-AI-Voice-Agent && docker-compose logs ai-engine --since 30m --no-color" > logs/ai-engine-voiprnd-$timestamp.log` to pull the most recent `ai-engine` output for RCA.
 
 ## IDE Hand-Off Notes
 - **Codex CLI**: Follow this file plus `call-framework.md` for deployment + regression steps.
@@ -193,10 +194,10 @@ Mirror any updates to this guidance in `.cursor/rules/asterisk_ai_voice_agent.md
 - Shared media dir: `/mnt/asterisk_media/ai-generated/`.
 
 ## Deploy (Server) — Runbook
-Assumptions: server `root@voiprnd.nemtclouddispatch.com`, repo at `/root/Asterisk-Agent-Develop`, branch `develop`.
+Assumptions: server `root@voiprnd.nemtclouddispatch.com`, repo at `/root/Asterisk-AI-Voice-Agent`, branch `develop`.
 ```
-ssh root@voiprnd.testserver.com \
-  'cd /root/Asterisk-Agent-Develop && \
+ssh root@voiprnd.nemtclouddispatch.com \
+  'cd /root/Asterisk-AI-Voice-Agent && \
    git checkout develop && git pull && \
    docker-compose up -d --build ai-engine local-ai-server && \
    docker-compose ps && \
