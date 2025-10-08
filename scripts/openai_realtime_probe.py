@@ -28,6 +28,7 @@ from typing import AsyncIterator
 import websockets
 
 REALTIME_URL = os.environ.get("OPENAI_REALTIME_URL", "wss://api.openai.com/v1/realtime")
+REALTIME_MODEL = os.environ.get("OPENAI_REALTIME_MODEL", "gpt-4o-realtime-preview-2024-12-17")
 API_KEY = os.environ.get("OPENAI_API_KEY")
 VOICE = os.environ.get("OPENAI_REALTIME_VOICE", "alloy")
 SAMPLE_RATE = 24_000
@@ -69,7 +70,12 @@ async def main() -> None:
         "Authorization": f"Bearer {API_KEY}",
         "OpenAI-Beta": "realtime=v1",
     }
-    async with websockets.connect(REALTIME_URL, extra_headers=headers) as ws:
+    url = REALTIME_URL
+    if "model=" not in url:
+        connector = "&" if "?" in url else "?"
+        url = f"{url}{connector}model={REALTIME_MODEL}"
+
+    async with websockets.connect(url, extra_headers=headers) as ws:
         session_update = {
             "type": "session.update",
             "session": {
