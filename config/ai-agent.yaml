@@ -139,7 +139,7 @@ streaming:
   greeting_min_start_ms: 40  # Extra-fast start specifically for greeting
   low_watermark_ms: 60       # Pause only when buffer drains below three frames
   provider_grace_ms: 1400    # Longer grace to avoid tail clipping on stop
-  logging_level: "info"      # Optional override for streaming logger verbosity
+  logging_level: "debug"     # Optional override for streaming logger verbosity
 
 # Asterisk connection settings (will be overridden by environment variables)
 asterisk:

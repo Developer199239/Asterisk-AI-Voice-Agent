@@ -202,14 +202,18 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                     pass
 
             async with self._audio_lock:
-                try:
-                    await self._append_audio_buffer(pcm16)
-                except Exception:
-                    logger.error("Failed to append input audio buffer", call_id=self._call_id, exc_info=True)
-                    return
+                await self._append_audio_buffer(pcm16)
 
                 self._pending_audio_16k.extend(pcm16)
+                pending_bytes = len(self._pending_audio_16k)
                 self._last_audio_append_ts = time.time()
+
+                logger.debug(
+                    "OpenAI inbound audio buffered",
+                    call_id=self._call_id,
+                    appended_bytes=len(pcm16),
+                    pending_bytes=pending_bytes,
+                )
 
                 await self._maybe_commit_audio()
         except ConnectionClosedError:
@@ -406,6 +410,11 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             return
         pending_bytes = len(self._pending_audio_16k)
         if pending_bytes <= 0:
+            logger.debug(
+                "OpenAI commit skip: no pending audio",
+                call_id=self._call_id,
+                force=force,
+            )
             return
 
         min_bytes = self._commit_min_bytes
@@ -434,6 +443,16 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                 should_commit = len(self._pending_audio_16k) >= min_bytes
 
         if not should_commit:
+            logger.debug(
+                "OpenAI commit skip",
+                call_id=self._call_id,
+                pending_bytes=pending_bytes,
+                min_bytes=min_bytes,
+                elapsed_since_append=elapsed_since_append,
+                elapsed_since_last_commit=elapsed_since_last_commit,
+                elapsed_since_error=elapsed_since_error,
+                force=force,
+            )
             return
 
         logger.debug(
