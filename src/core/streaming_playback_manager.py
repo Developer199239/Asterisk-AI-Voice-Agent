@@ -219,7 +219,10 @@ class StreamingPlaybackManager:
             configured_min_start = (
                 self.greeting_min_start_chunks if playback_type == "greeting" else self.min_start_chunks
             )
-            min_start_chunks = max(1, min(configured_min_start, jb_chunks))
+            # Always leave at least one spare slot so playback does not immediately
+            # fall below the watermark on the first frame.
+            max_startable = max(1, jb_chunks - 1)
+            min_start_chunks = max(1, min(configured_min_start, max_startable))
             if configured_min_start > min_start_chunks:
                 logger.debug(
                     "Streaming min_start clamped",
@@ -233,11 +236,11 @@ class StreamingPlaybackManager:
             configured_low_watermark = self.low_watermark_chunks
             low_watermark_chunks = 0
             if configured_low_watermark:
-                max_drainable = max(0, jb_chunks - 1)
-                low_watermark_chunks = min(configured_low_watermark, max_drainable)
-                if low_watermark_chunks <= 0:
-                    low_watermark_chunks = 0
-                elif configured_low_watermark > low_watermark_chunks:
+                max_low = max(0, min_start_chunks - 1)
+                half_capacity = max(0, jb_chunks // 2)
+                effective_cap = max(0, min(max_low, half_capacity))
+                low_watermark_chunks = min(configured_low_watermark, effective_cap)
+                if configured_low_watermark > low_watermark_chunks:
                     logger.debug(
                         "Streaming low_watermark clamped",
                         call_id=call_id,
@@ -245,6 +248,7 @@ class StreamingPlaybackManager:
                         configured_chunks=configured_low_watermark,
                         jitter_chunks=jb_chunks,
                         applied_chunks=low_watermark_chunks,
+                        min_start_chunks=min_start_chunks,
                     )
 
             # Mark streaming active in metrics and session

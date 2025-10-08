@@ -120,24 +120,24 @@ audiosocket:
 # Barge-in configuration
 barge_in:
   enabled: true
-  initial_protection_ms: 2000   # Stronger guard to prevent self-echo barge-in during greeting
-  min_ms: 1000                  # Require sustained ~1s speech to trigger barge-in
-  energy_threshold: 2600        # Less sensitive to noise/echo
-  cooldown_ms: 1500             # Avoid immediate retriggers
-  post_tts_end_protection_ms: 400  # Longer guard after playback ends
-  greeting_protection_ms: 2500  # Extra protection while first greeting TTS is playing
+  initial_protection_ms: 1500   # Enough guard to avoid self-echo without stalling caller audio
+  min_ms: 500                   # Half-second of confident speech triggers barge-in
+  energy_threshold: 1700        # Align with adaptive VAD baseline for quiet voices
+  cooldown_ms: 1200             # Prevent rapid re-triggers while staying responsive
+  post_tts_end_protection_ms: 200  # Short settle time after playback ends
+  greeting_protection_ms: 1400  # Extra protection only for the very first greeting
 
 # Streaming configuration (for downstream_mode=stream)
 streaming:
   sample_rate: 8000          # Output sample rate for streaming audio
-  jitter_buffer_ms: 90       # Slightly reduced buffer for faster start while maintaining stability
+  jitter_buffer_ms: 160      # Eight 20ms frames for steadier playback
   keepalive_interval_ms: 5000 # Keepalive interval for streaming connections
   connection_timeout_ms: 10000 # Connection timeout for streaming
-  fallback_timeout_ms: 20000  # Avoid premature fallback during greeting
+  fallback_timeout_ms: 60000  # Allow extended greeting debugging before falling back
   chunk_size_ms: 20          # Frame size; 20 ms recommended for telephony cadence
-  min_start_ms: 120          # Lower start threshold for quicker playback
-  greeting_min_start_ms: 60  # Extra-fast start specifically for greeting
-  low_watermark_ms: 180      # Lower watermark to begin playback with less buffered audio
+  min_start_ms: 100          # Start once we have five buffered frames
+  greeting_min_start_ms: 40  # Extra-fast start specifically for greeting
+  low_watermark_ms: 60       # Pause only when buffer drains below three frames
   provider_grace_ms: 1400    # Longer grace to avoid tail clipping on stop
   logging_level: "info"      # Optional override for streaming logger verbosity
 
@@ -174,20 +174,20 @@ vad:
   energy_threshold: 1500     # Base RMS energy threshold for speech (lowered for sensitivity)
   confidence_threshold: 0.6  # Minimum enhanced VAD confidence to count as speech
   adaptive_threshold_enabled: true   # Enable adaptive thresholds for better noise handling
-  noise_adaptation_rate: 0.1
+  noise_adaptation_rate: 0.2
   # Utterance settings - optimized for real-time conversation
-  min_utterance_duration_ms: 800   # Minimum 800ms for real-time (reduced from 4000ms)
+  min_utterance_duration_ms: 600   # Minimum 600ms keeps snappy handoffs
   max_utterance_duration_ms: 8000  # Maximum 8 seconds (reduced from 10000ms)
   utterance_padding_ms: 100        # Padding before/after speech (reduced for responsiveness)
   # Fallback settings - ensure audio flows when VAD fails
   fallback_enabled: true           # Enable fallback when VAD fails to detect speech
-  fallback_interval_ms: 1500       # Periodic fallback after 1.5s silence (prevents starvation)
+  fallback_interval_ms: 1000       # Periodic fallback after 1s silence (prevents starvation)
   fallback_buffer_size: 128000     # 4 seconds of 16kHz audio (128,000 bytes)
 
 # Provider-specific configurations
 providers:
   local:
-    enabled: true
+    enabled: false
     ws_url: "${LOCAL_WS_URL:-ws://127.0.0.1:8765}"
     connect_timeout_sec: ${LOCAL_WS_CONNECT_TIMEOUT:=2.0}
     response_timeout_sec: ${LOCAL_WS_RESPONSE_TIMEOUT:=5.0}
