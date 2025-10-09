@@ -511,7 +511,7 @@ class Engine:
                     provider = LocalProvider(config, self.on_provider_event)
                     self.providers[name] = provider
                     logger.info(f"Provider '{name}' loaded successfully.")
-                    
+
                     # Provide initial greeting from global LLM config
                     try:
                         if hasattr(provider, 'set_initial_greeting'):
@@ -523,6 +523,10 @@ class Engine:
                     if hasattr(provider, 'initialize'):
                         await provider.initialize()
                         logger.info(f"Provider '{name}' connection initialized.")
+
+                    runtime_issues = self._describe_provider_alignment(name, provider)
+                    if runtime_issues:
+                        self.provider_alignment_issues.setdefault(name, []).extend(runtime_issues)
                 elif name == "deepgram":
                     deepgram_config = self._build_deepgram_config(provider_config_data)
                     if not deepgram_config:
@@ -536,6 +540,10 @@ class Engine:
                     provider = DeepgramProvider(deepgram_config, self.config.llm, self.on_provider_event)
                     self.providers[name] = provider
                     logger.info("Provider 'deepgram' loaded successfully with OpenAI LLM dependency.")
+
+                    runtime_issues = self._describe_provider_alignment(name, provider)
+                    if runtime_issues:
+                        self.provider_alignment_issues.setdefault(name, []).extend(runtime_issues)
                 elif name == "openai_realtime":
                     openai_cfg = self._build_openai_realtime_config(provider_config_data)
                     if not openai_cfg:
@@ -544,6 +552,10 @@ class Engine:
                     provider = OpenAIRealtimeProvider(openai_cfg, self.on_provider_event)
                     self.providers[name] = provider
                     logger.info("Provider 'openai_realtime' loaded successfully.")
+
+                    runtime_issues = self._describe_provider_alignment(name, provider)
+                    if runtime_issues:
+                        self.provider_alignment_issues.setdefault(name, []).extend(runtime_issues)
                 else:
                     logger.warning(f"Unknown provider type: {name}")
                     continue
@@ -559,7 +571,7 @@ class Engine:
             logger.info(f"Default provider '{self.config.default_provider}' is available and ready.")
             for provider_name in self.providers:
                 issues = self.provider_alignment_issues.get(provider_name, [])
-                for detail in issues:
+                for detail in dict.fromkeys(issues):
                     logger.error(
                         "Provider codec/sample alignment issue",
                         provider=provider_name,
@@ -2312,6 +2324,40 @@ class Engine:
                     )
         except Exception:
             logger.debug("Provider configuration audit failed", provider=name, exc_info=True)
+        return issues
+
+    def _describe_provider_alignment(self, name: str, provider: AIProviderInterface) -> List[str]:
+        issues: List[str] = []
+        try:
+            audiosocket_format = "ulaw"
+            try:
+                if getattr(self.config, "audiosocket", None):
+                    audiosocket_format = (self.config.audiosocket.format or "ulaw").lower()
+            except Exception:
+                audiosocket_format = "ulaw"
+
+            streaming_encoding = getattr(self.streaming_playback_manager, "audiosocket_format", None)
+            if streaming_encoding:
+                streaming_encoding = streaming_encoding.lower()
+            else:
+                streaming_encoding = audiosocket_format
+
+            try:
+                streaming_rate = int(getattr(self.streaming_playback_manager, "sample_rate", 8000) or 8000)
+            except Exception:
+                streaming_rate = 8000
+
+            describe_method = getattr(provider, "describe_alignment", None)
+            if callable(describe_method):
+                issues.extend(
+                    describe_method(
+                        audiosocket_format=audiosocket_format,
+                        streaming_encoding=streaming_encoding,
+                        streaming_sample_rate=streaming_rate,
+                    )
+                )
+        except Exception:
+            logger.debug("Provider alignment description failed", provider=name, exc_info=True)
         return issues
 
     async def on_provider_event(self, event: Dict[str, Any]):

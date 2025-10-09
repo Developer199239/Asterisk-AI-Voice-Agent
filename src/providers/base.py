@@ -30,3 +30,17 @@ class AIProviderInterface(ABC):
     async def stop_session(self):
         """Closes the connection and cleans up resources for the call."""
         pass
+
+    # Optional: providers can override to describe codec/sample alignment characteristics.
+    def describe_alignment(
+        self,
+        *,
+        audiosocket_format: str,
+        streaming_encoding: str,
+        streaming_sample_rate: int,
+    ) -> List[str]:
+        """
+        Return human-readable issues when the provider's implementation conflicts with
+        the configured AudioSocket/streaming formats. Defaults to no findings.
+        """
+        return []

@@ -208,6 +208,46 @@ class DeepgramProvider(AIProviderInterface):
                 logger.error("Error in keep-alive task", exc_info=True)
                 break
 
+    def describe_alignment(
+        self,
+        *,
+        audiosocket_format: str,
+        streaming_encoding: str,
+        streaming_sample_rate: int,
+    ) -> List[str]:
+        issues: List[str] = []
+        cfg_enc = (getattr(self.config, "input_encoding", None) or "").lower()
+        try:
+            cfg_rate = int(getattr(self.config, "input_sample_rate_hz", 0) or 0)
+        except Exception:
+            cfg_rate = 0
+
+        if cfg_enc in ("ulaw", "mulaw", "g711_ulaw", "mu-law"):
+            issues.append(
+                "Deepgram send_audio converts μ-law frames to PCM16 before forwarding to the agent API. "
+                "With input_encoding=ulaw this results in silence. Set input_encoding=linear16 or update "
+                "the provider to pass μ-law through untouched."
+            )
+            if cfg_rate and cfg_rate != 8000:
+                issues.append(
+                    f"Deepgram configuration declares μ-law at {cfg_rate} Hz; μ-law transport must be 8000 Hz."
+                )
+        if cfg_enc in ("slin16", "linear16", "pcm16") and audiosocket_format != "slin16":
+            issues.append(
+                f"Deepgram expects PCM16 input but audiosocket.format is {audiosocket_format}. "
+                "Set audiosocket.format=slin16 or change deepgram.input_encoding."
+            )
+        if streaming_encoding not in ("ulaw", "mulaw", "g711_ulaw", "mu-law"):
+            issues.append(
+                f"Streaming manager emits {streaming_encoding} frames but Deepgram output_encoding is μ-law. "
+                "Ensure downstream playback converts the provider audio back to μ-law."
+            )
+        if streaming_sample_rate != 8000:
+            issues.append(
+                f"Streaming sample rate is {streaming_sample_rate} Hz but Deepgram output_sample_rate is 8000 Hz."
+            )
+        return issues
+
     async def _receive_loop(self):
         if not self.websocket:
             return

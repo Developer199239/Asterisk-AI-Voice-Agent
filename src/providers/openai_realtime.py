@@ -15,7 +15,7 @@ import contextlib
 import json
 import time
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 
 import websockets
 from websockets import WebSocketClientProtocol
@@ -78,6 +78,50 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         self._last_commit_ts: float = 0.0
         # Serialize append/commit to avoid empty commits from races
         self._audio_lock: asyncio.Lock = asyncio.Lock()
+
+    def describe_alignment(
+        self,
+        *,
+        audiosocket_format: str,
+        streaming_encoding: str,
+        streaming_sample_rate: int,
+    ) -> List[str]:
+        issues: List[str] = []
+        inbound_enc = (self.config.input_encoding or "slin16").lower()
+        inbound_rate = int(self.config.input_sample_rate_hz or 0)
+        target_enc = (self.config.target_encoding or "ulaw").lower()
+        target_rate = int(self.config.target_sample_rate_hz or 0)
+
+        if inbound_enc in ("slin16", "linear16", "pcm16") and audiosocket_format == "ulaw":
+            issues.append(
+                "OpenAI inbound encoding is PCM16 but AudioSocket format is μ-law; set audiosocket.format=slin16 "
+                "or change openai_realtime.input_encoding to ulaw."
+            )
+        if inbound_enc in ("ulaw", "mulaw", "g711_ulaw", "mu-law") and audiosocket_format != "ulaw":
+            issues.append(
+                f"OpenAI inbound encoding {inbound_enc} does not match audiosocket.format={audiosocket_format}."
+            )
+        if inbound_enc in ("ulaw", "mulaw", "g711_ulaw", "mu-law") and inbound_rate and inbound_rate != 8000:
+            issues.append(
+                f"OpenAI inbound μ-law sample rate is {inbound_rate} Hz; μ-law transport should be 8000 Hz."
+            )
+
+        if target_enc != streaming_encoding:
+            issues.append(
+                f"OpenAI target_encoding={target_enc} but streaming manager emits {streaming_encoding}."
+            )
+        if target_rate and target_rate != streaming_sample_rate:
+            issues.append(
+                f"OpenAI target_sample_rate_hz={target_rate} but streaming sample rate is {streaming_sample_rate}."
+            )
+
+        provider_rate = int(self.config.provider_input_sample_rate_hz or 0)
+        if provider_rate and provider_rate < 24000:
+            issues.append(
+                f"OpenAI provider_input_sample_rate_hz={provider_rate}; recommend 24000 for realtime streaming."
+            )
+
+        return issues
         # Track provider output format we requested in session.update
         self._provider_output_format: str = "pcm16"
 
