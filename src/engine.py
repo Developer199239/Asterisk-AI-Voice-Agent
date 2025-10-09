@@ -426,6 +426,11 @@ class Engine:
                     audiosocket_server=self.audio_socket_server,
                     audiosocket_format=as_format,
                 )
+                # Pre-call transport summary and alignment audit
+                try:
+                    self._audit_transport_alignment()
+                except Exception:
+                    logger.debug("Transport alignment audit failed", exc_info=True)
             except Exception as exc:
                 logger.error("Failed to start AudioSocket transport", error=str(exc), exc_info=True)
                 self.audio_socket_server = None
@@ -456,6 +461,11 @@ class Engine:
                     rtp_server=self.rtp_server,
                     audio_transport=self.config.audio_transport,
                 )
+                # Pre-call transport summary and alignment audit
+                try:
+                    self._audit_transport_alignment()
+                except Exception:
+                    logger.debug("Transport alignment audit failed", exc_info=True)
             except Exception as exc:
                 logger.error("Failed to start ExternalMedia RTP transport", error=str(exc), exc_info=True)
                 self.rtp_server = None
@@ -1094,9 +1104,12 @@ class Engine:
         codec = "slin"
         try:
             fmt = (getattr(self.config.audiosocket, 'format', '') or '').lower()
-            if fmt in ("ulaw", "mulaw", "g711_ulaw"):
+            if fmt in ("ulaw", "mulaw", "g711_ulaw", "mu-law"):
                 codec = "ulaw"
+            elif fmt in ("slin16", "linear16", "pcm16"):
+                codec = "slin16"
             else:
+                # Treat any other/legacy value (e.g., 'slin') as 8 kHz PCM16
                 codec = "slin"
         except Exception:
             codec = "slin"
@@ -2359,6 +2372,131 @@ class Engine:
         except Exception:
             logger.debug("Provider alignment description failed", provider=name, exc_info=True)
         return issues
+
+    def _audit_transport_alignment(self) -> None:
+        """Log a pre-call summary of transport settings and warn on misalignment.
+
+        YAML is the source of truth. We check:
+        - audiosocket.format vs streaming.sample_rate
+        - provider target vs audiosocket.format
+        - OpenAI Realtime provider input/output sample rates
+        """
+        try:
+            # Gather core transport settings
+            as_fmt = "ulaw"
+            if getattr(self.config, "audiosocket", None):
+                try:
+                    as_fmt = (self.config.audiosocket.format or "ulaw").lower()
+                except Exception:
+                    as_fmt = "ulaw"
+            try:
+                streaming_rate = int(getattr(self.streaming_playback_manager, "sample_rate", 8000) or 8000)
+            except Exception:
+                streaming_rate = 8000
+
+            # Provider configs (raw YAML dicts)
+            providers_cfg = getattr(self.config, "providers", {}) or {}
+            oair_cfg = providers_cfg.get("openai_realtime", {}) or {}
+            dg_cfg = providers_cfg.get("deepgram", {}) or {}
+
+            # Normalize key fields
+            def _lower_str(d: dict, key: str, default: str = "") -> str:
+                val = d.get(key, default)
+                if isinstance(val, str):
+                    return val.lower()
+                return str(val).lower()
+
+            oair_target_enc = _lower_str(oair_cfg, "target_encoding", "ulaw")
+            oair_target_rate = int(oair_cfg.get("target_sample_rate_hz") or 8000)
+            oair_in_rate = int(oair_cfg.get("provider_input_sample_rate_hz") or 24000)
+            oair_out_rate = int(oair_cfg.get("output_sample_rate_hz") or 24000)
+
+            dg_in_enc = _lower_str(dg_cfg, "input_encoding", "linear16")
+            try:
+                dg_in_rate = int(dg_cfg.get("input_sample_rate_hz") or 8000)
+            except Exception:
+                dg_in_rate = 8000
+
+            # Info summary
+            logger.info(
+                "Transport settings",
+                audiosocket_format=as_fmt,
+                streaming_sample_rate=streaming_rate,
+                openai_realtime_target_encoding=oair_target_enc,
+                openai_realtime_target_sample_rate=oair_target_rate,
+                openai_realtime_provider_input_rate=oair_in_rate,
+                openai_realtime_output_rate=oair_out_rate,
+                deepgram_input_encoding=dg_in_enc,
+                deepgram_input_sample_rate=dg_in_rate,
+            )
+
+            # Expected streaming rate from audiosocket format
+            expected_rate = None
+            if as_fmt in ("ulaw", "mulaw", "g711_ulaw", "mu-law"):
+                expected_rate = 8000
+            elif as_fmt in ("slin16", "linear16", "pcm16"):
+                expected_rate = 16000
+
+            # Warn on streaming rate mismatch
+            if expected_rate and streaming_rate != expected_rate:
+                logger.warning(
+                    "Streaming sample rate misaligned with audiosocket.format",
+                    audiosocket_format=as_fmt,
+                    streaming_sample_rate=streaming_rate,
+                    expected_sample_rate=expected_rate,
+                    suggestion=(
+                        "Set streaming.sample_rate to %d or change audiosocket.format to match"
+                        % expected_rate
+                    ),
+                )
+
+            # Provider target vs audiosocket.format
+            if as_fmt in ("ulaw", "mulaw", "g711_ulaw", "mu-law") and oair_target_enc not in ("ulaw", "mulaw", "g711_ulaw", "mu-law"):
+                logger.warning(
+                    "OpenAI target encoding misaligned with audiosocket.format",
+                    audiosocket_format=as_fmt,
+                    openai_target_encoding=oair_target_enc,
+                    suggestion="Set providers.openai_realtime.target_encoding to 'ulaw' or change audiosocket.format",
+                )
+            if as_fmt in ("slin16", "linear16", "pcm16") and oair_target_enc not in ("slin16", "linear16", "pcm16"):
+                logger.warning(
+                    "OpenAI target encoding misaligned with audiosocket.format",
+                    audiosocket_format=as_fmt,
+                    openai_target_encoding=oair_target_enc,
+                    suggestion="Set providers.openai_realtime.target_encoding to 'slin16' or change audiosocket.format",
+                )
+
+            # OpenAI provider IO rates
+            if oair_in_rate and oair_in_rate < 24000:
+                logger.warning(
+                    "OpenAI provider_input_sample_rate_hz suboptimal",
+                    value=oair_in_rate,
+                    suggestion="Set providers.openai_realtime.provider_input_sample_rate_hz to 24000",
+                )
+            if oair_out_rate and oair_out_rate < 24000:
+                logger.warning(
+                    "OpenAI output_sample_rate_hz suboptimal",
+                    value=oair_out_rate,
+                    suggestion="Set providers.openai_realtime.output_sample_rate_hz to 24000",
+                )
+
+            # Deepgram input encoding vs audiosocket
+            if dg_in_enc in ("ulaw", "mulaw", "g711_ulaw", "mu-law") and as_fmt not in ("ulaw", "mulaw", "g711_ulaw", "mu-law"):
+                logger.warning(
+                    "Deepgram input encoding expects μ-law but audiosocket is PCM",
+                    audiosocket_format=as_fmt,
+                    deepgram_input_encoding=dg_in_enc,
+                    suggestion="Set audiosocket.format to 'ulaw' or change deepgram.input_encoding to 'linear16'",
+                )
+            if dg_in_enc in ("slin16", "linear16", "pcm16") and as_fmt not in ("slin16", "linear16", "pcm16"):
+                logger.warning(
+                    "Deepgram input encoding expects PCM16 but audiosocket is μ-law",
+                    audiosocket_format=as_fmt,
+                    deepgram_input_encoding=dg_in_enc,
+                    suggestion="Set audiosocket.format to 'slin16' or change deepgram.input_encoding to 'ulaw'",
+                )
+        except Exception:
+            logger.debug("Transport audit encountered an error", exc_info=True)
 
     async def on_provider_event(self, event: Dict[str, Any]):
         """Handle async events from the active provider (Deepgram/OpenAI/local).
