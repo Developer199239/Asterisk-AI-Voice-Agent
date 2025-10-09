@@ -1,5 +1,6 @@
 import asyncio
 import json
+import audioop
 import websockets
 from typing import Callable, Optional, List, Dict, Any
 import websockets.exceptions
@@ -124,52 +125,86 @@ class DeepgramProvider(AIProviderInterface):
         if self.websocket and audio_chunk:
             try:
                 self._is_audio_flowing = True
-                # 1) Ensure payload matches declared encoding
-                input_encoding = getattr(self.config, 'input_encoding', None) or 'linear16'
-                fmt = input_encoding.lower()
-
-                expected_len = 160 if fmt in ('ulaw', 'mulaw', 'g711_ulaw', 'mu-law') else 320
-                actual_len = len(audio_chunk)
-                mismatch = False
-                if actual_len not in (0, expected_len):
-                    mismatch = True
-                if mismatch:
-                    logger.warning(
-                        "Deepgram provider audio chunk size mismatch",
-                        expected_bytes=expected_len,
-                        actual_bytes=actual_len,
-                        input_encoding=fmt,
+                chunk_len = len(audio_chunk)
+                if chunk_len not in (0, 160, 320):
+                    logger.debug(
+                        "Deepgram provider unexpected chunk size",
+                        bytes=chunk_len,
                     )
 
-                # 2) Convert based on encoding
-                if fmt in ('ulaw', 'mulaw', 'g711_ulaw', 'mu-law'):
-                    pcm8k = mulaw_to_pcm16le(audio_chunk)
+                input_encoding = (getattr(self.config, "input_encoding", None) or "linear16").strip().lower()
+                target_rate = int(getattr(self.config, "input_sample_rate_hz", 8000) or 8000)
+                actual_format = "ulaw" if chunk_len == 160 else "pcm16"
+
+                payload: bytes = audio_chunk
+                pcm_for_rms: Optional[bytes] = None
+
+                if input_encoding in ("ulaw", "mulaw", "g711_ulaw", "mu-law"):
+                    if actual_format == "pcm16":
+                        try:
+                            payload = audioop.lin2ulaw(audio_chunk, 2)
+                        except Exception:
+                            logger.warning("Failed to convert PCM to μ-law for Deepgram", exc_info=True)
+                            payload = audio_chunk
+                    else:
+                        payload = audio_chunk
+
+                    pcm_for_rms = mulaw_to_pcm16le(payload)
+                    if target_rate and target_rate != 8000:
+                        pcm_resampled, self._input_resample_state = resample_audio(
+                            pcm_for_rms,
+                            8000,
+                            target_rate,
+                            state=self._input_resample_state,
+                        )
+                        try:
+                            payload = audioop.lin2ulaw(pcm_resampled, 2)
+                        except Exception:
+                            logger.warning("Failed to convert resampled PCM back to μ-law", exc_info=True)
+                            payload = audio_chunk
+                        pcm_for_rms = pcm_resampled
+                    else:
+                        self._input_resample_state = None
+
+                elif input_encoding in ("slin16", "linear16", "pcm16"):
+                    if actual_format == "ulaw":
+                        pcm_8k = mulaw_to_pcm16le(audio_chunk)
+                    else:
+                        pcm_8k = audio_chunk
+
+                    pcm_for_rms = pcm_8k
+                    if target_rate and target_rate != 8000:
+                        pcm_8k, self._input_resample_state = resample_audio(
+                            pcm_8k,
+                            8000,
+                            target_rate,
+                            state=self._input_resample_state,
+                        )
+                    else:
+                        self._input_resample_state = None
+                    payload = pcm_8k
                 else:
-                    pcm8k = audio_chunk
+                    logger.warning(
+                        "Unsupported Deepgram input_encoding",
+                        input_encoding=input_encoding,
+                    )
+                    payload = audio_chunk
+                    pcm_for_rms = None
+                    self._input_resample_state = None
 
-                # Optional RMS sanity check for PCM inputs
-                if fmt in ('slin16', 'linear16', 'pcm16'):
+                if pcm_for_rms is not None:
                     try:
-                        import audioop
-
-                        rms = audioop.rms(pcm8k, 2)
-                        if rms < 100:  # heuristic threshold for silence/garble
+                        rms = audioop.rms(pcm_for_rms, 2)
+                        if rms < 100:
                             logger.warning(
                                 "Deepgram provider low RMS detected; possible codec mismatch",
                                 rms=rms,
-                                input_encoding=fmt,
-                                expected_bytes=expected_len,
-                                actual_bytes=actual_len,
+                                input_encoding=input_encoding,
+                                bytes=chunk_len,
                             )
                     except Exception:
                         logger.debug("Deepgram RMS check failed", exc_info=True)
 
-                payload = pcm8k
-                # 2) Resample if Deepgram expects 16k (or another rate)
-                if int(self._dg_input_rate) != 8000:
-                    payload, self._input_resample_state = resample_audio(
-                        pcm8k, 8000, int(self._dg_input_rate), state=self._input_resample_state
-                    )
                 await self.websocket.send(payload)
             except websockets.exceptions.ConnectionClosed as e:
                 logger.debug("Could not send audio packet: Connection closed.", code=e.code, reason=e.reason)

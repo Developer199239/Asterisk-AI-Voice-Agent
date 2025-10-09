@@ -79,6 +79,12 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         # Serialize append/commit to avoid empty commits from races
         self._audio_lock: asyncio.Lock = asyncio.Lock()
 
+        try:
+            if self.config.input_encoding:
+                self.config.input_encoding = self.config.input_encoding.strip()
+        except Exception:
+            pass
+
     def describe_alignment(
         self,
         *,
@@ -416,24 +422,53 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             await self.websocket.send(message)
 
     def _convert_inbound_audio(self, audio_chunk: bytes) -> Optional[bytes]:
-        fmt = (self.config.input_encoding or "slin16").lower()
-        pcm_8k = audio_chunk
+        fmt_raw = getattr(self.config, "input_encoding", None) or "slin16"
+        fmt = fmt_raw.strip().lower()
+        # Persist sanitized value so future checks stay consistent
+        try:
+            self.config.input_encoding = fmt
+        except Exception:
+            pass
 
-        if fmt in ("ulaw", "mulaw", "mu-law"):
+        valid_encodings = {
+            "ulaw",
+            "mulaw",
+            "g711_ulaw",
+            "mu-law",
+            "slin16",
+            "linear16",
+            "pcm16",
+        }
+        if fmt not in valid_encodings:
+            logger.warning("Unsupported input encoding for OpenAI Realtime", encoding=fmt_raw)
+            fmt = "slin16"
+            try:
+                self.config.input_encoding = fmt
+            except Exception:
+                pass
+
+        chunk_len = len(audio_chunk)
+        actual_format = "ulaw" if chunk_len == 160 else "pcm16"
+
+        # AudioSocket delivers 8 kHz frames; treat everything as such.
+        source_rate = 8000
+        if actual_format == "ulaw":
             pcm_8k = mulaw_to_pcm16le(audio_chunk)
-        elif fmt not in ("slin16", "linear16", "pcm16"):
-            logger.warning("Unsupported input encoding for OpenAI Realtime", encoding=fmt)
-            return None
+        else:
+            pcm_8k = audio_chunk
 
-        if self.config.input_sample_rate_hz != self.config.provider_input_sample_rate_hz:
+        provider_rate = int(getattr(self.config, "provider_input_sample_rate_hz", 0) or 0)
+
+        if provider_rate and provider_rate != source_rate:
             pcm_provider_rate, self._input_resample_state = resample_audio(
                 pcm_8k,
-                self.config.input_sample_rate_hz,
-                self.config.provider_input_sample_rate_hz,
+                source_rate,
+                provider_rate,
                 state=self._input_resample_state,
             )
             return pcm_provider_rate
 
+        self._input_resample_state = None
         return pcm_8k
 
     async def _receive_loop(self):
