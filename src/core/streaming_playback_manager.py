@@ -993,7 +993,7 @@ class StreamingPlaybackManager:
             if call_id in self.jitter_buffers:
                 del self.jitter_buffers[call_id]
             self._startup_ready.pop(call_id, None)
-            self._resample_states.pop(call_id, None)
+        self._resample_states.pop(call_id, None)
             # Reset metrics
             try:
                 _STREAMING_ACTIVE_GAUGE.labels(call_id).set(0)

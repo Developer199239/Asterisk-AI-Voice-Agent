@@ -124,8 +124,46 @@ class DeepgramProvider(AIProviderInterface):
         if self.websocket and audio_chunk:
             try:
                 self._is_audio_flowing = True
-                # 1) μ-law 8kHz -> PCM16 8kHz
-                pcm8k = mulaw_to_pcm16le(audio_chunk)
+                # 1) Ensure payload matches declared encoding
+                input_encoding = getattr(self.config, 'input_encoding', None) or 'linear16'
+                fmt = input_encoding.lower()
+
+                expected_len = 160 if fmt in ('ulaw', 'mulaw', 'g711_ulaw', 'mu-law') else 320
+                actual_len = len(audio_chunk)
+                mismatch = False
+                if actual_len not in (0, expected_len):
+                    mismatch = True
+                if mismatch:
+                    logger.warning(
+                        "Deepgram provider audio chunk size mismatch",
+                        expected_bytes=expected_len,
+                        actual_bytes=actual_len,
+                        input_encoding=fmt,
+                    )
+
+                # 2) Convert based on encoding
+                if fmt in ('ulaw', 'mulaw', 'g711_ulaw', 'mu-law'):
+                    pcm8k = mulaw_to_pcm16le(audio_chunk)
+                else:
+                    pcm8k = audio_chunk
+
+                # Optional RMS sanity check for PCM inputs
+                if fmt in ('slin16', 'linear16', 'pcm16'):
+                    try:
+                        import audioop
+
+                        rms = audioop.rms(pcm8k, 2)
+                        if rms < 100:  # heuristic threshold for silence/garble
+                            logger.warning(
+                                "Deepgram provider low RMS detected; possible codec mismatch",
+                                rms=rms,
+                                input_encoding=fmt,
+                                expected_bytes=expected_len,
+                                actual_bytes=actual_len,
+                            )
+                    except Exception:
+                        logger.debug("Deepgram RMS check failed", exc_info=True)
+
                 payload = pcm8k
                 # 2) Resample if Deepgram expects 16k (or another rate)
                 if int(self._dg_input_rate) != 8000:
