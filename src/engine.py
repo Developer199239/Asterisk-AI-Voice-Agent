@@ -234,6 +234,18 @@ class Engine:
             streaming_config=streaming_config,
             audio_transport=self.config.audio_transport,
         )
+        # Pre-seed audiosocket_format from YAML so provider audits use correct value
+        try:
+            initial_as_fmt = None
+            if getattr(self.config, "audiosocket", None) and hasattr(self.config.audiosocket, "format"):
+                initial_as_fmt = self.config.audiosocket.format
+            if initial_as_fmt:
+                self.streaming_playback_manager.set_transport(
+                    audio_transport=self.config.audio_transport,
+                    audiosocket_format=initial_as_fmt,
+                )
+        except Exception:
+            logger.debug("Failed to pre-seed streaming manager format", exc_info=True)
         
         # Milestone7: Pipeline orchestrator coordinates per-call STT/LLM/TTS adapters.
         self.pipeline_orchestrator = PipelineOrchestrator(config)
@@ -582,7 +594,7 @@ class Engine:
             for provider_name in self.providers:
                 issues = self.provider_alignment_issues.get(provider_name, [])
                 for detail in dict.fromkeys(issues):
-                    logger.error(
+                    logger.warning(
                         "Provider codec/sample alignment issue",
                         provider=provider_name,
                         detail=detail,

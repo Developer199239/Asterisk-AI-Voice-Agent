@@ -98,12 +98,20 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         target_enc = (self.config.target_encoding or "ulaw").lower()
         target_rate = int(self.config.target_sample_rate_hz or 0)
 
-        if inbound_enc in ("slin16", "linear16", "pcm16") and audiosocket_format == "ulaw":
+        def _class(enc: str) -> str:
+            e = (enc or "").lower()
+            if e in ("ulaw", "mulaw", "g711_ulaw", "mu-law"):
+                return "ulaw"
+            if e in ("slin16", "linear16", "pcm16"):
+                return "pcm16"
+            return e
+
+        if inbound_enc in ("slin16", "linear16", "pcm16") and _class(audiosocket_format) == "ulaw":
             issues.append(
                 "OpenAI inbound encoding is PCM16 but AudioSocket format is μ-law; set audiosocket.format=slin16 "
                 "or change openai_realtime.input_encoding to ulaw."
             )
-        if inbound_enc in ("ulaw", "mulaw", "g711_ulaw", "mu-law") and audiosocket_format != "ulaw":
+        if inbound_enc in ("ulaw", "mulaw", "g711_ulaw", "mu-law") and _class(audiosocket_format) != "ulaw":
             issues.append(
                 f"OpenAI inbound encoding {inbound_enc} does not match audiosocket.format={audiosocket_format}."
             )
@@ -112,7 +120,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                 f"OpenAI inbound μ-law sample rate is {inbound_rate} Hz; μ-law transport should be 8000 Hz."
             )
 
-        if target_enc != streaming_encoding:
+        if _class(target_enc) != _class(streaming_encoding):
             issues.append(
                 f"OpenAI target_encoding={target_enc} but streaming manager emits {streaming_encoding}."
             )
