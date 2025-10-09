@@ -485,6 +485,33 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         else:
             pcm_src = audio_chunk
 
+        # Diagnostics-only: probe PCM16 RMS native vs swapped once; do not mutate audio
+        try:
+            if actual_format == "pcm16" and not getattr(self, "_endianness_probe_done", False):
+                import audioop  # local import to avoid top-level dependency for non-PCM paths
+                rms_native = audioop.rms(pcm_src, 2) if pcm_src else 0
+                try:
+                    swapped = audioop.byteswap(pcm_src, 2) if pcm_src else b""
+                    rms_swapped = audioop.rms(swapped, 2) if swapped else 0
+                except Exception:
+                    rms_swapped = 0
+                try:
+                    logger.info(
+                        "OpenAI inbound PCM16 probe",
+                        call_id=self._call_id,
+                        rms_native=rms_native,
+                        rms_swapped=rms_swapped,
+                    )
+                except Exception:
+                    pass
+                try:
+                    self._endianness_probe_done = True
+                except Exception:
+                    pass
+        except Exception:
+            # Non-fatal; proceed without probe
+            pass
+
         provider_rate = int(getattr(self.config, "provider_input_sample_rate_hz", 0) or 0)
 
         if provider_rate and provider_rate != source_rate:

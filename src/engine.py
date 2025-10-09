@@ -1645,6 +1645,70 @@ class Engine:
             except Exception:
                 pass
 
+            # First-frame diagnostics probe (no mutation): log RMS for format verification
+            try:
+                vad_state = session.vad_state
+            except Exception:
+                vad_state = session.vad_state = {}
+            if not vad_state.get('format_probe_done'):
+                try:
+                    try:
+                        as_fmt = (getattr(self.config, 'audiosocket', None).format or 'ulaw').lower()
+                    except Exception:
+                        as_fmt = 'ulaw'
+                    if as_fmt in ('slin16', 'linear16', 'pcm16'):
+                        rms_native = audioop.rms(audio_bytes, 2)
+                        try:
+                            swapped = audioop.byteswap(audio_bytes, 2)
+                            rms_swapped = audioop.rms(swapped, 2)
+                        except Exception:
+                            rms_swapped = 0
+                        logger.info(
+                            "AudioSocket frame probe",
+                            call_id=caller_channel_id,
+                            audiosocket_format=as_fmt,
+                            frame_bytes=len(audio_bytes),
+                            rms_native=rms_native,
+                            rms_swapped=rms_swapped,
+                        )
+                        # Determine if inbound PCM16 appears byte-swapped (big-endian on wire)
+                        try:
+                            frame_bytes = len(audio_bytes)
+                            # Conservative rule: only flag swap when swapped energy is clearly higher
+                            swap_flag = (
+                                frame_bytes >= 640 and  # 20ms @ 16k PCM
+                                rms_swapped >= 2048 and
+                                rms_swapped >= 16 * max(1, rms_native)
+                            )
+                            vad_state['pcm16_inbound_swap'] = bool(swap_flag)
+                            if swap_flag:
+                                logger.warning(
+                                    "Inbound slin16 appears byte-swapped; will normalize to PCM16-LE for processing",
+                                    call_id=caller_channel_id,
+                                    rms_native=rms_native,
+                                    rms_swapped=rms_swapped,
+                                )
+                        except Exception:
+                            pass
+                    else:
+                        try:
+                            pcm = audioop.ulaw2lin(audio_bytes, 2)
+                            rms_pcm = audioop.rms(pcm, 2)
+                        except Exception:
+                            rms_pcm = 0
+                        logger.info(
+                            "AudioSocket frame probe",
+                            call_id=caller_channel_id,
+                            audiosocket_format=as_fmt,
+                            frame_bytes=len(audio_bytes),
+                            rms_pcm8k=rms_pcm,
+                        )
+                        # μ-law path: no PCM16 swap needed
+                        vad_state['pcm16_inbound_swap'] = False
+                    vad_state['format_probe_done'] = True
+                except Exception:
+                    pass
+
             # Post-TTS end protection: drop inbound briefly after gating clears to avoid agent echo re-capture
             try:
                 cfg = getattr(self.config, 'barge_in', None)
@@ -1734,7 +1798,22 @@ class Engine:
                         pass
                 else:
                     try:
-                        pcm16_frame = audioop.ulaw2lin(audio_bytes, 2)
+                        # Compute energy using correct AudioSocket format
+                        try:
+                            as_fmt = (getattr(self.config, 'audiosocket', None).format or 'ulaw').lower()
+                        except Exception:
+                            as_fmt = 'ulaw'
+                        if as_fmt in ('ulaw', 'mulaw', 'g711_ulaw', 'mu-law'):
+                            pcm16_frame = audioop.ulaw2lin(audio_bytes, 2)
+                        else:
+                            # slin16 path: bytes are already PCM16
+                            pcm16_frame = audio_bytes
+                            # Normalize endian if probe indicated swap
+                            try:
+                                if bool(session.vad_state.get('pcm16_inbound_swap', False)):
+                                    pcm16_frame = audioop.byteswap(pcm16_frame, 2)
+                            except Exception:
+                                pass
                         energy = audioop.rms(pcm16_frame, 2)
                     except Exception:
                         energy = 0
@@ -1890,7 +1969,7 @@ class Engine:
                     state['frames_since_speech'] = frames_since_speech + 1
 
                 if not forward_original_audio:
-                    payload_bytes = self._ulaw_silence(len(audio_bytes))
+                    payload_bytes = self._silence_for_format(len(audio_bytes))
                     logger.debug(
                         "🎤 VAD - Replacing frame with silence",
                         call_id=caller_channel_id,
@@ -1906,17 +1985,54 @@ class Engine:
                 logger.debug("Provider unavailable for audio", provider=provider_name)
                 return
 
+            # Normalize inbound slin16 endianness for providers if probe indicated swap needed
+            try:
+                as_fmt_send = (getattr(self.config, 'audiosocket', None).format or 'ulaw').lower()
+            except Exception:
+                as_fmt_send = 'ulaw'
+            if as_fmt_send in ('slin16', 'linear16', 'pcm16'):
+                try:
+                    swap_needed = bool(session.vad_state.get('pcm16_inbound_swap', False))
+                except Exception:
+                    swap_needed = False
+                if swap_needed and forward_original_audio:
+                    try:
+                        payload_bytes = audioop.byteswap(payload_bytes, 2)
+                    except Exception:
+                        logger.debug("Inbound slin16 byteswap failed; sending native bytes", call_id=caller_channel_id)
+
             await provider.send_audio(payload_bytes)
         except Exception as exc:
             logger.error("Error handling AudioSocket audio", conn_id=conn_id, error=str(exc), exc_info=True)
 
-    async def _run_enhanced_vad(self, session: CallSession, audio_bytes_ulaw: bytes) -> Optional[VADResult]:
-        """Convert μ-law audio to 20 ms PCM16 frames and run enhanced VAD."""
-        if not self.vad_manager or not audio_bytes_ulaw:
+    async def _run_enhanced_vad(self, session: CallSession, audio_bytes: bytes) -> Optional[VADResult]:
+        """Normalize inbound AudioSocket audio to PCM16 @ 8 kHz 20 ms frames and run enhanced VAD."""
+        if not self.vad_manager or not audio_bytes:
             return None
 
         try:
-            pcm16 = EnhancedVADManager.mu_law_to_pcm16(audio_bytes_ulaw)
+            # Detect AudioSocket wire format and normalize to PCM16 @ 8 kHz
+            try:
+                as_fmt = (getattr(self.config, 'audiosocket', None).format or 'ulaw').lower()
+            except Exception:
+                as_fmt = 'ulaw'
+            if as_fmt in ('ulaw', 'mulaw', 'g711_ulaw', 'mu-law'):
+                pcm_src = EnhancedVADManager.mu_law_to_pcm16(audio_bytes)
+                src_rate = 8000
+            else:
+                # slin16 path: bytes are already PCM16 @ 16 kHz
+                pcm_src = audio_bytes
+                src_rate = 16000
+                # Normalize endian if probe indicated swap
+                try:
+                    if bool(session.vad_state.get('pcm16_inbound_swap', False)):
+                        pcm_src = audioop.byteswap(pcm_src, 2)
+                except Exception:
+                    pass
+            if src_rate != 8000:
+                pcm16, _ = audioop.ratecv(pcm_src, 2, 1, src_rate, 8000, None)
+            else:
+                pcm16 = pcm_src
         except Exception:
             logger.debug(
                 "Enhanced VAD conversion failed",
@@ -2005,6 +2121,18 @@ class Engine:
         if length <= 0:
             return b""
         return bytes([0xFF]) * length
+
+    def _silence_for_format(self, length: int) -> bytes:
+        """Generate silence matching the negotiated AudioSocket format (μ-law or PCM16)."""
+        if length <= 0:
+            return b""
+        try:
+            as_fmt = (getattr(self.config, 'audiosocket', None).format or 'ulaw').lower()
+        except Exception:
+            as_fmt = 'ulaw'
+        if as_fmt in ('ulaw', 'mulaw', 'g711_ulaw', 'mu-law'):
+            return bytes([0xFF]) * length  # μ-law silence
+        return b"\x00" * length  # PCM16 silence (zeroed samples)
 
     async def _export_config_metrics(self, call_id: str) -> None:
         """Expose configured knobs as Prometheus gauges for this call."""

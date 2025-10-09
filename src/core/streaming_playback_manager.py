@@ -8,6 +8,7 @@ It includes automatic fallback to file playback on errors or timeouts.
 
 import asyncio
 import time
+import audioop
 from typing import Optional, Dict, Any, TYPE_CHECKING, Set
 import structlog
 from prometheus_client import Counter, Gauge, Histogram
@@ -302,6 +303,14 @@ class StreamingPlaybackManager:
                 src_rate = self.sample_rate
             self._resample_states[call_id] = None
             # Store stream info
+            # Determine if egress slin16 should be byteswapped based on inbound probe
+            egress_swap = False
+            try:
+                if (self.audiosocket_format or "ulaw").lower() in ("slin16", "linear16", "pcm16"):
+                    egress_swap = bool(session.vad_state.get("pcm16_inbound_swap", False))
+            except Exception:
+                egress_swap = False
+
             self.active_streams[call_id] = {
                 'stream_id': stream_id,
                 'playback_type': playback_type,
@@ -319,6 +328,8 @@ class StreamingPlaybackManager:
                 'end_reason': None,
                 'source_encoding': src_encoding,
                 'source_sample_rate': src_rate,
+                'egress_swap': egress_swap,
+                'tx_bytes': 0,
             }
             self._startup_ready[call_id] = False
             try:
@@ -330,6 +341,21 @@ class StreamingPlaybackManager:
                        call_id=call_id,
                        stream_id=stream_id,
                        playback_type=playback_type)
+
+            # Outbound setup probe
+            try:
+                logger.info(
+                    "🎵 STREAMING OUTBOUND - Setup",
+                    call_id=call_id,
+                    stream_id=stream_id,
+                    source_encoding=src_encoding,
+                    source_sample_rate=src_rate,
+                    target_format=(self.audiosocket_format or "ulaw").lower(),
+                    target_sample_rate=self.sample_rate,
+                    egress_swap=egress_swap,
+                )
+            except Exception:
+                pass
             
             return stream_id
             
@@ -549,6 +575,9 @@ class StreamingPlaybackManager:
             if not src_encoding_raw:
                 src_encoding_raw = "slin16"
 
+            # Determine if we must swap bytes for PCM16 egress
+            egress_swap = bool(stream_info.get('egress_swap', False))
+
             # Fast path: already matches target format and rate
             if (
                 src_encoding_raw in ("ulaw", "mulaw", "g711_ulaw", "mu-law")
@@ -562,7 +591,13 @@ class StreamingPlaybackManager:
                 and target_fmt in ("slin16", "linear16", "pcm16")
                 and src_rate == target_rate
             ):
+                # Fast path PCM16->PCM16: still apply egress swap if required
                 self._resample_states[call_id] = None
+                if egress_swap:
+                    try:
+                        return audioop.byteswap(chunk, 2)
+                    except Exception:
+                        logger.debug("PCM16 egress swap failed; sending native bytes", call_id=call_id)
                 return chunk
 
             working = chunk
@@ -590,7 +625,12 @@ class StreamingPlaybackManager:
             # Convert to target encoding
             if target_fmt in ("ulaw", "mulaw", "g711_ulaw", "mu-law"):
                 return pcm16le_to_mulaw(working)
-            # Otherwise target PCM16
+            # Otherwise target PCM16, with optional egress byteswap
+            if egress_swap:
+                try:
+                    return audioop.byteswap(working, 2)
+                except Exception:
+                    logger.debug("PCM16 egress swap failed; sending native bytes", call_id=call_id)
             return working
         except Exception as exc:
             logger.error(
@@ -621,6 +661,8 @@ class StreamingPlaybackManager:
                 else:
                     try:
                         _STREAM_TX_BYTES.labels(call_id).inc(len(chunk))
+                        if call_id in self.active_streams:
+                            self.active_streams[call_id]['tx_bytes'] = int(self.active_streams[call_id].get('tx_bytes', 0)) + len(chunk)
                     except Exception:
                         pass
                 return success
@@ -636,6 +678,10 @@ class StreamingPlaybackManager:
                 # One-time debug for first outbound frame to identify codec/format
                 if call_id not in self._first_send_logged:
                     fmt = (self.audiosocket_format or "ulaw").lower()
+                    try:
+                        egress_swap = bool(self.active_streams.get(call_id, {}).get('egress_swap', False))
+                    except Exception:
+                        egress_swap = False
                     logger.info(
                         "🎵 STREAMING OUTBOUND - First frame",
                         call_id=call_id,
@@ -645,6 +691,7 @@ class StreamingPlaybackManager:
                         frame_bytes=len(chunk),
                         sample_rate=self.sample_rate,
                         chunk_size_ms=self.chunk_size_ms,
+                        egress_swap=egress_swap,
                         conn_id=conn_id,
                     )
                     self._first_send_logged.add(call_id)
@@ -668,6 +715,8 @@ class StreamingPlaybackManager:
                 else:
                     try:
                         _STREAM_TX_BYTES.labels(call_id).inc(len(chunk))
+                        if call_id in self.active_streams:
+                            self.active_streams[call_id]['tx_bytes'] = int(self.active_streams[call_id].get('tx_bytes', 0)) + len(chunk)
                     except Exception:
                         pass
                 # First-frame observability
@@ -1014,6 +1063,42 @@ class StreamingPlaybackManager:
                     _STREAM_END_REASON_TOTAL.labels(call_id, reason).inc()
             except Exception:
                 pass
+
+            # Emit tuning summary for observability BEFORE removing stream info
+            try:
+                if call_id in self.active_streams:
+                    info = self.active_streams[call_id]
+                    try:
+                        fmt = (self.audiosocket_format or "ulaw").lower()
+                        bps = 1 if fmt in ("ulaw", "mulaw", "g711_ulaw", "mu-law") else 2
+                        sr = max(1, int(self.sample_rate))
+                        tx = int(info.get('tx_bytes', 0))
+                        eff_seconds = float(tx) / float(max(1, bps * sr))
+                    except Exception:
+                        eff_seconds = 0.0
+                    try:
+                        start_ts = float(info.get('start_time', time.time()))
+                        wall_seconds = max(0.0, time.time() - start_ts)
+                    except Exception:
+                        wall_seconds = 0.0
+                    try:
+                        drift_pct = 0.0 if wall_seconds <= 0.0 else ((eff_seconds - wall_seconds) / wall_seconds) * 100.0
+                    except Exception:
+                        drift_pct = 0.0
+                    logger.info(
+                        "🎛️ STREAMING TUNING SUMMARY",
+                        call_id=call_id,
+                        stream_id=stream_id,
+                        bytes_sent=tx,
+                        effective_seconds=round(eff_seconds, 3),
+                        wall_seconds=round(wall_seconds, 3),
+                        drift_pct=round(drift_pct, 1),
+                        low_watermark=self.low_watermark_ms,
+                        min_start=self.min_start_ms,
+                        provider_grace_ms=self.provider_grace_ms,
+                    )
+            except Exception:
+                logger.debug("Streaming tuning summary unavailable", call_id=call_id)
             # Remove from active streams
             if call_id in self.active_streams:
                 del self.active_streams[call_id]
@@ -1043,22 +1128,7 @@ class StreamingPlaybackManager:
             # Clear any remainder record after flushing
             self.frame_remainders.pop(call_id, None)
             
-            # Emit tuning summary for observability
-            try:
-                sess = await self.session_store.get_by_call_id(call_id)
-                if sess:
-                    logger.info(
-                        "🎛️ STREAMING TUNING SUMMARY",
-                        call_id=call_id,
-                        stream_id=stream_id,
-                        fallback_count=sess.streaming_fallback_count,
-                        bytes_sent=sess.streaming_bytes_sent,
-                        low_watermark=self.low_watermark_ms,
-                        min_start=self.min_start_ms,
-                        provider_grace_ms=self.provider_grace_ms,
-                    )
-            except Exception:
-                logger.debug("Streaming tuning summary unavailable", call_id=call_id)
+            
             
             logger.debug("Streaming cleanup completed",
                         call_id=call_id,
