@@ -10,7 +10,7 @@ import uuid
 import audioop
 import base64
 from collections import deque
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Set
 
 # Simple audio capture system removed - not used in production
 
@@ -239,9 +239,13 @@ class Engine:
         self.pipeline_orchestrator = PipelineOrchestrator(config)
         
         self.providers: Dict[str, AIProviderInterface] = {}
+        # Track static codec/sample-rate validation issues per provider
+        self.provider_alignment_issues: Dict[str, List[str]] = {}
         # Per-call provider streaming queues (AgentAudio -> streaming playback)
         self._provider_stream_queues: Dict[str, asyncio.Queue] = {}
         self._provider_stream_formats: Dict[str, Dict[str, Any]] = {}
+        # Prevent duplicate runtime warnings per call when misalignment persists
+        self._runtime_alignment_logged: Set[str] = set()
         self.conn_to_channel: Dict[str, str] = {}
         self.channel_to_conn: Dict[str, str] = {}
         self.conn_to_caller: Dict[str, str] = {}  # conn_id -> caller_channel_id
@@ -497,7 +501,11 @@ class Engine:
                 logger.info("Provider '%s' disabled in configuration; skipping initialization.", name)
                 continue
             try:
-                self._audit_provider_config(name, provider_config_data)
+                issues = self._audit_provider_config(name, provider_config_data)
+                if issues:
+                    self.provider_alignment_issues[name] = issues
+                elif name in self.provider_alignment_issues:
+                    self.provider_alignment_issues.pop(name, None)
                 if name == "local":
                     config = LocalProviderConfig(**provider_config_data)
                     provider = LocalProvider(config, self.on_provider_event)
@@ -549,6 +557,19 @@ class Engine:
             logger.error(f"Default provider '{self.config.default_provider}' not available. Available providers: {available_providers}")
         else:
             logger.info(f"Default provider '{self.config.default_provider}' is available and ready.")
+            for provider_name in self.providers:
+                issues = self.provider_alignment_issues.get(provider_name, [])
+                for detail in issues:
+                    logger.error(
+                        "Provider codec/sample alignment issue",
+                        provider=provider_name,
+                        detail=detail,
+                    )
+                if not issues:
+                    logger.info(
+                        "Provider codec/sample alignment verified",
+                        provider=provider_name,
+                    )
 
     def _is_caller_channel(self, channel: dict) -> bool:
         """Check if this is a caller channel (SIP, PJSIP, etc.)"""
@@ -1381,6 +1402,9 @@ class Engine:
                     await self.session_store.upsert_call(sess2)
             except Exception:
                 pass
+
+            # Reset per-call alignment warning state
+            self._runtime_alignment_logged.discard(call_id)
 
             logger.info("Call cleanup completed", call_id=call_id)
         except Exception as exc:
@@ -2235,8 +2259,11 @@ class Engine:
             logger.error("Failed to build OpenAIRealtimeProviderConfig", error=str(exc), exc_info=True)
             return None
 
-    def _audit_provider_config(self, name: str, provider_cfg: Dict[str, Any]) -> None:
-        """Static sanity checks for provider/audio format alignment."""
+    def _audit_provider_config(self, name: str, provider_cfg: Dict[str, Any]) -> List[str]:
+        """Static sanity checks for provider/audio format alignment.
+
+        Returns a list of descriptive issue strings when mismatches are detected."""
+        issues: List[str] = []
         try:
             audiosocket_format = "ulaw"
             try:
@@ -2248,35 +2275,44 @@ class Engine:
             if name == "deepgram":
                 enc = (provider_cfg.get("input_encoding") or "linear16").lower()
                 if enc in ("slin16", "linear16", "pcm16") and audiosocket_format != "slin16":
-                    logger.warning(
-                        "Deepgram configuration expects PCM input but AudioSocket format is %s. "
-                        "Set audiosocket.format=slin16 or change deepgram.input_encoding to ulaw.",
-                        audiosocket_format,
+                    issues.append(
+                        f"Deepgram expects PCM input but audiosocket.format={audiosocket_format}; "
+                        "set audiosocket.format=slin16 or change deepgram.input_encoding to ulaw."
                     )
                 if enc in ("ulaw", "mulaw", "g711_ulaw", "mu-law") and audiosocket_format != "ulaw":
-                    logger.warning(
-                        "Deepgram configuration expects μ-law input but AudioSocket format is %s. "
-                        "Set audiosocket.format=ulaw or change deepgram.input_encoding to linear16.",
-                        audiosocket_format,
+                    issues.append(
+                        f"Deepgram expects μ-law input but audiosocket.format={audiosocket_format}; "
+                        "set audiosocket.format=ulaw or change deepgram.input_encoding to linear16."
                     )
 
             if name == "openai_realtime":
                 provider_rate = int(provider_cfg.get("provider_input_sample_rate_hz") or 0)
                 output_rate = int(provider_cfg.get("output_sample_rate_hz") or 0)
                 if provider_rate and provider_rate < 24000:
-                    logger.warning(
-                        "OpenAI Realtime provider_input_sample_rate_hz=%s. "
-                        "Recommended value is 24000 for correct streaming.",
-                        provider_rate,
+                    issues.append(
+                        f"OpenAI Realtime provider_input_sample_rate_hz={provider_rate}; "
+                        "set to 24000 for correct streaming."
                     )
                 if output_rate and output_rate < 24000:
-                    logger.warning(
-                        "OpenAI Realtime output_sample_rate_hz=%s. "
-                        "Set to 24000 so downstream audio plays at the correct speed.",
-                        output_rate,
+                    issues.append(
+                        f"OpenAI Realtime output_sample_rate_hz={output_rate}; "
+                        "set to 24000 so downstream audio plays at the correct speed."
+                    )
+
+                target_encoding = (provider_cfg.get("target_encoding") or "ulaw").lower()
+                if target_encoding in ("ulaw", "mulaw", "g711_ulaw", "mu-law") and audiosocket_format != "ulaw":
+                    issues.append(
+                        f"OpenAI Realtime target_encoding={target_encoding} but audiosocket.format={audiosocket_format}; "
+                        "set audiosocket.format=ulaw or adjust provider target encoding."
+                    )
+                if target_encoding in ("slin16", "linear16", "pcm16") and audiosocket_format != "slin16":
+                    issues.append(
+                        f"OpenAI Realtime target_encoding={target_encoding} but audiosocket.format={audiosocket_format}; "
+                        "set audiosocket.format=slin16 or change provider target encoding."
                     )
         except Exception:
             logger.debug("Provider configuration audit failed", provider=name, exc_info=True)
+        return issues
 
     async def on_provider_event(self, event: Dict[str, Any]):
         """Handle async events from the active provider (Deepgram/OpenAI/local).
@@ -2333,6 +2369,17 @@ class Engine:
                     try:
                         playback_type = "greeting" if getattr(session, "conversation_state", "") == "greeting" else "streaming-response"
                         fmt_info = self._provider_stream_formats.get(call_id, {})
+                        provider_name = getattr(session, "provider_name", None) or self.config.default_provider
+                        alignment_issues = self.provider_alignment_issues.get(provider_name, [])
+                        if alignment_issues and call_id not in self._runtime_alignment_logged:
+                            for detail in alignment_issues:
+                                logger.warning(
+                                    "Provider codec/sample alignment issue persists during streaming",
+                                    call_id=call_id,
+                                    provider=provider_name,
+                                    detail=detail,
+                                )
+                            self._runtime_alignment_logged.add(call_id)
                         await self.streaming_playback_manager.start_streaming_playback(
                             call_id,
                             q,
