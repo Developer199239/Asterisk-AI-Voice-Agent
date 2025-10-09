@@ -497,6 +497,7 @@ class Engine:
                 logger.info("Provider '%s' disabled in configuration; skipping initialization.", name)
                 continue
             try:
+                self._audit_provider_config(name, provider_config_data)
                 if name == "local":
                     config = LocalProviderConfig(**provider_config_data)
                     provider = LocalProvider(config, self.on_provider_event)
@@ -2233,6 +2234,49 @@ class Engine:
         except Exception as exc:
             logger.error("Failed to build OpenAIRealtimeProviderConfig", error=str(exc), exc_info=True)
             return None
+
+    def _audit_provider_config(self, name: str, provider_cfg: Dict[str, Any]) -> None:
+        """Static sanity checks for provider/audio format alignment."""
+        try:
+            audiosocket_format = "ulaw"
+            try:
+                if getattr(self.config, "audiosocket", None):
+                    audiosocket_format = (self.config.audiosocket.format or "ulaw").lower()
+            except Exception:
+                audiosocket_format = "ulaw"
+
+            if name == "deepgram":
+                enc = (provider_cfg.get("input_encoding") or "linear16").lower()
+                if enc in ("slin16", "linear16", "pcm16") and audiosocket_format != "slin16":
+                    logger.warning(
+                        "Deepgram configuration expects PCM input but AudioSocket format is %s. "
+                        "Set audiosocket.format=slin16 or change deepgram.input_encoding to ulaw.",
+                        audiosocket_format,
+                    )
+                if enc in ("ulaw", "mulaw", "g711_ulaw", "mu-law") and audiosocket_format != "ulaw":
+                    logger.warning(
+                        "Deepgram configuration expects μ-law input but AudioSocket format is %s. "
+                        "Set audiosocket.format=ulaw or change deepgram.input_encoding to linear16.",
+                        audiosocket_format,
+                    )
+
+            if name == "openai_realtime":
+                provider_rate = int(provider_cfg.get("provider_input_sample_rate_hz") or 0)
+                output_rate = int(provider_cfg.get("output_sample_rate_hz") or 0)
+                if provider_rate and provider_rate < 24000:
+                    logger.warning(
+                        "OpenAI Realtime provider_input_sample_rate_hz=%s. "
+                        "Recommended value is 24000 for correct streaming.",
+                        provider_rate,
+                    )
+                if output_rate and output_rate < 24000:
+                    logger.warning(
+                        "OpenAI Realtime output_sample_rate_hz=%s. "
+                        "Set to 24000 so downstream audio plays at the correct speed.",
+                        output_rate,
+                    )
+        except Exception:
+            logger.debug("Provider configuration audit failed", provider=name, exc_info=True)
 
     async def on_provider_event(self, event: Dict[str, Any]):
         """Handle async events from the active provider (Deepgram/OpenAI/local).
