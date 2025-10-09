@@ -114,8 +114,8 @@ downstream_mode: "stream"
 audiosocket:
   host: "0.0.0.0"          # Bind address (use 127.0.0.1 when engine and Asterisk share a host)
   port: 8090               # TCP port for AudioSocket connections
-  format: "ulaw"           # Wire format from Asterisk: `ulaw` (160B/20ms) or `slin16` (320B/20ms) at 8 kHz
-                           # TIP: Match this to the dialplan's AudioSocket() media argument (`ulaw` for μ-law trunks).
+  format: "slin16"         # Wire format from Asterisk: `ulaw` (160B/20ms @ 8 kHz) or `slin16` (640B/20ms @ 16 kHz)
+                           # TIP: Match this to the dialplan's AudioSocket() media argument (use 'slin16' for wideband).
 
 # Barge-in configuration
 barge_in:
@@ -133,7 +133,7 @@ barge_in:
 
 # Streaming configuration (for downstream_mode=stream)
 streaming:
-  sample_rate: 8000          # Output sample rate for streaming audio
+  sample_rate: 16000         # Output sample rate for streaming audio (16 kHz for wideband)
   jitter_buffer_ms: 100      # Jitter buffer target depth; increase for jittery networks (e.g., 80–150). Higher = more robust, slightly higher latency.
   keepalive_interval_ms: 5000 # Keepalive interval for streaming connections
   connection_timeout_ms: 10000 # Connection timeout for streaming
@@ -205,8 +205,8 @@ providers:
     tts_model: "aura-asteria-en"
     greeting: "${DEEPGRAM_GREETING:-Hello, how can I help you today?}"
     instructions: "${DEEPGRAM_INSTRUCTIONS:-You are a concise voice assistant. Respond in under 20 words and answer immediately.}"
-    input_encoding: "ulaw"       # Provider audio encoding for inbound caller audio (matches AudioSocket μ-law frames)
-    input_sample_rate_hz: 8000    # Align to trunk sample rate (8 kHz for telephony)
+    input_encoding: "linear16"    # Provider audio encoding for inbound caller audio (PCM16 for wideband)
+    input_sample_rate_hz: 16000   # Align to wideband sample rate (16 kHz)
     continuous_input: true        # Stream audio continuously for best responsiveness
                                   # TIP: Keep this true for real-time conversations
   openai:
@@ -237,14 +237,14 @@ providers:
     base_url: "wss://api.openai.com/v1/realtime"
     instructions: "You are a concise voice assistant. Respond clearly and keep answers under 20 words unless more detail is requested."
     organization: ""
-    input_encoding: "ulaw"
-    input_sample_rate_hz: 8000
+    input_encoding: "slin16"
+    input_sample_rate_hz: 16000
     provider_input_encoding: "linear16"
     provider_input_sample_rate_hz: 24000
     output_encoding: "linear16"
     output_sample_rate_hz: 24000
-    target_encoding: "ulaw"
-    target_sample_rate_hz: 8000
+    target_encoding: "linear16"
+    target_sample_rate_hz: 16000
     response_modalities:
       - "audio"
       - "text"
