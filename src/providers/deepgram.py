@@ -35,6 +35,12 @@ class DeepgramProvider(AIProviderInterface):
             self._dg_input_rate = int(getattr(self.config, 'input_sample_rate_hz', 8000) or 8000)
         except Exception:
             self._dg_input_rate = 8000
+        # Cache provider output settings for downstream conversion/metadata
+        self._dg_output_encoding = (getattr(self.config, 'output_encoding', None) or 'mulaw').lower()
+        try:
+            self._dg_output_rate = int(getattr(self.config, 'output_sample_rate_hz', 8000) or 8000)
+        except Exception:
+            self._dg_output_rate = 8000
 
     @property
     def supported_codecs(self) -> List[str]:
@@ -70,6 +76,8 @@ class DeepgramProvider(AIProviderInterface):
         input_sample_rate = int(getattr(self.config, 'input_sample_rate_hz', 8000) or 8000)
         output_encoding = getattr(self.config, 'output_encoding', None) or 'mulaw'
         output_sample_rate = int(getattr(self.config, 'output_sample_rate_hz', 8000) or 8000)
+        self._dg_output_encoding = output_encoding.lower()
+        self._dg_output_rate = output_sample_rate
 
         # Determine greeting precedence: provider override > global LLM greeting > safe default
         try:
@@ -188,7 +196,9 @@ class DeepgramProvider(AIProviderInterface):
                         'type': 'AgentAudio',
                         'data': message,
                         'streaming_chunk': True,
-                        'call_id': self.call_id
+                        'call_id': self.call_id,
+                        'encoding': self._dg_output_encoding,
+                        'sample_rate': self._dg_output_rate,
                     }
                     if not self._first_output_chunk_logged:
                         logger.info(

@@ -241,6 +241,7 @@ class Engine:
         self.providers: Dict[str, AIProviderInterface] = {}
         # Per-call provider streaming queues (AgentAudio -> streaming playback)
         self._provider_stream_queues: Dict[str, asyncio.Queue] = {}
+        self._provider_stream_formats: Dict[str, Dict[str, Any]] = {}
         self.conn_to_channel: Dict[str, str] = {}
         self.channel_to_conn: Dict[str, str] = {}
         self.conn_to_caller: Dict[str, str] = {}  # conn_id -> caller_channel_id
@@ -2255,6 +2256,30 @@ class Engine:
                 chunk: bytes = event.get("data") or b""
                 if not chunk:
                     return
+                encoding = event.get("encoding")
+                if isinstance(encoding, bytes):
+                    try:
+                        encoding = encoding.decode("utf-8", "ignore")
+                    except Exception:
+                        encoding = None
+                if isinstance(encoding, str):
+                    encoding = encoding.lower().strip()
+                    if not encoding:
+                        encoding = None
+                sample_rate_val = event.get("sample_rate")
+                sample_rate_int: Optional[int]
+                try:
+                    sample_rate_int = int(sample_rate_val) if sample_rate_val is not None else None
+                except (TypeError, ValueError):
+                    sample_rate_int = None
+                # Persist latest provider format hints per call
+                fmt_entry = self._provider_stream_formats.get(call_id, {}).copy()
+                if encoding is not None:
+                    fmt_entry["encoding"] = encoding
+                if sample_rate_int is not None:
+                    fmt_entry["sample_rate"] = sample_rate_int
+                if fmt_entry:
+                    self._provider_stream_formats[call_id] = fmt_entry
                 # Ensure a streaming queue exists and streaming is started
                 q = self._provider_stream_queues.get(call_id)
                 if q is None:
@@ -2263,7 +2288,14 @@ class Engine:
                     # Kick off streaming playback; manager is idempotent if already active
                     try:
                         playback_type = "greeting" if getattr(session, "conversation_state", "") == "greeting" else "streaming-response"
-                        await self.streaming_playback_manager.start_streaming_playback(call_id, q, playback_type=playback_type)
+                        fmt_info = self._provider_stream_formats.get(call_id, {})
+                        await self.streaming_playback_manager.start_streaming_playback(
+                            call_id,
+                            q,
+                            playback_type=playback_type,
+                            source_encoding=fmt_info.get("encoding"),
+                            source_sample_rate=fmt_info.get("sample_rate"),
+                        )
                     except Exception:
                         logger.error("Failed to start streaming playback", call_id=call_id, exc_info=True)
                         # Fallback to file playback if streaming cannot start
@@ -2293,6 +2325,7 @@ class Engine:
                     self._provider_stream_queues.pop(call_id, None)
                 else:
                     logger.debug("AgentAudioDone with no active stream queue", call_id=call_id)
+                self._provider_stream_formats.pop(call_id, None)
             else:
                 # Log control/JSON events at debug for now
                 logger.debug("Provider control event", provider_event=event)

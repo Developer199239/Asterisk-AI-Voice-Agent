@@ -3,7 +3,7 @@ OpenAI Realtime provider implementation.
 
 This module integrates OpenAI's server-side Realtime WebSocket transport into the
 Asterisk AI Voice Agent without requiring WebRTC. Audio from AudioSocket is
-converted to PCM16 @ 16 kHz, streamed to OpenAI, and PCM16 24 kHz output is
+upsampled to PCM16 @ 24 kHz, streamed to OpenAI, and PCM16 24 kHz output is
 resampled to the configured downstream AudioSocket format (µ-law or PCM16 8 kHz).
 """
 
@@ -43,7 +43,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
 
     Lifecycle:
     1. start_session(call_id) -> establishes WebSocket session.
-    2. send_audio(bytes) -> converts inbound AudioSocket frames to PCM16 16 kHz,
+    2. send_audio(bytes) -> converts inbound AudioSocket frames to PCM16 24 kHz,
        base64-encodes, and streams via input_audio_buffer.
     3. Provider output deltas are decoded, resampled to AudioSocket format, and
        emitted as AgentAudio / AgentAudioDone events.
@@ -73,8 +73,8 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         self._output_resample_state: Optional[tuple] = None
         self._transcript_buffer: str = ""
         self._input_info_logged: bool = False
-        # Aggregate converted 16 kHz PCM16 bytes and commit in >=100ms chunks
-        self._pending_audio_16k: bytearray = bytearray()
+        # Aggregate provider-rate PCM16 bytes (24 kHz default) and commit in >=100ms chunks
+        self._pending_audio_provider_rate: bytearray = bytearray()
         self._last_commit_ts: float = 0.0
         # Serialize append/commit to avoid empty commits from races
         self._audio_lock: asyncio.Lock = asyncio.Lock()
@@ -184,14 +184,14 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                 # Serialize accumulation and commit to avoid empty commits due to races
                 async with self._audio_lock:
                     # Accumulate until we have >= 160ms to comfortably satisfy >=100ms minimum
-                    self._pending_audio_16k.extend(pcm16)
+                    self._pending_audio_provider_rate.extend(pcm16)
                     bytes_per_ms = int(self.config.provider_input_sample_rate_hz * 2 / 1000)
                     commit_threshold_ms = 160
                     commit_threshold_bytes = bytes_per_ms * commit_threshold_ms
 
-                    if len(self._pending_audio_16k) >= commit_threshold_bytes:
-                        chunk = bytes(self._pending_audio_16k)
-                        self._pending_audio_16k.clear()
+                    if len(self._pending_audio_provider_rate) >= commit_threshold_bytes:
+                        chunk = bytes(self._pending_audio_provider_rate)
+                        self._pending_audio_provider_rate.clear()
                         audio_b64 = base64.b64encode(chunk).decode("ascii")
                         try:
                             await self._send_json({"type": "input_audio_buffer.append", "audio": audio_b64})
@@ -382,13 +382,13 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             return None
 
         if self.config.input_sample_rate_hz != self.config.provider_input_sample_rate_hz:
-            pcm_16k, self._input_resample_state = resample_audio(
+            pcm_provider_rate, self._input_resample_state = resample_audio(
                 pcm_8k,
                 self.config.input_sample_rate_hz,
                 self.config.provider_input_sample_rate_hz,
                 state=self._input_resample_state,
             )
-            return pcm_16k
+            return pcm_provider_rate
 
         return pcm_8k
 
@@ -540,17 +540,17 @@ class OpenAIRealtimeProvider(AIProviderInterface):
 
     async def _handle_output_audio(self, audio_b64: str):
         try:
-            pcm_24k = base64.b64decode(audio_b64)
+            pcm_provider_output = base64.b64decode(audio_b64)
         except Exception:
             logger.warning("Invalid base64 audio payload from OpenAI", call_id=self._call_id)
             return
 
-        if not pcm_24k:
+        if not pcm_provider_output:
             return
 
         target_rate = self.config.target_sample_rate_hz
         pcm_target, self._output_resample_state = resample_audio(
-            pcm_24k,
+            pcm_provider_output,
             self.config.output_sample_rate_hz,
             target_rate,
             state=self._output_resample_state,
@@ -578,6 +578,8 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                         "data": outbound,
                         "streaming_chunk": True,
                         "call_id": self._call_id,
+                        "encoding": (self.config.target_encoding or "slin16"),
+                        "sample_rate": self.config.target_sample_rate_hz,
                     }
                 )
             except Exception:

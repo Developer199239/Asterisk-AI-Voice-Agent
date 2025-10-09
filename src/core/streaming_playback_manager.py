@@ -13,6 +13,11 @@ import structlog
 from prometheus_client import Counter, Gauge, Histogram
 import math
 
+from src.audio.resampler import (
+    mulaw_to_pcm16le,
+    pcm16le_to_mulaw,
+    resample_audio,
+)
 from src.core.session_store import SessionStore
 from src.core.models import CallSession, PlaybackRef
 
@@ -130,6 +135,8 @@ class StreamingPlaybackManager:
         self.keepalive_tasks: Dict[str, asyncio.Task] = {}  # call_id -> keepalive_task
         # Per-call remainder buffer for precise frame sizing
         self.frame_remainders: Dict[str, bytes] = {}
+        # Per-call resampler state (used when converting between rates)
+        self._resample_states: Dict[str, Optional[tuple]] = {}
         # First outbound frame logged tracker
         self._first_send_logged: Set[str] = set()
         # Startup gating to allow jitter buffers to fill before playback begins
@@ -171,10 +178,12 @@ class StreamingPlaybackManager:
                    jitter_buffer_ms=self.jitter_buffer_ms)
     
     async def start_streaming_playback(
-        self, 
-        call_id: str, 
+        self,
+        call_id: str,
         audio_chunks: asyncio.Queue,
-        playback_type: str = "response"
+        playback_type: str = "response",
+        source_encoding: Optional[str] = None,
+        source_sample_rate: Optional[int] = None,
     ) -> Optional[str]:
         """
         Start streaming audio playback for a call.
@@ -183,6 +192,8 @@ class StreamingPlaybackManager:
             call_id: Canonical call ID
             audio_chunks: Queue of audio chunks to stream
             playback_type: Type of playback (greeting, response, etc.)
+            source_encoding: Provider audio encoding reported for this stream.
+            source_sample_rate: Provider audio sample rate for this stream.
         
         Returns:
             stream_id if successful, None if failed
@@ -281,6 +292,15 @@ class StreamingPlaybackManager:
             )
             self.keepalive_tasks[call_id] = keepalive_task
             
+            src_encoding = (source_encoding or "").lower().strip()
+            if not src_encoding:
+                # Default to PCM expectations when unspecified
+                src_encoding = "slin16"
+            try:
+                src_rate = int(source_sample_rate) if source_sample_rate is not None else self.sample_rate
+            except Exception:
+                src_rate = self.sample_rate
+            self._resample_states[call_id] = None
             # Store stream info
             self.active_streams[call_id] = {
                 'stream_id': stream_id,
@@ -297,6 +317,8 @@ class StreamingPlaybackManager:
                 'jitter_buffer_chunks': jb_chunks,
                 'buffered_bytes': 0,
                 'end_reason': None,
+                'source_encoding': src_encoding,
+                'source_sample_rate': src_rate,
             }
             self._startup_ready[call_id] = False
             try:
@@ -464,7 +486,7 @@ class StreamingPlaybackManager:
                 chunk = jitter_buffer.get_nowait()
 
                 # Convert audio format if needed
-                processed_chunk = await self._process_audio_chunk(chunk)
+                processed_chunk = await self._process_audio_chunk(call_id, chunk)
                 if not processed_chunk:
                     self._decrement_buffered_bytes(call_id, len(chunk))
                     continue
@@ -508,24 +530,75 @@ class StreamingPlaybackManager:
 
         return True
     
-    async def _process_audio_chunk(self, chunk: bytes) -> Optional[bytes]:
-        """Process audio chunk for streaming.
-
-        - Deepgram emits μ-law 8 kHz frames.
-        - For AudioSocket downstream we must send PCM16 8 kHz.
-        - For ExternalMedia we pass through μ-law (RTP layer can handle ulaw).
-        """
+    async def _process_audio_chunk(self, call_id: str, chunk: bytes) -> Optional[bytes]:
+        """Process audio chunk for streaming transport."""
         if not chunk:
             return None
-        try:
-            if self.audio_transport == "audiosocket":
-                # Provider already emits audio that matches the configured AudioSocket format
-                # (e.g., slin16 or ulaw). Pass-through to avoid double conversion.
-                return chunk
-            # ExternalMedia/RTP path: pass-through
+
+        # ExternalMedia/RTP path: pass-through (conversion handled by RTP layer)
+        if self.audio_transport != "audiosocket":
             return chunk
-        except Exception as e:
-            logger.error("Audio chunk processing failed", error=str(e), exc_info=True)
+
+        try:
+            target_fmt = (self.audiosocket_format or "ulaw").lower()
+            target_rate = int(self.sample_rate)
+
+            stream_info = self.active_streams.get(call_id, {}) if call_id in self.active_streams else {}
+            src_encoding_raw = (stream_info.get("source_encoding") or "").lower().strip()
+            src_rate = int(stream_info.get("source_sample_rate") or target_rate)
+            if not src_encoding_raw:
+                src_encoding_raw = "slin16"
+
+            # Fast path: already matches target format and rate
+            if (
+                src_encoding_raw in ("ulaw", "mulaw", "g711_ulaw", "mu-law")
+                and target_fmt in ("ulaw", "mulaw", "g711_ulaw", "mu-law")
+                and src_rate == target_rate
+            ):
+                self._resample_states[call_id] = None
+                return chunk
+            if (
+                src_encoding_raw in ("slin16", "linear16", "pcm16")
+                and target_fmt in ("slin16", "linear16", "pcm16")
+                and src_rate == target_rate
+            ):
+                self._resample_states[call_id] = None
+                return chunk
+
+            working = chunk
+            resample_state = self._resample_states.get(call_id)
+
+            # Convert source to PCM16 for resampling/format conversion when needed
+            if src_encoding_raw in ("ulaw", "mulaw", "g711_ulaw", "mu-law"):
+                working = mulaw_to_pcm16le(working)
+                src_encoding = "pcm16"
+            else:
+                src_encoding = "pcm16"
+
+            # Resample to target rate when necessary
+            if src_rate != target_rate:
+                working, resample_state = resample_audio(
+                    working,
+                    src_rate,
+                    target_rate,
+                    state=resample_state,
+                )
+            else:
+                resample_state = None
+            self._resample_states[call_id] = resample_state
+
+            # Convert to target encoding
+            if target_fmt in ("ulaw", "mulaw", "g711_ulaw", "mu-law"):
+                return pcm16le_to_mulaw(working)
+            # Otherwise target PCM16
+            return working
+        except Exception as exc:
+            logger.error(
+                "Audio chunk processing failed",
+                call_id=call_id,
+                error=str(exc),
+                exc_info=True,
+            )
             return None
 
     async def _send_audio_chunk(self, call_id: str, stream_id: str, chunk: bytes) -> bool:
@@ -920,6 +993,7 @@ class StreamingPlaybackManager:
             if call_id in self.jitter_buffers:
                 del self.jitter_buffers[call_id]
             self._startup_ready.pop(call_id, None)
+            self._resample_states.pop(call_id, None)
             # Reset metrics
             try:
                 _STREAMING_ACTIVE_GAUGE.labels(call_id).set(0)
