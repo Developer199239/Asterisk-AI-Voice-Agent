@@ -6,6 +6,7 @@ from typing import Callable, Optional, List, Dict, Any
 import websockets.exceptions
 
 from structlog import get_logger
+from prometheus_client import Gauge, Info
 from ..audio.resampler import (
     mulaw_to_pcm16le,
     resample_audio,
@@ -14,6 +15,22 @@ from ..config import LLMConfig
 from .base import AIProviderInterface
 
 logger = get_logger(__name__)
+
+_DEEPGRAM_INPUT_RATE = Gauge(
+    "ai_agent_deepgram_input_sample_rate_hz",
+    "Configured Deepgram input sample rate per call",
+    labelnames=("call_id",),
+)
+_DEEPGRAM_OUTPUT_RATE = Gauge(
+    "ai_agent_deepgram_output_sample_rate_hz",
+    "Configured Deepgram output sample rate per call",
+    labelnames=("call_id",),
+)
+_DEEPGRAM_SESSION_AUDIO_INFO = Info(
+    "ai_agent_deepgram_session_audio",
+    "Deepgram session audio encodings/sample rates",
+    labelnames=("call_id",),
+)
 
 class DeepgramProvider(AIProviderInterface):
     def __init__(self, config: Dict[str, Any], llm_config: LLMConfig, on_event: Callable[[Dict[str, Any]], None]):
@@ -46,6 +63,52 @@ class DeepgramProvider(AIProviderInterface):
     @property
     def supported_codecs(self) -> List[str]:
         return ["ulaw"]
+
+    # ------------------------------------------------------------------ #
+    # Metrics helpers
+    # ------------------------------------------------------------------ #
+    def _record_session_audio(
+        self,
+        *,
+        input_encoding: str,
+        input_sample_rate_hz: int,
+        output_encoding: str,
+        output_sample_rate_hz: int,
+    ) -> None:
+        call_id = self.call_id
+        if not call_id:
+            return
+        try:
+            _DEEPGRAM_INPUT_RATE.labels(call_id).set(int(input_sample_rate_hz))
+        except Exception:
+            pass
+        try:
+            _DEEPGRAM_OUTPUT_RATE.labels(call_id).set(int(output_sample_rate_hz))
+        except Exception:
+            pass
+        info_payload = {
+            "input_encoding": str(input_encoding or ""),
+            "input_sample_rate_hz": str(input_sample_rate_hz),
+            "output_encoding": str(output_encoding or ""),
+            "output_sample_rate_hz": str(output_sample_rate_hz),
+        }
+        try:
+            _DEEPGRAM_SESSION_AUDIO_INFO.labels(call_id).info(info_payload)
+        except Exception:
+            pass
+
+    def _clear_metrics(self, call_id: Optional[str]) -> None:
+        if not call_id:
+            return
+        for metric in (_DEEPGRAM_INPUT_RATE, _DEEPGRAM_OUTPUT_RATE):
+            try:
+                metric.remove(call_id)
+            except (KeyError, ValueError):
+                pass
+        try:
+            _DEEPGRAM_SESSION_AUDIO_INFO.remove(call_id)
+        except (KeyError, ValueError):
+            pass
 
     async def start_session(self, call_id: str):
         ws_url = f"wss://agent.deepgram.com/v1/agent/converse"
@@ -108,12 +171,17 @@ class DeepgramProvider(AIProviderInterface):
             }
         }
         await self.websocket.send(json.dumps(settings))
+        summary = {
+            "input_encoding": str(input_encoding).lower(),
+            "input_sample_rate_hz": int(input_sample_rate),
+            "output_encoding": str(output_encoding).lower(),
+            "output_sample_rate_hz": int(output_sample_rate),
+        }
+        self._record_session_audio(**summary)
         logger.info(
-            "Deepgram agent configured.",
-            input_encoding=input_encoding,
-            input_sample_rate=input_sample_rate,
-            output_encoding=output_encoding,
-            output_sample_rate=output_sample_rate,
+            "Deepgram agent configured",
+            call_id=self.call_id,
+            **summary,
         )
 
     async def send_audio(self, audio_chunk: bytes):
@@ -245,6 +313,8 @@ class DeepgramProvider(AIProviderInterface):
                 logger.info("Disconnected from Deepgram Voice Agent.")
             self._closed = True
         finally:
+            self._clear_metrics(self.call_id)
+            self.call_id = None
             self._closing = False
 
     async def _keep_alive(self):
@@ -278,11 +348,6 @@ class DeepgramProvider(AIProviderInterface):
             cfg_rate = 0
 
         if cfg_enc in ("ulaw", "mulaw", "g711_ulaw", "mu-law"):
-            issues.append(
-                "Deepgram send_audio converts μ-law frames to PCM16 before forwarding to the agent API. "
-                "With input_encoding=ulaw this results in silence. Set input_encoding=linear16 or update "
-                "the provider to pass μ-law through untouched."
-            )
             if cfg_rate and cfg_rate != 8000:
                 issues.append(
                     f"Deepgram configuration declares μ-law at {cfg_rate} Hz; μ-law transport must be 8000 Hz."
@@ -336,7 +401,10 @@ class DeepgramProvider(AIProviderInterface):
                     if not self._first_output_chunk_logged:
                         logger.info(
                             "Deepgram AgentAudio first chunk",
-                            bytes=len(message)
+                            call_id=self.call_id,
+                            bytes=len(message),
+                            encoding=self._dg_output_encoding,
+                            sample_rate=self._dg_output_rate,
                         )
                         self._first_output_chunk_logged = True
                     self._in_audio_burst = True

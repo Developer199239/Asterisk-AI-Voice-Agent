@@ -93,6 +93,11 @@ _STREAM_END_REASON_TOTAL = Counter(
     "Count of stream end reasons",
     labelnames=("call_id", "reason"),
 )
+_STREAM_ENDIAN_CORRECTIONS_TOTAL = Counter(
+    "ai_agent_stream_endian_corrections_total",
+    "Count of PCM16 egress byte-order corrections applied automatically",
+    labelnames=("call_id", "mode"),
+)
 
 
 class StreamingPlaybackManager:
@@ -847,6 +852,17 @@ class StreamingPlaybackManager:
 
         target_fmt = (stream_info.get('target_format') or self.audiosocket_format or "ulaw").lower()
         if target_fmt not in ("slin16", "linear16", "pcm16"):
+            if call_id and not stream_info.get('egress_swap_skip_logged', False):
+                stream_info['egress_swap_skip_logged'] = True
+                try:
+                    logger.info(
+                        "Skipping PCM endianness check for non-PCM target",
+                        call_id=call_id,
+                        stream_id=stream_info.get('stream_id'),
+                        target_format=target_fmt,
+                    )
+                except Exception:
+                    pass
             return pcm_bytes
 
         mode = (mode or "auto").lower()
@@ -892,6 +908,11 @@ class StreamingPlaybackManager:
                         stream_info['egress_swap'] = True
                         stream_info['egress_swap_auto'] = True
                         egress_swap = True
+                        try:
+                            if call_id:
+                                _STREAM_ENDIAN_CORRECTIONS_TOTAL.labels(call_id, mode).inc()
+                        except Exception:
+                            pass
                         try:
                             logger.warning(
                                 "Auto-correcting PCM16 egress endianness",

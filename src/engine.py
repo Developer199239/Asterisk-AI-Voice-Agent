@@ -2605,17 +2605,35 @@ class Engine:
                 dg_in_rate = 8000
 
             # Info summary
-            logger.info(
-                "Transport settings",
-                audiosocket_format=as_fmt,
-                streaming_sample_rate=streaming_rate,
-                openai_realtime_target_encoding=oair_target_enc,
-                openai_realtime_target_sample_rate=oair_target_rate,
-                openai_realtime_provider_input_rate=oair_in_rate,
-                openai_realtime_output_rate=oair_out_rate,
-                deepgram_input_encoding=dg_in_enc,
-                deepgram_input_sample_rate=dg_in_rate,
-            )
+            streaming_target_fmt = (getattr(self.streaming_playback_manager, "audiosocket_format", None) or as_fmt).lower()
+            streaming_swap_mode = getattr(self.streaming_playback_manager, "egress_swap_mode", "auto")
+            streaming_force_mulaw = bool(getattr(self.streaming_playback_manager, "egress_force_mulaw", False))
+
+            dg_out_enc = _lower_str(dg_cfg, "output_encoding", "")
+            try:
+                dg_out_rate = int(dg_cfg.get("output_sample_rate_hz") or 0)
+            except Exception:
+                dg_out_rate = 0
+
+            summary = {
+                "audiosocket_format": as_fmt,
+                "streaming_target_encoding": streaming_target_fmt,
+                "streaming_sample_rate_hz": streaming_rate,
+                "streaming_egress_swap_mode": streaming_swap_mode,
+                "streaming_egress_force_mulaw": streaming_force_mulaw,
+                "openai_realtime_input_encoding": _lower_str(oair_cfg, "input_encoding", ""),
+                "openai_realtime_input_sample_rate_hz": int(oair_cfg.get("input_sample_rate_hz") or 0),
+                "openai_realtime_provider_input_sample_rate_hz": oair_in_rate,
+                "openai_realtime_output_sample_rate_hz": oair_out_rate,
+                "openai_realtime_target_encoding": oair_target_enc,
+                "openai_realtime_target_sample_rate_hz": oair_target_rate,
+                "deepgram_input_encoding": dg_in_enc,
+                "deepgram_input_sample_rate_hz": dg_in_rate,
+                "deepgram_output_encoding": dg_out_enc,
+                "deepgram_output_sample_rate_hz": dg_out_rate,
+            }
+
+            logger.info("Transport alignment summary", **summary)
 
             # Expected streaming rate from audiosocket format
             expected_rate = None

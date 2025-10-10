@@ -102,6 +102,7 @@ Common pitfalls:
 - providers.openai_realtime.output_encoding/output_sample_rate_hz: Provider output; engine resamples to target.
 - providers.openai_realtime.target_encoding/target_sample_rate_hz: Downstream transport expectations (e.g., μ‑law at 8 kHz).
 - providers.openai_realtime.turn_detection: Server‑side VAD (type, silence_duration_ms, threshold, prefix_padding_ms); improves turn handling.
+- Metrics: `ai_agent_openai_assumed_output_sample_rate_hz`, `ai_agent_openai_provider_output_sample_rate_hz`, and `ai_agent_openai_measured_output_sample_rate_hz` expose handshake vs. measured output rates per call.
 
 ### Deepgram Voice Agent
 - providers.deepgram.api_key, model, tts_model.
@@ -109,6 +110,7 @@ Common pitfalls:
 - providers.deepgram.instructions: Persona override for the “think” stage; leave empty to inherit `llm.prompt`.
 - providers.deepgram.input_encoding/input_sample_rate_hz: Inbound format; set `input_encoding=ulaw` for μ-law AudioSocket trunks.
 - providers.deepgram.continuous_input: true to stream audio continuously.
+- Metrics: `ai_agent_deepgram_input_sample_rate_hz` and `ai_agent_deepgram_output_sample_rate_hz` confirm negotiated codec settings per call.
 
 ### Google (pipelines)
 - google_llm.system_instruction/system_prompt: Persona; if missing, adapter falls back to `llm.prompt`.

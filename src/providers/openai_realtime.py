@@ -22,6 +22,7 @@ from websockets import WebSocketClientProtocol
 from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
 
 from structlog import get_logger
+from prometheus_client import Gauge, Info
 
 from .base import AIProviderInterface
 from ..audio import (
@@ -35,6 +36,27 @@ logger = get_logger(__name__)
 
 _COMMIT_INTERVAL_SEC = 0.2
 _KEEPALIVE_INTERVAL_SEC = 15.0
+
+_OPENAI_ASSUMED_OUTPUT_RATE = Gauge(
+    "ai_agent_openai_assumed_output_sample_rate_hz",
+    "Configured OpenAI Realtime output sample rate per call",
+    labelnames=("call_id",),
+)
+_OPENAI_PROVIDER_OUTPUT_RATE = Gauge(
+    "ai_agent_openai_provider_output_sample_rate_hz",
+    "Provider-advertised OpenAI Realtime output sample rate per call",
+    labelnames=("call_id",),
+)
+_OPENAI_MEASURED_OUTPUT_RATE = Gauge(
+    "ai_agent_openai_measured_output_sample_rate_hz",
+    "Measured OpenAI Realtime output sample rate per call",
+    labelnames=("call_id",),
+)
+_OPENAI_SESSION_AUDIO_INFO = Info(
+    "ai_agent_openai_session_audio",
+    "OpenAI Realtime session audio format assumptions and provider acknowledgements",
+    labelnames=("call_id",),
+)
 
 
 class OpenAIRealtimeProvider(AIProviderInterface):
@@ -78,6 +100,12 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         self._last_commit_ts: float = 0.0
         # Serialize append/commit to avoid empty commits from races
         self._audio_lock: asyncio.Lock = asyncio.Lock()
+        self._provider_output_format: str = "pcm16"
+        self._provider_reported_output_rate: Optional[int] = None
+        self._output_meter_start_ts: float = 0.0
+        self._output_meter_last_log_ts: float = 0.0
+        self._output_meter_bytes: int = 0
+        self._output_rate_warned: bool = False
 
         try:
             if self.config.input_encoding:
@@ -136,8 +164,6 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             )
 
         return issues
-        # Track provider output format we requested in session.update
-        self._provider_output_format: str = "pcm16"
 
     @property
     def supported_codecs(self):
@@ -159,6 +185,8 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         self._closing = False
         self._closed = False
 
+        self._reset_output_meter()
+
         url = self._build_ws_url()
         headers = [
             ("Authorization", f"Bearer {self.config.api_key}"),
@@ -175,6 +203,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             raise
 
         await self._send_session_update()
+        self._log_session_assumptions()
 
         # Proactively request an initial response so the agent can greet
         # even before user audio arrives. Prefer explicit greeting text
@@ -289,6 +318,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
 
             await self._emit_audio_done()
         finally:
+            previous_call_id = self._call_id
             self._receive_task = None
             self._keepalive_task = None
             self.websocket = None
@@ -301,6 +331,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             self._output_resample_state = None
             self._transcript_buffer = ""
             logger.info("OpenAI Realtime session stopped")
+            self._clear_metrics(previous_call_id)
 
     def get_provider_info(self) -> Dict[str, Any]:
         return {
@@ -682,6 +713,8 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         if not pcm_provider_output:
             return
 
+        self._update_output_meter(len(pcm_provider_output))
+
         target_rate = self.config.target_sample_rate_hz
         pcm_target, self._output_resample_state = resample_audio(
             pcm_provider_output,
@@ -778,3 +811,203 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                     break
         except asyncio.CancelledError:
             pass
+
+    # ------------------------------------------------------------------ #
+    # Metrics and session metadata helpers ------------------------------ #
+    # ------------------------------------------------------------------ #
+
+    def _reset_output_meter(self) -> None:
+        self._output_meter_start_ts = 0.0
+        self._output_meter_last_log_ts = 0.0
+        self._output_meter_bytes = 0
+        self._output_rate_warned = False
+        self._provider_reported_output_rate = None
+
+    def _log_session_assumptions(self) -> None:
+        call_id = self._call_id
+        if not call_id:
+            return
+
+        assumed_output = int(getattr(self.config, "output_sample_rate_hz", 0) or 0)
+        try:
+            _OPENAI_ASSUMED_OUTPUT_RATE.labels(call_id).set(assumed_output)
+        except Exception:
+            pass
+
+        info_payload = {
+            "input_encoding": str(getattr(self.config, "input_encoding", "") or ""),
+            "input_sample_rate_hz": str(getattr(self.config, "input_sample_rate_hz", "") or ""),
+            "provider_input_encoding": str(getattr(self.config, "provider_input_encoding", "") or ""),
+            "provider_input_sample_rate_hz": str(getattr(self.config, "provider_input_sample_rate_hz", "") or ""),
+            "output_encoding": str(getattr(self.config, "output_encoding", "") or ""),
+            "output_sample_rate_hz": str(getattr(self.config, "output_sample_rate_hz", "") or ""),
+            "target_encoding": str(getattr(self.config, "target_encoding", "") or ""),
+            "target_sample_rate_hz": str(getattr(self.config, "target_sample_rate_hz", "") or ""),
+        }
+
+        try:
+            _OPENAI_SESSION_AUDIO_INFO.labels(call_id).info(info_payload)
+        except Exception:
+            pass
+
+        try:
+            logger.info(
+                "OpenAI Realtime session assumptions",
+                call_id=call_id,
+                input_encoding=info_payload["input_encoding"],
+                input_sample_rate_hz=info_payload["input_sample_rate_hz"],
+                provider_input_sample_rate_hz=info_payload["provider_input_sample_rate_hz"],
+                output_sample_rate_hz=info_payload["output_sample_rate_hz"],
+                target_encoding=info_payload["target_encoding"],
+                target_sample_rate_hz=info_payload["target_sample_rate_hz"],
+            )
+        except Exception:
+            logger.debug("Failed to log OpenAI session assumptions", exc_info=True)
+
+    def _handle_session_info_event(self, event: Dict[str, Any]) -> None:
+        call_id = self._call_id
+        if not call_id:
+            return
+
+        session_data = event.get("session") or {}
+        output_meta = session_data.get("output_audio_format") or {}
+        provider_rate = self._extract_sample_rate(output_meta)
+        provider_encoding = self._extract_encoding(output_meta)
+
+        if provider_rate:
+            self._provider_reported_output_rate = provider_rate
+            try:
+                _OPENAI_PROVIDER_OUTPUT_RATE.labels(call_id).set(provider_rate)
+            except Exception:
+                pass
+
+        info_payload = {
+            "input_encoding": str(getattr(self.config, "input_encoding", "") or ""),
+            "input_sample_rate_hz": str(getattr(self.config, "input_sample_rate_hz", "") or ""),
+            "provider_input_encoding": str(getattr(self.config, "provider_input_encoding", "") or ""),
+            "provider_input_sample_rate_hz": str(getattr(self.config, "provider_input_sample_rate_hz", "") or ""),
+            "output_encoding": provider_encoding or str(getattr(self.config, "output_encoding", "") or ""),
+            "output_sample_rate_hz": str(provider_rate or getattr(self.config, "output_sample_rate_hz", "") or ""),
+            "target_encoding": str(getattr(self.config, "target_encoding", "") or ""),
+            "target_sample_rate_hz": str(getattr(self.config, "target_sample_rate_hz", "") or ""),
+        }
+
+        try:
+            _OPENAI_SESSION_AUDIO_INFO.labels(call_id).info(info_payload)
+        except Exception:
+            pass
+
+        try:
+            logger.info(
+                "OpenAI Realtime session acknowledged audio format",
+                call_id=call_id,
+                provider_output_encoding=provider_encoding,
+                provider_output_sample_rate_hz=provider_rate,
+                event_type=event.get("type"),
+            )
+        except Exception:
+            logger.debug("Failed to log OpenAI session metadata", exc_info=True)
+
+    def _update_output_meter(self, chunk_bytes: int) -> None:
+        if not chunk_bytes or not self._call_id:
+            return
+
+        now = time.monotonic()
+        if not self._output_meter_start_ts:
+            self._output_meter_start_ts = now
+            self._output_meter_last_log_ts = now
+
+        self._output_meter_bytes += chunk_bytes
+        elapsed = max(1e-6, now - self._output_meter_start_ts)
+        measured_rate = (self._output_meter_bytes / 2.0) / elapsed
+
+        try:
+            _OPENAI_MEASURED_OUTPUT_RATE.labels(self._call_id).set(measured_rate)
+        except Exception:
+            pass
+
+        if now - self._output_meter_last_log_ts >= 1.0:
+            self._output_meter_last_log_ts = now
+            assumed = float(getattr(self.config, "output_sample_rate_hz", 0) or 0)
+            reported = self._provider_reported_output_rate
+            log_payload = {
+                "call_id": self._call_id,
+                "assumed_output_sample_rate_hz": assumed or None,
+                "provider_reported_sample_rate_hz": reported,
+                "measured_output_sample_rate_hz": round(measured_rate, 2),
+                "window_seconds": round(elapsed, 2),
+                "bytes_window": self._output_meter_bytes,
+            }
+            try:
+                logger.info(
+                    "OpenAI Realtime output rate check",
+                    **{k: v for k, v in log_payload.items() if v is not None},
+                )
+            except Exception:
+                logger.debug("Failed to log OpenAI output rate check", exc_info=True)
+
+            if assumed > 0:
+                drift = abs(measured_rate - assumed) / assumed
+                if drift > 0.10 and not self._output_rate_warned:
+                    self._output_rate_warned = True
+                    try:
+                        logger.warning(
+                            "OpenAI Realtime output sample rate drift detected",
+                            call_id=self._call_id,
+                            measured_output_sample_rate_hz=round(measured_rate, 2),
+                            assumed_output_sample_rate_hz=assumed,
+                            provider_reported_sample_rate_hz=reported,
+                            drift_ratio=round(drift, 4),
+                        )
+                    except Exception:
+                        logger.debug("Failed to log OpenAI output rate drift", exc_info=True)
+
+    @staticmethod
+    def _extract_sample_rate(fmt: Any) -> Optional[int]:
+        if isinstance(fmt, str):
+            # Some previews may send "pcm16@24000"
+            if "@" in fmt:
+                try:
+                    return int(float(fmt.split("@", 1)[1]))
+                except (IndexError, ValueError):
+                    return None
+            return None
+        if not isinstance(fmt, dict):
+            return None
+        for key in ("sample_rate", "sample_rate_hz", "rate"):
+            value = fmt.get(key)
+            if value is None:
+                continue
+            try:
+                return int(float(value))
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    @staticmethod
+    def _extract_encoding(fmt: Any) -> Optional[str]:
+        if isinstance(fmt, str):
+            if "@" in fmt:
+                return fmt.split("@", 1)[0].strip().lower()
+            return fmt.lower()
+        if not isinstance(fmt, dict):
+            return None
+        for key in ("encoding", "format", "type"):
+            value = fmt.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.lower()
+        return None
+
+    def _clear_metrics(self, call_id: Optional[str]) -> None:
+        if not call_id:
+            return
+        for metric in (_OPENAI_ASSUMED_OUTPUT_RATE, _OPENAI_PROVIDER_OUTPUT_RATE, _OPENAI_MEASURED_OUTPUT_RATE):
+            try:
+                metric.remove(call_id)
+            except (KeyError, ValueError):
+                pass
+        try:
+            _OPENAI_SESSION_AUDIO_INFO.remove(call_id)
+        except (KeyError, ValueError):
+            pass
+        self._reset_output_meter()
