@@ -108,7 +108,7 @@ Common pitfalls:
 - providers.deepgram.api_key, model, tts_model.
 - providers.deepgram.greeting: Agent greeting. Leave empty to inherit `llm.initial_greeting`.
 - providers.deepgram.instructions: Persona override for the “think” stage; leave empty to inherit `llm.prompt`.
-- providers.deepgram.input_encoding/input_sample_rate_hz: Inbound format; set `input_encoding=ulaw` for μ-law AudioSocket trunks.
+- providers.deepgram.input_encoding/input_sample_rate_hz: Engine transcodes μ-law AudioSocket frames to linear PCM; use `input_encoding=linear16` at 8 kHz.
 - providers.deepgram.continuous_input: true to stream audio continuously.
 - Metrics: `ai_agent_deepgram_input_sample_rate_hz` and `ai_agent_deepgram_output_sample_rate_hz` confirm negotiated codec settings per call.
 

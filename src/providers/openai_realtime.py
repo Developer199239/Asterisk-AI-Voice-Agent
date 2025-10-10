@@ -106,6 +106,9 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         self._output_meter_last_log_ts: float = 0.0
         self._output_meter_bytes: int = 0
         self._output_rate_warned: bool = False
+        self._active_output_sample_rate_hz: Optional[float] = (
+            float(self.config.output_sample_rate_hz) if getattr(self.config, "output_sample_rate_hz", None) else None
+        )
 
         try:
             if self.config.input_encoding:
@@ -716,9 +719,12 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         self._update_output_meter(len(pcm_provider_output))
 
         target_rate = self.config.target_sample_rate_hz
+        source_rate = int(round(self._active_output_sample_rate_hz or self.config.output_sample_rate_hz or 0))
+        if not source_rate:
+            source_rate = self.config.output_sample_rate_hz
         pcm_target, self._output_resample_state = resample_audio(
             pcm_provider_output,
-            self.config.output_sample_rate_hz,
+            source_rate,
             target_rate,
             state=self._output_resample_state,
         )
@@ -822,6 +828,10 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         self._output_meter_bytes = 0
         self._output_rate_warned = False
         self._provider_reported_output_rate = None
+        try:
+            self._active_output_sample_rate_hz = float(self.config.output_sample_rate_hz)
+        except Exception:
+            self._active_output_sample_rate_hz = None
 
     def _log_session_assumptions(self) -> None:
         call_id = self._call_id
@@ -880,6 +890,10 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                 _OPENAI_PROVIDER_OUTPUT_RATE.labels(call_id).set(provider_rate)
             except Exception:
                 pass
+            try:
+                self._active_output_sample_rate_hz = float(provider_rate)
+            except Exception:
+                self._active_output_sample_rate_hz = provider_rate
 
         info_payload = {
             "input_encoding": str(getattr(self.config, "input_encoding", "") or ""),
@@ -928,7 +942,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
 
         if now - self._output_meter_last_log_ts >= 1.0:
             self._output_meter_last_log_ts = now
-            assumed = float(getattr(self.config, "output_sample_rate_hz", 0) or 0)
+            assumed = float(self._active_output_sample_rate_hz or getattr(self.config, "output_sample_rate_hz", 0) or 0)
             reported = self._provider_reported_output_rate
             log_payload = {
                 "call_id": self._call_id,
@@ -950,6 +964,11 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                 drift = abs(measured_rate - assumed) / assumed
                 if drift > 0.10 and not self._output_rate_warned:
                     self._output_rate_warned = True
+                    try:
+                        self._active_output_sample_rate_hz = measured_rate
+                        _OPENAI_PROVIDER_OUTPUT_RATE.labels(self._call_id).set(measured_rate)
+                    except Exception:
+                        pass
                     try:
                         logger.warning(
                             "OpenAI Realtime output sample rate drift detected",
