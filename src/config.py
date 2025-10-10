@@ -187,6 +187,8 @@ class StreamingConfig(BaseModel):
     # - force_true: always byteswap outbound PCM16
     # - force_false: never byteswap outbound PCM16 (send native LE)
     egress_swap_mode: str = Field(default="auto")
+    # When true, force outbound streaming audio to μ-law regardless of provider encoding.
+    egress_force_mulaw: bool = Field(default=False)
 
 
 class LoggingConfig(BaseModel):

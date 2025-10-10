@@ -9,7 +9,7 @@ It includes automatic fallback to file playback on errors or timeouts.
 import asyncio
 import time
 import audioop
-from typing import Optional, Dict, Any, TYPE_CHECKING, Set
+from typing import Optional, Dict, Any, TYPE_CHECKING, Set, Callable, Awaitable
 import structlog
 from prometheus_client import Counter, Gauge, Histogram
 import math
@@ -117,6 +117,7 @@ class StreamingPlaybackManager:
         audio_transport: str = "externalmedia",
         rtp_server: Optional[Any] = None,
         audiosocket_server: Optional[Any] = None,
+        audio_diag_callback: Optional[Callable[[str, str, bytes, str, int], Awaitable[None]]] = None,
     ):
         self.session_store = session_store
         self.ari_client = ari_client
@@ -126,6 +127,7 @@ class StreamingPlaybackManager:
         self.audio_transport = audio_transport
         self.rtp_server = rtp_server
         self.audiosocket_server = audiosocket_server
+        self.audio_diag_callback = audio_diag_callback
         self.audiosocket_format: str = "ulaw"  # default format expected by dialplan
         # Debug: when True, send frames to all AudioSocket conns for the call
         self.audiosocket_broadcast_debug: bool = bool(self.streaming_config.get('audiosocket_broadcast_debug', False))
@@ -134,6 +136,7 @@ class StreamingPlaybackManager:
             self.egress_swap_mode: str = str(self.streaming_config.get('egress_swap_mode', 'auto')).lower().strip() or 'auto'
         except Exception:
             self.egress_swap_mode = 'auto'
+        self.egress_force_mulaw: bool = bool(self.streaming_config.get('egress_force_mulaw', False))
         
         # Streaming state
         self.active_streams: Dict[str, Dict[str, Any]] = {}  # call_id -> stream_info
@@ -321,6 +324,9 @@ class StreamingPlaybackManager:
                 resolved_target_rate = self.sample_rate
             if resolved_target_rate <= 0:
                 resolved_target_rate = self.sample_rate
+            if self.egress_force_mulaw:
+                resolved_target_format = "ulaw"
+                resolved_target_rate = 8000
 
             self._resample_states[call_id] = None
             # Store stream info
@@ -361,6 +367,7 @@ class StreamingPlaybackManager:
                 'target_format': resolved_target_format,
                 'target_sample_rate': resolved_target_rate,
                 'tx_bytes': 0,
+                'egress_force_mulaw': self.egress_force_mulaw,
             }
             self._startup_ready[call_id] = False
             try:
@@ -709,6 +716,19 @@ class StreamingPlaybackManager:
             if not session:
                 logger.warning("Cannot stream audio - session not found", call_id=call_id)
                 return False
+            stream_info = self.active_streams.get(call_id, {})
+            if self.audio_diag_callback:
+                try:
+                    effective_fmt = (target_fmt or stream_info.get("target_format") or self.audiosocket_format or "ulaw")
+                    effective_rate = int(
+                        target_rate
+                        or stream_info.get("target_sample_rate")
+                        or self.sample_rate
+                    )
+                    stage = f"transport_out:{stream_info.get('playback_type', 'response')}"
+                    await self.audio_diag_callback(call_id, stage, chunk, effective_fmt, effective_rate)
+                except Exception:
+                    logger.debug("Streaming diagnostics callback failed", call_id=call_id, exc_info=True)
 
             if self.audio_transport == "externalmedia":
                 if not self.rtp_server:

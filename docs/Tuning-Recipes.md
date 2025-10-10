@@ -107,3 +107,23 @@ Use with or without local VAD. If both run, prefer conservative local VAD (e.g.,
 
 - `downstream_mode: stream`: best UX, requires stable network; tune `streaming.*` buffers.
 - `downstream_mode: file`: more tolerant to jitter and provider hiccups, at the cost of response latency.
+
+## Audio transport alignment (μ-law ↔ PCM16)
+
+```ini
+; Dialplan handshake (optional but recommended)
+exten => s,n,Set(AI_TRANSPORT_FORMAT=slin16)   ; or ulaw
+exten => s,n,Set(AI_TRANSPORT_RATE=8000)       ; 8k/16k/24k
+```
+
+- If the dialplan omits those variables, the engine falls back to `config.audiosocket.format` and logs the default it is using.
+- The engine auto-aligns downstream streaming targets; when a provider’s config disagrees, it will log an actionable warning (with the exact YAML keys to fix) and expose `ai_agent_codec_alignment{call_id,provider}` as `0` in `/metrics`.
+- To keep providers in PCM16 internally while the AudioSocket leg remains μ-law, enable:
+
+```yaml
+streaming:
+  egress_force_mulaw: true
+```
+
+  This converts outbound streaming audio back to μ-law/8 kHz right before it is written to Asterisk, regardless of provider output.
+- RMS/DC offset diagnostics for each stage are published as `ai_agent_audio_rms{stage=...}` and `ai_agent_audio_dc_offset{stage=...}` so you can alert on silent or biased audio before customers notice.

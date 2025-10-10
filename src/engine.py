@@ -107,6 +107,21 @@ _STREAM_RX_BYTES = Counter(
     "Inbound audio bytes from caller (per call)",
     labelnames=("call_id",),
 )
+_CODEC_ALIGNMENT = Gauge(
+    "ai_agent_codec_alignment",
+    "Codec/sample-rate alignment status per call/provider (1=aligned,0=degraded)",
+    labelnames=("call_id", "provider"),
+)
+_AUDIO_RMS_GAUGE = Gauge(
+    "ai_agent_audio_rms",
+    "Observed RMS levels for audio stages",
+    labelnames=("call_id", "stage"),
+)
+_AUDIO_DC_OFFSET = Gauge(
+    "ai_agent_audio_dc_offset",
+    "Observed DC offset (mean sample value) for audio stages",
+    labelnames=("call_id", "stage"),
+)
 
 class AudioFrameProcessor:
     """Processes audio in 40ms frames to prevent voice queue backlog."""
@@ -220,6 +235,7 @@ class Engine:
                 'provider_grace_ms': config.streaming.provider_grace_ms,
                 'logging_level': config.streaming.logging_level,
                 'egress_swap_mode': getattr(config.streaming, 'egress_swap_mode', 'auto'),
+                'egress_force_mulaw': getattr(config.streaming, 'egress_force_mulaw', False),
             }
         # Debug/diagnostics: allow broadcasting outbound frames to all AudioSocket conns
         try:
@@ -234,6 +250,7 @@ class Engine:
             fallback_playback_manager=self.playback_manager,
             streaming_config=streaming_config,
             audio_transport=self.config.audio_transport,
+            audio_diag_callback=self._update_audio_diagnostics_by_call,
         )
         # Pre-seed audiosocket_format from YAML so provider audits use correct value
         try:
@@ -791,6 +808,12 @@ class Engine:
             logger.info("🎯 HYBRID ARI - Step 4: ✅ Caller session created and stored",
                        channel_id=caller_channel_id,
                        bridge_id=bridge_id)
+
+            # Resolve transport profile from dialplan hints/config defaults
+            try:
+                await self._hydrate_transport_from_dialplan(session, caller_channel_id)
+            except Exception:
+                logger.debug("Transport profile hydration failed", call_id=caller_channel_id, exc_info=True)
 
             # Detect caller codec/sample-rate so downstream playback matches the trunk.
             try:
@@ -1651,6 +1674,12 @@ class Engine:
                 logger.debug("No session for caller; dropping AudioSocket audio", conn_id=conn_id, caller_channel_id=caller_channel_id)
                 return
 
+            diagnostics_flags = session.audio_diagnostics
+            if "inbound_first_frame" not in diagnostics_flags:
+                fmt, rate = self._infer_transport_from_frame(len(audio_bytes))
+                await self._update_transport_profile(session, fmt=fmt, sample_rate=rate, source="audiosocket")
+                diagnostics_flags["inbound_first_frame"] = True
+
             # Per-call RX bytes
             try:
                 _STREAM_RX_BYTES.labels(caller_channel_id).inc(len(audio_bytes))
@@ -1720,6 +1749,17 @@ class Engine:
                     vad_state['format_probe_done'] = True
                 except Exception:
                     pass
+
+            try:
+                self._update_audio_diagnostics(
+                    session,
+                    stage="transport_in",
+                    audio_bytes=audio_bytes,
+                    encoding=session.transport_profile.format,
+                    sample_rate=session.transport_profile.sample_rate,
+                )
+            except Exception:
+                logger.debug("Inbound diagnostics update failed", call_id=caller_channel_id, exc_info=True)
 
             # Post-TTS end protection: drop inbound briefly after gating clears to avoid agent echo re-capture
             try:
@@ -2696,6 +2736,12 @@ class Engine:
                     fmt_entry["sample_rate"] = sample_rate_int
                 if fmt_entry:
                     self._provider_stream_formats[call_id] = fmt_entry
+                try:
+                    diag_encoding = fmt_entry.get("encoding") or encoding or session.transport_profile.format
+                    diag_rate = int(fmt_entry.get("sample_rate") or sample_rate_int or session.transport_profile.sample_rate)
+                    self._update_audio_diagnostics(session, "provider_out", chunk, diag_encoding, diag_rate)
+                except Exception:
+                    logger.debug("Provider audio diagnostics update failed", call_id=call_id, exc_info=True)
                 # Ensure a streaming queue exists and streaming is started
                 q = self._provider_stream_queues.get(call_id)
                 if q is None:
@@ -2717,17 +2763,13 @@ class Engine:
                                 )
                             self._runtime_alignment_logged.add(call_id)
 
-                        prefs = self.call_audio_preferences.get(call_id, {})
-                        try:
-                            target_encoding = str(prefs.get("format") or (self.config.audiosocket.format or "ulaw")).lower()
-                        except Exception:
-                            target_encoding = "ulaw"
-                        try:
-                            target_sample_rate = int(prefs.get("sample_rate") or self.config.streaming.sample_rate)
-                        except Exception:
-                            target_sample_rate = 8000
+                        target_encoding, target_sample_rate, remediation = self._resolve_stream_targets(
+                            session, session.provider_name
+                        )
                         if target_sample_rate <= 0:
-                            target_sample_rate = 8000
+                            target_sample_rate = session.transport_profile.sample_rate
+                        if remediation:
+                            session.audio_diagnostics["codec_remediation"] = remediation
 
                         await self.streaming_playback_manager.start_streaming_playback(
                             call_id,
@@ -3340,18 +3382,12 @@ class Engine:
 
         canonical_fmt, sample_rate, reported = self._normalize_audio_format(preferred_fmt)
 
-        # Persist on session for downstream use
-        session.caller_audio_format = canonical_fmt
-        session.caller_sample_rate = sample_rate
-        try:
-            await self._save_session(session)
-        except Exception:
-            logger.debug("Failed to persist caller codec info", call_id=session.call_id, exc_info=True)
-
-        self.call_audio_preferences[session.call_id] = {
-            "format": canonical_fmt,
-            "sample_rate": sample_rate,
-        }
+        await self._update_transport_profile(
+            session,
+            fmt=canonical_fmt,
+            sample_rate=sample_rate,
+            source="detected",
+        )
 
         try:
             logger.info(
@@ -3403,6 +3439,261 @@ class Engine:
             sample_rate = 8000
 
         return canonical, sample_rate, reported
+
+    @staticmethod
+    def _canonicalize_encoding(value: Optional[str]) -> str:
+        """Normalize codec tokens to canonical engine values."""
+        if not value:
+            return ""
+        token = value.lower().strip()
+        mapping = {
+            "mu-law": "ulaw",
+            "mulaw": "ulaw",
+            "g711_ulaw": "ulaw",
+            "g711ulaw": "ulaw",
+            "g711-ula": "ulaw",
+            "linear16": "slin16",
+            "pcm16": "slin16",
+            "slin": "slin16",
+            "slin12": "slin16",
+            "slin16": "slin16",
+        }
+        return mapping.get(token, token)
+
+    @staticmethod
+    def _infer_transport_from_frame(frame_len: int) -> Tuple[str, int]:
+        """Infer transport format/sample-rate from canonical frame lengths."""
+        mapping = {
+            160: ("ulaw", 8000),   # 20ms @8k μ-law
+            320: ("slin16", 8000), # 20ms @8k PCM16
+            640: ("slin16", 16000),# 20ms @16k PCM16
+            960: ("slin16", 24000),
+        }
+        fmt, rate = mapping.get(frame_len, ("slin16" if frame_len % 2 == 0 else "ulaw", 8000))
+        return fmt, rate
+
+    async def _update_transport_profile(self, session: CallSession, *, fmt: Optional[str], sample_rate: Optional[int], source: str) -> None:
+        """Persist transport profile updates and sync preferences."""
+        if not fmt and not sample_rate:
+            return
+        canonical_fmt = self._canonicalize_encoding(fmt) or session.transport_profile.format
+        final_rate = sample_rate or session.transport_profile.sample_rate
+        profile = session.transport_profile
+        changed = (
+            profile.format != canonical_fmt
+            or profile.sample_rate != final_rate
+            or profile.source != source
+        )
+        profile.update(format=canonical_fmt, sample_rate=final_rate, source=source)
+        session.caller_audio_format = canonical_fmt
+        session.caller_sample_rate = final_rate
+        self.call_audio_preferences[session.call_id] = {
+            "format": canonical_fmt,
+            "sample_rate": final_rate,
+        }
+        if changed:
+            try:
+                await self._save_session(session)
+            except Exception:
+                logger.debug("Failed to persist transport profile", call_id=session.call_id, exc_info=True)
+            try:
+                logger.info(
+                    "Transport profile resolved",
+                    call_id=session.call_id,
+                    format=canonical_fmt,
+                    sample_rate=final_rate,
+                    source=source,
+                )
+            except Exception:
+                pass
+
+    def _update_audio_diagnostics(self, session: CallSession, stage: str, audio_bytes: bytes, encoding: str, sample_rate: int) -> None:
+        """Track audio health metrics (RMS/DC offset) for observability."""
+        try:
+            canonical = self._canonicalize_encoding(encoding) or "slin16"
+            if canonical == "ulaw":
+                pcm = audioop.ulaw2lin(audio_bytes, 2)
+            else:
+                pcm = audio_bytes
+            rms = audioop.rms(pcm, 2) if pcm else 0
+            dc_offset = audioop.avg(pcm, 2) if pcm else 0
+            session.audio_diagnostics[stage] = {
+                "rms": rms,
+                "dc_offset": dc_offset,
+                "sample_rate": sample_rate,
+                "updated": time.time(),
+            }
+            _AUDIO_RMS_GAUGE.labels(session.call_id, stage).set(rms)
+            _AUDIO_DC_OFFSET.labels(session.call_id, stage).set(dc_offset)
+            rms_threshold = 50 if canonical == "ulaw" else 200
+            alert_key = f"{stage}_low_rms_alerted"
+            if rms < rms_threshold and not session.audio_diagnostics.get(alert_key):
+                session.audio_diagnostics[alert_key] = True
+                logger.warning(
+                    "Low audio energy detected; degraded audio quality likely",
+                    call_id=session.call_id,
+                    stage=stage,
+                    format=canonical,
+                    rms=rms,
+                    threshold=rms_threshold,
+                )
+            dc_threshold = 600
+            dc_alert_key = f"{stage}_dc_alerted"
+            if abs(dc_offset) > dc_threshold and not session.audio_diagnostics.get(dc_alert_key):
+                session.audio_diagnostics[dc_alert_key] = True
+                logger.warning(
+                    "Significant DC offset detected in audio stream",
+                    call_id=session.call_id,
+                    stage=stage,
+                    dc_offset=dc_offset,
+                    threshold=dc_threshold,
+                )
+        except Exception:
+            logger.debug("Audio diagnostics update failed", call_id=session.call_id, stage=stage, exc_info=True)
+
+    async def _hydrate_transport_from_dialplan(self, session: CallSession, channel_id: str) -> None:
+        """Read optional channel variables describing the transport expectations."""
+        transport_fmt = None
+        transport_rate = None
+        variables = ("AI_TRANSPORT_FORMAT", "AI_TRANSPORT_RATE")
+        results: Dict[str, Optional[str]] = {}
+        for variable in variables:
+            try:
+                resp = await self.ari_client.send_command(
+                    "GET",
+                    f"channels/{channel_id}/variable",
+                    params={"variable": variable},
+                )
+            except Exception:
+                logger.debug("Transport variable fetch failed", call_id=channel_id, variable=variable, exc_info=True)
+                continue
+            if isinstance(resp, dict):
+                results[variable] = (resp.get("value") or "").strip()
+        if results.get("AI_TRANSPORT_FORMAT"):
+            transport_fmt = results["AI_TRANSPORT_FORMAT"]
+        if results.get("AI_TRANSPORT_RATE"):
+            try:
+                transport_rate = int(results["AI_TRANSPORT_RATE"])
+            except (TypeError, ValueError):
+                transport_rate = None
+        if not transport_fmt and not transport_rate:
+            # Default to config
+            try:
+                transport_fmt = getattr(self.config.audiosocket, "format", None)
+            except Exception:
+                transport_fmt = None
+            if not transport_rate:
+                try:
+                    transport_rate = int(getattr(self.config.streaming, "sample_rate", 8000))
+                except Exception:
+                    transport_rate = 8000
+            logger.info(
+                "Dialplan transport hints absent; using configured defaults",
+                call_id=session.call_id,
+                format=transport_fmt or "ulaw",
+                sample_rate=transport_rate,
+            )
+        else:
+            logger.info(
+                "Dialplan transport hints detected",
+                call_id=session.call_id,
+                format=transport_fmt or session.transport_profile.format,
+                sample_rate=transport_rate or session.transport_profile.sample_rate,
+            )
+        await self._update_transport_profile(
+            session,
+            fmt=transport_fmt or session.transport_profile.format,
+            sample_rate=transport_rate or session.transport_profile.sample_rate,
+            source="dialplan" if results else session.transport_profile.source,
+        )
+
+    def _resolve_stream_targets(
+        self,
+        session: CallSession,
+        provider_name: str,
+    ) -> Tuple[str, int, Optional[str]]:
+        """Ensure downstream streaming targets align with the transport profile."""
+        transport_fmt = session.transport_profile.format
+        transport_rate = session.transport_profile.sample_rate
+        prefs = self.call_audio_preferences.get(session.call_id, {}) or {}
+        target_encoding = self._canonicalize_encoding(prefs.get("format")) or transport_fmt
+        target_sample_rate = int(prefs.get("sample_rate") or transport_rate)
+
+        adjustments = {}
+        if target_encoding != transport_fmt:
+            adjustments["format"] = transport_fmt
+        if target_sample_rate != transport_rate:
+            adjustments["sample_rate"] = transport_rate
+
+        if adjustments:
+            target_encoding = transport_fmt
+            target_sample_rate = transport_rate
+            self.call_audio_preferences[session.call_id] = {
+                "format": transport_fmt,
+                "sample_rate": transport_rate,
+            }
+            try:
+                logger.info(
+                    "Auto-aligning downstream targets with transport profile",
+                    call_id=session.call_id,
+                    provider=provider_name,
+                    adjustments=adjustments,
+                )
+            except Exception:
+                pass
+
+        provider = self.providers.get(provider_name)
+        provider_target = None
+        provider_rate = None
+        try:
+            provider_cfg = getattr(provider, "config", None)
+            provider_target = self._canonicalize_encoding(getattr(provider_cfg, "target_encoding", None))
+            provider_rate = int(getattr(provider_cfg, "target_sample_rate_hz", 0) or 0)
+        except Exception:
+            provider_cfg = None
+
+        remediation = None
+        aligned = True
+        if provider_target and provider_target != transport_fmt:
+            aligned = False
+            remediation = (
+                f"Provider target_encoding={provider_target} but transport format={transport_fmt}. "
+                f"Update providers.{provider_name}.target_encoding to '{transport_fmt}' in config/ai-agent.yaml."
+            )
+        if provider_rate and provider_rate != transport_rate:
+            aligned = False
+            extra = (
+                f"Provider target_sample_rate_hz={provider_rate} but transport sample_rate={transport_rate}. "
+                f"Update providers.{provider_name}.target_sample_rate_hz to {transport_rate}."
+            )
+            remediation = f"{remediation} {extra}" if remediation else extra
+
+        session.codec_alignment_ok = aligned
+        session.codec_alignment_message = remediation
+        _CODEC_ALIGNMENT.labels(session.call_id, provider_name).set(1 if aligned else 0)
+
+        if not aligned and remediation:
+            logger.warning(
+                "Codec/sample alignment degraded",
+                call_id=session.call_id,
+                provider=provider_name,
+                remediation=remediation,
+            )
+
+        return target_encoding, target_sample_rate, remediation
+
+    async def _update_audio_diagnostics_by_call(
+        self,
+        call_id: str,
+        stage: str,
+        audio_bytes: bytes,
+        encoding: str,
+        sample_rate: int,
+    ) -> None:
+        session = await self.session_store.get_by_call_id(call_id)
+        if not session:
+            return
+        self._update_audio_diagnostics(session, stage, audio_bytes, encoding, sample_rate)
 
     async def _assign_pipeline_to_session(
         self,

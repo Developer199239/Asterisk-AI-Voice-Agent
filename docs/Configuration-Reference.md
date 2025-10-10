@@ -63,6 +63,7 @@ Controls the pacing and robustness of streamed agent audio.
 - streaming.low_watermark_ms: Brief pause/guard band; increase if underruns occur.
 - streaming.provider_grace_ms: Absorb late provider chunks to avoid tail-chop artifacts.
 - streaming.logging_level: Verbosity for the streaming manager.
+- streaming.egress_force_mulaw: When true, converts outbound streaming audio to μ-law 8 kHz regardless of provider encoding.
 
 ## VAD (Voice Activity Detection)
 

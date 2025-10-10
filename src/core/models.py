@@ -11,6 +11,27 @@ import time
 
 
 @dataclass
+class TransportProfile:
+    """Canonical transport characteristics for a call."""
+    format: str = "ulaw"
+    sample_rate: int = 8000
+    channels: int = 1
+    source: str = "config"  # config | dialplan | audiosocket | detected
+    last_updated: float = field(default_factory=time.time)
+
+    def update(self, *, format: Optional[str] = None, sample_rate: Optional[int] = None, channels: Optional[int] = None, source: Optional[str] = None) -> None:
+        if format:
+            self.format = format
+        if sample_rate:
+            self.sample_rate = sample_rate
+        if channels:
+            self.channels = channels
+        if source:
+            self.source = source
+        self.last_updated = time.time()
+
+
+@dataclass
 class PlaybackRef:
     """Reference to an active audio playback."""
     playback_id: str
@@ -99,7 +120,11 @@ class CallSession:
     last_streaming_error: Optional[str] = None
     caller_audio_format: str = "ulaw"
     caller_sample_rate: int = 8000
-    
+    transport_profile: TransportProfile = field(default_factory=TransportProfile)
+    codec_alignment_ok: bool = True
+    codec_alignment_message: Optional[str] = None
+    audio_diagnostics: Dict[str, Any] = field(default_factory=dict)
+
     def __post_init__(self):
         """Initialize default VAD and fallback state."""
         if not self.vad_state:
