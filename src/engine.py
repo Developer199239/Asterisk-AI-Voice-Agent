@@ -1751,13 +1751,21 @@ class Engine:
                     pass
 
             try:
-                self._update_audio_diagnostics(
-                    session,
-                    stage="transport_in",
-                    audio_bytes=audio_bytes,
-                    encoding=session.transport_profile.format,
-                    sample_rate=session.transport_profile.sample_rate,
-                )
+                swap_needed_flag = bool(session.vad_state.get('pcm16_inbound_swap', False))
+            except Exception:
+                swap_needed_flag = False
+            try:
+                profile_fmt = session.transport_profile.format or ""
+                if not profile_fmt:
+                    profile_fmt = getattr(self.config.audiosocket, "format", "ulaw") if getattr(self.config, "audiosocket", None) else "ulaw"
+                profile_rate = session.transport_profile.sample_rate or getattr(self.config.streaming, "sample_rate", 8000)
+            except Exception:
+                profile_fmt = "ulaw"
+                profile_rate = 8000
+            pcm_bytes, pcm_rate = self._wire_to_pcm16(audio_bytes, profile_fmt, swap_needed_flag, profile_rate)
+            try:
+                if pcm_bytes:
+                    self._update_audio_diagnostics(session, "transport_in", pcm_bytes, "slin16", pcm_rate)
             except Exception:
                 logger.debug("Inbound diagnostics update failed", call_id=caller_channel_id, exc_info=True)
 
@@ -1850,23 +1858,8 @@ class Engine:
                         pass
                 else:
                     try:
-                        # Compute energy using correct AudioSocket format
-                        try:
-                            as_fmt = (getattr(self.config, 'audiosocket', None).format or 'ulaw').lower()
-                        except Exception:
-                            as_fmt = 'ulaw'
-                        if as_fmt in ('ulaw', 'mulaw', 'g711_ulaw', 'mu-law'):
-                            pcm16_frame = audioop.ulaw2lin(audio_bytes, 2)
-                        else:
-                            # slin16 path: bytes are already PCM16
-                            pcm16_frame = audio_bytes
-                            # Normalize endian if probe indicated swap
-                            try:
-                                if bool(session.vad_state.get('pcm16_inbound_swap', False)):
-                                    pcm16_frame = audioop.byteswap(pcm16_frame, 2)
-                            except Exception:
-                                pass
-                        energy = audioop.rms(pcm16_frame, 2)
+                        pcm16_frame = pcm_bytes
+                        energy = audioop.rms(pcm16_frame, 2) if pcm16_frame else 0
                     except Exception:
                         energy = 0
 
@@ -1982,8 +1975,14 @@ class Engine:
                 q = self._pipeline_queues.get(caller_channel_id)
                 if q:
                     try:
-                        pcm16 = self._as_to_pcm16_16k(audio_bytes)
-                        q.put_nowait(pcm16)
+                        pcm16 = pcm_bytes
+                        if pcm16 and pcm_rate != 16000:
+                            try:
+                                pcm16, _ = audioop.ratecv(pcm16, 2, 1, pcm_rate, 16000, None)
+                            except Exception:
+                                pcm16 = pcm_bytes
+                        if pcm16:
+                            q.put_nowait(pcm16)
                         return
                     except asyncio.QueueFull:
                         logger.debug("Pipeline queue full; dropping AudioSocket frame", call_id=caller_channel_id)
@@ -1991,7 +1990,8 @@ class Engine:
 
             # Enhanced VAD Audio Filtering with continuous delivery
             forward_original_audio = True
-            payload_bytes = audio_bytes
+            pcm_payload = pcm_bytes
+            payload_rate = pcm_rate
 
             if vad_result:
                 now = time.time()
@@ -2021,7 +2021,8 @@ class Engine:
                     state['frames_since_speech'] = frames_since_speech + 1
 
                 if not forward_original_audio:
-                    payload_bytes = self._silence_for_format(len(audio_bytes))
+                    silence_len = len(pcm_bytes) if pcm_bytes else len(audio_bytes) * 2
+                    pcm_payload = b"\x00" * silence_len
                     logger.debug(
                         "🎤 VAD - Replacing frame with silence",
                         call_id=caller_channel_id,
@@ -2036,24 +2037,18 @@ class Engine:
             if not provider or not hasattr(provider, 'send_audio'):
                 logger.debug("Provider unavailable for audio", provider=provider_name)
                 return
-
-            # Normalize inbound slin16 endianness for providers if probe indicated swap needed
             try:
-                as_fmt_send = (getattr(self.config, 'audiosocket', None).format or 'ulaw').lower()
+                self._update_audio_diagnostics(session, "provider_in", pcm_payload, "slin16", payload_rate)
             except Exception:
-                as_fmt_send = 'ulaw'
-            if as_fmt_send in ('slin16', 'linear16', 'pcm16'):
-                try:
-                    swap_needed = bool(session.vad_state.get('pcm16_inbound_swap', False))
-                except Exception:
-                    swap_needed = False
-                if swap_needed and forward_original_audio:
-                    try:
-                        payload_bytes = audioop.byteswap(payload_bytes, 2)
-                    except Exception:
-                        logger.debug("Inbound slin16 byteswap failed; sending native bytes", call_id=caller_channel_id)
+                logger.debug("Provider input diagnostics update failed", call_id=caller_channel_id, exc_info=True)
 
-            await provider.send_audio(payload_bytes)
+            provider_payload, provider_encoding, provider_rate = self._encode_for_provider(
+                provider_name,
+                provider,
+                pcm_payload,
+                payload_rate,
+            )
+            await provider.send_audio(provider_payload)
         except Exception as exc:
             logger.error("Error handling AudioSocket audio", conn_id=conn_id, error=str(exc), exc_info=True)
 
@@ -3472,19 +3467,109 @@ class Engine:
         fmt, rate = mapping.get(frame_len, ("slin16" if frame_len % 2 == 0 else "ulaw", 8000))
         return fmt, rate
 
+    def _wire_to_pcm16(
+        self,
+        audio_bytes: bytes,
+        wire_fmt: str,
+        swap_needed: bool,
+        wire_rate: int,
+    ) -> Tuple[bytes, int]:
+        """Convert wire-format audio to PCM16 little-endian."""
+        canonical = self._canonicalize_encoding(wire_fmt) or "ulaw"
+        rate = wire_rate or 8000
+        pcm = audio_bytes
+        try:
+            if canonical in ("ulaw", "mulaw", "g711_ulaw", "mu-law"):
+                pcm = audioop.ulaw2lin(audio_bytes, 2)
+                rate = 8000
+            else:
+                if swap_needed:
+                    pcm = audioop.byteswap(audio_bytes, 2)
+                else:
+                    pcm = audio_bytes
+        except Exception:
+            pcm = b""
+        return pcm or b"", rate
+
+    def _encode_for_provider(
+        self,
+        provider_name: str,
+        provider,
+        pcm_bytes: bytes,
+        pcm_rate: int,
+    ) -> Tuple[bytes, str, int]:
+        """Encode PCM audio based on provider configuration expectations."""
+        if pcm_bytes is None:
+            pcm_bytes = b""
+        if pcm_rate <= 0:
+            pcm_rate = 8000
+
+        expected_enc = ""
+        expected_rate = pcm_rate
+        try:
+            provider_cfg = getattr(provider, "config", None)
+            if provider_cfg is not None:
+                expected_enc = self._canonicalize_encoding(getattr(provider_cfg, "input_encoding", None))
+                expected_rate = int(getattr(provider_cfg, "input_sample_rate_hz", pcm_rate) or pcm_rate)
+        except Exception:
+            expected_enc = ""
+            expected_rate = pcm_rate
+
+        if expected_enc in ("slin16", "linear16", "pcm16", ""):
+            if expected_rate <= 0:
+                expected_rate = pcm_rate
+            if pcm_rate != expected_rate and pcm_bytes:
+                try:
+                    pcm_bytes, _ = audioop.ratecv(pcm_bytes, 2, 1, pcm_rate, expected_rate, None)
+                    pcm_rate = expected_rate
+                except Exception:
+                    pass
+            return pcm_bytes, "slin16", pcm_rate
+
+        if expected_enc in ("ulaw", "mulaw", "g711_ulaw", "mu-law"):
+            if expected_rate <= 0:
+                expected_rate = 8000
+            working = pcm_bytes
+            if pcm_rate != expected_rate and working:
+                try:
+                    working, _ = audioop.ratecv(working, 2, 1, pcm_rate, expected_rate, None)
+                except Exception:
+                    working = pcm_bytes
+            try:
+                encoded = audioop.lin2ulaw(working, 2)
+            except Exception:
+                encoded = b""
+            return encoded, "ulaw", expected_rate
+
+        # Fallback: return PCM as-is
+        return pcm_bytes, "slin16", pcm_rate
+
     async def _update_transport_profile(self, session: CallSession, *, fmt: Optional[str], sample_rate: Optional[int], source: str) -> None:
         """Persist transport profile updates and sync preferences."""
+        profile = session.transport_profile
+        priority_order = {
+            "config": 0,
+            "dialplan": 1,
+            "audiosocket": 2,
+            "detected": 3,
+        }
+        incoming_source = source or profile.source
+        incoming_priority = priority_order.get(incoming_source, 0)
+        current_priority = priority_order.get(profile.source, 0)
+
+        if incoming_priority < current_priority and fmt is not None and sample_rate is not None:
+            # Preserve higher-priority source; ignore lower-priority override.
+            return
         if not fmt and not sample_rate:
             return
         canonical_fmt = self._canonicalize_encoding(fmt) or session.transport_profile.format
         final_rate = sample_rate or session.transport_profile.sample_rate
-        profile = session.transport_profile
         changed = (
             profile.format != canonical_fmt
             or profile.sample_rate != final_rate
-            or profile.source != source
+            or profile.source != incoming_source
         )
-        profile.update(format=canonical_fmt, sample_rate=final_rate, source=source)
+        profile.update(format=canonical_fmt, sample_rate=final_rate, source=incoming_source)
         session.caller_audio_format = canonical_fmt
         session.caller_sample_rate = final_rate
         self.call_audio_preferences[session.call_id] = {
