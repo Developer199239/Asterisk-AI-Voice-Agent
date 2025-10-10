@@ -219,6 +219,7 @@ class Engine:
                 'low_watermark_ms': config.streaming.low_watermark_ms,
                 'provider_grace_ms': config.streaming.provider_grace_ms,
                 'logging_level': config.streaming.logging_level,
+                'egress_swap_mode': getattr(config.streaming, 'egress_swap_mode', 'auto'),
             }
         # Debug/diagnostics: allow broadcasting outbound frames to all AudioSocket conns
         try:

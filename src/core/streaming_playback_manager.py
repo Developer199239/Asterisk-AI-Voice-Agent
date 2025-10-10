@@ -129,6 +129,11 @@ class StreamingPlaybackManager:
         self.audiosocket_format: str = "ulaw"  # default format expected by dialplan
         # Debug: when True, send frames to all AudioSocket conns for the call
         self.audiosocket_broadcast_debug: bool = bool(self.streaming_config.get('audiosocket_broadcast_debug', False))
+        # Egress endianness override mode: 'auto' | 'force_true' | 'force_false'
+        try:
+            self.egress_swap_mode: str = str(self.streaming_config.get('egress_swap_mode', 'auto')).lower().strip() or 'auto'
+        except Exception:
+            self.egress_swap_mode = 'auto'
         
         # Streaming state
         self.active_streams: Dict[str, Dict[str, Any]] = {}  # call_id -> stream_info
@@ -303,13 +308,20 @@ class StreamingPlaybackManager:
                 src_rate = self.sample_rate
             self._resample_states[call_id] = None
             # Store stream info
-            # Determine if egress slin16 should be byteswapped based on inbound probe
-            egress_swap = False
+            # Determine if egress slin16 should be byteswapped based on mode and inbound probe
+            mode = self.egress_swap_mode
+            egress_swap_auto = False
             try:
                 if (self.audiosocket_format or "ulaw").lower() in ("slin16", "linear16", "pcm16"):
-                    egress_swap = bool(session.vad_state.get("pcm16_inbound_swap", False))
+                    egress_swap_auto = bool(session.vad_state.get("pcm16_inbound_swap", False))
             except Exception:
+                egress_swap_auto = False
+            if mode == 'force_true':
+                egress_swap = True
+            elif mode == 'force_false':
                 egress_swap = False
+            else:
+                egress_swap = egress_swap_auto
 
             self.active_streams[call_id] = {
                 'stream_id': stream_id,
@@ -329,6 +341,7 @@ class StreamingPlaybackManager:
                 'source_encoding': src_encoding,
                 'source_sample_rate': src_rate,
                 'egress_swap': egress_swap,
+                'egress_swap_mode': mode,
                 'tx_bytes': 0,
             }
             self._startup_ready[call_id] = False
@@ -353,6 +366,7 @@ class StreamingPlaybackManager:
                     target_format=(self.audiosocket_format or "ulaw").lower(),
                     target_sample_rate=self.sample_rate,
                     egress_swap=egress_swap,
+                    egress_swap_mode=mode,
                 )
             except Exception:
                 pass
@@ -682,6 +696,10 @@ class StreamingPlaybackManager:
                         egress_swap = bool(self.active_streams.get(call_id, {}).get('egress_swap', False))
                     except Exception:
                         egress_swap = False
+                    try:
+                        egress_mode = str(self.active_streams.get(call_id, {}).get('egress_swap_mode', self.egress_swap_mode))
+                    except Exception:
+                        egress_mode = self.egress_swap_mode
                     logger.info(
                         "🎵 STREAMING OUTBOUND - First frame",
                         call_id=call_id,
@@ -692,8 +710,33 @@ class StreamingPlaybackManager:
                         sample_rate=self.sample_rate,
                         chunk_size_ms=self.chunk_size_ms,
                         egress_swap=egress_swap,
+                        egress_swap_mode=egress_mode,
                         conn_id=conn_id,
                     )
+                    # One-time PCM16 egress probe: compare native vs swapped RMS for outbound frame
+                    if fmt in ("slin16", "linear16", "pcm16"):
+                        try:
+                            rms_native = audioop.rms(chunk, 2)
+                        except Exception:
+                            rms_native = 0
+                        try:
+                            swapped = audioop.byteswap(chunk, 2)
+                            rms_swapped = audioop.rms(swapped, 2)
+                        except Exception:
+                            rms_swapped = 0
+                        try:
+                            logger.info(
+                                "🎵 STREAMING OUTBOUND - Probe",
+                                call_id=call_id,
+                                stream_id=stream_id,
+                                audiosocket_format=fmt,
+                                egress_swap=egress_swap,
+                                egress_swap_mode=egress_mode,
+                                rms_native=rms_native,
+                                rms_swapped=rms_swapped,
+                            )
+                        except Exception:
+                            pass
                     self._first_send_logged.add(call_id)
                 # Optional broadcast mode for diagnostics
                 if self.audiosocket_broadcast_debug:

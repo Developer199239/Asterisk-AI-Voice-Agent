@@ -56,7 +56,7 @@ class DeepgramProviderConfig(BaseModel):
     greeting: Optional[str] = None
     instructions: Optional[str] = None
     input_encoding: str = Field(default="linear16")
-    input_sample_rate_hz: int = Field(default=16000)
+    input_sample_rate_hz: int = Field(default=24000)
     continuous_input: bool = Field(default=True)
     base_url: str = Field(default="https://api.deepgram.com")
     tts_voice: Optional[str] = None
@@ -77,7 +77,7 @@ class OpenAIProviderConfig(BaseModel):
     voice: str = Field(default="alloy")
     default_modalities: List[str] = Field(default_factory=lambda: ["text"])
     input_encoding: str = Field(default="linear16")
-    input_sample_rate_hz: int = Field(default=16000)
+    input_sample_rate_hz: int = Field(default=24000)
     target_encoding: str = Field(default="mulaw")
     target_sample_rate_hz: int = Field(default=8000)
     chunk_size_ms: int = Field(default=20)
@@ -108,7 +108,7 @@ class OpenAIRealtimeProviderConfig(BaseModel):
     input_encoding: str = Field(default="slin16")  # AudioSocket inbound default (8 kHz PCM16)
     input_sample_rate_hz: int = Field(default=8000)  # AudioSocket source sample rate
     provider_input_encoding: str = Field(default="linear16")  # Provider expects PCM16 LE
-    provider_input_sample_rate_hz: int = Field(default=16000)  # OpenAI Realtime input sample rate
+    provider_input_sample_rate_hz: int = Field(default=24000)  # OpenAI Realtime input sample rate
     output_encoding: str = Field(default="linear16")  # Provider emits PCM16 frames
     output_sample_rate_hz: int = Field(default=24000)
     target_encoding: str = Field(default="ulaw")  # Downstream AudioSocket expectations
@@ -182,6 +182,11 @@ class StreamingConfig(BaseModel):
     logging_level: str = Field(default="info")
     # Smaller warm-up only for the initial greeting to get first audio out sooner
     greeting_min_start_ms: int = Field(default=0)
+    # Egress endianness control for PCM16 slin16 over AudioSocket: 'auto'|'force_true'|'force_false'
+    # - auto: derive from inbound probe (current behavior)
+    # - force_true: always byteswap outbound PCM16
+    # - force_false: never byteswap outbound PCM16 (send native LE)
+    egress_swap_mode: str = Field(default="auto")
 
 
 class LoggingConfig(BaseModel):
