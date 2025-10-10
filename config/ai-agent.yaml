@@ -21,8 +21,8 @@ pipelines:
       tts:
         base_url: "https://api.openai.com/v1/audio/speech"
         format:
-          encoding: "linear16"  # Provider emits PCM16 frames used by streaming mode
-          sample_rate: 24000    # Engine resamples to downstream target sample rate as needed
+          encoding: "mulaw"  # Match telephony trunk for immediate playback
+          sample_rate: 8000
   # Fully local inference pipeline; runs entirely inside local_ai_server.
   local_only:
     stt: local_stt
@@ -114,8 +114,8 @@ downstream_mode: "stream"
 audiosocket:
   host: "0.0.0.0"          # Bind address (use 127.0.0.1 when engine and Asterisk share a host)
   port: 8090               # TCP port for AudioSocket connections
-  format: "slin16"         # Wire format from Asterisk: `ulaw` (160B/20ms @ 8 kHz) or `slin16` (640B/20ms @ 16 kHz)
-                           # TIP: Match this to the dialplan's AudioSocket() media argument (use 'slin16' for wideband).
+  format: "ulaw"           # Wire format from Asterisk: `ulaw` (160B/20ms @ 8 kHz) or `slin16` (640B/20ms @ 16 kHz)
+                           # TIP: Match this to the dialplan's AudioSocket() media argument (use 'ulaw' for PSTN trunks).
 
 # Barge-in configuration
 barge_in:
@@ -133,7 +133,7 @@ barge_in:
 
 # Streaming configuration (for downstream_mode=stream)
 streaming:
-  sample_rate: 16000         # Output sample rate for streaming audio (16 kHz for wideband)
+  sample_rate: 8000          # Output sample rate for streaming audio (8 kHz for telephony)
   jitter_buffer_ms: 100      # Jitter buffer target depth; increase for jittery networks (e.g., 80–150). Higher = more robust, slightly higher latency.
   keepalive_interval_ms: 5000 # Keepalive interval for streaming connections
   connection_timeout_ms: 10000 # Connection timeout for streaming
@@ -238,14 +238,14 @@ providers:
     base_url: "wss://api.openai.com/v1/realtime"
     instructions: "You are a concise voice assistant. Respond clearly and keep answers under 20 words unless more detail is requested."
     organization: ""
-    input_encoding: "slin16"
-    input_sample_rate_hz: 16000
+    input_encoding: "ulaw"
+    input_sample_rate_hz: 8000
     provider_input_encoding: "linear16"
     provider_input_sample_rate_hz: 24000
     output_encoding: "linear16"
     output_sample_rate_hz: 24000
-    target_encoding: "linear16"
-    target_sample_rate_hz: 16000
+    target_encoding: "mulaw"
+    target_sample_rate_hz: 8000
     response_modalities:
       - "audio"
       - "text"

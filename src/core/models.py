@@ -97,6 +97,8 @@ class CallSession:
     streaming_keepalive_sent: int = 0
     streaming_keepalive_timeouts: int = 0
     last_streaming_error: Optional[str] = None
+    caller_audio_format: str = "ulaw"
+    caller_sample_rate: int = 8000
     
     def __post_init__(self):
         """Initialize default VAD and fallback state."""

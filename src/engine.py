@@ -10,7 +10,7 @@ import uuid
 import audioop
 import base64
 from collections import deque
-from typing import Dict, Any, Optional, List, Set
+from typing import Dict, Any, Optional, List, Set, Tuple
 
 # Simple audio capture system removed - not used in production
 
@@ -259,6 +259,8 @@ class Engine:
         self._provider_stream_formats: Dict[str, Dict[str, Any]] = {}
         # Prevent duplicate runtime warnings per call when misalignment persists
         self._runtime_alignment_logged: Set[str] = set()
+        # Per-call downstream audio preferences (format/sample-rate)
+        self.call_audio_preferences: Dict[str, Dict[str, Any]] = {}
         self.conn_to_channel: Dict[str, str] = {}
         self.channel_to_conn: Dict[str, str] = {}
         self.conn_to_caller: Dict[str, str] = {}  # conn_id -> caller_channel_id
@@ -789,6 +791,12 @@ class Engine:
             logger.info("🎯 HYBRID ARI - Step 4: ✅ Caller session created and stored",
                        channel_id=caller_channel_id,
                        bridge_id=bridge_id)
+
+            # Detect caller codec/sample-rate so downstream playback matches the trunk.
+            try:
+                await self._detect_caller_codec(session, caller_channel_id)
+            except Exception:
+                logger.debug("Caller codec detection failed", call_id=caller_channel_id, exc_info=True)
 
             # Milestone7: Per-call override via Asterisk channel var AI_PROVIDER.
             # Values:
@@ -1401,6 +1409,9 @@ class Engine:
                 self._pipeline_forced.pop(call_id, None)
             except Exception:
                 logger.debug("Pipeline cleanup failed", call_id=call_id, exc_info=True)
+
+            # Clear detected codec preferences
+            self.call_audio_preferences.pop(call_id, None)
 
             # Remove SSRC mapping for this call (if any)
             try:
@@ -2706,14 +2717,16 @@ class Engine:
                                 )
                             self._runtime_alignment_logged.add(call_id)
 
-                        # Determine downstream target encoding/sample rate for this call based on AudioSocket config.
+                        prefs = self.call_audio_preferences.get(call_id, {})
                         try:
-                            target_encoding = (self.config.audiosocket.format or "ulaw").lower()
+                            target_encoding = str(prefs.get("format") or (self.config.audiosocket.format or "ulaw")).lower()
                         except Exception:
                             target_encoding = "ulaw"
                         try:
-                            target_sample_rate = int(self.config.streaming.sample_rate)
+                            target_sample_rate = int(prefs.get("sample_rate") or self.config.streaming.sample_rate)
                         except Exception:
+                            target_sample_rate = 8000
+                        if target_sample_rate <= 0:
                             target_sample_rate = 8000
 
                         await self.streaming_playback_manager.start_streaming_playback(
@@ -3299,6 +3312,97 @@ class Engine:
             pass
         except Exception:
             logger.error("Pipeline runner crashed", call_id=call_id, exc_info=True)
+
+    async def _detect_caller_codec(self, session: CallSession, channel_id: str) -> None:
+        """Inspect the caller channel via ARI and record its audio format/sample-rate."""
+        preferred_fmt: Optional[str] = None
+        variables = (
+            "CHANNEL(audionativeformat)",
+            "CHANNEL(audioreadformat)",
+        )
+
+        for variable in variables:
+            try:
+                resp = await self.ari_client.send_command(
+                    "GET",
+                    f"channels/{channel_id}/variable",
+                    params={"variable": variable},
+                )
+            except Exception:
+                logger.debug("Codec variable fetch failed", call_id=channel_id, variable=variable, exc_info=True)
+                continue
+
+            if isinstance(resp, dict):
+                value = (resp.get("value") or "").strip()
+                if value:
+                    preferred_fmt = value
+                    break
+
+        canonical_fmt, sample_rate, reported = self._normalize_audio_format(preferred_fmt)
+
+        # Persist on session for downstream use
+        session.caller_audio_format = canonical_fmt
+        session.caller_sample_rate = sample_rate
+        try:
+            await self._save_session(session)
+        except Exception:
+            logger.debug("Failed to persist caller codec info", call_id=session.call_id, exc_info=True)
+
+        self.call_audio_preferences[session.call_id] = {
+            "format": canonical_fmt,
+            "sample_rate": sample_rate,
+        }
+
+        try:
+            logger.info(
+                "Detected caller codec",
+                call_id=session.call_id,
+                reported_format=reported,
+                normalized_format=canonical_fmt,
+                sample_rate=sample_rate,
+            )
+        except Exception:
+            pass
+
+    @staticmethod
+    def _normalize_audio_format(raw_format: Optional[str]) -> Tuple[str, int, str]:
+        """Map assorted codec tokens to canonical AudioSocket format + sample rate."""
+        reported = (raw_format or "").strip()
+        token = reported.lower()
+
+        alias_map = {
+            "mulaw": "ulaw",
+            "mu-law": "ulaw",
+            "g711_ulaw": "ulaw",
+            "g711ulaw": "ulaw",
+            "g711-ula": "ulaw",
+            "g711_alaw": "alaw",
+            "g711alaw": "alaw",
+            "slin": "slin16",
+            "slin12": "slin16",
+            "slin16": "slin16",
+            "linear16": "slin16",
+            "pcm16": "slin16",
+            "g722": "slin16",
+        }
+
+        canonical = alias_map.get(token, token if token else "ulaw")
+
+        # We only stream μ-law or PCM16 internally; fall back to μ-law for others (e.g. alaw).
+        if canonical not in {"ulaw", "slin16"}:
+            canonical = "ulaw"
+
+        sample_map = {
+            "ulaw": 8000,
+            "slin16": 16000,
+        }
+        sample_rate = sample_map.get(canonical, 8000)
+
+        # If the original token hinted at 8 kHz PCM, honor it.
+        if canonical == "slin16" and token in {"slin", "slin8"}:
+            sample_rate = 8000
+
+        return canonical, sample_rate, reported
 
     async def _assign_pipeline_to_session(
         self,
