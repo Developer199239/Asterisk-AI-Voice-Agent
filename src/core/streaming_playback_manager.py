@@ -501,6 +501,15 @@ class StreamingPlaybackManager:
     ) -> bool:
         """Process audio chunks from jitter buffer."""
         try:
+            stream_info = self.active_streams.get(call_id, {}) if call_id in self.active_streams else {}
+            target_fmt = (stream_info.get("target_format") or self.audiosocket_format or "ulaw").lower()
+            try:
+                target_rate = int(stream_info.get("target_sample_rate", self.sample_rate))
+            except Exception:
+                target_rate = int(self.sample_rate)
+            if target_rate <= 0:
+                target_rate = int(self.sample_rate)
+
             # Hold playback until jitter buffer has the minimum startup chunks
             ready = self._startup_ready.get(call_id, False)
             if not ready:
