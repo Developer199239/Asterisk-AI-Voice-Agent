@@ -67,3 +67,23 @@ def test_output_rate_drift_adjusts_active_rate(openai_config):
         assert abs(provider._active_output_sample_rate_hz - 9000) < 500
     finally:
         _cleanup_metrics(call_id)
+
+
+@pytest.mark.asyncio
+async def test_session_requests_g711_when_target_mulaw(openai_config):
+    provider = OpenAIRealtimeProvider(openai_config, on_event=None)
+    captured = {}
+
+    async def fake_send(payload):
+        captured.update(payload)
+
+    provider._send_json = fake_send  # type: ignore
+
+    await provider._send_session_update()
+
+    fmt = captured.get("session", {}).get("output_audio_format")
+    assert isinstance(fmt, dict)
+    assert fmt.get("type") == "g711_ulaw"
+    assert fmt.get("sample_rate") == openai_config.target_sample_rate_hz
+    assert provider._provider_output_format == "g711_ulaw"
+    assert provider._session_output_bytes_per_sample == 1

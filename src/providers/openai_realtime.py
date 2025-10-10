@@ -109,6 +109,8 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         self._active_output_sample_rate_hz: Optional[float] = (
             float(self.config.output_sample_rate_hz) if getattr(self.config, "output_sample_rate_hz", None) else None
         )
+        self._session_output_bytes_per_sample: int = 2
+        self._session_output_encoding: str = "pcm16"
 
         try:
             if self.config.input_encoding:
@@ -370,7 +372,29 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         # Choose OpenAI output format for this session:
         # If downstream target is μ-law, request g711_ulaw from provider to test end-to-end μ-law.
         # Otherwise keep PCM16.
-        out_fmt = "pcm16"
+        target_enc = (self.config.target_encoding or "").lower()
+        target_rate = int(self.config.target_sample_rate_hz or 0) or 8000
+        provider_output_rate = int(getattr(self.config, "output_sample_rate_hz", 0) or 24000)
+
+        if target_enc in ("ulaw", "mulaw", "g711_ulaw", "mu-law"):
+            out_fmt = {
+                "type": "g711_ulaw",
+                "sample_rate": target_rate,
+            }
+            self._provider_output_format = "g711_ulaw"
+            self._active_output_sample_rate_hz = float(target_rate)
+            self._session_output_bytes_per_sample = 1
+            self._session_output_encoding = "g711_ulaw"
+        else:
+            out_fmt = {
+                "type": "pcm16",
+                "sample_rate": provider_output_rate,
+            }
+            self._provider_output_format = "pcm16"
+            self._session_output_bytes_per_sample = 2
+            self._session_output_encoding = "pcm16"
+            if not self._active_output_sample_rate_hz:
+                self._active_output_sample_rate_hz = float(provider_output_rate)
 
         session: Dict[str, Any] = {
             # Model is selected via URL; keep accepted keys here
@@ -379,8 +403,6 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             "output_audio_format": out_fmt,
             "voice": self.config.voice,
         }
-        # Record provider output format for runtime handling
-        self._provider_output_format = out_fmt
         # Optional server-side VAD/turn detection at session level
         if getattr(self.config, "turn_detection", None):
             try:
@@ -718,6 +740,15 @@ class OpenAIRealtimeProvider(AIProviderInterface):
 
         self._update_output_meter(len(pcm_provider_output))
 
+        if self._provider_output_format in ("g711_ulaw", "ulaw", "mulaw", "g711", "mu-law"):
+            try:
+                pcm_provider_output = mulaw_to_pcm16le(pcm_provider_output)
+            except Exception:
+                logger.warning("Failed to convert μ-law provider output to PCM16", call_id=self._call_id, exc_info=True)
+                pcm_provider_output = b""
+            if not pcm_provider_output:
+                return
+
         target_rate = self.config.target_sample_rate_hz
         source_rate = int(round(self._active_output_sample_rate_hz or self.config.output_sample_rate_hz or 0))
         if not source_rate:
@@ -849,8 +880,8 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             "input_sample_rate_hz": str(getattr(self.config, "input_sample_rate_hz", "") or ""),
             "provider_input_encoding": str(getattr(self.config, "provider_input_encoding", "") or ""),
             "provider_input_sample_rate_hz": str(getattr(self.config, "provider_input_sample_rate_hz", "") or ""),
-            "output_encoding": str(getattr(self.config, "output_encoding", "") or ""),
-            "output_sample_rate_hz": str(getattr(self.config, "output_sample_rate_hz", "") or ""),
+            "output_encoding": self._session_output_encoding,
+            "output_sample_rate_hz": str(int(self._active_output_sample_rate_hz or getattr(self.config, "output_sample_rate_hz", "") or 0)),
             "target_encoding": str(getattr(self.config, "target_encoding", "") or ""),
             "target_sample_rate_hz": str(getattr(self.config, "target_sample_rate_hz", "") or ""),
         }
@@ -900,8 +931,8 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             "input_sample_rate_hz": str(getattr(self.config, "input_sample_rate_hz", "") or ""),
             "provider_input_encoding": str(getattr(self.config, "provider_input_encoding", "") or ""),
             "provider_input_sample_rate_hz": str(getattr(self.config, "provider_input_sample_rate_hz", "") or ""),
-            "output_encoding": provider_encoding or str(getattr(self.config, "output_encoding", "") or ""),
-            "output_sample_rate_hz": str(provider_rate or getattr(self.config, "output_sample_rate_hz", "") or ""),
+            "output_encoding": provider_encoding or self._session_output_encoding,
+            "output_sample_rate_hz": str(provider_rate or self._active_output_sample_rate_hz or getattr(self.config, "output_sample_rate_hz", "") or ""),
             "target_encoding": str(getattr(self.config, "target_encoding", "") or ""),
             "target_sample_rate_hz": str(getattr(self.config, "target_sample_rate_hz", "") or ""),
         }
@@ -933,7 +964,8 @@ class OpenAIRealtimeProvider(AIProviderInterface):
 
         self._output_meter_bytes += chunk_bytes
         elapsed = max(1e-6, now - self._output_meter_start_ts)
-        measured_rate = (self._output_meter_bytes / 2.0) / elapsed
+        bytes_per_sample = max(1, self._session_output_bytes_per_sample)
+        measured_rate = (self._output_meter_bytes / bytes_per_sample) / elapsed
 
         try:
             _OPENAI_MEASURED_OUTPUT_RATE.labels(self._call_id).set(measured_rate)
