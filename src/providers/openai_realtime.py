@@ -377,10 +377,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         provider_output_rate = int(getattr(self.config, "output_sample_rate_hz", 0) or 24000)
 
         if target_enc in ("ulaw", "mulaw", "g711_ulaw", "mu-law"):
-            out_fmt = {
-                "type": "g711_ulaw",
-                "sample_rate": target_rate,
-            }
+            out_fmt = "g711_ulaw"
             self._provider_output_format = "g711_ulaw"
             self._active_output_sample_rate_hz = float(target_rate)
             self._session_output_bytes_per_sample = 1

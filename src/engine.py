@@ -2048,6 +2048,16 @@ class Engine:
                 pcm_payload,
                 payload_rate,
             )
+
+            # Preserve original μ-law frames for Deepgram when the payload was replaced with silence
+            if (
+                provider_name == "deepgram"
+                and provider_encoding in ("ulaw", "mulaw", "g711_ulaw", "mu-law")
+                and provider_payload
+                and not any(provider_payload)
+            ):
+                provider_payload = audio_bytes
+                provider_rate = 8000
             await provider.send_audio(provider_payload)
         except Exception as exc:
             logger.error("Error handling AudioSocket audio", conn_id=conn_id, error=str(exc), exc_info=True)
