@@ -1833,6 +1833,31 @@ class Engine:
                                  tts_elapsed_ms=tts_elapsed_ms, protect_ms=initial_protect)
                     return
 
+                # Continuous-input providers: forward raw frames during TTS after initial guard
+                try:
+                    provider_name = getattr(session, 'provider_name', None) or self.config.default_provider
+                    provider = self.providers.get(provider_name)
+                except Exception:
+                    provider = None
+                continuous_input = False
+                try:
+                    if provider_name == "deepgram":
+                        continuous_input = True
+                    else:
+                        pcfg = getattr(provider, 'config', None)
+                        if isinstance(pcfg, dict):
+                            continuous_input = bool(pcfg.get('continuous_input', False))
+                        else:
+                            continuous_input = bool(getattr(pcfg, 'continuous_input', False))
+                except Exception:
+                    continuous_input = False
+                if continuous_input and provider and hasattr(provider, 'send_audio'):
+                    try:
+                        await provider.send_audio(audio_bytes)
+                    except Exception:
+                        logger.debug("Provider continuous-input forward error", call_id=caller_channel_id, exc_info=True)
+                    return
+
                 # Barge-in detection: accumulate candidate window based on multi-criteria (VAD + energy)
                 threshold = int(getattr(cfg, 'energy_threshold', 1000))
                 frame_ms = 20

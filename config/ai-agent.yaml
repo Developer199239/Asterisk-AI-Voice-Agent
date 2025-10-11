@@ -119,12 +119,12 @@ audiosocket:
 
 # Barge-in configuration
 barge_in:
-  enabled: false
+  enabled: true
   initial_protection_ms: 400   # Drop inbound during the initial TTS window (avoids early self-echo)
                                # Range: 200–600 ms (higher if trunks echo or agent intros are long)
-  min_ms: 400                  # Sustained speech required to trigger barge-in (de-bounce)
+  min_ms: 250                  # Sustained speech required to trigger barge-in (de-bounce)
                                # Range: 250–600 ms (lower = more sensitive barge-in)
-  energy_threshold: 1800       # RMS threshold for speech detection (telephony baseline)
+  energy_threshold: 1100       # RMS threshold for speech detection (telephony baseline)
                                # Range: 1000–3000 (raise on noisy lines)
                                # Range: 500–1500 ms
   post_tts_end_protection_ms: 250  # Shorter guard so callers aren't clipped after playback
@@ -256,3 +256,6 @@ providers:
       silence_duration_ms: 200
       threshold: 0.5
       prefix_padding_ms: 200
+    # Egress pacer for telephony cadence (20ms frames) with warm-up
+    egress_pacer_enabled: true
+    egress_pacer_warmup_ms: 320

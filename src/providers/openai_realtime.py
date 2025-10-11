@@ -111,6 +111,19 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         )
         self._session_output_bytes_per_sample: int = 2
         self._session_output_encoding: str = "pcm16"
+        # Egress pacing and buffering (telephony cadence)
+        self._egress_pacer_enabled: bool = bool(getattr(config, "egress_pacer_enabled", True))
+        try:
+            self._egress_pacer_warmup_ms: int = int(getattr(config, "egress_pacer_warmup_ms", 320))
+        except Exception:
+            self._egress_pacer_warmup_ms = 320
+        self._outbuf: bytearray = bytearray()
+        self._pacer_task: Optional[asyncio.Task] = None
+        self._pacer_running: bool = False
+        self._pacer_start_ts: float = 0.0
+        self._pacer_underruns: int = 0
+        self._pacer_lock: asyncio.Lock = asyncio.Lock()
+        self._fallback_pcm24k_done: bool = False
 
         try:
             if self.config.input_encoding:
@@ -224,6 +237,19 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         self._receive_task = asyncio.create_task(self._receive_loop())
         self._keepalive_task = asyncio.create_task(self._keepalive_loop())
 
+        # Reset egress pacer state at session start
+        try:
+            async with self._pacer_lock:
+                self._outbuf.clear()
+            self._pacer_running = False
+            self._pacer_start_ts = 0.0
+            self._pacer_underruns = 0
+            self._fallback_pcm24k_done = False
+            if self._pacer_task and not self._pacer_task.done():
+                self._pacer_task.cancel()
+        except Exception:
+            logger.debug("Failed to reset pacer state on session start", exc_info=True)
+
         logger.info("OpenAI Realtime session established", call_id=call_id)
 
     async def send_audio(self, audio_chunk: bytes):
@@ -323,6 +349,13 @@ class OpenAIRealtimeProvider(AIProviderInterface):
 
             await self._emit_audio_done()
         finally:
+            # Cleanup pacer
+            try:
+                self._pacer_running = False
+                if self._pacer_task:
+                    self._pacer_task.cancel()
+            except Exception:
+                pass
             previous_call_id = self._call_id
             self._receive_task = None
             self._keepalive_task = None
@@ -761,30 +794,40 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         if not outbound:
             return
 
-        if self.on_event:
-            if not self._first_output_chunk_logged:
-                logger.info(
-                    "OpenAI Realtime first audio chunk",
-                    call_id=self._call_id,
-                    bytes=len(outbound),
-                    target_encoding=self.config.target_encoding,
-                )
-                self._first_output_chunk_logged = True
+        # Append to egress buffer and start pacer, or emit immediately if disabled
+        try:
+            async with self._pacer_lock:
+                self._outbuf.extend(outbound)
+        except Exception:
+            logger.debug("Failed appending to pacer buffer", call_id=self._call_id, exc_info=True)
 
-            self._in_audio_burst = True
-            try:
-                await self.on_event(
-                    {
-                        "type": "AgentAudio",
-                        "data": outbound,
-                        "streaming_chunk": True,
-                        "call_id": self._call_id,
-                        "encoding": (self.config.target_encoding or "slin16"),
-                        "sample_rate": self.config.target_sample_rate_hz,
-                    }
-                )
-            except Exception:
-                logger.error("Failed to emit AgentAudio event", call_id=self._call_id, exc_info=True)
+        if self._egress_pacer_enabled:
+            await self._ensure_pacer_started()
+        else:
+            # Fallback to immediate emit (legacy behavior)
+            if self.on_event:
+                if not self._first_output_chunk_logged:
+                    logger.info(
+                        "OpenAI Realtime first audio chunk",
+                        call_id=self._call_id,
+                        bytes=len(outbound),
+                        target_encoding=self.config.target_encoding,
+                    )
+                    self._first_output_chunk_logged = True
+                self._in_audio_burst = True
+                try:
+                    await self.on_event(
+                        {
+                            "type": "AgentAudio",
+                            "data": outbound,
+                            "streaming_chunk": True,
+                            "call_id": self._call_id,
+                            "encoding": (self.config.target_encoding or "slin16"),
+                            "sample_rate": self.config.target_sample_rate_hz,
+                        }
+                    )
+                except Exception:
+                    logger.error("Failed to emit AgentAudio event", call_id=self._call_id, exc_info=True)
 
     async def _emit_audio_done(self):
         if not self._in_audio_burst or not self.on_event or not self._call_id:
@@ -801,6 +844,13 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             logger.error("Failed to emit AgentAudioDone event", call_id=self._call_id, exc_info=True)
         finally:
             self._in_audio_burst = False
+            # Pause pacer between bursts so we don't emit prolonged silence
+            try:
+                self._pacer_running = False
+                if self._pacer_task and not self._pacer_task.done():
+                    self._pacer_task.cancel()
+            except Exception:
+                logger.debug("Failed to pause pacer on AgentAudioDone", call_id=self._call_id, exc_info=True)
             self._output_resample_state = None
             self._first_output_chunk_logged = False
 
@@ -1009,6 +1059,151 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                         )
                     except Exception:
                         logger.debug("Failed to log OpenAI output rate drift", exc_info=True)
+
+            # Fallback trigger: if pacer has been running >10s and measured rate remains <7.6–8 kHz, switch to PCM16@24k
+            try:
+                if (
+                    self._egress_pacer_enabled
+                    and self._pacer_start_ts > 0.0
+                    and not self._fallback_pcm24k_done
+                ):
+                    window = now - self._pacer_start_ts
+                    if window >= 10.0 and measured_rate and measured_rate < 7600.0:
+                        asyncio.create_task(self._switch_to_pcm24k_output())
+                        self._fallback_pcm24k_done = True
+            except Exception:
+                logger.debug("PCM24k fallback evaluation error", exc_info=True)
+
+    async def _ensure_pacer_started(self) -> None:
+        if self._pacer_running:
+            return
+        if not self.on_event or not self._call_id:
+            return
+        self._pacer_running = True
+        self._pacer_start_ts = time.monotonic()
+        try:
+            if self._pacer_task and not self._pacer_task.done():
+                self._pacer_task.cancel()
+        except Exception:
+            pass
+        self._pacer_task = asyncio.create_task(self._pacer_loop())
+
+    async def _pacer_loop(self) -> None:
+        call_id = self._call_id
+        if not call_id or not self.on_event:
+            self._pacer_running = False
+            return
+        # Determine 20ms chunk sizing based on target encoding/sample-rate
+        chunk_bytes, silence_factory = self._pacer_params()
+        warmup_bytes = int(max(0, self._egress_pacer_warmup_ms) / 20) * chunk_bytes
+        # Warm-up buffer
+        try:
+            while self.websocket and not self.websocket.closed and self._pacer_running:
+                async with self._pacer_lock:
+                    buf_len = len(self._outbuf)
+                if buf_len >= warmup_bytes or not self._egress_pacer_enabled:
+                    break
+                await asyncio.sleep(0.01)
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            logger.debug("Pacer warm-up error", call_id=call_id, exc_info=True)
+
+        # Emit loop at 20 ms cadence
+        try:
+            while self.websocket and not self.websocket.closed and self._pacer_running:
+                chunk = b""
+                async with self._pacer_lock:
+                    if len(self._outbuf) >= chunk_bytes:
+                        chunk = bytes(self._outbuf[:chunk_bytes])
+                        del self._outbuf[:chunk_bytes]
+                if not chunk:
+                    # Underrun: emit silence to maintain cadence
+                    self._pacer_underruns += 1
+                    chunk = silence_factory(chunk_bytes)
+
+                if not self._first_output_chunk_logged:
+                    try:
+                        logger.info(
+                            "OpenAI Realtime first paced audio chunk",
+                            call_id=call_id,
+                            bytes=len(chunk),
+                            target_encoding=self.config.target_encoding,
+                        )
+                    except Exception:
+                        pass
+                    self._first_output_chunk_logged = True
+                self._in_audio_burst = True
+                try:
+                    await self.on_event(
+                        {
+                            "type": "AgentAudio",
+                            "data": chunk,
+                            "streaming_chunk": True,
+                            "call_id": call_id,
+                            "encoding": (self.config.target_encoding or "slin16"),
+                            "sample_rate": self.config.target_sample_rate_hz,
+                        }
+                    )
+                except Exception:
+                    logger.error("Failed to emit paced AgentAudio", call_id=call_id, exc_info=True)
+                await asyncio.sleep(0.02)
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            logger.debug("Pacer loop error", call_id=call_id, exc_info=True)
+        finally:
+            self._pacer_running = False
+
+    def _pacer_params(self) -> (int, Any):
+        # Compute chunk size for 20 ms frames and a silence factory matching target encoding
+        enc = (self.config.target_encoding or "ulaw").lower()
+        rate = int(self.config.target_sample_rate_hz or 8000)
+        if enc in ("ulaw", "mulaw", "g711_ulaw", "mu-law"):
+            bytes_per_sample = 1
+            chunk_bytes = int(rate / 50) * bytes_per_sample
+            def silence(n: int) -> bytes:
+                return bytes([0xFF]) * max(0, n)
+            return chunk_bytes, silence
+        # PCM16 path (e.g., slin16)
+        bytes_per_sample = 2
+        chunk_bytes = int(rate / 50) * bytes_per_sample
+        def silence(n: int) -> bytes:
+            return b"\x00" * max(0, n)
+        return chunk_bytes, silence
+
+    async def _switch_to_pcm24k_output(self) -> None:
+        if not self.websocket or self.websocket.closed:
+            return
+        call_id = self._call_id
+        try:
+            logger.warning(
+                "Switching OpenAI output to PCM16@24k due to sustained low measured rate",
+                call_id=call_id,
+            )
+        except Exception:
+            pass
+        payload: Dict[str, Any] = {
+            "type": "session.update",
+            "event_id": f"sess-{uuid.uuid4()}",
+            "session": {
+                "output_audio_format": {
+                    "type": "pcm16",
+                    "sample_rate": 24000,
+                }
+            },
+        }
+        try:
+            await self._send_json(payload)
+            self._provider_output_format = "pcm16"
+            self._session_output_bytes_per_sample = 2
+            try:
+                self._active_output_sample_rate_hz = float(24000)
+            except Exception:
+                self._active_output_sample_rate_hz = 24000.0
+            self._reset_output_meter()
+        except Exception:
+            logger.debug("Failed to switch OpenAI session to PCM16@24k", call_id=call_id, exc_info=True)
 
     @staticmethod
     def _extract_sample_rate(fmt: Any) -> Optional[int]:
