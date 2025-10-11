@@ -409,22 +409,16 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         target_rate = int(self.config.target_sample_rate_hz or 0) or 8000
         provider_output_rate = int(getattr(self.config, "output_sample_rate_hz", 0) or 24000)
 
-        if target_enc in ("ulaw", "mulaw", "g711_ulaw", "mu-law"):
-            out_fmt = "g711_ulaw"
-            self._provider_output_format = "g711_ulaw"
-            self._active_output_sample_rate_hz = float(target_rate)
-            self._session_output_bytes_per_sample = 1
-            self._session_output_encoding = "g711_ulaw"
-        else:
-            out_fmt = {
-                "type": "pcm16",
-                "sample_rate": provider_output_rate,
-            }
-            self._provider_output_format = "pcm16"
-            self._session_output_bytes_per_sample = 2
-            self._session_output_encoding = "pcm16"
-            if not self._active_output_sample_rate_hz:
-                self._active_output_sample_rate_hz = float(provider_output_rate)
+        # Force provider output to PCM16 for reliability; convert to μ-law locally as needed
+        out_fmt = {
+            "type": "pcm16",
+            "sample_rate": provider_output_rate,
+        }
+        self._provider_output_format = "pcm16"
+        self._session_output_bytes_per_sample = 2
+        self._session_output_encoding = "pcm16"
+        if not self._active_output_sample_rate_hz:
+            self._active_output_sample_rate_hz = float(provider_output_rate)
 
         session: Dict[str, Any] = {
             # Model is selected via URL; keep accepted keys here
