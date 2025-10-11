@@ -133,7 +133,7 @@ barge_in:
 # Streaming configuration (for downstream_mode=stream)
 streaming:
   sample_rate: 8000          # Output sample rate for streaming audio (8kHz for telephony)
-  jitter_buffer_ms: 100      # Jitter buffer target depth; increase for jittery networks (e.g., 80–150). Higher = more robust, slightly higher latency.
+  jitter_buffer_ms: 320      # Jitter buffer target depth; set >= min_start_ms + 20ms spare (e.g., 320ms for 300ms min-start)
   keepalive_interval_ms: 5000 # Keepalive interval for streaming connections
   connection_timeout_ms: 10000 # Connection timeout for streaming
   fallback_timeout_ms: 8000   # No audio sent for this long → fall back to file playback
@@ -257,5 +257,5 @@ providers:
       threshold: 0.5
       prefix_padding_ms: 200
     # Egress pacer for telephony cadence (20ms frames) with warm-up
-    egress_pacer_enabled: true
+    egress_pacer_enabled: false
     egress_pacer_warmup_ms: 320

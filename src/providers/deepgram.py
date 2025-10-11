@@ -53,6 +53,7 @@ class DeepgramProvider(AIProviderInterface):
         self._ready_to_stream: bool = False
         self._settings_ts: float = 0.0
         self._prestream_queue: list[bytes] = []  # small buffer for early frames
+        self._pcm16_accum = bytearray()
         # Cache declared Deepgram input settings
         try:
             self._dg_input_rate = int(getattr(self.config, 'input_sample_rate_hz', 8000) or 8000)
@@ -314,28 +315,57 @@ class DeepgramProvider(AIProviderInterface):
                     except Exception:
                         logger.debug("Deepgram RMS check failed", exc_info=True)
 
-                # If settings not applied yet, queue a few frames to avoid early close
-                if not self._ready_to_stream:
-                    try:
-                        self._prestream_queue.append(payload)
-                        # Cap queue at ~10 frames (~200 ms at 20 ms per frame)
-                        if len(self._prestream_queue) > 10:
-                            self._prestream_queue.pop(0)
-                    except Exception:
-                        pass
-                    return
+                if input_encoding in ("slin16", "linear16", "pcm16"):
+                    frame_bytes = (int(target_rate * 0.02) * 2) if target_rate else 640
+                    if frame_bytes <= 0:
+                        frame_bytes = 640
+                    self._pcm16_accum.extend(payload)
+                    frames_to_send: list[bytes] = []
+                    while len(self._pcm16_accum) >= frame_bytes:
+                        frames_to_send.append(bytes(self._pcm16_accum[:frame_bytes]))
+                        del self._pcm16_accum[:frame_bytes]
 
-                # Flush any queued frames first
-                if self._prestream_queue:
-                    try:
-                        for q in self._prestream_queue:
-                            await self.websocket.send(q)
-                    except Exception:
-                        logger.debug("Deepgram prestream flush failed", exc_info=True)
-                    finally:
-                        self._prestream_queue.clear()
+                    if not self._ready_to_stream:
+                        try:
+                            for fr in frames_to_send:
+                                self._prestream_queue.append(fr)
+                                if len(self._prestream_queue) > 10:
+                                    self._prestream_queue.pop(0)
+                        except Exception:
+                            pass
+                        return
 
-                await self.websocket.send(payload)
+                    if self._prestream_queue:
+                        try:
+                            for q in self._prestream_queue:
+                                await self.websocket.send(q)
+                        except Exception:
+                            logger.debug("Deepgram prestream flush failed", exc_info=True)
+                        finally:
+                            self._prestream_queue.clear()
+
+                    for fr in frames_to_send:
+                        await self.websocket.send(fr)
+                else:
+                    if not self._ready_to_stream:
+                        try:
+                            self._prestream_queue.append(payload)
+                            if len(self._prestream_queue) > 10:
+                                self._prestream_queue.pop(0)
+                        except Exception:
+                            pass
+                        return
+
+                    if self._prestream_queue:
+                        try:
+                            for q in self._prestream_queue:
+                                await self.websocket.send(q)
+                        except Exception:
+                            logger.debug("Deepgram prestream flush failed", exc_info=True)
+                        finally:
+                            self._prestream_queue.clear()
+
+                    await self.websocket.send(payload)
             except websockets.exceptions.ConnectionClosed as e:
                 logger.debug("Could not send audio packet: Connection closed.", code=e.code, reason=e.reason)
             except Exception:
