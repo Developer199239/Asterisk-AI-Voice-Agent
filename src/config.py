@@ -114,6 +114,8 @@ class OpenAIRealtimeProviderConfig(BaseModel):
     target_encoding: str = Field(default="ulaw")  # Downstream AudioSocket expectations
     target_sample_rate_hz: int = Field(default=8000)
     response_modalities: List[str] = Field(default_factory=lambda: ["text", "audio"])
+    egress_pacer_enabled: bool = Field(default=False)
+    egress_pacer_warmup_ms: int = Field(default=320)
     # Optional explicit greeting to speak immediately on connect
     greeting: Optional[str] = None
     # Optional server-side turn detection configuration

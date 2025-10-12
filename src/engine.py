@@ -284,6 +284,13 @@ class Engine:
         self.audio_socket_server: Optional[AudioSocketServer] = None
         self.audiosocket_conn_to_ssrc: Dict[str, int] = {}
         self.audiosocket_resample_state: Dict[str, Optional[tuple]] = {}
+        # Stateful resampling: maintain per-call/per-provider ratecv states to avoid drift
+        # Provider input (caller -> provider) resample state
+        self._resample_state_provider_in: Dict[str, Dict[str, Optional[tuple]]] = {}
+        # Forced pipeline PCM16@16k path (per-call)
+        self._resample_state_pipeline16k: Dict[str, Optional[tuple]] = {}
+        # Enhanced VAD normalization to 8 kHz (per-call)
+        self._resample_state_vad8k: Dict[str, Optional[tuple]] = {}
         self.pending_channel_for_bind: Optional[str] = None
         # Support duplicate Local ;1/;2 AudioSocket connections per call
         self.channel_to_conns: Dict[str, set] = {}
@@ -322,19 +329,21 @@ class Engine:
                     "Enhanced VAD enabled",
                     energy_threshold=self.vad_manager.energy_threshold,
                     confidence_threshold=self.vad_manager.confidence_threshold,
-                    adaptive=self.vad_manager.adaptive_threshold_enabled,
                 )
-
-            if not use_provider_vad and WEBRTC_VAD_AVAILABLE:
-                try:
-                    aggressiveness = config.vad.webrtc_aggressiveness
-                    self.webrtc_vad = webrtcvad.Vad(aggressiveness)
-                    logger.info("🎤 WebRTC VAD initialized", aggressiveness=aggressiveness)
-                except Exception as e:
-                    logger.warning("🎤 WebRTC VAD initialization failed", error=str(e))
-                    self.webrtc_vad = None
-            elif not use_provider_vad:
-                logger.warning("🎤 WebRTC VAD not available - install py-webrtcvad")
+                logger.info(
+                    "🎯 WebRTC VAD settings",
+                    aggressiveness=int(getattr(vad_cfg, "webrtc_aggressiveness", 1)),
+                )
+                if WEBRTC_VAD_AVAILABLE:
+                    try:
+                        aggressiveness = config.vad.webrtc_aggressiveness
+                        self.webrtc_vad = webrtcvad.Vad(aggressiveness)
+                        logger.info("🎤 WebRTC VAD initialized", aggressiveness=aggressiveness)
+                    except Exception as e:
+                        logger.warning("🎤 WebRTC VAD initialization failed", error=str(e))
+                        self.webrtc_vad = None
+                elif not use_provider_vad:
+                    logger.warning("🎤 WebRTC VAD not available - install py-webrtcvad")
         except Exception:
             logger.error("Failed to initialize VAD components", exc_info=True)
         # Map our synthesized UUID extension to the real ARI caller channel id
@@ -2003,7 +2012,9 @@ class Engine:
                         pcm16 = pcm_bytes
                         if pcm16 and pcm_rate != 16000:
                             try:
-                                pcm16, _ = audioop.ratecv(pcm16, 2, 1, pcm_rate, 16000, None)
+                                state = self._resample_state_pipeline16k.get(caller_channel_id)
+                                pcm16, state = audioop.ratecv(pcm16, 2, 1, pcm_rate, 16000, state)
+                                self._resample_state_pipeline16k[caller_channel_id] = state
                             except Exception:
                                 pcm16 = pcm_bytes
                         if pcm16:
@@ -2068,6 +2079,7 @@ class Engine:
                 logger.debug("Provider input diagnostics update failed", call_id=caller_channel_id, exc_info=True)
 
             provider_payload, provider_encoding, provider_rate = self._encode_for_provider(
+                session.call_id,
                 provider_name,
                 provider,
                 pcm_payload,
@@ -2112,7 +2124,12 @@ class Engine:
                 except Exception:
                     pass
             if src_rate != 8000:
-                pcm16, _ = audioop.ratecv(pcm_src, 2, 1, src_rate, 8000, None)
+                try:
+                    state = self._resample_state_vad8k.get(session.call_id)
+                    pcm16, state = audioop.ratecv(pcm_src, 2, 1, src_rate, 8000, state)
+                    self._resample_state_vad8k[session.call_id] = state
+                except Exception:
+                    pcm16 = pcm_src
             else:
                 pcm16 = pcm_src
         except Exception:
@@ -2882,7 +2899,13 @@ class Engine:
             else:
                 # Treat as PCM16 8 kHz
                 pcm8k = audio_bytes
-            pcm16k, _ = audioop.ratecv(pcm8k, 2, 1, 8000, 16000, None)
+            try:
+                # Use pipeline16k resample state under synthetic key 'pipeline'
+                state = self._resample_state_pipeline16k.get('pipeline')
+                pcm16k, state = audioop.ratecv(pcm8k, 2, 1, 8000, 16000, state)
+                self._resample_state_pipeline16k['pipeline'] = state
+            except Exception:
+                pcm16k = pcm8k
             return pcm16k
         except Exception:
             logger.debug("AudioSocket -> PCM16 16k conversion failed", exc_info=True)
@@ -3546,6 +3569,7 @@ class Engine:
 
     def _encode_for_provider(
         self,
+        call_id: str,
         provider_name: str,
         provider,
         pcm_bytes: bytes,
@@ -3568,12 +3592,17 @@ class Engine:
             expected_enc = ""
             expected_rate = pcm_rate
 
+        # Prepare per-call/provider resample state holder
+        prov_states = self._resample_state_provider_in.setdefault(call_id, {})
+        state_key = f"{provider_name}:{expected_rate}"
         if expected_enc in ("slin16", "linear16", "pcm16", ""):
             if expected_rate <= 0:
                 expected_rate = pcm_rate
             if pcm_rate != expected_rate and pcm_bytes:
                 try:
-                    pcm_bytes, _ = audioop.ratecv(pcm_bytes, 2, 1, pcm_rate, expected_rate, None)
+                    state = prov_states.get(state_key)
+                    pcm_bytes, state = audioop.ratecv(pcm_bytes, 2, 1, pcm_rate, expected_rate, state)
+                    prov_states[state_key] = state
                     pcm_rate = expected_rate
                 except Exception:
                     pass
@@ -3585,7 +3614,9 @@ class Engine:
             working = pcm_bytes
             if pcm_rate != expected_rate and working:
                 try:
-                    working, _ = audioop.ratecv(working, 2, 1, pcm_rate, expected_rate, None)
+                    state = prov_states.get(state_key)
+                    working, state = audioop.ratecv(working, 2, 1, pcm_rate, expected_rate, state)
+                    prov_states[state_key] = state
                 except Exception:
                     working = pcm_bytes
             try:
