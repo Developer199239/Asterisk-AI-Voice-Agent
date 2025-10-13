@@ -58,6 +58,7 @@ class DeepgramProvider(AIProviderInterface):
         self._ack_event: Optional[asyncio.Event] = None
         # Greeting injection guard
         self._greeting_injected: bool = False
+        self._greeting_injections: int = 0
         # Cache declared Deepgram input settings
         try:
             self._dg_input_rate = int(getattr(self.config, 'input_sample_rate_hz', 8000) or 8000)
@@ -220,11 +221,11 @@ class DeepgramProvider(AIProviderInterface):
         # Immediately inject greeting once to try to kick off TTS
         async def _inject_greeting_immediate():
             try:
-                if self.websocket and not self.websocket.closed and greeting_val and not self._greeting_injected:
-                    self._greeting_injected = True
+                if self.websocket and not self.websocket.closed and greeting_val and self._greeting_injections < 1:
                     logger.info("Injecting greeting immediately after Settings", call_id=self.call_id)
+                    self._greeting_injections += 1
                     try:
-                        await self.speak(greeting_val)
+                        await self._inject_message_dual(greeting_val)
                     except Exception:
                         logger.debug("Immediate greeting injection failed", exc_info=True)
             except Exception:
@@ -243,12 +244,12 @@ class DeepgramProvider(AIProviderInterface):
         # If ready and we haven't seen any audio burst within ~1s, inject greeting once to kick off TTS
         async def _inject_greeting_if_quiet():
             try:
-                await asyncio.sleep(1.0)
-                if self.websocket and not self.websocket.closed and not self._in_audio_burst and greeting_val and not self._greeting_injected:
+                await asyncio.sleep(1.5)
+                if self.websocket and not self.websocket.closed and not self._in_audio_burst and greeting_val and self._greeting_injections < 2:
                     logger.info("Injecting greeting via fallback as no AgentAudio detected", call_id=self.call_id)
                     try:
-                        self._greeting_injected = True
-                        await self.speak(greeting_val)
+                        self._greeting_injections += 1
+                        await self._inject_message_dual(greeting_val)
                     except Exception:
                         logger.debug("Greeting injection failed", exc_info=True)
             except Exception:
@@ -542,8 +543,29 @@ class DeepgramProvider(AIProviderInterface):
                                     self._ack_logged = True
                                 except Exception:
                                     pass
-                        except Exception:
-                            logger.debug("Deepgram ACK logging failed", exc_info=True)
+                            # Log all control events for diagnostics
+                            try:
+                                et = event_data.get("type") if isinstance(event_data, dict) else None
+                                logger.info(
+                                    "Deepgram control event",
+                                    call_id=self.call_id,
+                                    event_type=et,
+                                )
+                            except Exception:
+                                pass
+                            # Post-ACK injection when readiness events arrive and audio hasn't started
+                            try:
+                                et = event_data.get("type") if isinstance(event_data, dict) else None
+                                if et in ("SettingsApplied", "Welcome") and not self._in_audio_burst and self._greeting_injections < 2:
+                                    if self.websocket and not self.websocket.closed:
+                                        logger.info("Injecting greeting after ACK", call_id=self.call_id, event_type=et)
+                                        self._greeting_injections += 1
+                                        try:
+                                            await self._inject_message_dual((getattr(self.llm_config, 'initial_greeting', None) or getattr(self.config, 'greeting', None) or "Hello, how can I help you today?").strip())
+                                        except Exception:
+                                            logger.debug("Post-ACK greeting injection failed", exc_info=True)
+                            except Exception:
+                                pass
                         # If we were in an audio burst, a JSON control/event frame marks a boundary
                         if self._in_audio_burst and self.on_event:
                             await self.on_event({
@@ -660,6 +682,26 @@ class DeepgramProvider(AIProviderInterface):
             await self.websocket.send(json.dumps(inject_message))
         except websockets.exceptions.ConnectionClosed as e:
             logger.error("Failed to send inject agent message: Connection is closed.", exc_info=True, code=e.code, reason=e.reason)
+
+    async def _inject_message_dual(self, text: str):
+        if not text or not self.websocket:
+            return
+        try:
+            await self.websocket.send(json.dumps({"type": "inject_agent_message", "message": text}))
+        except Exception:
+            logger.debug("Lowercase inject failed", exc_info=True)
+        # Schedule a short delayed PascalCase inject if audio hasn't started
+        async def _fallback_case():
+            try:
+                await asyncio.sleep(0.5)
+                if self.websocket and not self.websocket.closed and not self._in_audio_burst:
+                    try:
+                        await self.websocket.send(json.dumps({"type": "Inject Agent Message", "message": text}))
+                    except Exception:
+                        logger.debug("PascalCase inject failed", exc_info=True)
+            except Exception:
+                pass
+        asyncio.create_task(_fallback_case())
     
     def get_provider_info(self) -> Dict[str, Any]:
         """Get information about the provider and its capabilities."""
