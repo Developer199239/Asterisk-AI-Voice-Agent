@@ -728,7 +728,58 @@ class StreamingPlaybackManager:
                 working = mulaw_to_pcm16le(working)
                 src_encoding = "pcm16"
             else:
+                # Source is PCM16. Probe endianness once and auto-correct to little-endian for downstream ops.
                 src_encoding = "pcm16"
+                try:
+                    if not stream_info.get('src_endian_probe_done', False):
+                        import audioop
+                        rms_native = audioop.rms(working, 2)
+                        avg_native = audioop.avg(working, 2)
+                        try:
+                            swapped = audioop.byteswap(working, 2)
+                            rms_swapped = audioop.rms(swapped, 2)
+                            avg_swapped = audioop.avg(swapped, 2)
+                        except Exception:
+                            swapped = None
+                            rms_swapped = 0
+                            avg_swapped = 0
+                        stream_info['src_endian_probe_done'] = True
+                        # Decide if swapped is clearly better: much higher RMS or much lower DC offset
+                        prefer_swapped = False
+                        if swapped is not None:
+                            if rms_swapped >= max(1024, 4 * max(1, rms_native)):
+                                prefer_swapped = True
+                            else:
+                                try:
+                                    if abs(avg_native) >= 8 * max(1, abs(avg_swapped)) and rms_swapped >= max(256, rms_native // 2):
+                                        prefer_swapped = True
+                                except Exception:
+                                    pass
+                        try:
+                            logger.info(
+                                "Streaming source PCM16 endian probe",
+                                call_id=call_id,
+                                rms_native=rms_native,
+                                rms_swapped=rms_swapped,
+                                avg_native=avg_native,
+                                avg_swapped=avg_swapped,
+                                prefer_swapped=prefer_swapped,
+                            )
+                        except Exception:
+                            pass
+                        if prefer_swapped and swapped is not None:
+                            stream_info['src_endian_swapped'] = True
+                            working = swapped
+                    else:
+                        if stream_info.get('src_endian_swapped', False):
+                            try:
+                                import audioop
+                                working = audioop.byteswap(working, 2)
+                            except Exception:
+                                pass
+                except Exception:
+                    # Probe failures should not break streaming; continue with native bytes
+                    pass
 
             # Resample to target rate when necessary
             if src_rate != target_rate:
