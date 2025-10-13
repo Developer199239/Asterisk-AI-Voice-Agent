@@ -781,6 +781,25 @@ class StreamingPlaybackManager:
                     # Probe failures should not break streaming; continue with native bytes
                     pass
 
+                # Remove significant DC offset before further processing
+                try:
+                    import audioop
+                    dc = audioop.avg(working, 2)
+                    if abs(dc) >= 1024:
+                        try:
+                            working = audioop.bias(working, 2, -int(dc))
+                            if not stream_info.get('src_dc_correction_logged', False):
+                                logger.info(
+                                    "Streaming source PCM16 DC correction applied",
+                                    call_id=call_id,
+                                    dc_before=int(dc),
+                                )
+                                stream_info['src_dc_correction_logged'] = True
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+
             # Resample to target rate when necessary
             if src_rate != target_rate:
                 working, resample_state = resample_audio(
