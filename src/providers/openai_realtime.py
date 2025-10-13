@@ -1083,6 +1083,18 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         bytes_per_sample = max(1, self._session_output_bytes_per_sample)
         measured_rate = (self._output_meter_bytes / bytes_per_sample) / elapsed
 
+        # Guardrails: when target is μ-law, avoid "learning" sub-8kHz rates unless PCM is confirmed
+        try:
+            target_is_ulaw = str(getattr(self.config, "target_encoding", "") or "").lower() in (
+                "ulaw",
+                "mulaw",
+                "g711_ulaw",
+                "mu-law",
+            )
+        except Exception:
+            target_is_ulaw = False
+        confirmed_pcm = bool(self._outfmt_acknowledged and self._provider_output_format == "pcm16")
+
         try:
             _OPENAI_MEASURED_OUTPUT_RATE.labels(self._call_id).set(measured_rate)
         except Exception:
@@ -1102,8 +1114,13 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             if drift_now > 0.10 and not self._output_rate_warned:
                 self._output_rate_warned = True
                 try:
-                    self._active_output_sample_rate_hz = measured_rate
-                    _OPENAI_PROVIDER_OUTPUT_RATE.labels(self._call_id).set(measured_rate)
+                    if target_is_ulaw and not confirmed_pcm and measured_rate < 7600.0:
+                        # Clamp to telephony cadence when μ-law is the downstream target
+                        self._active_output_sample_rate_hz = 8000.0
+                        _OPENAI_PROVIDER_OUTPUT_RATE.labels(self._call_id).set(8000.0)
+                    else:
+                        self._active_output_sample_rate_hz = measured_rate
+                        _OPENAI_PROVIDER_OUTPUT_RATE.labels(self._call_id).set(measured_rate)
                 except Exception:
                     pass
 
@@ -1132,8 +1149,13 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                 if drift > 0.10 and not self._output_rate_warned:
                     self._output_rate_warned = True
                     try:
-                        self._active_output_sample_rate_hz = measured_rate
-                        _OPENAI_PROVIDER_OUTPUT_RATE.labels(self._call_id).set(measured_rate)
+                        if target_is_ulaw and not confirmed_pcm and measured_rate < 7600.0:
+                            # Keep μ-law cadence stable instead of adopting a sub-8kHz learned rate
+                            self._active_output_sample_rate_hz = 8000.0
+                            _OPENAI_PROVIDER_OUTPUT_RATE.labels(self._call_id).set(8000.0)
+                        else:
+                            self._active_output_sample_rate_hz = measured_rate
+                            _OPENAI_PROVIDER_OUTPUT_RATE.labels(self._call_id).set(measured_rate)
                     except Exception:
                         pass
                     try:
@@ -1148,14 +1170,12 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                     except Exception:
                         logger.debug("Failed to log OpenAI output rate drift", exc_info=True)
 
-            # Fallback trigger: if pacer has been running >10s and measured rate remains <7.6–8 kHz, switch to PCM16@24k
+            # Fallback trigger: if stream has been running >10s and measured rate remains <7.6–8 kHz, switch to PCM16@24k
             try:
-                if (
-                    self._egress_pacer_enabled
-                    and self._pacer_start_ts > 0.0
-                    and not self._fallback_pcm24k_done
-                ):
-                    window = now - self._pacer_start_ts
+                if not self._fallback_pcm24k_done:
+                    # Use pacer start when available, otherwise meter start as a conservative window
+                    window_anchor = self._pacer_start_ts if self._pacer_start_ts > 0.0 else self._output_meter_start_ts
+                    window = now - window_anchor if window_anchor > 0.0 else elapsed
                     if window >= 10.0 and measured_rate and measured_rate < 7600.0:
                         asyncio.create_task(self._switch_to_pcm24k_output())
                         self._fallback_pcm24k_done = True

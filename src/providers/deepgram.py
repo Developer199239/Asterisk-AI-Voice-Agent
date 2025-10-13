@@ -465,6 +465,60 @@ class DeepgramProvider(AIProviderInterface):
                         logger.error("Failed to parse JSON message from Deepgram", message=message)
                 elif isinstance(message, bytes):
                     self._ready_to_stream = True
+                    # One-time runtime probe: infer output encoding/rate from first bytes
+                    try:
+                        if not getattr(self, "_dg_output_inferred", False):
+                            l = len(message)
+                            inferred: Optional[str] = None
+                            inferred_rate: Optional[int] = None
+                            # Quick structural hints
+                            if l % 2 == 1:
+                                inferred = "mulaw"
+                            else:
+                                # Compare RMS treating payload as PCM16 vs μ-law→PCM16
+                                try:
+                                    rms_pcm = audioop.rms(message[: min(960, l - (l % 2))], 2) if l >= 2 else 0
+                                except Exception:
+                                    rms_pcm = 0
+                                try:
+                                    pcm_from_ulaw = mulaw_to_pcm16le(message[: min(320, l)])
+                                    rms_ulaw = audioop.rms(pcm_from_ulaw, 2) if pcm_from_ulaw else 0
+                                except Exception:
+                                    rms_ulaw = 0
+                                if rms_ulaw > max(50, int(1.5 * (rms_pcm or 1))):
+                                    inferred = "mulaw"
+                                else:
+                                    inferred = "linear16"
+                            # Heuristic rate inference for PCM16: check 20ms multiples
+                            if inferred == "linear16":
+                                # 20ms frame sizes for PCM16: 320@8k, 640@16k, 960@24k
+                                if l % 960 == 0:
+                                    inferred_rate = 24000
+                                elif l % 640 == 0:
+                                    inferred_rate = 16000
+                                elif l % 320 == 0:
+                                    inferred_rate = 8000
+                            if inferred and inferred != self._dg_output_encoding:
+                                try:
+                                    logger.info(
+                                        "Deepgram output encoding inferred from runtime payload",
+                                        call_id=self.call_id,
+                                        previous_encoding=self._dg_output_encoding,
+                                        new_encoding=inferred,
+                                        bytes=l,
+                                        inferred_rate=inferred_rate,
+                                    )
+                                except Exception:
+                                    pass
+                                self._dg_output_encoding = inferred
+                                if inferred_rate:
+                                    self._dg_output_rate = inferred_rate
+                                try:
+                                    self._dg_output_inferred = True
+                                except Exception:
+                                    pass
+                    except Exception:
+                        logger.debug("Deepgram output inference failed", exc_info=True)
                     audio_event = {
                         'type': 'AgentAudio',
                         'data': message,
