@@ -543,6 +543,8 @@ class DeepgramProvider(AIProviderInterface):
                                     self._ack_logged = True
                                 except Exception:
                                     pass
+                        except Exception:
+                            logger.debug("Deepgram ACK logging failed", exc_info=True)
                             # Log all control events for diagnostics
                             try:
                                 et = event_data.get("type") if isinstance(event_data, dict) else None
