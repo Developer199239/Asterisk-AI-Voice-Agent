@@ -810,6 +810,22 @@ class StreamingPlaybackManager:
                 )
             else:
                 resample_state = None
+            # Post-resample DC offset correction (secondary clamp)
+            try:
+                import audioop
+                dc2 = audioop.avg(working, 2)
+                # Use a lower threshold post-resample to clamp small residual bias
+                if abs(dc2) >= 256:
+                    working = audioop.bias(working, 2, -int(dc2))
+                    if not stream_info.get('post_resample_dc_correction_logged', False):
+                        logger.info(
+                            "Streaming PCM16 post-resample DC correction applied",
+                            call_id=call_id,
+                            dc_before=int(dc2),
+                        )
+                        stream_info['post_resample_dc_correction_logged'] = True
+            except Exception:
+                pass
             self._resample_states[call_id] = resample_state
 
             # Convert to target encoding
