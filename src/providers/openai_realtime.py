@@ -408,22 +408,14 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         if not output_modalities:
             output_modalities = ["audio"]
 
-        # Choose OpenAI output format for this session based on downstream target.
-        # If downstream target is μ-law, request g711_ulaw@8k to avoid any resample window.
+        # Choose OpenAI output format token for this session based on downstream target.
+        # Server expects a string token for output_audio_format (e.g., 'pcm16', 'g711_ulaw').
         target_enc = (self.config.target_encoding or "").lower()
-        target_rate = int(self.config.target_sample_rate_hz or 0) or 8000
-        provider_output_rate = int(getattr(self.config, "output_sample_rate_hz", 0) or 24000)
-
         if target_enc in ("ulaw", "mulaw", "g711_ulaw", "mu-law"):
-            # Request μ-law@8k from provider, but do NOT assume it until server ACK
-            out_fmt = {"type": "g711_ulaw", "sample_rate": 8000}
+            out_fmt = "g711_ulaw"
         else:
-            # Default: PCM16 at provider_output_rate
-            out_fmt = {
-                "type": "pcm16",
-                "sample_rate": provider_output_rate,
-            }
-        # Do not mutate local provider format state here; wait for session ACK
+            out_fmt = "pcm16"
+        # Do not mutate local provider format state here; wait for session ACK/events
 
         session: Dict[str, Any] = {
             # Model is selected via URL; keep accepted keys here
@@ -1295,10 +1287,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             "type": "session.update",
             "event_id": f"sess-{uuid.uuid4()}",
             "session": {
-                "output_audio_format": {
-                    "type": "pcm16",
-                    "sample_rate": 24000,
-                }
+                "output_audio_format": "pcm16",
             },
         }
         try:
