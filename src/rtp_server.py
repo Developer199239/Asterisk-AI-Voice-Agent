@@ -9,7 +9,7 @@ import struct
 import audioop
 import time
 from typing import Dict, Optional, Callable, Any
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .logging_config import get_logger
 
@@ -20,27 +20,24 @@ class RTPSession:
     """Represents an active RTP session for a call."""
     call_id: str
     local_port: int
-    remote_host: str
-    remote_port: int
     socket: socket.socket
-    sequence_number: int
-    timestamp: int
-    ssrc: int
     created_at: float
     last_packet_at: float
-    # Enhanced fields for jitter buffering and monitoring
+    remote_host: Optional[str] = None
+    remote_port: Optional[int] = None
+    sequence_number: int = 0
+    timestamp: int = 0
+    ssrc: Optional[int] = None
     expected_sequence: int = 0
     packet_loss_count: int = 0
     last_sequence: int = 0
-    jitter_buffer: list = None
+    jitter_buffer: list = field(default_factory=list)
     frames_received: int = 0
     frames_processed: int = 0
-    # Resampling state for consistent frame sizes
-    resample_state: tuple = None
-    
-    def __post_init__(self):
-        if self.jitter_buffer is None:
-            self.jitter_buffer = []
+    resample_state: Optional[tuple] = None
+    receiver_task: Optional[asyncio.Task] = None
+    send_sequence_initialized: bool = False
+    send_timestamp_initialized: bool = False
 
 class RTPServer:
     """

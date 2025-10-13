@@ -25,6 +25,7 @@ class AsteriskConfig(BaseModel):
 class ExternalMediaConfig(BaseModel):
     rtp_host: str = Field(default="0.0.0.0")
     rtp_port: int = Field(default=18080)
+    port_range: Optional[str] = Field(default=None)
     codec: str = Field(default="ulaw")  # ulaw or slin16
     direction: str = Field(default="both")  # both, sendonly, recvonly
     jitter_buffer_ms: int = Field(default=20)

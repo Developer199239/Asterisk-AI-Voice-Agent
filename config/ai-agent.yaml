@@ -155,6 +155,7 @@ asterisk:
 external_media:
   rtp_host: "0.0.0.0"      # target IP for ExternalMedia (localhost for host networking)
   rtp_port: 18080            # fixed port for simplicity
+  port_range: "18080:18099"  # optional range for dynamic allocation (start:end); leave empty to reuse rtp_port
   codec: "ulaw"              # ulaw (8k) or slin16 (8k)
   direction: "both"          # sendrecv | sendonly | recvonly
   jitter_buffer_ms: 20       # target frame size

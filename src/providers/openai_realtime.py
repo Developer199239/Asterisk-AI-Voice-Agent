@@ -15,6 +15,7 @@ import contextlib
 import json
 import time
 import uuid
+import audioop
 from typing import Any, Dict, Optional, List
 
 import websockets
@@ -113,6 +114,9 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         self._session_output_encoding: str = "pcm16"
         # Output format acknowledgment flag: only enable μ-law pass-through after server ACK
         self._outfmt_acknowledged: bool = False
+        # Heuristic inference state when provider does not ACK output format
+        self._inferred_provider_encoding: Optional[str] = None
+        self._inference_logged: bool = False
         # Egress pacing and buffering (telephony cadence)
         self._egress_pacer_enabled: bool = bool(getattr(config, "egress_pacer_enabled", True))
         try:
@@ -777,8 +781,46 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         ):
             outbound = raw_bytes
         else:
-            # Otherwise, normalize to PCM16, resample if needed, then convert to target encoding
-            if self._provider_output_format in ("g711_ulaw", "ulaw", "mulaw", "g711", "mu-law"):
+            # Otherwise, normalize to PCM16 using either ACK'ed format or inferred format, then convert
+            effective_fmt = self._provider_output_format
+            if not self._outfmt_acknowledged:
+                # Heuristic inference when ACK missing: prefer μ-law if odd length or RMS-ulaw >> RMS-pcm
+                inferred = None
+                try:
+                    l = len(raw_bytes)
+                    if l % 2 == 1:
+                        inferred = "ulaw"
+                    else:
+                        # Compare RMS when treated as PCM16 vs μ-law→PCM16 on a small window
+                        win_pcm = raw_bytes[: min(640, l - (l % 2))]
+                        rms_pcm = audioop.rms(win_pcm, 2) if win_pcm else 0
+                        try:
+                            win_mulaw_pcm16 = mulaw_to_pcm16le(raw_bytes[: min(320, l)])
+                        except Exception:
+                            win_mulaw_pcm16 = b""
+                        rms_ulaw = audioop.rms(win_mulaw_pcm16, 2) if win_mulaw_pcm16 else 0
+                        if rms_ulaw > max(50, int(1.5 * (rms_pcm or 1))):
+                            inferred = "ulaw"
+                        else:
+                            inferred = "pcm16"
+                except Exception:
+                    inferred = None
+                self._inferred_provider_encoding = inferred or self._inferred_provider_encoding or "pcm16"
+                effective_fmt = self._inferred_provider_encoding
+                if not self._inference_logged:
+                    try:
+                        logger.info(
+                            "OpenAI output format not ACKed; using inferred decode path",
+                            call_id=self._call_id,
+                            inferred=effective_fmt,
+                            bytes=len(raw_bytes),
+                        )
+                    except Exception:
+                        pass
+                    self._inference_logged = True
+
+            # Decode to PCM16 according to effective format
+            if effective_fmt in ("g711_ulaw", "ulaw", "mulaw", "g711", "mu-law"):
                 try:
                     pcm_provider_output = mulaw_to_pcm16le(raw_bytes)
                 except Exception:
