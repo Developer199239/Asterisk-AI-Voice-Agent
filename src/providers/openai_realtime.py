@@ -111,6 +111,8 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         )
         self._session_output_bytes_per_sample: int = 2
         self._session_output_encoding: str = "pcm16"
+        # Output format acknowledgment flag: only enable μ-law pass-through after server ACK
+        self._outfmt_acknowledged: bool = False
         # Egress pacing and buffering (telephony cadence)
         self._egress_pacer_enabled: bool = bool(getattr(config, "egress_pacer_enabled", True))
         try:
@@ -409,26 +411,15 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         provider_output_rate = int(getattr(self.config, "output_sample_rate_hz", 0) or 24000)
 
         if target_enc in ("ulaw", "mulaw", "g711_ulaw", "mu-law"):
-            out_fmt = {
-                "type": "g711_ulaw",
-                "sample_rate": 8000,
-            }
-            self._provider_output_format = "g711_ulaw"
-            self._session_output_bytes_per_sample = 1  # μ-law bytes per sample
-            self._session_output_encoding = "g711_ulaw"
-            if not self._active_output_sample_rate_hz:
-                self._active_output_sample_rate_hz = float(8000)
+            # Request μ-law@8k from provider, but do NOT assume it until server ACK
+            out_fmt = {"type": "g711_ulaw", "sample_rate": 8000}
         else:
             # Default: PCM16 at provider_output_rate
             out_fmt = {
                 "type": "pcm16",
                 "sample_rate": provider_output_rate,
             }
-            self._provider_output_format = "pcm16"
-            self._session_output_bytes_per_sample = 2
-            self._session_output_encoding = "pcm16"
-            if not self._active_output_sample_rate_hz:
-                self._active_output_sample_rate_hz = float(provider_output_rate)
+        # Do not mutate local provider format state here; wait for session ACK
 
         session: Dict[str, Any] = {
             # Model is selected via URL; keep accepted keys here
@@ -775,10 +766,11 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         # Always update the output meter with provider-native bytes
         self._update_output_meter(len(raw_bytes))
 
-        # Fast-path: if provider emits μ-law and downstream target is μ-law@8k, pass through bytes
+        # Fast-path: only after server ACK, if provider emits μ-law and downstream target is μ-law@8k, pass through bytes
         target_enc = (self.config.target_encoding or "").lower()
         if (
-            self._provider_output_format in ("g711_ulaw", "ulaw", "mulaw", "g711", "mu-law")
+            self._outfmt_acknowledged
+            and self._provider_output_format in ("g711_ulaw", "ulaw", "mulaw", "g711", "mu-law")
             and target_enc in ("ulaw", "mulaw", "g711_ulaw", "mu-law")
             and int(self.config.target_sample_rate_hz or 0) == 8000
             and int(round(self._active_output_sample_rate_hz or 8000)) == 8000
@@ -988,6 +980,20 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                 self._active_output_sample_rate_hz = float(provider_rate)
             except Exception:
                 self._active_output_sample_rate_hz = provider_rate
+
+        # Acknowledge μ-law only when provider confirms it
+        enc_norm = (provider_encoding or "").lower()
+        if enc_norm in ("g711_ulaw", "ulaw", "mulaw", "mu-law") and int(provider_rate or 0) == 8000:
+            self._outfmt_acknowledged = True
+            self._provider_output_format = "g711_ulaw"
+            self._session_output_bytes_per_sample = 1
+            self._session_output_encoding = "g711_ulaw"
+        else:
+            # Default to PCM16 assumptions until μ-law is confirmed
+            self._outfmt_acknowledged = False
+            self._provider_output_format = "pcm16"
+            self._session_output_bytes_per_sample = 2
+            self._session_output_encoding = "pcm16"
 
         info_payload = {
             "input_encoding": str(getattr(self.config, "input_encoding", "") or ""),
