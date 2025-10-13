@@ -402,23 +402,33 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         if not output_modalities:
             output_modalities = ["audio"]
 
-        # Choose OpenAI output format for this session:
-        # If downstream target is μ-law, request g711_ulaw from provider to test end-to-end μ-law.
-        # Otherwise keep PCM16.
+        # Choose OpenAI output format for this session based on downstream target.
+        # If downstream target is μ-law, request g711_ulaw@8k to avoid any resample window.
         target_enc = (self.config.target_encoding or "").lower()
         target_rate = int(self.config.target_sample_rate_hz or 0) or 8000
         provider_output_rate = int(getattr(self.config, "output_sample_rate_hz", 0) or 24000)
 
-        # Force provider output to PCM16 for reliability; convert to μ-law locally as needed
-        out_fmt = {
-            "type": "pcm16",
-            "sample_rate": provider_output_rate,
-        }
-        self._provider_output_format = "pcm16"
-        self._session_output_bytes_per_sample = 2
-        self._session_output_encoding = "pcm16"
-        if not self._active_output_sample_rate_hz:
-            self._active_output_sample_rate_hz = float(provider_output_rate)
+        if target_enc in ("ulaw", "mulaw", "g711_ulaw", "mu-law"):
+            out_fmt = {
+                "type": "g711_ulaw",
+                "sample_rate": 8000,
+            }
+            self._provider_output_format = "g711_ulaw"
+            self._session_output_bytes_per_sample = 1  # μ-law bytes per sample
+            self._session_output_encoding = "g711_ulaw"
+            if not self._active_output_sample_rate_hz:
+                self._active_output_sample_rate_hz = float(8000)
+        else:
+            # Default: PCM16 at provider_output_rate
+            out_fmt = {
+                "type": "pcm16",
+                "sample_rate": provider_output_rate,
+            }
+            self._provider_output_format = "pcm16"
+            self._session_output_bytes_per_sample = 2
+            self._session_output_encoding = "pcm16"
+            if not self._active_output_sample_rate_hz:
+                self._active_output_sample_rate_hz = float(provider_output_rate)
 
         session: Dict[str, Any] = {
             # Model is selected via URL; keep accepted keys here
@@ -754,39 +764,51 @@ class OpenAIRealtimeProvider(AIProviderInterface):
 
     async def _handle_output_audio(self, audio_b64: str):
         try:
-            pcm_provider_output = base64.b64decode(audio_b64)
+            raw_bytes = base64.b64decode(audio_b64)
         except Exception:
             logger.warning("Invalid base64 audio payload from OpenAI", call_id=self._call_id)
             return
 
-        if not pcm_provider_output:
+        if not raw_bytes:
             return
 
-        self._update_output_meter(len(pcm_provider_output))
+        # Always update the output meter with provider-native bytes
+        self._update_output_meter(len(raw_bytes))
 
-        if self._provider_output_format in ("g711_ulaw", "ulaw", "mulaw", "g711", "mu-law"):
-            try:
-                pcm_provider_output = mulaw_to_pcm16le(pcm_provider_output)
-            except Exception:
-                logger.warning("Failed to convert μ-law provider output to PCM16", call_id=self._call_id, exc_info=True)
-                pcm_provider_output = b""
-            if not pcm_provider_output:
+        # Fast-path: if provider emits μ-law and downstream target is μ-law@8k, pass through bytes
+        target_enc = (self.config.target_encoding or "").lower()
+        if (
+            self._provider_output_format in ("g711_ulaw", "ulaw", "mulaw", "g711", "mu-law")
+            and target_enc in ("ulaw", "mulaw", "g711_ulaw", "mu-law")
+            and int(self.config.target_sample_rate_hz or 0) == 8000
+            and int(round(self._active_output_sample_rate_hz or 8000)) == 8000
+        ):
+            outbound = raw_bytes
+        else:
+            # Otherwise, normalize to PCM16, resample if needed, then convert to target encoding
+            if self._provider_output_format in ("g711_ulaw", "ulaw", "mulaw", "g711", "mu-law"):
+                try:
+                    pcm_provider_output = mulaw_to_pcm16le(raw_bytes)
+                except Exception:
+                    logger.warning("Failed to convert μ-law provider output to PCM16", call_id=self._call_id, exc_info=True)
+                    return
+            else:
+                pcm_provider_output = raw_bytes
+
+            target_rate = self.config.target_sample_rate_hz
+            source_rate = int(round(self._active_output_sample_rate_hz or self.config.output_sample_rate_hz or 0))
+            if not source_rate:
+                source_rate = self.config.output_sample_rate_hz
+            pcm_target, self._output_resample_state = resample_audio(
+                pcm_provider_output,
+                source_rate,
+                target_rate,
+                state=self._output_resample_state,
+            )
+
+            outbound = convert_pcm16le_to_target_format(pcm_target, self.config.target_encoding)
+            if not outbound:
                 return
-
-        target_rate = self.config.target_sample_rate_hz
-        source_rate = int(round(self._active_output_sample_rate_hz or self.config.output_sample_rate_hz or 0))
-        if not source_rate:
-            source_rate = self.config.output_sample_rate_hz
-        pcm_target, self._output_resample_state = resample_audio(
-            pcm_provider_output,
-            source_rate,
-            target_rate,
-            state=self._output_resample_state,
-        )
-
-        outbound = convert_pcm16le_to_target_format(pcm_target, self.config.target_encoding)
-        if not outbound:
-            return
 
         # Append to egress buffer and start pacer, or emit immediately if disabled
         try:
@@ -1012,6 +1034,25 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             _OPENAI_MEASURED_OUTPUT_RATE.labels(self._call_id).set(measured_rate)
         except Exception:
             pass
+
+        # Early drift correction (within ~250ms) so we don't wait a full second
+        # before aligning the active source rate. This minimizes initial warble.
+        try:
+            assumed_now = float(self._active_output_sample_rate_hz or getattr(self.config, "output_sample_rate_hz", 0) or 0)
+        except Exception:
+            assumed_now = float(getattr(self.config, "output_sample_rate_hz", 0) or 0)
+        if elapsed >= 0.25 and assumed_now > 0:
+            try:
+                drift_now = abs(measured_rate - assumed_now) / assumed_now
+            except Exception:
+                drift_now = 0.0
+            if drift_now > 0.10 and not self._output_rate_warned:
+                self._output_rate_warned = True
+                try:
+                    self._active_output_sample_rate_hz = measured_rate
+                    _OPENAI_PROVIDER_OUTPUT_RATE.labels(self._call_id).set(measured_rate)
+                except Exception:
+                    pass
 
         if now - self._output_meter_last_log_ts >= 1.0:
             self._output_meter_last_log_ts = now
