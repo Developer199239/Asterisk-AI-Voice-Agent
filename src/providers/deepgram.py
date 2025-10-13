@@ -522,6 +522,14 @@ class DeepgramProvider(AIProviderInterface):
                                 audio_ack = {}
                                 if isinstance(event_data, dict):
                                     audio_ack = event_data.get("audio") or {}
+                                    # Capture request_id from ACK/Welcome if header was missing
+                                    rid = event_data.get("request_id")
+                                    if rid and not getattr(self, "request_id", None):
+                                        self.request_id = rid
+                                        try:
+                                            logger.info("Deepgram request id (ack)", call_id=self.call_id, request_id=rid)
+                                        except Exception:
+                                            pass
                                 logger.info(
                                     "Deepgram Agent ACK settings",
                                     call_id=self.call_id,
@@ -647,7 +655,7 @@ class DeepgramProvider(AIProviderInterface):
     async def speak(self, text: str):
         if not text or not self.websocket:
             return
-        inject_message = {"type": "InjectAgentMessage", "message": text}
+        inject_message = {"type": "inject_agent_message", "message": text}
         try:
             await self.websocket.send(json.dumps(inject_message))
         except websockets.exceptions.ConnectionClosed as e:
