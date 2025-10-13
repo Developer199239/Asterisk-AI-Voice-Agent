@@ -210,8 +210,8 @@ providers:
     input_sample_rate_hz: 16000
     continuous_input: true        # Stream audio continuously for best responsiveness
                                   # TIP: Keep this true for real-time conversations
-    output_encoding: "linear16"
-    output_sample_rate_hz: 24000
+    output_encoding: "mulaw"
+    output_sample_rate_hz: 8000
   openai:
     enabled: false
     api_key: "${OPENAI_API_KEY}"
