@@ -56,6 +56,8 @@ class DeepgramProvider(AIProviderInterface):
         self._pcm16_accum = bytearray()
         # Settings ACK gating
         self._ack_event: Optional[asyncio.Event] = None
+        # Greeting injection guard
+        self._greeting_injected: bool = False
         # Cache declared Deepgram input settings
         try:
             self._dg_input_rate = int(getattr(self.config, 'input_sample_rate_hz', 8000) or 8000)
@@ -215,6 +217,20 @@ class DeepgramProvider(AIProviderInterface):
                 pass
         asyncio.create_task(_fallback_ready())
 
+        # Immediately inject greeting once to try to kick off TTS
+        async def _inject_greeting_immediate():
+            try:
+                if self.websocket and not self.websocket.closed and greeting_val and not self._greeting_injected:
+                    self._greeting_injected = True
+                    logger.info("Injecting greeting immediately after Settings", call_id=self.call_id)
+                    try:
+                        await self.speak(greeting_val)
+                    except Exception:
+                        logger.debug("Immediate greeting injection failed", exc_info=True)
+            except Exception:
+                pass
+        asyncio.create_task(_inject_greeting_immediate())
+
         # Wait up to 1.0s for a server response to mark readiness
         try:
             if self._ack_event is not None:
@@ -228,9 +244,10 @@ class DeepgramProvider(AIProviderInterface):
         async def _inject_greeting_if_quiet():
             try:
                 await asyncio.sleep(1.0)
-                if self.websocket and not self.websocket.closed and not self._in_audio_burst and greeting_val:
+                if self.websocket and not self.websocket.closed and not self._in_audio_burst and greeting_val and not self._greeting_injected:
                     logger.info("Injecting greeting via fallback as no AgentAudio detected", call_id=self.call_id)
                     try:
+                        self._greeting_injected = True
                         await self.speak(greeting_val)
                     except Exception:
                         logger.debug("Greeting injection failed", exc_info=True)
@@ -499,7 +516,7 @@ class DeepgramProvider(AIProviderInterface):
                                 self._ack_event.set()
                         except Exception:
                             pass
-                        # One-time ACK settings log for effective audio configs
+                        # One-time ACK settings log for effective audio configs (log full payload)
                         try:
                             if getattr(self, "_settings_sent", False) and not getattr(self, "_ack_logged", False):
                                 audio_ack = {}
@@ -511,6 +528,7 @@ class DeepgramProvider(AIProviderInterface):
                                     request_id=getattr(self, "request_id", None),
                                     ack_audio=audio_ack,
                                     event_type=(event_data.get("type") if isinstance(event_data, dict) else None),
+                                    ack_raw=event_data,
                                 )
                                 try:
                                     self._ack_logged = True
