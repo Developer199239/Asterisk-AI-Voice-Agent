@@ -165,7 +165,7 @@ Dashboards are stored under `monitoring/dashboards/`, and configuration instruct
 - **AudioSocket Regression Pass (2025-09-22)**: Latest regression validated the AudioSocket-first capture path from `ai-agent-media-fork`, with a two-way Deepgram call completing successfully end-to-end.
 - **SessionStore Adoption Started**: Playback gating, RTP SSRC tracking, and health reporting use `SessionStore`, with remaining handlers scheduled for migration.
 - **AudioSocket Listener Integration**: With `audio_transport=audiosocket` the engine now exposes the TCP listener itself (default `0.0.0.0:8090`, configurable via the new `audiosocket.*` block) and binds inbound UUIDs straight into `SessionStore` before forwarding frames through the VAD pipeline.
-- **ExternalMedia RTP Integration**: When `audio_transport=externalmedia` the engine accepts RTP (UDP) on port 18080, resamples to 16 kHz, and forwards frames through the VAD pipeline.
+- **ExternalMedia RTP Integration**: When `audio_transport=externalmedia` the engine accepts RTP (UDP) on the configured port or range (default `18080:18099`), resamples to 16 kHz, and forwards frames through the VAD pipeline.
 - **Downstream Playback**: `PlaybackManager` writes μ-law files to `/mnt/asterisk_media/ai-generated` and triggers deterministic bridge playbacks with gating.
 - **Complete Pipeline**: RTP → VAD/Fallback → Provider WebSocket → LLM/TTS → File playback all operate in production.
 - **Deepgram Integration Hardened**: The Deepgram provider now uses a typed config with environment fallbacks, so the cloud path can be enabled without disturbing the local provider wiring.
@@ -194,7 +194,7 @@ Configure via env:
 
 ### Known Constraints
 
-- RTP server requires port 18080 to be available for ExternalMedia integration
+- RTP server requires the configured port or port range (default `18080:18099`) to be available for ExternalMedia integration
 - ExternalMedia channels must be properly bridged with caller channels for audio flow
 - SSRC mapping is critical for audio routing - first RTP packet automatically maps SSRC to caller
 - TTS gating requires proper PlaybackFinished event handling for feedback prevention
@@ -331,7 +331,8 @@ Ongoing milestones and their acceptance criteria live in `docs/plan/ROADMAP.md`.
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
 │   ASTERISK      │    │   AI ENGINE     │    │   PROVIDER      │
 │   ExternalMedia   │    │   ExternalMedia   │    │   SYSTEM        │
-│   (Port 18080)   │    │   Server        │    │                 │
+│ (Port Range      │    │   Server        │    │                 │
+│ 18080-18099)     │    │                 │    │                 │
 └─────────────────┘    └─────────────────┘    └─────────────────┘
          │                       │                       │
          │ 1. TCP Connection     │                       │
@@ -365,7 +366,7 @@ src/
 │   ├── session_store.py         # Central store for call/session/playback state
 │   └── playback_manager.py      # Deterministic playback + gating logic
 │
-├── rtp_server.py               # ExternalMedia RTP server (UDP listener on port 18080)
+├── rtp_server.py               # ExternalMedia RTP server (per-call UDP sockets, default range 18080-18099)
 │   ├── start()                  # Bind UDP socket and launch receiver loop
 │   ├── _rtp_receiver()          # Parse RTP headers, resample μ-law → PCM16 16 kHz
 │   └── engine_callback          # Dispatches SSRC-tagged audio back to engine
@@ -399,7 +400,7 @@ The current implementation keeps Asterisk in control of the media pipe while the
 
 1. **Call Initiation**: A new call hits the Stasis dialplan context (`from-ai-agent` or similar), handing control to `engine.py`.
 2. **ExternalMedia Origination**: `_handle_caller_stasis_start_hybrid()` answers the caller, creates a mixing bridge, and originates an ExternalMedia channel via ARI (`_start_external_media_channel`). When that channel enters Stasis, the engine bridges it with the caller and records the mapping in `SessionStore`.
-3. **Audio Stream Starts**: Once bridged, Asterisk streams μ-law RTP packets to the engine’s `RTPServer` (default `0.0.0.0:18080`). `RTPServer` parses RTP headers, resamples audio to 16 kHz, and calls `_on_rtp_audio(ssrc, pcm_16k)`.
+3. **Audio Stream Starts**: Once bridged, Asterisk streams μ-law RTP packets to the engine’s `RTPServer` (default `0.0.0.0:18080-18099`). `RTPServer` parses RTP headers, resamples audio to 16 kHz, and calls `_on_rtp_audio(ssrc, pcm_16k)`.
 4. **Real-time Conversation**:
    - `_on_rtp_audio` tracks the SSRC→call association in `SessionStore`, applies VAD / fallback buffering, and forwards PCM frames to the active provider through `provider.send_audio`.
    - The provider (Deepgram or Local WebSocket server) performs STT → LLM → TTS and emits AgentAudio events back to the engine.
@@ -573,7 +574,7 @@ All streaming state is also reflected in `SessionStore` (`CallSession` fields: `
 ### RTP Server Pattern
 Two-way audio hinges on the `RTPServer` implementation in `src/rtp_server.py`:
 
-- **Transport**: UDP socket bound to `0.0.0.0:18080` (configurable via YAML) – Asterisk’s `ExternalMedia()` application sends 20 ms μ-law frames to this port.
+- **Transport**: UDP socket bound to the configured host/port range (default `0.0.0.0:18080-18099`) – Asterisk’s `ExternalMedia()` application sends 20 ms μ-law frames to this endpoint.
 - **Packet Handling**: `_rtp_receiver()` parses RTP headers, tracks expected sequence numbers/packet loss, converts μ-law to PCM16, and resamples 8 kHz audio to 16 kHz using `audioop.ratecv`.
 - **Engine Callback**: Every decoded frame is delivered back to `engine._on_rtp_audio(ssrc, pcm_16k)` where VAD, fallback buffering, and provider routing are performed. SSRCs are mapped to call sessions on the first packet through `SessionStore`.
 - **Outbound Audio**: Downstream audio remains file-based (no RTP transmit path yet); playback continues to flow through ARI bridges managed by `PlaybackManager`.
@@ -600,13 +601,13 @@ Call lifecycle is tracked across both the legacy dictionaries and the new `Sessi
 ## Testing and Verification
 
 ### ExternalMedia Testing
-- **Socket Availability**: Confirm the RTP server binds to UDP port 18080 (default) without collisions.
+- **Socket Availability**: Confirm the RTP server binds to the configured UDP port or port range (default `18080:18099`) without collisions.
 - **Audio Stream Testing**: Stream μ-law audio over ExternalMedia and verify RTP frames reach `_on_rtp_audio`.
 - **Provider Integration**: Ensure buffered audio reaches the active provider WebSocket session.
 - **Error Handling**: Simulate packet loss / SSRC churn and monitor recovery logging.
 
 ### Critical Testing Points
-- **RTP Server**: Must be listening on UDP port 18080 (or configured override)
+- **RTP Server**: Must be listening on the configured UDP port or range (default `18080:18099`)
 - **SSRC Mapping**: Must associate the first packet on each SSRC with the active call
 - **Audio Format Handling**: Must process μ-law audio correctly
 - **Provider Integration**: Must forward audio to correct provider
@@ -618,7 +619,7 @@ Call lifecycle is tracked across both the legacy dictionaries and the new `Sessi
 ### ExternalMedia-Specific Issues
 
 **No RTP Packets Observed**:
-- Check that the RTP server is running on UDP port 18080 (or configured port)
+- Check that the RTP server is running on the configured UDP port/range (default `18080:18099`)
 - Verify the dialplan invokes `ExternalMedia()` with the correct host/port
 - Confirm firewall rules allow UDP traffic on the configured port
 
@@ -640,7 +641,7 @@ Call lifecycle is tracked across both the legacy dictionaries and the new `Sessi
 When issues arise:
 1. Check RTP server logs for packet activity and SSRC mapping events
 2. Verify Asterisk dialplan configuration
-3. Send test RTP packets (e.g., `rtpplay`, `pjsip send media`) to UDP port 18080
+3. Send test RTP packets (e.g., `rtpplay`, `pjsip send media`) to the configured RTP port (default `18080`)
 4. Monitor audio stream processing
 5. Check provider integration and response times
 6. Verify file-based playback functionality

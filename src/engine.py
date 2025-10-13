@@ -502,13 +502,15 @@ class Engine:
                 rtp_host = self.config.external_media.rtp_host
                 rtp_port = self.config.external_media.rtp_port
                 codec = self.config.external_media.codec
+                port_range = self._parse_port_range(getattr(self.config.external_media, "port_range", None), rtp_port)
                 
                 # Create RTP server with callback to route audio to providers
                 self.rtp_server = RTPServer(
                     host=rtp_host,
                     port=rtp_port,
                     engine_callback=self._on_rtp_audio,
-                    codec=codec
+                    codec=codec,
+                    port_range=port_range,
                 )
                 
                 # Start RTP server
@@ -534,6 +536,39 @@ class Engine:
         self.ari_client.add_event_handler("PlaybackFinished", self._on_playback_finished)
         asyncio.create_task(self.ari_client.start_listening())
         logger.info("Engine started and listening for calls.")
+
+    def _parse_port_range(self, value: Optional[Any], fallback_port: int) -> Tuple[int, int]:
+        """Parse external_media.port_range into an inclusive (start, end) tuple."""
+        try:
+            if value is None:
+                return (int(fallback_port), int(fallback_port))
+
+            if isinstance(value, (list, tuple)) and len(value) == 2:
+                start, end = int(value[0]), int(value[1])
+            else:
+                raw = str(value).strip()
+                if not raw:
+                    return (int(fallback_port), int(fallback_port))
+                if ":" in raw:
+                    start_s, end_s = raw.split(":", 1)
+                elif "-" in raw:
+                    start_s, end_s = raw.split("-", 1)
+                else:
+                    start_s = end_s = raw
+                start, end = int(start_s), int(end_s)
+
+            if start > end:
+                start, end = end, start
+            if start <= 0 or end <= 0:
+                raise ValueError("Ports must be positive integers")
+            return (start, end)
+        except Exception:
+            logger.warning(
+                "Invalid external_media.port_range configuration; using fallback port",
+                value=value,
+                fallback=fallback_port,
+            )
+            return (int(fallback_port), int(fallback_port))
 
     async def stop(self):
         """Disconnect from ARI and stop the engine."""
@@ -727,6 +762,91 @@ class Engine:
                           channel_id=channel_id, 
                           channel_name=channel_name)
 
+    async def _start_external_media_channel(self, caller_channel_id: str) -> Optional[str]:
+        """Allocate RTP resources and originate the ExternalMedia channel via ARI."""
+        if not self.config.external_media:
+            logger.error("🎯 EXTERNAL MEDIA - Configuration missing; cannot start ExternalMedia channel",
+                         caller_channel_id=caller_channel_id)
+            return None
+        if not self.rtp_server:
+            logger.error("🎯 EXTERNAL MEDIA - RTP server unavailable; cannot start ExternalMedia channel",
+                         caller_channel_id=caller_channel_id)
+            return None
+
+        try:
+            port = await self.rtp_server.allocate_session(caller_channel_id)
+        except Exception as exc:
+            logger.error("🎯 EXTERNAL MEDIA - RTP session allocation failed",
+                         caller_channel_id=caller_channel_id,
+                         error=str(exc),
+                         exc_info=True)
+            return None
+
+        host = self.config.external_media.rtp_host
+        codec = getattr(self.config.external_media, "codec", "ulaw")
+        direction = getattr(self.config.external_media, "direction", "both")
+        external_host = f"{host}:{port}"
+
+        try:
+            response = await self.ari_client.create_external_media_channel(
+                app=self.config.asterisk.app_name,
+                external_host=external_host,
+                format=codec,
+                direction=direction,
+                encapsulation="rtp",
+            )
+        except Exception as exc:
+            logger.error("🎯 EXTERNAL MEDIA - ARI create_external_media_channel failed",
+                         caller_channel_id=caller_channel_id,
+                         external_host=external_host,
+                         error=str(exc),
+                         exc_info=True)
+            await self.rtp_server.cleanup_session(caller_channel_id)
+            try:
+                session = await self.session_store.get_by_call_id(caller_channel_id)
+                if session:
+                    session.external_media_port = None
+                    session.pending_external_media_id = None
+                    await self._save_session(session)
+            except Exception:
+                logger.debug("Failed to reset session after ARI external media failure",
+                             caller_channel_id=caller_channel_id,
+                             exc_info=True)
+            return None
+
+        channel_id = response.get("id") if isinstance(response, dict) else None
+        if not channel_id:
+            logger.error("🎯 EXTERNAL MEDIA - ARI create_external_media_channel returned no channel id",
+                         caller_channel_id=caller_channel_id,
+                         response=response)
+            await self.rtp_server.cleanup_session(caller_channel_id)
+            try:
+                session = await self.session_store.get_by_call_id(caller_channel_id)
+                if session:
+                    session.external_media_port = None
+                    session.pending_external_media_id = None
+                    await self._save_session(session)
+            except Exception:
+                logger.debug("Failed to reset session after missing ExternalMedia channel id",
+                             caller_channel_id=caller_channel_id,
+                             exc_info=True)
+            return None
+
+        session = await self.session_store.get_by_call_id(caller_channel_id)
+        if session:
+            session.pending_external_media_id = channel_id
+            session.external_media_port = port
+            await self._save_session(session)
+
+        logger.info("🎯 EXTERNAL MEDIA - ExternalMedia channel originated",
+                    caller_channel_id=caller_channel_id,
+                    external_media_id=channel_id,
+                    rtp_host=host,
+                    rtp_port=port,
+                    codec=codec,
+                    direction=direction)
+        return channel_id
+
     async def _handle_external_media_stasis_start(self, external_media_id: str, channel: dict):
         """Handle ExternalMedia channel entering Stasis."""
         try:
@@ -752,6 +872,9 @@ class Engine:
             if bridge_id:
                 success = await self.ari_client.add_channel_to_bridge(bridge_id, external_media_id)
                 if success:
+                    session.external_media_id = external_media_id
+                    session.pending_external_media_id = None
+                    await self._save_session(session)
                     logger.info("🎯 EXTERNAL MEDIA - ExternalMedia channel added to bridge", 
                                external_media_id=external_media_id,
                                bridge_id=bridge_id,
@@ -1432,6 +1555,12 @@ class Engine:
                     await self.ari_client.hangup_channel(channel_id)
                 except Exception:
                     logger.debug("Hangup failed during cleanup", call_id=call_id, channel_id=channel_id, exc_info=True)
+
+            if getattr(self, 'rtp_server', None):
+                try:
+                    await self.rtp_server.cleanup_session(call_id)
+                except Exception:
+                    logger.debug("RTP session cleanup failed during call cleanup", call_id=call_id, exc_info=True)
 
             # Remove residual mappings so new calls don’t inherit.
             self.bridges.pop(session.caller_channel_id, None)

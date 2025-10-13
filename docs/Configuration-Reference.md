@@ -30,6 +30,7 @@ This document explains every major option in `config/ai-agent.yaml`, the precede
 
 - external_media.rtp_host: Bind address for RTP server.
 - external_media.rtp_port: Port for inbound RTP.
+- external_media.port_range: Optional range (`start:end`) for dynamic per-call RTP allocation; defaults to `rtp_port`.
 - external_media.codec: `ulaw` | `slin16` (8 kHz).
 - external_media.direction: `both` | `sendonly` | `recvonly`.
 - external_media.jitter_buffer_ms: Target frame size for RTP playout pacing.

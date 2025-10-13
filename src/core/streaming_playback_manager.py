@@ -190,7 +190,7 @@ class StreamingPlaybackManager:
         logger.info("StreamingPlaybackManager initialized",
                    sample_rate=self.sample_rate,
                    jitter_buffer_ms=self.jitter_buffer_ms)
-
+    
     @staticmethod
     def _canonicalize_encoding(value: Optional[str]) -> str:
         if not value:

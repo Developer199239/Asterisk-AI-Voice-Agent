@@ -37,6 +37,11 @@ def validate_yaml_config():
                 print(f"❌ Missing field: external_media.{field}")
                 return False
             print(f"✅ external_media.{field}: {external_media[field]}")
+
+        if 'port_range' in external_media:
+            print(f"✅ external_media.port_range: {external_media['port_range']}")
+        else:
+            print("ℹ️ external_media.port_range not set; single-port mode will be used")
         
         print("✅ ExternalMedia configuration is valid")
         return True

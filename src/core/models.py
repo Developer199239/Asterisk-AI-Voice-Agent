@@ -52,6 +52,7 @@ class CallSession:
     local_channel_id: Optional[str] = None
     external_media_id: Optional[str] = None
     external_media_call_id: Optional[str] = None
+    external_media_port: Optional[int] = None
     audiosocket_channel_id: Optional[str] = None
     audiosocket_conn_id: Optional[str] = None
     audiosocket_uuid: Optional[str] = None

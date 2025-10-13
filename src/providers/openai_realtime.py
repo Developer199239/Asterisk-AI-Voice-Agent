@@ -830,9 +830,14 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                 pcm_provider_output = raw_bytes
 
             target_rate = self.config.target_sample_rate_hz
-            source_rate = int(round(self._active_output_sample_rate_hz or self.config.output_sample_rate_hz or 0))
-            if not source_rate:
-                source_rate = self.config.output_sample_rate_hz
+            # Determine source_rate more safely when provider hasn't ACKed.
+            # If we inferred μ-law, the true source is 8000 Hz regardless of config defaults.
+            if not self._outfmt_acknowledged and effective_fmt in ("g711_ulaw", "ulaw", "mulaw", "g711", "mu-law"):
+                source_rate = 8000
+            else:
+                source_rate = int(round(self._active_output_sample_rate_hz or self.config.output_sample_rate_hz or 0))
+                if not source_rate:
+                    source_rate = self.config.output_sample_rate_hz
             pcm_target, self._output_resample_state = resample_audio(
                 pcm_provider_output,
                 source_rate,

@@ -48,10 +48,18 @@ class ExternalMediaEngine:
         # Initialize RTP server
         rtp_config = getattr(config, 'rtp', None)
         if rtp_config:
+            base_port = getattr(rtp_config, "port", getattr(rtp_config, "rtp_port", 18080))
+            range_value = getattr(rtp_config, "port_range", None)
+            if isinstance(range_value, (list, tuple)) and len(range_value) == 2:
+                port_range = (int(range_value[0]), int(range_value[1]))
+            else:
+                port_range = None
             self.rtp_server = RTPServer(
                 host=rtp_config.host,
-                port_range=tuple(rtp_config.port_range),
-                engine_callback=self._on_rtp_audio_received
+                port=base_port,
+                engine_callback=self._on_rtp_audio_received,
+                codec=getattr(rtp_config, "codec", "ulaw"),
+                port_range=port_range,
             )
         else:
             raise ValueError("RTP configuration not found in config")

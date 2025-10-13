@@ -510,7 +510,7 @@ else:  # Now properly at the same level as the ExternalMedia condition
 **Problem**: No RTP packets received from Asterisk to our RTP server
 **Impact**: No voice capture possible despite audio capture being enabled
 **Evidence**: No RTP/SSRC logs found in engine logs
-**Root Cause**: Asterisk not sending RTP packets to our RTP server (127.0.0.1:18080)
+**Root Cause**: Asterisk not sending RTP packets to our RTP server (default `127.0.0.1:18080`)
 
 ## Critical Issues Identified
 
@@ -531,7 +531,7 @@ else:  # Now properly at the same level as the ExternalMedia condition
 
 ### Issue #4: ❌ RTP Audio Not Received (NEW - CRITICAL)
 **Current**: No RTP packets received from Asterisk to our RTP server
-**Required**: Asterisk must send RTP packets to 127.0.0.1:18080
+**Required**: Asterisk must send RTP packets to the configured RTP endpoint (default `127.0.0.1:18080`)
 **Impact**: No voice capture possible despite all other components working
 
 ## Recommended Fixes
@@ -553,7 +553,7 @@ else:  # Now properly at the same level as the ExternalMedia condition
 
 ### Fix #4: ❌ RTP Audio Reception (NEW - CRITICAL)
 **Problem**: No RTP packets received from Asterisk to our RTP server
-**Solution**: Investigate why Asterisk is not sending RTP packets to 127.0.0.1:18080
+**Solution**: Investigate why Asterisk is not sending RTP packets to the configured endpoint (default `127.0.0.1:18080`)
 **Possible Causes**:
 - ExternalMedia channel configuration issue
 - RTP server binding issue
@@ -2622,7 +2622,7 @@ The TTS gating implementation **completely failed** despite being properly coded
 - **Call Setup**: Channel 1758345162.282 established successfully
 - **Bridge Creation**: Bridge 9f44bba6-7453-4838-83f0-bab2e7abfffc created
 - **ExternalMedia Channel**: ExternalMedia channel 1758345168.283 created successfully
-- **RTP Server**: Running on port 18080 with ulaw codec
+- **RTP Server**: Running on configured port range (default `18080:18099`) with μ-law codec
 - **RTP Session**: SSRC 265035133 mapped to call_id call_265035133_1758345168
 
 #### **Phase 2: RTP Audio Reception (05:12:48 - 05:13:14)**
@@ -3862,7 +3862,7 @@ This explains why:
 **Health Check Results**:
 ```
 ✅ ARI Connection: Successfully connected to ARI HTTP endpoint and WebSocket
-✅ RTP Server: RTP server started for ExternalMedia transport on port 18080
+✅ RTP Server: RTP server started for ExternalMedia transport on port range 18080-18099
 ✅ Provider Loading: Provider 'local' loaded successfully and ready
 ✅ Engine Status: Engine started and listening for calls
 ```
@@ -3877,7 +3877,7 @@ This explains why:
 **Architecture Clarification**:
 - **Hybrid ARI**: Call control approach using "answer caller → create mixing bridge → add caller → create ExternalMedia and add it to bridge" flow
 - **SessionStore**: Centralized state management layer replacing all legacy dictionary-based state
-- **ExternalMedia RTP**: Real-time audio capture via ExternalMedia RTP on port 18080 with automatic SSRC mapping
+- **ExternalMedia RTP**: Real-time audio capture via ExternalMedia RTP on the configured port range (default `18080:18099`) with automatic SSRC mapping
 - **File-based Playback**: Robust TTS delivery using ARI file playback commands
 
 ### Expected Results

@@ -1,6 +1,6 @@
 """
 RTP Server for External Media Integration with Asterisk.
-Handles bidirectional RTP audio streams for AI voice agent.
+Handles bidirectional RTP audio streams for the AI voice agent.
 """
 
 import asyncio
@@ -8,12 +8,14 @@ import socket
 import struct
 import audioop
 import time
-from typing import Dict, Optional, Callable, Any
+import random
 from dataclasses import dataclass, field
+from typing import Dict, Optional, Callable, Any, Tuple
 
 from .logging_config import get_logger
 
 logger = get_logger(__name__)
+
 
 @dataclass
 class RTPSession:
@@ -39,381 +41,339 @@ class RTPSession:
     send_sequence_initialized: bool = False
     send_timestamp_initialized: bool = False
 
+
 class RTPServer:
     """
     RTP Server for handling bidirectional audio streams with Asterisk External Media.
-    
+
     This server:
-    1. Receives RTP packets from Asterisk (caller audio)
-    2. Forwards audio to AI pipeline for processing
-    3. Receives processed audio from AI pipeline
-    4. Sends RTP packets back to Asterisk (AI response audio)
+        1. Receives RTP packets from Asterisk (caller audio)
+        2. Converts to PCM16 @ 16 kHz for provider processing
+        3. Sends provider audio back to Asterisk as RTP using the same SSRC
     """
-    
-    def __init__(self, host: str, port: int, engine_callback: Callable, codec: str = "ulaw"):
+
+    RTP_VERSION = 2
+    RTP_HEADER_SIZE = 12
+    SAMPLE_RATE = 8000
+    SAMPLES_PER_PACKET = 160  # 20 ms @ 8 kHz
+
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        engine_callback: Callable[[int, bytes], Any],
+        codec: str = "ulaw",
+        port_range: Optional[Tuple[int, int]] = None,
+    ):
         self.host = host
-        self.port = port
+        self.base_port = int(port)
         self.engine_callback = engine_callback
-        self.codec = codec
+        self.codec = self._normalise_codec(codec)
+
+        if port_range:
+            start, end = port_range
+        else:
+            start = end = self.base_port
+        if start > end:
+            start, end = end, start
+        self.port_range: Tuple[int, int] = (max(1, start), max(1, end))
+
         self.sessions: Dict[str, RTPSession] = {}
-        self.ssrc_to_call_id: Dict[int, str] = {}  # SSRC mapping
-        self.running = False
-        self.server_task: Optional[asyncio.Task] = None
-        self.server_socket: Optional[socket.socket] = None
-        
-        # RTP constants
-        self.RTP_VERSION = 2
-        self.RTP_PAYLOAD_TYPE_ULAW = 0
-        self.RTP_HEADER_SIZE = 12
-        self.SAMPLE_RATE = 8000
-        self.SAMPLES_PER_PACKET = 160  # 20ms at 8kHz
-        
-        logger.info(f"RTP Server initialized - Host: {host}, Port: {port}")
-    
-    async def start(self):
-        """Start the RTP server."""
+        self.session_tasks: Dict[str, asyncio.Task] = {}
+        self.port_allocation: Dict[int, str] = {}
+        self.ssrc_to_call_id: Dict[int, str] = {}
+        self.running: bool = False
+
+        logger.info(
+            "RTP Server initialized",
+            host=self.host,
+            port_range=self.port_range,
+            codec=self.codec,
+        )
+
+    async def start(self) -> None:
+        """Mark the RTP server as ready. Per-call sockets are allocated on demand."""
         if self.running:
             logger.warning("RTP server already running")
             return
-        
-        try:
-            # Create UDP socket for RTP
-            self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            self.server_socket.bind((self.host, self.port))
-            self.server_socket.setblocking(False)
-            
-            self.running = True
-            self.server_task = asyncio.create_task(self._rtp_receiver())
-            
-            logger.info(f"RTP Server started - Host: {self.host}, Port: {self.port}, Codec: {self.codec}")
-            
-        except Exception as e:
-            logger.error(f"Failed to start RTP server: {e}")
-            raise
-    
-    async def stop(self):
-        """Stop the RTP server and cleanup all sessions."""
+        self.running = True
+        logger.info(
+            "RTP Server ready",
+            host=self.host,
+            port_range=self.port_range,
+            codec=self.codec,
+        )
+
+    async def stop(self) -> None:
+        """Stop the RTP server and clean up all sessions."""
+        if not self.running:
+            return
+
         self.running = False
-        
-        # Cancel server task
-        if self.server_task:
-            self.server_task.cancel()
+
+        # Cancel receiver tasks first so sockets can close cleanly.
+        for task in list(self.session_tasks.values()):
+            task.cancel()
+        for task in list(self.session_tasks.values()):
             try:
-                await self.server_task
+                await task
             except asyncio.CancelledError:
                 pass
-        
-        # Close server socket
-        if self.server_socket:
-            self.server_socket.close()
-        
-        # Close all active sessions
+            except Exception as exc:
+                logger.debug("RTP receiver task cleanup error", error=str(exc))
+
+        # Close sockets / release ports.
         for session in list(self.sessions.values()):
             await self._cleanup_session(session)
-        
+
+        self.session_tasks.clear()
+        self.sessions.clear()
+        self.port_allocation.clear()
+        self.ssrc_to_call_id.clear()
+
         logger.info("RTP Server stopped")
-    
-    async def _rtp_receiver(self):
-        """Main RTP receiver loop."""
-        logger.info(f"RTP receiver started - Host: {self.host}, Port: {self.port}")
-        
-        while self.running:
-            try:
-                # Receive RTP packet
-                data, addr = await asyncio.get_event_loop().sock_recvfrom(self.server_socket, 1500)
-                
-                # Parse RTP header
-                if len(data) >= self.RTP_HEADER_SIZE:
-                    # Correct RTP header parsing
-                    b0, b1 = data[0], data[1]
-                    version = b0 >> 6
-                    pt = b1 & 0x7F
-                    m = (b1 >> 7) & 0x01
-                    sequence = struct.unpack('!H', data[2:4])[0]
-                    timestamp = struct.unpack('!I', data[4:8])[0]
-                    ssrc = struct.unpack('!I', data[8:12])[0]
-                    
-                    # Validate RTP version
-                    if version != self.RTP_VERSION:
-                        logger.warning("Invalid RTP version", version=version, expected=self.RTP_VERSION)
-                        continue
-                    
-                    # Extract audio payload
-                    audio_payload = data[self.RTP_HEADER_SIZE:]
-                    
-                    # Find or create session based on SSRC
-                    call_id = self.ssrc_to_call_id.get(ssrc)
-                    if not call_id:
-                        # New SSRC - create session
-                        call_id = f"call_{ssrc}_{int(time.time())}"
-                        await self._create_session_from_ssrc(call_id, ssrc, addr)
-                        self.ssrc_to_call_id[ssrc] = call_id
-                        logger.info("🎵 NEW RTP SESSION - New RTP session created", call_id=call_id, ssrc=ssrc, addr=addr)
-                    
-                    # Process packet and call engine with SSRC directly
-                    logger.debug("🎵 RTP PACKET - RTP packet received", ssrc=ssrc, sequence=sequence, size=len(audio_payload), addr=addr)
-                    await self._process_rtp_packet_with_ssrc(ssrc, sequence, timestamp, audio_payload)
-                    
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                if self.running:
-                    logger.error("RTP receiver error", error=str(e))
-                break
-        
-        logger.info("RTP receiver stopped")
-    
-    async def _create_session_from_ssrc(self, call_id: str, ssrc: int, addr: tuple):
-        """Create a new RTP session from SSRC."""
+
+    async def allocate_session(self, call_id: str) -> int:
+        """Allocate and bind a UDP socket for a call, returning the chosen port."""
+        if not self.running:
+            raise RuntimeError("RTP server not started")
+
+        if call_id in self.sessions:
+            return self.sessions[call_id].local_port
+
+        port = self._reserve_port(call_id)
+        if port is None:
+            raise RuntimeError("No free RTP ports available in configured range")
+
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.bind((self.host, port))
+        sock.setblocking(False)
+
+        now = time.time()
         session = RTPSession(
             call_id=call_id,
-            local_port=self.port,
-            remote_host=addr[0],
-            remote_port=addr[1],
-            socket=None,  # Not used in new architecture
-            sequence_number=0,
-            timestamp=0,
-            ssrc=ssrc,
-            created_at=time.time(),
-            last_packet_at=time.time()
+            local_port=port,
+            socket=sock,
+            created_at=now,
+            last_packet_at=now,
         )
-        
         self.sessions[call_id] = session
-        logger.info("RTP session created from SSRC", call_id=call_id, ssrc=ssrc, addr=addr)
-    
-    async def _process_rtp_packet_with_ssrc(self, ssrc: int, sequence: int, timestamp: int, audio_payload: bytes):
-        """Process an RTP packet and call engine with SSRC directly."""
-        # Get call_id from SSRC mapping
-        call_id = self.ssrc_to_call_id.get(ssrc)
-        if not call_id:
-            logger.warning("No call_id found for SSRC", ssrc=ssrc)
-            return
-        
-        if call_id not in self.sessions:
-            logger.warning("No session found for call_id", call_id=call_id, ssrc=ssrc)
-            return
-        
-        session = self.sessions[call_id]
-        session.frames_received += 1
-        session.last_packet_at = time.time()
-        
-        # Periodic logging every 50 packets
-        if session.frames_received % 50 == 0:
-            logger.info("🎵 RTP STATS - RTP frames received/processed", 
-                       ssrc=ssrc, 
-                       frames_received=session.frames_received, 
-                       frames_processed=session.frames_processed)
-        
-        # Sequence validation and loss detection
-        if session.expected_sequence == 0:
-            session.expected_sequence = sequence
-        else:
-            expected = session.expected_sequence
-            if sequence != expected:
-                if sequence > expected:
-                    # Packet loss detected
-                    lost_packets = sequence - expected
-                    session.packet_loss_count += lost_packets
-                    logger.debug("Packet loss detected", 
-                               ssrc=ssrc, 
-                               expected=expected, 
-                               received=sequence, 
-                               lost=lost_packets)
-                else:
-                    # Out of order packet
-                    logger.debug("Out of order packet", 
-                               ssrc=ssrc, 
-                               expected=expected, 
-                               received=sequence)
-        
-        session.expected_sequence = sequence + 1
-        session.last_sequence = sequence
-        
-        # Decode audio based on codec
-        if self.codec == "ulaw":
-            pcm_data = audioop.ulaw2lin(audio_payload, 2)  # Convert ulaw to PCM16
-        elif self.codec == "slin16":
-            pcm_data = audio_payload  # Already PCM16
-        else:
-            logger.error("Unsupported codec", codec=self.codec)
-            return
-        
-        # Resample from 8kHz to 16kHz
-        pcm_16k = self._resample_8k_to_16k(pcm_data, session)
-        
-        # Log resampled audio size for verification
-        logger.debug("🎵 RTP RESAMPLE - Audio resampled", 
-                    ssrc=ssrc, 
-                    input_bytes=len(pcm_data), 
-                    output_bytes=len(pcm_16k),
-                    expected_bytes=640)
-        
-        # Forward to engine with SSRC directly
-        try:
-            await self.engine_callback(ssrc, pcm_16k)
-            session.frames_processed += 1
-        except Exception as e:
-            logger.error("Error in engine callback", ssrc=ssrc, error=str(e))
 
-    async def _process_rtp_packet(self, call_id: str, ssrc: int, sequence: int, timestamp: int, audio_payload: bytes):
-        """Process an RTP packet with jitter buffering and codec conversion."""
-        if call_id not in self.sessions:
-            logger.warning("No session found for call", call_id=call_id)
+        loop = self._get_loop()
+        task = loop.create_task(self._rtp_receiver_loop(session))
+        session.receiver_task = task
+        self.session_tasks[call_id] = task
+
+        logger.info("RTP session allocated", call_id=call_id, port=port, codec=self.codec)
+        return port
+
+    async def cleanup_session(self, call_id: str) -> None:
+        """Public helper to clean up a specific RTP session."""
+        session = self.sessions.pop(call_id, None)
+        if not session:
             return
-        
-        session = self.sessions[call_id]
+        await self._cleanup_session(session)
+        self.session_tasks.pop(call_id, None)
+        logger.info("RTP session cleaned up", call_id=call_id)
+
+    def map_ssrc_to_call_id(self, ssrc: int, call_id: str) -> None:
+        """Record SSRC → call ID mapping for outbound lookups."""
+        self.ssrc_to_call_id[ssrc] = call_id
+        session = self.sessions.get(call_id)
+        if session:
+            session.ssrc = ssrc
+        logger.info("SSRC mapped to call ID", ssrc=ssrc, call_id=call_id)
+
+    def get_call_id_for_ssrc(self, ssrc: int) -> Optional[str]:
+        return self.ssrc_to_call_id.get(ssrc)
+
+    async def send_audio(self, call_id: str, chunk: bytes, *, ssrc: Optional[int] = None) -> bool:
+        """Send provider audio back to Asterisk as RTP for the specified call."""
+        if not chunk:
+            return True
+
+        session = self.sessions.get(call_id)
+        if not session:
+            logger.debug("RTP send skipped (no session)", call_id=call_id)
+            return False
+        if session.remote_host is None or session.remote_port is None:
+            logger.debug("RTP send deferred; remote endpoint unknown", call_id=call_id)
+            return False
+
+        out_ssrc = ssrc or session.ssrc
+        if out_ssrc is None:
+            logger.debug("RTP send deferred; SSRC not established", call_id=call_id)
+            return False
+
+        # Initialise outbound sequence / timestamp the first time we transmit.
+        if not session.send_sequence_initialized:
+            session.sequence_number = session.sequence_number or random.randint(0, 0xFFFF)
+            session.send_sequence_initialized = True
+        if not session.send_timestamp_initialized:
+            session.timestamp = session.timestamp or random.randint(0, 0xFFFFFFFF)
+            session.send_timestamp_initialized = True
+
+        header = self._build_rtp_header(
+            sequence=session.sequence_number,
+            timestamp=session.timestamp,
+            ssrc=out_ssrc,
+        )
+        packet = header + chunk
+
+        try:
+            # Prefer connected UDP sockets for lower overhead.
+            if not self._socket_is_connected(session.socket):
+                try:
+                    session.socket.connect((session.remote_host, session.remote_port))
+                except Exception as exc:
+                    logger.debug(
+                        "RTP connect failed; falling back to sendto",
+                        call_id=call_id,
+                        error=str(exc),
+                    )
+                    session.socket = session.socket  # no-op for mypy hints
+            sent = session.socket.send(packet) if self._socket_is_connected(session.socket) else session.socket.sendto(packet, (session.remote_host, session.remote_port))
+            if sent != len(packet):
+                logger.debug("Short RTP send", call_id=call_id, expected=len(packet), sent=sent)
+        except BlockingIOError:
+            logger.debug("RTP send would block", call_id=call_id)
+            return False
+        except Exception as exc:
+            logger.error("RTP send failed", call_id=call_id, error=str(exc))
+            return False
+
+        session.sequence_number = (session.sequence_number + 1) & 0xFFFF
+        session.timestamp = (session.timestamp + self.SAMPLES_PER_PACKET) & 0xFFFFFFFF
+        session.frames_processed += 1
+        return True
+
+    async def _rtp_receiver_loop(self, session: RTPSession) -> None:
+        """Per-session receive loop that forwards inbound audio to the engine."""
+        loop = self._get_loop()
+        sock = session.socket
+        call_id = session.call_id
+
+        logger.debug("RTP receiver loop started", call_id=call_id, port=session.local_port)
+
+        while self.running and call_id in self.sessions:
+            try:
+                data, addr = await loop.sock_recvfrom(sock, 1500)
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                if self.running:
+                    logger.error("RTP receiver error", call_id=call_id, error=str(exc))
+                break
+
+            if len(data) < self.RTP_HEADER_SIZE:
+                continue
+
+            version = data[0] >> 6
+            if version != self.RTP_VERSION:
+                logger.debug("Invalid RTP version", call_id=call_id, version=version)
+                continue
+
+            sequence = struct.unpack("!H", data[2:4])[0]
+            timestamp = struct.unpack("!I", data[4:8])[0]
+            ssrc = struct.unpack("!I", data[8:12])[0]
+            payload = data[self.RTP_HEADER_SIZE:]
+
+            # Record remote endpoint on first packet.
+            if session.remote_host is None:
+                session.remote_host, session.remote_port = addr[0], addr[1]
+                logger.info(
+                    "RTP remote endpoint established",
+                    call_id=call_id,
+                    remote_host=session.remote_host,
+                    remote_port=session.remote_port,
+                )
+            elif (addr[0] != session.remote_host) or (addr[1] != session.remote_port):
+                session.remote_host, session.remote_port = addr[0], addr[1]
+                logger.info(
+                    "RTP remote endpoint updated",
+                    call_id=call_id,
+                    remote_host=session.remote_host,
+                    remote_port=session.remote_port,
+                )
+
+            # Maintain SSRC mapping.
+            session.ssrc = ssrc
+            self.ssrc_to_call_id[ssrc] = call_id
+
+            # Seed outbound sequence/timestamp with inbound values so the far-end sees continuity.
+            if not session.send_sequence_initialized:
+                session.sequence_number = sequence
+            if not session.send_timestamp_initialized:
+                session.timestamp = timestamp
+
+            await self._handle_inbound_packet(session, sequence, timestamp, payload, ssrc)
+
+        logger.debug("RTP receiver loop stopped", call_id=call_id, port=session.local_port)
+
+    async def _handle_inbound_packet(
+        self,
+        session: RTPSession,
+        sequence: int,
+        timestamp: int,
+        payload: bytes,
+        ssrc: int,
+    ) -> None:
+        """Decode inbound RTP audio and forward PCM16 16 kHz to the engine."""
+        call_id = session.call_id
         session.frames_received += 1
         session.last_packet_at = time.time()
-        
-        # Sequence validation and loss detection
+
+        # Packet loss / ordering diagnostics.
         if session.expected_sequence == 0:
             session.expected_sequence = sequence
         else:
             expected = session.expected_sequence
             if sequence != expected:
                 if sequence > expected:
-                    # Packet loss detected
-                    lost_packets = sequence - expected
-                    session.packet_loss_count += lost_packets
-                    logger.debug("Packet loss detected", 
-                               call_id=call_id, 
-                               expected=expected, 
-                               received=sequence, 
-                               lost=lost_packets)
+                    lost = sequence - expected
+                    session.packet_loss_count += lost
+                    logger.debug(
+                        "RTP packet loss detected",
+                        call_id=call_id,
+                        expected=expected,
+                        received=sequence,
+                        lost=lost,
+                    )
                 else:
-                    # Out of order packet
-                    logger.debug("Out of order packet", 
-                               call_id=call_id, 
-                               expected=expected, 
-                               received=sequence)
-        
-        session.expected_sequence = sequence + 1
+                    logger.debug(
+                        "RTP out-of-order packet",
+                        call_id=call_id,
+                        expected=expected,
+                        received=sequence,
+                    )
+        session.expected_sequence = (sequence + 1) & 0xFFFF
         session.last_sequence = sequence
-        
-        # Decode audio based on codec
-        if self.codec == "ulaw":
-            pcm_data = audioop.ulaw2lin(audio_payload, 2)  # Convert ulaw to PCM16
-        elif self.codec == "slin16":
-            pcm_data = audio_payload  # Already PCM16
-        else:
-            logger.error("Unsupported codec", codec=self.codec)
+
+        try:
+            pcm_8k = self._decode_payload(payload)
+            pcm_16k, state = audioop.ratecv(pcm_8k, 2, 1, self.SAMPLE_RATE, 16000, session.resample_state)
+            session.resample_state = state
+        except Exception as exc:
+            logger.error("RTP payload decode failed", call_id=call_id, error=str(exc))
             return
-        
-        # Resample from 8kHz to 16kHz
-        pcm_16k = self._resample_8k_to_16k(pcm_data, session)
-        
-        # Log resampled audio size for verification
-        logger.debug("🎵 RTP RESAMPLE - Audio resampled", 
-                    call_id=call_id, 
-                    input_bytes=len(pcm_data), 
-                    output_bytes=len(pcm_16k),
-                    expected_bytes=640)
-        
-        # Forward to engine
+
         try:
             await self.engine_callback(ssrc, pcm_16k)
+        except Exception as exc:
+            logger.error("Engine callback failed", call_id=call_id, error=str(exc))
+        else:
             session.frames_processed += 1
-        except Exception as e:
-            logger.error("Error in engine callback", ssrc=ssrc, error=str(e))
-    
-    def _resample_8k_to_16k(self, pcm_8k: bytes, session: RTPSession) -> bytes:
-        """Resample PCM16 8kHz to 16kHz using audioop.ratecv with persistent state."""
-        try:
-            # Use audioop.ratecv with persistent state to avoid frame size drift
-            pcm_16k, state = audioop.ratecv(pcm_8k, 2, 1, 8000, 16000, session.resample_state)
-            session.resample_state = state  # Store state for next packet
-            return pcm_16k
-        except Exception as e:
-            logger.error("Resampling failed", error=str(e))
-            return pcm_8k  # Return original if resampling fails
-    
-    def get_call_id_for_ssrc(self, ssrc: int) -> Optional[str]:
-        """Get call ID for a given SSRC."""
-        return self.ssrc_to_call_id.get(ssrc)
-    
-    def map_ssrc_to_call_id(self, ssrc: int, call_id: str):
-        """Manually map an SSRC to a call ID (for ExternalMedia integration)."""
-        self.ssrc_to_call_id[ssrc] = call_id
-        logger.info("SSRC mapped to call ID", ssrc=ssrc, call_id=call_id)
-    
-    
-    async def cleanup_session(self, call_id: str):
-        """Cleanup RTP session for a call."""
-        if call_id in self.sessions:
-            session = self.sessions[call_id]
-            await self._cleanup_session(session)
-            del self.sessions[call_id]
-            logger.info(f"RTP session cleaned up for call {call_id}")
-    
-    
-    async def _cleanup_session(self, session: RTPSession):
-        """Cleanup a single RTP session."""
-        try:
-            # Remove SSRC mapping
-            if session.ssrc in self.ssrc_to_call_id:
-                del self.ssrc_to_call_id[session.ssrc]
-            
-            logger.debug("RTP session cleaned up", 
-                        call_id=session.call_id, 
-                        ssrc=session.ssrc,
-                        frames_received=session.frames_received,
-                        frames_processed=session.frames_processed)
-            
-        except Exception as e:
-            logger.error("Error cleaning up RTP session", 
-                        call_id=session.call_id, 
-                        error=str(e))
-    
+
     def get_session_info(self, call_id: str) -> Optional[Dict[str, Any]]:
-        """Get information about an RTP session."""
-        if call_id not in self.sessions:
+        session = self.sessions.get(call_id)
+        if not session:
             return None
-        
-        session = self.sessions[call_id]
         return {
             "call_id": session.call_id,
             "local_port": session.local_port,
             "remote_host": session.remote_host,
             "remote_port": session.remote_port,
-            "sequence_number": session.sequence_number,
-            "timestamp": session.timestamp,
             "ssrc": session.ssrc,
-            "created_at": session.created_at,
-            "last_packet_at": session.last_packet_at,
-            "active": time.time() - session.last_packet_at < 30  # 30 second timeout
-        }
-    
-    def get_stats(self) -> Dict[str, Any]:
-        """Get RTP server statistics."""
-        active_sessions = sum(1 for s in self.sessions.values() if time.time() - s.last_packet_at < 30)
-        total_frames_received = sum(s.frames_received for s in self.sessions.values())
-        total_frames_processed = sum(s.frames_processed for s in self.sessions.values())
-        total_packet_loss = sum(s.packet_loss_count for s in self.sessions.values())
-        
-        return {
-            "running": self.running,
-            "host": self.host,
-            "port": self.port,
-            "codec": self.codec,
-            "total_sessions": len(self.sessions),
-            "active_sessions": active_sessions,
-            "total_frames_received": total_frames_received,
-            "total_frames_processed": total_frames_processed,
-            "total_packet_loss": total_packet_loss,
-            "ssrc_mappings": len(self.ssrc_to_call_id)
-        }
-    
-    def get_session_stats(self, call_id: str) -> Optional[Dict[str, Any]]:
-        """Get statistics for a specific RTP session."""
-        if call_id not in self.sessions:
-            return None
-        
-        session = self.sessions[call_id]
-        return {
-            "call_id": session.call_id,
-            "ssrc": session.ssrc,
-            "remote_host": session.remote_host,
-            "remote_port": session.remote_port,
             "frames_received": session.frames_received,
             "frames_processed": session.frames_processed,
             "packet_loss_count": session.packet_loss_count,
@@ -421,5 +381,96 @@ class RTPServer:
             "expected_sequence": session.expected_sequence,
             "created_at": session.created_at,
             "last_packet_at": session.last_packet_at,
-            "active": time.time() - session.last_packet_at < 30
         }
+
+    def get_stats(self) -> Dict[str, Any]:
+        now = time.time()
+        active_sessions = sum(1 for s in self.sessions.values() if now - s.last_packet_at < 30)
+        return {
+            "running": self.running,
+            "host": self.host,
+            "port_range": self.port_range,
+            "codec": self.codec,
+            "sessions_total": len(self.sessions),
+            "sessions_active": active_sessions,
+            "frames_received": sum(s.frames_received for s in self.sessions.values()),
+            "frames_processed": sum(s.frames_processed for s in self.sessions.values()),
+            "packet_loss_total": sum(s.packet_loss_count for s in self.sessions.values()),
+        }
+
+    # ------------------------------------------------------------------ #
+    # Internal helpers
+    # ------------------------------------------------------------------ #
+
+    def _reserve_port(self, call_id: str) -> Optional[int]:
+        start, end = self.port_range
+        for port in range(start, end + 1):
+            if port not in self.port_allocation:
+                self.port_allocation[port] = call_id
+                return port
+        return None
+
+    def _release_port(self, port: int) -> None:
+        self.port_allocation.pop(port, None)
+
+    async def _cleanup_session(self, session: RTPSession) -> None:
+        call_id = session.call_id
+        if session.receiver_task:
+            session.receiver_task.cancel()
+            try:
+                await session.receiver_task
+            except asyncio.CancelledError:
+                pass
+            except Exception as exc:
+                logger.debug("RTP receiver task finalisation error", call_id=call_id, error=str(exc))
+
+        if session.socket:
+            try:
+                session.socket.close()
+            except Exception:
+                pass
+
+        if session.local_port in self.port_allocation:
+            self._release_port(session.local_port)
+        if session.ssrc in self.ssrc_to_call_id:
+            self.ssrc_to_call_id.pop(session.ssrc, None)
+
+    def _normalise_codec(self, codec: str) -> str:
+        value = (codec or "ulaw").lower()
+        if value in ("mulaw", "g711_ulaw", "mu-law"):
+            return "ulaw"
+        if value in ("slin16", "linear16", "pcm16"):
+            return "slin16"
+        return value
+
+    def _decode_payload(self, payload: bytes) -> bytes:
+        if self.codec == "ulaw":
+            return audioop.ulaw2lin(payload, 2)
+        if self.codec == "slin16":
+            return payload
+        raise ValueError(f"Unsupported codec '{self.codec}'")
+
+    def _build_rtp_header(self, sequence: int, timestamp: int, ssrc: int) -> bytes:
+        version_p_x_cc = self.RTP_VERSION << 6
+        payload_type = self._payload_type_byte()
+        return struct.pack("!BBHII", version_p_x_cc, payload_type, sequence & 0xFFFF, timestamp & 0xFFFFFFFF, ssrc & 0xFFFFFFFF)
+
+    def _payload_type_byte(self) -> int:
+        if self.codec == "ulaw":
+            return 0
+        if self.codec == "slin16":
+            return 11  # static payload type for L16/1 channel
+        return 0
+
+    def _socket_is_connected(self, sock: socket.socket) -> bool:
+        try:
+            sock.getpeername()
+            return True
+        except OSError:
+            return False
+
+    def _get_loop(self) -> asyncio.AbstractEventLoop:
+        try:
+            return asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.get_event_loop()
