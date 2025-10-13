@@ -198,6 +198,23 @@ class DeepgramProvider(AIProviderInterface):
             self._settings_ts = _t.monotonic()
         except Exception:
             self._settings_ts = 0.0
+        # Start a fallback timer to avoid indefinite buffering if ACK never arrives
+        async def _fallback_ready():
+            try:
+                await asyncio.sleep(0.3)
+                if self.websocket and not self.websocket.closed and not self._ready_to_stream:
+                    self._ready_to_stream = True
+                    try:
+                        logger.warning(
+                            "Deepgram settings ACK not received promptly; enabling streaming after fallback delay",
+                            call_id=self.call_id,
+                        )
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        asyncio.create_task(_fallback_ready())
+
         # Wait up to 1.0s for a server response to mark readiness
         try:
             if self._ack_event is not None:
@@ -206,7 +223,20 @@ class DeepgramProvider(AIProviderInterface):
             else:
                 logger.debug("ACK gate not initialized; skipping wait")
         except asyncio.TimeoutError:
-            logger.warning("Deepgram settings ACK not received within timeout; will buffer until server responds")
+            logger.warning("Deepgram settings ACK not received within timeout; fallback readiness may be active")
+        # If ready and we haven't seen any audio burst within ~1s, inject greeting once to kick off TTS
+        async def _inject_greeting_if_quiet():
+            try:
+                await asyncio.sleep(1.0)
+                if self.websocket and not self.websocket.closed and not self._in_audio_burst and greeting_val:
+                    logger.info("Injecting greeting via fallback as no AgentAudio detected", call_id=self.call_id)
+                    try:
+                        await self.speak(greeting_val)
+                    except Exception:
+                        logger.debug("Greeting injection failed", exc_info=True)
+            except Exception:
+                pass
+        asyncio.create_task(_inject_greeting_if_quiet())
         summary = {
             "input_encoding": str(input_encoding).lower(),
             "input_sample_rate_hz": int(input_sample_rate),
