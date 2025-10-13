@@ -129,6 +129,16 @@ class DeepgramProvider(AIProviderInterface):
 
             # Persist call context for downstream events
             self.call_id = call_id
+            # Capture Deepgram request id if provided
+            try:
+                rid = None
+                if hasattr(self.websocket, "response_headers") and self.websocket.response_headers:
+                    rid = self.websocket.response_headers.get("x-request-id")
+                if rid:
+                    self.request_id = rid
+                    logger.info("Deepgram request id", call_id=call_id, request_id=rid)
+            except Exception:
+                logger.debug("Failed to read Deepgram response headers", exc_info=True)
 
             # Prepare ACK gate and start receiver early to catch server responses
             self._ack_event = asyncio.Event()
@@ -169,8 +179,8 @@ class DeepgramProvider(AIProviderInterface):
         settings = {
             "type": "Settings",
             "audio": {
-                "input": { "encoding": input_encoding, "sample_rate": input_sample_rate },
-                "output": { "encoding": output_encoding, "sample_rate": output_sample_rate, "container": "none" }
+                "input": { "encoding": input_encoding, "sample_rate": input_sample_rate, "container": "raw" },
+                "output": { "encoding": output_encoding, "sample_rate": output_sample_rate, "container": "raw" }
             },
             "agent": {
                 "greeting": greeting_val,
@@ -459,6 +469,25 @@ class DeepgramProvider(AIProviderInterface):
                                 self._ack_event.set()
                         except Exception:
                             pass
+                        # One-time ACK settings log for effective audio configs
+                        try:
+                            if getattr(self, "_settings_sent", False) and not getattr(self, "_ack_logged", False):
+                                audio_ack = {}
+                                if isinstance(event_data, dict):
+                                    audio_ack = event_data.get("audio") or {}
+                                logger.info(
+                                    "Deepgram Agent ACK settings",
+                                    call_id=self.call_id,
+                                    request_id=getattr(self, "request_id", None),
+                                    ack_audio=audio_ack,
+                                    event_type=(event_data.get("type") if isinstance(event_data, dict) else None),
+                                )
+                                try:
+                                    self._ack_logged = True
+                                except Exception:
+                                    pass
+                        except Exception:
+                            logger.debug("Deepgram ACK logging failed", exc_info=True)
                         # If we were in an audio burst, a JSON control/event frame marks a boundary
                         if self._in_audio_burst and self.on_event:
                             await self.on_event({
