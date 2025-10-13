@@ -1140,17 +1140,49 @@ class Engine:
 
         caller_channel_id = self.pending_audiosocket_channels.pop(audiosocket_channel_id, None)
         if not caller_channel_id:
-            # Fallback lookup via SessionStore
-            sessions = await self.session_store.get_all_sessions()
-            for s in sessions:
-                if getattr(s, 'audiosocket_channel_id', None) == audiosocket_channel_id:
-                    caller_channel_id = s.caller_channel_id
-                    break
+            # Fallback 1: try to parse the AudioSocket UUID from the channel name and map via uuidext_to_channel
+            name = channel.get('name', '') or ''
+            parsed_uuid = None
+            try:
+                # Expected form: "AudioSocket/host:port-<uuid>"; take substring after last '-'
+                if name.startswith('AudioSocket/') and '-' in name:
+                    candidate = name.rsplit('-', 1)[-1]
+                    # Basic UUID sanity (contains 4 dashes)
+                    if candidate.count('-') == 4:
+                        parsed_uuid = candidate
+            except Exception:
+                parsed_uuid = None
+
+            if parsed_uuid and parsed_uuid in self.uuidext_to_channel:
+                caller_channel_id = self.uuidext_to_channel.get(parsed_uuid)
+            
+            # Fallback 2: brief retry loop to allow originate path to record mappings
+            if not caller_channel_id:
+                for attempt in range(5):
+                    await asyncio.sleep(0.05)
+                    # Recheck pending mapping
+                    caller_channel_id = self.pending_audiosocket_channels.pop(audiosocket_channel_id, None)
+                    if caller_channel_id:
+                        break
+                    # Recheck uuid mapping if we parsed one
+                    if parsed_uuid and parsed_uuid in self.uuidext_to_channel:
+                        caller_channel_id = self.uuidext_to_channel.get(parsed_uuid)
+                        if caller_channel_id:
+                            break
+            
+            # Fallback 3: scan sessions as a last resort
+            if not caller_channel_id:
+                sessions = await self.session_store.get_all_sessions()
+                for s in sessions:
+                    if getattr(s, 'audiosocket_channel_id', None) == audiosocket_channel_id:
+                        caller_channel_id = s.caller_channel_id
+                        break
 
         if not caller_channel_id:
             logger.error(
                 "🎯 HYBRID ARI - No caller found for AudioSocket channel",
                 audiosocket_channel_id=audiosocket_channel_id,
+                channel_name=channel.get('name'),
             )
             await self.ari_client.hangup_channel(audiosocket_channel_id)
             return
