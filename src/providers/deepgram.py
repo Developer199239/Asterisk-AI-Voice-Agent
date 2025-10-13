@@ -54,6 +54,8 @@ class DeepgramProvider(AIProviderInterface):
         self._settings_ts: float = 0.0
         self._prestream_queue: list[bytes] = []  # small buffer for early frames
         self._pcm16_accum = bytearray()
+        # Settings ACK gating
+        self._ack_event: Optional[asyncio.Event] = None
         # Cache declared Deepgram input settings
         try:
             self._dg_input_rate = int(getattr(self.config, 'input_sample_rate_hz', 8000) or 8000)
@@ -128,9 +130,11 @@ class DeepgramProvider(AIProviderInterface):
             # Persist call context for downstream events
             self.call_id = call_id
 
-            await self._configure_agent()
-
+            # Prepare ACK gate and start receiver early to catch server responses
+            self._ack_event = asyncio.Event()
             asyncio.create_task(self._receive_loop())
+
+            await self._configure_agent()
             self._keep_alive_task = asyncio.create_task(self._keep_alive())
 
         except Exception as e:
@@ -177,22 +181,22 @@ class DeepgramProvider(AIProviderInterface):
             }
         }
         await self.websocket.send(json.dumps(settings))
-        # Mark settings sent and become ready shortly or upon first server message
+        # Mark settings sent; readiness only upon server response (ACK) or timeout
         self._settings_sent = True
         try:
             import time as _t
             self._settings_ts = _t.monotonic()
         except Exception:
             self._settings_ts = 0.0
-        # Fallback readiness timer (~200 ms)
-        async def _mark_ready_after_delay():
-            try:
-                await asyncio.sleep(0.2)
-                if self.websocket and not self.websocket.closed and not self._ready_to_stream:
-                    self._ready_to_stream = True
-            except Exception:
-                pass
-        asyncio.create_task(_mark_ready_after_delay())
+        # Wait up to 1.0s for a server response to mark readiness
+        try:
+            if self._ack_event is not None:
+                await asyncio.wait_for(self._ack_event.wait(), timeout=1.0)
+                self._ready_to_stream = True
+            else:
+                logger.debug("ACK gate not initialized; skipping wait")
+        except asyncio.TimeoutError:
+            logger.warning("Deepgram settings ACK not received within timeout; will buffer until server responds")
         summary = {
             "input_encoding": str(input_encoding).lower(),
             "input_sample_rate_hz": int(input_sample_rate),
@@ -448,8 +452,13 @@ class DeepgramProvider(AIProviderInterface):
                 if isinstance(message, str):
                     try:
                         event_data = json.loads(message)
-                        # Any server message after settings marks stream readiness
+                        # Any server message after settings marks stream readiness and ACK
                         self._ready_to_stream = True
+                        try:
+                            if self._ack_event and not self._ack_event.is_set():
+                                self._ack_event.set()
+                        except Exception:
+                            pass
                         # If we were in an audio burst, a JSON control/event frame marks a boundary
                         if self._in_audio_burst and self.on_event:
                             await self.on_event({

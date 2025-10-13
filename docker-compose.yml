@@ -21,9 +21,7 @@ services:
     stdin_open: true
     restart: unless-stopped
     network_mode: "host"
-    depends_on:
-      local-ai-server:
-        condition: service_started
+
 
   local-ai-server:
     build:

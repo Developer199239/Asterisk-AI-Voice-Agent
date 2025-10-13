@@ -1,6 +1,6 @@
 # config/ai-agent.yaml
 # Default provider to use if not specified in the dialplan
-default_provider: "openai_realtime"
+default_provider: "deepgram"
 
 # Pipeline definitions specify which STT/LLM/TTS components power each call.
 # Pipelines can mix local and cloud services; the orchestrator selects components
@@ -119,7 +119,7 @@ audiosocket:
 
 # Barge-in configuration
 barge_in:
-  enabled: true
+  enabled: false
   initial_protection_ms: 400   # Drop inbound during the initial TTS window (avoids early self-echo)
                                # Range: 200–600 ms (higher if trunks echo or agent intros are long)
   min_ms: 250                  # Sustained speech required to trigger barge-in (de-bounce)
@@ -189,7 +189,7 @@ vad:
 # Provider-specific configurations
 providers:
   local:
-    enabled: true
+    enabled: false
     ws_url: "${LOCAL_WS_URL:-ws://127.0.0.1:8765}"
     connect_timeout_sec: ${LOCAL_WS_CONNECT_TIMEOUT:=2.0}
     response_timeout_sec: ${LOCAL_WS_RESPONSE_TIMEOUT:=5.0}
@@ -206,14 +206,14 @@ providers:
     tts_model: "aura-asteria-en"
     greeting: "${DEEPGRAM_GREETING:-Hello, how can I help you today?}"
     instructions: "${DEEPGRAM_INSTRUCTIONS:-You are a concise voice assistant. Respond in under 20 words and answer immediately.}"
-    input_encoding: "ulaw"
-    input_sample_rate_hz: 8000
+    input_encoding: "linear16"
+    input_sample_rate_hz: 16000
     continuous_input: true        # Stream audio continuously for best responsiveness
                                   # TIP: Keep this true for real-time conversations
     output_encoding: "linear16"
     output_sample_rate_hz: 24000
   openai:
-    enabled: true
+    enabled: false
     api_key: "${OPENAI_API_KEY}"
     organization: ""
     project: ""
@@ -233,7 +233,7 @@ providers:
     chunk_size_ms: 20
     response_timeout_sec: 5.0
   openai_realtime:
-    enabled: true
+    enabled: false
     api_key: "${OPENAI_API_KEY}"
     model: "gpt-4o-realtime-preview-2024-12-17"
     voice: "alloy"
