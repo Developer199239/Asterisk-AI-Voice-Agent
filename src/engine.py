@@ -253,6 +253,11 @@ class Engine:
                     getattr(config.streaming, 'egress_force_mulaw', False),
                     audiosocket_fmt,
                 ),
+                # Diagnostics (optional): enable short PCM taps pre/post compand
+                'diag_enable_taps': bool(getattr(config.streaming, 'diag_enable_taps', False)),
+                'diag_pre_secs': int(getattr(config.streaming, 'diag_pre_secs', 0) or 0),
+                'diag_post_secs': int(getattr(config.streaming, 'diag_post_secs', 0) or 0),
+                'diag_out_dir': str(getattr(config.streaming, 'diag_out_dir', '') or ''),
             }
         # Debug/diagnostics: allow broadcasting outbound frames to all AudioSocket conns
         try:
