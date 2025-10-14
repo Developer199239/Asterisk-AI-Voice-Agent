@@ -888,7 +888,40 @@ class StreamingPlaybackManager:
                         if len(pre_buf) < pre_lim:
                             need = pre_lim - len(pre_buf)
                             pre_buf.extend(working[:need])
+                    # Encode to μ-law and back-convert for post snapshot
                     ulaw_bytes = pcm16le_to_mulaw(working)
+                    back_pcm = mulaw_to_pcm16le(ulaw_bytes)
+                    # First-chunk direct snapshot: write from current frame data if not yet snapped
+                    try:
+                        if not info.get('tap_first_snapshot_done', False):
+                            stream_id_first = str(info.get('stream_id', 'seg'))
+                            # Pre-compand snapshot
+                            if working:
+                                fn = os.path.join(self.diag_out_dir, f"pre_compand_pcm16_{call_id}_{stream_id_first}_first.wav")
+                                try:
+                                    with wave.open(fn, 'wb') as wf:
+                                        wf.setnchannels(1)
+                                        wf.setsampwidth(2)
+                                        wf.setframerate(int(rate) if isinstance(rate, int) else int(self.sample_rate))
+                                        wf.writeframes(working)
+                                    logger.info("Wrote pre-compand PCM16 tap snapshot", call_id=call_id, stream_id=stream_id_first, path=fn, bytes=len(working), rate=rate, snapshot="first")
+                                except Exception:
+                                    logger.warning("Failed to write pre-compand tap snapshot", call_id=call_id, stream_id=stream_id_first, path=fn, rate=rate, snapshot="first", exc_info=True)
+                            # Post-compand snapshot (decoded back to PCM16)
+                            if back_pcm:
+                                fn2 = os.path.join(self.diag_out_dir, f"post_compand_pcm16_{call_id}_{stream_id_first}_first.wav")
+                                try:
+                                    with wave.open(fn2, 'wb') as wf:
+                                        wf.setnchannels(1)
+                                        wf.setsampwidth(2)
+                                        wf.setframerate(int(rate) if isinstance(rate, int) else int(self.sample_rate))
+                                        wf.writeframes(back_pcm)
+                                    logger.info("Wrote post-compand PCM16 tap snapshot", call_id=call_id, stream_id=stream_id_first, path=fn2, bytes=len(back_pcm), rate=rate, snapshot="first")
+                                except Exception:
+                                    logger.warning("Failed to write post-compand tap snapshot", call_id=call_id, stream_id=stream_id_first, path=fn2, rate=rate, snapshot="first", exc_info=True)
+                            info['tap_first_snapshot_done'] = True
+                    except Exception:
+                        logger.debug("First-chunk tap snapshot failed", call_id=call_id, exc_info=True)
                     try:
                         post_lim = max(0, int(self.diag_post_secs * rate * 2))
                     except Exception:
@@ -897,17 +930,47 @@ class StreamingPlaybackManager:
                         post_buf = info['tap_post_pcm16']
                         if len(post_buf) < post_lim:
                             need2 = post_lim - len(post_buf)
-                            back_pcm = mulaw_to_pcm16le(ulaw_bytes)
                             post_buf.extend(back_pcm[:need2])
                     return ulaw_bytes
                 return pcm16le_to_mulaw(working)
             # Otherwise target PCM16, with optional (or auto) egress byteswap
+            out_pcm = self._apply_pcm_endianness(call_id, working, stream_info, mode)
             if getattr(self, 'diag_enable_taps', False) and call_id in self.active_streams:
                 info = self.active_streams.get(call_id, {})
                 try:
                     rate = int(target_rate)
                 except Exception:
                     rate = target_rate
+                # First-chunk direct snapshot: use current PCM16 frame data
+                try:
+                    if not info.get('tap_first_snapshot_done', False):
+                        stream_id_first = str(info.get('stream_id', 'seg'))
+                        if working:
+                            fnp = os.path.join(self.diag_out_dir, f"pre_compand_pcm16_{call_id}_{stream_id_first}_first.wav")
+                            try:
+                                with wave.open(fnp, 'wb') as wf:
+                                    wf.setnchannels(1)
+                                    wf.setsampwidth(2)
+                                    wf.setframerate(int(rate) if isinstance(rate, int) else int(self.sample_rate))
+                                    wf.writeframes(working)
+                                logger.info("Wrote pre-compand PCM16 tap snapshot", call_id=call_id, stream_id=stream_id_first, path=fnp, bytes=len(working), rate=rate, snapshot="first")
+                            except Exception:
+                                logger.warning("Failed to write pre-compand tap snapshot", call_id=call_id, stream_id=stream_id_first, path=fnp, rate=rate, snapshot="first", exc_info=True)
+                        if out_pcm:
+                            fnq = os.path.join(self.diag_out_dir, f"post_compand_pcm16_{call_id}_{stream_id_first}_first.wav")
+                            try:
+                                with wave.open(fnq, 'wb') as wf:
+                                    wf.setnchannels(1)
+                                    wf.setsampwidth(2)
+                                    wf.setframerate(int(rate) if isinstance(rate, int) else int(self.sample_rate))
+                                    wf.writeframes(out_pcm)
+                                logger.info("Wrote post-compand PCM16 tap snapshot", call_id=call_id, stream_id=stream_id_first, path=fnq, bytes=len(out_pcm), rate=rate, snapshot="first")
+                            except Exception:
+                                logger.warning("Failed to write post-compand tap snapshot", call_id=call_id, stream_id=stream_id_first, path=fnq, rate=rate, snapshot="first", exc_info=True)
+                        info['tap_first_snapshot_done'] = True
+                except Exception:
+                    logger.debug("First-chunk tap snapshot failed (PCM)", call_id=call_id, exc_info=True)
+                # Continue with buffer accumulation
                 try:
                     pre_lim = max(0, int(self.diag_pre_secs * rate * 2))
                 except Exception:
@@ -925,8 +988,8 @@ class StreamingPlaybackManager:
                     post_buf = info['tap_post_pcm16']
                     if len(post_buf) < post_lim:
                         need2 = post_lim - len(post_buf)
-                        post_buf.extend(working[:need2])
-            return self._apply_pcm_endianness(call_id, working, stream_info, mode)
+                        post_buf.extend(out_pcm[:need2])
+            return out_pcm
         except Exception as exc:
             logger.error(
                 "Audio chunk processing failed",
