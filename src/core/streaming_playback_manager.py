@@ -1514,10 +1514,23 @@ class StreamingPlaybackManager:
             # Diagnostic: write pre/post tap WAVs if enabled
             try:
                 info = self.active_streams.get(call_id, {})
-                if info and bool(info.get('diag_enabled')) and int(info.get('tap_rate') or 0) > 0:
-                    rate = int(info.get('tap_rate'))
+                if info and bool(info.get('diag_enabled')):
+                    try:
+                        raw_rate = int(info.get('tap_rate') or 0)
+                    except Exception:
+                        raw_rate = 0
+                    rate = raw_rate if raw_rate > 0 else int(self.sample_rate)
                     pre = bytes(info.get('tap_pre_pcm16') or b"")
                     post = bytes(info.get('tap_post_pcm16') or b"")
+                    # Always log counts so we know what reached cleanup
+                    logger.info(
+                        "Streaming diag taps summary",
+                        call_id=call_id,
+                        tap_pre_bytes=len(pre),
+                        tap_post_bytes=len(post),
+                        tap_rate=rate,
+                    )
+                    # Only write files when there is data
                     if pre:
                         fn = os.path.join(self.diag_out_dir, f"pre_compand_pcm16_{call_id}.wav")
                         try:
@@ -1528,7 +1541,7 @@ class StreamingPlaybackManager:
                                 wf.writeframes(pre)
                             logger.info("Wrote pre-compand PCM16 tap", call_id=call_id, path=fn, bytes=len(pre), rate=rate)
                         except Exception:
-                            logger.debug("Failed to write pre-compand tap", call_id=call_id, exc_info=True)
+                            logger.warning("Failed to write pre-compand tap", call_id=call_id, path=fn, rate=rate, exc_info=True)
                     if post:
                         fn2 = os.path.join(self.diag_out_dir, f"post_compand_pcm16_{call_id}.wav")
                         try:
@@ -1539,7 +1552,7 @@ class StreamingPlaybackManager:
                                 wf.writeframes(post)
                             logger.info("Wrote post-compand PCM16 tap", call_id=call_id, path=fn2, bytes=len(post), rate=rate)
                         except Exception:
-                            logger.debug("Failed to write post-compand tap", call_id=call_id, exc_info=True)
+                            logger.warning("Failed to write post-compand tap", call_id=call_id, path=fn2, rate=rate, exc_info=True)
             except Exception:
                 logger.debug("Diagnostic tap write failed", call_id=call_id, exc_info=True)
 
