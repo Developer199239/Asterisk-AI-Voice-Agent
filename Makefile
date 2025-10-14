@@ -406,6 +406,11 @@ test-call:
 		echo "   cat $$LATEST_FRAMEWORK"; \
 	fi
 
+## rca-collect: Collect RCA artifacts (logs, taps, recordings) and run analyzer (env: SERVER_HOST, PROJECT_PATH, SINCE_MIN)
+rca-collect:
+	@echo "--> Collecting RCA artifacts from server..."
+	@bash scripts/rca_collect.sh
+
 ## check-python: Check for host python3 and print fallback guidance
 check-python:
 	@if command -v python3 >/dev/null 2>&1; then \
