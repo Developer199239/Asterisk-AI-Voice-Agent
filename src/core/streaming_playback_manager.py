@@ -1504,6 +1504,38 @@ class StreamingPlaybackManager:
     async def _cleanup_stream(self, call_id: str, stream_id: str) -> None:
         """Clean up streaming resources."""
         try:
+            # Diagnostic: write pre/post tap WAVs if enabled
+            try:
+                info = self.active_streams.get(call_id, {})
+                if info and bool(info.get('diag_enabled')) and int(info.get('tap_rate') or 0) > 0:
+                    rate = int(info.get('tap_rate'))
+                    pre = bytes(info.get('tap_pre_pcm16') or b"")
+                    post = bytes(info.get('tap_post_pcm16') or b"")
+                    if pre:
+                        fn = os.path.join(self.diag_out_dir, f"pre_compand_pcm16_{call_id}.wav")
+                        try:
+                            with wave.open(fn, 'wb') as wf:
+                                wf.setnchannels(1)
+                                wf.setsampwidth(2)
+                                wf.setframerate(rate)
+                                wf.writeframes(pre)
+                            logger.info("Wrote pre-compand PCM16 tap", call_id=call_id, path=fn, bytes=len(pre), rate=rate)
+                        except Exception:
+                            logger.debug("Failed to write pre-compand tap", call_id=call_id, exc_info=True)
+                    if post:
+                        fn2 = os.path.join(self.diag_out_dir, f"post_compand_pcm16_{call_id}.wav")
+                        try:
+                            with wave.open(fn2, 'wb') as wf:
+                                wf.setnchannels(1)
+                                wf.setsampwidth(2)
+                                wf.setframerate(rate)
+                                wf.writeframes(post)
+                            logger.info("Wrote post-compand PCM16 tap", call_id=call_id, path=fn2, bytes=len(post), rate=rate)
+                        except Exception:
+                            logger.debug("Failed to write post-compand tap", call_id=call_id, exc_info=True)
+            except Exception:
+                logger.debug("Diagnostic tap write failed", call_id=call_id, exc_info=True)
+
             # Before clearing gating/state, give provider a grace period and flush any remaining audio
             # to avoid chopping off the tail of the playback.
             try:
