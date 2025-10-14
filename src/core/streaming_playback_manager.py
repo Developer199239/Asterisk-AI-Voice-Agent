@@ -159,6 +159,10 @@ class StreamingPlaybackManager:
         self._first_send_logged: Set[str] = set()
         # Startup gating to allow jitter buffers to fill before playback begins
         self._startup_ready: Dict[str, bool] = {}
+        # Call-level diagnostic accumulators
+        self.call_tap_pre_pcm16: Dict[str, bytearray] = {}
+        self.call_tap_post_pcm16: Dict[str, bytearray] = {}
+        self.call_tap_rate: Dict[str, int] = {}
         
         # Configuration defaults
         self.sample_rate = self.streaming_config.get('sample_rate', 8000)
@@ -424,6 +428,18 @@ class StreamingPlaybackManager:
             else:
                 egress_swap = egress_swap_auto
 
+            # Initialize call-level taps if enabled
+            if self.diag_enable_taps:
+                try:
+                    self.call_tap_pre_pcm16.setdefault(call_id, bytearray())
+                    self.call_tap_post_pcm16.setdefault(call_id, bytearray())
+                    self.call_tap_rate[call_id] = int(resolved_target_rate)
+                except Exception:
+                    try:
+                        self.call_tap_rate[call_id] = int(self.sample_rate)
+                    except Exception:
+                        pass
+
             self.active_streams[call_id] = {
                 'stream_id': stream_id,
                 'playback_type': playback_type,
@@ -451,6 +467,9 @@ class StreamingPlaybackManager:
                 'tap_post_pcm16': bytearray(),
                 'tap_rate': (resolved_target_rate if self.diag_enable_taps else 0),
                 'diag_enabled': self.diag_enable_taps,
+                'tap_first_window_pre': bytearray(),
+                'tap_first_window_post': bytearray(),
+                'tap_first_window_done': False,
             }
             self._startup_ready[call_id] = False
             try:
@@ -931,6 +950,64 @@ class StreamingPlaybackManager:
                         if len(post_buf) < post_lim:
                             need2 = post_lim - len(post_buf)
                             post_buf.extend(back_pcm[:need2])
+                    # Call-level accumulation (pre/post)
+                    try:
+                        if self.diag_enable_taps:
+                            if call_id in self.call_tap_pre_pcm16 and working:
+                                self.call_tap_pre_pcm16[call_id].extend(working)
+                            if call_id in self.call_tap_post_pcm16 and back_pcm:
+                                self.call_tap_post_pcm16[call_id].extend(back_pcm)
+                    except Exception:
+                        logger.debug("Call-level tap accumulation failed (ulaw)", call_id=call_id, exc_info=True)
+                    # First-window (200ms) per-segment snapshots
+                    try:
+                        win_rate = int(rate) if isinstance(rate, int) else int(self.sample_rate)
+                    except Exception:
+                        win_rate = int(self.sample_rate)
+                    try:
+                        win_bytes = max(1, int(win_rate * 0.2 * 2))
+                    except Exception:
+                        win_bytes = 3200  # ~200ms @ 8k, 16-bit
+                    try:
+                        if isinstance(info.get('tap_first_window_pre'), bytearray) and working:
+                            pre_w = info['tap_first_window_pre']
+                            if len(pre_w) < win_bytes:
+                                needw = win_bytes - len(pre_w)
+                                pre_w.extend(working[:needw])
+                        if isinstance(info.get('tap_first_window_post'), bytearray) and back_pcm:
+                            post_w = info['tap_first_window_post']
+                            if len(post_w) < win_bytes:
+                                needw2 = win_bytes - len(post_w)
+                                post_w.extend(back_pcm[:needw2])
+                        if not info.get('tap_first_window_done'):
+                            pre_w = info.get('tap_first_window_pre') or bytearray()
+                            post_w = info.get('tap_first_window_post') or bytearray()
+                            if len(pre_w) >= win_bytes and len(post_w) >= win_bytes:
+                                sid = str(info.get('stream_id', 'seg'))
+                                # Write 200ms snapshots
+                                try:
+                                    fnp200 = os.path.join(self.diag_out_dir, f"pre_compand_pcm16_{call_id}_{sid}_first200ms.wav")
+                                    with wave.open(fnp200, 'wb') as wf:
+                                        wf.setnchannels(1)
+                                        wf.setsampwidth(2)
+                                        wf.setframerate(win_rate)
+                                        wf.writeframes(bytes(pre_w[:win_bytes]))
+                                    logger.info("Wrote pre-compand 200ms snapshot", call_id=call_id, stream_id=sid, path=fnp200, bytes=win_bytes, rate=win_rate, snapshot="first200ms")
+                                except Exception:
+                                    logger.warning("Failed 200ms pre snapshot", call_id=call_id, stream_id=sid, rate=win_rate, exc_info=True)
+                                try:
+                                    fnq200 = os.path.join(self.diag_out_dir, f"post_compand_pcm16_{call_id}_{sid}_first200ms.wav")
+                                    with wave.open(fnq200, 'wb') as wf:
+                                        wf.setnchannels(1)
+                                        wf.setsampwidth(2)
+                                        wf.setframerate(win_rate)
+                                        wf.writeframes(bytes(post_w[:win_bytes]))
+                                    logger.info("Wrote post-compand 200ms snapshot", call_id=call_id, stream_id=sid, path=fnq200, bytes=win_bytes, rate=win_rate, snapshot="first200ms")
+                                except Exception:
+                                    logger.warning("Failed 200ms post snapshot", call_id=call_id, stream_id=sid, rate=win_rate, exc_info=True)
+                                info['tap_first_window_done'] = True
+                    except Exception:
+                        logger.debug("First-window snapshot failed (ulaw)", call_id=call_id, exc_info=True)
                     return ulaw_bytes
                 return pcm16le_to_mulaw(working)
             # Otherwise target PCM16, with optional (or auto) egress byteswap
@@ -989,6 +1066,63 @@ class StreamingPlaybackManager:
                     if len(post_buf) < post_lim:
                         need2 = post_lim - len(post_buf)
                         post_buf.extend(out_pcm[:need2])
+                # Call-level accumulation (pre/post)
+                try:
+                    if self.diag_enable_taps:
+                        if call_id in self.call_tap_pre_pcm16 and working:
+                            self.call_tap_pre_pcm16[call_id].extend(working)
+                        if call_id in self.call_tap_post_pcm16 and out_pcm:
+                            self.call_tap_post_pcm16[call_id].extend(out_pcm)
+                except Exception:
+                    logger.debug("Call-level tap accumulation failed (pcm)", call_id=call_id, exc_info=True)
+                # First-window (200ms) per-segment snapshots
+                try:
+                    win_rate = int(target_rate) if isinstance(target_rate, int) else int(self.sample_rate)
+                except Exception:
+                    win_rate = int(self.sample_rate)
+                try:
+                    win_bytes = max(1, int(win_rate * 0.2 * 2))
+                except Exception:
+                    win_bytes = 3200
+                try:
+                    if isinstance(info.get('tap_first_window_pre'), bytearray) and working:
+                        pre_w = info['tap_first_window_pre']
+                        if len(pre_w) < win_bytes:
+                            needw = win_bytes - len(pre_w)
+                            pre_w.extend(working[:needw])
+                    if isinstance(info.get('tap_first_window_post'), bytearray) and out_pcm:
+                        post_w = info['tap_first_window_post']
+                        if len(post_w) < win_bytes:
+                            needw2 = win_bytes - len(post_w)
+                            post_w.extend(out_pcm[:needw2])
+                    if not info.get('tap_first_window_done'):
+                        pre_w = info.get('tap_first_window_pre') or bytearray()
+                        post_w = info.get('tap_first_window_post') or bytearray()
+                        if len(pre_w) >= win_bytes and len(post_w) >= win_bytes:
+                            sid = str(info.get('stream_id', 'seg'))
+                            try:
+                                fnp200 = os.path.join(self.diag_out_dir, f"pre_compand_pcm16_{call_id}_{sid}_first200ms.wav")
+                                with wave.open(fnp200, 'wb') as wf:
+                                    wf.setnchannels(1)
+                                    wf.setsampwidth(2)
+                                    wf.setframerate(win_rate)
+                                    wf.writeframes(bytes(pre_w[:win_bytes]))
+                                logger.info("Wrote pre-compand 200ms snapshot", call_id=call_id, stream_id=sid, path=fnp200, bytes=win_bytes, rate=win_rate, snapshot="first200ms")
+                            except Exception:
+                                logger.warning("Failed 200ms pre snapshot", call_id=call_id, stream_id=sid, rate=win_rate, exc_info=True)
+                            try:
+                                fnq200 = os.path.join(self.diag_out_dir, f"post_compand_pcm16_{call_id}_{sid}_first200ms.wav")
+                                with wave.open(fnq200, 'wb') as wf:
+                                    wf.setnchannels(1)
+                                    wf.setsampwidth(2)
+                                    wf.setframerate(win_rate)
+                                    wf.writeframes(bytes(post_w[:win_bytes]))
+                                logger.info("Wrote post-compand 200ms snapshot", call_id=call_id, stream_id=sid, path=fnq200, bytes=win_bytes, rate=win_rate, snapshot="first200ms")
+                            except Exception:
+                                logger.warning("Failed 200ms post snapshot", call_id=call_id, stream_id=sid, rate=win_rate, exc_info=True)
+                            info['tap_first_window_done'] = True
+                except Exception:
+                    logger.debug("First-window snapshot failed (pcm)", call_id=call_id, exc_info=True)
             return out_pcm
         except Exception as exc:
             logger.error(
@@ -1673,6 +1807,45 @@ class StreamingPlaybackManager:
                             logger.info("Wrote post-compand PCM16 tap snapshot", call_id=call_id, stream_id=stream_id, path=fn2_seg, bytes=len(post), rate=rate, snapshot="end")
                         except Exception:
                             logger.warning("Failed to write post-compand tap snapshot", call_id=call_id, stream_id=stream_id, rate=rate, snapshot="end", exc_info=True)
+                    # Call-level summary and writes (accumulate across segments)
+                    try:
+                        cpre = bytes(self.call_tap_pre_pcm16.get(call_id, b""))
+                        cpost = bytes(self.call_tap_post_pcm16.get(call_id, b""))
+                        try:
+                            crate = int(self.call_tap_rate.get(call_id, rate))
+                        except Exception:
+                            crate = rate
+                        logger.info(
+                            "Streaming diag taps call-level summary",
+                            call_id=call_id,
+                            call_tap_pre_bytes=len(cpre),
+                            call_tap_post_bytes=len(cpost),
+                            call_tap_rate=crate,
+                        )
+                        if cpre:
+                            fnc = os.path.join(self.diag_out_dir, f"pre_compand_pcm16_{call_id}_call.wav")
+                            try:
+                                with wave.open(fnc, 'wb') as wf:
+                                    wf.setnchannels(1)
+                                    wf.setsampwidth(2)
+                                    wf.setframerate(crate)
+                                    wf.writeframes(cpre)
+                                logger.info("Wrote call-level pre-compand PCM16 tap", call_id=call_id, path=fnc, bytes=len(cpre), rate=crate)
+                            except Exception:
+                                logger.warning("Failed to write call-level pre-compand tap", call_id=call_id, path=fnc, rate=crate, exc_info=True)
+                        if cpost:
+                            fnc2 = os.path.join(self.diag_out_dir, f"post_compand_pcm16_{call_id}_call.wav")
+                            try:
+                                with wave.open(fnc2, 'wb') as wf:
+                                    wf.setnchannels(1)
+                                    wf.setsampwidth(2)
+                                    wf.setframerate(crate)
+                                    wf.writeframes(cpost)
+                                logger.info("Wrote call-level post-compand PCM16 tap", call_id=call_id, path=fnc2, bytes=len(cpost), rate=crate)
+                            except Exception:
+                                logger.warning("Failed to write call-level post-compand tap", call_id=call_id, path=fnc2, rate=crate, exc_info=True)
+                    except Exception:
+                        logger.debug("Call-level tap write failed", call_id=call_id, exc_info=True)
             except Exception:
                 logger.debug("Diagnostic tap write failed", call_id=call_id, exc_info=True)
 
