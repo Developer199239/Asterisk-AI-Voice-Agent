@@ -13,6 +13,8 @@ from typing import Optional, Dict, Any, TYPE_CHECKING, Set, Callable, Awaitable
 import structlog
 from prometheus_client import Counter, Gauge, Histogram
 import math
+import os
+import wave
 
 from src.audio.resampler import (
     mulaw_to_pcm16le,
@@ -151,6 +153,8 @@ class StreamingPlaybackManager:
         self.frame_remainders: Dict[str, bytes] = {}
         # Per-call resampler state (used when converting between rates)
         self._resample_states: Dict[str, Optional[tuple]] = {}
+        # Per-call DC-block filter state: last_x, last_y
+        self._dc_block_state: Dict[str, tuple[int, int]] = {}
         # First outbound frame logged tracker
         self._first_send_logged: Set[str] = set()
         # Startup gating to allow jitter buffers to fill before playback begins
@@ -186,7 +190,28 @@ class StreamingPlaybackManager:
             logger.warning("Streaming playback logging level set to WARNING")
         elif self.logging_level not in ("info", "debug", "warning"):
             logger.info("Streaming playback logging level", value=self.logging_level)
-
+        try:
+            self.diag_enable_taps = bool(self.streaming_config.get('diag_enable_taps', False))
+        except Exception:
+            self.diag_enable_taps = False
+        try:
+            self.diag_pre_secs = int(self.streaming_config.get('diag_pre_secs', 2))
+        except Exception:
+            self.diag_pre_secs = 2
+        try:
+            self.diag_post_secs = int(self.streaming_config.get('diag_post_secs', 2))
+        except Exception:
+            self.diag_post_secs = 2
+        try:
+            self.diag_out_dir = str(self.streaming_config.get('diag_out_dir', '/tmp/ai-engine-taps') or '/tmp/ai-engine-taps')
+        except Exception:
+            self.diag_out_dir = '/tmp/ai-engine-taps'
+        if self.diag_enable_taps:
+            try:
+                os.makedirs(self.diag_out_dir, exist_ok=True)
+            except Exception:
+                pass
+        
         logger.info("StreamingPlaybackManager initialized",
                    sample_rate=self.sample_rate,
                    jitter_buffer_ms=self.jitter_buffer_ms)
@@ -415,6 +440,10 @@ class StreamingPlaybackManager:
                 'target_sample_rate': resolved_target_rate,
                 'tx_bytes': 0,
                 'egress_force_mulaw': self.egress_force_mulaw,
+                'tap_pre_pcm16': bytearray(),
+                'tap_post_pcm16': bytearray(),
+                'tap_rate': (resolved_target_rate if self.diag_enable_taps else 0),
+                'diag_enabled': self.diag_enable_taps,
             }
             self._startup_ready[call_id] = False
             try:
@@ -828,10 +857,68 @@ class StreamingPlaybackManager:
                 pass
             self._resample_states[call_id] = resample_state
 
+            # Apply a light DC-block filter on PCM16 prior to target encoding
+            try:
+                if not self._is_mulaw(target_fmt):
+                    working = self._apply_dc_block(call_id, working)
+            except Exception:
+                pass
+
             # Convert to target encoding
             if self._is_mulaw(target_fmt):
+                if getattr(self, 'diag_enable_taps', False) and call_id in self.active_streams:
+                    info = self.active_streams.get(call_id, {})
+                    try:
+                        rate = int(target_rate)
+                    except Exception:
+                        rate = target_rate
+                    try:
+                        pre_lim = max(0, int(self.diag_pre_secs * rate * 2))
+                    except Exception:
+                        pre_lim = 0
+                    if pre_lim and isinstance(info.get('tap_pre_pcm16'), (bytearray, bytes)):
+                        pre_buf = info['tap_pre_pcm16']
+                        if len(pre_buf) < pre_lim:
+                            need = pre_lim - len(pre_buf)
+                            pre_buf.extend(working[:need])
+                    ulaw_bytes = pcm16le_to_mulaw(working)
+                    try:
+                        post_lim = max(0, int(self.diag_post_secs * rate * 2))
+                    except Exception:
+                        post_lim = 0
+                    if post_lim and isinstance(info.get('tap_post_pcm16'), (bytearray, bytes)):
+                        post_buf = info['tap_post_pcm16']
+                        if len(post_buf) < post_lim:
+                            need2 = post_lim - len(post_buf)
+                            back_pcm = mulaw_to_pcm16le(ulaw_bytes)
+                            post_buf.extend(back_pcm[:need2])
+                    return ulaw_bytes
                 return pcm16le_to_mulaw(working)
             # Otherwise target PCM16, with optional (or auto) egress byteswap
+            if getattr(self, 'diag_enable_taps', False) and call_id in self.active_streams:
+                info = self.active_streams.get(call_id, {})
+                try:
+                    rate = int(target_rate)
+                except Exception:
+                    rate = target_rate
+                try:
+                    pre_lim = max(0, int(self.diag_pre_secs * rate * 2))
+                except Exception:
+                    pre_lim = 0
+                if pre_lim and isinstance(info.get('tap_pre_pcm16'), (bytearray, bytes)):
+                    pre_buf = info['tap_pre_pcm16']
+                    if len(pre_buf) < pre_lim:
+                        need = pre_lim - len(pre_buf)
+                        pre_buf.extend(working[:need])
+                try:
+                    post_lim = max(0, int(self.diag_post_secs * rate * 2))
+                except Exception:
+                    post_lim = 0
+                if post_lim and isinstance(info.get('tap_post_pcm16'), (bytearray, bytes)):
+                    post_buf = info['tap_post_pcm16']
+                    if len(post_buf) < post_lim:
+                        need2 = post_lim - len(post_buf)
+                        post_buf.extend(working[:need2])
             return self._apply_pcm_endianness(call_id, working, stream_info, mode)
         except Exception as exc:
             logger.error(
@@ -841,6 +928,36 @@ class StreamingPlaybackManager:
                 exc_info=True,
             )
             return None
+
+    def _apply_dc_block(self, call_id: str, pcm_bytes: bytes, r: float = 0.995) -> bytes:
+        """Apply first-order DC-block filter y[n] = x[n] - x[n-1] + r*y[n-1] to PCM16 LE bytes."""
+        if not pcm_bytes:
+            return pcm_bytes
+        try:
+            import array
+            # Interpret as little-endian signed 16-bit
+            buf = array.array('h')
+            buf.frombytes(pcm_bytes)
+            # Ensure correct endianness
+            if buf.itemsize != 2:
+                return pcm_bytes
+            last = self._dc_block_state.get(call_id, (0, 0))
+            x1, y1 = int(last[0]), int(last[1])
+            # Filter
+            for i in range(len(buf)):
+                x0 = int(buf[i])
+                y0 = x0 - x1 + int(r * y1)
+                # Clamp to int16
+                if y0 > 32767:
+                    y0 = 32767
+                elif y0 < -32768:
+                    y0 = -32768
+                buf[i] = y0
+                x1, y1 = x0, y0
+            self._dc_block_state[call_id] = (x1, y1)
+            return buf.tobytes()
+        except Exception:
+            return pcm_bytes
 
     async def _send_audio_chunk(
         self,
