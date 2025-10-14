@@ -138,8 +138,8 @@ streaming:
   connection_timeout_ms: 10000 # Connection timeout for streaming
   fallback_timeout_ms: 8000   # No audio sent for this long → fall back to file playback
   chunk_size_ms: 20          # Frame size; 20 ms recommended for telephony cadence
-  min_start_ms: 300          # Warm-up buffer before first frame; 250–400 ms recommended for natural, click-free starts.
-  low_watermark_ms: 200      # Pause streaming when buffer dips below this watermark; rebuild depth to avoid underruns.
+  min_start_ms: 200          # Warm-up buffer before first frame; 200 ms to reduce gated feel.
+  low_watermark_ms: 120      # Pause streaming when buffer dips below this watermark; ~60% of min_start.
   provider_grace_ms: 500     # Absorb late provider chunks after stream cleanup (ms); prevents tail-chop artifacts.
   logging_level: "debug"      # Optional override for streaming logger verbosity
   egress_swap_mode: "auto"   # Auto-detect PCM16 byte order (auto|force_true|force_false)
