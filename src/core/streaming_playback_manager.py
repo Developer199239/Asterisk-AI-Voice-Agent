@@ -159,6 +159,8 @@ class StreamingPlaybackManager:
         self._first_send_logged: Set[str] = set()
         # Startup gating to allow jitter buffers to fill before playback begins
         self._startup_ready: Dict[str, bool] = {}
+        # Track last segment end time per call for adaptive warm-up
+        self._last_segment_end_ts: Dict[str, float] = {}
         # Call-level diagnostic accumulators
         self.call_tap_pre_pcm16: Dict[str, bytearray] = {}
         self.call_tap_post_pcm16: Dict[str, bytearray] = {}
@@ -308,10 +310,28 @@ class StreamingPlaybackManager:
                 jb_chunks = 10
             jitter_buffer = asyncio.Queue(maxsize=jb_chunks)
             self.jitter_buffers[call_id] = jitter_buffer
-            # Derive per-stream warm-up thresholds so we never demand
-            # more buffered chunks than the queue can hold.
+            # Derive adaptive per-stream warm-up thresholds so we never demand more
+            # buffered chunks than the queue can hold.
+            # Adapt based on time since the last segment ended: shorter for back-to-back,
+            # longer when resuming after silence.
+            now_ts = time.time()
+            last_end_ts = float(self._last_segment_end_ts.get(call_id, 0.0) or 0.0)
+            gap_ms = int(max(0.0, (now_ts - last_end_ts) * 1000.0)) if last_end_ts > 0 else 999999
+            # Heuristics (can be made configurable later):
+            # - Back-to-back threshold: 500 ms
+            # - Back-to-back warm-up: ~50% of configured min_start_ms (>= 40 ms)
+            # - Cold resume warm-up: max(configured min_start_ms, 320 ms)
+            base_min_ms = max(1, int(self.min_start_ms))
+            if playback_type == "greeting":
+                adaptive_min_ms = base_min_ms  # keep greeting behavior predictable
+            else:
+                if gap_ms <= int(self.provider_grace_ms or 500):
+                    adaptive_min_ms = max(40, int(base_min_ms * 0.5))
+                else:
+                    adaptive_min_ms = max(base_min_ms, 320)
+            adaptive_min_chunks = max(1, int(math.ceil(adaptive_min_ms / chunk_ms)))
             configured_min_start = (
-                self.greeting_min_start_chunks if playback_type == "greeting" else self.min_start_chunks
+                self.greeting_min_start_chunks if playback_type == "greeting" else adaptive_min_chunks
             )
             # Always leave at least one spare slot so playback does not immediately
             # fall below the watermark on the first frame.
@@ -326,8 +346,13 @@ class StreamingPlaybackManager:
                     jitter_chunks=jb_chunks,
                     applied_chunks=min_start_chunks,
                 )
-
-            configured_low_watermark = self.low_watermark_chunks
+            # Scale low watermark proportionally to the adaptive warm-up
+            # Use ~2/3 of min_start by default, but do not exceed configured low_watermark.
+            try:
+                scaled_lw = int(max(0, math.ceil(min_start_chunks * (2.0/3.0))))
+            except Exception:
+                scaled_lw = min_start_chunks // 2
+            configured_low_watermark = min(self.low_watermark_chunks, scaled_lw)
             low_watermark_chunks = 0
             if configured_low_watermark:
                 max_low = max(0, min_start_chunks - 1)
@@ -344,6 +369,27 @@ class StreamingPlaybackManager:
                         applied_chunks=low_watermark_chunks,
                         min_start_chunks=min_start_chunks,
                     )
+            # Decide initial startup readiness based on recent gap (reuse buffer for back-to-back)
+            try:
+                initial_startup_ready = bool(gap_ms <= int(self.provider_grace_ms or 500))
+            except Exception:
+                initial_startup_ready = bool(gap_ms <= 500)
+            # Log adaptive warm-up decision for observability
+            try:
+                logger.info(
+                    "🎚️ STREAMING ADAPTIVE WARM-UP",
+                    call_id=call_id,
+                    playback_type=playback_type,
+                    gap_ms=gap_ms,
+                    adaptive_min_ms=(adaptive_min_ms if playback_type != "greeting" else base_min_ms),
+                    min_start_chunks=min_start_chunks,
+                    low_watermark_chunks=low_watermark_chunks,
+                    chunk_ms=chunk_ms,
+                    jb_chunks=jb_chunks,
+                    initial_startup_ready=initial_startup_ready,
+                )
+            except Exception:
+                pass
 
             # Mark streaming active in metrics and session
             _STREAMING_ACTIVE_GAUGE.labels(call_id).set(1)
@@ -448,7 +494,7 @@ class StreamingPlaybackManager:
                 'start_time': time.time(),
                 'chunks_sent': 0,
                 'last_chunk_time': time.time(),
-                'startup_ready': False,
+                'startup_ready': bool(initial_startup_ready),
                 'first_frame_observed': False,
                 'min_start_chunks': min_start_chunks,
                 'low_watermark_chunks': low_watermark_chunks,
@@ -471,7 +517,7 @@ class StreamingPlaybackManager:
                 'tap_first_window_post': bytearray(),
                 'tap_first_window_done': False,
             }
-            self._startup_ready[call_id] = False
+            self._startup_ready[call_id] = bool(initial_startup_ready)
             try:
                 _STREAM_STARTED_TOTAL.labels(call_id, playback_type).inc()
             except Exception:
@@ -1955,6 +2001,11 @@ class StreamingPlaybackManager:
             # Remove from active streams
             if call_id in self.active_streams:
                 del self.active_streams[call_id]
+            # Record last segment end timestamp for adaptive gating of next segment
+            try:
+                self._last_segment_end_ts[call_id] = time.time()
+            except Exception:
+                pass
             
             # Clean up jitter buffer
             if call_id in self.jitter_buffers:
