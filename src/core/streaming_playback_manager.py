@@ -1066,6 +1066,41 @@ class StreamingPlaybackManager:
                         conn_id=conn_id,
                     )
                     self._first_send_logged.add(call_id)
+                    # Per-segment diag tap flush (snapshot on first frame)
+                    try:
+                        info = self.active_streams.get(call_id, {})
+                        if info and bool(info.get('diag_enabled')):
+                            try:
+                                raw_rate = int(info.get('tap_rate') or 0)
+                            except Exception:
+                                raw_rate = 0
+                            rate = raw_rate if raw_rate > 0 else int(self.sample_rate)
+                            pre = bytes(info.get('tap_pre_pcm16') or b"")
+                            post = bytes(info.get('tap_post_pcm16') or b"")
+                            if pre:
+                                fn = os.path.join(self.diag_out_dir, f"pre_compand_pcm16_{call_id}_{stream_id}_first.wav")
+                                try:
+                                    with wave.open(fn, 'wb') as wf:
+                                        wf.setnchannels(1)
+                                        wf.setsampwidth(2)
+                                        wf.setframerate(rate)
+                                        wf.writeframes(pre)
+                                    logger.info("Wrote pre-compand PCM16 tap snapshot", call_id=call_id, stream_id=stream_id, path=fn, bytes=len(pre), rate=rate, snapshot="first")
+                                except Exception:
+                                    logger.warning("Failed to write pre-compand tap snapshot", call_id=call_id, stream_id=stream_id, path=fn, rate=rate, snapshot="first", exc_info=True)
+                            if post:
+                                fn2 = os.path.join(self.diag_out_dir, f"post_compand_pcm16_{call_id}_{stream_id}_first.wav")
+                                try:
+                                    with wave.open(fn2, 'wb') as wf:
+                                        wf.setnchannels(1)
+                                        wf.setsampwidth(2)
+                                        wf.setframerate(rate)
+                                        wf.writeframes(post)
+                                    logger.info("Wrote post-compand PCM16 tap snapshot", call_id=call_id, stream_id=stream_id, path=fn2, bytes=len(post), rate=rate, snapshot="first")
+                                except Exception:
+                                    logger.warning("Failed to write post-compand tap snapshot", call_id=call_id, stream_id=stream_id, path=fn2, rate=rate, snapshot="first", exc_info=True)
+                    except Exception:
+                        logger.debug("Per-segment tap snapshot failed", call_id=call_id, stream_id=stream_id, exc_info=True)
                 # Optional broadcast mode for diagnostics
                 if self.audiosocket_broadcast_debug:
                     conns = list(set(getattr(session, 'audiosocket_conns', []) or []))
@@ -1542,6 +1577,17 @@ class StreamingPlaybackManager:
                             logger.info("Wrote pre-compand PCM16 tap", call_id=call_id, path=fn, bytes=len(pre), rate=rate)
                         except Exception:
                             logger.warning("Failed to write pre-compand tap", call_id=call_id, path=fn, rate=rate, exc_info=True)
+                        # Segment-specific snapshot (end of stream)
+                        try:
+                            fn_seg = os.path.join(self.diag_out_dir, f"pre_compand_pcm16_{call_id}_{stream_id}_end.wav")
+                            with wave.open(fn_seg, 'wb') as wf:
+                                wf.setnchannels(1)
+                                wf.setsampwidth(2)
+                                wf.setframerate(rate)
+                                wf.writeframes(pre)
+                            logger.info("Wrote pre-compand PCM16 tap snapshot", call_id=call_id, stream_id=stream_id, path=fn_seg, bytes=len(pre), rate=rate, snapshot="end")
+                        except Exception:
+                            logger.warning("Failed to write pre-compand tap snapshot", call_id=call_id, stream_id=stream_id, rate=rate, snapshot="end", exc_info=True)
                     if post:
                         fn2 = os.path.join(self.diag_out_dir, f"post_compand_pcm16_{call_id}.wav")
                         try:
@@ -1553,6 +1599,17 @@ class StreamingPlaybackManager:
                             logger.info("Wrote post-compand PCM16 tap", call_id=call_id, path=fn2, bytes=len(post), rate=rate)
                         except Exception:
                             logger.warning("Failed to write post-compand tap", call_id=call_id, path=fn2, rate=rate, exc_info=True)
+                        # Segment-specific snapshot (end of stream)
+                        try:
+                            fn2_seg = os.path.join(self.diag_out_dir, f"post_compand_pcm16_{call_id}_{stream_id}_end.wav")
+                            with wave.open(fn2_seg, 'wb') as wf:
+                                wf.setnchannels(1)
+                                wf.setsampwidth(2)
+                                wf.setframerate(rate)
+                                wf.writeframes(post)
+                            logger.info("Wrote post-compand PCM16 tap snapshot", call_id=call_id, stream_id=stream_id, path=fn2_seg, bytes=len(post), rate=rate, snapshot="end")
+                        except Exception:
+                            logger.warning("Failed to write post-compand tap snapshot", call_id=call_id, stream_id=stream_id, rate=rate, snapshot="end", exc_info=True)
             except Exception:
                 logger.debug("Diagnostic tap write failed", call_id=call_id, exc_info=True)
 
