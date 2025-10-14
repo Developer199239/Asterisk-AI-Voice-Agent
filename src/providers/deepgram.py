@@ -188,9 +188,9 @@ class DeepgramProvider(AIProviderInterface):
             "agent": {
                 "greeting": greeting_val,
                 "language": "en",
-                "listen": { "provider": { "type": "deepgram", "model": self.config.model, "smart_format": True } },
+                "listen": { "provider": "deepgram", "model": self.config.model, "smart_format": True },
                 "think": { "provider": { "type": "open_ai", "model": self.llm_config.model }, "prompt": self.llm_config.prompt },
-                "speak": { "provider": { "type": "deepgram", "model": self.config.tts_model } }
+                "speak": { "provider": "deepgram", "voice": self.config.tts_model }
             }
         }
         await self.websocket.send(json.dumps(settings))
