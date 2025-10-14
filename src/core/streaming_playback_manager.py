@@ -212,9 +212,13 @@ class StreamingPlaybackManager:
             except Exception:
                 pass
         
-        logger.info("StreamingPlaybackManager initialized",
-                   sample_rate=self.sample_rate,
-                   jitter_buffer_ms=self.jitter_buffer_ms)
+        logger.info(
+            "StreamingPlaybackManager initialized",
+            sample_rate=self.sample_rate,
+            jitter_buffer_ms=self.jitter_buffer_ms,
+            diag_enable_taps=bool(self.diag_enable_taps),
+            diag_out_dir=str(self.diag_out_dir),
+        )
     
     @staticmethod
     def _canonicalize_encoding(value: Optional[str]) -> str:
