@@ -192,15 +192,15 @@ class DeepgramProvider(AIProviderInterface):
         settings = {
             "type": "Settings",
             "audio": {
-                "input": { "container": "raw", "format": input_format, "sampleRate": int(input_sample_rate) },
-                "output": { "container": "raw", "format": output_format, "sampleRate": int(output_sample_rate) }
+                "input": { "encoding": input_format, "sample_rate": int(input_sample_rate) },
+                "output": { "encoding": output_format, "sample_rate": int(output_sample_rate) }
             },
             "agent": {
                 "greeting": greeting_val,
-                "language": "en",
-                "listen": { "provider": "deepgram", "model": self.config.model },
+                "language": "en-US",
+                "listen": { "provider": { "type": "deepgram", "model": self.config.model } },
                 "think": { "provider": { "type": "open_ai", "model": self.llm_config.model }, "prompt": self.llm_config.prompt },
-                "speak": { "provider": "deepgram", "voice": self.config.tts_model }
+                "speak": { "provider": { "type": "deepgram", "model": self.config.tts_model } }
             }
         }
         await self.websocket.send(json.dumps(settings))
@@ -555,29 +555,29 @@ class DeepgramProvider(AIProviderInterface):
                                     pass
                         except Exception:
                             logger.debug("Deepgram ACK logging failed", exc_info=True)
-                            # Log all control events for diagnostics
-                            try:
-                                et = event_data.get("type") if isinstance(event_data, dict) else None
-                                logger.info(
-                                    "Deepgram control event",
-                                    call_id=self.call_id,
-                                    event_type=et,
-                                )
-                            except Exception:
-                                pass
-                            # Post-ACK injection when readiness events arrive and audio hasn't started
-                            try:
-                                et = event_data.get("type") if isinstance(event_data, dict) else None
-                                if et in ("SettingsApplied", "Welcome") and not self._in_audio_burst and self._greeting_injections < 2:
-                                    if self.websocket and not self.websocket.closed:
-                                        logger.info("Injecting greeting after ACK", call_id=self.call_id, event_type=et)
-                                        self._greeting_injections += 1
-                                        try:
-                                            await self._inject_message_dual((getattr(self.llm_config, 'initial_greeting', None) or getattr(self.config, 'greeting', None) or "Hello, how can I help you today?").strip())
-                                        except Exception:
-                                            logger.debug("Post-ACK greeting injection failed", exc_info=True)
-                            except Exception:
-                                pass
+                        # Always log control events
+                        try:
+                            et = event_data.get("type") if isinstance(event_data, dict) else None
+                            logger.info(
+                                "Deepgram control event",
+                                call_id=self.call_id,
+                                event_type=et,
+                            )
+                        except Exception:
+                            pass
+                        # Post-ACK injection when readiness events arrive and audio hasn't started
+                        try:
+                            et = event_data.get("type") if isinstance(event_data, dict) else None
+                            if et in ("SettingsApplied", "Welcome") and not self._in_audio_burst and self._greeting_injections < 2:
+                                if self.websocket and not self.websocket.closed:
+                                    logger.info("Injecting greeting after ACK", call_id=self.call_id, event_type=et)
+                                    self._greeting_injections += 1
+                                    try:
+                                        await self._inject_message_dual((getattr(self.llm_config, 'initial_greeting', None) or getattr(self.config, 'greeting', None) or "Hello, how can I help you today?").strip())
+                                    except Exception:
+                                        logger.debug("Post-ACK greeting injection failed", exc_info=True)
+                        except Exception:
+                            pass
                         # If we were in an audio burst, a JSON control/event frame marks a boundary
                         if self._in_audio_burst and self.on_event:
                             await self.on_event({
@@ -689,7 +689,7 @@ class DeepgramProvider(AIProviderInterface):
     async def speak(self, text: str):
         if not text or not self.websocket:
             return
-        inject_message = {"type": "Inject Agent Message", "message": {"text": text}}
+        inject_message = {"type": "InjectAgentMessage", "content": text}
         try:
             await self.websocket.send(json.dumps(inject_message))
         except websockets.exceptions.ConnectionClosed as e:
@@ -700,18 +700,18 @@ class DeepgramProvider(AIProviderInterface):
             return
         # Primary: V1 shape
         try:
-            await self.websocket.send(json.dumps({"type": "Inject Agent Message", "message": {"text": text}}))
+            await self.websocket.send(json.dumps({"type": "InjectAgentMessage", "content": text}))
         except Exception:
-            logger.debug("Primary Inject Agent Message failed", exc_info=True)
-        # Fallback: legacy lowercase + flat message
+            logger.debug("Primary InjectAgentMessage failed", exc_info=True)
+        # Fallback: early-access variant for compatibility
         async def _fallback_case():
             try:
                 await asyncio.sleep(0.5)
                 if self.websocket and not self.websocket.closed and not self._in_audio_burst:
                     try:
-                        await self.websocket.send(json.dumps({"type": "inject_agent_message", "message": text}))
+                        await self.websocket.send(json.dumps({"type": "Inject Agent Message", "message": {"text": text}}))
                     except Exception:
-                        logger.debug("Legacy lowercase inject failed", exc_info=True)
+                        logger.debug("Fallback Inject Agent Message failed", exc_info=True)
             except Exception:
                 pass
         asyncio.create_task(_fallback_case())
