@@ -165,6 +165,16 @@ class DeepgramProvider(AIProviderInterface):
         output_sample_rate = int(getattr(self.config, 'output_sample_rate_hz', 8000) or 8000)
         self._dg_output_encoding = output_encoding.lower()
         self._dg_output_rate = output_sample_rate
+        # Canonicalize Deepgram V1 audio.format values
+        def _canon_fmt(v: str) -> str:
+            t = (v or '').strip().lower()
+            if t in ('mulaw', 'mu-law', 'g711_ulaw', 'g711ulaw', 'g711-ula', 'ulaw'):
+                return 'ulaw'
+            if t in ('slin16', 'linear16', 'pcm16'):
+                return 'linear16'
+            return 'ulaw'
+        input_format = _canon_fmt(input_encoding)
+        output_format = _canon_fmt(output_encoding)
 
         # Determine greeting precedence: provider override > global LLM greeting > safe default
         try:
@@ -182,13 +192,13 @@ class DeepgramProvider(AIProviderInterface):
         settings = {
             "type": "Settings",
             "audio": {
-                "input": { "encoding": input_encoding, "sample_rate": input_sample_rate, "container": "raw" },
-                "output": { "encoding": output_encoding, "sample_rate": output_sample_rate, "container": "raw" }
+                "input": { "container": "raw", "format": input_format, "sampleRate": int(input_sample_rate) },
+                "output": { "container": "raw", "format": output_format, "sampleRate": int(output_sample_rate) }
             },
             "agent": {
                 "greeting": greeting_val,
                 "language": "en",
-                "listen": { "provider": "deepgram", "model": self.config.model, "smart_format": True },
+                "listen": { "provider": "deepgram", "model": self.config.model },
                 "think": { "provider": { "type": "open_ai", "model": self.llm_config.model }, "prompt": self.llm_config.prompt },
                 "speak": { "provider": "deepgram", "voice": self.config.tts_model }
             }
@@ -679,7 +689,7 @@ class DeepgramProvider(AIProviderInterface):
     async def speak(self, text: str):
         if not text or not self.websocket:
             return
-        inject_message = {"type": "inject_agent_message", "message": text}
+        inject_message = {"type": "Inject Agent Message", "message": {"text": text}}
         try:
             await self.websocket.send(json.dumps(inject_message))
         except websockets.exceptions.ConnectionClosed as e:
@@ -688,19 +698,20 @@ class DeepgramProvider(AIProviderInterface):
     async def _inject_message_dual(self, text: str):
         if not text or not self.websocket:
             return
+        # Primary: V1 shape
         try:
-            await self.websocket.send(json.dumps({"type": "inject_agent_message", "message": text}))
+            await self.websocket.send(json.dumps({"type": "Inject Agent Message", "message": {"text": text}}))
         except Exception:
-            logger.debug("Lowercase inject failed", exc_info=True)
-        # Schedule a short delayed PascalCase inject if audio hasn't started
+            logger.debug("Primary Inject Agent Message failed", exc_info=True)
+        # Fallback: legacy lowercase + flat message
         async def _fallback_case():
             try:
                 await asyncio.sleep(0.5)
                 if self.websocket and not self.websocket.closed and not self._in_audio_burst:
                     try:
-                        await self.websocket.send(json.dumps({"type": "Inject Agent Message", "message": text}))
+                        await self.websocket.send(json.dumps({"type": "inject_agent_message", "message": text}))
                     except Exception:
-                        logger.debug("PascalCase inject failed", exc_info=True)
+                        logger.debug("Legacy lowercase inject failed", exc_info=True)
             except Exception:
                 pass
         asyncio.create_task(_fallback_case())
