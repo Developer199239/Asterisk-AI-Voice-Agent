@@ -1,5 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# Load environment variables from .env if present (local only; not committed)
+ENV_FILE="${ENV_FILE:-.env}"
+if [ -f "$ENV_FILE" ]; then
+  set -a
+  . "$ENV_FILE"
+  set +a
+fi
 SERVER_USER="${SERVER_USER:-root}"
 SERVER_HOST="${SERVER_HOST:-voiprnd.nemtclouddispatch.com}"
 PROJECT_PATH="${PROJECT_PATH:-/root/Asterisk-AI-Voice-Agent}"
@@ -33,14 +40,16 @@ fi
 
 # Fetch Deepgram usage for this call when credentials are available (robust Python fallback).
 DG_PROJECT_ID="${DG_PROJECT_ID:-}"
-DG_API_KEY="${DEEPGRAM_API_KEY:-}"
-if [ -n "$DG_PROJECT_ID" ] && [ -n "$DG_API_KEY" ]; then
-  RCA_BASE="$BASE" DG_PROJECT_ID="$DG_PROJECT_ID" DEEPGRAM_API_KEY="$DG_API_KEY" python3 - <<'PY'
+DEEPGRAM_API_KEY="${DEEPGRAM_API_KEY:-}"
+DEEPGRAM_LOG_API_KEY="${DEEPGRAM_LOG_API_KEY:-}"
+if [ -n "$DEEPGRAM_API_KEY" ] || [ -n "$DEEPGRAM_LOG_API_KEY" ]; then
+  RCA_BASE="$BASE" DG_PROJECT_ID="$DG_PROJECT_ID" DEEPGRAM_API_KEY="$DEEPGRAM_API_KEY" DEEPGRAM_LOG_API_KEY="$DEEPGRAM_LOG_API_KEY" DG_REQUEST_ID="${DG_REQUEST_ID:-}" DEEPGRAM_REQUEST_ID="${DEEPGRAM_REQUEST_ID:-}" python3 - <<'PY'
 import os, re, json, datetime as dt, urllib.request, pathlib, sys
 
 base = pathlib.Path(os.environ.get('RCA_BASE', ''))
-dg_proj = os.environ.get('DG_PROJECT_ID')
-dg_key = os.environ.get('DEEPGRAM_API_KEY')
+dg_proj = os.environ.get('DG_PROJECT_ID') or os.environ.get('DEEPGRAM_PROJECT_ID')
+# Prefer dedicated logging key if provided
+dg_key = os.environ.get('DEEPGRAM_LOG_API_KEY') or os.environ.get('DEEPGRAM_API_KEY')
 logs_dir = base / 'logs'
 logs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -49,11 +58,9 @@ def parse_call_ts(log_path: pathlib.Path):
         txt = log_path.read_text(errors='ignore')
     except Exception:
         return None
-    # Prefer the precise first outbound frame timestamp
     m = re.findall(r'"event": "\\ud83c\\udfb5 STREAMING OUTBOUND - First frame".*?"timestamp": "([^"]+)"', txt)
     ts = m[-1] if m else None
     if not ts:
-        # Fallback to AudioSocket frame probe
         m2 = re.findall(r'"event": "AudioSocket frame probe".*?"timestamp": "([^"]+)"', txt)
         ts = m2[-1] if m2 else None
     if not ts:
@@ -66,39 +73,116 @@ def parse_call_ts(log_path: pathlib.Path):
 def iso(dtobj):
     return dtobj.strftime('%Y-%m-%dT%H:%M:%SZ')
 
-if not (dg_proj and dg_key and base.exists()):
+def http_get(url: str):
+    req = urllib.request.Request(url, headers={'Authorization': f'Token {dg_key}', 'accept': 'application/json'})
+    with urllib.request.urlopen(req, timeout=45) as r:
+        return json.loads(r.read().decode('utf-8', 'ignore'))
+
+if not (dg_key and base.exists()):
     sys.exit(0)
 
 logp = logs_dir / 'ai-engine.log'
 call_ts = parse_call_ts(logp)
+# Attempt to derive Deepgram request_id from ai-engine log for this call
+cid = None
+try:
+    cid = (base / 'call_id.txt').read_text(errors='ignore').strip()
+except Exception:
+    cid = None
 
-# Build time window: if call_ts known, use [call_ts-45m, call_ts+15m], else last 30m
+rid_from_log = None
+try:
+    if logp.exists():
+        import re as _re
+        call_tag = f'"call_id": "{cid}"' if cid else None
+        rid_pat = _re.compile(r'"request_id"\s*:\s*"([0-9a-fA-F\-]{36})"')
+        last = None
+        with logp.open('r', errors='ignore') as fh:
+            for line in fh:
+                if (not call_tag or call_tag in line) and ('Deepgram' in line or 'providers.deepgram' in line) and 'request_id' in line:
+                    m = rid_pat.search(line)
+                    if m:
+                        last = m.group(1)
+        rid_from_log = last
+except Exception:
+    rid_from_log = None
+rid_env = os.environ.get('DG_REQUEST_ID') or os.environ.get('DEEPGRAM_REQUEST_ID') or rid_from_log
 now = dt.datetime.utcnow()
 if call_ts:
-    start = call_ts - dt.timedelta(minutes=45)
-    end = call_ts + dt.timedelta(minutes=15)
+    start = call_ts - dt.timedelta(hours=2)
+    end = call_ts + dt.timedelta(hours=1)
 else:
-    start = now - dt.timedelta(minutes=30)
+    start = now - dt.timedelta(minutes=60)
     end = now
 
-list_url = f"https://api.deepgram.com/v1/projects/{dg_proj}/requests?start={iso(start)}&end={iso(end)}&status=succeeded"
-req = urllib.request.Request(list_url, headers={'Authorization': f'Token {dg_key}', 'accept': 'application/json'})
-try:
-    with urllib.request.urlopen(req, timeout=45) as r:
-        data = json.loads(r.read().decode('utf-8', 'ignore'))
-except Exception as e:
-    data = {'requests': []}
+all_reqs = []
 
-reqs = data.get('requests') or []
-(logs_dir / 'deepgram_requests.json').write_text(json.dumps(reqs, indent=2))
+# If a request id is provided and we have a project id, fetch detail directly
+det_written = False
+if rid_env and dg_proj:
+    try:
+        det = http_get(f"https://api.deepgram.com/v1/projects/{dg_proj}/requests/{rid_env}")
+        (logs_dir / 'deepgram_request_detail.json').write_text(json.dumps(det, indent=2))
+        det_written = True
+    except Exception:
+        det_written = False
+
+# If we didn't fetch by id, list requests within the time window (single or multiple projects)
+if not det_written:
+    projects = []
+    if dg_proj:
+        projects = [dg_proj]
+    else:
+        # Try to list projects when project id not provided
+        try:
+            pdata = http_get('https://api.deepgram.com/v1/projects')
+            for p in (pdata.get('projects') or []):
+                pid = p.get('project_id') or p.get('id')
+                if pid:
+                    projects.append(pid)
+        except Exception:
+            projects = []
+
+    for pid in projects or []:
+        try:
+            data = http_get(f"https://api.deepgram.com/v1/projects/{pid}/requests?start={iso(start)}&end={iso(end)}&limit=200")
+            reqs = data.get('requests') or []
+            for it in reqs:
+                it['_project_id'] = pid
+            all_reqs.extend(reqs)
+        except Exception:
+            continue
+
+    # If specific project set but yielded nothing, try all accessible projects as fallback
+    if dg_proj and not all_reqs:
+        try:
+            pdata = http_get('https://api.deepgram.com/v1/projects')
+            for p in (pdata.get('projects') or []):
+                pid = p.get('project_id') or p.get('id')
+                if not pid or pid == dg_proj:
+                    continue
+                try:
+                    data = http_get(f"https://api.deepgram.com/v1/projects/{pid}/requests?start={iso(start)}&end={iso(end)}&limit=200")
+                    reqs = data.get('requests') or []
+                    for it in reqs:
+                        it['_project_id'] = pid
+                    all_reqs.extend(reqs)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+(logs_dir / 'deepgram_requests.json').write_text(json.dumps(all_reqs, indent=2))
 
 def best_match(reqs, ref_ts):
     def ts_of(it):
         for k in ('created','start','completed'):
             v = it.get(k)
             if v:
-                try: return dt.datetime.fromisoformat(v.replace('Z','+00:00'))
-                except Exception: pass
+                try:
+                    return dt.datetime.fromisoformat(v.replace('Z','+00:00'))
+                except Exception:
+                    pass
         return None
     scored = []
     for it in reqs:
@@ -110,18 +194,47 @@ def best_match(reqs, ref_ts):
     scored.sort(key=lambda x: x[0])
     return scored[0][1] if scored else None
 
-best = best_match(reqs, call_ts)
-if best and best.get('request_id'):
+best = best_match(all_reqs, call_ts)
+if (not det_written) and best and best.get('request_id') and best.get('_project_id'):
     rid = best['request_id']
-    det_url = f"https://api.deepgram.com/v1/projects/{dg_proj}/requests/{rid}"
-    det_req = urllib.request.Request(det_url, headers={'Authorization': f'Token {dg_key}', 'accept': 'application/json'})
+    pid = best['_project_id']
     try:
-        with urllib.request.urlopen(det_req, timeout=45) as r:
-            det = json.loads(r.read().decode('utf-8', 'ignore'))
+        det = http_get(f"https://api.deepgram.com/v1/projects/{pid}/requests/{rid}")
         (logs_dir / 'deepgram_request_detail.json').write_text(json.dumps(det, indent=2))
+        det_written = True
     except Exception:
-        pass
-print("Deepgram snapshot captured:", len(reqs), "requests; detail written:", bool(best and best.get('request_id')))
+        det_written = False
+# Compute time mapping between Deepgram and engine timeline when detail exists
+try:
+    det_path = logs_dir / 'deepgram_request_detail.json'
+    if det_path.exists():
+        det = json.loads(det_path.read_text(errors='ignore') or '{}')
+        dg_created = det.get('created') or det.get('response', {}).get('created')
+        dg_completed = (det.get('response') or {}).get('completed')
+        def to_dt(s):
+            try:
+                return dt.datetime.fromisoformat((s or '').replace('Z','+00:00'))
+            except Exception:
+                return None
+        created_dt = to_dt(dg_created)
+        completed_dt = to_dt(dg_completed)
+        engine_dt = call_ts  # already computed above
+        offset_seconds = None
+        if created_dt and engine_dt:
+            offset_seconds = (engine_dt - created_dt).total_seconds()
+        mapping = {
+            'deepgram_request_id': det.get('request_id'),
+            'deepgram_project_id': det.get('project_uuid') or det.get('project_id'),
+            'deepgram_created_utc': dg_created,
+            'deepgram_completed_utc': dg_completed,
+            'engine_first_frame_utc': engine_dt.strftime('%Y-%m-%dT%H:%M:%SZ') if engine_dt else None,
+            'offset_seconds_engine_minus_deepgram': offset_seconds,
+        }
+        (logs_dir / 'deepgram_time_map.json').write_text(json.dumps(mapping, indent=2))
+except Exception:
+    pass
+
+print("Deepgram snapshot captured:", len(all_reqs), "requests; detail written:", det_written)
 PY
 fi
 echo "RCA_BASE=$BASE"

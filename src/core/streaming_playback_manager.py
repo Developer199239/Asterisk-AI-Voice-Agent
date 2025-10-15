@@ -629,6 +629,8 @@ class StreamingPlaybackManager:
                         if call_id in self.active_streams:
                             info = self.active_streams[call_id]
                             info['buffered_bytes'] = int(info.get('buffered_bytes', 0)) + len(chunk)
+                            # Track total bytes queued to this streaming segment (pre-send)
+                            info['queued_bytes'] = int(info.get('queued_bytes', 0)) + len(chunk)
                     except Exception:
                         pass
 
@@ -747,8 +749,22 @@ class StreamingPlaybackManager:
                                  resume_floor_chunks=resume_floor_chunks,
                                  min_start_chunks=min_need,
                                  buffered_frames=self._estimate_available_frames(call_id, jitter_buffer, include_remainder=False))
-                    # Re-check loop conditions after rebuild
-                    continue
+                    # Re-check after rebuild; if still shallow but non-empty, enter dribble mode (fall-through to send)
+                    try:
+                        available_after = self._estimate_available_frames(call_id, jitter_buffer, include_remainder=True)
+                        if available_after <= low_watermark_chunks and not jitter_buffer.empty():
+                            logger.debug(
+                                "Streaming dribble mode active",
+                                call_id=call_id,
+                                stream_id=stream_id,
+                                buffered_frames=available_after,
+                                target_frames=target_frames,
+                            )
+                        elif jitter_buffer.empty():
+                            # Nothing to send yet; yield control to outer loop
+                            return True
+                    except Exception:
+                        pass
                 chunk = jitter_buffer.get_nowait()
 
                 # Convert audio format if needed
@@ -2001,6 +2017,22 @@ class StreamingPlaybackManager:
                             call_tap_post_bytes=len(cpost),
                             call_tap_rate=crate,
                         )
+                        # Segment byte summary (queued vs sent)
+                        try:
+                            info = self.active_streams.get(call_id, {}) if call_id in self.active_streams else {}
+                            qbytes = int(info.get('queued_bytes', 0) or 0)
+                            txbytes = int(info.get('tx_bytes', 0) or 0)
+                            bbytes = int(info.get('buffered_bytes', 0) or 0)
+                            logger.info(
+                                "Streaming segment bytes summary",
+                                call_id=call_id,
+                                stream_id=stream_id,
+                                queued_bytes=qbytes,
+                                tx_bytes=txbytes,
+                                buffered_bytes=bbytes,
+                            )
+                        except Exception:
+                            logger.debug("Streaming segment bytes summary failed", call_id=call_id, exc_info=True)
                         if cpre:
                             fnc = os.path.join(self.diag_out_dir, f"pre_compand_pcm16_{call_id}_call.wav")
                             try:
