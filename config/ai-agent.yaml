@@ -133,13 +133,13 @@ barge_in:
 # Streaming configuration (for downstream_mode=stream)
 streaming:
   sample_rate: 8000          # Output sample rate for streaming audio (8kHz for telephony)
-  jitter_buffer_ms: 320      # Jitter buffer target depth; set >= min_start_ms + 20ms spare (e.g., 320ms for 300ms min-start)
+  jitter_buffer_ms: 520      # Target depth; set >= adaptive min_start_ms + 20ms spare (e.g., 520ms for ~400ms min-start)
   keepalive_interval_ms: 5000 # Keepalive interval for streaming connections
   connection_timeout_ms: 10000 # Connection timeout for streaming
   fallback_timeout_ms: 8000   # No audio sent for this long → fall back to file playback
-  chunk_size_ms: 20          # Frame size; 20 ms recommended for telephony cadence
+  chunk_size_ms: 10          # Finer pacing for smoother cadence at segment edges
   min_start_ms: 120          # Warm-up buffer before first frame; 120 ms for smoother cadence.
-  low_watermark_ms: 80       # Pause streaming when buffer dips below this watermark; ~67% of min_start.
+  low_watermark_ms: 260      # Pause when depth < ~2/3 of adaptive min_start; acts as lower bound for scaling logic
   provider_grace_ms: 900     # Absorb late provider chunks after stream cleanup (ms); prevents tail-chop artifacts.
   logging_level: "debug"      # Optional override for streaming logger verbosity
   egress_swap_mode: "auto"   # Auto-detect PCM16 byte order (auto|force_true|force_false)
