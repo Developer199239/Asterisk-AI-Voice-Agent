@@ -140,7 +140,7 @@ streaming:
   chunk_size_ms: 20          # Frame size; 20 ms recommended for telephony cadence
   min_start_ms: 120          # Warm-up buffer before first frame; 120 ms for smoother cadence.
   low_watermark_ms: 80       # Pause streaming when buffer dips below this watermark; ~67% of min_start.
-  provider_grace_ms: 500     # Absorb late provider chunks after stream cleanup (ms); prevents tail-chop artifacts.
+  provider_grace_ms: 900     # Absorb late provider chunks after stream cleanup (ms); prevents tail-chop artifacts.
   logging_level: "debug"      # Optional override for streaming logger verbosity
   egress_swap_mode: "auto"   # Auto-detect PCM16 byte order (auto|force_true|force_false)
   egress_force_mulaw: true

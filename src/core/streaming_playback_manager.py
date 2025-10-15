@@ -326,9 +326,9 @@ class StreamingPlaybackManager:
                 adaptive_min_ms = base_min_ms  # keep greeting behavior predictable
             else:
                 if gap_ms <= int(self.provider_grace_ms or 500):
-                    adaptive_min_ms = max(40, int(base_min_ms * 0.5))
+                    adaptive_min_ms = max(80, int(base_min_ms * 0.5))
                 else:
-                    adaptive_min_ms = max(base_min_ms, 320)
+                    adaptive_min_ms = max(base_min_ms, 400)
             adaptive_min_chunks = max(1, int(math.ceil(adaptive_min_ms / chunk_ms)))
             configured_min_start = (
                 self.greeting_min_start_chunks if playback_type == "greeting" else adaptive_min_chunks
@@ -693,7 +693,7 @@ class StreamingPlaybackManager:
 
             # Process available chunks with pacing to avoid flooding Asterisk
             while not jitter_buffer.empty():
-                # Low watermark check: if depth drops below threshold, pause to rebuild buffer
+                # Low watermark: pause until we rebuild to adaptive target (min_start_chunks), not just 1 frame over watermark
                 low_watermark_chunks = self._get_low_watermark_frames(call_id)
 
                 if (
@@ -701,14 +701,29 @@ class StreamingPlaybackManager:
                     and self._estimate_available_frames(call_id, jitter_buffer, include_remainder=True) <= low_watermark_chunks
                     and self._startup_ready.get(call_id, False)
                 ):
-                    logger.debug("Streaming jitter buffer low watermark pause",
+                    try:
+                        min_need = int(self.active_streams.get(call_id, {}).get('min_start_chunks', self.min_start_chunks))
+                    except Exception:
+                        min_need = self.min_start_chunks
+                    target_frames = max(low_watermark_chunks + 1, min_need)
+                    t0 = time.time()
+                    try:
+                        max_wait = max(0.2, float(self.provider_grace_ms) / 1000.0)
+                    except Exception:
+                        max_wait = 0.5
+                    while (
+                        self._estimate_available_frames(call_id, jitter_buffer, include_remainder=True) < target_frames
+                        and (time.time() - t0) < max_wait
+                    ):
+                        await asyncio.sleep(self.chunk_size_ms / 1000.0)
+                        _STREAMING_JITTER_DEPTH.labels(call_id).set(jitter_buffer.qsize())
+                    logger.debug("Streaming jitter buffer rebuild complete",
                                  call_id=call_id,
                                  stream_id=stream_id,
-                                 buffered_frames=self._estimate_available_frames(call_id, jitter_buffer, include_remainder=False),
-                                 low_watermark=low_watermark_chunks)
-                    await asyncio.sleep(self.chunk_size_ms / 1000.0)
-                    _STREAMING_JITTER_DEPTH.labels(call_id).set(jitter_buffer.qsize())
-                    break
+                                 target_frames=target_frames,
+                                 buffered_frames=self._estimate_available_frames(call_id, jitter_buffer, include_remainder=False))
+                    # Re-check loop conditions after rebuild
+                    continue
                 chunk = jitter_buffer.get_nowait()
 
                 # Convert audio format if needed
