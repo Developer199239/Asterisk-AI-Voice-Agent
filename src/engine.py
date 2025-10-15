@@ -3153,7 +3153,7 @@ class Engine:
                     q.put_nowait(out_chunk)
                 except asyncio.QueueFull:
                     logger.debug("Provider streaming queue full; dropping chunk", call_id=call_id)
-        elif etype == "AgentAudioDone":
+            elif etype == "AgentAudioDone":
             q = self._provider_stream_queues.get(call_id)
             if q is not None:
                 # Signal end of stream
