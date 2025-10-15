@@ -382,11 +382,14 @@ class StreamingPlaybackManager:
                     playback_type=playback_type,
                     gap_ms=gap_ms,
                     adaptive_min_ms=(adaptive_min_ms if playback_type != "greeting" else base_min_ms),
+                    adaptive_warmup_ms=(adaptive_min_ms if playback_type != "greeting" else base_min_ms),
                     min_start_chunks=min_start_chunks,
                     low_watermark_chunks=low_watermark_chunks,
                     chunk_ms=chunk_ms,
                     jb_chunks=jb_chunks,
                     initial_startup_ready=initial_startup_ready,
+                    startup_ready_reused=initial_startup_ready,
+                    provider_grace_ms=int(self.provider_grace_ms) if getattr(self, 'provider_grace_ms', None) is not None else 0,
                 )
             except Exception:
                 pass
