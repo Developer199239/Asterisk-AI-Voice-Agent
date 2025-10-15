@@ -50,6 +50,16 @@ PYCODE
     --header "Authorization: Token ${DG_API_KEY}" \
     --header 'accept: application/json' \
     | jq '.requests // [] | map(select(.request_id != null))' > "$BASE/logs/deepgram_requests.json" || true
+  if command -v jq >/dev/null 2>&1; then
+    REQUEST_ID=$(jq -r '.[0].request_id // empty' "$BASE/logs/deepgram_requests.json" 2>/dev/null || true)
+    if [ -n "$REQUEST_ID" ]; then
+      curl --silent --show-error --request GET \
+        "https://api.deepgram.com/v1/projects/${DG_PROJECT_ID}/requests/${REQUEST_ID}" \
+        --header "Authorization: Token ${DG_API_KEY}" \
+        --header 'accept: application/json' \
+        > "$BASE/logs/deepgram_request_detail.json" || true
+    fi
+  fi
 fi
 echo "RCA_BASE=$BASE"
 echo "CALL_ID=$CID"

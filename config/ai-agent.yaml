@@ -131,7 +131,7 @@ barge_in:
 
 # Streaming configuration (for downstream_mode=stream)
 streaming:
-  sample_rate: 16000         # Output sample rate for streaming audio (16kHz for slin16 wire)
+  sample_rate: 8000          # Output sample rate for streaming audio (μ-law 8kHz path)
   jitter_buffer_ms: 520      # Target depth; set >= adaptive min_start_ms + 20ms spare (e.g., 520ms for ~400ms min-start)
   keepalive_interval_ms: 5000 # Keepalive interval for streaming connections
   connection_timeout_ms: 10000 # Connection timeout for streaming
@@ -216,8 +216,8 @@ providers:
     input_sample_rate_hz: 16000
     continuous_input: true        # Stream audio continuously for best responsiveness
                                   # TIP: Keep this true for real-time conversations
-    output_encoding: "linear16"
-    output_sample_rate_hz: 24000
+    output_encoding: "mulaw"      # Match provider's hosted voice agent output (μ-law 8 kHz)
+    output_sample_rate_hz: 8000
   openai:
     enabled: false
     api_key: "${OPENAI_API_KEY}"

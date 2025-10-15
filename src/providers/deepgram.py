@@ -33,6 +33,45 @@ _DEEPGRAM_SESSION_AUDIO_INFO = Info(
 )
 
 class DeepgramProvider(AIProviderInterface):
+    @staticmethod
+    def _canonicalize_encoding(value: Optional[str]) -> str:
+        t = (value or '').strip().lower()
+        if t in ('mulaw', 'mu-law', 'g711_ulaw', 'g711ulaw', 'g711-ula', 'g711ulaw', 'ulaw'):
+            return 'mulaw'
+        if t in ('slin16', 'linear16', 'pcm16'):
+            return 'linear16'
+        return t or 'mulaw'
+
+    def _update_output_format(self, encoding: Optional[str], sample_rate: Optional[Any], source: str = "runtime") -> None:
+        try:
+            if encoding:
+                canon = self._canonicalize_encoding(encoding)
+                if canon and canon != self._dg_output_encoding:
+                    logger.info(
+                        "Deepgram output format override",
+                        call_id=self.call_id,
+                        previous_encoding=self._dg_output_encoding,
+                        new_encoding=canon,
+                        source=source,
+                    )
+                    self._dg_output_encoding = canon
+            if sample_rate:
+                try:
+                    rate_val = int(sample_rate)
+                    if rate_val > 0 and rate_val != self._dg_output_rate:
+                        logger.info(
+                            "Deepgram output sample rate override",
+                            call_id=self.call_id,
+                            previous_rate=self._dg_output_rate,
+                            new_rate=rate_val,
+                            source=source,
+                        )
+                        self._dg_output_rate = rate_val
+                except Exception:
+                    logger.debug("Deepgram output sample rate parse failed", value=sample_rate, exc_info=True)
+        except Exception:
+            logger.debug("Deepgram output format update failed", encoding=encoding, sample_rate=sample_rate, source=source, exc_info=True)
+
     def __init__(self, config: Dict[str, Any], llm_config: LLMConfig, on_event: Callable[[Dict[str, Any]], None]):
         super().__init__(on_event)
         self.config = config
@@ -65,11 +104,14 @@ class DeepgramProvider(AIProviderInterface):
         except Exception:
             self._dg_input_rate = 8000
         # Cache provider output settings for downstream conversion/metadata
-        self._dg_output_encoding = (getattr(self.config, 'output_encoding', None) or 'mulaw').lower()
+        self._dg_output_encoding = self._canonicalize_encoding(getattr(self.config, 'output_encoding', None) or 'mulaw')
         try:
             self._dg_output_rate = int(getattr(self.config, 'output_sample_rate_hz', 8000) or 8000)
         except Exception:
             self._dg_output_rate = 8000
+        # Allow optional runtime detection when explicitly enabled
+        self.allow_output_autodetect = bool(getattr(self.config, 'allow_output_autodetect', False))
+        self._dg_output_inferred = not self.allow_output_autodetect
 
     @property
     def supported_codecs(self) -> List[str]:
@@ -163,18 +205,12 @@ class DeepgramProvider(AIProviderInterface):
         input_sample_rate = int(getattr(self.config, 'input_sample_rate_hz', 8000) or 8000)
         output_encoding = getattr(self.config, 'output_encoding', None) or 'mulaw'
         output_sample_rate = int(getattr(self.config, 'output_sample_rate_hz', 8000) or 8000)
-        self._dg_output_encoding = output_encoding.lower()
+        self._dg_output_encoding = self._canonicalize_encoding(output_encoding)
         self._dg_output_rate = output_sample_rate
+        self._dg_output_inferred = not self.allow_output_autodetect
         # Canonicalize Deepgram V1 audio.format values
-        def _canon_fmt(v: str) -> str:
-            t = (v or '').strip().lower()
-            if t in ('mulaw', 'mu-law', 'g711_ulaw', 'g711ulaw', 'g711-ula', 'ulaw'):
-                return 'mulaw'
-            if t in ('slin16', 'linear16', 'pcm16'):
-                return 'linear16'
-            return 'ulaw'
-        input_format = _canon_fmt(input_encoding)
-        output_format = _canon_fmt(output_encoding)
+        input_format = self._canonicalize_encoding(input_encoding)
+        output_format = self._canonicalize_encoding(output_encoding)
 
         # Determine greeting precedence: provider override > global LLM greeting > safe default
         try:
@@ -288,12 +324,6 @@ class DeepgramProvider(AIProviderInterface):
             try:
                 self._is_audio_flowing = True
                 chunk_len = len(audio_chunk)
-                if chunk_len not in (0, 160, 320):
-                    logger.debug(
-                        "Deepgram provider unexpected chunk size",
-                        bytes=chunk_len,
-                    )
-
                 input_encoding = (getattr(self.config, "input_encoding", None) or "linear16").strip().lower()
                 target_rate = int(getattr(self.config, "input_sample_rate_hz", 8000) or 8000)
                 # Infer actual inbound format and source rate from canonical 20 ms frame sizes
@@ -315,6 +345,19 @@ class DeepgramProvider(AIProviderInterface):
                         src_rate = int(getattr(self.config, "input_sample_rate_hz", 0) or 0) or (16000 if actual_format == "pcm16" else 8000)
                     except Exception:
                         src_rate = 8000
+
+                try:
+                    frame_bytes = 160 if actual_format == "ulaw" else int(max(1, src_rate) / 50) * 2
+                except Exception:
+                    frame_bytes = 0
+                if frame_bytes and chunk_len % frame_bytes != 0:
+                    logger.debug(
+                        "Deepgram provider irregular chunk size",
+                        bytes=chunk_len,
+                        frame_bytes=frame_bytes,
+                        actual_format=actual_format,
+                        src_rate=src_rate,
+                    )
 
                 payload: bytes = audio_chunk
                 pcm_for_rms: Optional[bytes] = None
@@ -550,6 +593,15 @@ class DeepgramProvider(AIProviderInterface):
                                     ack_raw=event_data,
                                 )
                                 try:
+                                    out_cfg = {}
+                                    if isinstance(audio_ack, dict):
+                                        out_cfg = audio_ack.get("output") or {}
+                                    ack_encoding = out_cfg.get("encoding")
+                                    ack_rate = out_cfg.get("sample_rate")
+                                    self._update_output_format(ack_encoding, ack_rate, source="ack")
+                                except Exception:
+                                    logger.debug("Deepgram ACK output parsing failed", exc_info=True)
+                                try:
                                     self._ack_logged = True
                                 except Exception:
                                     pass
@@ -563,6 +615,17 @@ class DeepgramProvider(AIProviderInterface):
                                 call_id=self.call_id,
                                 event_type=et,
                             )
+                            if isinstance(event_data, dict) and et == "ConversationText":
+                                try:
+                                    logger.info(
+                                        "Deepgram conversation text",
+                                        call_id=self.call_id,
+                                        role=event_data.get("role"),
+                                        text=event_data.get("text") or event_data.get("content"),
+                                        segments=event_data.get("segments"),
+                                    )
+                                except Exception:
+                                    logger.debug("Deepgram conversation text logging failed", exc_info=True)
                             if et in ("Error", "Warning"):
                                 try:
                                     logger.warning(
@@ -603,8 +666,9 @@ class DeepgramProvider(AIProviderInterface):
                 elif isinstance(message, bytes):
                     self._ready_to_stream = True
                     # One-time runtime probe: infer output encoding/rate from first bytes
+                    can_autodetect = getattr(self, "allow_output_autodetect", False)
                     try:
-                        if not getattr(self, "_dg_output_inferred", False):
+                        if can_autodetect and not getattr(self, "_dg_output_inferred", False):
                             l = len(message)
                             inferred: Optional[str] = None
                             inferred_rate: Optional[int] = None
@@ -654,6 +718,9 @@ class DeepgramProvider(AIProviderInterface):
                                     self._dg_output_inferred = True
                                 except Exception:
                                     pass
+                        else:
+                            if not getattr(self, "_dg_output_inferred", False):
+                                self._dg_output_inferred = True
                     except Exception:
                         logger.debug("Deepgram output inference failed", exc_info=True)
                     audio_event = {
