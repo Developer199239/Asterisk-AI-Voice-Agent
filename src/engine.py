@@ -3026,7 +3026,11 @@ class Engine:
                     )
                 except Exception:
                     pass
-                wire_rate = 16000
+                wire_rate = session.transport_profile.sample_rate or rate or getattr(self.config.streaming, "sample_rate", 16000)
+                try:
+                    transport_encoding = self._canonicalize_encoding(session.transport_profile.format)
+                except Exception:
+                    transport_encoding = ""
                 out_chunk = chunk
                 if enc in ("linear16", "pcm16", "slin", "slin16") and rate and wire_rate and rate != wire_rate:
                     try:
@@ -3044,6 +3048,17 @@ class Engine:
                         )
                     except Exception:
                         logger.debug("Provider chunk resample failed; passing original", call_id=call_id, exc_info=True)
+                elif transport_encoding == "mulaw":
+                    # Slice μ-law payload into 20 ms frames to match AudioSocket pacing.
+                    try:
+                        frame_bytes = max(1, int((wire_rate or 8000) / 50))  # 20ms frame size
+                    except Exception:
+                        frame_bytes = 160
+                    if frame_bytes and len(out_chunk) > frame_bytes:
+                        sliced = []
+                        for i in range(0, len(out_chunk), frame_bytes):
+                            sliced.append(out_chunk[i : i + frame_bytes])
+                        out_chunk = sliced
 
                 # Coalescing settings
                 coalesce_enabled = bool(getattr(getattr(self.config, 'streaming', {}), 'coalesce_enabled', False))
@@ -3057,7 +3072,7 @@ class Engine:
                     micro_fallback_ms = 300
 
                 q = self._provider_stream_queues.get(call_id)
-                if coalesce_enabled and q is None:
+                if coalesce_enabled and q is None and not isinstance(out_chunk, list):
                     buf = self._provider_coalesce_buf.setdefault(call_id, bytearray())
                     buf.extend(out_chunk)
                     try:
@@ -3149,10 +3164,14 @@ class Engine:
                             except Exception:
                                 logger.error("Fallback file playback exception", call_id=call_id, exc_info=True)
                                 return
-                    try:
+                try:
+                    if isinstance(out_chunk, list):
+                        for frame in out_chunk:
+                            q.put_nowait(frame)
+                    else:
                         q.put_nowait(out_chunk)
-                    except asyncio.QueueFull:
-                        logger.debug("Provider streaming queue full; dropping chunk", call_id=call_id)
+                except asyncio.QueueFull:
+                    logger.debug("Provider streaming queue full; dropping chunk", call_id=call_id)
             elif etype == "AgentAudioDone":
                 q = self._provider_stream_queues.get(call_id)
                 if q is not None:
