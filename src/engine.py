@@ -375,6 +375,10 @@ class Engine:
         self.pending_audiosocket_channels: Dict[str, str] = {}  # audiosocket_channel_id -> caller_channel_id
         self._audio_rx_debug: Dict[str, int] = {}
         self._keepalive_tasks: Dict[str, asyncio.Task] = {}
+        # Track provider segment start timestamps per call for duration logging
+        self._provider_segment_start_ts: Dict[str, float] = {}
+        # Track provider AgentAudio chunk sequence per call for duration logging
+        self._provider_chunk_seq: Dict[str, int] = {}
         # Active playbacks are now managed by SessionStore
         # ExternalMedia to caller channel mapping is now managed by SessionStore
         # SSRC to caller channel mapping for RTP audio routing
@@ -2990,6 +2994,36 @@ class Engine:
                     self._update_audio_diagnostics(session, "provider_out", chunk, diag_encoding, diag_rate)
                 except Exception:
                     logger.debug("Provider audio diagnostics update failed", call_id=call_id, exc_info=True)
+                # Log provider AgentAudio chunk metrics for RCA
+                try:
+                    rate = int(sample_rate_int or diag_rate or 0) if (locals().get('diag_rate') is not None) else int(sample_rate_int or 0)
+                except Exception:
+                    rate = 0
+                try:
+                    enc = (encoding or diag_encoding or "").lower() if (locals().get('diag_encoding') is not None) else (encoding or "")
+                except Exception:
+                    enc = encoding or ""
+                bps = 2 if enc in ("linear16", "pcm16", "slin", "slin16") else 1
+                duration_ms = 0.0
+                try:
+                    if rate and bps:
+                        duration_ms = round((len(chunk) / float(bps * rate)) * 1000.0, 3)
+                except Exception:
+                    duration_ms = 0.0
+                seq = self._provider_chunk_seq.get(call_id, 0) + 1
+                self._provider_chunk_seq[call_id] = seq
+                try:
+                    logger.info(
+                        "PROVIDER CHUNK",
+                        call_id=call_id,
+                        seq=seq,
+                        size_bytes=len(chunk),
+                        encoding=enc,
+                        sample_rate_hz=rate,
+                        approx_duration_ms=duration_ms,
+                    )
+                except Exception:
+                    pass
                 # Ensure a streaming queue exists and streaming is started
                 q = self._provider_stream_queues.get(call_id)
                 if q is None:
@@ -3028,6 +3062,11 @@ class Engine:
                             target_encoding=target_encoding,
                             target_sample_rate=target_sample_rate,
                         )
+                        try:
+                            self._provider_segment_start_ts[call_id] = time.time()
+                            logger.info("PROVIDER SEGMENT START", call_id=call_id, playback_type=playback_type)
+                        except Exception:
+                            pass
                     except Exception:
                         logger.error("Failed to start streaming playback", call_id=call_id, exc_info=True)
                         # Fallback to file playback if streaming cannot start
@@ -3058,6 +3097,20 @@ class Engine:
                 else:
                     logger.debug("AgentAudioDone with no active stream queue", call_id=call_id)
                 self._provider_stream_formats.pop(call_id, None)
+                # Log provider segment wall duration
+                try:
+                    start_ts = self._provider_segment_start_ts.pop(call_id, None)
+                    if start_ts is not None:
+                        wall = max(0.0, time.time() - float(start_ts))
+                        logger.info(
+                            "PROVIDER SEGMENT END",
+                            call_id=call_id,
+                            segment_wall_seconds=round(wall, 3),
+                        )
+                    # Reset chunk sequence at segment end
+                    self._provider_chunk_seq.pop(call_id, None)
+                except Exception:
+                    pass
             else:
                 # Log control/JSON events at debug for now
                 logger.debug("Provider control event", provider_event=event)
