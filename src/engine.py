@@ -3026,96 +3026,52 @@ class Engine:
                     )
                 except Exception:
                     pass
-            wire_rate = 16000
-            out_chunk = chunk
-            if enc in ("linear16", "pcm16", "slin", "slin16") and rate and wire_rate and rate != wire_rate:
-                try:
-                    out_chunk, _ = audioop.ratecv(chunk, 2, 1, rate, wire_rate, None)
-                    seq = self._provider_chunk_seq.get(call_id, 0) + 1
-                    self._provider_chunk_seq[call_id] = seq
-                    logger.info(
-                        "PROVIDER CHUNK",
-                        call_id=call_id,
-                        seq=seq,
-                        size_bytes=len(chunk),
-                        encoding=enc,
-                        sample_rate_hz=rate,
-                        approx_duration_ms=duration_ms,
-                    )
-                except Exception:
-                    logger.debug("Provider chunk resample failed; passing original", call_id=call_id, exc_info=True)
-
-            # Coalescing settings
-            coalesce_enabled = bool(getattr(getattr(self.config, 'streaming', {}), 'coalesce_enabled', False))
-            try:
-                coalesce_min_ms = int(getattr(self.config.streaming, 'coalesce_min_ms', 600))
-            except Exception:
-                coalesce_min_ms = 600
-            try:
-                micro_fallback_ms = int(getattr(self.config.streaming, 'micro_fallback_ms', 300))
-            except Exception:
-                micro_fallback_ms = 300
-
-            q = self._provider_stream_queues.get(call_id)
-            if coalesce_enabled and q is None:
-                buf = self._provider_coalesce_buf.setdefault(call_id, bytearray())
-                buf.extend(out_chunk)
-                try:
-                    buf_ms = round((len(buf) / float(2 * max(1, wire_rate))) * 1000.0, 3)
-                except Exception:
-                    buf_ms = 0.0
-                logger.info("PROVIDER COALESCE BUFFER", call_id=call_id, buf_ms=buf_ms, bytes=len(buf))
-                if buf_ms < coalesce_min_ms:
-                    # Keep buffering until threshold
-                    return
-                # Start streaming now with coalesced buffer
-                try:
-                    q = asyncio.Queue(maxsize=256)
-                    self._provider_stream_queues[call_id] = q
-                    playback_type = "greeting" if getattr(session, "conversation_state", "") == "greeting" else "streaming-response"
-                    fmt_info = self._provider_stream_formats.get(call_id, {})
-                    provider_name = getattr(session, "provider_name", None) or self.config.default_provider
-                    alignment_issues = self.provider_alignment_issues.get(provider_name, [])
-                    if alignment_issues and call_id not in self._runtime_alignment_logged:
-                        for detail in alignment_issues:
-                            logger.warning("Provider codec/sample alignment issue persists during streaming", call_id=call_id, provider=provider_name, detail=detail)
-                        self._runtime_alignment_logged.add(call_id)
-                    target_encoding, target_sample_rate, remediation = self._resolve_stream_targets(session, session.provider_name)
-                    if target_sample_rate <= 0:
-                        target_sample_rate = session.transport_profile.sample_rate
-                    if remediation:
-                        session.audio_diagnostics["codec_remediation"] = remediation
-                    await self.streaming_playback_manager.start_streaming_playback(
-                        call_id,
-                        q,
-                        playback_type=playback_type,
-                        source_encoding=fmt_info.get("encoding"),
-                        source_sample_rate=fmt_info.get("sample_rate"),
-                        target_encoding=target_encoding,
-                        target_sample_rate=target_sample_rate,
-                    )
-                    logger.info("COALESCE START", call_id=call_id, coalesced_ms=buf_ms, coalesced_bytes=len(buf))
+                wire_rate = 16000
+                out_chunk = chunk
+                if enc in ("linear16", "pcm16", "slin", "slin16") and rate and wire_rate and rate != wire_rate:
                     try:
-                        q.put_nowait(bytes(buf))
-                    except asyncio.QueueFull:
-                        logger.debug("Coalesced enqueue dropped (queue full)", call_id=call_id)
-                    self._provider_coalesce_buf.pop(call_id, None)
-                except Exception:
-                    logger.error("Coalesced start_streaming_playback failed", call_id=call_id, exc_info=True)
-                    # Fallback: play coalesced buffer via file
-                    try:
-                        playback_id = await self.playback_manager.play_audio(call_id, bytes(buf), "streaming-response")
-                        logger.info("MICRO SEGMENT FILE FALLBACK (start)", call_id=call_id, buf_ms=buf_ms, playback_id=playback_id)
+                        out_chunk, _ = audioop.ratecv(chunk, 2, 1, rate, wire_rate, None)
+                        seq = self._provider_chunk_seq.get(call_id, 0) + 1
+                        self._provider_chunk_seq[call_id] = seq
+                        logger.info(
+                            "PROVIDER CHUNK",
+                            call_id=call_id,
+                            seq=seq,
+                            size_bytes=len(chunk),
+                            encoding=enc,
+                            sample_rate_hz=rate,
+                            approx_duration_ms=duration_ms,
+                        )
                     except Exception:
-                        logger.error("File fallback failed after coalesce start error", call_id=call_id, exc_info=True)
-                    self._provider_coalesce_buf.pop(call_id, None)
-                    return
-            else:
-                # Normal path: ensure stream and enqueue
-                if q is None:
-                    q = asyncio.Queue(maxsize=256)
-                    self._provider_stream_queues[call_id] = q
+                        logger.debug("Provider chunk resample failed; passing original", call_id=call_id, exc_info=True)
+
+                # Coalescing settings
+                coalesce_enabled = bool(getattr(getattr(self.config, 'streaming', {}), 'coalesce_enabled', False))
+                try:
+                    coalesce_min_ms = int(getattr(self.config.streaming, 'coalesce_min_ms', 600))
+                except Exception:
+                    coalesce_min_ms = 600
+                try:
+                    micro_fallback_ms = int(getattr(self.config.streaming, 'micro_fallback_ms', 300))
+                except Exception:
+                    micro_fallback_ms = 300
+
+                q = self._provider_stream_queues.get(call_id)
+                if coalesce_enabled and q is None:
+                    buf = self._provider_coalesce_buf.setdefault(call_id, bytearray())
+                    buf.extend(out_chunk)
                     try:
+                        buf_ms = round((len(buf) / float(2 * max(1, wire_rate))) * 1000.0, 3)
+                    except Exception:
+                        buf_ms = 0.0
+                    logger.info("PROVIDER COALESCE BUFFER", call_id=call_id, buf_ms=buf_ms, bytes=len(buf))
+                    if buf_ms < coalesce_min_ms:
+                        # Keep buffering until threshold
+                        return
+                    # Start streaming now with coalesced buffer
+                    try:
+                        q = asyncio.Queue(maxsize=256)
+                        self._provider_stream_queues[call_id] = q
                         playback_type = "greeting" if getattr(session, "conversation_state", "") == "greeting" else "streaming-response"
                         fmt_info = self._provider_stream_formats.get(call_id, {})
                         provider_name = getattr(session, "provider_name", None) or self.config.default_provider
@@ -3138,21 +3094,65 @@ class Engine:
                             target_encoding=target_encoding,
                             target_sample_rate=target_sample_rate,
                         )
-                    except Exception:
-                        logger.error("Failed to start streaming playback", call_id=call_id, exc_info=True)
-                        # Fallback to file playback if streaming cannot start
+                        logger.info("COALESCE START", call_id=call_id, coalesced_ms=buf_ms, coalesced_bytes=len(buf))
                         try:
-                            playback_id = await self.playback_manager.play_audio(call_id, out_chunk, "streaming-response")
-                            if not playback_id:
-                                logger.error("Fallback file playback failed", call_id=call_id, size=len(out_chunk))
-                            return
+                            q.put_nowait(bytes(buf))
+                        except asyncio.QueueFull:
+                            logger.debug("Coalesced enqueue dropped (queue full)", call_id=call_id)
+                        self._provider_coalesce_buf.pop(call_id, None)
+                    except Exception:
+                        logger.error("Coalesced start_streaming_playback failed", call_id=call_id, exc_info=True)
+                        # Fallback: play coalesced buffer via file
+                        try:
+                            playback_id = await self.playback_manager.play_audio(call_id, bytes(buf), "streaming-response")
+                            logger.info("MICRO SEGMENT FILE FALLBACK (start)", call_id=call_id, buf_ms=buf_ms, playback_id=playback_id)
                         except Exception:
-                            logger.error("Fallback file playback exception", call_id=call_id, exc_info=True)
-                            return
-                try:
-                    q.put_nowait(out_chunk)
-                except asyncio.QueueFull:
-                    logger.debug("Provider streaming queue full; dropping chunk", call_id=call_id)
+                            logger.error("File fallback failed after coalesce start error", call_id=call_id, exc_info=True)
+                        self._provider_coalesce_buf.pop(call_id, None)
+                        return
+                else:
+                    # Normal path: ensure stream and enqueue
+                    if q is None:
+                        q = asyncio.Queue(maxsize=256)
+                        self._provider_stream_queues[call_id] = q
+                        try:
+                            playback_type = "greeting" if getattr(session, "conversation_state", "") == "greeting" else "streaming-response"
+                            fmt_info = self._provider_stream_formats.get(call_id, {})
+                            provider_name = getattr(session, "provider_name", None) or self.config.default_provider
+                            alignment_issues = self.provider_alignment_issues.get(provider_name, [])
+                            if alignment_issues and call_id not in self._runtime_alignment_logged:
+                                for detail in alignment_issues:
+                                    logger.warning("Provider codec/sample alignment issue persists during streaming", call_id=call_id, provider=provider_name, detail=detail)
+                                self._runtime_alignment_logged.add(call_id)
+                            target_encoding, target_sample_rate, remediation = self._resolve_stream_targets(session, session.provider_name)
+                            if target_sample_rate <= 0:
+                                target_sample_rate = session.transport_profile.sample_rate
+                            if remediation:
+                                session.audio_diagnostics["codec_remediation"] = remediation
+                            await self.streaming_playback_manager.start_streaming_playback(
+                                call_id,
+                                q,
+                                playback_type=playback_type,
+                                source_encoding=fmt_info.get("encoding"),
+                                source_sample_rate=fmt_info.get("sample_rate"),
+                                target_encoding=target_encoding,
+                                target_sample_rate=target_sample_rate,
+                            )
+                        except Exception:
+                            logger.error("Failed to start streaming playback", call_id=call_id, exc_info=True)
+                            # Fallback to file playback if streaming cannot start
+                            try:
+                                playback_id = await self.playback_manager.play_audio(call_id, out_chunk, "streaming-response")
+                                if not playback_id:
+                                    logger.error("Fallback file playback failed", call_id=call_id, size=len(out_chunk))
+                                return
+                            except Exception:
+                                logger.error("Fallback file playback exception", call_id=call_id, exc_info=True)
+                                return
+                    try:
+                        q.put_nowait(out_chunk)
+                    except asyncio.QueueFull:
+                        logger.debug("Provider streaming queue full; dropping chunk", call_id=call_id)
             elif etype == "AgentAudioDone":
                 q = self._provider_stream_queues.get(call_id)
                 if q is not None:
