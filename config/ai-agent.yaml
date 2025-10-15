@@ -216,7 +216,7 @@ providers:
     input_sample_rate_hz: 16000
     continuous_input: true        # Stream audio continuously for best responsiveness
                                   # TIP: Keep this true for real-time conversations
-    output_encoding: "mulaw"      # Match provider's hosted voice agent output (μ-law 8 kHz)
+    output_encoding: "mulaw"
     output_sample_rate_hz: 8000
   openai:
     enabled: false
