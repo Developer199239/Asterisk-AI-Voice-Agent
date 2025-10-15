@@ -30,5 +30,26 @@ if [ -n "$RECS" ]; then python3 scripts/wav_quality_analyzer.py "$BASE"/recordin
 if [ -n "$CID" ]; then
   egrep -n "ADAPTIVE WARM-UP|Wrote .*200ms|call-level summary|STREAMING TUNING SUMMARY" "$BASE/logs/ai-engine.log" | grep "$CID" > "$BASE/logs/call_timeline.log" || true
 fi
+
+# Fetch Deepgram usage detail for the latest call when credentials are available.
+DG_PROJECT_ID="${DG_PROJECT_ID:-}"
+DG_API_KEY="${DEEPGRAM_API_KEY:-}"
+if [ -n "$CID" ] && [ -n "$DG_PROJECT_ID" ] && [ -n "$DG_API_KEY" ]; then
+  START_ISO=$(date -u -v-30M +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || python3 - <<'PYCODE'
+import datetime
+print((datetime.datetime.utcnow() - datetime.timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ"))
+PYCODE
+)
+  END_ISO=$(date -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || python3 - <<'PYCODE'
+import datetime
+print(datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"))
+PYCODE
+)
+  curl --silent --show-error --request GET \
+    "https://api.deepgram.com/v1/projects/${DG_PROJECT_ID}/requests?start=${START_ISO}&end=${END_ISO}&status=succeeded" \
+    --header "Authorization: Token ${DG_API_KEY}" \
+    --header 'accept: application/json' \
+    | jq '.requests // [] | map(select(.request_id != null))' > "$BASE/logs/deepgram_requests.json" || true
+fi
 echo "RCA_BASE=$BASE"
 echo "CALL_ID=$CID"
