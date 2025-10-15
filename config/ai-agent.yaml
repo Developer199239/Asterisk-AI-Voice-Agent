@@ -114,8 +114,7 @@ downstream_mode: "stream"
 audiosocket:
   host: "0.0.0.0"          # Bind address (use 127.0.0.1 when engine and Asterisk share a host)
   port: 8090               # TCP port for AudioSocket connections
-  format: "ulaw"           # Wire format from Asterisk: `ulaw` (160B/20ms @ 8 kHz) or `slin16` (640B/20ms @ 16 kHz)
-                           # TIP: Match this to the dialplan's AudioSocket() media argument (use 'ulaw' for PSTN trunks).
+  format: "slin16"         # Wire format: PCM16 @ 8kHz for AudioSocket; must match dialplan's AudioSocket() media argument.
 
 # Barge-in configuration
 barge_in:
@@ -137,7 +136,7 @@ streaming:
   keepalive_interval_ms: 5000 # Keepalive interval for streaming connections
   connection_timeout_ms: 10000 # Connection timeout for streaming
   fallback_timeout_ms: 8000   # No audio sent for this long → fall back to file playback
-  chunk_size_ms: 10          # Finer pacing for smoother cadence at segment edges
+  chunk_size_ms: 20          # Wire pacing for AudioSocket: 20 ms frames (320 bytes PCM16 @ 8kHz)
   min_start_ms: 120          # Warm-up buffer before first frame; 120 ms for smoother cadence.
   low_watermark_ms: 260      # Pause when depth < ~2/3 of adaptive min_start; acts as lower bound for scaling logic
   provider_grace_ms: 900     # Absorb late provider chunks after stream cleanup (ms); prevents tail-chop artifacts.
