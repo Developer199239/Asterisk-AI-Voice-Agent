@@ -4190,6 +4190,28 @@ class Engine:
         """Ensure downstream streaming targets align with the transport profile."""
         transport_fmt = session.transport_profile.format
         transport_rate = session.transport_profile.sample_rate
+
+        # Hard-pin targets to AudioSocket transport settings to prevent runtime drift
+        try:
+            if getattr(self.config, 'audio_transport', None) == 'audiosocket':
+                # Prefer explicit audiosocket.format/sample_rate from config; fallback to transport profile
+                try:
+                    as_fmt_cfg = (self.config.audiosocket.format or '').lower() if getattr(self.config, 'audiosocket', None) else ''
+                except Exception:
+                    as_fmt_cfg = ''
+                try:
+                    as_rate_cfg = int(getattr(getattr(self.config, 'streaming', None), 'sample_rate', 0) or 0)
+                except Exception:
+                    as_rate_cfg = 0
+                pinned_fmt = self._canonicalize_encoding(as_fmt_cfg) or transport_fmt or 'ulaw'
+                pinned_rate = int(as_rate_cfg or transport_rate or 8000)
+                if pinned_rate <= 0:
+                    pinned_rate = 8000
+                # Override transport_fmt/rate for target resolution below
+                transport_fmt = pinned_fmt
+                transport_rate = pinned_rate
+        except Exception:
+            pass
         prefs = self.call_audio_preferences.get(session.call_id, {}) or {}
         target_encoding = self._canonicalize_encoding(prefs.get("format")) or transport_fmt
         target_sample_rate = int(prefs.get("sample_rate") or transport_rate)
