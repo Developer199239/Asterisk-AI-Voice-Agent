@@ -851,6 +851,99 @@ class StreamingPlaybackManager:
                 and src_rate == target_rate
             ):
                 self._resample_states[call_id] = None
+                # Diagnostics: capture taps even on μ-law fast-path
+                try:
+                    if getattr(self, 'diag_enable_taps', False) and call_id in self.active_streams:
+                        info = self.active_streams.get(call_id, {})
+                        try:
+                            rate = int(target_rate)
+                        except Exception:
+                            rate = int(self.sample_rate)
+                        # Decode μ-law to PCM16 for tap snapshots
+                        try:
+                            back_pcm = mulaw_to_pcm16le(chunk)
+                        except Exception:
+                            back_pcm = b""
+                        # First-chunk direct snapshots
+                        try:
+                            if not info.get('tap_first_snapshot_done', False):
+                                stream_id_first = str(info.get('stream_id', 'seg'))
+                                if back_pcm:
+                                    fn2 = os.path.join(self.diag_out_dir, f"post_compand_pcm16_{call_id}_{stream_id_first}_first.wav")
+                                    try:
+                                        with wave.open(fn2, 'wb') as wf:
+                                            wf.setnchannels(1)
+                                            wf.setsampwidth(2)
+                                            wf.setframerate(int(rate) if isinstance(rate, int) else int(self.sample_rate))
+                                            wf.writeframes(back_pcm)
+                                        logger.info("Wrote post-compand PCM16 tap snapshot", call_id=call_id, stream_id=stream_id_first, path=fn2, bytes=len(back_pcm), rate=rate, snapshot="first")
+                                    except Exception:
+                                        logger.warning("Failed to write post-compand tap snapshot", call_id=call_id, stream_id=stream_id_first, path=fn2, rate=rate, snapshot="first", exc_info=True)
+                                # Mark first snapshot done to avoid duplicates
+                                info['tap_first_snapshot_done'] = True
+                        except Exception:
+                            logger.debug("Fast-path first-chunk tap snapshot failed", call_id=call_id, exc_info=True)
+                        # Accumulate pre/post buffers (use decoded PCM16 as both for fast-path)
+                        try:
+                            pre_lim = max(0, int(self.diag_pre_secs * rate * 2))
+                        except Exception:
+                            pre_lim = 0
+                        if pre_lim and isinstance(info.get('tap_pre_pcm16'), (bytearray, bytes)) and back_pcm:
+                            pre_buf = info['tap_pre_pcm16']
+                            if len(pre_buf) < pre_lim:
+                                need = pre_lim - len(pre_buf)
+                                pre_buf.extend(back_pcm[:need])
+                        try:
+                            post_lim = max(0, int(self.diag_post_secs * rate * 2))
+                        except Exception:
+                            post_lim = 0
+                        if post_lim and isinstance(info.get('tap_post_pcm16'), (bytearray, bytes)) and back_pcm:
+                            post_buf = info['tap_post_pcm16']
+                            if len(post_buf) < post_lim:
+                                need2 = post_lim - len(post_buf)
+                                post_buf.extend(back_pcm[:need2])
+                        # Call-level accumulation (pre/post)
+                        try:
+                            if self.diag_enable_taps and call_id in self.call_tap_post_pcm16 and back_pcm:
+                                self.call_tap_post_pcm16[call_id].extend(back_pcm)
+                            if self.diag_enable_taps and call_id in self.call_tap_pre_pcm16 and back_pcm:
+                                self.call_tap_pre_pcm16[call_id].extend(back_pcm)
+                        except Exception:
+                            logger.debug("Fast-path call-level tap accumulation failed (ulaw)", call_id=call_id, exc_info=True)
+                        # First-window (200ms) per-segment snapshots
+                        try:
+                            try:
+                                win_rate = int(rate) if isinstance(rate, int) else int(self.sample_rate)
+                            except Exception:
+                                win_rate = int(self.sample_rate)
+                            try:
+                                win_bytes = max(1, int(win_rate * 0.2 * 2))
+                            except Exception:
+                                win_bytes = 3200
+                            if isinstance(info.get('tap_first_window_post'), bytearray) and back_pcm:
+                                post_w = info['tap_first_window_post']
+                                if len(post_w) < win_bytes:
+                                    needw2 = win_bytes - len(post_w)
+                                    post_w.extend(back_pcm[:needw2])
+                            if not info.get('tap_first_window_done'):
+                                post_w = info.get('tap_first_window_post') or bytearray()
+                                if len(post_w) >= win_bytes:
+                                    sid = str(info.get('stream_id', 'seg'))
+                                    try:
+                                        fnq200 = os.path.join(self.diag_out_dir, f"post_compand_pcm16_{call_id}_{sid}_first200ms.wav")
+                                        with wave.open(fnq200, 'wb') as wf:
+                                            wf.setnchannels(1)
+                                            wf.setsampwidth(2)
+                                            wf.setframerate(win_rate)
+                                            wf.writeframes(bytes(post_w[:win_bytes]))
+                                        logger.info("Wrote post-compand 200ms snapshot", call_id=call_id, stream_id=sid, path=fnq200, bytes=win_bytes, rate=win_rate, snapshot="first200ms")
+                                    except Exception:
+                                        logger.warning("Failed 200ms post snapshot (fast-path)", call_id=call_id, stream_id=sid, rate=win_rate, exc_info=True)
+                                    info['tap_first_window_done'] = True
+                        except Exception:
+                            logger.debug("First-window snapshot failed (fast-path ulaw)", call_id=call_id, exc_info=True)
+                except Exception:
+                    logger.debug("Fast-path tap capture failed", call_id=call_id, exc_info=True)
                 return chunk
             if (
                 src_encoding_raw in ("slin16", "linear16", "pcm16")
@@ -2006,11 +2099,16 @@ class StreamingPlaybackManager:
                     info = self.active_streams[call_id]
                     try:
                         fmt = (
-                            self._canonicalize_encoding(self.audiosocket_format)
+                            self._canonicalize_encoding(info.get('target_format'))
+                            or self._canonicalize_encoding(self.audiosocket_format)
                             or "ulaw"
                         )
                         bps = 1 if self._is_mulaw(fmt) else 2
-                        sr = max(1, int(self.sample_rate))
+                        try:
+                            sr_candidate = int(info.get('target_sample_rate', 0) or 0)
+                        except Exception:
+                            sr_candidate = 0
+                        sr = max(1, int(sr_candidate or self.sample_rate))
                         tx = int(info.get('tx_bytes', 0))
                         eff_seconds = float(tx) / float(max(1, bps * sr))
                     except Exception:
