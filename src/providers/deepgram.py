@@ -9,6 +9,7 @@ from structlog import get_logger
 from prometheus_client import Gauge, Info
 from ..audio.resampler import (
     mulaw_to_pcm16le,
+    pcm16le_to_mulaw,
     resample_audio,
 )
 from ..config import LLMConfig
@@ -723,21 +724,67 @@ class DeepgramProvider(AIProviderInterface):
                                 self._dg_output_inferred = True
                     except Exception:
                         logger.debug("Deepgram output inference failed", exc_info=True)
+
+                    # Provider-side normalization: emit only verified μ-law @ 8000
+                    payload_ulaw: bytes = b""
+                    try:
+                        enc = (self._dg_output_encoding or "mulaw").strip().lower()
+                        rate = int(self._dg_output_rate or 8000)
+                    except Exception:
+                        enc = "mulaw"
+                        rate = 8000
+
+                    if enc in ("linear16", "slin16", "pcm16"):
+                        # Treat message as PCM16LE at provider rate; resample to 8k then μ-law compand
+                        pcm = message
+                        if rate != 8000:
+                            try:
+                                pcm, _ = resample_audio(pcm, rate, 8000, state=None)
+                                rate = 8000
+                            except Exception:
+                                logger.warning("Deepgram provider-side resample to 8k failed; emitting raw PCM16", exc_info=True)
+                        try:
+                            payload_ulaw = pcm16le_to_mulaw(pcm)
+                        except Exception:
+                            # Fallback: best-effort via audioop
+                            try:
+                                payload_ulaw = audioop.lin2ulaw(pcm, 2)
+                            except Exception:
+                                payload_ulaw = b""
+                    else:
+                        # enc == mulaw (or other): enforce canonical μ-law@8k by decode→resample(if needed)→encode
+                        try:
+                            pcm = mulaw_to_pcm16le(message)
+                        except Exception:
+                            pcm = b""
+                        if rate != 8000 and pcm:
+                            try:
+                                pcm, _ = resample_audio(pcm, rate, 8000, state=None)
+                                rate = 8000
+                            except Exception:
+                                logger.warning("Deepgram μ-law decode/resample failed; emitting original μ-law", exc_info=True)
+                                payload_ulaw = message
+                        if not payload_ulaw:
+                            try:
+                                payload_ulaw = pcm16le_to_mulaw(pcm) if pcm else message
+                            except Exception:
+                                payload_ulaw = message
+
                     audio_event = {
                         'type': 'AgentAudio',
-                        'data': message,
+                        'data': payload_ulaw if payload_ulaw else message,
                         'streaming_chunk': True,
                         'call_id': self.call_id,
-                        'encoding': self._dg_output_encoding,
-                        'sample_rate': self._dg_output_rate,
+                        'encoding': 'mulaw',
+                        'sample_rate': 8000,
                     }
                     if not self._first_output_chunk_logged:
                         logger.info(
                             "Deepgram AgentAudio first chunk",
                             call_id=self.call_id,
-                            bytes=len(message),
-                            encoding=self._dg_output_encoding,
-                            sample_rate=self._dg_output_rate,
+                            bytes=len(audio_event['data']),
+                            encoding=audio_event['encoding'],
+                            sample_rate=audio_event['sample_rate'],
                         )
                         self._first_output_chunk_logged = True
                     self._in_audio_burst = True
