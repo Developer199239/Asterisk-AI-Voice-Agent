@@ -130,6 +130,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         self._pacer_underruns: int = 0
         self._pacer_lock: asyncio.Lock = asyncio.Lock()
         self._fallback_pcm24k_done: bool = False
+        self._reconnect_task: Optional[asyncio.Task] = None
 
         try:
             if self.config.input_encoding:
@@ -321,7 +322,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                             await self._send_json({"type": "input_audio_buffer.append", "audio": audio_b64})
                             await self._send_json({"type": "input_audio_buffer.commit"})
                             self._last_commit_ts = time.monotonic()
-                            logger.debug(
+                            logger.info(
                                 "OpenAI committed input audio",
                                 call_id=self._call_id,
                                 ms=len(chunk) // bytes_per_ms,
@@ -332,6 +333,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                         await self._ensure_response_request()
         except ConnectionClosedError:
             logger.warning("OpenAI Realtime socket closed while sending audio", call_id=self._call_id)
+            await self._reconnect_with_backoff()
         except Exception:
             logger.error("Failed to send audio to OpenAI Realtime", call_id=self._call_id, exc_info=True)
 
@@ -624,6 +626,12 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         finally:
             await self._emit_audio_done()
             self._pending_response = False
+            try:
+                if not self._closing and not self._closed and self._call_id:
+                    if not self._reconnect_task or self._reconnect_task.done():
+                        self._reconnect_task = asyncio.create_task(self._reconnect_with_backoff())
+            except Exception:
+                logger.debug("Failed to schedule OpenAI reconnect", call_id=self._call_id, exc_info=True)
 
     async def _handle_event(self, event: Dict[str, Any]):
         event_type = event.get("type")
@@ -727,7 +735,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
 
         # Optional acks/telemetry for audio buffer operations
         if event_type and event_type.startswith("input_audio_buffer"):
-            logger.debug("OpenAI input_audio_buffer ack", call_id=self._call_id, event_type=event_type)
+            logger.info("OpenAI input_audio_buffer ack", call_id=self._call_id, event_type=event_type)
             return
 
         # Additional transcript variants per guide
@@ -942,6 +950,44 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                     break
         except asyncio.CancelledError:
             pass
+
+    async def _reconnect_with_backoff(self):
+        call_id = self._call_id
+        if not call_id:
+            return
+        backoff = 0.5
+        for attempt in range(1, 6):
+            if self._closing or self._closed:
+                return
+            try:
+                url = self._build_ws_url()
+                headers = [
+                    ("Authorization", f"Bearer {self.config.api_key}"),
+                    ("OpenAI-Beta", "realtime=v1"),
+                ]
+                if self.config.organization:
+                    headers.append(("OpenAI-Organization", self.config.organization))
+                logger.info("Reconnecting to OpenAI Realtime", call_id=call_id, attempt=attempt)
+                self.websocket = await websockets.connect(url, extra_headers=headers)
+                # Reset minor state
+                self._pending_response = False
+                self._in_audio_burst = False
+                self._first_output_chunk_logged = False
+                # Send session update again and restart loops
+                await self._send_session_update()
+                self._log_session_assumptions()
+                self._receive_task = asyncio.create_task(self._receive_loop())
+                self._keepalive_task = asyncio.create_task(self._keepalive_loop())
+                logger.info("OpenAI Realtime reconnected", call_id=call_id)
+                return
+            except Exception:
+                logger.warning("OpenAI Realtime reconnect failed", call_id=call_id, attempt=attempt, exc_info=True)
+                try:
+                    await asyncio.sleep(backoff)
+                except asyncio.CancelledError:
+                    return
+                backoff = min(6.0, backoff * 2)
+        logger.error("OpenAI Realtime reconnection exhausted attempts", call_id=call_id)
 
     # ------------------------------------------------------------------ #
     # Metrics and session metadata helpers ------------------------------ #

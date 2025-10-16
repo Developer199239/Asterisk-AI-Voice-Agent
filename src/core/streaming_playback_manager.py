@@ -716,11 +716,11 @@ class StreamingPlaybackManager:
                 pacer_task = stream_info.get('pacer_task')
             if pacer_task and not pacer_task.done():
                 try:
-                    provider_grace_ms = max(0, int(self.provider_grace_ms))
+                    frames_remaining = self._estimate_available_frames(call_id, jitter_buffer, include_remainder=True)
                 except Exception:
-                    provider_grace_ms = 0
-                chunk_window = max(0.02, (self.chunk_size_ms / 1000.0) * 4)
-                drain_timeout = max(0.5, min(2.0, (provider_grace_ms / 1000.0) + chunk_window))
+                    frames_remaining = 0
+                chunk_sec = max(0.02, self.chunk_size_ms / 1000.0)
+                drain_timeout = min(2.0, max(0.5, (frames_remaining * chunk_sec) + 0.1))
                 with suppress(asyncio.CancelledError, asyncio.TimeoutError):
                     await asyncio.wait_for(pacer_task, timeout=drain_timeout)
             if pacer_task and not pacer_task.done():
@@ -814,7 +814,7 @@ class StreamingPlaybackManager:
         sentinel_seen = bool(stream_info.get('sentinel_seen', False))
         pending = self.frame_remainders.get(call_id, b"")
 
-        while len(pending) < frame_size and not sentinel_seen:
+        while len(pending) < frame_size:
             try:
                 chunk = jitter_buffer.get_nowait()
             except asyncio.QueueEmpty:
