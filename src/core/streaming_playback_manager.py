@@ -451,6 +451,10 @@ class StreamingPlaybackManager:
                 self._stream_audio_loop(call_id, stream_id, audio_chunks, jitter_buffer)
             )
             
+            # Start pacer (consumer) task to drain jitter buffer independently of producer
+            pacer_task = asyncio.create_task(
+                self._pacer_loop(call_id, stream_id, jitter_buffer)
+            )
             # Start keepalive task
             keepalive_task = asyncio.create_task(
                 self._keepalive_loop(call_id, stream_id)
@@ -525,6 +529,7 @@ class StreamingPlaybackManager:
                 'stream_id': stream_id,
                 'playback_type': playback_type,
                 'streaming_task': streaming_task,
+                'pacer_task': pacer_task,
                 'keepalive_task': keepalive_task,
                 'start_time': time.time(),
                 'seg_start_ts': time.time(),
@@ -657,17 +662,7 @@ class StreamingPlaybackManager:
                     except Exception:
                         pass
 
-                    # Process jitter buffer
-                    success = await self._process_jitter_buffer(call_id, stream_id, jitter_buffer)
-                    if not success:
-                        await self._record_fallback(call_id, "transport-failure")
-                        await self._fallback_to_file_playback(call_id, stream_id)
-                        try:
-                            if call_id in self.active_streams:
-                                self.active_streams[call_id]['end_reason'] = 'transport-failure'
-                        except Exception:
-                            pass
-                        break
+                    # Producer does not drain; pacer loop handles jitter buffer consumption
                     
                 except asyncio.TimeoutError:
                     # No audio chunk received within timeout
@@ -691,6 +686,39 @@ class StreamingPlaybackManager:
             await self._fallback_to_file_playback(call_id, stream_id)
         finally:
             await self._cleanup_stream(call_id, stream_id)
+
+    async def _pacer_loop(
+        self,
+        call_id: str,
+        stream_id: str,
+        jitter_buffer: asyncio.Queue,
+    ) -> None:
+        """Continuously drain the jitter buffer at 20ms cadence.
+
+        Runs in parallel to the producer loop so we don't serialize enqueue and send.
+        """
+        try:
+            while True:
+                # If stream is gone, stop
+                if call_id not in self.active_streams:
+                    break
+                ok = await self._process_jitter_buffer(call_id, stream_id, jitter_buffer)
+                if not ok:
+                    # Transport failure; record and fallback
+                    try:
+                        await self._record_fallback(call_id, "transport-failure")
+                        await self._fallback_to_file_playback(call_id, stream_id)
+                        if call_id in self.active_streams:
+                            self.active_streams[call_id]['end_reason'] = 'transport-failure'
+                    except Exception:
+                        pass
+                    break
+                # Yield a bit when there's nothing to send to avoid busy loop
+                await asyncio.sleep(max(0.001, (self.chunk_size_ms / 1000.0) * 0.1))
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error("Error in pacer loop", call_id=call_id, stream_id=stream_id, error=str(e), exc_info=True)
     
     async def _process_jitter_buffer(
         self,
@@ -1965,43 +1993,45 @@ class StreamingPlaybackManager:
                         call_id=call_id,
                         stream_id=stream_id,
                         error=str(e))
+
     
     async def stop_streaming_playback(self, call_id: str) -> bool:
         """Stop streaming playback for a call."""
         try:
-            if call_id not in self.active_streams:
-                logger.warning("Cannot stop streaming - no active stream",
-                             call_id=call_id)
+            stream_info = self.active_streams.get(call_id)
+            if not stream_info:
+                logger.warning("No active streaming to stop", call_id=call_id)
                 return False
-            
-            stream_info = self.active_streams[call_id]
-            stream_id = stream_info['stream_id']
-            
+            stream_id = stream_info.get('stream_id') or ''
             # Cancel streaming task
-            if 'streaming_task' in stream_info:
-                stream_info['streaming_task'].cancel()
-            
+            try:
+                task = stream_info.get('streaming_task')
+                if task:
+                    task.cancel()
+            except Exception:
+                pass
+            # Cancel pacer task
+            try:
+                ptask = stream_info.get('pacer_task')
+                if ptask:
+                    ptask.cancel()
+            except Exception:
+                pass
             # Cancel keepalive task
             if call_id in self.keepalive_tasks:
-                self.keepalive_tasks[call_id].cancel()
-                del self.keepalive_tasks[call_id]
-            
-            # Cleanup
+                try:
+                    self.keepalive_tasks[call_id].cancel()
+                except Exception:
+                    pass
+                self.keepalive_tasks.pop(call_id, None)
+            # Cleanup resources and emit summaries
             await self._cleanup_stream(call_id, stream_id)
-            
-            logger.info("🎵 STREAMING PLAYBACK - Stopped",
-                       call_id=call_id,
-                       stream_id=stream_id)
-            
+            logger.info("🎵 STREAMING PLAYBACK - Stopped", call_id=call_id, stream_id=stream_id)
             return True
-            
         except Exception as e:
-            logger.error("Error stopping streaming playback",
-                        call_id=call_id,
-                        error=str(e),
-                        exc_info=True)
+            logger.error("Error stopping streaming playback", call_id=call_id, error=str(e), exc_info=True)
             return False
-    
+
     async def _cleanup_stream(self, call_id: str, stream_id: str) -> None:
         """Clean up streaming resources."""
         try:
