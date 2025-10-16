@@ -9,6 +9,7 @@ It includes automatic fallback to file playback on errors or timeouts.
 import asyncio
 import time
 import audioop
+from contextlib import suppress
 from typing import Optional, Dict, Any, TYPE_CHECKING, Set, Callable, Awaitable
 import structlog
 from prometheus_client import Counter, Gauge, Histogram
@@ -29,6 +30,8 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from src.core.playback_manager import PlaybackManager
 
 logger = structlog.get_logger(__name__)
+
+_JITTER_SENTINEL = object()
 
 # Prometheus metrics for streaming playback (module-scope, registered once)
 _STREAMING_ACTIVE_GAUGE = Gauge(
@@ -166,6 +169,7 @@ class StreamingPlaybackManager:
         self.active_streams: Dict[str, Dict[str, Any]] = {}  # call_id -> stream_info
         self.jitter_buffers: Dict[str, asyncio.Queue] = {}  # call_id -> audio_queue
         self.keepalive_tasks: Dict[str, asyncio.Task] = {}  # call_id -> keepalive_task
+        self._cleanup_in_progress: Set[str] = set()
         # Per-call remainder buffer for precise frame sizing
         self.frame_remainders: Dict[str, bytes] = {}
         # Per-call resampler state (used when converting between rates)
@@ -609,6 +613,7 @@ class StreamingPlaybackManager:
         jitter_buffer: asyncio.Queue
     ) -> None:
         """Main streaming loop that processes audio chunks."""
+        sentinel_sent = False
         try:
             fallback_timeout = self.fallback_timeout_ms / 1000.0
             last_send_time = time.time()
@@ -621,13 +626,18 @@ class StreamingPlaybackManager:
                         timeout=fallback_timeout
                     )
                     
-                    if chunk is None:  # End of stream signal
+                    if chunk is None:  # End of stream signal from provider
                         logger.info("🎵 STREAMING PLAYBACK - End of stream",
                                    call_id=call_id,
                                    stream_id=stream_id)
                         try:
                             if call_id in self.active_streams:
                                 self.active_streams[call_id]['end_reason'] = 'end-of-stream'
+                        except Exception:
+                            pass
+                        try:
+                            await jitter_buffer.put(_JITTER_SENTINEL)
+                            sentinel_sent = True
                         except Exception:
                             pass
                         break
@@ -673,6 +683,12 @@ class StreamingPlaybackManager:
                                      timeout=fallback_timeout)
                         await self._record_fallback(call_id, f"timeout>{fallback_timeout}s")
                         await self._fallback_to_file_playback(call_id, stream_id)
+                        if not sentinel_sent:
+                            try:
+                                await jitter_buffer.put(_JITTER_SENTINEL)
+                                sentinel_sent = True
+                            except Exception:
+                                pass
                         break
                     continue
                     
@@ -684,7 +700,38 @@ class StreamingPlaybackManager:
                         exc_info=True)
             await self._record_fallback(call_id, str(e))
             await self._fallback_to_file_playback(call_id, stream_id)
+            if not sentinel_sent:
+                with suppress(asyncio.CancelledError, Exception):
+                    await jitter_buffer.put(_JITTER_SENTINEL)
+                sentinel_sent = True
         finally:
+            if not sentinel_sent:
+                with suppress(asyncio.CancelledError, Exception):
+                    await jitter_buffer.put(_JITTER_SENTINEL)
+                sentinel_sent = True
+            pacer_task: Optional[asyncio.Task] = None
+            stream_info = self.active_streams.get(call_id)
+            if stream_info is not None:
+                stream_info['producer_closed'] = True
+                pacer_task = stream_info.get('pacer_task')
+            if pacer_task and not pacer_task.done():
+                try:
+                    provider_grace_ms = max(0, int(self.provider_grace_ms))
+                except Exception:
+                    provider_grace_ms = 0
+                chunk_window = max(0.02, (self.chunk_size_ms / 1000.0) * 4)
+                drain_timeout = max(0.5, min(2.0, (provider_grace_ms / 1000.0) + chunk_window))
+                with suppress(asyncio.CancelledError, asyncio.TimeoutError):
+                    await asyncio.wait_for(pacer_task, timeout=drain_timeout)
+            if pacer_task and not pacer_task.done():
+                pacer_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await pacer_task
+            keepalive_task = self.keepalive_tasks.pop(call_id, None)
+            if keepalive_task:
+                keepalive_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await keepalive_task
             await self._cleanup_stream(call_id, stream_id)
 
     async def _pacer_loop(
@@ -693,18 +740,28 @@ class StreamingPlaybackManager:
         stream_id: str,
         jitter_buffer: asyncio.Queue,
     ) -> None:
-        """Continuously drain the jitter buffer at 20ms cadence.
-
-        Runs in parallel to the producer loop so we don't serialize enqueue and send.
-        """
+        """Drain jitter buffer at steady cadence so producer and consumer are independent."""
+        tick_seconds = max(0.02, self.chunk_size_ms / 1000.0)
+        next_tick = time.perf_counter()
         try:
             while True:
-                # If stream is gone, stop
+                now = time.perf_counter()
+                sleep_for = next_tick - now
+                if sleep_for > 0:
+                    try:
+                        await asyncio.sleep(sleep_for)
+                    except asyncio.CancelledError:
+                        raise
+                else:
+                    next_tick = now
                 if call_id not in self.active_streams:
                     break
-                ok = await self._process_jitter_buffer(call_id, stream_id, jitter_buffer)
-                if not ok:
-                    # Transport failure; record and fallback
+                status = await self._drain_next_frame(
+                    call_id, stream_id, jitter_buffer
+                )
+                if status == "finished":
+                    break
+                if status == "error":
                     try:
                         await self._record_fallback(call_id, "transport-failure")
                         await self._fallback_to_file_playback(call_id, stream_id)
@@ -713,203 +770,248 @@ class StreamingPlaybackManager:
                     except Exception:
                         pass
                     break
-                # Yield a bit when there's nothing to send to avoid busy loop
-                await asyncio.sleep(max(0.001, (self.chunk_size_ms / 1000.0) * 0.1))
+                next_tick += tick_seconds
+                now_after = time.perf_counter()
+                if next_tick < now_after:
+                    next_tick = now_after
         except asyncio.CancelledError:
-            pass
+            logger.debug("Pacer loop cancelled", call_id=call_id, stream_id=stream_id)
         except Exception as e:
             logger.error("Error in pacer loop", call_id=call_id, stream_id=stream_id, error=str(e), exc_info=True)
     
-    async def _process_jitter_buffer(
+    async def _drain_next_frame(
         self,
         call_id: str,
         stream_id: str,
-        jitter_buffer: asyncio.Queue
-    ) -> bool:
-        """Process audio chunks from jitter buffer."""
+        jitter_buffer: asyncio.Queue,
+    ) -> str:
+        """Send one 20ms frame (or filler) per tick."""
+        stream_info = self.active_streams.get(call_id)
+        if not stream_info:
+            return "finished"
+
         try:
-            stream_info = self.active_streams.get(call_id, {}) if call_id in self.active_streams else {}
-            target_fmt = (
-                self._canonicalize_encoding(stream_info.get("target_format"))
-                or self._canonicalize_encoding(self.audiosocket_format)
-                or "ulaw"
-            )
+            _STREAMING_JITTER_DEPTH.labels(call_id).set(jitter_buffer.qsize())
+        except Exception:
+            pass
+
+        if not self._ensure_startup_ready(call_id, stream_id, jitter_buffer, stream_info):
+            return "wait"
+
+        target_fmt = (
+            self._canonicalize_encoding(stream_info.get("target_format"))
+            or self._canonicalize_encoding(self.audiosocket_format)
+            or "ulaw"
+        )
+        try:
+            target_rate = int(stream_info.get("target_sample_rate", self.sample_rate))
+        except Exception:
+            target_rate = int(self.sample_rate)
+        if target_rate <= 0:
+            target_rate = self._default_sample_rate_for_format(target_fmt, int(self.sample_rate))
+
+        frame_size = self._frame_size_bytes(call_id)
+        sentinel_seen = bool(stream_info.get('sentinel_seen', False))
+        pending = self.frame_remainders.get(call_id, b"")
+
+        while len(pending) < frame_size and not sentinel_seen:
             try:
-                target_rate = int(stream_info.get("target_sample_rate", self.sample_rate))
-            except Exception:
-                target_rate = int(self.sample_rate)
-            if target_rate <= 0:
-                target_rate = self._default_sample_rate_for_format(target_fmt, int(self.sample_rate))
-
-            # Hold playback until jitter buffer has the minimum startup chunks
-            ready = self._startup_ready.get(call_id, False)
-            if not ready:
-                min_need = self.min_start_chunks
-                try:
-                    if call_id in self.active_streams:
-                        min_need = int(self.active_streams[call_id].get('min_start_chunks', self.min_start_chunks))
-                except Exception:
-                    min_need = self.min_start_chunks
-                available_frames = self._estimate_available_frames(call_id, jitter_buffer, include_remainder=True)
-                if available_frames < min_need:
-                    return True
-                self._startup_ready[call_id] = True
-                if call_id in self.active_streams:
-                    self.active_streams[call_id]['startup_ready'] = True
-                logger.debug(
-                    "Streaming jitter buffer warm-up complete",
-                    call_id=call_id,
-                    stream_id=stream_id,
-                    buffered_chunks=jitter_buffer.qsize(),
-                )
-
-            # Process available chunks with pacing to avoid flooding Asterisk
-            while not jitter_buffer.empty():
-                # Low watermark handling: only rebuild-wait on TRUE EMPTY; if any frames exist, keep sending
-                low_watermark_chunks = self._get_low_watermark_frames(call_id)
-                available_now = self._estimate_available_frames(call_id, jitter_buffer, include_remainder=True)
-
-                if (
-                    low_watermark_chunks
-                    and available_now <= low_watermark_chunks
-                    and self._startup_ready.get(call_id, False)
-                    and available_now == 0
-                ):
-                    try:
-                        min_need = int(self.active_streams.get(call_id, {}).get('min_start_chunks', self.min_start_chunks))
-                    except Exception:
-                        min_need = self.min_start_chunks
-                    # Drop resume_floor from target to avoid oversized goals
-                    target_frames = max(low_watermark_chunks + 1, min_need)
-                    t0 = time.time()
-                    # Cap provider_grace_ms to 60ms with once-per-segment warning
-                    try:
-                        cfg_wait = max(0.0, float(self.provider_grace_ms) / 1000.0)
-                    except Exception:
-                        cfg_wait = 0.5
-                    info = self.active_streams.get(call_id, {}) if call_id in self.active_streams else {}
-                    if cfg_wait > 0.06 and not bool(info.get('warned_grace_cap', False)):
-                        try:
-                            logger.warning("provider_grace_ms capped", call_id=call_id, configured_ms=int(self.provider_grace_ms), cap_ms=60)
-                        except Exception:
-                            pass
-                        info['warned_grace_cap'] = True
-                    max_wait = min(0.06, cfg_wait)
-                    while (
-                        self._estimate_available_frames(call_id, jitter_buffer, include_remainder=True) < target_frames
-                        and (time.time() - t0) < max_wait
-                    ):
-                        await asyncio.sleep(self.chunk_size_ms / 1000.0)
-                        _STREAMING_JITTER_DEPTH.labels(call_id).set(jitter_buffer.qsize())
-                    logger.debug("Streaming jitter buffer rebuild complete",
-                                 call_id=call_id,
-                                 stream_id=stream_id,
-                                 target_frames=target_frames,
-                                 resume_floor_chunks=int(self.active_streams.get(call_id, {}).get('resume_floor_chunks', min_need)) if call_id in self.active_streams else min_need,
-                                 min_start_chunks=min_need,
-                                 buffered_frames=self._estimate_available_frames(call_id, jitter_buffer, include_remainder=False))
-                    # Re-check after rebuild; if still shallow but non-empty, enter dribble mode (fall-through to send)
-                    try:
-                        available_after = self._estimate_available_frames(call_id, jitter_buffer, include_remainder=True)
-                        if available_after <= low_watermark_chunks and not jitter_buffer.empty() and available_after > 0:
-                            logger.debug(
-                                "Streaming dribble mode active",
-                                call_id=call_id,
-                                stream_id=stream_id,
-                                buffered_frames=available_after,
-                                target_frames=target_frames,
-                            )
-                        elif jitter_buffer.empty():
-                            # Nothing to send yet; yield control to outer loop
-                            return True
-                    except Exception:
-                        pass
                 chunk = jitter_buffer.get_nowait()
-
-                # Convert audio format if needed
-                processed_chunk = await self._process_audio_chunk(call_id, chunk)
-                if not processed_chunk:
+            except asyncio.QueueEmpty:
+                break
+            if chunk is _JITTER_SENTINEL:
+                sentinel_seen = True
+                stream_info['sentinel_seen'] = True
+                continue
+            processed_chunk = await self._process_audio_chunk(call_id, chunk)
+            if not processed_chunk:
+                try:
                     self._decrement_buffered_bytes(call_id, len(chunk))
-                    continue
+                except Exception:
+                    pass
+                continue
+            pending += processed_chunk
 
-                if self.audio_transport == "audiosocket":
-                    # Segment to fixed 20ms frames and pace sends
-                    fmt = target_fmt
-                    bytes_per_sample = 1 if fmt in ("ulaw", "mulaw", "mu-law") else 2
-                    frame_size = int(target_rate * (self.chunk_size_ms / 1000.0) * bytes_per_sample)
-                    if frame_size <= 0:
-                        frame_size = 160 if bytes_per_sample == 1 else 320  # 8k@20ms
+        self.frame_remainders[call_id] = pending
+        available_frames = self._estimate_available_frames(call_id, jitter_buffer, include_remainder=True)
 
-                    pending = self.frame_remainders.get(call_id, b"") + processed_chunk
-                    offset = 0
-                    total_len = len(pending)
-                    while (total_len - offset) >= frame_size:
-                        frame = pending[offset:offset + frame_size]
-                        offset += frame_size
-                        success = await self._send_audio_chunk(
-                            call_id,
-                            stream_id,
-                            frame,
-                            target_fmt=target_fmt,
-                            target_rate=target_rate,
-                        )
-                        if not success:
-                            return False
-                        self._decrement_buffered_bytes(call_id, frame_size)
-                        try:
-                            _STREAM_FRAMES_SENT_TOTAL.labels(call_id).inc(1)
-                            if call_id in self.active_streams:
-                                self.active_streams[call_id]['frames_sent'] = int(self.active_streams[call_id].get('frames_sent', 0)) + 1
-                        except Exception:
-                            pass
-                        # Pacing: sleep for chunk duration to avoid overrun
-                        await asyncio.sleep(self.chunk_size_ms / 1000.0)
+        if self._should_wait_for_low_water(call_id, stream_info, available_frames, sentinel_seen):
+            return "wait"
 
-                    # Save remainder for next round
-                    self.frame_remainders[call_id] = pending[offset:]
-                    # If we have no remainder and no queued frames but pacing tick is due, inject one filler frame to avoid pacer stall
-                    if not self.frame_remainders[call_id] and jitter_buffer.empty():
-                        try:
-                            bytes_per_sample = 1 if (target_fmt in ("ulaw", "mulaw", "mu-law")) else 2
-                            filler = (b"\xFF" if bytes_per_sample == 1 else b"\x00") * frame_size
-                            ok = await self._send_audio_chunk(
-                                call_id,
-                                stream_id,
-                                filler,
-                                target_fmt=target_fmt,
-                                target_rate=target_rate,
-                            )
-                            if ok:
-                                _STREAM_UNDERFLOW_EVENTS_TOTAL.labels(call_id).inc(1)
-                                _STREAM_FILLER_BYTES_TOTAL.labels(call_id).inc(len(filler))
-                                if call_id in self.active_streams:
-                                    info2 = self.active_streams[call_id]
-                                    info2['frames_sent'] = int(info2.get('frames_sent', 0)) + 1
-                                    info2['underflow_events'] = int(info2.get('underflow_events', 0)) + 1
-                            await asyncio.sleep(self.chunk_size_ms / 1000.0)
-                        except Exception:
-                            logger.debug("Filler frame insertion failed", call_id=call_id, exc_info=True)
-                else:
-                    # ExternalMedia/RTP path: send as-is (RTP layer handles timing)
-                    success = await self._send_audio_chunk(
-                        call_id,
-                        stream_id,
-                        processed_chunk,
-                        target_fmt=target_fmt,
-                        target_rate=target_rate,
-                    )
-                    if not success:
-                        return False
-                    # Treat entire chunk as consumed bytes
-                    self._decrement_buffered_bytes(call_id, len(processed_chunk))
+        if len(pending) >= frame_size:
+            frame = pending[:frame_size]
+            self.frame_remainders[call_id] = pending[frame_size:]
+            return await self._emit_frame(
+                call_id,
+                stream_id,
+                frame,
+                target_fmt,
+                target_rate,
+                filler=False,
+            )
 
-        except Exception as e:
-            logger.error("Error processing jitter buffer",
-                        call_id=call_id,
-                        error=str(e))
+        if sentinel_seen:
+            if pending:
+                filler_byte = b"\xFF" if self._is_mulaw(target_fmt) else b"\x00"
+                padded = pending + (filler_byte * max(0, frame_size - len(pending)))
+                self.frame_remainders[call_id] = b""
+                return await self._emit_frame(
+                    call_id,
+                    stream_id,
+                    padded[:frame_size],
+                    target_fmt,
+                    target_rate,
+                    filler=False,
+                )
+            if jitter_buffer.empty():
+                return "finished"
+
+        if (
+            stream_info.get('startup_ready')
+            and stream_info.get('frames_sent', 0) > 0
+            and not pending
+            and jitter_buffer.empty()
+            and not sentinel_seen
+            and not stream_info.get('low_water_deadline')
+        ):
+            filler_byte = b"\xFF" if self._is_mulaw(target_fmt) else b"\x00"
+            filler = filler_byte * frame_size
+            return await self._emit_frame(
+                call_id,
+                stream_id,
+                filler,
+                target_fmt,
+                target_rate,
+                filler=True,
+            )
+
+        try:
+            _STREAMING_JITTER_DEPTH.labels(call_id).set(jitter_buffer.qsize())
+        except Exception:
+            pass
+
+        return "wait"
+
+    def _ensure_startup_ready(
+        self,
+        call_id: str,
+        stream_id: str,
+        jitter_buffer: asyncio.Queue,
+        stream_info: Dict[str, Any],
+    ) -> bool:
+        if self._startup_ready.get(call_id, False):
+            return True
+        try:
+            min_need = int(stream_info.get('min_start_chunks', self.min_start_chunks))
+        except Exception:
+            min_need = self.min_start_chunks
+        available_frames = self._estimate_available_frames(call_id, jitter_buffer, include_remainder=True)
+        if available_frames < min_need:
             return False
-
+        self._startup_ready[call_id] = True
+        stream_info['startup_ready'] = True
+        try:
+            logger.debug(
+                "Streaming jitter buffer warm-up complete",
+                call_id=call_id,
+                stream_id=stream_id,
+                buffered_chunks=jitter_buffer.qsize(),
+            )
+        except Exception:
+            pass
         return True
+
+    def _should_wait_for_low_water(
+        self,
+        call_id: str,
+        stream_info: Dict[str, Any],
+        available_frames: int,
+        sentinel_seen: bool,
+    ) -> bool:
+        if sentinel_seen:
+            stream_info.pop('low_water_deadline', None)
+            return False
+        if not stream_info.get('startup_ready'):
+            return False
+        low_watermark_chunks = self._get_low_watermark_frames(call_id)
+        if not low_watermark_chunks:
+            stream_info.pop('low_water_deadline', None)
+            return False
+        if available_frames > low_watermark_chunks:
+            stream_info.pop('low_water_deadline', None)
+            return False
+        try:
+            min_need = int(stream_info.get('min_start_chunks', self.min_start_chunks))
+        except Exception:
+            min_need = self.min_start_chunks
+        target_frames = max(low_watermark_chunks + 1, min_need)
+        try:
+            cfg_wait = max(0.0, float(self.provider_grace_ms) / 1000.0)
+        except Exception:
+            cfg_wait = 0.5
+        if cfg_wait > 0.06 and not bool(stream_info.get('warned_grace_cap', False)):
+            try:
+                logger.warning("provider_grace_ms capped", call_id=call_id, configured_ms=int(self.provider_grace_ms), cap_ms=60)
+            except Exception:
+                pass
+            stream_info['warned_grace_cap'] = True
+        max_wait = min(0.06, cfg_wait)
+        if max_wait <= 0.0:
+            stream_info.pop('low_water_deadline', None)
+            return False
+        now = time.time()
+        deadline = stream_info.get('low_water_deadline')
+        if deadline is None:
+            stream_info['low_water_deadline'] = now + max_wait
+            return True
+        if now < deadline and available_frames < target_frames:
+            return True
+        stream_info.pop('low_water_deadline', None)
+        return False
+
+    async def _emit_frame(
+        self,
+        call_id: str,
+        stream_id: str,
+        frame: bytes,
+        target_fmt: str,
+        target_rate: int,
+        *,
+        filler: bool,
+    ) -> str:
+        success = await self._send_audio_chunk(
+            call_id,
+            stream_id,
+            frame,
+            target_fmt=target_fmt,
+            target_rate=target_rate,
+        )
+        if not success:
+            return "error"
+        if not filler:
+            self._decrement_buffered_bytes(call_id, len(frame))
+        try:
+            _STREAM_FRAMES_SENT_TOTAL.labels(call_id).inc(1)
+        except Exception:
+            pass
+        info = self.active_streams.get(call_id)
+        if info is not None:
+            try:
+                info['frames_sent'] = int(info.get('frames_sent', 0)) + 1
+                info['last_frame_ts'] = time.time()
+            except Exception:
+                pass
+            if filler:
+                try:
+                    _STREAM_UNDERFLOW_EVENTS_TOTAL.labels(call_id).inc(1)
+                    _STREAM_FILLER_BYTES_TOTAL.labels(call_id).inc(len(frame))
+                except Exception:
+                    pass
+                try:
+                    info['underflow_events'] = int(info.get('underflow_events', 0)) + 1
+                except Exception:
+                    pass
+        return "sent"
     
     async def _process_audio_chunk(self, call_id: str, chunk: bytes) -> Optional[bytes]:
         """Process audio chunk for streaming transport."""
@@ -2034,6 +2136,9 @@ class StreamingPlaybackManager:
 
     async def _cleanup_stream(self, call_id: str, stream_id: str) -> None:
         """Clean up streaming resources."""
+        if call_id in self._cleanup_in_progress:
+            return
+        self._cleanup_in_progress.add(call_id)
         try:
             # Diagnostic: write pre/post tap WAVs if enabled
             try:
@@ -2326,6 +2431,8 @@ class StreamingPlaybackManager:
                         call_id=call_id,
                         stream_id=stream_id,
                         error=str(e))
+        finally:
+            self._cleanup_in_progress.discard(call_id)
     
     def _generate_stream_id(self, call_id: str, playback_type: str) -> str:
         """Generate deterministic stream ID."""
