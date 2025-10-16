@@ -937,14 +937,13 @@ class StreamingPlaybackManager:
         if not low_watermark_chunks:
             stream_info.pop('low_water_deadline', None)
             return False
-        if available_frames > low_watermark_chunks:
+        # Post-start, only rebuild-wait when we are truly empty.
+        # If any frames exist, keep flowing to maintain continuous 20ms cadence.
+        if available_frames > 0:
             stream_info.pop('low_water_deadline', None)
             return False
-        try:
-            min_need = int(stream_info.get('min_start_chunks', self.min_start_chunks))
-        except Exception:
-            min_need = self.min_start_chunks
-        target_frames = max(low_watermark_chunks + 1, min_need)
+        # After startup, do not couple rebuild target to min_start; aim for low_water + 1.
+        target_frames = low_watermark_chunks + 1
         try:
             cfg_wait = max(0.0, float(self.provider_grace_ms) / 1000.0)
         except Exception:
@@ -964,7 +963,8 @@ class StreamingPlaybackManager:
         if deadline is None:
             stream_info['low_water_deadline'] = now + max_wait
             return True
-        if now < deadline and available_frames < target_frames:
+        # Continue waiting only while still truly empty; once any frames arrive, resume sending.
+        if now < deadline and available_frames == 0:
             return True
         stream_info.pop('low_water_deadline', None)
         return False
