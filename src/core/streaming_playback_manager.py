@@ -72,6 +72,23 @@ _STREAM_TX_BYTES = Counter(
     labelnames=("call_id",),
 )
 
+# Additional pacing/underflow metrics
+_STREAM_UNDERFLOW_EVENTS_TOTAL = Counter(
+    "ai_agent_stream_underflow_events_total",
+    "Underflow events (20ms fillers inserted)",
+    labelnames=("call_id",),
+)
+_STREAM_FILLER_BYTES_TOTAL = Counter(
+    "ai_agent_stream_filler_bytes_total",
+    "Filler bytes injected on underflow",
+    labelnames=("call_id",),
+)
+_STREAM_FRAMES_SENT_TOTAL = Counter(
+    "ai_agent_stream_frames_sent_total",
+    "Frames (20ms) actually sent",
+    labelnames=("call_id",),
+)
+
 # New observability metrics for tuning
 _STREAM_STARTED_TOTAL = Counter(
     "ai_agent_stream_started_total",
@@ -510,6 +527,7 @@ class StreamingPlaybackManager:
                 'streaming_task': streaming_task,
                 'keepalive_task': keepalive_task,
                 'start_time': time.time(),
+                'seg_start_ts': time.time(),
                 'chunks_sent': 0,
                 'last_chunk_time': time.time(),
                 'startup_ready': bool(initial_startup_ready),
@@ -527,6 +545,11 @@ class StreamingPlaybackManager:
                 'target_format': resolved_target_format,
                 'target_sample_rate': resolved_target_rate,
                 'tx_bytes': 0,
+                'queued_bytes': 0,
+                'frames_sent': 0,
+                'underflow_events': 0,
+                'provider_bytes': 0,
+                'warned_grace_cap': False,
                 'egress_force_mulaw': self.egress_force_mulaw,
                 'tap_pre_pcm16': bytearray(),
                 'tap_post_pcm16': bytearray(),
@@ -714,28 +737,36 @@ class StreamingPlaybackManager:
 
             # Process available chunks with pacing to avoid flooding Asterisk
             while not jitter_buffer.empty():
-                # Low watermark: pause until we rebuild to adaptive target (min_start_chunks), not just 1 frame over watermark
+                # Low watermark handling: only rebuild-wait on TRUE EMPTY; if any frames exist, keep sending
                 low_watermark_chunks = self._get_low_watermark_frames(call_id)
+                available_now = self._estimate_available_frames(call_id, jitter_buffer, include_remainder=True)
 
                 if (
                     low_watermark_chunks
-                    and self._estimate_available_frames(call_id, jitter_buffer, include_remainder=True) <= low_watermark_chunks
+                    and available_now <= low_watermark_chunks
                     and self._startup_ready.get(call_id, False)
+                    and available_now == 0
                 ):
                     try:
                         min_need = int(self.active_streams.get(call_id, {}).get('min_start_chunks', self.min_start_chunks))
                     except Exception:
                         min_need = self.min_start_chunks
-                    try:
-                        resume_floor_chunks = int(self.active_streams.get(call_id, {}).get('resume_floor_chunks', min_need))
-                    except Exception:
-                        resume_floor_chunks = min_need
-                    target_frames = max(low_watermark_chunks + 1, min_need, resume_floor_chunks)
+                    # Drop resume_floor from target to avoid oversized goals
+                    target_frames = max(low_watermark_chunks + 1, min_need)
                     t0 = time.time()
+                    # Cap provider_grace_ms to 60ms with once-per-segment warning
                     try:
-                        max_wait = max(0.2, float(self.provider_grace_ms) / 1000.0)
+                        cfg_wait = max(0.0, float(self.provider_grace_ms) / 1000.0)
                     except Exception:
-                        max_wait = 0.5
+                        cfg_wait = 0.5
+                    info = self.active_streams.get(call_id, {}) if call_id in self.active_streams else {}
+                    if cfg_wait > 0.06 and not bool(info.get('warned_grace_cap', False)):
+                        try:
+                            logger.warning("provider_grace_ms capped", call_id=call_id, configured_ms=int(self.provider_grace_ms), cap_ms=60)
+                        except Exception:
+                            pass
+                        info['warned_grace_cap'] = True
+                    max_wait = min(0.06, cfg_wait)
                     while (
                         self._estimate_available_frames(call_id, jitter_buffer, include_remainder=True) < target_frames
                         and (time.time() - t0) < max_wait
@@ -746,13 +777,13 @@ class StreamingPlaybackManager:
                                  call_id=call_id,
                                  stream_id=stream_id,
                                  target_frames=target_frames,
-                                 resume_floor_chunks=resume_floor_chunks,
+                                 resume_floor_chunks=int(self.active_streams.get(call_id, {}).get('resume_floor_chunks', min_need)) if call_id in self.active_streams else min_need,
                                  min_start_chunks=min_need,
                                  buffered_frames=self._estimate_available_frames(call_id, jitter_buffer, include_remainder=False))
                     # Re-check after rebuild; if still shallow but non-empty, enter dribble mode (fall-through to send)
                     try:
                         available_after = self._estimate_available_frames(call_id, jitter_buffer, include_remainder=True)
-                        if available_after <= low_watermark_chunks and not jitter_buffer.empty():
+                        if available_after <= low_watermark_chunks and not jitter_buffer.empty() and available_after > 0:
                             logger.debug(
                                 "Streaming dribble mode active",
                                 call_id=call_id,
@@ -797,11 +828,39 @@ class StreamingPlaybackManager:
                         if not success:
                             return False
                         self._decrement_buffered_bytes(call_id, frame_size)
+                        try:
+                            _STREAM_FRAMES_SENT_TOTAL.labels(call_id).inc(1)
+                            if call_id in self.active_streams:
+                                self.active_streams[call_id]['frames_sent'] = int(self.active_streams[call_id].get('frames_sent', 0)) + 1
+                        except Exception:
+                            pass
                         # Pacing: sleep for chunk duration to avoid overrun
                         await asyncio.sleep(self.chunk_size_ms / 1000.0)
 
                     # Save remainder for next round
                     self.frame_remainders[call_id] = pending[offset:]
+                    # If we have no remainder and no queued frames but pacing tick is due, inject one filler frame to avoid pacer stall
+                    if not self.frame_remainders[call_id] and jitter_buffer.empty():
+                        try:
+                            bytes_per_sample = 1 if (target_fmt in ("ulaw", "mulaw", "mu-law")) else 2
+                            filler = (b"\xFF" if bytes_per_sample == 1 else b"\x00") * frame_size
+                            ok = await self._send_audio_chunk(
+                                call_id,
+                                stream_id,
+                                filler,
+                                target_fmt=target_fmt,
+                                target_rate=target_rate,
+                            )
+                            if ok:
+                                _STREAM_UNDERFLOW_EVENTS_TOTAL.labels(call_id).inc(1)
+                                _STREAM_FILLER_BYTES_TOTAL.labels(call_id).inc(len(filler))
+                                if call_id in self.active_streams:
+                                    info2 = self.active_streams[call_id]
+                                    info2['frames_sent'] = int(info2.get('frames_sent', 0)) + 1
+                                    info2['underflow_events'] = int(info2.get('underflow_events', 0)) + 1
+                            await asyncio.sleep(self.chunk_size_ms / 1000.0)
+                        except Exception:
+                            logger.debug("Filler frame insertion failed", call_id=call_id, exc_info=True)
                 else:
                     # ExternalMedia/RTP path: send as-is (RTP layer handles timing)
                     success = await self._send_audio_chunk(
@@ -1738,6 +1797,14 @@ class StreamingPlaybackManager:
         if audiosocket_format is not None:
             self.audiosocket_format = audiosocket_format
 
+    def record_provider_bytes(self, call_id: str, provider_bytes: int) -> None:
+        try:
+            info = self.active_streams.get(call_id)
+            if info is not None:
+                info['provider_bytes'] = int(provider_bytes)
+        except Exception:
+            pass
+
     async def _record_fallback(self, call_id: str, reason: str) -> None:
         """Increment fallback counters and persist the last error."""
         try:
@@ -2017,22 +2084,38 @@ class StreamingPlaybackManager:
                             call_tap_post_bytes=len(cpost),
                             call_tap_rate=crate,
                         )
-                        # Segment byte summary (queued vs sent)
+                        # Segment byte summary v2 (provider vs queued vs sent, frames, underflows, wall)
                         try:
                             info = self.active_streams.get(call_id, {}) if call_id in self.active_streams else {}
                             qbytes = int(info.get('queued_bytes', 0) or 0)
                             txbytes = int(info.get('tx_bytes', 0) or 0)
                             bbytes = int(info.get('buffered_bytes', 0) or 0)
+                            frames_sent = int(info.get('frames_sent', 0) or 0)
+                            underflows = int(info.get('underflow_events', 0) or 0)
+                            provider_bytes = int(info.get('provider_bytes', 0) or 0)
+                            # compute wall_seconds
+                            try:
+                                seg_start = float(info.get('seg_start_ts', 0.0) or info.get('start_time', 0.0) or 0.0)
+                            except Exception:
+                                seg_start = 0.0
+                            wall_seconds = 0.0
+                            if seg_start:
+                                import time as _t
+                                wall_seconds = max(0.0, _t.time() - seg_start)
                             logger.info(
-                                "Streaming segment bytes summary",
+                                "Streaming segment bytes summary v2",
                                 call_id=call_id,
                                 stream_id=stream_id,
+                                provider_bytes=provider_bytes,
                                 queued_bytes=qbytes,
                                 tx_bytes=txbytes,
+                                frames_sent=frames_sent,
+                                underflow_events=underflows,
+                                wall_seconds=wall_seconds,
                                 buffered_bytes=bbytes,
                             )
                         except Exception:
-                            logger.debug("Streaming segment bytes summary failed", call_id=call_id, exc_info=True)
+                            logger.debug("Streaming segment bytes summary v2 failed", call_id=call_id, exc_info=True)
                         if cpre:
                             fnc = os.path.join(self.diag_out_dir, f"pre_compand_pcm16_{call_id}_call.wav")
                             try:

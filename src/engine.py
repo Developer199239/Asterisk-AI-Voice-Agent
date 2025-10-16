@@ -3205,6 +3205,12 @@ class Engine:
                                 provider_bytes=prov,
                                 enqueued_bytes=enq,
                                 enqueued_ratio=round(ratio, 3))
+                    try:
+                        if hasattr(self, 'streaming_playback_manager') and self.streaming_playback_manager:
+                            self.streaming_playback_manager.record_provider_bytes(call_id, int(prov))
+                    except Exception:
+                        logger.debug("Failed to propagate provider_bytes to streaming manager",
+                                     call_id=call_id, exc_info=True)
                     # Reset chunk sequence at segment end
                     self._provider_chunk_seq.pop(call_id, None)
                 except Exception:
