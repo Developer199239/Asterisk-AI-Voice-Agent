@@ -47,6 +47,7 @@ from .core import SessionStore, PlaybackManager, ConversationCoordinator
 from .core.vad_manager import EnhancedVADManager, VADResult
 from .core.streaming_playback_manager import StreamingPlaybackManager
 from .core.models import CallSession
+from .utils.audio_capture import AudioCaptureManager
 
 logger = get_logger(__name__)
 
@@ -273,6 +274,7 @@ class Engine:
             streaming_config=streaming_config,
             audio_transport=self.config.audio_transport,
             audio_diag_callback=self._update_audio_diagnostics_by_call,
+            audio_capture_manager=self.audio_capture,
         )
         # Pre-seed audiosocket_format from YAML so provider audits use correct value
         try:
@@ -306,6 +308,7 @@ class Engine:
         self.audio_socket_server: Optional[AudioSocketServer] = None
         self.audiosocket_conn_to_ssrc: Dict[str, int] = {}
         self.audiosocket_resample_state: Dict[str, Optional[tuple]] = {}
+        self.audio_capture = AudioCaptureManager()
         # Stateful resampling: maintain per-call/per-provider ratecv states to avoid drift
         # Provider input (caller -> provider) resample state
         self._resample_state_provider_in: Dict[str, Dict[str, Optional[tuple]]] = {}
@@ -1655,6 +1658,11 @@ class Engine:
             # Finally remove the session.
             await self.session_store.remove_call(call_id)
 
+            try:
+                self.audio_capture.close_call(call_id)
+            except Exception:
+                logger.debug("Audio capture cleanup failed", call_id=call_id, exc_info=True)
+
             if self.conversation_coordinator:
                 await self.conversation_coordinator.unregister_call(call_id)
             
@@ -1967,6 +1975,7 @@ class Engine:
             try:
                 if pcm_bytes:
                     self._update_audio_diagnostics(session, "transport_in", pcm_bytes, "slin16", pcm_rate)
+                    self.audio_capture.append_pcm16(session.call_id, "caller_inbound", pcm_bytes, pcm_rate)
             except Exception:
                 logger.debug("Inbound diagnostics update failed", call_id=caller_channel_id, exc_info=True)
 
@@ -2284,6 +2293,16 @@ class Engine:
             ):
                 provider_payload = audio_bytes
                 provider_rate = 8000
+            try:
+                self.audio_capture.append_encoded(
+                    session.call_id,
+                    "caller_to_provider",
+                    provider_payload,
+                    provider_encoding,
+                    provider_rate,
+                )
+            except Exception:
+                logger.debug("Provider input capture failed", call_id=session.call_id, exc_info=True)
             await provider.send_audio(provider_payload)
         except Exception as exc:
             logger.error("Error handling AudioSocket audio", conn_id=conn_id, error=str(exc), exc_info=True)
@@ -2996,6 +3015,16 @@ class Engine:
                     self._update_audio_diagnostics(session, "provider_out", chunk, diag_encoding, diag_rate)
                 except Exception:
                     logger.debug("Provider audio diagnostics update failed", call_id=call_id, exc_info=True)
+                try:
+                    self.audio_capture.append_encoded(
+                        call_id,
+                        "agent_from_provider",
+                        chunk,
+                        diag_encoding,
+                        diag_rate,
+                    )
+                except Exception:
+                    logger.debug("Provider audio capture failed", call_id=call_id, exc_info=True)
                 # Log provider AgentAudio chunk metrics for RCA
                 try:
                     rate = int(sample_rate_int or diag_rate or 0) if (locals().get('diag_rate') is not None) else int(sample_rate_int or 0)

@@ -1,0 +1,96 @@
+import os
+import wave
+import threading
+from typing import Dict, Tuple, Optional
+
+import audioop
+
+
+class AudioCaptureManager:
+    """Utility for capturing per-call audio streams to WAV files."""
+
+    def __init__(self, base_dir: str = "/tmp/ai-engine-captures"):
+        self.base_dir = base_dir
+        self._lock = threading.Lock()
+        # key -> (wave.Wave_write, sample_rate)
+        self._handles: Dict[Tuple[str, str], Tuple[wave.Wave_write, int]] = {}
+
+    def _open_handle(self, call_id: str, stream_name: str, sample_rate: int) -> wave.Wave_write:
+        path = os.path.join(self.base_dir, call_id, f"{stream_name}.wav")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        wf = wave.open(path, "wb")
+        wf.setnchannels(1)
+        wf.setsampwidth(2)  # PCM16
+        wf.setframerate(sample_rate)
+        return wf
+
+    def append_pcm16(self, call_id: str, stream_name: str, pcm16: bytes, sample_rate: int) -> None:
+        if not pcm16:
+            return
+        key = (call_id, stream_name)
+        with self._lock:
+            handle = self._handles.get(key)
+            if handle is None:
+                wf = self._open_handle(call_id, stream_name, sample_rate)
+                self._handles[key] = (wf, sample_rate)
+            else:
+                wf, existing_rate = handle
+                if existing_rate != sample_rate:
+                    # Close and reopen with new rate to avoid inconsistent headers
+                    try:
+                        wf.close()
+                    except Exception:
+                        pass
+                    wf = self._open_handle(call_id, stream_name, sample_rate)
+                    self._handles[key] = (wf, sample_rate)
+            wf = self._handles[key][0]
+            try:
+                wf.writeframes(pcm16)
+            except Exception:
+                # On write failure, close the handle to avoid corrupted files
+                try:
+                    wf.close()
+                except Exception:
+                    pass
+                self._handles.pop(key, None)
+
+    def append_encoded(
+        self,
+        call_id: str,
+        stream_name: str,
+        payload: bytes,
+        encoding: str,
+        sample_rate: int,
+    ) -> None:
+        if not payload:
+            return
+        encoding = (encoding or "").lower()
+        try:
+            if encoding in ("ulaw", "mulaw", "g711_ulaw", "mu-law"):
+                pcm16 = audioop.ulaw2lin(payload, 2)
+                rate = sample_rate or 8000
+            elif encoding in ("slin16", "linear16", "pcm16"):
+                pcm16 = payload
+                rate = sample_rate or 16000
+            else:
+                # Fallback: treat as PCM16
+                pcm16 = payload
+                rate = sample_rate or 16000
+            self.append_pcm16(call_id, stream_name, pcm16, rate)
+        except Exception:
+            # Ignore capture failures; they should not break call flow.
+            pass
+
+    def close_call(self, call_id: str) -> None:
+        keys_to_close = []
+        with self._lock:
+            for key, (wf, _rate) in list(self._handles.items()):
+                if key[0] == call_id:
+                    try:
+                        wf.close()
+                    except Exception:
+                        pass
+                    keys_to_close.append(key)
+            for key in keys_to_close:
+                self._handles.pop(key, None)
+

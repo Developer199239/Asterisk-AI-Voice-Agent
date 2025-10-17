@@ -9,6 +9,7 @@ It includes automatic fallback to file playback on errors or timeouts.
 import asyncio
 import time
 import audioop
+import array
 from contextlib import suppress
 from typing import Optional, Dict, Any, TYPE_CHECKING, Set, Callable, Awaitable, Tuple
 import structlog
@@ -145,6 +146,7 @@ class StreamingPlaybackManager:
         rtp_server: Optional[Any] = None,
         audiosocket_server: Optional[Any] = None,
         audio_diag_callback: Optional[Callable[[str, str, bytes, str, int], Awaitable[None]]] = None,
+        audio_capture_manager: Optional[Any] = None,
     ):
         self.session_store = session_store
         self.ari_client = ari_client
@@ -155,6 +157,7 @@ class StreamingPlaybackManager:
         self.rtp_server = rtp_server
         self.audiosocket_server = audiosocket_server
         self.audio_diag_callback = audio_diag_callback
+        self.audio_capture_manager = audio_capture_manager
         self.audiosocket_format: str = "ulaw"  # default format expected by dialplan
         # Debug: when True, send frames to all AudioSocket conns for the call
         self.audiosocket_broadcast_debug: bool = bool(self.streaming_config.get('audiosocket_broadcast_debug', False))
@@ -1674,6 +1677,17 @@ class StreamingPlaybackManager:
                 if not conn_id:
                     logger.warning("Streaming transport missing AudioSocket connection", call_id=call_id)
                     return False
+                if self.audio_capture_manager:
+                    try:
+                        self.audio_capture_manager.append_encoded(
+                            call_id,
+                            "agent_out_to_caller",
+                            chunk,
+                            target_fmt or self.audiosocket_format,
+                            int(target_rate or self.sample_rate),
+                        )
+                    except Exception:
+                        logger.debug("Outbound audio capture failed", call_id=call_id, exc_info=True)
                 # One-time debug for first outbound frame to identify codec/format
                 if call_id not in self._first_send_logged:
                     fmt = (
