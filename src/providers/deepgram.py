@@ -113,9 +113,11 @@ class DeepgramProvider(AIProviderInterface):
         except Exception:
             self._dg_input_rate = 8000
         # Cache provider output settings for downstream conversion/metadata
-        self._dg_output_encoding = self._canonicalize_encoding(self._get_config_value('output_encoding', None) or 'mulaw')
+        self._original_output_encoding = self._get_config_value('output_encoding', None)
+        self._original_output_rate = self._get_config_value('output_sample_rate_hz', 8000)
+        self._dg_output_encoding = self._canonicalize_encoding(self._original_output_encoding or 'mulaw')
         try:
-            self._dg_output_rate = int(self._get_config_value('output_sample_rate_hz', 8000) or 8000)
+            self._dg_output_rate = int(self._original_output_rate or 8000)
         except Exception:
             self._dg_output_rate = 8000
         # Allow optional runtime detection when explicitly enabled
@@ -212,8 +214,8 @@ class DeepgramProvider(AIProviderInterface):
         # Derive codec settings from config with safe defaults
         input_encoding = self._get_config_value('input_encoding', None) or 'linear16'
         input_sample_rate = int(self._get_config_value('input_sample_rate_hz', 8000) or 8000)
-        output_encoding = self._get_config_value('output_encoding', None) or 'mulaw'
-        output_sample_rate = int(self._get_config_value('output_sample_rate_hz', 8000) or 8000)
+        output_encoding = self._original_output_encoding or 'mulaw'
+        output_sample_rate = int(self._original_output_rate or 8000)
         self._dg_output_encoding = self._canonicalize_encoding(output_encoding)
         self._dg_output_rate = output_sample_rate
         self._dg_output_inferred = not self.allow_output_autodetect
