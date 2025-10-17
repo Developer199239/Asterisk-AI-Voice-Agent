@@ -646,7 +646,7 @@ class DeepgramProvider(AIProviderInterface):
                                     logger.info("Injecting greeting after ACK", call_id=self.call_id, event_type=et)
                                     self._greeting_injections += 1
                                     try:
-                            await self._inject_message_dual((getattr(self.llm_config, 'initial_greeting', None) or self.config.get('greeting', None) or "Hello, how can I help you today?").strip())
+                                        await self._inject_message_dual((getattr(self.llm_config, 'initial_greeting', None) or self.config.get('greeting', None) or "Hello, how can I help you today?").strip())
                                     except Exception:
                                         logger.debug("Post-ACK greeting injection failed", exc_info=True)
                         except Exception:
