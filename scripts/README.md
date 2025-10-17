@@ -38,6 +38,16 @@ This document summarizes the utilities under `scripts/` and when to use them.
 - `scripts/summarize_call_capture.sh`
   - Summarizes captured logs quickly on the CLI.
 
+- `scripts/compare_call_audio.py`
+  - Compares inbound/outbound WAV recordings (RMS, DC bias, spectra, pacing).
+  - Usage: `python3 scripts/compare_call_audio.py --in logs/.../in-*.wav --out logs/.../out-*.wav`
+
+- `scripts/transcribe_call.py`
+  - Offline transcription using Vosk (auto-downloads small English model).
+  - Usage: `python3 scripts/transcribe_call.py logs/.../recordings/out-*.wav`
+
+- `scripts/rca_collect.sh`
+  - Remote log/recording capture. Stores wav stats and now transcripts at `logs/remote/<ts>/transcripts/`.
 ## Provider & Model Management
 
 - `scripts/switch_provider.py`

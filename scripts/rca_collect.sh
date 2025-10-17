@@ -13,7 +13,7 @@ PROJECT_PATH="${PROJECT_PATH:-/root/Asterisk-AI-Voice-Agent}"
 SINCE_MIN="${SINCE_MIN:-60}"
 TS=$(date -u +%Y%m%d-%H%M%S)
 BASE="logs/remote/rca-$TS"
-mkdir -p "$BASE"/{taps,recordings,logs}
+mkdir -p "$BASE"/{taps,recordings,logs,transcripts}
 echo "$BASE" > logs/remote/rca-latest.path
 ssh "$SERVER_USER@$SERVER_HOST" "docker logs --since ${SINCE_MIN}m ai_engine > /tmp/ai-engine.latest.log" || true
 scp "$SERVER_USER@$SERVER_HOST:/tmp/ai-engine.latest.log" "$BASE/logs/ai-engine.log"
@@ -37,6 +37,18 @@ if [ -n "$RECS" ]; then python3 scripts/wav_quality_analyzer.py "$BASE"/recordin
 if [ -n "$CID" ]; then
   egrep -n "ADAPTIVE WARM-UP|Wrote .*200ms|call-level summary|STREAMING TUNING SUMMARY" "$BASE/logs/ai-engine.log" | grep "$CID" > "$BASE/logs/call_timeline.log" || true
 fi
+
+# Offline transcription of outbound audio when available
+OUT_WAVS=$(ls "$BASE"/recordings/out-*.wav 2>/dev/null | head -n 1 || true)
+if [ -n "$OUT_WAVS" ]; then
+  python3 scripts/transcribe_call.py "$BASE"/recordings/out-*.wav --json "$BASE/transcripts/out.json" || true
+fi
+
+IN_WAVS=$(ls "$BASE"/recordings/in-*.wav 2>/dev/null | head -n 1 || true)
+if [ -n "$IN_WAVS" ]; then
+  python3 scripts/transcribe_call.py "$BASE"/recordings/in-*.wav --json "$BASE/transcripts/in.json" || true
+fi
+
 
 # Fetch Deepgram usage for this call when credentials are available (robust Python fallback).
 DG_PROJECT_ID="${DG_PROJECT_ID:-}"
