@@ -49,6 +49,15 @@ if [ -n "$IN_WAVS" ]; then
   python3 scripts/transcribe_call.py "$BASE"/recordings/in-*.wav --json "$BASE/transcripts/in.json" || true
 fi
 
+if [ -n "$CID" ]; then
+  ssh "$SERVER_USER@$SERVER_HOST" "CID=$CID; SRC=/tmp/ai-engine-captures/\$CID; TMP=/tmp/ai-capture-\$CID; TAR=/tmp/ai-capture-\$CID.tgz; if docker exec ai_engine test -d \$SRC; then docker cp ai_engine:\$SRC \$TMP 2>/dev/null && tar czf \$TAR -C /tmp ai-capture-\$CID && rm -rf \$TMP; fi" || true
+  if scp "$SERVER_USER@$SERVER_HOST:/tmp/ai-capture-$CID.tgz" "$BASE/" 2>/dev/null; then
+    ssh "$SERVER_USER@$SERVER_HOST" "rm -f /tmp/ai-capture-$CID.tgz" || true
+    mkdir -p "$BASE/captures"
+    tar xzf "$BASE/ai-capture-$CID.tgz" -C "$BASE/captures" && rm "$BASE/ai-capture-$CID.tgz"
+  fi
+fi
+
 
 # Fetch Deepgram usage for this call when credentials are available (robust Python fallback).
 DG_PROJECT_ID="${DG_PROJECT_ID:-}"
