@@ -325,8 +325,8 @@ class DeepgramProvider(AIProviderInterface):
             try:
                 self._is_audio_flowing = True
                 chunk_len = len(audio_chunk)
-        input_encoding = (self.config.get("input_encoding", None) or "linear16").strip().lower()
-        target_rate = int(self.config.get("input_sample_rate_hz", 8000) or 8000)
+                input_encoding = (self.config.get("input_encoding", None) or "linear16").strip().lower()
+                target_rate = int(self.config.get("input_sample_rate_hz", 8000) or 8000)
                 # Infer actual inbound format and source rate from canonical 20 ms frame sizes
                 #  - 160 B ≈ μ-law @ 8 kHz (20 ms)
                 #  - 320 B ≈ PCM16 @ 8 kHz (20 ms)
@@ -343,7 +343,7 @@ class DeepgramProvider(AIProviderInterface):
                 else:
                     actual_format = "pcm16" if input_encoding in ("slin16", "linear16", "pcm16") else "ulaw"
                     try:
-                        src_rate = int(getattr(self.config, "input_sample_rate_hz", 0) or 0) or (16000 if actual_format == "pcm16" else 8000)
+                        src_rate = int(self.config.get("input_sample_rate_hz", 0) or 0) or (16000 if actual_format == "pcm16" else 8000)
                     except Exception:
                         src_rate = 8000
 
@@ -529,9 +529,9 @@ class DeepgramProvider(AIProviderInterface):
         streaming_sample_rate: int,
     ) -> List[str]:
         issues: List[str] = []
-        cfg_enc = (getattr(self.config, "input_encoding", None) or "").lower()
+        cfg_enc = (self.config.get("input_encoding", None) or "").lower()
         try:
-            cfg_rate = int(getattr(self.config, "input_sample_rate_hz", 0) or 0)
+            cfg_rate = int(self.config.get("input_sample_rate_hz", 0) or 0)
         except Exception:
             cfg_rate = 0
 
@@ -646,7 +646,7 @@ class DeepgramProvider(AIProviderInterface):
                                     logger.info("Injecting greeting after ACK", call_id=self.call_id, event_type=et)
                                     self._greeting_injections += 1
                                     try:
-                                        await self._inject_message_dual((getattr(self.llm_config, 'initial_greeting', None) or getattr(self.config, 'greeting', None) or "Hello, how can I help you today?").strip())
+                            await self._inject_message_dual((getattr(self.llm_config, 'initial_greeting', None) or self.config.get('greeting', None) or "Hello, how can I help you today?").strip())
                                     except Exception:
                                         logger.debug("Post-ACK greeting injection failed", exc_info=True)
                         except Exception:
@@ -918,7 +918,7 @@ class DeepgramProvider(AIProviderInterface):
         # configured and wired to emit events. A live websocket is only established
         # after start_session(call_id) during an actual call.
         try:
-            api_key_ok = bool(getattr(self.config, 'api_key', None))
+            api_key_ok = bool(self.config.get('api_key', None))
         except Exception:
             api_key_ok = False
         return api_key_ok and (self.on_event is not None)
