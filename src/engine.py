@@ -265,7 +265,8 @@ class Engine:
             streaming_config['audiosocket_broadcast_debug'] = bool(int(os.getenv('AUDIOSOCKET_BROADCAST_DEBUG', '0')))
         except Exception:
             streaming_config['audiosocket_broadcast_debug'] = False
-        
+
+        self.audio_capture = AudioCaptureManager()
         self.streaming_playback_manager = StreamingPlaybackManager(
             self.session_store,
             self.ari_client,
