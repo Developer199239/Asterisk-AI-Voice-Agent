@@ -101,17 +101,17 @@ class DeepgramProvider(AIProviderInterface):
         self._greeting_injections: int = 0
         # Cache declared Deepgram input settings
         try:
-            self._dg_input_rate = int(getattr(self.config, 'input_sample_rate_hz', 8000) or 8000)
+            self._dg_input_rate = int(self.config.get('input_sample_rate_hz', 8000) or 8000)
         except Exception:
             self._dg_input_rate = 8000
         # Cache provider output settings for downstream conversion/metadata
-        self._dg_output_encoding = self._canonicalize_encoding(getattr(self.config, 'output_encoding', None) or 'mulaw')
+        self._dg_output_encoding = self._canonicalize_encoding(self.config.get('output_encoding', None) or 'mulaw')
         try:
-            self._dg_output_rate = int(getattr(self.config, 'output_sample_rate_hz', 8000) or 8000)
+            self._dg_output_rate = int(self.config.get('output_sample_rate_hz', 8000) or 8000)
         except Exception:
             self._dg_output_rate = 8000
         # Allow optional runtime detection when explicitly enabled
-        self.allow_output_autodetect = bool(getattr(self.config, 'allow_output_autodetect', False))
+        self.allow_output_autodetect = bool(self.config.get('allow_output_autodetect', False))
         self._dg_output_inferred = not self.allow_output_autodetect
 
     @property
@@ -202,10 +202,10 @@ class DeepgramProvider(AIProviderInterface):
     async def _configure_agent(self):
         """Builds and sends the V1 Settings message to the Deepgram Voice Agent."""
         # Derive codec settings from config with safe defaults
-        input_encoding = getattr(self.config, 'input_encoding', None) or 'linear16'
-        input_sample_rate = int(getattr(self.config, 'input_sample_rate_hz', 8000) or 8000)
-        output_encoding = getattr(self.config, 'output_encoding', None) or 'mulaw'
-        output_sample_rate = int(getattr(self.config, 'output_sample_rate_hz', 8000) or 8000)
+        input_encoding = self.config.get('input_encoding', None) or 'linear16'
+        input_sample_rate = int(self.config.get('input_sample_rate_hz', 8000) or 8000)
+        output_encoding = self.config.get('output_encoding', None) or 'mulaw'
+        output_sample_rate = int(self.config.get('output_sample_rate_hz', 8000) or 8000)
         self._dg_output_encoding = self._canonicalize_encoding(output_encoding)
         self._dg_output_rate = output_sample_rate
         self._dg_output_inferred = not self.allow_output_autodetect
@@ -215,7 +215,7 @@ class DeepgramProvider(AIProviderInterface):
 
         # Determine greeting precedence: provider override > global LLM greeting > safe default
         try:
-            greeting_val = (getattr(self.config, 'greeting', None) or "").strip()
+            greeting_val = (self.config.get('greeting', None) or "").strip()
         except Exception:
             greeting_val = ""
         if not greeting_val:
@@ -325,8 +325,8 @@ class DeepgramProvider(AIProviderInterface):
             try:
                 self._is_audio_flowing = True
                 chunk_len = len(audio_chunk)
-                input_encoding = (getattr(self.config, "input_encoding", None) or "linear16").strip().lower()
-                target_rate = int(getattr(self.config, "input_sample_rate_hz", 8000) or 8000)
+        input_encoding = (self.config.get("input_encoding", None) or "linear16").strip().lower()
+        target_rate = int(self.config.get("input_sample_rate_hz", 8000) or 8000)
                 # Infer actual inbound format and source rate from canonical 20 ms frame sizes
                 #  - 160 B ≈ μ-law @ 8 kHz (20 ms)
                 #  - 320 B ≈ PCM16 @ 8 kHz (20 ms)
@@ -735,8 +735,40 @@ class DeepgramProvider(AIProviderInterface):
                         rate = 8000
 
                     if enc in ("linear16", "slin16", "pcm16"):
-                        # Treat message as PCM16LE at provider rate; resample to 8k then μ-law compand
+                        # Treat message as PCM16; auto-detect endianness; resample to 8k then μ-law compand
                         pcm = message
+                        # Endianness probe on a short window
+                        try:
+                            win = pcm[: min(960, len(pcm) - (len(pcm) % 2))]
+                            rms_native = audioop.rms(win, 2) if len(win) >= 2 else 0
+                            swapped = audioop.byteswap(win, 2) if len(win) >= 2 else b""
+                            rms_swapped = audioop.rms(swapped, 2) if swapped else 0
+                            avg_native = audioop.avg(win, 2) if len(win) >= 2 else 0
+                            avg_swapped = audioop.avg(swapped, 2) if swapped else 0
+                            prefer_swapped = False
+                            if rms_swapped >= max(1024, 4 * max(1, rms_native)):
+                                prefer_swapped = True
+                            elif abs(avg_native) >= 8 * max(1, abs(avg_swapped)) and rms_swapped >= max(256, rms_native // 2):
+                                prefer_swapped = True
+                            if prefer_swapped:
+                                try:
+                                    pcm = audioop.byteswap(pcm, 2)
+                                except Exception:
+                                    pass
+                            try:
+                                logger.info(
+                                    "Deepgram provider PCM16 endian probe",
+                                    call_id=self.call_id,
+                                    rms_native=rms_native,
+                                    rms_swapped=rms_swapped,
+                                    avg_native=avg_native,
+                                    avg_swapped=avg_swapped,
+                                    prefer_swapped=prefer_swapped,
+                                )
+                            except Exception:
+                                pass
+                        except Exception:
+                            pass
                         if rate != 8000:
                             try:
                                 pcm, _ = resample_audio(pcm, rate, 8000, state=None)
@@ -752,11 +784,42 @@ class DeepgramProvider(AIProviderInterface):
                             except Exception:
                                 payload_ulaw = b""
                     else:
-                        # enc == mulaw (or other): enforce canonical μ-law@8k by decode→resample(if needed)→encode
+                        # enc == mulaw (or other): detect G.711 law (μ-law vs A-law), then enforce μ-law@8k
+                        law = "mulaw"
+                        pcm = b""
                         try:
-                            pcm = mulaw_to_pcm16le(message)
+                            win_len = min(320, len(message))
+                            mu_win_pcm = mulaw_to_pcm16le(message[:win_len]) if win_len else b""
+                            alaw_win_pcm = audioop.alaw2lin(message[:win_len], 2) if win_len else b""
+                            rms_mu = audioop.rms(mu_win_pcm, 2) if mu_win_pcm else 0
+                            rms_a = audioop.rms(alaw_win_pcm, 2) if alaw_win_pcm else 0
+                            if rms_a > max(100, int(1.5 * (rms_mu or 1))):
+                                law = "alaw"
+                                try:
+                                    pcm = audioop.alaw2lin(message, 2)
+                                except Exception:
+                                    pcm = b""
+                            else:
+                                try:
+                                    pcm = mulaw_to_pcm16le(message)
+                                except Exception:
+                                    pcm = b""
+                            try:
+                                logger.info(
+                                    "Deepgram provider G.711 law detection",
+                                    call_id=self.call_id,
+                                    candidate_rms_mulaw=rms_mu,
+                                    candidate_rms_alaw=rms_a,
+                                    chosen_law=law,
+                                )
+                            except Exception:
+                                pass
                         except Exception:
-                            pcm = b""
+                            # Default to μ-law decode fallback
+                            try:
+                                pcm = mulaw_to_pcm16le(message)
+                            except Exception:
+                                pcm = b""
                         if rate != 8000 and pcm:
                             try:
                                 pcm, _ = resample_audio(pcm, rate, 8000, state=None)
