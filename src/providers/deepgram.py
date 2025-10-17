@@ -245,7 +245,7 @@ class DeepgramProvider(AIProviderInterface):
             "type": "Settings",
             "audio": {
                 "input": { "encoding": input_format, "sample_rate": int(input_sample_rate) },
-                "output": { "encoding": output_format, "sample_rate": int(output_sample_rate) }
+                "output": { "encoding": output_format, "sample_rate": int(output_sample_rate), "container": "none" }
             },
             "agent": {
                 "greeting": greeting_val,
