@@ -113,13 +113,13 @@ class DeepgramProvider(AIProviderInterface):
         except Exception:
             self._dg_input_rate = 8000
         # Cache provider output settings for downstream conversion/metadata
-        self._original_output_encoding = self._get_config_value('output_encoding', None)
-        self._original_output_rate = self._get_config_value('output_sample_rate_hz', 8000)
-        self._dg_output_encoding = self._canonicalize_encoding(self._original_output_encoding or 'mulaw')
+        self._original_output_encoding = self._get_config_value('output_encoding', None) or 'linear16'
+        self._original_output_rate = self._get_config_value('output_sample_rate_hz', 24000) or 24000
+        self._dg_output_encoding = self._canonicalize_encoding(self._original_output_encoding)
         try:
-            self._dg_output_rate = int(self._original_output_rate or 8000)
+            self._dg_output_rate = int(self._original_output_rate)
         except Exception:
-            self._dg_output_rate = 8000
+            self._dg_output_rate = 24000
         # Allow optional runtime detection when explicitly enabled
         self.allow_output_autodetect = bool(self._get_config_value('allow_output_autodetect', False))
         self._dg_output_inferred = not self.allow_output_autodetect
@@ -212,10 +212,10 @@ class DeepgramProvider(AIProviderInterface):
     async def _configure_agent(self):
         """Builds and sends the V1 Settings message to the Deepgram Voice Agent."""
         # Derive codec settings from config with safe defaults
-        input_encoding = self._get_config_value('input_encoding', None) or 'linear16'
+        input_encoding = self._get_config_value('input_encoding', None) or 'ulaw'
         input_sample_rate = int(self._get_config_value('input_sample_rate_hz', 8000) or 8000)
-        output_encoding = self._original_output_encoding or 'mulaw'
-        output_sample_rate = int(self._original_output_rate or 8000)
+        output_encoding = 'linear16'
+        output_sample_rate = int(self._original_output_rate or 24000)
         self._dg_output_encoding = self._canonicalize_encoding(output_encoding)
         self._dg_output_rate = output_sample_rate
         self._dg_output_inferred = not self.allow_output_autodetect
