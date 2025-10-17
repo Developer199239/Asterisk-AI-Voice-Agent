@@ -4106,6 +4106,18 @@ class Engine:
             }
             _AUDIO_RMS_GAUGE.labels(session.call_id, stage).set(rms)
             _AUDIO_DC_OFFSET.labels(session.call_id, stage).set(dc_offset)
+            first_sample_key = f"{stage}_first_sample_logged"
+            if not session.audio_diagnostics.get(first_sample_key):
+                session.audio_diagnostics[first_sample_key] = True
+                logger.info(
+                    "Audio diagnostics sample captured",
+                    call_id=session.call_id,
+                    stage=stage,
+                    format=canonical,
+                    rms=rms,
+                    dc_offset=dc_offset,
+                    sample_rate=sample_rate,
+                )
             rms_threshold = 50 if canonical == "ulaw" else 200
             alert_key = f"{stage}_low_rms_alerted"
             if rms < rms_threshold and not session.audio_diagnostics.get(alert_key):

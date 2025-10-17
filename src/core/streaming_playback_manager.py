@@ -10,7 +10,7 @@ import asyncio
 import time
 import audioop
 from contextlib import suppress
-from typing import Optional, Dict, Any, TYPE_CHECKING, Set, Callable, Awaitable
+from typing import Optional, Dict, Any, TYPE_CHECKING, Set, Callable, Awaitable, Tuple
 import structlog
 from prometheus_client import Counter, Gauge, Histogram
 import math
@@ -873,18 +873,25 @@ class StreamingPlaybackManager:
 
         if (
             stream_info.get('startup_ready')
-            and stream_info.get('frames_sent', 0) > 0
-            and not pending
-            and jitter_buffer.empty()
             and not sentinel_seen
-            and not stream_info.get('low_water_deadline')
+            and jitter_buffer.empty()
         ):
             filler_byte = b"\xFF" if self._is_mulaw(target_fmt) else b"\x00"
-            filler = filler_byte * frame_size
+            if pending:
+                pending_len = len(pending)
+                frame = pending + (filler_byte * max(0, frame_size - pending_len))
+                self.frame_remainders[call_id] = b""
+                try:
+                    if pending_len:
+                        self._decrement_buffered_bytes(call_id, pending_len)
+                except Exception:
+                    pass
+            else:
+                frame = filler_byte * frame_size
             return await self._emit_frame(
                 call_id,
                 stream_id,
-                filler,
+                frame[:frame_size],
                 target_fmt,
                 target_rate,
                 filler=True,
@@ -1085,6 +1092,24 @@ class StreamingPlaybackManager:
                     guard_ok = True
 
                 if guard_ok:
+                    # Decode once so we can scrub DC bias and reuse for diagnostics
+                    back_pcm = b""
+                    try:
+                        raw_pcm = mulaw_to_pcm16le(chunk)
+                        cleaned_pcm, dc_removed = self._remove_dc_from_pcm16(
+                            call_id,
+                            raw_pcm,
+                            threshold=256,
+                            stage="stream-fastpath",
+                        )
+                        if dc_removed:
+                            chunk = pcm16le_to_mulaw(cleaned_pcm)
+                            back_pcm = cleaned_pcm
+                        else:
+                            back_pcm = raw_pcm
+                    except Exception:
+                        back_pcm = b""
+
                     # Diagnostics: capture taps even on μ-law fast-path
                     try:
                         if getattr(self, 'diag_enable_taps', False) and call_id in self.active_streams:
@@ -1093,11 +1118,6 @@ class StreamingPlaybackManager:
                                 rate = int(target_rate)
                             except Exception:
                                 rate = int(self.sample_rate)
-                            # Decode μ-law to PCM16 for tap snapshots
-                            try:
-                                back_pcm = mulaw_to_pcm16le(chunk)
-                            except Exception:
-                                back_pcm = b""
                             # First-chunk direct snapshots
                             try:
                                 if not info.get('tap_first_snapshot_done', False):
@@ -1195,6 +1215,12 @@ class StreamingPlaybackManager:
             # Convert source to PCM16 for resampling/format conversion when needed
             if self._is_mulaw(src_encoding_raw):
                 working = mulaw_to_pcm16le(working)
+                working, _ = self._remove_dc_from_pcm16(
+                    call_id,
+                    working,
+                    threshold=256,
+                    stage="stream-pipeline",
+                )
                 src_encoding = "pcm16"
             else:
                 # Source is PCM16. Probe endianness once and auto-correct to little-endian for downstream ops.
@@ -1306,6 +1332,12 @@ class StreamingPlaybackManager:
 
             # Convert to target encoding
             if self._is_mulaw(target_fmt):
+                working, _ = self._remove_dc_from_pcm16(
+                    call_id,
+                    working,
+                    threshold=256,
+                    stage="stream-pre-encode",
+                )
                 if getattr(self, 'diag_enable_taps', False) and call_id in self.active_streams:
                     info = self.active_streams.get(call_id, {})
                     try:
@@ -1760,6 +1792,53 @@ class StreamingPlaybackManager:
                         error=str(e),
                         exc_info=True)
             return False
+
+    def _remove_dc_from_pcm16(
+        self,
+        call_id: str,
+        pcm_bytes: bytes,
+        *,
+        threshold: int = 256,
+        stage: str = "",
+    ) -> Tuple[bytes, bool]:
+        """Clamp DC offset on PCM16 audio."""
+        if not pcm_bytes:
+            return pcm_bytes, False
+        try:
+            import audioop
+        except Exception:
+            return pcm_bytes, False
+
+        try:
+            dc = audioop.avg(pcm_bytes, 2)
+        except Exception:
+            return pcm_bytes, False
+
+        if abs(dc) < max(0, int(threshold)):
+            return pcm_bytes, False
+
+        try:
+            cleaned = audioop.bias(pcm_bytes, 2, -int(dc))
+        except Exception:
+            return pcm_bytes, False
+
+        if call_id in self.active_streams:
+            info = self.active_streams.get(call_id, {}) or {}
+            if stage:
+                key = f"_dc_logged_{stage}"
+                if not info.get(key):
+                    try:
+                        logger.info(
+                            "Streaming PCM16 DC correction applied",
+                            call_id=call_id,
+                            stage=stage,
+                            dc_before=int(dc),
+                        )
+                    except Exception:
+                        pass
+                    info[key] = True
+                    self.active_streams[call_id] = info
+        return cleaned, True
 
     def _apply_pcm_endianness(
         self,
