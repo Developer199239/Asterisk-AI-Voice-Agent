@@ -43,6 +43,14 @@ class DeepgramProvider(AIProviderInterface):
             return 'linear16'
         return t or 'mulaw'
 
+    def _get_config_value(self, key: str, default: Optional[Any] = None) -> Optional[Any]:
+        try:
+            if isinstance(self.config, dict):
+                return self.config.get(key, default)
+            return getattr(self.config, key, default)
+        except Exception:
+            return default
+
     def _update_output_format(self, encoding: Optional[str], sample_rate: Optional[Any], source: str = "runtime") -> None:
         try:
             if encoding:
@@ -101,17 +109,17 @@ class DeepgramProvider(AIProviderInterface):
         self._greeting_injections: int = 0
         # Cache declared Deepgram input settings
         try:
-            self._dg_input_rate = int(self.config.get('input_sample_rate_hz', 8000) or 8000)
+            self._dg_input_rate = int(self._get_config_value('input_sample_rate_hz', 8000) or 8000)
         except Exception:
             self._dg_input_rate = 8000
         # Cache provider output settings for downstream conversion/metadata
-        self._dg_output_encoding = self._canonicalize_encoding(self.config.get('output_encoding', None) or 'mulaw')
+        self._dg_output_encoding = self._canonicalize_encoding(self._get_config_value('output_encoding', None) or 'mulaw')
         try:
-            self._dg_output_rate = int(self.config.get('output_sample_rate_hz', 8000) or 8000)
+            self._dg_output_rate = int(self._get_config_value('output_sample_rate_hz', 8000) or 8000)
         except Exception:
             self._dg_output_rate = 8000
         # Allow optional runtime detection when explicitly enabled
-        self.allow_output_autodetect = bool(self.config.get('allow_output_autodetect', False))
+        self.allow_output_autodetect = bool(self._get_config_value('allow_output_autodetect', False))
         self._dg_output_inferred = not self.allow_output_autodetect
 
     @property
@@ -202,10 +210,10 @@ class DeepgramProvider(AIProviderInterface):
     async def _configure_agent(self):
         """Builds and sends the V1 Settings message to the Deepgram Voice Agent."""
         # Derive codec settings from config with safe defaults
-        input_encoding = self.config.get('input_encoding', None) or 'linear16'
-        input_sample_rate = int(self.config.get('input_sample_rate_hz', 8000) or 8000)
-        output_encoding = self.config.get('output_encoding', None) or 'mulaw'
-        output_sample_rate = int(self.config.get('output_sample_rate_hz', 8000) or 8000)
+        input_encoding = self._get_config_value('input_encoding', None) or 'linear16'
+        input_sample_rate = int(self._get_config_value('input_sample_rate_hz', 8000) or 8000)
+        output_encoding = self._get_config_value('output_encoding', None) or 'mulaw'
+        output_sample_rate = int(self._get_config_value('output_sample_rate_hz', 8000) or 8000)
         self._dg_output_encoding = self._canonicalize_encoding(output_encoding)
         self._dg_output_rate = output_sample_rate
         self._dg_output_inferred = not self.allow_output_autodetect
@@ -215,7 +223,7 @@ class DeepgramProvider(AIProviderInterface):
 
         # Determine greeting precedence: provider override > global LLM greeting > safe default
         try:
-            greeting_val = (self.config.get('greeting', None) or "").strip()
+            greeting_val = (self._get_config_value('greeting', None) or "").strip()
         except Exception:
             greeting_val = ""
         if not greeting_val:
@@ -325,8 +333,8 @@ class DeepgramProvider(AIProviderInterface):
             try:
                 self._is_audio_flowing = True
                 chunk_len = len(audio_chunk)
-                input_encoding = (self.config.get("input_encoding", None) or "linear16").strip().lower()
-                target_rate = int(self.config.get("input_sample_rate_hz", 8000) or 8000)
+                input_encoding = (self._get_config_value("input_encoding", None) or "linear16").strip().lower()
+                target_rate = int(self._get_config_value("input_sample_rate_hz", 8000) or 8000)
                 # Infer actual inbound format and source rate from canonical 20 ms frame sizes
                 #  - 160 B ≈ μ-law @ 8 kHz (20 ms)
                 #  - 320 B ≈ PCM16 @ 8 kHz (20 ms)
@@ -343,7 +351,7 @@ class DeepgramProvider(AIProviderInterface):
                 else:
                     actual_format = "pcm16" if input_encoding in ("slin16", "linear16", "pcm16") else "ulaw"
                     try:
-                        src_rate = int(self.config.get("input_sample_rate_hz", 0) or 0) or (16000 if actual_format == "pcm16" else 8000)
+                        src_rate = int(self._get_config_value("input_sample_rate_hz", 0) or 0) or (16000 if actual_format == "pcm16" else 8000)
                     except Exception:
                         src_rate = 8000
 
@@ -529,9 +537,9 @@ class DeepgramProvider(AIProviderInterface):
         streaming_sample_rate: int,
     ) -> List[str]:
         issues: List[str] = []
-        cfg_enc = (self.config.get("input_encoding", None) or "").lower()
+        cfg_enc = (self._get_config_value("input_encoding", None) or "").lower()
         try:
-            cfg_rate = int(self.config.get("input_sample_rate_hz", 0) or 0)
+            cfg_rate = int(self._get_config_value("input_sample_rate_hz", 0) or 0)
         except Exception:
             cfg_rate = 0
 
@@ -646,7 +654,7 @@ class DeepgramProvider(AIProviderInterface):
                                     logger.info("Injecting greeting after ACK", call_id=self.call_id, event_type=et)
                                     self._greeting_injections += 1
                                     try:
-                                        await self._inject_message_dual((getattr(self.llm_config, 'initial_greeting', None) or self.config.get('greeting', None) or "Hello, how can I help you today?").strip())
+                                        await self._inject_message_dual((getattr(self.llm_config, 'initial_greeting', None) or self._get_config_value('greeting', None) or "Hello, how can I help you today?").strip())
                                     except Exception:
                                         logger.debug("Post-ACK greeting injection failed", exc_info=True)
                         except Exception:
@@ -918,7 +926,7 @@ class DeepgramProvider(AIProviderInterface):
         # configured and wired to emit events. A live websocket is only established
         # after start_session(call_id) during an actual call.
         try:
-            api_key_ok = bool(self.config.get('api_key', None))
+            api_key_ok = bool(self._get_config_value('api_key', None))
         except Exception:
             api_key_ok = False
         return api_key_ok and (self.on_event is not None)
