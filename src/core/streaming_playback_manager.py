@@ -167,6 +167,19 @@ class StreamingPlaybackManager:
         except Exception:
             self.egress_swap_mode = 'auto'
         self.egress_force_mulaw: bool = bool(self.streaming_config.get('egress_force_mulaw', False))
+        # Output conditioning: limiter and attack envelope
+        try:
+            self.limiter_enabled: bool = bool(self.streaming_config.get('limiter_enabled', True))
+        except Exception:
+            self.limiter_enabled = True
+        try:
+            self.limiter_headroom_ratio: float = float(self.streaming_config.get('limiter_headroom_ratio', 0.8))
+        except Exception:
+            self.limiter_headroom_ratio = 0.8
+        try:
+            self.attack_ms: int = int(self.streaming_config.get('attack_ms', 25))  # fade-in at start of segment
+        except Exception:
+            self.attack_ms = 25
         
         # Streaming state
         self.active_streams: Dict[str, Dict[str, Any]] = {}  # call_id -> stream_info
@@ -1106,6 +1119,18 @@ class StreamingPlaybackManager:
                             stage="stream-fastpath",
                         )
                         filtered_pcm = self._apply_dc_block(call_id, cleaned_pcm)
+                        # Apply attack envelope on first window and limiter before re-encoding
+                        try:
+                            info = self.active_streams.get(call_id, {})
+                            rate_fp = int(target_rate) if isinstance(target_rate, int) else int(self.sample_rate)
+                            filtered_pcm = self._apply_attack_envelope(call_id, filtered_pcm, rate_fp, info)
+                        except Exception:
+                            pass
+                        if self.limiter_enabled:
+                            try:
+                                filtered_pcm = self._apply_soft_limiter(filtered_pcm, self.limiter_headroom_ratio)
+                            except Exception:
+                                pass
                         chunk = pcm16le_to_mulaw(filtered_pcm)
                         back_pcm = filtered_pcm
                     except Exception:
@@ -1343,6 +1368,18 @@ class StreamingPlaybackManager:
                     stage="stream-pre-encode",
                 )
                 working = self._apply_dc_block(call_id, working)
+                # Apply short attack envelope at segment start and a soft limiter before μ-law encode
+                try:
+                    info = self.active_streams.get(call_id, {})
+                    rate_attack = int(target_rate) if isinstance(target_rate, int) else int(self.sample_rate)
+                    working = self._apply_attack_envelope(call_id, working, rate_attack, info)
+                except Exception:
+                    pass
+                if self.limiter_enabled:
+                    try:
+                        working = self._apply_soft_limiter(working, self.limiter_headroom_ratio)
+                    except Exception:
+                        pass
                 if getattr(self, 'diag_enable_taps', False) and call_id in self.active_streams:
                     info = self.active_streams.get(call_id, {})
                     try:
@@ -1608,6 +1645,68 @@ class StreamingPlaybackManager:
                 buf[idx] = int(y)
 
             self._dc_block_state[call_id] = (prev_x, prev_y)
+            return buf.tobytes()
+        except Exception:
+            return pcm_bytes
+
+    def _apply_soft_limiter(self, pcm_bytes: bytes, headroom_ratio: float = 0.8) -> bytes:
+        """Apply a simple soft limiter (tanh-based) to PCM16 to prevent clipping before μ-law encoding.
+        headroom_ratio defines the target ceiling as a fraction of full-scale (default 0.8).
+        """
+        if not pcm_bytes:
+            return pcm_bytes
+        try:
+            import array, math
+            ceiling = max(1, int(32767 * max(0.1, min(0.99, float(headroom_ratio)))))
+            buf = array.array('h')
+            buf.frombytes(pcm_bytes)
+            if buf.itemsize != 2:
+                return pcm_bytes
+            inv = 1.0 / float(ceiling)
+            for i in range(len(buf)):
+                x = int(buf[i])
+                y = int(round(ceiling * math.tanh(x * inv)))
+                if y > 32767:
+                    y = 32767
+                elif y < -32768:
+                    y = -32768
+                buf[i] = y
+            return buf.tobytes()
+        except Exception:
+            return pcm_bytes
+
+    def _apply_attack_envelope(self, call_id: str, pcm_bytes: bytes, sample_rate: int, stream_info: Dict[str, Any]) -> bytes:
+        """Apply a short linear attack envelope at the start of a streaming segment to avoid hot starts.
+        Maintains per-stream remaining bytes in stream_info['attack_bytes_remaining'].
+        """
+        if not pcm_bytes or sample_rate <= 0 or self.attack_ms <= 0:
+            return pcm_bytes
+        try:
+            import array
+            total_attack_bytes = int(max(0, int(sample_rate * (self.attack_ms / 1000.0)) * 2))
+            remaining = int(stream_info.get('attack_bytes_remaining', total_attack_bytes))
+            if remaining <= 0:
+                return pcm_bytes
+            buf = array.array('h')
+            buf.frombytes(pcm_bytes)
+            if buf.itemsize != 2:
+                return pcm_bytes
+            # Number of samples to shape in this buffer
+            shape_samples = min(len(buf), remaining // 2)
+            if shape_samples <= 0:
+                return pcm_bytes
+            # Linear ramp from ~0 -> 1 over remaining bytes
+            for i in range(shape_samples):
+                # Progress across total attack window (bytes consumed so far)
+                consumed_bytes = (total_attack_bytes - remaining) + (i * 2)
+                alpha = max(0.0, min(1.0, consumed_bytes / float(max(1, total_attack_bytes))))
+                s = int(buf[i])
+                buf[i] = int(round(s * alpha))
+            remaining -= shape_samples * 2
+            if remaining <= 0:
+                stream_info['attack_bytes_remaining'] = 0
+            else:
+                stream_info['attack_bytes_remaining'] = remaining
             return buf.tobytes()
         except Exception:
             return pcm_bytes
