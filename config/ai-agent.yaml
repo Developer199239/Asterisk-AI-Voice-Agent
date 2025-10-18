@@ -114,7 +114,7 @@ downstream_mode: "stream"
 audiosocket:
   host: "0.0.0.0"          # Bind address (use 127.0.0.1 when engine and Asterisk share a host)
   port: 8090               # TCP port for AudioSocket connections
-  format: "slin16"           # Wire format: μ-law @ 8kHz for AudioSocket; must match dialplan's AudioSocket() media argument.
+  format: "ulaw"           # Wire format: μ-law @ 8kHz for AudioSocket; must match dialplan's AudioSocket() media argument.
 
 # Barge-in configuration
 barge_in:
@@ -131,7 +131,7 @@ barge_in:
 
 # Streaming configuration (for downstream_mode=stream)
 streaming:
-  sample_rate: 16000          # Output sample rate for streaming audio (μ-law 8kHz path)
+  sample_rate: 8000          # Output sample rate for streaming audio (μ-law 8kHz path)
   jitter_buffer_ms: 520      # Target depth; 520ms keeps at least min_start + spare in buffer
   keepalive_interval_ms: 5000 # Keepalive interval for streaming connections
   connection_timeout_ms: 10000 # Connection timeout for streaming
@@ -142,7 +142,7 @@ streaming:
   provider_grace_ms: 60      # Short tail grace so cleanup finishes quickly without dragging cadence.
   logging_level: "debug"      # Optional override for streaming logger verbosity
   egress_swap_mode: "auto"   # Auto-detect PCM16 byte order (auto|force_true|force_false)
-  egress_force_mulaw: false
+  egress_force_mulaw: true
   # Diagnostics (feature-flagged): capture short PCM taps pre/post compand for next call
   diag_enable_taps: true
   diag_pre_secs: 1
