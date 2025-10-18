@@ -1,6 +1,6 @@
 # config/ai-agent.yaml
 # Default provider to use if not specified in the dialplan
-default_provider: "openai_realtime"
+default_provider: "deepgram"
 
 # Pipeline definitions specify which STT/LLM/TTS components power each call.
 # Pipelines can mix local and cloud services; the orchestrator selects components
@@ -114,7 +114,7 @@ downstream_mode: "stream"
 audiosocket:
   host: "0.0.0.0"          # Bind address (use 127.0.0.1 when engine and Asterisk share a host)
   port: 8090               # TCP port for AudioSocket connections
-  format: "ulaw"           # Wire format: μ-law @ 8kHz for AudioSocket; must match dialplan's AudioSocket() media argument.
+  format: "slin16"           # Wire format: μ-law @ 8kHz for AudioSocket; must match dialplan's AudioSocket() media argument.
 
 # Barge-in configuration
 barge_in:
@@ -131,7 +131,7 @@ barge_in:
 
 # Streaming configuration (for downstream_mode=stream)
 streaming:
-  sample_rate: 8000          # Output sample rate for streaming audio (μ-law 8kHz path)
+  sample_rate: 16000          # Output sample rate for streaming audio (μ-law 8kHz path)
   jitter_buffer_ms: 520      # Target depth; 520ms keeps at least min_start + spare in buffer
   keepalive_interval_ms: 5000 # Keepalive interval for streaming connections
   connection_timeout_ms: 10000 # Connection timeout for streaming
@@ -142,7 +142,7 @@ streaming:
   provider_grace_ms: 60      # Short tail grace so cleanup finishes quickly without dragging cadence.
   logging_level: "debug"      # Optional override for streaming logger verbosity
   egress_swap_mode: "auto"   # Auto-detect PCM16 byte order (auto|force_true|force_false)
-  egress_force_mulaw: true
+  egress_force_mulaw: false
   # Diagnostics (feature-flagged): capture short PCM taps pre/post compand for next call
   diag_enable_taps: true
   diag_pre_secs: 1
@@ -208,15 +208,15 @@ providers:
   deepgram:
     enabled: true
     api_key: "${DEEPGRAM_API_KEY}"
-    model: "nova-2-general"
+    model: "nova-2-phonecall"
     tts_model: "aura-2-thalia-en"
     greeting: "${DEEPGRAM_GREETING:-Hello, how can I help you today?}"
     instructions: "${DEEPGRAM_INSTRUCTIONS:-You are a concise voice assistant. Respond in under 20 words and answer immediately.}"
-    input_encoding: "ulaw"
-    input_sample_rate_hz: 8000
+    input_encoding: "linear16"
+    input_sample_rate_hz: 24000
     continuous_input: true        # Stream audio continuously for best responsiveness
                                   # TIP: Keep this true for real-time conversations
-    allow_output_autodetect: false
+    allow_output_autodetect: true
     output_encoding: "linear16"
     output_sample_rate_hz: 24000
   openai:
@@ -240,7 +240,7 @@ providers:
     chunk_size_ms: 20
     response_timeout_sec: 5.0
   openai_realtime:
-    enabled: true
+    enabled: false
     api_key: "${OPENAI_API_KEY}"
     model: "gpt-4o-realtime-preview-2024-12-17"
     voice: "alloy"
