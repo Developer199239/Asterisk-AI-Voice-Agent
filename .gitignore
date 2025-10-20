@@ -217,3 +217,10 @@ venv/
 
 # Local diagnostics bundles
 server_diagnostics/
+
+# RCA artifacts (local-only; do not commit)
+rca-*/
+rca-out*/
+tmp_rca/
+rca-*.tar.gz
+logs/remote/
