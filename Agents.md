@@ -160,7 +160,6 @@ exten => s,1,NoOp(Local)
 
 ## Observability & Troubleshooting
 - Engine logs: ARI connection errors, AudioSocket binds, playback IDs.
-- Asterisk logs: `/var/log/asterisk/full` — verify actual playback and errors.
 - Known gotcha: Do not append `.ulaw` to `sound:` URIs (Asterisk adds extensions automatically).
 - Metrics: hit `curl http://127.0.0.1:15000/metrics` after each regression to capture latency histograms and `ai_agent_last_*` gauges before recycling containers.
 - Remote logs: from the local repo run `timestamp=$(date +%Y%m%d-%H%M%S); ssh root@voiprnd.nemtclouddispatch.com "cd /root/Asterisk-AI-Voice-Agent && docker-compose logs ai-engine --since 30m --no-color" > logs/ai-engine-voiprnd-$timestamp.log` to pull the most recent `ai-engine` output for RCA.
@@ -221,12 +220,6 @@ If no connection arrives in time, the engine will fall back to legacy snoop (log
 - Enable `downstream_mode=stream` (when implemented): full‑duplex streaming, barge‑in (<300ms cancel‑to‑listen), jitter buffer, keepalives, telemetry.
 - Keep `file` path as fallback.
 
-## TaskMaster (MCP) Utilities
-- Tool client scripts: `scripts/tm_tools.mjs` (list/info/call tools) and `scripts/check_taskmaster_mcp.mjs`.
-- Typical calls:
-  - `node scripts/tm_tools.mjs list`
-  - `node scripts/tm_tools.mjs info parse_prd`
-  - `node scripts/tm_tools.mjs call update_task '{"id":"5","append":true,...}'`
 
 ## What I Still Need From You
 1) Server details to deploy:

@@ -14,6 +14,7 @@ SINCE_MIN="${SINCE_MIN:-60}"
 TS=$(date -u +%Y%m%d-%H%M%S)
 BASE="logs/remote/rca-$TS"
 mkdir -p "$BASE"/{taps,recordings,logs,transcripts}
+mkdir -p "$BASE"/config
 echo "$BASE" > logs/remote/rca-latest.path
 ssh "$SERVER_USER@$SERVER_HOST" "docker logs --since ${SINCE_MIN}m ai_engine > /tmp/ai-engine.latest.log" || true
 scp "$SERVER_USER@$SERVER_HOST:/tmp/ai-engine.latest.log" "$BASE/logs/ai-engine.log"
@@ -28,6 +29,15 @@ if [ -n "$REC_LIST" ]; then
     [ -z "$f" ] && continue
     scp "$SERVER_USER@$SERVER_HOST:$f" "$BASE/recordings/" || true
   done <<< "$REC_LIST"
+fi
+
+# Fetch ARI channel recordings by parsing rec name from engine logs (name field)
+REC_NAME=$(grep -o '"name": "out-[^"]*"' "$BASE/logs/ai-engine.log" | awk -F '"' '{print $4}' | tail -n 1 || true)
+if [ -n "$REC_NAME" ]; then
+  # Default ARI recording directory
+  scp "$SERVER_USER@$SERVER_HOST:/var/spool/asterisk/recording/${REC_NAME}.wav" "$BASE/recordings/" 2>/dev/null || true
+  # Some installs use 'recordings' (plural)
+  scp "$SERVER_USER@$SERVER_HOST:/var/spool/asterisk/recordings/${REC_NAME}.wav" "$BASE/recordings/" 2>/dev/null || true
 fi
 TAPS=$(ls "$BASE"/taps/*.wav 2>/dev/null || true)
 RECS=$(ls "$BASE"/recordings/*.wav 2>/dev/null || true)
@@ -50,7 +60,7 @@ if [ -n "$IN_WAVS" ]; then
 fi
 
 if [ -n "$CID" ]; then
-  ssh "$SERVER_USER@$SERVER_HOST" "CID=$CID; SRC=/tmp/ai-engine-captures/\$CID; TMP=/tmp/ai-capture-\$CID; TAR=/tmp/ai-capture-\$CID.tgz; if docker exec ai_engine test -d \$SRC; then docker cp ai_engine:\$SRC \$TMP 2>/dev/null && tar czf \$TAR -C /tmp ai-capture-\$CID && rm -rf \$TMP; fi" || true
+  ssh "$SERVER_USER@$SERVER_HOST" "CID=$CID; SRC=/tmp/ai-engine-captures/$CID; TMP=/tmp/ai-capture-$CID; TAR=/tmp/ai-capture-$CID.tgz; if docker exec ai_engine test -d $SRC; then docker cp ai_engine:$SRC $TMP 2>/dev/null && tar czf $TAR -C /tmp ai-capture-$CID && rm -rf $TMP; fi" || true
   if scp "$SERVER_USER@$SERVER_HOST:/tmp/ai-capture-$CID.tgz" "$BASE/" 2>/dev/null; then
     ssh "$SERVER_USER@$SERVER_HOST" "rm -f /tmp/ai-capture-$CID.tgz" || true
     mkdir -p "$BASE/captures"
@@ -58,6 +68,8 @@ if [ -n "$CID" ]; then
   fi
 fi
 
+# Fetch server-side ai-agent.yaml for transport/provider troubleshooting
+scp "$SERVER_USER@$SERVER_HOST:$PROJECT_PATH/config/ai-agent.yaml" "$BASE/config/" 2>/dev/null || true
 
 # Fetch Deepgram usage for this call when credentials are available (robust Python fallback).
 DG_PROJECT_ID="${DG_PROJECT_ID:-}"
