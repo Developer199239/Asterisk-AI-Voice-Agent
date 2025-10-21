@@ -302,17 +302,22 @@ class DeepgramProvider(AIProviderInterface):
             "type": "Settings",
             "audio": {
             "input": { "encoding": input_format, "sample_rate": int(input_sample_rate) },
-            "output": { "encoding": self._dg_output_encoding, "sample_rate": int(self._dg_output_rate), "container": "none" }
+            "output": { "encoding": self._dg_output_encoding, "sample_rate": int(self._dg_output_rate) }
             },
             "agent": {
             "greeting": greeting_val,
             "language": "en-US",
             "listen": { "provider": { "type": "deepgram", "model": listen_model } },
-                "think": { "provider": { "type": "open_ai", "model": think_model }, "prompt": think_prompt },
-                "speak": {
-                    "provider": { "type": "deepgram", "model": speak_model },
-                    "audio": { "encoding": self._dg_output_encoding, "sample_rate": int(self._dg_output_rate), "container": "none" }
+            "think": { "provider": { "type": "open_ai", "model": think_model }, "prompt": think_prompt },
+            "speak": {
+                "provider": { "type": "deepgram", "model": speak_model },
+                "audio": {
+                    "format": {
+                        "encoding": self._dg_output_encoding,
+                        "sample_rate": int(self._dg_output_rate)
+                    }
                 }
+            }
             }
         }
         await self.websocket.send(json.dumps(settings))
@@ -401,22 +406,35 @@ class DeepgramProvider(AIProviderInterface):
             api_key = self._get_config_value('api_key', None)
             if not api_key:
                 raise RuntimeError("Deepgram API key missing for capability fetch")
-            url = (self._get_config_value('api_base_url', None) or 'https://api.deepgram.com').rstrip('/') + '/v1/voice/models'
+            base = (self._get_config_value('api_base_url', None) or 'https://api.deepgram.com').rstrip('/')
+            endpoints = [
+                f"{base}/v1/voices",
+                f"{base}/v1/voice/models/deepgram",
+                f"{base}/v1/voice/models",
+            ]
             headers = { 'Authorization': f'Token {api_key}' }
             timeout = aiohttp.ClientTimeout(total=8)
+            data = None
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(url, headers=headers) as resp:
-                    if resp.status != 200:
-                        logger.warning("Deepgram voice catalog fetch failed", status=resp.status)
-                        raise RuntimeError(f"status={resp.status}")
-                    data = await resp.json(content_type=None)
+                for ep in endpoints:
+                    async with session.get(ep, headers=headers) as resp:
+                        if resp.status == 200:
+                            data = await resp.json(content_type=None)
+                            break
+                        else:
+                            try:
+                                logger.warning("Deepgram voice catalog fetch failed", status=resp.status)
+                            except Exception:
+                                pass
+                if data is None:
+                    raise RuntimeError("All Deepgram voice catalog endpoints failed")
             caps: Dict[str, Any] = {}
-            models = []
+            entries = []
             try:
-                models = data.get('models') or data.get('data') or []
+                entries = data.get('voices') or data.get('models') or data.get('data') or []
             except Exception:
-                models = []
-            for m in models:
+                entries = []
+            for m in entries:
                 try:
                     name = (m.get('name') or m.get('id') or '').strip()
                     if not name:
@@ -427,8 +445,23 @@ class DeepgramProvider(AIProviderInterface):
                     default_rate = None
                     # Heuristic parse across possible shapes
                     audio = m.get('audio') or {}
+                    # Formats array may appear at top-level or under audio
+                    formats = audio.get('formats') or m.get('formats') or []
+                    for f in formats:
+                        try:
+                            e = self._canonicalize_encoding(f.get('encoding')) if f.get('encoding') is not None else None
+                            if e:
+                                encs.add(e)
+                        except Exception:
+                            pass
+                        try:
+                            sr = int(f.get('sample_rate') or 0)
+                            if sr:
+                                rates.add(sr)
+                        except Exception:
+                            pass
                     try:
-                        encs.update([str(e).lower() for e in (audio.get('encodings') or [])])
+                        encs.update([self._canonicalize_encoding(str(e).lower()) for e in (audio.get('encodings') or [])])
                     except Exception:
                         pass
                     try:
@@ -445,9 +478,12 @@ class DeepgramProvider(AIProviderInterface):
                             rates.update(int(r) for r in (m.get('sample_rates') or []))
                         except Exception:
                             pass
-                    default_enc = (audio.get('default_encoding') or m.get('default_encoding') or '').lower() or None
+                    # Default may be nested: audio.default or top-level default
+                    default = audio.get('default') or m.get('default') or {}
+                    default_enc = (default.get('encoding') or audio.get('default_encoding') or m.get('default_encoding') or '')
+                    default_enc = self._canonicalize_encoding(default_enc) if default_enc else None
                     try:
-                        default_rate = int(audio.get('default_sample_rate') or m.get('default_sample_rate') or 0) or None
+                        default_rate = int(default.get('sample_rate') or audio.get('default_sample_rate') or m.get('default_sample_rate') or 0) or None
                     except Exception:
                         default_rate = None
                     caps[name] = {

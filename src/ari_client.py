@@ -318,14 +318,15 @@ class ARIClient:
                 ifExists=if_exists,
             )
             # Some ARI implementations accept JSON body for these params
+            # ARI expects query params; ensure all values are strings to satisfy yarl
             payload = {
-                "name": name,
-                "format": format,
-                "ifExists": if_exists,
-                "maxDurationSeconds": int(max_duration_seconds),
-                "maxSilenceSeconds": int(max_silence_seconds),
-                "beep": bool(beep),
-                "terminateOn": terminate_on,
+                "name": str(name),
+                "format": str(format),
+                "ifExists": str(if_exists),
+                "maxDurationSeconds": str(int(max_duration_seconds)),
+                "maxSilenceSeconds": str(int(max_silence_seconds)),
+                "beep": "true" if bool(beep) else "false",
+                "terminateOn": str(terminate_on),
             }
             response = await self.send_command(
                 "POST",
