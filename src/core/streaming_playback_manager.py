@@ -523,6 +523,22 @@ class StreamingPlaybackManager:
 
             self._resample_states[call_id] = None
             # Store stream info
+            # Small pre-start wait to allow inbound endianness probe to populate session.vad_state
+            # This helps avoid a race where the first greeting frames are sent with the wrong byte order
+            try:
+                if str(self.egress_swap_mode).lower() == 'auto' and self._canonicalize_encoding(self.audiosocket_format) in {"slin16", "linear16", "pcm16"}:
+                    for _i in range(5):  # up to ~100ms
+                        try:
+                            s = await self.session_store.get_by_call_id(call_id)
+                            vs = getattr(s, 'vad_state', {}) if s else {}
+                            if 'pcm16_inbound_swap' in vs:
+                                session = s or session
+                                break
+                        except Exception:
+                            pass
+                        await asyncio.sleep(0.02)
+            except Exception:
+                pass
             # Determine if egress slin16 should be byteswapped based on mode and inbound probe
             mode = self.egress_swap_mode
             egress_swap_auto = False
