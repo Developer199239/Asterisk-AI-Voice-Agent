@@ -306,7 +306,8 @@ class DeepgramProvider(AIProviderInterface):
         # Only include speak-level override if capabilities were fetched and include this voice
         include_speak_override = bool(self._caps_last_success and isinstance(locals().get('caps', {}), dict) and speak_model in (caps or {}))
 
-        include_output_override = bool(self._caps_last_success)
+        # Always include explicit audio.output so provider emits the format we expect
+        include_output_override = True
 
         settings = {
             "type": "Settings",
@@ -1012,7 +1013,9 @@ class DeepgramProvider(AIProviderInterface):
                     # One-time runtime probe: infer output encoding/rate from first bytes
                     can_autodetect = getattr(self, "allow_output_autodetect", False)
                     try:
-                        if can_autodetect and not getattr(self, "_dg_output_inferred", False):
+                        # Run a one-time inference on the first binary payload to guard against
+                        # server-side defaults that differ from our declared output.
+                        if not getattr(self, "_dg_output_inferred", False):
                             l = len(message)
                             inferred: Optional[str] = None
                             inferred_rate: Optional[int] = None
@@ -1063,6 +1066,7 @@ class DeepgramProvider(AIProviderInterface):
                                 except Exception:
                                     pass
                         else:
+                            # Already inferred or no need; mark as completed to avoid repeating
                             if not getattr(self, "_dg_output_inferred", False):
                                 self._dg_output_inferred = True
                     except Exception:

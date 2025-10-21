@@ -2080,7 +2080,54 @@ class Engine:
             # Self-echo mitigation and barge-in/continuous-input handling during TTS playback
             if hasattr(session, 'audio_capture_enabled') and not session.audio_capture_enabled:
                 cfg = getattr(self.config, 'barge_in', None)
-                # Protection window from TTS start to avoid initial self-echo
+                # Determine provider and continuous-input capability FIRST to allow forwarding during greeting guard
+                try:
+                    provider_name = getattr(session, 'provider_name', None) or self.config.default_provider
+                    provider = self.providers.get(provider_name)
+                except Exception:
+                    provider = None
+                continuous_input = False
+                try:
+                    if provider_name == "deepgram":
+                        continuous_input = True
+                    else:
+                        pcfg = getattr(provider, 'config', None)
+                        if isinstance(pcfg, dict):
+                            continuous_input = bool(pcfg.get('continuous_input', False))
+                        else:
+                            continuous_input = bool(getattr(pcfg, 'continuous_input', False))
+                except Exception:
+                    continuous_input = False
+                # If provider supports continuous input, forward provider-encoded PCM immediately (during TTS guard)
+                if continuous_input and provider and hasattr(provider, 'send_audio'):
+                    try:
+                        # Diagnostics on the PCM payload we are about to send
+                        self._update_audio_diagnostics(session, "provider_in", pcm_bytes, "slin16", pcm_rate)
+                    except Exception:
+                        logger.debug("Provider input diagnostics update failed (continuous-input)", call_id=caller_channel_id, exc_info=True)
+                    try:
+                        prov_payload, prov_enc, prov_rate = self._encode_for_provider(
+                            session.call_id,
+                            provider_name,
+                            provider,
+                            pcm_bytes,
+                            pcm_rate,
+                        )
+                        try:
+                            self.audio_capture.append_encoded(
+                                session.call_id,
+                                "caller_to_provider",
+                                prov_payload,
+                                prov_enc,
+                                prov_rate,
+                            )
+                        except Exception:
+                            logger.debug("Provider input capture failed (continuous-input)", call_id=session.call_id, exc_info=True)
+                        await provider.send_audio(prov_payload)
+                    except Exception:
+                        logger.debug("Provider continuous-input forward error", call_id=caller_channel_id, exc_info=True)
+                    return
+                # Protection window from TTS start to avoid initial self-echo (applies when not using continuous-input)
                 now = time.time()
                 tts_elapsed_ms = 0
                 try:
@@ -2101,31 +2148,6 @@ class Engine:
                     logger.debug("Dropping inbound during initial TTS protection window",
                                  conn_id=conn_id, caller_channel_id=caller_channel_id,
                                  tts_elapsed_ms=tts_elapsed_ms, protect_ms=initial_protect)
-                    return
-                # Determine provider and continuous-input capability
-                try:
-                    provider_name = getattr(session, 'provider_name', None) or self.config.default_provider
-                    provider = self.providers.get(provider_name)
-                except Exception:
-                    provider = None
-                continuous_input = False
-                try:
-                    if provider_name == "deepgram":
-                        continuous_input = True
-                    else:
-                        pcfg = getattr(provider, 'config', None)
-                        if isinstance(pcfg, dict):
-                            continuous_input = bool(pcfg.get('continuous_input', False))
-                        else:
-                            continuous_input = bool(getattr(pcfg, 'continuous_input', False))
-                except Exception:
-                    continuous_input = False
-                # If provider supports continuous input, forward during TTS even when barge-in is disabled
-                if continuous_input and provider and hasattr(provider, 'send_audio'):
-                    try:
-                        await provider.send_audio(audio_bytes)
-                    except Exception:
-                        logger.debug("Provider continuous-input forward error", call_id=caller_channel_id, exc_info=True)
                     return
                 # If barge-in disabled and no continuous-input path, drop
                 if not cfg or not getattr(cfg, 'enabled', True):
@@ -2294,6 +2316,12 @@ class Engine:
             pcm_payload = pcm_bytes
             payload_rate = pcm_rate
 
+            # Pre-guard RMS for instrumentation
+            try:
+                pre_guard_rms = audioop.rms(pcm_bytes, 2) if pcm_bytes else 0
+            except Exception:
+                pre_guard_rms = 0
+
             if vad_result:
                 now = time.time()
                 state = session.vad_state
@@ -2322,16 +2350,36 @@ class Engine:
                     state['frames_since_speech'] = frames_since_speech + 1
 
                 if not forward_original_audio:
-                    silence_len = len(pcm_bytes) if pcm_bytes else len(audio_bytes) * 2
-                    pcm_payload = b"\x00" * silence_len
-                    logger.debug(
-                        "🎤 VAD - Replacing frame with silence",
-                        call_id=caller_channel_id,
-                        confidence=f"{vad_result.confidence:.2f}",
-                        energy=vad_result.energy_level,
-                        is_speech=vad_result.is_speech,
-                        frames_since_speech=state.get('frames_since_speech', 0),
-                    )
+                    # During greeting, avoid zeroing frames; allow audio to pass to provider
+                    if getattr(session, 'conversation_state', None) == 'greeting':
+                        pcm_payload = pcm_bytes
+                        forward_original_audio = True
+                    else:
+                        silence_len = len(pcm_bytes) if pcm_bytes else len(audio_bytes) * 2
+                        pcm_payload = b"\x00" * silence_len
+                        logger.debug(
+                            "🎤 VAD - Replacing frame with silence",
+                            call_id=caller_channel_id,
+                            confidence=f"{vad_result.confidence:.2f}",
+                            energy=vad_result.energy_level,
+                            is_speech=vad_result.is_speech,
+                            frames_since_speech=state.get('frames_since_speech', 0),
+                        )
+
+            # Post-guard RMS instrumentation
+            try:
+                post_guard_rms = audioop.rms(pcm_payload, 2) if pcm_payload else 0
+            except Exception:
+                post_guard_rms = 0
+            try:
+                logger.info(
+                    "Inbound PCM guard RMS",
+                    call_id=caller_channel_id,
+                    pre_guard_pcm_rms=pre_guard_rms,
+                    post_guard_pcm_rms=post_guard_rms,
+                )
+            except Exception:
+                pass
 
             provider_name = session.provider_name or self.config.default_provider
             provider = self.providers.get(provider_name)
