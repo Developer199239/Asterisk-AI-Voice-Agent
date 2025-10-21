@@ -141,7 +141,7 @@ streaming:
   low_watermark_ms: 200      # Pause when depth < ~2/3 of min_start; 200ms keeps shallow buffer without starving.
   provider_grace_ms: 60      # Short tail grace so cleanup finishes quickly without dragging cadence.
   logging_level: "debug"      # Optional override for streaming logger verbosity
-  egress_swap_mode: "force_false"   # Force PCM16 little-endian for AudioSocket
+  egress_swap_mode: "auto"   # Auto: follow inbound slin16 swap probe for PCM16 byte order
   egress_force_mulaw: false
   # Diagnostics (feature-flagged): capture short PCM taps pre/post compand for next call
   diag_enable_taps: true
@@ -218,7 +218,7 @@ providers:
                                   # TIP: Keep this true for real-time conversations
     allow_output_autodetect: false
     output_encoding: "linear16"
-    output_sample_rate_hz: 8000
+    output_sample_rate_hz: 24000
   openai:
     enabled: false
     api_key: "${OPENAI_API_KEY}"
