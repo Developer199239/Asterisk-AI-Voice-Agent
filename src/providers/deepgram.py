@@ -3,6 +3,7 @@ import json
 import audioop
 import websockets
 import time
+import array
 from typing import Callable, Optional, List, Dict, Any
 import websockets.exceptions
 
@@ -181,6 +182,28 @@ class DeepgramProvider(AIProviderInterface):
             _DEEPGRAM_SESSION_AUDIO_INFO.remove(call_id)
         except (KeyError, ValueError):
             pass
+
+    def _apply_dc_block(self, pcm_bytes: bytes, r: float = 0.995) -> bytes:
+        """Apply first-order DC-block filter to PCM16 little-endian audio."""
+        if not pcm_bytes:
+            return pcm_bytes
+        try:
+            buf = array.array('h')
+            buf.frombytes(pcm_bytes)
+            prev_x = 0.0
+            prev_y = 0.0
+            for i, s in enumerate(buf):
+                x = float(int(s))
+                y = x - prev_x + r * prev_y
+                prev_x, prev_y = x, y
+                if y > 32767.0:
+                    y = 32767.0
+                elif y < -32768.0:
+                    y = -32768.0
+                buf[i] = int(y)
+            return buf.tobytes()
+        except Exception:
+            return pcm_bytes
 
     async def start_session(self, call_id: str):
         ws_url = f"wss://agent.deepgram.com/v1/agent/converse"
@@ -788,7 +811,7 @@ class DeepgramProvider(AIProviderInterface):
                     except Exception:
                         logger.debug("Deepgram output inference failed", exc_info=True)
 
-                    # Provider-side normalization: emit only verified μ-law @ 8000
+                    # Provider-side normalization
                     payload_ulaw: bytes = b""
                     try:
                         enc = (self._dg_output_encoding or "mulaw").strip().lower()
@@ -798,7 +821,7 @@ class DeepgramProvider(AIProviderInterface):
                         rate = 8000
 
                     if enc in ("linear16", "slin16", "pcm16"):
-                        # Treat message as PCM16; auto-detect endianness; resample to 8k then μ-law compand
+                        # Treat message as PCM16; auto-detect endianness; resample to 8k and emit PCM
                         pcm = message
                         # Endianness probe on a short window
                         try:
@@ -838,14 +861,32 @@ class DeepgramProvider(AIProviderInterface):
                                 rate = 8000
                             except Exception:
                                 logger.warning("Deepgram provider-side resample to 8k failed; emitting raw PCM16", exc_info=True)
+                        # DC-block the PCM payload before handing downstream
                         try:
-                            payload_ulaw = pcm16le_to_mulaw(pcm)
+                            pcm = self._apply_dc_block(pcm)
                         except Exception:
-                            # Fallback: best-effort via audioop
-                            try:
-                                payload_ulaw = audioop.lin2ulaw(pcm, 2)
-                            except Exception:
-                                payload_ulaw = b""
+                            pass
+                        audio_event = {
+                            'type': 'AgentAudio',
+                            'data': pcm,
+                            'streaming_chunk': True,
+                            'call_id': self.call_id,
+                            'encoding': 'linear16',
+                            'sample_rate': 8000,
+                        }
+                        if not self._first_output_chunk_logged:
+                            logger.info(
+                                "Deepgram AgentAudio first chunk",
+                                call_id=self.call_id,
+                                bytes=len(audio_event['data']),
+                                encoding=audio_event['encoding'],
+                                sample_rate=audio_event['sample_rate'],
+                            )
+                            self._first_output_chunk_logged = True
+                        self._in_audio_burst = True
+                        if self.on_event:
+                            await self.on_event(audio_event)
+                        continue
                     else:
                         # enc == mulaw (or other): detect G.711 law (μ-law vs A-law), then enforce μ-law@8k
                         law = "mulaw"

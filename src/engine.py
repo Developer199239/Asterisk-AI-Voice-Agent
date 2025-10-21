@@ -2375,18 +2375,35 @@ class Engine:
             return None
 
         try:
-            # Detect AudioSocket wire format and normalize to PCM16 @ 8 kHz
+            # Detect AudioSocket wire format from session first (actual negotiated),
+            # then fall back to YAML. Map 'slin' (Asterisk) to PCM16 @ 8 kHz.
             try:
-                as_fmt = (getattr(self.config, 'audiosocket', None).format or 'ulaw').lower()
+                fmt_token = (session.transport_profile.format or '').lower()
             except Exception:
-                as_fmt = 'ulaw'
-            if as_fmt in ('ulaw', 'mulaw', 'g711_ulaw', 'mu-law'):
+                fmt_token = ''
+            if not fmt_token:
+                try:
+                    fmt_token = (getattr(self.config, 'audiosocket', None).format or 'ulaw').lower()
+                except Exception:
+                    fmt_token = 'ulaw'
+
+            # Determine source rate preference from session profile when available
+            try:
+                prof_rate = int(session.transport_profile.sample_rate or 0)
+            except Exception:
+                prof_rate = 0
+
+            if fmt_token in ('ulaw', 'mulaw', 'g711_ulaw', 'mu-law'):
                 pcm_src = EnhancedVADManager.mu_law_to_pcm16(audio_bytes)
                 src_rate = 8000
-            else:
-                # slin16 path: bytes are already PCM16 @ 16 kHz
+            elif fmt_token in ('slin', 'slin8', 'linear16_8k', 'pcm16_8k'):
+                # Asterisk 'slin' is 8 kHz PCM16
                 pcm_src = audio_bytes
-                src_rate = 16000
+                src_rate = 8000
+            else:
+                # Generic PCM16: prefer session sample rate, default to 16000 only if unknown
+                pcm_src = audio_bytes
+                src_rate = prof_rate if prof_rate > 0 else 16000
                 # Normalize endian if probe indicated swap
                 try:
                     if bool(session.vad_state.get('pcm16_inbound_swap', False)):
