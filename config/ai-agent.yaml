@@ -114,11 +114,11 @@ downstream_mode: "stream"
 audiosocket:
   host: "0.0.0.0"          # Bind address (use 127.0.0.1 when engine and Asterisk share a host)
   port: 8090               # TCP port for AudioSocket connections
-  format: "ulaw"           # Wire format: 16-bit PCM LE @ 8kHz for AudioSocket; must match dialplan's AudioSocket() media argument.
+  format: "slin"           # Wire format: 16-bit PCM LE @ 8kHz for AudioSocket; must match dialplan's AudioSocket() media argument.
 
 # Barge-in configuration
 barge_in:
-  enabled: false
+  enabled: true
   initial_protection_ms: 100   # Short initial guard so caller audio reaches provider quickly
                                # Range: 200–600 ms (higher if trunks echo or agent intros are long)
   min_ms: 250                  # Sustained speech required to trigger barge-in (de-bounce)
@@ -142,7 +142,7 @@ streaming:
   provider_grace_ms: 60      # Short tail grace so cleanup finishes quickly without dragging cadence.
   logging_level: "debug"      # Optional override for streaming logger verbosity
   egress_swap_mode: "force_false"   # Force PCM16 little-endian for AudioSocket
-  egress_force_mulaw: true
+  egress_force_mulaw: false
   # Diagnostics (feature-flagged): capture short PCM taps pre/post compand for next call
   diag_enable_taps: true
   diag_pre_secs: 1
@@ -182,8 +182,8 @@ vad:
   webrtc_start_frames: 3     # Consecutive frames to start recording
   webrtc_end_silence_frames: 50  # Silence frames to end recording (1000ms)
   
-  # Utterance settings - optimized for 4+ second duration
-  min_utterance_duration_ms: 4000  # Minimum 4 seconds for accurate STT
+  # Utterance settings - optimized for 4+ second utterances
+  min_utterance_duration_ms: 600  # Minimum ~600 ms to allow faster turn-taking
   max_utterance_duration_ms: 10000 # Maximum 10 seconds
   utterance_padding_ms: 200        # Padding before/after speech
   
@@ -213,12 +213,12 @@ providers:
     greeting: "${DEEPGRAM_GREETING:-Hello, how can I help you today?}"
     instructions: "${DEEPGRAM_INSTRUCTIONS:-You are a concise voice assistant. Respond in under 20 words and answer immediately.}"
     input_encoding: "linear16"
-    input_sample_rate_hz: 16000
+    input_sample_rate_hz: 8000
     continuous_input: true        # Stream audio continuously for best responsiveness
                                   # TIP: Keep this true for real-time conversations
     allow_output_autodetect: true
     output_encoding: "linear16"
-    output_sample_rate_hz: 24000
+    output_sample_rate_hz: 8000
   openai:
     enabled: false
     api_key: "${OPENAI_API_KEY}"
