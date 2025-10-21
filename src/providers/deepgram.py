@@ -309,7 +309,10 @@ class DeepgramProvider(AIProviderInterface):
             "language": "en-US",
             "listen": { "provider": { "type": "deepgram", "model": listen_model } },
                 "think": { "provider": { "type": "open_ai", "model": think_model }, "prompt": think_prompt },
-                "speak": { "provider": { "type": "deepgram", "model": speak_model } }
+                "speak": {
+                    "provider": { "type": "deepgram", "model": speak_model },
+                    "audio": { "encoding": self._dg_output_encoding, "sample_rate": int(self._dg_output_rate), "container": "none" }
+                }
             }
         }
         await self.websocket.send(json.dumps(settings))
@@ -476,14 +479,22 @@ class DeepgramProvider(AIProviderInterface):
         model_caps = caps_map.get(voice_model) or {}
         encs = set([self._canonicalize_encoding(e) for e in (model_caps.get('encodings') or [])])
         rates = set(int(r) for r in (model_caps.get('sample_rates') or []))
-        # Try preferred combinations if both encoding and rate are supported
+        # If capabilities are missing/empty, prefer the model defaults rather than assuming support
+        def_enc = self._canonicalize_encoding(model_caps.get('default_encoding')) if model_caps.get('default_encoding') else None
+        try:
+            def_rate = int(model_caps.get('default_sample_rate') or 0) or None
+        except Exception:
+            def_rate = None
+        if not encs and not rates and (def_enc or def_rate):
+            return def_enc or 'linear16', def_rate or 24000
+        # Otherwise, only choose from preference order when both encoding and rate are explicitly supported
         for enc, rate in enc_pref_order:
             enc_canon = self._canonicalize_encoding(enc)
             if (not encs or enc_canon in encs) and (not rates or rate in rates):
-                return enc_canon, rate
+                # Require at least one of encs/rates to explicitly confirm support
+                if (encs and enc_canon in encs) or (rates and rate in rates):
+                    return enc_canon, rate
         # Fallback to defaults advertised by model
-        def_enc = self._canonicalize_encoding(model_caps.get('default_encoding')) if model_caps.get('default_encoding') else None
-        def_rate = int(model_caps.get('default_sample_rate') or 0) or None
         if def_enc and def_rate:
             return def_enc, def_rate
         # Last resort: use our configured defaults

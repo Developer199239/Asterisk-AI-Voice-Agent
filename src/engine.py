@@ -4189,7 +4189,9 @@ class Engine:
             "config": 0,
             "dialplan": 1,
             "audiosocket": 2,
-            "detected": 3,
+            # Provider can refine effective stream source format after transport is known
+            "provider": 3,
+            "detected": 4,
         }
         incoming_source = source or profile.source
         incoming_priority = priority_order.get(incoming_source, 0)
