@@ -4,6 +4,7 @@ import audioop
 import websockets
 import time
 import array
+import aiohttp
 from typing import Callable, Optional, List, Dict, Any
 import websockets.exceptions
 
@@ -132,6 +133,9 @@ class DeepgramProvider(AIProviderInterface):
         # Allow optional runtime detection when explicitly enabled
         self.allow_output_autodetect = bool(self._get_config_value('allow_output_autodetect', False))
         self._dg_output_inferred = not self.allow_output_autodetect
+        # Voice catalog cache (TTL)
+        self._model_caps_cache: Optional[Dict[str, Any]] = None
+        self._caps_expires_at: float = 0.0
 
     @property
     def supported_codecs(self) -> List[str]:
@@ -245,6 +249,7 @@ class DeepgramProvider(AIProviderInterface):
         # Derive codec settings from config with safe defaults
         input_encoding = self._get_config_value('input_encoding', None) or 'ulaw'
         input_sample_rate = int(self._get_config_value('input_sample_rate_hz', 8000) or 8000)
+        # Choose output based on voice capabilities (fallback to configured defaults)
         output_encoding = 'linear16'
         output_sample_rate = int(self._original_output_rate or 24000)
         self._dg_output_encoding = self._canonicalize_encoding(output_encoding)
@@ -269,19 +274,40 @@ class DeepgramProvider(AIProviderInterface):
 
         listen_model = self._get_config_value('model', None) or getattr(self.llm_config, 'listen_model', None) or "nova-2-general"
         speak_model = self._get_config_value('tts_model', None) or getattr(self.llm_config, 'tts_model', None) or "aura-asteria-en"
+
+        # Try capability-driven selection for the speak (voice) output
+        try:
+            caps = await self._fetch_voice_capabilities()
+            sel_enc, sel_rate = self._select_audio_profile(speak_model, caps)
+            if sel_enc:
+                output_encoding = sel_enc
+            if sel_rate:
+                output_sample_rate = int(sel_rate)
+            # Reflect chosen in provider state early so downstream expects it
+            self._dg_output_encoding = self._canonicalize_encoding(output_encoding)
+            self._dg_output_rate = int(output_sample_rate)
+            logger.info(
+                "Deepgram voice profile selected",
+                call_id=self.call_id,
+                speak_model=speak_model,
+                chosen_encoding=self._dg_output_encoding,
+                chosen_sample_rate=self._dg_output_rate,
+            )
+        except Exception:
+            logger.debug("Deepgram capability-driven selection failed; using defaults", exc_info=True)
         think_model = getattr(self.llm_config, 'model', None) or "gpt-4o"
         think_prompt = getattr(self.llm_config, 'prompt', None) or "You are a helpful assistant."
 
         settings = {
             "type": "Settings",
             "audio": {
-                "input": { "encoding": input_format, "sample_rate": int(input_sample_rate) },
-                "output": { "encoding": output_format, "sample_rate": int(output_sample_rate), "container": "none" }
+            "input": { "encoding": input_format, "sample_rate": int(input_sample_rate) },
+            "output": { "encoding": self._dg_output_encoding, "sample_rate": int(self._dg_output_rate), "container": "none" }
             },
             "agent": {
-                "greeting": greeting_val,
-                "language": "en-US",
-                "listen": { "provider": { "type": "deepgram", "model": listen_model } },
+            "greeting": greeting_val,
+            "language": "en-US",
+            "listen": { "provider": { "type": "deepgram", "model": listen_model } },
                 "think": { "provider": { "type": "open_ai", "model": think_model }, "prompt": think_prompt },
                 "speak": { "provider": { "type": "deepgram", "model": speak_model } }
             }
@@ -351,8 +377,8 @@ class DeepgramProvider(AIProviderInterface):
         summary = {
             "input_encoding": str(input_encoding).lower(),
             "input_sample_rate_hz": int(input_sample_rate),
-            "output_encoding": str(output_encoding).lower(),
-            "output_sample_rate_hz": int(output_sample_rate),
+            "output_encoding": str(self._dg_output_encoding).lower(),
+            "output_sample_rate_hz": int(self._dg_output_rate),
         }
         self._record_session_audio(**summary)
         logger.info(
@@ -360,6 +386,113 @@ class DeepgramProvider(AIProviderInterface):
             call_id=self.call_id,
             **summary,
         )
+
+    async def _fetch_voice_capabilities(self) -> Dict[str, Any]:
+        """Fetch Deepgram voice model capabilities with TTL cache.
+
+        Returns a dict: name -> { encodings: set([...]), sample_rates: set([...]), default_encoding, default_sample_rate }"""
+        try:
+            now = time.time()
+            if self._model_caps_cache and now < self._caps_expires_at:
+                return self._model_caps_cache
+            api_key = self._get_config_value('api_key', None)
+            if not api_key:
+                raise RuntimeError("Deepgram API key missing for capability fetch")
+            url = (self._get_config_value('api_base_url', None) or 'https://api.deepgram.com').rstrip('/') + '/v1/voice/models'
+            headers = { 'Authorization': f'Token {api_key}' }
+            timeout = aiohttp.ClientTimeout(total=8)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(url, headers=headers) as resp:
+                    if resp.status != 200:
+                        logger.warning("Deepgram voice catalog fetch failed", status=resp.status)
+                        raise RuntimeError(f"status={resp.status}")
+                    data = await resp.json(content_type=None)
+            caps: Dict[str, Any] = {}
+            models = []
+            try:
+                models = data.get('models') or data.get('data') or []
+            except Exception:
+                models = []
+            for m in models:
+                try:
+                    name = (m.get('name') or m.get('id') or '').strip()
+                    if not name:
+                        continue
+                    encs = set()
+                    rates = set()
+                    default_enc = None
+                    default_rate = None
+                    # Heuristic parse across possible shapes
+                    audio = m.get('audio') or {}
+                    try:
+                        encs.update([str(e).lower() for e in (audio.get('encodings') or [])])
+                    except Exception:
+                        pass
+                    try:
+                        rates.update(int(r) for r in (audio.get('sample_rates') or []))
+                    except Exception:
+                        pass
+                    if not encs:
+                        try:
+                            encs.update([str(e).lower() for e in (m.get('supported_encodings') or [])])
+                        except Exception:
+                            pass
+                    if not rates:
+                        try:
+                            rates.update(int(r) for r in (m.get('sample_rates') or []))
+                        except Exception:
+                            pass
+                    default_enc = (audio.get('default_encoding') or m.get('default_encoding') or '').lower() or None
+                    try:
+                        default_rate = int(audio.get('default_sample_rate') or m.get('default_sample_rate') or 0) or None
+                    except Exception:
+                        default_rate = None
+                    caps[name] = {
+                        'encodings': encs,
+                        'sample_rates': rates,
+                        'default_encoding': default_enc,
+                        'default_sample_rate': default_rate,
+                    }
+                except Exception:
+                    continue
+            # Cache with TTL
+            self._model_caps_cache = caps
+            self._caps_expires_at = time.time() + 600.0
+            logger.info("Deepgram voice catalog cached", count=len(caps))
+            return caps
+        except Exception:
+            logger.debug("Deepgram voice catalog retrieval failed", exc_info=True)
+            return self._model_caps_cache or {}
+
+    def _select_audio_profile(self, voice_model: str, caps_map: Dict[str, Any]) -> tuple:
+        """Select provider output (encoding, sample_rate) based on voice capabilities."""
+        # Defaults
+        enc_pref_order = [
+            ('linear16', 8000),
+            ('mulaw', 8000),
+            ('linear16', 16000),
+            ('linear16', 24000),
+        ]
+        model_caps = caps_map.get(voice_model) or {}
+        encs = set([self._canonicalize_encoding(e) for e in (model_caps.get('encodings') or [])])
+        rates = set(int(r) for r in (model_caps.get('sample_rates') or []))
+        # Try preferred combinations if both encoding and rate are supported
+        for enc, rate in enc_pref_order:
+            enc_canon = self._canonicalize_encoding(enc)
+            if (not encs or enc_canon in encs) and (not rates or rate in rates):
+                return enc_canon, rate
+        # Fallback to defaults advertised by model
+        def_enc = self._canonicalize_encoding(model_caps.get('default_encoding')) if model_caps.get('default_encoding') else None
+        def_rate = int(model_caps.get('default_sample_rate') or 0) or None
+        if def_enc and def_rate:
+            return def_enc, def_rate
+        # Last resort: use our configured defaults
+        try:
+            cfg_enc = self._canonicalize_encoding(self._get_config_value('output_encoding', 'linear16'))
+            cfg_rate = int(self._get_config_value('output_sample_rate_hz', 24000) or 24000)
+            return cfg_enc, cfg_rate
+        except Exception:
+            return 'linear16', 24000
 
     async def send_audio(self, audio_chunk: bytes):
         """Send caller audio to Deepgram in the declared input format.
@@ -694,6 +827,17 @@ class DeepgramProvider(AIProviderInterface):
                                     pass
                         except Exception:
                             logger.debug("Deepgram ACK logging failed", exc_info=True)
+                        # Surface final provider output format to engine for early alignment
+                        try:
+                            if self.on_event:
+                                await self.on_event({
+                                    'type': 'ProviderAudioFormat',
+                                    'call_id': self.call_id,
+                                    'encoding': self._dg_output_encoding,
+                                    'sample_rate': self._dg_output_rate,
+                                })
+                        except Exception:
+                            logger.debug("ProviderAudioFormat event emission failed", exc_info=True)
                         # Always log control events
                         try:
                             et = event_data.get("type") if isinstance(event_data, dict) else None

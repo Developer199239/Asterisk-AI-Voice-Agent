@@ -3059,6 +3059,40 @@ class Engine:
                 logger.warning("Provider event for unknown call", event_type=etype, call_id=call_id)
                 return
 
+            # Provider announced its audio format before first audio chunk
+            if etype == "ProviderAudioFormat":
+                encoding = event.get("encoding")
+                if isinstance(encoding, bytes):
+                    try:
+                        encoding = encoding.decode("utf-8", "ignore")
+                    except Exception:
+                        encoding = None
+                if isinstance(encoding, str):
+                    encoding = encoding.lower().strip() or None
+                sr_val = event.get("sample_rate")
+                try:
+                    sample_rate = int(sr_val) if sr_val is not None else None
+                except (TypeError, ValueError):
+                    sample_rate = None
+
+                # Persist as the stream's expected source format so streaming manager can align
+                fmt_entry = self._provider_stream_formats.get(call_id, {}).copy()
+                if encoding is not None:
+                    fmt_entry["encoding"] = encoding
+                if sample_rate is not None:
+                    fmt_entry["sample_rate"] = sample_rate
+                if fmt_entry:
+                    self._provider_stream_formats[call_id] = fmt_entry
+
+                # Update transport profile early (source="provider") for downstream alignment
+                try:
+                    await self._update_transport_profile(session, fmt=encoding, sample_rate=sample_rate, source="provider")
+                except Exception:
+                    logger.debug("ProviderAudioFormat profile update failed", call_id=call_id, exc_info=True)
+
+                logger.info("Provider audio format announced", call_id=call_id, encoding=encoding, sample_rate=sample_rate)
+                return
+
             # Downstream strategy: stream provider audio in near-real time via StreamingPlaybackManager
             if etype == "AgentAudio":
                 chunk: bytes = event.get("data") or b""
