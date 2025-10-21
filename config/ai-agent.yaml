@@ -114,7 +114,7 @@ downstream_mode: "stream"
 audiosocket:
   host: "0.0.0.0"          # Bind address (use 127.0.0.1 when engine and Asterisk share a host)
   port: 8090               # TCP port for AudioSocket connections
-  format: "slin16"           # Wire format: 16-bit PCM LE @ 8kHz for AudioSocket; must match dialplan's AudioSocket() media argument.
+  format: "ulaw"           # Wire format: 16-bit PCM LE @ 8kHz for AudioSocket; must match dialplan's AudioSocket() media argument.
 
 # Barge-in configuration
 barge_in:
@@ -142,7 +142,7 @@ streaming:
   provider_grace_ms: 60      # Short tail grace so cleanup finishes quickly without dragging cadence.
   logging_level: "debug"      # Optional override for streaming logger verbosity
   egress_swap_mode: "force_false"   # Force PCM16 little-endian for AudioSocket
-  egress_force_mulaw: false
+  egress_force_mulaw: true
   # Diagnostics (feature-flagged): capture short PCM taps pre/post compand for next call
   diag_enable_taps: true
   diag_pre_secs: 1
@@ -213,7 +213,7 @@ providers:
     greeting: "${DEEPGRAM_GREETING:-Hello, how can I help you today?}"
     instructions: "${DEEPGRAM_INSTRUCTIONS:-You are a concise voice assistant. Respond in under 20 words and answer immediately.}"
     input_encoding: "linear16"
-    input_sample_rate_hz: 24000
+    input_sample_rate_hz: 16000
     continuous_input: true        # Stream audio continuously for best responsiveness
                                   # TIP: Keep this true for real-time conversations
     allow_output_autodetect: true

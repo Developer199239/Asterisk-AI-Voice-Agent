@@ -421,6 +421,8 @@ class DeepgramProvider(AIProviderInterface):
                             state=self._input_resample_state,
                         )
                         payload = pcm_dst
+                        # Use the resampled buffer for RMS diagnostics to avoid false low-energy alerts
+                        pcm_for_rms = pcm_dst
                     else:
                         self._input_resample_state = None
                         payload = pcm_src
