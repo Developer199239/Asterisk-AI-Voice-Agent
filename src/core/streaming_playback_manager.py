@@ -177,7 +177,9 @@ class StreamingPlaybackManager:
         except Exception:
             self.limiter_headroom_ratio = 0.65
         try:
-            self.attack_ms: int = int(self.streaming_config.get('attack_ms', 20))
+            # Explicitly handle 0 value (don't treat as falsy)
+            attack_val = self.streaming_config.get('attack_ms')
+            self.attack_ms: int = int(attack_val) if attack_val is not None else 20
         except Exception:
             self.attack_ms = 20
         
