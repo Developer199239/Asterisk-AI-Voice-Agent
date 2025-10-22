@@ -1154,36 +1154,19 @@ class DeepgramProvider(AIProviderInterface):
                             await self.on_event(audio_event)
                         continue
                     else:
-                        # enc == mulaw (or other): detect G.711 law (μ-law vs A-law), then enforce μ-law@8k
+                        # enc == mulaw: trust configuration and FORCE μ-law decode (no auto-detection)
+                        # Previous auto-detection was broken - A-law decode of μ-law data produces
+                        # garbage with high RMS, causing incorrect A-law selection
                         law = "mulaw"
                         pcm = b""
                         try:
-                            win_len = min(320, len(message))
-                            mu_win_pcm = mulaw_to_pcm16le(message[:win_len]) if win_len else b""
-                            alaw_win_pcm = audioop.alaw2lin(message[:win_len], 2) if win_len else b""
-                            rms_mu = audioop.rms(mu_win_pcm, 2) if mu_win_pcm else 0
-                            rms_a = audioop.rms(alaw_win_pcm, 2) if alaw_win_pcm else 0
-                            if rms_a > max(100, int(1.5 * (rms_mu or 1))):
-                                law = "alaw"
-                                try:
-                                    pcm = audioop.alaw2lin(message, 2)
-                                except Exception:
-                                    pcm = b""
-                            else:
-                                try:
-                                    pcm = mulaw_to_pcm16le(message)
-                                except Exception:
-                                    pcm = b""
-                            try:
-                                logger.info(
-                                    "Deepgram provider G.711 law detection",
-                                    call_id=self.call_id,
-                                    candidate_rms_mulaw=rms_mu,
-                                    candidate_rms_alaw=rms_a,
-                                    chosen_law=law,
-                                )
-                            except Exception:
-                                pass
+                            # Directly decode as μ-law since that's what we configured Deepgram to send
+                            pcm = mulaw_to_pcm16le(message)
+                            logger.debug(
+                                "Deepgram provider μ-law decode (forced from config)",
+                                call_id=self.call_id,
+                                bytes=len(message),
+                            )
                         except Exception:
                             # Default to μ-law decode fallback
                             try:
