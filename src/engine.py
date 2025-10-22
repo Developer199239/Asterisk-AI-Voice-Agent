@@ -4156,7 +4156,7 @@ class Engine:
             "g711-ula": "ulaw",
             "linear16": "slin16",
             "pcm16": "slin16",
-            "slin": "slin16",
+            # Note: "slin" (8kHz PCM) and "slin16" (16kHz PCM) are distinct formats - do not alias
             "slin12": "slin16",
             "slin16": "slin16",
         }
