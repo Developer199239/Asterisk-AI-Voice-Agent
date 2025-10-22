@@ -3363,6 +3363,7 @@ class Engine:
                 else:
                     # Normal path: ensure stream and enqueue
                     if q is None:
+                        # No existing queue - create new one
                         q = asyncio.Queue(maxsize=256)
                         self._provider_stream_queues[call_id] = q
                         try:
@@ -3420,8 +3421,12 @@ class Engine:
                     except asyncio.QueueFull:
                         # Even if full, attempt graceful end later
                         asyncio.create_task(q.put(None))
-                    # Clear saved queue reference
-                    self._provider_stream_queues.pop(call_id, None)
+                    # ❌ BUG FIX: DO NOT immediately clear queue reference!
+                    # Rapid AgentAudioDone events cause chunks to be dropped during transitions.
+                    # Keep queue alive so subsequent chunks can still be enqueued until
+                    # next stream actually starts. The queue will be replaced (not cleared)
+                    # when the next stream starts.
+                    # self._provider_stream_queues.pop(call_id, None)  # ← REMOVED
                 else:
                     logger.debug("AgentAudioDone with no active stream queue", call_id=call_id)
                 self._provider_stream_formats.pop(call_id, None)
