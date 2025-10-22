@@ -1488,40 +1488,43 @@ class StreamingPlaybackManager:
                             if len(pre_w) < win_bytes:
                                 needw = win_bytes - len(pre_w)
                                 pre_w.extend(working[:needw])
-                if isinstance(info.get('tap_first_window_post'), bytearray) and back_pcm:
-                    post_w = info['tap_first_window_post']
-                    if len(post_w) < win_bytes:
-                        needw2 = win_bytes - len(post_w)
-                        post_w.extend(back_pcm[:needw2])
-                        if not info.get('tap_first_window_done'):
-                            pre_w = info.get('tap_first_window_pre') or bytearray()
-                            post_w = info.get('tap_first_window_post') or bytearray()
-                            if len(pre_w) >= win_bytes and len(post_w) >= win_bytes:
-                                sid = str(info.get('stream_id', 'seg'))
-                                # Write 200ms snapshots
-                                try:
-                                    fnp200 = os.path.join(self.diag_out_dir, f"pre_compand_pcm16_{call_id}_{sid}_first200ms.wav")
-                                    with wave.open(fnp200, 'wb') as wf:
-                                        wf.setnchannels(1)
-                                        wf.setsampwidth(2)
-                                        wf.setframerate(win_rate)
-                                        wf.writeframes(bytes(pre_w[:win_bytes]))
-                                    logger.info("Wrote pre-compand 200ms snapshot", call_id=call_id, stream_id=sid, path=fnp200, bytes=win_bytes, rate=win_rate, snapshot="first200ms")
-                                except Exception:
-                                    logger.warning("Failed 200ms pre snapshot", call_id=call_id, stream_id=sid, rate=win_rate, exc_info=True)
-                                try:
-                                    fnq200 = os.path.join(self.diag_out_dir, f"post_compand_pcm16_{call_id}_{sid}_first200ms.wav")
-                                    with wave.open(fnq200, 'wb') as wf:
-                                        wf.setnchannels(1)
-                                        wf.setsampwidth(2)
-                                        wf.setframerate(win_rate)
-                                        wf.writeframes(bytes(post_w[:win_bytes]))
-                                    logger.info("Wrote post-compand 200ms snapshot", call_id=call_id, stream_id=sid, path=fnq200, bytes=win_bytes, rate=win_rate, snapshot="first200ms")
-                                except Exception:
-                                    logger.warning("Failed 200ms post snapshot", call_id=call_id, stream_id=sid, rate=win_rate, exc_info=True)
-                                info['tap_first_window_done'] = True
                     except Exception:
-                        logger.debug("First-window snapshot failed (ulaw)", call_id=call_id, exc_info=True)
+                        pass
+                try:
+                    if isinstance(info.get('tap_first_window_post'), bytearray) and back_pcm:
+                        post_w = info['tap_first_window_post']
+                        if len(post_w) < win_bytes:
+                            needw2 = win_bytes - len(post_w)
+                            post_w.extend(back_pcm[:needw2])
+                            if not info.get('tap_first_window_done'):
+                                pre_w = info.get('tap_first_window_pre') or bytearray()
+                                post_w = info.get('tap_first_window_post') or bytearray()
+                                if len(pre_w) >= win_bytes and len(post_w) >= win_bytes:
+                                    sid = str(info.get('stream_id', 'seg'))
+                                    # Write 200ms snapshots
+                                    try:
+                                        fnp200 = os.path.join(self.diag_out_dir, f"pre_compand_pcm16_{call_id}_{sid}_first200ms.wav")
+                                        with wave.open(fnp200, 'wb') as wf:
+                                            wf.setnchannels(1)
+                                            wf.setsampwidth(2)
+                                            wf.setframerate(win_rate)
+                                            wf.writeframes(bytes(pre_w[:win_bytes]))
+                                        logger.info("Wrote pre-compand 200ms snapshot", call_id=call_id, stream_id=sid, path=fnp200, bytes=win_bytes, rate=win_rate, snapshot="first200ms")
+                                    except Exception:
+                                        logger.warning("Failed 200ms pre snapshot", call_id=call_id, stream_id=sid, rate=win_rate, exc_info=True)
+                                    try:
+                                        fnq200 = os.path.join(self.diag_out_dir, f"post_compand_pcm16_{call_id}_{sid}_first200ms.wav")
+                                        with wave.open(fnq200, 'wb') as wf:
+                                            wf.setnchannels(1)
+                                            wf.setsampwidth(2)
+                                            wf.setframerate(win_rate)
+                                            wf.writeframes(bytes(post_w[:win_bytes]))
+                                        logger.info("Wrote post-compand 200ms snapshot", call_id=call_id, stream_id=sid, path=fnq200, bytes=win_bytes, rate=win_rate, snapshot="first200ms")
+                                    except Exception:
+                                        logger.warning("Failed 200ms post snapshot", call_id=call_id, stream_id=sid, rate=win_rate, exc_info=True)
+                                    info['tap_first_window_done'] = True
+                except Exception:
+                    logger.debug("First-window snapshot failed (ulaw)", call_id=call_id, exc_info=True)
                     return ulaw_bytes
                 return pcm16le_to_mulaw(working)
             # Otherwise target PCM16, apply optional envelope/limiter, with optional (or auto) egress byteswap
