@@ -143,6 +143,13 @@ streaming:
   logging_level: "debug"      # Optional override for streaming logger verbosity
   egress_swap_mode: "auto"   # Auto: follow inbound slin16 swap probe for PCM16 byte order
   egress_force_mulaw: false
+  # Maintain a single continuous stream across provider segments (prevents segment loss)
+  continuous_stream: true
+  # Audio normalizer (make-up gain before μ-law encode)
+  normalizer:
+    enabled: true
+    target_rms: 1400
+    max_gain_db: 9.0
   # Diagnostics (feature-flagged): capture short PCM taps pre/post compand for next call
   diag_enable_taps: true
   diag_pre_secs: 1

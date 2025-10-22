@@ -254,6 +254,14 @@ class Engine:
                     getattr(config.streaming, 'egress_force_mulaw', False),
                     audiosocket_fmt,
                 ),
+                # Continuous stream across provider segments (single pacer per call)
+                'continuous_stream': bool(getattr(config.streaming, 'continuous_stream', True)),
+                # Audio normalizer (RMS make-up gain prior to μ-law encode)
+                'normalizer': {
+                    'enabled': bool(getattr(getattr(config, 'streaming', {}), 'normalizer', {}).get('enabled', True)) if hasattr(config, 'streaming') else True,
+                    'target_rms': int(getattr(getattr(config, 'streaming', {}), 'normalizer', {}).get('target_rms', 1400)) if hasattr(config, 'streaming') else 1400,
+                    'max_gain_db': float(getattr(getattr(config, 'streaming', {}), 'normalizer', {}).get('max_gain_db', 9.0)) if hasattr(config, 'streaming') else 9.0,
+                },
                 # Diagnostics (optional): enable short PCM taps pre/post compand
                 'diag_enable_taps': bool(getattr(config.streaming, 'diag_enable_taps', False)),
                 'diag_pre_secs': int(getattr(config.streaming, 'diag_pre_secs', 0) or 0),
@@ -333,6 +341,9 @@ class Engine:
         self.vad_detectors: Dict[str, VoiceActivityDetector] = {}  # conn_id -> VAD
         self.local_channels: Dict[str, str] = {}  # channel_id -> legacy local_channel_id
         self.audiosocket_channels: Dict[str, str] = {}  # call_id -> audiosocket_channel_id
+        # Streaming per-call persistent stream and gating state
+        self._provider_stream_ids: Dict[str, str] = {}
+        self._segment_tts_active: Set[str] = set()
         
         self.vad_manager: Optional[EnhancedVADManager] = None
         self.webrtc_vad = None
@@ -3304,6 +3315,14 @@ class Engine:
                     micro_fallback_ms = 300
 
                 q = self._provider_stream_queues.get(call_id)
+                # In continuous-stream mode, ensure per-segment gating is active
+                try:
+                    if getattr(self.streaming_playback_manager, 'continuous_stream', False):
+                        if call_id not in self._segment_tts_active:
+                            await self.streaming_playback_manager.start_segment_gating(call_id)
+                            self._segment_tts_active.add(call_id)
+                except Exception:
+                    logger.debug("Failed to start segment gating", call_id=call_id, exc_info=True)
                 if coalesce_enabled and q is None and not isinstance(out_chunk, list):
                     buf = self._provider_coalesce_buf.setdefault(call_id, bytearray())
                     buf.extend(out_chunk)
@@ -3413,19 +3432,34 @@ class Engine:
                 except asyncio.QueueFull:
                     logger.debug("Provider streaming queue full; dropping chunk", call_id=call_id)
             elif etype == "AgentAudioDone":
+                continuous = bool(getattr(self.streaming_playback_manager, 'continuous_stream', False))
                 q = self._provider_stream_queues.get(call_id)
-                if q is not None:
-                    # Signal end of stream
+                if continuous:
+                    # Do NOT end the stream; mark boundary and end per-segment gating
                     try:
-                        q.put_nowait(None)  # sentinel for StreamingPlaybackManager
-                    except asyncio.QueueFull:
-                        # Even if full, attempt graceful end later
-                        asyncio.create_task(q.put(None))
-                    # Clear queue reference so next chunk creates new queue/stream
-                    self._provider_stream_queues.pop(call_id, None)
+                        await self.streaming_playback_manager.mark_segment_boundary(call_id)
+                    except Exception:
+                        logger.debug("Failed to mark segment boundary", call_id=call_id, exc_info=True)
+                    try:
+                        await self.streaming_playback_manager.end_segment_gating(call_id)
+                    except Exception:
+                        logger.debug("Failed to end segment gating", call_id=call_id, exc_info=True)
+                    try:
+                        self._segment_tts_active.discard(call_id)
+                    except Exception:
+                        pass
                 else:
-                    logger.debug("AgentAudioDone with no active stream queue", call_id=call_id)
-                self._provider_stream_formats.pop(call_id, None)
+                    if q is not None:
+                        # Signal end of stream (per-segment mode)
+                        try:
+                            q.put_nowait(None)  # sentinel for StreamingPlaybackManager
+                        except asyncio.QueueFull:
+                            asyncio.create_task(q.put(None))
+                        # Clear queue reference so next chunk creates new queue/stream
+                        self._provider_stream_queues.pop(call_id, None)
+                    else:
+                        logger.debug("AgentAudioDone with no active stream queue", call_id=call_id)
+                    self._provider_stream_formats.pop(call_id, None)
                 # Log provider segment wall duration
                 try:
                     start_ts = self._provider_segment_start_ts.pop(call_id, None)

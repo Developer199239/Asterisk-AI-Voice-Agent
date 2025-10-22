@@ -210,6 +210,28 @@ class StreamingPlaybackManager:
         self.connection_timeout_ms = self.streaming_config.get('connection_timeout_ms', 10000)
         self.fallback_timeout_ms = self.streaming_config.get('fallback_timeout_ms', 4000)
         self.chunk_size_ms = self.streaming_config.get('chunk_size_ms', 20)
+        # Continuous streaming across provider segments
+        try:
+            self.continuous_stream: bool = bool(self.streaming_config.get('continuous_stream', True))
+        except Exception:
+            self.continuous_stream = True
+        # Simple audio normalizer (make-up gain before μ-law encode)
+        try:
+            norm = self.streaming_config.get('normalizer', {}) or {}
+        except Exception:
+            norm = {}
+        try:
+            self.normalizer_enabled: bool = bool(norm.get('enabled', True))
+        except Exception:
+            self.normalizer_enabled = True
+        try:
+            self.normalizer_target_rms: int = int(norm.get('target_rms', 1400))
+        except Exception:
+            self.normalizer_target_rms = 1400
+        try:
+            self.normalizer_max_gain_db: float = float(norm.get('max_gain_db', 9.0))
+        except Exception:
+            self.normalizer_max_gain_db = 9.0
         # Derived configuration (chunk counts)
         self.min_start_ms = max(0, int(self.streaming_config.get('min_start_ms', 120)))
         self.low_watermark_ms = max(0, int(self.streaming_config.get('low_watermark_ms', 80)))
@@ -721,17 +743,24 @@ class StreamingPlaybackManager:
 
                 except asyncio.TimeoutError:
                     # No audio chunk received within timeout
-                    if time.time() - last_send_time > fallback_timeout:
-                        logger.warning("🎵 STREAMING PLAYBACK - Timeout, falling back to file playback", call_id=call_id, stream_id=stream_id, timeout=fallback_timeout)
-                        await self._record_fallback(call_id, f"timeout>{fallback_timeout}s")
-                        await self._fallback_to_file_playback(call_id, stream_id)
-                        if not sentinel_sent:
-                            try:
-                                await jitter_buffer.put(_JITTER_SENTINEL)
-                                sentinel_sent = True
-                            except Exception:
-                                pass
-                        break
+                    if not self.continuous_stream:
+                        if time.time() - last_send_time > fallback_timeout:
+                            logger.warning("🎵 STREAMING PLAYBACK - Timeout, falling back to file playback", call_id=call_id, stream_id=stream_id, timeout=fallback_timeout)
+                            await self._record_fallback(call_id, f"timeout>{fallback_timeout}s")
+                            await self._fallback_to_file_playback(call_id, stream_id)
+                            if not sentinel_sent:
+                                try:
+                                    await jitter_buffer.put(_JITTER_SENTINEL)
+                                    sentinel_sent = True
+                                except Exception:
+                                    pass
+                            break
+                        continue
+                    # Continuous stream: stay alive, pacer will inject fillers as needed
+                    try:
+                        _STREAMING_LAST_CHUNK_AGE.labels(call_id).set(time.time() - last_send_time)
+                    except Exception:
+                        pass
                     continue
         finally:
             if not sentinel_sent:
@@ -1366,6 +1395,12 @@ class StreamingPlaybackManager:
                     working = self._apply_attack_envelope(call_id, working, rate_attack, info)
                 except Exception:
                     pass
+                # Apply make-up gain normalization before limiter if enabled
+                try:
+                    if self.normalizer_enabled and self.normalizer_target_rms > 0:
+                        working = self._apply_normalizer(working, self.normalizer_target_rms, self.normalizer_max_gain_db)
+                except Exception:
+                    logger.debug("Normalizer failed; continuing without gain", call_id=call_id, exc_info=True)
                 if self.limiter_enabled:
                     try:
                         working = self._apply_soft_limiter(working, self.limiter_headroom_ratio)
@@ -1453,11 +1488,11 @@ class StreamingPlaybackManager:
                             if len(pre_w) < win_bytes:
                                 needw = win_bytes - len(pre_w)
                                 pre_w.extend(working[:needw])
-                        if isinstance(info.get('tap_first_window_post'), bytearray) and back_pcm:
-                            post_w = info['tap_first_window_post']
-                            if len(post_w) < win_bytes:
-                                needw2 = win_bytes - len(post_w)
-                                post_w.extend(back_pcm[:needw2])
+                if isinstance(info.get('tap_first_window_post'), bytearray) and back_pcm:
+                    post_w = info['tap_first_window_post']
+                    if len(post_w) < win_bytes:
+                        needw2 = win_bytes - len(post_w)
+                        post_w.extend(back_pcm[:needw2])
                         if not info.get('tap_first_window_done'):
                             pre_w = info.get('tap_first_window_pre') or bytearray()
                             post_w = info.get('tap_first_window_post') or bytearray()
@@ -1635,6 +1670,48 @@ class StreamingPlaybackManager:
     def _apply_soft_limiter(self, pcm_bytes: bytes, headroom_ratio: float = 0.8) -> bytes:
         """DISABLED - limiter was causing unnecessary audio processing."""
         return pcm_bytes
+
+    def _apply_normalizer(self, pcm_bytes: bytes, target_rms: int, max_gain_db: float) -> bytes:
+        """Apply simple RMS-based make-up gain to PCM16 LE audio.
+
+        - Computes RMS of the current buffer and applies a scalar gain to approach
+          target_rms, capped by max_gain_db.
+        - Clips to int16 range.
+        - Returns original input on any error.
+        """
+        if not pcm_bytes or target_rms <= 0:
+            return pcm_bytes
+        try:
+            import array, math
+            buf = array.array('h')
+            buf.frombytes(pcm_bytes)
+            if buf.itemsize != 2 or len(buf) == 0:
+                return pcm_bytes
+            # Compute RMS
+            acc = 0.0
+            for s in buf:
+                acc += float(s) * float(s)
+            rms = math.sqrt(acc / float(len(buf))) if len(buf) > 0 else 0.0
+            if rms <= 1.0:
+                return pcm_bytes
+            # Compute linear gain toward target, limited by max_gain_db
+            desired = float(target_rms) / float(rms)
+            max_lin = math.pow(10.0, float(max_gain_db) / 20.0)
+            gain = min(desired, max_lin)
+            if gain <= 1.01:
+                # Avoid tiny changes to reduce CPU
+                return pcm_bytes
+            # Apply and clip
+            for i, s in enumerate(buf):
+                y = float(s) * gain
+                if y > 32767.0:
+                    y = 32767.0
+                elif y < -32768.0:
+                    y = -32768.0
+                buf[i] = int(y)
+            return buf.tobytes()
+        except Exception:
+            return pcm_bytes
 
     def _apply_attack_envelope(self, call_id: str, pcm_bytes: bytes, sample_rate: int, stream_info: Dict[str, Any]) -> bytes:
         """Apply a short linear attack envelope at the start of a streaming segment to avoid hot starts.
@@ -2316,6 +2393,67 @@ class StreamingPlaybackManager:
         except Exception as e:
             logger.error("Error stopping streaming playback", call_id=call_id, error=str(e), exc_info=True)
             return False
+
+    async def mark_segment_boundary(self, call_id: str) -> None:
+        """Mark a segment boundary for a continuous stream.
+
+        Resets attack envelope so the next provider segment starts with a short
+        fade-in, without tearing down the stream/pacer.
+        """
+        try:
+            info = self.active_streams.get(call_id)
+            if not info:
+                return
+            try:
+                rate = int(info.get('target_sample_rate') or self.sample_rate)
+            except Exception:
+                rate = int(self.sample_rate)
+            total_attack_bytes = int(max(0, int(rate * (self.attack_ms / 1000.0)) * 2))
+            info['attack_bytes_remaining'] = total_attack_bytes
+            logger.debug("Marked segment boundary; attack reset", call_id=call_id, attack_bytes=total_attack_bytes)
+        except Exception:
+            logger.debug("Failed to mark segment boundary", call_id=call_id, exc_info=True)
+
+    async def start_segment_gating(self, call_id: str) -> None:
+        """Begin per-segment TTS gating in continuous-stream mode."""
+        try:
+            info = self.active_streams.get(call_id)
+            if not info:
+                return
+            stream_id = str(info.get('stream_id') or '')
+            if not stream_id:
+                return
+            ok = True
+            if self.conversation_coordinator:
+                ok = await self.conversation_coordinator.on_tts_start(call_id, stream_id)
+            else:
+                ok = await self.session_store.set_gating_token(call_id, stream_id)
+            if not ok:
+                logger.warning("Failed to start segment gating", call_id=call_id, stream_id=stream_id)
+        except Exception:
+            logger.debug("start_segment_gating failed", call_id=call_id, exc_info=True)
+
+    async def end_segment_gating(self, call_id: str) -> None:
+        """End per-segment TTS gating in continuous-stream mode."""
+        try:
+            info = self.active_streams.get(call_id)
+            if not info:
+                return
+            stream_id = str(info.get('stream_id') or '')
+            if not stream_id:
+                return
+            if self.conversation_coordinator:
+                try:
+                    await self.conversation_coordinator.on_tts_end(call_id, stream_id, reason="segment-end")
+                except Exception:
+                    pass
+            try:
+                await self.session_store.clear_gating_token(call_id, stream_id)
+            except Exception:
+                pass
+            logger.debug("Ended segment gating", call_id=call_id, stream_id=stream_id)
+        except Exception:
+            logger.debug("end_segment_gating failed", call_id=call_id, exc_info=True)
 
     async def _cleanup_stream(self, call_id: str, stream_id: str) -> None:
         """Clean up streaming resources."""
