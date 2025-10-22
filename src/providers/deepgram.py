@@ -123,13 +123,13 @@ class DeepgramProvider(AIProviderInterface):
         except Exception:
             self._dg_input_rate = 8000
         # Cache provider output settings for downstream conversion/metadata
-        self._original_output_encoding = self._get_config_value('output_encoding', None) or 'linear16'
-        self._original_output_rate = self._get_config_value('output_sample_rate_hz', 24000) or 24000
+        self._original_output_encoding = self._get_config_value('output_encoding', None) or 'mulaw'
+        self._original_output_rate = self._get_config_value('output_sample_rate_hz', 8000) or 8000
         self._dg_output_encoding = self._canonicalize_encoding(self._original_output_encoding)
         try:
             self._dg_output_rate = int(self._original_output_rate)
         except Exception:
-            self._dg_output_rate = 24000
+            self._dg_output_rate = 8000
         # Allow optional runtime detection when explicitly enabled
         self.allow_output_autodetect = bool(self._get_config_value('allow_output_autodetect', False))
         self._dg_output_inferred = not self.allow_output_autodetect
@@ -256,7 +256,7 @@ class DeepgramProvider(AIProviderInterface):
         input_sample_rate = int(self._get_config_value('input_sample_rate_hz', 8000) or 8000)
         # Choose output based on voice capabilities (fallback to configured defaults)
         output_encoding = self._original_output_encoding
-        output_sample_rate = int(self._original_output_rate or 24000)
+        output_sample_rate = int(self._original_output_rate or 8000)
         self._dg_output_encoding = self._canonicalize_encoding(output_encoding)
         self._dg_output_rate = output_sample_rate
         self._dg_output_inferred = not self.allow_output_autodetect
@@ -547,12 +547,12 @@ class DeepgramProvider(AIProviderInterface):
 
     def _select_audio_profile(self, voice_model: str, caps_map: Dict[str, Any]) -> tuple:
         """Select provider output (encoding, sample_rate) based on voice capabilities."""
-        # Defaults
+        # Defaults - prefer mulaw @ 8000 for telephony
         enc_pref_order = [
-            ('linear16', 8000),
             ('mulaw', 8000),
+            ('mulaw', 16000),
+            ('linear16', 8000),
             ('linear16', 16000),
-            ('linear16', 24000),
         ]
         model_caps = caps_map.get(voice_model) or {}
         encs = set([self._canonicalize_encoding(e) for e in (model_caps.get('encodings') or [])])
@@ -564,7 +564,7 @@ class DeepgramProvider(AIProviderInterface):
         except Exception:
             def_rate = None
         if not encs and not rates and (def_enc or def_rate):
-            return def_enc or 'linear16', def_rate or 24000
+            return def_enc or 'mulaw', def_rate or 8000
         # Otherwise, only choose from preference order when both encoding and rate are explicitly supported
         for enc, rate in enc_pref_order:
             enc_canon = self._canonicalize_encoding(enc)
@@ -577,11 +577,11 @@ class DeepgramProvider(AIProviderInterface):
             return def_enc, def_rate
         # Last resort: use our configured defaults
         try:
-            cfg_enc = self._canonicalize_encoding(self._get_config_value('output_encoding', 'linear16'))
-            cfg_rate = int(self._get_config_value('output_sample_rate_hz', 24000) or 24000)
+            cfg_enc = self._canonicalize_encoding(self._get_config_value('output_encoding', 'mulaw'))
+            cfg_rate = int(self._get_config_value('output_sample_rate_hz', 8000) or 8000)
             return cfg_enc, cfg_rate
         except Exception:
-            return 'linear16', 24000
+            return 'mulaw', 8000
 
     async def send_audio(self, audio_chunk: bytes):
         """Send caller audio to Deepgram in the declared input format.
@@ -593,7 +593,7 @@ class DeepgramProvider(AIProviderInterface):
             try:
                 self._is_audio_flowing = True
                 chunk_len = len(audio_chunk)
-                input_encoding = (self._get_config_value("input_encoding", None) or "linear16").strip().lower()
+                input_encoding = (self._get_config_value("input_encoding", None) or "mulaw").strip().lower()
                 target_rate = int(self._get_config_value("input_sample_rate_hz", 8000) or 8000)
                 # Infer actual inbound format and source rate from canonical 20 ms frame sizes
                 #  - 160 B ≈ μ-law @ 8 kHz (20 ms)

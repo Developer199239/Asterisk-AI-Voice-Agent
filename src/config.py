@@ -52,13 +52,17 @@ class LocalProviderConfig(BaseModel):
 
 class DeepgramProviderConfig(BaseModel):
     api_key: Optional[str] = None
+    enabled: bool = Field(default=True)
     model: str = Field(default="nova-2-general")
     tts_model: str = Field(default="aura-asteria-en")
     greeting: Optional[str] = None
     instructions: Optional[str] = None
-    input_encoding: str = Field(default="linear16")
-    input_sample_rate_hz: int = Field(default=24000)
+    input_encoding: str = Field(default="mulaw")
+    input_sample_rate_hz: int = Field(default=8000)
     continuous_input: bool = Field(default=True)
+    output_encoding: str = Field(default="mulaw")
+    output_sample_rate_hz: int = Field(default=8000)
+    allow_output_autodetect: bool = Field(default=False)
     base_url: str = Field(default="https://api.deepgram.com")
     tts_voice: Optional[str] = None
     stt_language: str = Field(default="en-US")
