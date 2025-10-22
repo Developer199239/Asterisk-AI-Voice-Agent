@@ -943,6 +943,20 @@ class StreamingPlaybackManager:
             and not sentinel_seen
             and jitter_buffer.empty()
         ):
+            # Adaptive low-buffer backoff: occasionally wait instead of emitting filler
+            try:
+                backoff = int(stream_info.get('empty_backoff_ticks', 0) or 0)
+            except Exception:
+                backoff = 0
+            if backoff < 3:
+                stream_info['empty_backoff_ticks'] = backoff + 1
+                try:
+                    logger.debug("Low-buffer backoff tick", call_id=call_id, streak=stream_info['empty_backoff_ticks'])
+                except Exception:
+                    pass
+                return "wait"
+            # After short backoff streak, send one filler and reset the streak
+            stream_info['empty_backoff_ticks'] = 0
             filler_byte = b"\xFF" if self._is_mulaw(target_fmt) else b"\x00"
             if pending:
                 pending_len = len(pending)
@@ -1069,6 +1083,13 @@ class StreamingPlaybackManager:
             return "error"
         if not filler:
             self._decrement_buffered_bytes(call_id, len(frame))
+            # Reset low-buffer backoff when sending real audio
+            try:
+                info = self.active_streams.get(call_id)
+                if info is not None and 'empty_backoff_ticks' in info:
+                    info['empty_backoff_ticks'] = 0
+            except Exception:
+                pass
         try:
             _STREAM_FRAMES_SENT_TOTAL.labels(call_id).inc(1)
         except Exception:
@@ -1102,6 +1123,12 @@ class StreamingPlaybackManager:
             return chunk
 
         try:
+            # Ensure chunk is bytes for audioop/mulaw conversion
+            if not isinstance(chunk, (bytes, bytearray)):
+                try:
+                    chunk = bytes(chunk)
+                except Exception:
+                    logger.debug("Non-bytes audio chunk could not be coerced", call_id=call_id, chunk_type=str(type(chunk)))
             stream_info = self.active_streams.get(call_id, {}) if call_id in self.active_streams else {}
 
             target_fmt = (
@@ -1161,14 +1188,20 @@ class StreamingPlaybackManager:
                 if guard_ok:
                     # μ-law path: decode → normalize → optional limit → re-encode
                     try:
+                        logger.debug("MULAW DECODE ATTEMPT", call_id=call_id, chunk_size=len(chunk), chunk_type=type(chunk).__name__)
                         back_pcm = mulaw_to_pcm16le(chunk)
-                    except Exception:
+                        logger.debug("MULAW DECODE SUCCESS", call_id=call_id, pcm_size=len(back_pcm))
+                    except Exception as e:
+                        logger.error("MULAW DECODE FAILED", call_id=call_id, error=str(e), error_type=type(e).__name__, chunk_size=len(chunk), exc_info=True)
                         back_pcm = b""
 
                     working_pcm = back_pcm
                     try:
                         if working_pcm and self.normalizer_enabled and self.normalizer_target_rms > 0:
                             working_pcm = self._apply_normalizer(working_pcm, self.normalizer_target_rms, self.normalizer_max_gain_db)
+                        else:
+                            if not working_pcm:
+                                logger.warning("EMPTY PCM AFTER DECODE - NORMALIZER SKIPPED", call_id=call_id)
                     except Exception:
                         logger.debug("Normalizer failed in μ-law path", call_id=call_id, exc_info=True)
                     try:
