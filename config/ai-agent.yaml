@@ -143,6 +143,7 @@ streaming:
   logging_level: "debug"      # Optional override for streaming logger verbosity
   egress_swap_mode: "auto"   # Auto: follow inbound slin16 swap probe for PCM16 byte order
   egress_force_mulaw: false
+  attack_ms: 20              # Gentle attack envelope to avoid clicks at segment joins
   # Maintain a single continuous stream across provider segments (prevents segment loss)
   continuous_stream: true
   # Audio normalizer (make-up gain before μ-law encode)
