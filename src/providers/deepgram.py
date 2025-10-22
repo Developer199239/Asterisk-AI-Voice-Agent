@@ -362,6 +362,12 @@ class DeepgramProvider(AIProviderInterface):
         except Exception:
             self._last_settings_minimal = None
         self._last_settings_payload = settings
+        # Log the exact Settings payload being sent to Deepgram
+        logger.info(
+            "Sending Settings to Deepgram Voice Agent",
+            call_id=self.call_id,
+            settings_payload=settings,
+        )
         await self.websocket.send(json.dumps(settings))
         # Mark settings sent; readiness only upon server response (ACK) or timeout
         self._settings_sent = True
