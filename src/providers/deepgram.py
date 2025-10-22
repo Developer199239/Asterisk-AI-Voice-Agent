@@ -901,20 +901,68 @@ class DeepgramProvider(AIProviderInterface):
                                             logger.info("Deepgram request id (ack)", call_id=self.call_id, request_id=rid)
                                         except Exception:
                                             pass
+                                # Enhanced ACK diagnostics
+                                out_cfg = {}
+                                in_cfg = {}
+                                if isinstance(audio_ack, dict):
+                                    out_cfg = audio_ack.get("output") or {}
+                                    in_cfg = audio_ack.get("input") or {}
+                                
+                                ack_encoding = out_cfg.get("encoding")
+                                ack_rate = out_cfg.get("sample_rate")
+                                ack_container = out_cfg.get("container")
+                                ack_bitrate = out_cfg.get("bitrate")
+                                
+                                in_encoding = in_cfg.get("encoding")
+                                in_rate = in_cfg.get("sample_rate")
+                                
+                                # Determine if settings were accepted
+                                requested_encoding = self._dg_output_encoding
+                                requested_rate = self._dg_output_rate
+                                settings_accepted = bool(ack_encoding and ack_rate)
+                                settings_match = (ack_encoding == requested_encoding and ack_rate == requested_rate)
+                                
                                 logger.info(
-                                    "Deepgram Agent ACK settings",
+                                    "🔧 DEEPGRAM ACK SETTINGS",
                                     call_id=self.call_id,
                                     request_id=getattr(self, "request_id", None),
-                                    ack_audio=audio_ack,
+                                    # What we requested
+                                    requested_output_encoding=requested_encoding,
+                                    requested_output_rate=requested_rate,
+                                    # What Deepgram acknowledged
+                                    ack_output_encoding=ack_encoding,
+                                    ack_output_rate=ack_rate,
+                                    ack_output_container=ack_container,
+                                    ack_output_bitrate=ack_bitrate,
+                                    ack_input_encoding=in_encoding,
+                                    ack_input_rate=in_rate,
+                                    # Validation
+                                    settings_accepted=settings_accepted,
+                                    settings_match=settings_match,
+                                    ack_empty=not audio_ack,
                                     event_type=(event_data.get("type") if isinstance(event_data, dict) else None),
-                                    ack_raw=event_data,
+                                    full_ack=event_data,
                                 )
+                                
+                                if not settings_accepted:
+                                    logger.warning(
+                                        "⚠️ DEEPGRAM REJECTED OUTPUT SETTINGS (empty ack_audio)",
+                                        call_id=self.call_id,
+                                        requested_encoding=requested_encoding,
+                                        requested_rate=requested_rate,
+                                        will_fallback_to_defaults=True,
+                                    )
+                                elif not settings_match:
+                                    logger.warning(
+                                        "⚠️ DEEPGRAM CHANGED OUTPUT SETTINGS",
+                                        call_id=self.call_id,
+                                        requested_encoding=requested_encoding,
+                                        requested_rate=requested_rate,
+                                        actual_encoding=ack_encoding,
+                                        actual_rate=ack_rate,
+                                    )
+                                
                                 try:
-                                    out_cfg = {}
-                                    if isinstance(audio_ack, dict):
-                                        out_cfg = audio_ack.get("output") or {}
-                                    ack_encoding = out_cfg.get("encoding")
-                                    ack_rate = out_cfg.get("sample_rate")
                                     self._update_output_format(ack_encoding, ack_rate, source="ack")
                                 except Exception:
                                     logger.debug("Deepgram ACK output parsing failed", exc_info=True)
@@ -1160,21 +1208,118 @@ class DeepgramProvider(AIProviderInterface):
                             await self.on_event(audio_event)
                         continue
                     else:
-                        # enc == mulaw: trust configuration and FORCE μ-law decode (no auto-detection)
-                        # Previous auto-detection was broken - A-law decode of μ-law data produces
-                        # garbage with high RMS, causing incorrect A-law selection
+                        # enc == mulaw: Comprehensive format detection and diagnostics
                         law = "mulaw"
                         pcm = b""
+                        
+                        # DIAGNOSTIC: Capture raw audio characteristics
+                        msg_len = len(message)
                         try:
-                            # Directly decode as μ-law since that's what we configured Deepgram to send
-                            pcm = mulaw_to_pcm16le(message)
-                            logger.debug(
-                                "Deepgram provider μ-law decode (forced from config)",
+                            # Sample first 16 bytes for hex analysis
+                            hex_sample = message[:16].hex() if msg_len >= 16 else message.hex()
+                            
+                            # Try multiple decode methods and measure quality
+                            pcm_mulaw = b""
+                            pcm_alaw = b""
+                            rms_mulaw = 0
+                            rms_alaw = 0
+                            
+                            # Method 1: Standard μ-law decode
+                            try:
+                                pcm_mulaw = mulaw_to_pcm16le(message)
+                                if pcm_mulaw:
+                                    rms_mulaw = audioop.rms(pcm_mulaw, 2)
+                            except Exception:
+                                pass
+                            
+                            # Method 2: A-law decode (in case mislabeled)
+                            try:
+                                pcm_alaw = audioop.alaw2lin(message, 2)
+                                if pcm_alaw:
+                                    rms_alaw = audioop.rms(pcm_alaw, 2)
+                            except Exception:
+                                pass
+                            
+                            # Calculate DC offset and peak for both
+                            dc_mulaw = 0
+                            peak_mulaw = 0
+                            dc_alaw = 0
+                            peak_alaw = 0
+                            
+                            if pcm_mulaw:
+                                try:
+                                    samples = array.array('h', pcm_mulaw)
+                                    if samples:
+                                        dc_mulaw = sum(samples) // len(samples)
+                                        peak_mulaw = max(abs(s) for s in samples)
+                                except Exception:
+                                    pass
+                            
+                            if pcm_alaw:
+                                try:
+                                    samples = array.array('h', pcm_alaw)
+                                    if samples:
+                                        dc_alaw = sum(samples) // len(samples)
+                                        peak_alaw = max(abs(s) for s in samples)
+                                except Exception:
+                                    pass
+                            
+                            # Log comprehensive diagnostics
+                            logger.info(
+                                "🔊 AUDIO FORMAT DIAGNOSTICS",
                                 call_id=self.call_id,
-                                bytes=len(message),
+                                msg_bytes=msg_len,
+                                hex_sample=hex_sample,
+                                mulaw_rms=rms_mulaw,
+                                mulaw_dc=dc_mulaw,
+                                mulaw_peak=peak_mulaw,
+                                alaw_rms=rms_alaw,
+                                alaw_dc=dc_alaw,
+                                alaw_peak=peak_alaw,
+                                rms_ratio=round(rms_alaw / max(rms_mulaw, 1), 2) if rms_mulaw > 0 else 0,
                             )
-                        except Exception:
-                            # Default to μ-law decode fallback
+                            
+                            # Choose best decode method based on quality metrics
+                            # Higher RMS usually indicates correct decoding
+                            if rms_mulaw > rms_alaw * 1.2:  # μ-law is clearly better
+                                pcm = pcm_mulaw
+                                law = "mulaw"
+                                logger.info(
+                                    "✅ Selected μ-law decode",
+                                    call_id=self.call_id,
+                                    reason="higher_rms",
+                                    mulaw_rms=rms_mulaw,
+                                    alaw_rms=rms_alaw,
+                                )
+                            elif rms_alaw > rms_mulaw * 1.2:  # A-law is clearly better
+                                pcm = pcm_alaw
+                                law = "alaw"
+                                logger.warning(
+                                    "⚠️ Selected A-law decode (Deepgram sent A-law despite mulaw request)",
+                                    call_id=self.call_id,
+                                    reason="higher_rms",
+                                    mulaw_rms=rms_mulaw,
+                                    alaw_rms=rms_alaw,
+                                )
+                            else:
+                                # Similar RMS - default to configured μ-law
+                                pcm = pcm_mulaw
+                                law = "mulaw"
+                                logger.debug(
+                                    "Using configured μ-law decode (similar quality)",
+                                    call_id=self.call_id,
+                                    mulaw_rms=rms_mulaw,
+                                    alaw_rms=rms_alaw,
+                                )
+                            
+                        except Exception as e:
+                            # Fallback: simple μ-law decode
+                            logger.error(
+                                "Audio diagnostics failed, using simple μ-law decode",
+                                call_id=self.call_id,
+                                error=str(e),
+                                exc_info=True,
+                            )
                             try:
                                 pcm = mulaw_to_pcm16le(message)
                             except Exception:
