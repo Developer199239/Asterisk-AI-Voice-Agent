@@ -177,7 +177,7 @@ class StreamingPlaybackManager:
         except Exception:
             self.limiter_headroom_ratio = 0.65
         try:
-            self.attack_ms: int = int(self.streaming_config.get('attack_ms', 25))  # fade-in at start of segment
+            self.attack_ms: int = 0  # DISABLED - was causing massive audio attenuation bug
         except Exception:
             self.attack_ms = 25
         
