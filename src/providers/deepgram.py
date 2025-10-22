@@ -92,6 +92,7 @@ class DeepgramProvider(AIProviderInterface):
         self._keep_alive_task: Optional[asyncio.Task] = None
         self._is_audio_flowing = False
         self.request_id: Optional[str] = None
+        self.session_id: Optional[str] = None
         self.call_id: Optional[str] = None
         self._in_audio_burst: bool = False
         self._first_output_chunk_logged: bool = False
@@ -898,12 +899,19 @@ class DeepgramProvider(AIProviderInterface):
                                 audio_ack = {}
                                 if isinstance(event_data, dict):
                                     audio_ack = event_data.get("audio") or {}
-                                    # Capture request_id from ACK/Welcome if header was missing
+                                    # Capture request_id and session_id from ACK/Welcome if header was missing
                                     rid = event_data.get("request_id")
+                                    sid = event_data.get("session_id")
                                     if rid and not getattr(self, "request_id", None):
                                         self.request_id = rid
                                         try:
                                             logger.info("Deepgram request id (ack)", call_id=self.call_id, request_id=rid)
+                                        except Exception:
+                                            pass
+                                    if sid and not getattr(self, "session_id", None):
+                                        self.session_id = sid
+                                        try:
+                                            logger.info("Deepgram session id (ack)", call_id=self.call_id, session_id=sid)
                                         except Exception:
                                             pass
                                 # Enhanced ACK diagnostics
@@ -988,14 +996,62 @@ class DeepgramProvider(AIProviderInterface):
                                 })
                         except Exception:
                             logger.debug("ProviderAudioFormat event emission failed", exc_info=True)
-                        # Always log control events
+                        # Always log control events with enhanced metadata
                         try:
                             et = event_data.get("type") if isinstance(event_data, dict) else None
+                            # Log all lifecycle events with full context
                             logger.info(
-                                "Deepgram control event",
+                                "Deepgram lifecycle event",
                                 call_id=self.call_id,
                                 event_type=et,
+                                request_id=getattr(self, "request_id", None),
+                                session_id=getattr(self, "session_id", None),
                             )
+                            
+                            # Enhanced logging for specific event types
+                            if et == "SettingsApplied":
+                                logger.info(
+                                    "✅ Deepgram SettingsApplied",
+                                    call_id=self.call_id,
+                                    request_id=getattr(self, "request_id", None),
+                                    session_id=getattr(self, "session_id", None),
+                                    settings=event_data,
+                                )
+                            elif et == "Welcome":
+                                logger.info(
+                                    "🔌 Deepgram Welcome",
+                                    call_id=self.call_id,
+                                    request_id=getattr(self, "request_id", None),
+                                    session_id=getattr(self, "session_id", None),
+                                )
+                            elif et == "UserStartedSpeaking":
+                                logger.info(
+                                    "🎤 Deepgram UserStartedSpeaking",
+                                    call_id=self.call_id,
+                                    request_id=getattr(self, "request_id", None),
+                                )
+                            elif et == "UserStoppedSpeaking":
+                                logger.info(
+                                    "🔇 Deepgram UserStoppedSpeaking",
+                                    call_id=self.call_id,
+                                    request_id=getattr(self, "request_id", None),
+                                )
+                            elif et == "FunctionCallRequest":
+                                logger.info(
+                                    "📞 Deepgram FunctionCallRequest",
+                                    call_id=self.call_id,
+                                    function_call_id=event_data.get("function_call_id"),
+                                    function_name=event_data.get("function_name"),
+                                    request_id=getattr(self, "request_id", None),
+                                )
+                            elif et == "ConnectionClosed":
+                                logger.info(
+                                    "🔌 Deepgram ConnectionClosed",
+                                    call_id=self.call_id,
+                                    request_id=getattr(self, "request_id", None),
+                                    code=event_data.get("code"),
+                                    reason=event_data.get("reason"),
+                                )
                             # Set ACK gate only on SettingsApplied (not Welcome)
                             if et == "SettingsApplied" and self._ack_event and not self._ack_event.is_set():
                                 try:
