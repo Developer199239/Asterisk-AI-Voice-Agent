@@ -284,6 +284,11 @@ class StreamingPlaybackManager:
             self.ulaw_fastpath_guard: bool = bool(self.streaming_config.get('ulaw_fastpath_guard', True))
         except Exception:
             self.ulaw_fastpath_guard = True
+        # Low-buffer adaptive backoff configuration
+        try:
+            self.empty_backoff_ticks_max: int = int(self.streaming_config.get('empty_backoff_ticks_max', 5))
+        except Exception:
+            self.empty_backoff_ticks_max = 5
         
         logger.info(
             "StreamingPlaybackManager initialized",
@@ -948,7 +953,7 @@ class StreamingPlaybackManager:
                 backoff = int(stream_info.get('empty_backoff_ticks', 0) or 0)
             except Exception:
                 backoff = 0
-            if backoff < 3:
+            if backoff < self.empty_backoff_ticks_max:
                 stream_info['empty_backoff_ticks'] = backoff + 1
                 try:
                     logger.debug("Low-buffer backoff tick", call_id=call_id, streak=stream_info['empty_backoff_ticks'])
@@ -1748,16 +1753,50 @@ class StreamingPlaybackManager:
 
         - Computes RMS of the current buffer and applies a scalar gain to approach
           target_rms, capped by max_gain_db.
-        - Clips to int16 range.
-        - Returns original input on any error.
+          - Clips to int16 range.
+          - Returns original input on any error.
         """
+        # Entry diagnostics
+        try:
+            logger.debug(
+                "NORMALIZER FUNCTION ENTRY",
+                pcm_bytes_len=(len(pcm_bytes) if pcm_bytes else 0),
+                target_rms=int(target_rms),
+                max_gain_db=float(max_gain_db),
+            )
+        except Exception:
+            pass
         if not pcm_bytes or target_rms <= 0:
+            try:
+                logger.debug(
+                    "NORMALIZER EARLY RETURN #1",
+                    empty_pcm=(not bool(pcm_bytes)),
+                    invalid_target=bool(target_rms <= 0),
+                )
+            except Exception:
+                pass
             return pcm_bytes
         try:
             import array, math
             buf = array.array('h')
             buf.frombytes(pcm_bytes)
+            try:
+                logger.debug(
+                    "NORMALIZER BUFFER DECODED",
+                    buf_itemsize=int(buf.itemsize),
+                    buf_len=int(len(buf)),
+                )
+            except Exception:
+                pass
             if buf.itemsize != 2 or len(buf) == 0:
+                try:
+                    logger.debug(
+                        "NORMALIZER EARLY RETURN #2",
+                        wrong_itemsize=bool(buf.itemsize != 2),
+                        empty_buffer=bool(len(buf) == 0),
+                    )
+                except Exception:
+                    pass
                 return pcm_bytes
             # Compute RMS
             acc = 0.0
