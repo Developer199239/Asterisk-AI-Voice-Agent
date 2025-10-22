@@ -1201,6 +1201,18 @@ class StreamingPlaybackManager:
                         back_pcm = b""
 
                     working_pcm = back_pcm
+                    
+                    # Trim leading silence before normalization
+                    if working_pcm:
+                        original_size = len(working_pcm)
+                        working_pcm = self._trim_leading_silence(working_pcm, threshold_rms=100)
+                        if len(working_pcm) < original_size:
+                            logger.debug("SILENCE TRIMMING APPLIED",
+                                        call_id=call_id,
+                                        original_bytes=original_size,
+                                        trimmed_bytes=len(working_pcm),
+                                        removed_bytes=original_size - len(working_pcm))
+                    
                     try:
                         logger.debug(
                             "NORMALIZER CONDITION CHECK (ulaw fast-path)",
@@ -1747,6 +1759,66 @@ class StreamingPlaybackManager:
     def _apply_soft_limiter(self, pcm_bytes: bytes, headroom_ratio: float = 0.8) -> bytes:
         """DISABLED - limiter was causing unnecessary audio processing."""
         return pcm_bytes
+
+    def _trim_leading_silence(self, pcm_bytes: bytes, threshold_rms: int = 100) -> bytes:
+        """
+        Remove silent frames from the start of audio chunk.
+        Returns trimmed audio or original if no leading silence detected.
+        
+        Args:
+            pcm_bytes: PCM16 LE audio data
+            threshold_rms: RMS threshold below which audio is considered silent (default 100)
+        
+        Returns:
+            Trimmed PCM16 bytes with leading silence removed
+        """
+        if not pcm_bytes or len(pcm_bytes) < 320:  # Less than 20ms at 8kHz
+            return pcm_bytes
+        
+        try:
+            import array
+            import math
+            
+            buf = array.array('h')
+            buf.frombytes(pcm_bytes)
+            
+            # Process in 20ms frames (160 samples at 8kHz)
+            frame_size = 160
+            
+            for i in range(0, len(buf), frame_size):
+                frame = buf[i:i+frame_size]
+                if len(frame) < frame_size:
+                    break
+                
+                # Calculate frame RMS
+                acc = sum(float(s) * float(s) for s in frame)
+                frame_rms = int(math.sqrt(acc / len(frame)))
+                
+                if frame_rms > threshold_rms:  # Found real audio
+                    if i > 0:
+                        # Trim everything before this frame
+                        trimmed = buf[i:]
+                        trimmed_ms = int(i / 8)  # 8 samples per ms at 8kHz
+                        logger.info("SILENCE TRIMMED FROM CHUNK",
+                                   trimmed_samples=i,
+                                   trimmed_ms=trimmed_ms,
+                                   first_audio_rms=frame_rms,
+                                   original_bytes=len(pcm_bytes),
+                                   trimmed_bytes=len(trimmed) * 2)
+                        return trimmed.tobytes()
+                    else:
+                        # No leading silence
+                        return pcm_bytes
+            
+            # All frames were silent
+            logger.warning("ENTIRE CHUNK SILENT",
+                          chunk_size=len(buf),
+                          threshold=threshold_rms)
+            return pcm_bytes
+            
+        except Exception as e:
+            logger.error("SILENCE TRIM FAILED", error=str(e), exc_info=True)
+            return pcm_bytes
 
     def _apply_normalizer(self, pcm_bytes: bytes, target_rms: int, max_gain_db: float) -> bytes:
         """Apply simple RMS-based make-up gain to PCM16 LE audio.
