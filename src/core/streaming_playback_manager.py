@@ -1764,10 +1764,11 @@ class StreamingPlaybackManager:
             for s in buf:
                 acc += float(s) * float(s)
             rms = math.sqrt(acc / float(len(buf))) if len(buf) > 0 else 0.0
-            if rms <= 1.0:
-                return pcm_bytes
+            # Do NOT early-return for low RMS; boost very quiet audio too.
+            # Prevent divide-by-zero by clamping effective RMS to >= 1.0
+            effective_rms = max(1.0, float(rms))
             # Compute linear gain toward target, limited by max_gain_db
-            desired = float(target_rms) / float(rms)
+            desired = float(target_rms) / effective_rms
             max_lin = math.pow(10.0, float(max_gain_db) / 20.0)
             gain = min(desired, max_lin)
             # Diagnostics: always log RMS/gain decision for RCA
