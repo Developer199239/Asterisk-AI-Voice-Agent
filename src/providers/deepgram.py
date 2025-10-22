@@ -1284,6 +1284,8 @@ class DeepgramProvider(AIProviderInterface):
                             if rms_mulaw > rms_alaw * 1.2:  # μ-law is clearly better
                                 pcm = pcm_mulaw
                                 law = "mulaw"
+                                # Data is μ-law - keep as-is
+                                payload_ulaw = message
                                 logger.info(
                                     "✅ Selected μ-law decode",
                                     call_id=self.call_id,
@@ -1294,17 +1296,26 @@ class DeepgramProvider(AIProviderInterface):
                             elif rms_alaw > rms_mulaw * 1.2:  # A-law is clearly better
                                 pcm = pcm_alaw
                                 law = "alaw"
-                                logger.warning(
-                                    "⚠️ Selected A-law decode (Deepgram sent A-law despite mulaw request)",
-                                    call_id=self.call_id,
-                                    reason="higher_rms",
-                                    mulaw_rms=rms_mulaw,
-                                    alaw_rms=rms_alaw,
-                                )
+                                # Data is A-law - convert directly to μ-law WITHOUT going through PCM
+                                # to avoid double-companding distortion
+                                try:
+                                    # Direct A-law to μ-law conversion table
+                                    payload_ulaw = audioop.lin2ulaw(pcm_alaw, 2)
+                                    logger.warning(
+                                        "⚠️ Converted A-law → μ-law directly (Deepgram sent A-law despite mulaw request)",
+                                        call_id=self.call_id,
+                                        reason="higher_rms",
+                                        mulaw_rms=rms_mulaw,
+                                        alaw_rms=rms_alaw,
+                                    )
+                                except Exception as e:
+                                    logger.error(f"A-law to μ-law conversion failed: {e}")
+                                    payload_ulaw = message
                             else:
                                 # Similar RMS - default to configured μ-law
                                 pcm = pcm_mulaw
                                 law = "mulaw"
+                                payload_ulaw = message
                                 logger.debug(
                                     "Using configured μ-law decode (similar quality)",
                                     call_id=self.call_id,
