@@ -1197,9 +1197,24 @@ class StreamingPlaybackManager:
 
                     working_pcm = back_pcm
                     try:
+                        logger.debug(
+                            "NORMALIZER CONDITION CHECK (ulaw fast-path)",
+                            call_id=call_id,
+                            working_pcm_size=(len(working_pcm) if working_pcm else 0),
+                            normalizer_enabled=bool(self.normalizer_enabled),
+                            target_rms=int(self.normalizer_target_rms),
+                        )
                         if working_pcm and self.normalizer_enabled and self.normalizer_target_rms > 0:
+                            logger.debug("ENTERING NORMALIZER (ulaw fast-path)", call_id=call_id)
                             working_pcm = self._apply_normalizer(working_pcm, self.normalizer_target_rms, self.normalizer_max_gain_db)
                         else:
+                            logger.warning(
+                                "NORMALIZER SKIPPED - WHY? (ulaw fast-path)",
+                                call_id=call_id,
+                                working_pcm_size=(len(working_pcm) if working_pcm else 0),
+                                normalizer_enabled=bool(self.normalizer_enabled),
+                                target_rms=int(self.normalizer_target_rms),
+                            )
                             if not working_pcm:
                                 logger.warning("EMPTY PCM AFTER DECODE - NORMALIZER SKIPPED", call_id=call_id)
                     except Exception:
@@ -1436,8 +1451,23 @@ class StreamingPlaybackManager:
                     pass
                 # Apply make-up gain normalization before limiter if enabled
                 try:
+                    logger.debug(
+                        "NORMALIZER CONDITION CHECK (pcm->ulaw)",
+                        call_id=call_id,
+                        normalizer_enabled=bool(self.normalizer_enabled),
+                        target_rms=int(self.normalizer_target_rms),
+                        pcm_size=len(working) if working else 0,
+                    )
                     if self.normalizer_enabled and self.normalizer_target_rms > 0:
+                        logger.debug("ENTERING NORMALIZER (pcm->ulaw)", call_id=call_id)
                         working = self._apply_normalizer(working, self.normalizer_target_rms, self.normalizer_max_gain_db)
+                    else:
+                        logger.warning(
+                            "NORMALIZER SKIPPED - WHY? (pcm->ulaw)",
+                            call_id=call_id,
+                            normalizer_enabled=bool(self.normalizer_enabled),
+                            target_rms=int(self.normalizer_target_rms),
+                        )
                 except Exception:
                     logger.debug("Normalizer failed; continuing without gain", call_id=call_id, exc_info=True)
                 if self.limiter_enabled:
