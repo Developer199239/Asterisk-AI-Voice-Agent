@@ -255,7 +255,7 @@ class DeepgramProvider(AIProviderInterface):
         input_encoding = self._get_config_value('input_encoding', None) or 'ulaw'
         input_sample_rate = int(self._get_config_value('input_sample_rate_hz', 8000) or 8000)
         # Choose output based on voice capabilities (fallback to configured defaults)
-        output_encoding = 'linear16'
+        output_encoding = self._original_output_encoding
         output_sample_rate = int(self._original_output_rate or 24000)
         self._dg_output_encoding = self._canonicalize_encoding(output_encoding)
         self._dg_output_rate = output_sample_rate
