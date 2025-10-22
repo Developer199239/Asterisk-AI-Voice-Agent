@@ -309,30 +309,35 @@ class DeepgramProvider(AIProviderInterface):
         # Always include explicit audio.output so provider emits the format we expect
         include_output_override = True
 
+        # Use Twilio's exact working configuration
         settings = {
             "type": "Settings",
             "audio": {
-            "input": { "encoding": input_format, "sample_rate": int(input_sample_rate) }
+                "input": { "encoding": "mulaw", "sample_rate": 8000 },
+                "output": { "encoding": "mulaw", "sample_rate": 8000, "container": "none" }
             },
             "agent": {
-            "greeting": greeting_val,
-            "language": "en-US",
-            "listen": { "provider": { "type": "deepgram", "model": listen_model } },
-            "think": { "provider": { "type": "open_ai", "model": think_model }, "prompt": think_prompt },
-            "speak": {
-                "provider": { "type": "deepgram", "model": speak_model }
-            }
+                "language": "en",  # Twilio uses "en" not "en-US"
+                "listen": { 
+                    "provider": { 
+                        "type": "deepgram", 
+                        "model": "nova-3"  # Twilio uses nova-3
+                    } 
+                },
+                "think": { 
+                    "provider": { 
+                        "type": "open_ai", 
+                        "model": "gpt-4o-mini",  # Twilio uses gpt-4o-mini
+                        "temperature": 0.7
+                    }, 
+                    "prompt": think_prompt 
+                },
+                "speak": {
+                    "provider": { "type": "deepgram", "model": speak_model }
+                },
+                "greeting": greeting_val
             }
         }
-        if include_output_override:
-            try:
-                settings["audio"]["output"] = { 
-                    "encoding": self._dg_output_encoding, 
-                    "sample_rate": int(self._dg_output_rate),
-                    "container": "none"
-                }
-            except Exception:
-                pass
         if include_speak_override:
             try:
                 settings["agent"]["speak"]["audio"] = {
@@ -1208,153 +1213,23 @@ class DeepgramProvider(AIProviderInterface):
                             await self.on_event(audio_event)
                         continue
                     else:
-                        # enc == mulaw: Comprehensive format detection and diagnostics
-                        law = "mulaw"
-                        pcm = b""
+                        # enc == mulaw: Use Twilio's approach - treat as mulaw directly
+                        # Deepgram Voice Agent with mulaw settings sends mulaw data
+                        payload_ulaw = message  # Use raw mulaw data directly
                         
-                        # DIAGNOSTIC: Capture raw audio characteristics
-                        msg_len = len(message)
-                        try:
-                            # Sample first 16 bytes for hex analysis
-                            hex_sample = message[:16].hex() if msg_len >= 16 else message.hex()
-                            
-                            # Try multiple decode methods and measure quality
-                            pcm_mulaw = b""
-                            pcm_alaw = b""
-                            rms_mulaw = 0
-                            rms_alaw = 0
-                            
-                            # Method 1: Standard μ-law decode
-                            try:
-                                pcm_mulaw = mulaw_to_pcm16le(message)
-                                if pcm_mulaw:
-                                    rms_mulaw = audioop.rms(pcm_mulaw, 2)
-                            except Exception:
-                                pass
-                            
-                            # Method 2: A-law decode (in case mislabeled)
-                            try:
-                                pcm_alaw = audioop.alaw2lin(message, 2)
-                                if pcm_alaw:
-                                    rms_alaw = audioop.rms(pcm_alaw, 2)
-                            except Exception:
-                                pass
-                            
-                            # Calculate DC offset and peak for both
-                            dc_mulaw = 0
-                            peak_mulaw = 0
-                            dc_alaw = 0
-                            peak_alaw = 0
-                            
-                            if pcm_mulaw:
-                                try:
-                                    samples = array.array('h', pcm_mulaw)
-                                    if samples:
-                                        dc_mulaw = sum(samples) // len(samples)
-                                        peak_mulaw = max(abs(s) for s in samples)
-                                except Exception:
-                                    pass
-                            
-                            if pcm_alaw:
-                                try:
-                                    samples = array.array('h', pcm_alaw)
-                                    if samples:
-                                        dc_alaw = sum(samples) // len(samples)
-                                        peak_alaw = max(abs(s) for s in samples)
-                                except Exception:
-                                    pass
-                            
-                            # Log comprehensive diagnostics
+                        # Log first chunk only for diagnostics
+                        if not self._first_output_chunk_logged:
                             logger.info(
-                                "🔊 AUDIO FORMAT DIAGNOSTICS",
+                                "Deepgram AgentAudio first chunk (mulaw)",
                                 call_id=self.call_id,
-                                msg_bytes=msg_len,
-                                hex_sample=hex_sample,
-                                mulaw_rms=rms_mulaw,
-                                mulaw_dc=dc_mulaw,
-                                mulaw_peak=peak_mulaw,
-                                alaw_rms=rms_alaw,
-                                alaw_dc=dc_alaw,
-                                alaw_peak=peak_alaw,
-                                rms_ratio=round(rms_alaw / max(rms_mulaw, 1), 2) if rms_mulaw > 0 else 0,
+                                bytes=len(message),
+                                encoding="mulaw",
+                                sample_rate=8000,
                             )
-                            
-                            # Choose best decode method based on quality metrics
-                            # Higher RMS usually indicates correct decoding
-                            if rms_mulaw > rms_alaw * 1.2:  # μ-law is clearly better
-                                pcm = pcm_mulaw
-                                law = "mulaw"
-                                # Data is μ-law - keep as-is
-                                payload_ulaw = message
-                                logger.info(
-                                    "✅ Selected μ-law decode",
-                                    call_id=self.call_id,
-                                    reason="higher_rms",
-                                    mulaw_rms=rms_mulaw,
-                                    alaw_rms=rms_alaw,
-                                )
-                            elif rms_alaw > rms_mulaw * 1.2:  # A-law is clearly better
-                                pcm = pcm_alaw
-                                law = "alaw"
-                                # Data is A-law - Deepgram is sending 16kHz but claiming 8kHz!
-                                # Need to downsample from 16kHz to 8kHz
-                                try:
-                                    # Assume 16kHz input (Deepgram bug - they send 16kHz despite API saying 8kHz)
-                                    from src.audio.resampler import resample_audio
-                                    pcm_8k, _ = resample_audio(pcm_alaw, 16000, 8000, state=None)
-                                    payload_ulaw = audioop.lin2ulaw(pcm_8k, 2)
-                                    logger.warning(
-                                        "⚠️ Converted A-law 16kHz → μ-law 8kHz (Deepgram sent 16kHz A-law despite 8kHz request)",
-                                        call_id=self.call_id,
-                                        reason="higher_rms",
-                                        input_samples=len(pcm_alaw)//2,
-                                        output_samples=len(pcm_8k)//2,
-                                        mulaw_rms=rms_mulaw,
-                                        alaw_rms=rms_alaw,
-                                    )
-                                except Exception as e:
-                                    logger.error(f"A-law 16kHz→8kHz conversion failed: {e}", exc_info=True)
-                                    # Fallback: try without resampling
-                                    try:
-                                        payload_ulaw = audioop.lin2ulaw(pcm_alaw, 2)
-                                    except:
-                                        payload_ulaw = message
-                            else:
-                                # Similar RMS - default to configured μ-law
-                                pcm = pcm_mulaw
-                                law = "mulaw"
-                                payload_ulaw = message
-                                logger.debug(
-                                    "Using configured μ-law decode (similar quality)",
-                                    call_id=self.call_id,
-                                    mulaw_rms=rms_mulaw,
-                                    alaw_rms=rms_alaw,
-                                )
-                            
-                        except Exception as e:
-                            # Fallback: simple μ-law decode
-                            logger.error(
-                                "Audio diagnostics failed, using simple μ-law decode",
-                                call_id=self.call_id,
-                                error=str(e),
-                                exc_info=True,
-                            )
-                            try:
-                                pcm = mulaw_to_pcm16le(message)
-                            except Exception:
-                                pcm = b""
-                        if rate != 8000 and pcm:
-                            try:
-                                pcm, _ = resample_audio(pcm, rate, 8000, state=None)
-                                rate = 8000
-                            except Exception:
-                                logger.warning("Deepgram μ-law decode/resample failed; emitting original μ-law", exc_info=True)
-                                payload_ulaw = message
-                        if not payload_ulaw:
-                            try:
-                                payload_ulaw = pcm16le_to_mulaw(pcm) if pcm else message
-                            except Exception:
-                                payload_ulaw = message
+                            self._first_output_chunk_logged = True
+                        
+                        # Twilio approach: Use mulaw data as-is, no conversion needed
+                        # Already set: payload_ulaw = message
 
                     audio_event = {
                         'type': 'AgentAudio',
