@@ -131,7 +131,7 @@ barge_in:
 
 # Streaming configuration (for downstream_mode=stream)
 streaming:
-  sample_rate: 16000          # Output sample rate for streaming audio (μ-law 8kHz path)
+  sample_rate: 8000           # Output sample rate for streaming audio (telephony μ-law baseline)
   jitter_buffer_ms: 520      # Target depth; 520ms keeps at least min_start + spare in buffer
   keepalive_interval_ms: 5000 # Keepalive interval for streaming connections
   connection_timeout_ms: 10000 # Connection timeout for streaming
