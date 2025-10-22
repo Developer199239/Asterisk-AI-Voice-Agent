@@ -326,7 +326,11 @@ class DeepgramProvider(AIProviderInterface):
         }
         if include_output_override:
             try:
-                settings["audio"]["output"] = { "encoding": self._dg_output_encoding, "sample_rate": int(self._dg_output_rate) }
+                settings["audio"]["output"] = { 
+                    "encoding": self._dg_output_encoding, 
+                    "sample_rate": int(self._dg_output_rate),
+                    "container": "none"
+                }
             except Exception:
                 pass
         if include_speak_override:
@@ -335,6 +339,7 @@ class DeepgramProvider(AIProviderInterface):
                     "format": {
                         "encoding": self._dg_output_encoding,
                         "sample_rate": int(self._dg_output_rate),
+                        "container": "none"
                     }
                 }
             except Exception:
