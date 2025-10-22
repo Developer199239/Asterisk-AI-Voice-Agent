@@ -1770,8 +1770,23 @@ class StreamingPlaybackManager:
             desired = float(target_rms) / float(rms)
             max_lin = math.pow(10.0, float(max_gain_db) / 20.0)
             gain = min(desired, max_lin)
+            # Diagnostics: always log RMS/gain decision for RCA
+            try:
+                logger.debug(
+                    "NORMALIZER RMS CHECK",
+                    current_rms=int(rms),
+                    target_rms=int(target_rms),
+                    calculated_gain=round(gain, 3),
+                    will_skip=bool(gain <= 1.01),
+                )
+            except Exception:
+                pass
             if gain <= 1.01:
                 # Avoid tiny changes to reduce CPU
+                try:
+                    logger.debug("NORMALIZER SKIPPED - gain too small", gain=round(gain, 3), current_rms=int(rms))
+                except Exception:
+                    pass
                 return pcm_bytes
             try:
                 gain_db = 20.0 * math.log10(max(1e-6, gain))
