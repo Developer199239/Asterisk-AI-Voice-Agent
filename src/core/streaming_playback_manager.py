@@ -1169,6 +1169,22 @@ class StreamingPlaybackManager:
                 and src_rate == target_rate
             ):
                 self._resample_states[call_id] = None
+                
+                # NEW: Direct passthrough - skip all processing when source and target are both mulaw
+                # This eliminates decode/normalize/encode cycle that degrades quality and adds latency
+                try:
+                    logger.info(
+                        "🚀 μ-law PASSTHROUGH - Skipping all processing",
+                        call_id=call_id,
+                        chunk_bytes=len(chunk),
+                        source=src_encoding_raw,
+                        target=target_fmt,
+                        sample_rate=src_rate,
+                    )
+                except Exception:
+                    pass
+                return chunk  # Return original Deepgram mulaw unchanged
+                
                 # μ-law fast-path sanity guard: verify round-trip μ-law -> PCM16 -> μ-law preserves bytes
                 guard_ok = True
                 try:
@@ -1319,6 +1335,39 @@ class StreamingPlaybackManager:
                         logger.debug("Fast-path tap capture failed", call_id=call_id, exc_info=True)
                     return ulaw_bytes
                 # If guard failed, fall through to conversion path below
+            
+            # NEW: Fast path for μ-law → PCM16 (AudioSocket requires PCM16)
+            # Just decode, skip attack/normalize/limiter/encode
+            if (
+                self._is_mulaw(src_encoding_raw)
+                and target_fmt in ("slin16", "linear16", "pcm16")
+                and src_rate == target_rate
+            ):
+                self._resample_states[call_id] = None
+                try:
+                    logger.info(
+                        "🎯 μ-law → PCM16 FAST PATH - Simple decode only",
+                        call_id=call_id,
+                        chunk_bytes=len(chunk),
+                        source=src_encoding_raw,
+                        target=target_fmt,
+                        sample_rate=src_rate,
+                    )
+                except Exception:
+                    pass
+                # Simple decode: mulaw → PCM16
+                try:
+                    pcm16_bytes = mulaw_to_pcm16le(chunk)
+                    return pcm16_bytes
+                except Exception as e:
+                    logger.error(
+                        "μ-law decode failed in fast path",
+                        call_id=call_id,
+                        error=str(e),
+                        exc_info=True,
+                    )
+                    return chunk  # Fallback to original
+            
             if (
                 src_encoding_raw in ("slin16", "linear16", "pcm16")
                 and target_fmt in ("slin16", "linear16", "pcm16")
