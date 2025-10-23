@@ -1,11 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 # Load environment variables from .env if present (local only; not committed)
+# Prefer explicit ENV_FILE; otherwise try project .env, then config/.env
 ENV_FILE="${ENV_FILE:-.env}"
+if [ ! -f "$ENV_FILE" ] && [ -f "config/.env" ]; then
+  ENV_FILE="config/.env"
+fi
 if [ -f "$ENV_FILE" ]; then
+  echo "[RCA] Loading env from $ENV_FILE"
   set -a
   . "$ENV_FILE"
   set +a
+else
+  echo "[RCA] No .env found (ENV_FILE=$ENV_FILE) — proceeding without local credentials"
 fi
 SERVER_USER="${SERVER_USER:-root}"
 SERVER_HOST="${SERVER_HOST:-voiprnd.nemtclouddispatch.com}"
@@ -104,6 +111,12 @@ scp "$SERVER_USER@$SERVER_HOST:$PROJECT_PATH/config/ai-agent.yaml" "$BASE/config
 # Fetch Asterisk dialplan custom file and full log for context
 scp "$SERVER_USER@$SERVER_HOST:/etc/asterisk/extensions_custom.conf" "$BASE/config/" 2>/dev/null || echo "[WARN] Failed to fetch extensions_custom.conf"
 scp "$SERVER_USER@$SERVER_HOST:/var/log/asterisk/full" "$BASE/logs/asterisk-full.log" 2>/dev/null || echo "[WARN] Failed to fetch asterisk full log"
+
+# Copy container log files from /app/logs when available
+CONTAINER_LOG_TMP="/tmp/ai-engine-logs-${CID:-latest}"
+ssh "$SERVER_USER@$SERVER_HOST" "mkdir -p '$CONTAINER_LOG_TMP' && docker cp ai_engine:/app/logs/. '$CONTAINER_LOG_TMP'/ 2>/dev/null" || echo "[WARN] Failed to copy logs from container"
+scp -r "$SERVER_USER@$SERVER_HOST:$CONTAINER_LOG_TMP" "$BASE/logs/" 2>/dev/null || echo "[WARN] Failed to download container logs"
+ssh "$SERVER_USER@$SERVER_HOST" "rm -rf '$CONTAINER_LOG_TMP'" || true
 
 # Aggregate audio quality metrics and produce unified summary + narrative
 BASE_DIR="$BASE" python3 - <<'PY'
@@ -333,9 +346,23 @@ summary_txt.write_text("\n".join(lines))
 PY
 
 # Fetch Deepgram usage for this call when credentials are available (robust Python fallback).
-DG_PROJECT_ID="${DG_PROJECT_ID:-}"
+# Normalize env var names to ensure presence when only DEEPGRAM_PROJECT_ID is set in .env
+DG_PROJECT_ID="${DG_PROJECT_ID:-${DEEPGRAM_PROJECT_ID:-}}"
+export DG_PROJECT_ID
 DEEPGRAM_API_KEY="${DEEPGRAM_API_KEY:-}"
 DEEPGRAM_LOG_API_KEY="${DEEPGRAM_LOG_API_KEY:-}"
+
+# Safe diagnostics (do not print secrets)
+if [ -n "$DG_PROJECT_ID" ]; then
+  echo "[RCA] Deepgram project id detected from env"
+else
+  echo "[RCA] WARN: Deepgram project id not found in env (set DG_PROJECT_ID or DEEPGRAM_PROJECT_ID)"
+fi
+if [ -n "$DEEPGRAM_LOG_API_KEY" ] || [ -n "$DEEPGRAM_API_KEY" ]; then
+  echo "[RCA] Deepgram API key detected from env"
+else
+  echo "[RCA] WARN: Deepgram API key not found in env (set DEEPGRAM_LOG_API_KEY or DEEPGRAM_API_KEY)"
+fi
 if [ -n "$DEEPGRAM_API_KEY" ] || [ -n "$DEEPGRAM_LOG_API_KEY" ]; then
   RCA_BASE="$BASE" DG_PROJECT_ID="$DG_PROJECT_ID" DEEPGRAM_API_KEY="$DEEPGRAM_API_KEY" DEEPGRAM_LOG_API_KEY="$DEEPGRAM_LOG_API_KEY" DG_REQUEST_ID="${DG_REQUEST_ID:-}" DEEPGRAM_REQUEST_ID="${DEEPGRAM_REQUEST_ID:-}" python3 - <<'PY'
 import os, re, json, datetime as dt, urllib.request, pathlib, sys

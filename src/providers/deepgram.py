@@ -5,6 +5,7 @@ import websockets
 import time
 import array
 import aiohttp
+import re
 from typing import Callable, Optional, List, Dict, Any
 import websockets.exceptions
 
@@ -53,6 +54,47 @@ class DeepgramProvider(AIProviderInterface):
             return getattr(self.config, key, default)
         except Exception:
             return default
+
+    def _extract_request_session_ids(self, payload: Any) -> tuple[Optional[str], Optional[str]]:
+        rid: Optional[str] = None
+        sid: Optional[str] = None
+        try:
+            if isinstance(payload, dict):
+                v = payload.get("request_id")
+                if isinstance(v, str) and not rid:
+                    rid = v
+                v = payload.get("session_id") or payload.get("sessionId")
+                if isinstance(v, str) and not sid:
+                    sid = v
+                hdrs = payload.get("headers") or {}
+                if isinstance(hdrs, dict) and not rid:
+                    hv = hdrs.get("x-request-id") or hdrs.get("X-Request-Id")
+                    if isinstance(hv, str):
+                        rid = hv
+                sess = payload.get("session") or {}
+                if isinstance(sess, dict) and not sid:
+                    sv = sess.get("id") or sess.get("session_id")
+                    if isinstance(sv, str):
+                        sid = sv
+            def walk(obj: Any):
+                nonlocal rid, sid
+                if isinstance(obj, dict):
+                    for k, v in obj.items():
+                        kl = str(k).lower()
+                        if rid is None and "request" in kl and isinstance(v, str) and re.fullmatch(r"[0-9a-fA-F-]{36}", v or ""):
+                            rid = v
+                        if sid is None and (kl == "session_id" or kl == "sessionid") and isinstance(v, str):
+                            sid = v
+                        if isinstance(v, (dict, list)):
+                            walk(v)
+                elif isinstance(obj, list):
+                    for it in obj:
+                        walk(it)
+            if rid is None or sid is None:
+                walk(payload)
+        except Exception:
+            pass
+        return rid, sid
 
     def _update_output_format(self, encoding: Optional[str], sample_rate: Optional[Any], source: str = "runtime") -> None:
         try:
@@ -892,6 +934,22 @@ class DeepgramProvider(AIProviderInterface):
                     try:
                         event_data = json.loads(message)
                         et = event_data.get("type") if isinstance(event_data, dict) else None
+                        try:
+                            erid, esid = self._extract_request_session_ids(event_data)
+                            if erid and not getattr(self, "request_id", None):
+                                self.request_id = erid
+                                try:
+                                    logger.info("Deepgram request id (event)", call_id=self.call_id, request_id=erid)
+                                except Exception:
+                                    pass
+                            if esid and not getattr(self, "session_id", None):
+                                self.session_id = esid
+                                try:
+                                    logger.info("Deepgram session id (event)", call_id=self.call_id, session_id=esid)
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
                         # Mark readiness only upon SettingsApplied to avoid pre-ACK races
                         if et == "SettingsApplied":
                             self._ready_to_stream = True
