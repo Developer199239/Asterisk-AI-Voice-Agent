@@ -3279,7 +3279,9 @@ class Engine:
                     )
                 except Exception:
                     pass
-                wire_rate = session.transport_profile.sample_rate or rate or getattr(self.config.streaming, "sample_rate", 16000)
+                # Use streaming config rate for provider audio, not transport_profile which can be
+                # corrupted by inbound audio detection (user's 8kHz vs provider's 16kHz)
+                wire_rate = getattr(self.config.streaming, "sample_rate", 16000) or rate or 16000
                 try:
                     transport_encoding = self._canonicalize_encoding(session.transport_profile.format)
                 except Exception:
