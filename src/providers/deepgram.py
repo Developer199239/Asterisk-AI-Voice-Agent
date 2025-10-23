@@ -865,14 +865,18 @@ class DeepgramProvider(AIProviderInterface):
                 f"Deepgram expects PCM16 input but audiosocket.format is {audiosocket_format}. "
                 "Set audiosocket.format=slin16 or change deepgram.input_encoding."
             )
-        if streaming_encoding not in ("ulaw", "mulaw", "g711_ulaw", "mu-law"):
+        # Check streaming alignment with actual Deepgram output config (not hardcoded assumptions)
+        dg_out_enc = self._canonicalize_encoding(self._dg_output_encoding or "mulaw")
+        dg_out_rate = int(self._dg_output_rate or 8000)
+        
+        if streaming_encoding != dg_out_enc:
             issues.append(
-                f"Streaming manager emits {streaming_encoding} frames but Deepgram output_encoding is μ-law. "
-                "Ensure downstream playback converts the provider audio back to μ-law."
+                f"Streaming manager emits {streaming_encoding} frames but Deepgram output_encoding is {dg_out_enc}. "
+                f"Ensure downstream playback matches Deepgram output format."
             )
-        if streaming_sample_rate != 8000:
+        if streaming_sample_rate != dg_out_rate:
             issues.append(
-                f"Streaming sample rate is {streaming_sample_rate} Hz but Deepgram output_sample_rate is 8000 Hz."
+                f"Streaming sample rate is {streaming_sample_rate} Hz but Deepgram output_sample_rate is {dg_out_rate} Hz."
             )
         return issues
 
