@@ -224,12 +224,12 @@ providers:
     tts_model: "aura-2-thalia-en"
     greeting: "Hello, how can I help you today?"
     instructions: "Voice assistant. Answer in 5-8 words. Be direct. Expand only if asked."
-    input_encoding: "mulaw"
+    input_encoding: "linear16"
     input_sample_rate_hz: 8000
     continuous_input: true        # Stream audio continuously for best responsiveness
                                   # TIP: Keep this true for real-time conversations
     allow_output_autodetect: false
-    output_encoding: "mulaw"
+    output_encoding: "linear16"
     output_sample_rate_hz: 8000
   openai:
     enabled: false
