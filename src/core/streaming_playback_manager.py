@@ -646,6 +646,7 @@ class StreamingPlaybackManager:
                 'tap_first_window_pre': bytearray(),
                 'tap_first_window_post': bytearray(),
                 'tap_first_window_done': False,
+                'segments_played': 0,
             }
             self._startup_ready[call_id] = bool(initial_startup_ready)
             try:
@@ -1004,6 +1005,26 @@ class StreamingPlaybackManager:
     ) -> bool:
         if self._startup_ready.get(call_id, False):
             return True
+        
+        # OPTIMIZATION: Skip warm-up for non-first segments in continuous stream
+        # Buffer is already primed from previous segment - start immediately
+        is_first_segment = stream_info.get('segments_played', 0) == 0
+        if not is_first_segment and self.continuous_stream:
+            self._startup_ready[call_id] = True
+            stream_info['startup_ready'] = True
+            try:
+                logger.info(
+                    "⚡ CONTINUOUS STREAM - Skipping warm-up for subsequent segment",
+                    call_id=call_id,
+                    stream_id=stream_id,
+                    segment_num=stream_info.get('segments_played', 0),
+                    jitter_depth=jitter_buffer.qsize(),
+                )
+            except Exception:
+                pass
+            return True
+        
+        # Original warm-up logic for first segment
         try:
             min_need = int(stream_info.get('min_start_chunks', self.min_start_chunks))
         except Exception:
@@ -2675,6 +2696,10 @@ class StreamingPlaybackManager:
             info = self.active_streams.get(call_id)
             if not info:
                 return
+            
+            # Increment segment counter for warm-up optimization
+            info['segments_played'] = info.get('segments_played', 0) + 1
+            
             try:
                 rate = int(info.get('target_sample_rate') or 0)
             except Exception:
@@ -2683,7 +2708,14 @@ class StreamingPlaybackManager:
                 rate = int(self.sample_rate)
             total_attack_bytes = int(max(0, int(rate * (self.attack_ms / 1000.0)) * 2))
             info['attack_bytes_remaining'] = total_attack_bytes
-            logger.debug("Marked segment boundary; attack reset", call_id=call_id, attack_bytes=total_attack_bytes, attack_ms=self.attack_ms, rate=rate)
+            logger.debug(
+                "Marked segment boundary; attack reset",
+                call_id=call_id,
+                segment_num=info['segments_played'],
+                attack_bytes=total_attack_bytes,
+                attack_ms=self.attack_ms,
+                rate=rate
+            )
         except Exception:
             logger.debug("Failed to mark segment boundary", call_id=call_id, exc_info=True)
 
