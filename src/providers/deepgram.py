@@ -142,6 +142,9 @@ class DeepgramProvider(AIProviderInterface):
         self._settings_retry_attempted: bool = False
         self._last_settings_payload: Optional[dict] = None
         self._last_settings_minimal: Optional[dict] = None
+        # Endianness detection cache (probe once, reuse for all chunks)
+        self._pcm16_endian_probed: bool = False
+        self._pcm16_needs_swap: bool = False
 
     @property
     def supported_codecs(self) -> List[str]:
@@ -1216,40 +1219,46 @@ class DeepgramProvider(AIProviderInterface):
                         rate = 8000
 
                     if enc in ("linear16", "slin16", "pcm16"):
-                        # Treat message as PCM16; auto-detect endianness; resample to 8k and emit PCM
+                        # Treat message as PCM16; auto-detect endianness ONCE and cache result
                         pcm = message
-                        # Endianness probe on a short window
-                        try:
-                            win = pcm[: min(960, len(pcm) - (len(pcm) % 2))]
-                            rms_native = audioop.rms(win, 2) if len(win) >= 2 else 0
-                            swapped = audioop.byteswap(win, 2) if len(win) >= 2 else b""
-                            rms_swapped = audioop.rms(swapped, 2) if swapped else 0
-                            avg_native = audioop.avg(win, 2) if len(win) >= 2 else 0
-                            avg_swapped = audioop.avg(swapped, 2) if swapped else 0
-                            prefer_swapped = False
-                            if rms_swapped >= max(1024, 4 * max(1, rms_native)):
-                                prefer_swapped = True
-                            elif abs(avg_native) >= 8 * max(1, abs(avg_swapped)) and rms_swapped >= max(256, rms_native // 2):
-                                prefer_swapped = True
-                            if prefer_swapped:
+                        # Endianness probe on first chunk only
+                        if not self._pcm16_endian_probed:
+                            try:
+                                win = pcm[: min(960, len(pcm) - (len(pcm) % 2))]
+                                rms_native = audioop.rms(win, 2) if len(win) >= 2 else 0
+                                swapped = audioop.byteswap(win, 2) if len(win) >= 2 else b""
+                                rms_swapped = audioop.rms(swapped, 2) if swapped else 0
+                                avg_native = audioop.avg(win, 2) if len(win) >= 2 else 0
+                                avg_swapped = audioop.avg(swapped, 2) if swapped else 0
+                                prefer_swapped = False
+                                if rms_swapped >= max(1024, 4 * max(1, rms_native)):
+                                    prefer_swapped = True
+                                elif abs(avg_native) >= 8 * max(1, abs(avg_swapped)) and rms_swapped >= max(256, rms_native // 2):
+                                    prefer_swapped = True
+                                # Cache the result
+                                self._pcm16_endian_probed = True
+                                self._pcm16_needs_swap = prefer_swapped
                                 try:
-                                    pcm = audioop.byteswap(pcm, 2)
+                                    logger.info(
+                                        "Deepgram provider PCM16 endian probe (cached)",
+                                        call_id=self.call_id,
+                                        rms_native=rms_native,
+                                        rms_swapped=rms_swapped,
+                                        avg_native=avg_native,
+                                        avg_swapped=avg_swapped,
+                                        prefer_swapped=prefer_swapped,
+                                    )
                                 except Exception:
                                     pass
+                            except Exception:
+                                self._pcm16_endian_probed = True
+                                self._pcm16_needs_swap = False
+                        # Apply cached swap decision
+                        if self._pcm16_needs_swap:
                             try:
-                                logger.info(
-                                    "Deepgram provider PCM16 endian probe",
-                                    call_id=self.call_id,
-                                    rms_native=rms_native,
-                                    rms_swapped=rms_swapped,
-                                    avg_native=avg_native,
-                                    avg_swapped=avg_swapped,
-                                    prefer_swapped=prefer_swapped,
-                                )
+                                pcm = audioop.byteswap(pcm, 2)
                             except Exception:
                                 pass
-                        except Exception:
-                            pass
                         # No forced resampling - honor configured output rate
                         # DC-block the PCM payload before handing downstream
                         try:
