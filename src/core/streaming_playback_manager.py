@@ -322,7 +322,8 @@ class StreamingPlaybackManager:
             "g711ulaw": "ulaw",
             "linear16": "slin16",
             "pcm16": "slin16",
-            "slin": "slin16",
+            # "slin": "slin16",  # REMOVED: slin should remain slin (8kHz PCM16)
+            "slin": "slin",      # Keep slin as-is for 8kHz PCM16
             "slin12": "slin16",
             "slin16": "slin16",
         }
@@ -338,6 +339,8 @@ class StreamingPlaybackManager:
         canonical = StreamingPlaybackManager._canonicalize_encoding(fmt)
         if canonical in {"ulaw", "mulaw", "g711_ulaw", "mu-law"}:
             return 8000
+        if canonical == "slin":
+            return 8000  # slin is always 8kHz PCM16
         if canonical in {"slin16", "linear16", "pcm16"}:
             return fallback if fallback > 0 else 16000
         return fallback if fallback > 0 else 8000
@@ -1340,7 +1343,7 @@ class StreamingPlaybackManager:
             # Just decode, skip attack/normalize/limiter/encode
             if (
                 self._is_mulaw(src_encoding_raw)
-                and target_fmt in ("slin16", "linear16", "pcm16")
+                and target_fmt in ("slin", "slin16", "linear16", "pcm16")
                 and src_rate == target_rate
             ):
                 self._resample_states[call_id] = None
@@ -1369,8 +1372,8 @@ class StreamingPlaybackManager:
                     return chunk  # Fallback to original
             
             if (
-                src_encoding_raw in ("slin16", "linear16", "pcm16")
-                and target_fmt in ("slin16", "linear16", "pcm16")
+                src_encoding_raw in ("slin", "slin16", "linear16", "pcm16")
+                and target_fmt in ("slin", "slin16", "linear16", "pcm16")
                 and src_rate == target_rate
             ):
                 # Fast path PCM16->PCM16: still apply egress swap if required (with auto-probe)
