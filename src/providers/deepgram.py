@@ -1103,16 +1103,19 @@ class DeepgramProvider(AIProviderInterface):
                         except Exception:
                             pass
                         # Post-ACK injection when readiness events arrive and audio hasn't started
+                        # DISABLED: Let Deepgram Voice Agent handle greeting via agent.greeting setting
+                        # to avoid duplicate greeting (plays twice otherwise)
                         try:
                             et = event_data.get("type") if isinstance(event_data, dict) else None
                             if et == "SettingsApplied" and not self._in_audio_burst and self._greeting_injections < 2:
                                 if self.websocket and not self.websocket.closed:
-                                    logger.info("Injecting greeting after ACK", call_id=self.call_id, event_type=et)
-                                    self._greeting_injections += 1
-                                    try:
-                                        await self._inject_message_dual((getattr(self.llm_config, 'initial_greeting', None) or self._get_config_value('greeting', None) or "Hello, how can I help you today?").strip())
-                                    except Exception:
-                                        logger.debug("Post-ACK greeting injection failed", exc_info=True)
+                                    logger.info("Skipping greeting injection - using Deepgram agent greeting", call_id=self.call_id, event_type=et)
+                                    # Greeting injection disabled to prevent duplicate
+                                    # self._greeting_injections += 1
+                                    # try:
+                                    #     await self._inject_message_dual((getattr(self.llm_config, 'initial_greeting', None) or self._get_config_value('greeting', None) or "Hello, how can I help you today?").strip())
+                                    # except Exception:
+                                    #     logger.debug("Post-ACK greeting injection failed", exc_info=True)
                         except Exception:
                             pass
                         # If we were in an audio burst, a JSON control/event frame marks a boundary

@@ -114,7 +114,7 @@ downstream_mode: "stream"
 audiosocket:
   host: "0.0.0.0"          # Bind address (use 127.0.0.1 when engine and Asterisk share a host)
   port: 8090               # TCP port for AudioSocket connections
-  format: "ulaw"             # Wire format: μ-law @ 8kHz for AudioSocket (native telephony encoding)
+  format: "slin"             # Wire format: PCM16 @ 8kHz (AudioSocket protocol TYPE 0x10)
 
 # Barge-in configuration
 barge_in:
@@ -132,13 +132,14 @@ barge_in:
 # Streaming configuration (for downstream_mode=stream)
 streaming:
   sample_rate: 8000           # Output sample rate for streaming audio (telephony μ-law baseline)
-  jitter_buffer_ms: 950      # Larger buffer to reduce underflows during provider silence
+  jitter_buffer_ms: 500         # Reduced for localhost (was 950ms) - AI Engine on same host
   keepalive_interval_ms: 5000 # Keepalive interval for streaming connections
   connection_timeout_ms: 120000 # Extended to tolerate long provider pauses in continuous mode
   fallback_timeout_ms: 8000   # No audio sent for this long → fall back to file playback
   chunk_size_ms: 20          # Wire pacing for AudioSocket: 20 ms frames (320 bytes PCM16 @ 8kHz)
-  min_start_ms: 700          # Longer warm-up to stabilize buffer before first frame
-  low_watermark_ms: 350      # Pause when depth < ~2/3 of min_start; 350ms keeps some cushion.
+  min_start_ms: 60              # Reduced for localhost stability (was 120ms)
+  low_watermark_ms: 40          # Reduced for localhost (was 80ms)
+  greeting_min_start_ms: 40     # Faster greeting playback start
   provider_grace_ms: 60      # Short tail grace so cleanup finishes quickly without dragging cadence.
   logging_level: "debug"      # Optional override for streaming logger verbosity
   egress_swap_mode: "auto"   # Auto: follow inbound slin16 swap probe for PCM16 byte order
@@ -178,8 +179,9 @@ external_media:
 # Global LLM settings (will be overridden by environment variables)
 llm:
   initial_greeting: "Hello, how can I help you today?"
-  prompt: "You are a concise and helpful voice assistant. Keep replies under 20 words unless asked for detail."
-  model: "gpt-4o"
+  prompt: "Voice assistant. Answer in 5-8 words. Be direct. Expand only if asked."
+  model: "gpt-4o-mini"
+  temperature: 0.7
   api_key: "${OPENAI_API_KEY}" # Example of using env var substitution
 
 
@@ -221,7 +223,7 @@ providers:
     model: "nova-2-phonecall"
     tts_model: "aura-2-thalia-en"
     greeting: "Hello, how can I help you today?"
-    instructions: "You are a concise voice assistant. Respond in under 20 words and answer immediately."
+    instructions: "Voice assistant. Answer in 5-8 words. Be direct. Expand only if asked."
     input_encoding: "mulaw"
     input_sample_rate_hz: 8000
     continuous_input: true        # Stream audio continuously for best responsiveness
