@@ -114,7 +114,7 @@ downstream_mode: "stream"
 audiosocket:
   host: "0.0.0.0"          # Bind address (use 127.0.0.1 when engine and Asterisk share a host)
   port: 8090               # TCP port for AudioSocket connections
-  format: "slin16"           # Wire format: PCM16 @ 16kHz (AudioSocket protocol TYPE 0x12)
+  format: "slin"             # Wire format: PCM16 @ 8kHz (AudioSocket protocol TYPE 0x10)
 
 # Barge-in configuration
 barge_in:
@@ -131,14 +131,14 @@ barge_in:
 
 # Streaming configuration (for downstream_mode=stream)
 streaming:
-  sample_rate: 16000          # Output sample rate for streaming audio (wideband HD)
-  jitter_buffer_ms: 500         # Reduced for localhost (was 950ms) - AI Engine on same host
+  sample_rate: 8000           # Output sample rate for streaming audio (telephony μ-law baseline)
+  jitter_buffer_ms: 950         # Larger buffer to reduce underflows during provider silence
   keepalive_interval_ms: 5000 # Keepalive interval for streaming connections
   connection_timeout_ms: 120000 # Extended to tolerate long provider pauses in continuous mode
   fallback_timeout_ms: 8000   # No audio sent for this long → fall back to file playback
   chunk_size_ms: 20          # Wire pacing for AudioSocket: 20 ms frames (320 bytes PCM16 @ 8kHz)
-  min_start_ms: 60              # Reduced for localhost stability (was 120ms)
-  low_watermark_ms: 40          # Reduced for localhost (was 80ms)
+  min_start_ms: 700            # Longer warm-up to stabilize buffer before first frame
+  low_watermark_ms: 350        # Pause when depth drops below ~350 ms (keeps cushion)
   greeting_min_start_ms: 40     # Faster greeting playback start
   provider_grace_ms: 60      # Short tail grace so cleanup finishes quickly without dragging cadence.
   logging_level: "debug"      # Optional override for streaming logger verbosity
