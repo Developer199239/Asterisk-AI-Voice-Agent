@@ -162,11 +162,8 @@ class StreamingPlaybackManager:
         # Debug: when True, send frames to all AudioSocket conns for the call
         self.audiosocket_broadcast_debug: bool = bool(self.streaming_config.get('audiosocket_broadcast_debug', False))
         # Egress endianness override mode: 'auto' | 'force_true' | 'force_false'
-        try:
-            self.egress_swap_mode: str = str(self.streaming_config.get('egress_swap_mode', 'auto')).lower().strip() or 'auto'
-        except Exception:
-            self.egress_swap_mode = 'auto'
-        self.egress_force_mulaw: bool = bool(self.streaming_config.get('egress_force_mulaw', False))
+        self.egress_swap_mode: str = 'disabled'
+        self.egress_force_mulaw: bool = False
         # Output conditioning: limiter and attack envelope
         try:
             self.limiter_enabled: bool = bool(self.streaming_config.get('limiter_enabled', True))
@@ -211,7 +208,8 @@ class StreamingPlaybackManager:
         self.keepalive_interval_ms = self.streaming_config.get('keepalive_interval_ms', 5000)
         self.connection_timeout_ms = self.streaming_config.get('connection_timeout_ms', 10000)
         self.fallback_timeout_ms = self.streaming_config.get('fallback_timeout_ms', 4000)
-        self.chunk_size_ms = self.streaming_config.get('chunk_size_ms', 20)
+        self.chunk_size_ms = self._resolve_chunk_size_ms(self.streaming_config.get('chunk_size_ms'))
+        self.idle_cutoff_ms = self._resolve_idle_cutoff_ms(self.streaming_config.get('idle_cutoff_ms'))
         # Continuous streaming across provider segments
         try:
             self.continuous_stream: bool = bool(self.streaming_config.get('continuous_stream', True))
@@ -554,48 +552,24 @@ class StreamingPlaybackManager:
                     self.sample_rate,
                 )
             mulaw_transport = self._is_mulaw(self.audiosocket_format)
-            if self.egress_force_mulaw and mulaw_transport:
+            if mulaw_transport:
                 resolved_target_format = "ulaw"
                 resolved_target_rate = 8000
-            elif not self._is_mulaw(resolved_target_format) and mulaw_transport and target_sample_rate is None:
+            elif self._canonicalize_encoding(self.audiosocket_format) in {"slin", "slin16", "linear16", "pcm16"}:
+                resolved_target_format = "slin16" if resolved_target_rate >= 16000 else "slin"
                 resolved_target_rate = self._default_sample_rate_for_format(
-                    self.audiosocket_format,
+                    resolved_target_format,
                     resolved_target_rate,
                 )
 
             self._resample_states[call_id] = None
             # Store stream info
+            try:
+                idle_cutoff_ticks = max(1, int(math.ceil(self.idle_cutoff_ms / max(1, self.chunk_size_ms))))
+            except Exception:
+                idle_cutoff_ticks = 60
             # Small pre-start wait to allow inbound endianness probe to populate session.vad_state
             # This helps avoid a race where the first greeting frames are sent with the wrong byte order
-            try:
-                if str(self.egress_swap_mode).lower() == 'auto' and self._canonicalize_encoding(self.audiosocket_format) in {"slin16", "linear16", "pcm16"}:
-                    for _i in range(5):  # up to ~100ms
-                        try:
-                            s = await self.session_store.get_by_call_id(call_id)
-                            vs = getattr(s, 'vad_state', {}) if s else {}
-                            if 'pcm16_inbound_swap' in vs:
-                                session = s or session
-                                break
-                        except Exception:
-                            pass
-                        await asyncio.sleep(0.02)
-            except Exception:
-                pass
-            # Determine if egress slin16 should be byteswapped based on mode and inbound probe
-            mode = self.egress_swap_mode
-            egress_swap_auto = False
-            try:
-                if self._canonicalize_encoding(self.audiosocket_format) in {"slin16", "linear16", "pcm16"}:
-                    egress_swap_auto = bool(session.vad_state.get("pcm16_inbound_swap", False))
-            except Exception:
-                egress_swap_auto = False
-            if mode == 'force_true':
-                egress_swap = True
-            elif mode == 'force_false':
-                egress_swap = False
-            else:
-                egress_swap = egress_swap_auto
-
             # Initialize call-level taps if enabled
             if self.diag_enable_taps:
                 try:
@@ -618,6 +592,7 @@ class StreamingPlaybackManager:
                 'seg_start_ts': time.time(),
                 'chunks_sent': 0,
                 'last_chunk_time': time.time(),
+                'idle_cutoff_ms': self.idle_cutoff_ms,
                 'startup_ready': bool(initial_startup_ready),
                 'first_frame_observed': False,
                 'min_start_chunks': min_start_chunks,
@@ -628,8 +603,6 @@ class StreamingPlaybackManager:
                 'end_reason': None,
                 'source_encoding': src_encoding,
                 'source_sample_rate': src_rate,
-                'egress_swap': egress_swap,
-                'egress_swap_mode': mode,
                 'target_format': resolved_target_format,
                 'target_sample_rate': resolved_target_rate,
                 'tx_bytes': 0,
@@ -638,7 +611,6 @@ class StreamingPlaybackManager:
                 'underflow_events': 0,
                 'provider_bytes': 0,
                 'warned_grace_cap': False,
-                'egress_force_mulaw': self.egress_force_mulaw,
                 'tap_pre_pcm16': bytearray(),
                 'tap_post_pcm16': bytearray(),
                 'tap_rate': (resolved_target_rate if self.diag_enable_taps else 0),
@@ -647,6 +619,10 @@ class StreamingPlaybackManager:
                 'tap_first_window_post': bytearray(),
                 'tap_first_window_done': False,
                 'segments_played': 0,
+                'idle_ticks': 0,
+                'idle_cutoff_ticks': idle_cutoff_ticks,
+                'last_real_emit_ts': None,
+                'last_emit_was_filler': False,
             }
             self._startup_ready[call_id] = bool(initial_startup_ready)
             try:
@@ -669,8 +645,6 @@ class StreamingPlaybackManager:
                     source_sample_rate=src_rate,
                     target_format=resolved_target_format,
                     target_sample_rate=resolved_target_rate,
-                    egress_swap=egress_swap,
-                    egress_swap_mode=mode,
                 )
             except Exception:
                 pass
@@ -753,7 +727,10 @@ class StreamingPlaybackManager:
                             except Exception:
                                 tgt_rate = int(self.sample_rate)
                             if tgt_rate <= 0:
-                                tgt_rate = self._default_sample_rate_for_format(tgt_fmt, int(self.sample_rate))
+                                tgt_rate = self._default_sample_rate_for_format(
+                                    tgt_fmt,
+                                    int(self.sample_rate),
+                                )
                             src_bps = 1 if self._is_mulaw(src_enc) else 2
                             tgt_bps = 1 if self._is_mulaw(tgt_fmt) else 2
                             try:
@@ -842,8 +819,6 @@ class StreamingPlaybackManager:
                 status = await self._drain_next_frame(
                     call_id, stream_id, jitter_buffer
                 )
-                if status == "finished":
-                    break
                 if status == "error":
                     try:
                         await self._record_fallback(call_id, "transport-failure")
@@ -852,6 +827,11 @@ class StreamingPlaybackManager:
                             self.active_streams[call_id]['end_reason'] = 'transport-failure'
                     except Exception:
                         pass
+                    break
+                self._update_idle_tracking(call_id, status)
+                if self._should_stop_for_idle(call_id, stream_id, jitter_buffer):
+                    break
+                if status == "finished":
                     break
                 next_tick += tick_seconds
                 now_after = time.perf_counter()
@@ -1126,10 +1106,15 @@ class StreamingPlaybackManager:
         except Exception:
             pass
         info = self.active_streams.get(call_id)
+        now = time.time()
         if info is not None:
             try:
                 info['frames_sent'] = int(info.get('frames_sent', 0)) + 1
-                info['last_frame_ts'] = time.time()
+                info['last_frame_ts'] = now
+                info['last_emit_was_filler'] = bool(filler)
+                if not filler:
+                    info['last_real_emit_ts'] = now
+                    info['idle_ticks'] = 0
             except Exception:
                 pass
             if filler:
@@ -1183,9 +1168,6 @@ class StreamingPlaybackManager:
                 src_encoding_raw = "slin16"
 
             # Determine if we must swap bytes for PCM16 egress
-            egress_swap = bool(stream_info.get('egress_swap', False))
-            mode = (stream_info.get('egress_swap_mode') or self.egress_swap_mode).lower()
-
             # Fast path: already matches target format and rate
             if (
                 self._is_mulaw(src_encoding_raw)
@@ -1399,7 +1381,7 @@ class StreamingPlaybackManager:
             ):
                 # Fast path PCM16->PCM16: still apply egress swap if required (with auto-probe)
                 self._resample_states[call_id] = None
-                return self._apply_pcm_endianness(call_id, chunk, stream_info, mode)
+                return chunk
 
             working = chunk
             resample_state = self._resample_states.get(call_id)
@@ -1699,7 +1681,7 @@ class StreamingPlaybackManager:
                 working = self._apply_attack_envelope(call_id, working, int(rate) if isinstance(rate, int) else int(self.sample_rate), info)
             except Exception:
                 pass
-            out_pcm = self._apply_pcm_endianness(call_id, working, stream_info, mode)
+            out_pcm = working
             # Apply soft limiter on PCM egress to prevent clipping (mirrors μ-law path behavior)
             try:
                 if self.limiter_enabled and out_pcm:
@@ -2119,14 +2101,6 @@ class StreamingPlaybackManager:
                         sample_rate = self.sample_rate
                     if sample_rate <= 0:
                         sample_rate = self._default_sample_rate_for_format(fmt, self.sample_rate)
-                    try:
-                        egress_swap = bool(self.active_streams.get(call_id, {}).get('egress_swap', False))
-                    except Exception:
-                        egress_swap = False
-                    try:
-                        egress_mode = str(self.active_streams.get(call_id, {}).get('egress_swap_mode', self.egress_swap_mode))
-                    except Exception:
-                        egress_mode = self.egress_swap_mode
                     logger.info(
                         "🎵 STREAMING OUTBOUND - First frame",
                         call_id=call_id,
@@ -2136,8 +2110,6 @@ class StreamingPlaybackManager:
                         frame_bytes=len(chunk),
                         sample_rate=sample_rate,
                         chunk_size_ms=self.chunk_size_ms,
-                        egress_swap=egress_swap,
-                        egress_swap_mode=egress_mode,
                         conn_id=conn_id,
                     )
                     self._first_send_logged.add(call_id)
@@ -2274,113 +2246,98 @@ class StreamingPlaybackManager:
                     self.active_streams[call_id] = info
         return cleaned, True
 
-    def _apply_pcm_endianness(
-        self,
-        call_id: str,
-        pcm_bytes: bytes,
-        stream_info: Dict[str, Any],
-        mode: str,
-    ) -> bytes:
-        """Ensure PCM16 egress matches the negotiated byte order with auto correction."""
-        if not pcm_bytes:
-            return pcm_bytes
+    def _update_idle_tracking(self, call_id: str, status: str) -> None:
+        info = self.active_streams.get(call_id)
+        if not info:
+            return
+        try:
+            current_ticks = int(info.get('idle_ticks', 0) or 0)
+        except Exception:
+            current_ticks = 0
+        if status == "sent":
+            if bool(info.get('last_emit_was_filler')):
+                info['idle_ticks'] = current_ticks + 1
+            else:
+                info['idle_ticks'] = 0
+        elif status == "wait":
+            info['idle_ticks'] = current_ticks + 1
+        elif status == "finished":
+            info['idle_ticks'] = current_ticks + 1
 
-        target_fmt = (
-            self._canonicalize_encoding(stream_info.get('target_format'))
-            or self._canonicalize_encoding(self.audiosocket_format)
-            or "ulaw"
-        )
-        if target_fmt not in ("slin16", "linear16", "pcm16"):
-            if call_id and not stream_info.get('egress_swap_skip_logged', False):
-                stream_info['egress_swap_skip_logged'] = True
-                try:
-                    logger.info(
-                        "Skipping PCM endianness check for non-PCM target",
-                        call_id=call_id,
-                        stream_id=stream_info.get('stream_id'),
-                        target_format=target_fmt,
-                    )
-                except Exception:
-                    pass
-            return pcm_bytes
+    def _should_stop_for_idle(self, call_id: str, stream_id: str, jitter_buffer: asyncio.Queue) -> bool:
+        info = self.active_streams.get(call_id)
+        if not info or info.get('idle_cutoff_triggered'):
+            return False
+        try:
+            cutoff_ms = int(info.get('idle_cutoff_ms', self.idle_cutoff_ms) or 0)
+        except Exception:
+            cutoff_ms = self.idle_cutoff_ms
+        if cutoff_ms <= 0:
+            return False
+        if not bool(info.get('sentinel_seen', False)):
+            return False
+        if not jitter_buffer.empty():
+            return False
+        remainder = self.frame_remainders.get(call_id, b"")
+        if remainder:
+            return False
+        try:
+            idle_ticks = int(info.get('idle_ticks', 0) or 0)
+        except Exception:
+            idle_ticks = 0
+        cutoff_ticks = int(info.get('idle_cutoff_ticks', 0) or 0)
+        if cutoff_ticks and idle_ticks < cutoff_ticks:
+            return False
+        last_real_emit_ts = info.get('last_real_emit_ts')
+        if last_real_emit_ts is None:
+            return False
+        elapsed_ms = max(0.0, (time.time() - float(last_real_emit_ts)) * 1000.0)
+        if elapsed_ms < cutoff_ms:
+            return False
+        info['idle_cutoff_triggered'] = True
+        info['end_reason'] = info.get('end_reason') or 'idle-cutoff'
+        try:
+            logger.info(
+                "🎵 STREAMING PACER - Idle cutoff",
+                call_id=call_id,
+                stream_id=stream_id,
+                idle_elapsed_ms=int(elapsed_ms),
+                idle_cutoff_ms=cutoff_ms,
+            )
+        except Exception:
+            pass
+        return True
 
-        mode = (mode or "auto").lower()
-        egress_swap = bool(stream_info.get('egress_swap', False))
-        stream_id = stream_info.get('stream_id')
+    def _resolve_chunk_size_ms(self, cfg_value: Optional[Any]) -> int:
+        """Resolve outbound chunk cadence (ms)."""
+        default_ms = 20
+        if cfg_value is None:
+            return default_ms
+        try:
+            # Allow string values like "auto" or numbers
+            if isinstance(cfg_value, str):
+                val = cfg_value.strip().lower()
+                if not val or val == "auto":
+                    return default_ms
+                return max(5, min(120, int(float(val))))
+            return max(5, min(120, int(cfg_value)))
+        except Exception:
+            return default_ms
 
-        probe_needed = not stream_info.get('egress_probe_done', False)
-        swapped_bytes: Optional[bytes] = None
-        rms_native = rms_swapped = 0
-
-        if probe_needed or mode == "force_true":
-            try:
-                rms_native = audioop.rms(pcm_bytes, 2)
-            except Exception:
-                rms_native = 0
-            try:
-                swapped_bytes = audioop.byteswap(pcm_bytes, 2)
-                rms_swapped = audioop.rms(swapped_bytes, 2)
-            except Exception:
-                swapped_bytes = None
-                rms_swapped = 0
-
-            if probe_needed:
-                stream_info['egress_probe_done'] = True
-                try:
-                    logger.info(
-                        "🎵 STREAMING OUTBOUND - Probe",
-                        call_id=call_id,
-                        stream_id=stream_id,
-                        audiosocket_format=target_fmt,
-                        egress_swap=egress_swap,
-                        egress_swap_mode=mode,
-                        rms_native=rms_native,
-                        rms_swapped=rms_swapped,
-                        target_sample_rate=stream_info.get('target_sample_rate', self.sample_rate),
-                    )
-                except Exception:
-                    pass
-
-                if mode != "force_false" and swapped_bytes is not None:
-                    threshold = max(512, 4 * max(1, rms_native))
-                    if not egress_swap and rms_swapped >= threshold:
-                        stream_info['egress_swap'] = True
-                        stream_info['egress_swap_auto'] = True
-                        egress_swap = True
-                        try:
-                            if call_id:
-                                _STREAM_ENDIAN_CORRECTIONS_TOTAL.labels(call_id, mode).inc()
-                        except Exception:
-                            pass
-                        try:
-                            logger.warning(
-                                "Auto-correcting PCM16 egress endianness",
-                                call_id=call_id,
-                                stream_id=stream_id,
-                                egress_swap_mode=mode,
-                                rms_native=rms_native,
-                                rms_swapped=rms_swapped,
-                                threshold=threshold,
-                            )
-                        except Exception:
-                            pass
-                        # If we already have swapped bytes from the probe, reuse it.
-                        if swapped_bytes is not None:
-                            return swapped_bytes
-
-            if mode == "force_true" and not egress_swap:
-                stream_info['egress_swap'] = True
-                egress_swap = True
-                if swapped_bytes is not None:
-                    return swapped_bytes
-
-        if egress_swap:
-            try:
-                return audioop.byteswap(pcm_bytes, 2)
-            except Exception:
-                logger.debug("PCM16 egress swap failed; sending native bytes", call_id=call_id)
-
-        return pcm_bytes
+    def _resolve_idle_cutoff_ms(self, cfg_value: Optional[Any]) -> int:
+        """Resolve idle cutoff in milliseconds for pacer."""
+        default_ms = 1200
+        if cfg_value is None:
+            return default_ms
+        try:
+            if isinstance(cfg_value, str):
+                val = cfg_value.strip().lower()
+                if not val or val == "auto":
+                    return default_ms
+                return max(200, min(5000, int(float(val))))
+            return max(200, min(5000, int(cfg_value)))
+        except Exception:
+            return default_ms
 
     def _frame_size_bytes(self, call_id: Optional[str] = None) -> int:
         fmt = (

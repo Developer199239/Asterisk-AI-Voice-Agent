@@ -397,6 +397,8 @@ class Engine:
         # Track per-segment provider bytes vs. bytes enqueued to streaming
         self._provider_bytes: Dict[str, int] = {}
         self._enqueued_bytes: Dict[str, int] = {}
+        # Transport observability
+        self._transport_card_logged: Set[str] = set()
         # Experimental coalescing: per-call buffer for provider TTS chunks
         self._provider_coalesce_buf: Dict[str, bytearray] = {}
         # Active playbacks are now managed by SessionStore
@@ -941,12 +943,12 @@ class Engine:
             return
         
         try:
-            # Step 1: Answer the caller
+            # Answer the caller
             logger.info("🎯 HYBRID ARI - Step 1: Answering caller channel", channel_id=caller_channel_id)
             await self.ari_client.answer_channel(caller_channel_id)
             logger.info("🎯 HYBRID ARI - Step 1: ✅ Caller channel answered", channel_id=caller_channel_id)
             
-            # Step 2: Create bridge immediately
+            # Create bridge immediately
             logger.info("🎯 HYBRID ARI - Step 2: Creating bridge immediately", channel_id=caller_channel_id)
             bridge_id = await self.ari_client.create_bridge(bridge_type="mixing")
             if not bridge_id:
@@ -955,7 +957,7 @@ class Engine:
                        channel_id=caller_channel_id, 
                        bridge_id=bridge_id)
             
-            # Step 3: Add caller to bridge
+            # Add caller to bridge
             logger.info("🎯 HYBRID ARI - Step 3: Adding caller to bridge", 
                        channel_id=caller_channel_id, 
                        bridge_id=bridge_id)
@@ -967,7 +969,7 @@ class Engine:
                        bridge_id=bridge_id)
             self.bridges[caller_channel_id] = bridge_id
             
-            # Step 4: Create CallSession and store in SessionStore
+            # Create CallSession and store in SessionStore
             session = CallSession(
                 call_id=caller_channel_id,
                 caller_channel_id=caller_channel_id,
@@ -1425,17 +1427,11 @@ class Engine:
                 if session:
                     session.audiosocket_uuid = audio_uuid
                     await self._save_session(session)
-                else:
-                    logger.warning(
-                        "🎯 HYBRID ARI - Session not found while recording AudioSocket UUID",
+                    logger.info(
+                        "🎯 HYBRID ARI - AudioSocket channel originated",
                         caller_channel_id=caller_channel_id,
+                        audiosocket_channel_id=audiosocket_channel_id,
                     )
-
-                logger.info(
-                    "🎯 HYBRID ARI - AudioSocket channel originated",
-                    caller_channel_id=caller_channel_id,
-                    audiosocket_channel_id=audiosocket_channel_id,
-                )
             else:
                 raise RuntimeError("Failed to originate AudioSocket channel")
         except Exception as e:
@@ -1743,77 +1739,6 @@ class Engine:
             except Exception:
                 pass
 
-    async def _create_bridge_and_connect(self, caller_channel_id: str, local_channel_id: str):
-        """Create bridge and connect both channels."""
-        try:
-            # Create mixing bridge
-            bridge_id = await self.ari_client.create_bridge(bridge_type="mixing")
-            if not bridge_id:
-                raise RuntimeError("Failed to create mixing bridge")
-            
-            logger.info("Bridge created", bridge_id=bridge_id, 
-                       caller_channel_id=caller_channel_id, 
-                       local_channel_id=local_channel_id)
-            
-            # Add both channels to bridge
-            caller_success = await self.ari_client.add_channel_to_bridge(bridge_id, caller_channel_id)
-            local_success = await self.ari_client.add_channel_to_bridge(bridge_id, local_channel_id)
-            
-            if not caller_success:
-                logger.error("Failed to add caller channel to bridge", 
-                            bridge_id=bridge_id, caller_channel_id=caller_channel_id)
-                raise RuntimeError("Failed to add caller channel to bridge")
-            
-            if not local_success:
-                logger.error("Failed to add Local channel to bridge", 
-                            bridge_id=bridge_id, local_channel_id=local_channel_id)
-                raise RuntimeError("Failed to add Local channel to bridge")
-            
-            # Store bridge info
-            self.bridges[caller_channel_id] = bridge_id
-            # Update session with bridge info
-            call_id = session.call_id
-            
-            # Signal end of stream
-            queue = getattr(session, "streaming_audio_queue", None)
-            if queue:
-                await queue.put(None)  # End of stream signal
-            
-            # Stop streaming playback
-            if hasattr(session, "current_stream_id"):
-                await self.streaming_playback_manager.stop_streaming_playback(call_id)
-                session.current_stream_id = None
-                session.streaming_started = False
-            
-            # Reset queue for the next response
-            session.streaming_audio_queue = asyncio.Queue()
-            await self._save_session(session)
-            await self._reset_vad_after_playback(session)
-
-            logger.info(
-                "🎵 STREAMING DONE - Real-time audio streaming completed",
-                call_id=call_id,
-            )
-            
-            # Update conversation state
-            if session.conversation_state == "greeting":
-                session.conversation_state = "listening"
-                logger.info("Greeting completed, now listening for conversation", call_id=call_id)
-            elif session.conversation_state == "processing":
-                session.conversation_state = "listening"
-                logger.info("Response streamed, listening for next user input", call_id=call_id)
-            
-            await self._save_session(session)
-            
-            if self.conversation_coordinator:
-                await self.conversation_coordinator.update_conversation_state(call_id, "listening")
-                
-        except Exception as e:
-            logger.error("Error handling streaming audio done",
-                        call_id=session.call_id,
-                        error=str(e),
-                        exc_info=True)
-    
     async def _handle_streaming_ready(self, call_id: str) -> None:
         """Handle streaming ready event."""
         try:
@@ -1827,7 +1752,7 @@ class Engine:
             logger.error("Error handling streaming ready",
                         call_id=call_id,
                         error=str(e))
-    
+
     async def _handle_streaming_response(self, call_id: str) -> None:
         """Handle streaming response event."""
         try:
@@ -3386,6 +3311,14 @@ class Engine:
                             target_encoding=target_encoding,
                             target_sample_rate=target_sample_rate,
                         )
+                        self._emit_transport_card(
+                            call_id,
+                            session,
+                            source_encoding=fmt_info.get("encoding") or encoding,
+                            source_sample_rate=source_sample_rate,
+                            target_encoding=target_encoding,
+                            target_sample_rate=target_sample_rate,
+                        )
                         logger.info("COALESCE START", call_id=call_id, coalesced_ms=buf_ms, coalesced_bytes=len(buf))
                         try:
                             q.put_nowait(bytes(buf))
@@ -3422,38 +3355,47 @@ class Engine:
                                 target_sample_rate = session.transport_profile.sample_rate
                             if remediation:
                                 session.audio_diagnostics["codec_remediation"] = remediation
+                            src_encoding = fmt_info.get("encoding") or encoding
+                            src_rate = fmt_info.get("sample_rate") or sample_rate_int or getattr(session.provider, "_dg_output_rate", None)
                             await self.streaming_playback_manager.start_streaming_playback(
                                 call_id,
                                 q,
                                 playback_type=playback_type,
-                                source_encoding=fmt_info.get("encoding"),
-                                source_sample_rate=fmt_info.get("sample_rate"),
+                                source_encoding=src_encoding,
+                                source_sample_rate=src_rate,
                                 target_encoding=target_encoding,
                                 target_sample_rate=target_sample_rate,
                             )
+                            self._emit_transport_card(
+                                call_id,
+                                session,
+                                source_encoding=src_encoding,
+                                source_sample_rate=src_rate,
+                                target_encoding=target_encoding,
+                                target_sample_rate=target_sample_rate,
+                            )
+                            logger.info("Streaming playback started", call_id=call_id)
                         except Exception:
                             logger.error("Failed to start streaming playback", call_id=call_id, exc_info=True)
-                            # Fallback to file playback if streaming cannot start
                             try:
                                 playback_id = await self.playback_manager.play_audio(call_id, out_chunk, "streaming-response")
                                 if not playback_id:
                                     logger.error("Fallback file playback failed", call_id=call_id, size=len(out_chunk))
-                                return
                             except Exception:
                                 logger.error("Fallback file playback exception", call_id=call_id, exc_info=True)
-                                return
-                try:
-                    # Track provider bytes
-                    self._provider_bytes[call_id] = int(self._provider_bytes.get(call_id, 0)) + (len(chunk) if isinstance(chunk, (bytes, bytearray)) else sum(len(f) for f in (out_chunk if isinstance(out_chunk, list) else [out_chunk])))
-                    if isinstance(out_chunk, list):
-                        for frame in out_chunk:
-                            q.put_nowait(frame)
-                            self._enqueued_bytes[call_id] = int(self._enqueued_bytes.get(call_id, 0)) + len(frame)
-                    else:
-                        q.put_nowait(out_chunk)
-                        self._enqueued_bytes[call_id] = int(self._enqueued_bytes.get(call_id, 0)) + len(out_chunk)
-                except asyncio.QueueFull:
-                    logger.debug("Provider streaming queue full; dropping chunk", call_id=call_id)
+                            return
+                    try:
+                        # Track provider bytes
+                        self._provider_bytes[call_id] = int(self._provider_bytes.get(call_id, 0)) + (len(chunk) if isinstance(chunk, (bytes, bytearray)) else sum(len(f) for f in (out_chunk if isinstance(out_chunk, list) else [out_chunk])))
+                        if isinstance(out_chunk, list):
+                            for frame in out_chunk:
+                                q.put_nowait(frame)
+                                self._enqueued_bytes[call_id] = int(self._enqueued_bytes.get(call_id, 0)) + len(frame)
+                        else:
+                            q.put_nowait(out_chunk)
+                            self._enqueued_bytes[call_id] = int(self._enqueued_bytes.get(call_id, 0)) + len(out_chunk)
+                    except asyncio.QueueFull:
+                        logger.debug("Provider streaming queue full; dropping chunk", call_id=call_id)
             elif etype == "AgentAudioDone":
                 continuous = bool(getattr(self.streaming_playback_manager, 'continuous_stream', False))
                 q = self._provider_stream_queues.get(call_id)
@@ -3556,6 +3498,14 @@ class Engine:
                                 target_encoding=target_encoding,
                                 target_sample_rate=target_sample_rate,
                             )
+                            self._emit_transport_card(
+                                call_id,
+                                session,
+                                source_encoding=fmt_info.get("encoding"),
+                                source_sample_rate=fmt_info.get("sample_rate"),
+                                target_encoding=target_encoding,
+                                target_sample_rate=target_sample_rate,
+                            )
                             logger.info("COALESCE START (end)", call_id=call_id, coalesced_ms=buf_ms, coalesced_bytes=len(buf))
                             try:
                                 q2.put_nowait(bytes(buf))
@@ -3591,11 +3541,11 @@ class Engine:
             try:
                 # Use pipeline16k resample state under synthetic key 'pipeline'
                 state = self._resample_state_pipeline16k.get('pipeline')
-                pcm16k, state = audioop.ratecv(pcm8k, 2, 1, 8000, 16000, state)
+                pcm16, state = audioop.ratecv(pcm8k, 2, 1, 8000, 16000, state)
                 self._resample_state_pipeline16k['pipeline'] = state
             except Exception:
-                pcm16k = pcm8k
-            return pcm16k
+                pcm16 = pcm8k
+            return pcm16
         except Exception:
             logger.debug("AudioSocket -> PCM16 16k conversion failed", exc_info=True)
             return audio_bytes
@@ -3876,20 +3826,6 @@ class Engine:
                                 )
                     except asyncio.CancelledError:
                         pass
-                    finally:
-                        if local_buf:
-                            try:
-                                await pipeline.stt_adapter.send_audio(
-                                    call_id,
-                                    bytes(local_buf),
-                                    fmt=stream_format,
-                                )
-                            except Exception:
-                                logger.debug(
-                                    "Streaming STT residual send failed",
-                                    call_id=call_id,
-                                    exc_info=True,
-                                )
 
                 async def stt_receiver() -> None:
                     try:
@@ -4212,11 +4148,10 @@ class Engine:
             "g711_ulaw": "ulaw",
             "g711ulaw": "ulaw",
             "g711-ula": "ulaw",
-            "linear16": "slin16",
-            "pcm16": "slin16",
             # Note: "slin" (8kHz PCM) and "slin16" (16kHz PCM) are distinct formats - do not alias
             "slin12": "slin16",
             "slin16": "slin16",
+            "slin": "slin16",
         }
         return mapping.get(token, token)
 
@@ -4446,98 +4381,6 @@ class Engine:
         except Exception:
             logger.debug("Audio diagnostics update failed", call_id=session.call_id, stage=stage, exc_info=True)
 
-    async def _hydrate_transport_from_dialplan(self, session: CallSession, channel_id: str) -> None:
-        """Read optional channel variables describing the transport expectations."""
-        transport_fmt = None
-        transport_rate = None
-        variables = ("AI_TRANSPORT_FORMAT", "AI_TRANSPORT_RATE")
-        results: Dict[str, Optional[str]] = {}
-        for variable in variables:
-            try:
-                resp = await self.ari_client.send_command(
-                    "GET",
-                    f"channels/{channel_id}/variable",
-                    params={"variable": variable},
-                )
-            except Exception:
-                logger.debug("Transport variable fetch failed", call_id=channel_id, variable=variable, exc_info=True)
-                continue
-            if isinstance(resp, dict):
-                results[variable] = (resp.get("value") or "").strip()
-        if results.get("AI_TRANSPORT_FORMAT"):
-            transport_fmt = results["AI_TRANSPORT_FORMAT"]
-        if results.get("AI_TRANSPORT_RATE"):
-            try:
-                transport_rate = int(results["AI_TRANSPORT_RATE"])
-            except (TypeError, ValueError):
-                transport_rate = None
-        if not transport_fmt and not transport_rate:
-            # Default to config
-            try:
-                transport_fmt = getattr(self.config.audiosocket, "format", None)
-            except Exception:
-                transport_fmt = None
-            if not transport_rate:
-                try:
-                    transport_rate = int(getattr(self.config.streaming, "sample_rate", 8000))
-                except Exception:
-                    transport_rate = 8000
-            logger.info(
-                "Dialplan transport hints absent; using configured defaults",
-                call_id=session.call_id,
-                format=transport_fmt or "ulaw",
-                sample_rate=transport_rate,
-            )
-        else:
-            logger.info(
-                "Dialplan transport hints detected",
-                call_id=session.call_id,
-                format=transport_fmt or session.transport_profile.format,
-                sample_rate=transport_rate or session.transport_profile.sample_rate,
-            )
-        await self._update_transport_profile(
-            session,
-            fmt=transport_fmt or session.transport_profile.format,
-            sample_rate=transport_rate or session.transport_profile.sample_rate,
-            source="dialplan" if results else session.transport_profile.source,
-        )
-
-    def _resolve_stream_targets(
-        self,
-        session: CallSession,
-        provider_name: str,
-    ) -> Tuple[str, int, Optional[str]]:
-        """Ensure downstream streaming targets align with the transport profile."""
-        transport_fmt = session.transport_profile.format
-        transport_rate = session.transport_profile.sample_rate
-
-        # Hard-pin targets to AudioSocket transport settings to prevent runtime drift
-        try:
-            if getattr(self.config, 'audio_transport', None) == 'audiosocket':
-                # Prefer explicit audiosocket.format/sample_rate from config; fallback to transport profile
-                try:
-                    as_fmt_cfg = (self.config.audiosocket.format or '').lower() if getattr(self.config, 'audiosocket', None) else ''
-                except Exception:
-                    as_fmt_cfg = ''
-                try:
-                    as_rate_cfg = int(getattr(getattr(self.config, 'streaming', None), 'sample_rate', 0) or 0)
-                except Exception:
-                    as_rate_cfg = 0
-                pinned_fmt = self._canonicalize_encoding(as_fmt_cfg) or transport_fmt or 'ulaw'
-                pinned_rate = int(as_rate_cfg or transport_rate or 8000)
-                if pinned_rate <= 0:
-                    pinned_rate = 8000
-                # Override transport_fmt/rate for target resolution below
-                transport_fmt = pinned_fmt
-                transport_rate = pinned_rate
-        except Exception:
-            pass
-        prefs = self.call_audio_preferences.get(session.call_id, {}) or {}
-        target_encoding = self._canonicalize_encoding(prefs.get("format")) or transport_fmt
-        target_sample_rate = int(prefs.get("sample_rate") or transport_rate)
-
-        adjustments = {}
-        if target_encoding != transport_fmt:
             adjustments["format"] = transport_fmt
         if target_sample_rate != transport_rate:
             adjustments["sample_rate"] = transport_rate
@@ -4597,7 +4440,16 @@ class Engine:
                 remediation=remediation,
             )
 
-        return target_encoding, target_sample_rate, remediation
+        self._emit_transport_card(
+            session.call_id,
+            session,
+            source_encoding=provider_target,
+            source_sample_rate=provider_rate,
+            target_encoding=transport_fmt,
+            target_sample_rate=transport_rate,
+        )
+
+        return transport_fmt, transport_rate, remediation
 
     async def _update_audio_diagnostics_by_call(
         self,
@@ -4611,6 +4463,172 @@ class Engine:
         if not session:
             return
         self._update_audio_diagnostics(session, stage, audio_bytes, encoding, sample_rate)
+
+    def _emit_transport_card(
+        self,
+        call_id: Optional[str],
+        session: Optional[CallSession],
+        *,
+        source_encoding: Optional[Any],
+        source_sample_rate: Optional[Any],
+        target_encoding: Optional[Any],
+        target_sample_rate: Optional[Any],
+    ) -> None:
+        if not call_id or call_id in self._transport_card_logged:
+            return
+
+        spm = getattr(self, "streaming_playback_manager", None)
+        wire_encoding = None
+        wire_rate: Optional[int] = None
+        chunk_ms: Optional[int] = None
+        idle_cutoff_ms: Optional[int] = None
+        if spm is not None:
+            try:
+                wire_encoding = getattr(spm, "audiosocket_format", None)
+            except Exception:
+                wire_encoding = None
+            try:
+                rate_val = getattr(spm, "sample_rate", None)
+                wire_rate = int(rate_val) if rate_val else None
+            except Exception:
+                wire_rate = None
+            try:
+                chunk_val = getattr(spm, "chunk_size_ms", None)
+                chunk_ms = int(chunk_val) if chunk_val else None
+            except Exception:
+                chunk_ms = None
+            try:
+                idle_val = getattr(spm, "idle_cutoff_ms", None)
+                idle_cutoff_ms = int(idle_val) if idle_val else None
+            except Exception:
+                idle_cutoff_ms = None
+
+        provider_name = None
+        transport_source = None
+        transport_fmt = None
+        transport_rate: Optional[int] = None
+        if session is not None:
+            provider_name = getattr(session, "provider_name", None) or getattr(session, "provider", None) or self.config.default_provider
+            try:
+                transport_source = session.transport_profile.source
+            except Exception:
+                transport_source = None
+            try:
+                transport_fmt = session.transport_profile.format
+            except Exception:
+                transport_fmt = None
+            try:
+                rate = session.transport_profile.sample_rate
+                transport_rate = int(rate) if rate else None
+            except Exception:
+                transport_rate = None
+
+        def _canon_rate(value: Optional[Any]) -> Optional[int]:
+            if value is None:
+                return None
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return None
+
+        payload = {
+            "call_id": call_id,
+            "provider": provider_name,
+            "transport_source": transport_source,
+            "wire_encoding": self._canonicalize_encoding(wire_encoding) or None,
+            "wire_sample_rate_hz": _canon_rate(wire_rate),
+            "transport_encoding": self._canonicalize_encoding(transport_fmt) or None,
+            "transport_sample_rate_hz": _canon_rate(transport_rate),
+            "provider_encoding": self._canonicalize_encoding(source_encoding) or None,
+            "provider_sample_rate_hz": _canon_rate(source_sample_rate),
+            "target_encoding": self._canonicalize_encoding(target_encoding) or None,
+            "target_sample_rate_hz": _canon_rate(target_sample_rate),
+            "chunk_size_ms": _canon_rate(chunk_ms),
+            "idle_cutoff_ms": _canon_rate(idle_cutoff_ms),
+        }
+
+        try:
+            logger.info(
+                "TransportCard",
+                **{k: v for k, v in payload.items() if v is not None},
+            )
+            self._transport_card_logged.add(call_id)
+        except Exception:
+            logger.debug("TransportCard logging failed", call_id=call_id, exc_info=True)
+
+    def _resolve_stream_targets(
+        self,
+        session: CallSession,
+        provider_name: Optional[str],
+    ) -> Tuple[str, int, Optional[str]]:
+        provider_name = provider_name or getattr(session, "provider_name", None) or self.config.default_provider
+
+        transport_fmt = self._canonicalize_encoding(getattr(session.transport_profile, "format", None)) or "ulaw"
+        try:
+            transport_rate = int(getattr(session.transport_profile, "sample_rate", 0) or 0)
+        except Exception:
+            transport_rate = 0
+        if transport_rate <= 0:
+            transport_rate = 8000 if transport_fmt in {"ulaw", "mulaw", "g711_ulaw"} else 16000
+
+        # Always refresh downstream preference view so playback manager aligns with transport
+        self.call_audio_preferences[session.call_id] = {
+            "format": transport_fmt,
+            "sample_rate": transport_rate,
+        }
+
+        provider = self.providers.get(provider_name)
+        provider_target = None
+        provider_rate = None
+        try:
+            provider_cfg = getattr(provider, "config", None)
+            provider_target = self._canonicalize_encoding(getattr(provider_cfg, "target_encoding", None))
+            raw_rate = getattr(provider_cfg, "target_sample_rate_hz", None)
+            provider_rate = int(raw_rate) if raw_rate else None
+        except Exception:
+            provider_cfg = None
+
+        remediation: Optional[str] = None
+        aligned = True
+        if provider_target and provider_target != transport_fmt:
+            aligned = False
+            remediation = (
+                f"Provider target_encoding={provider_target} but transport format={transport_fmt}. "
+                f"Update providers.{provider_name}.target_encoding to '{transport_fmt}' in config/ai-agent.yaml."
+            )
+        if provider_rate and provider_rate != transport_rate:
+            aligned = False
+            extra = (
+                f"Provider target_sample_rate_hz={provider_rate} but transport sample_rate={transport_rate}. "
+                f"Update providers.{provider_name}.target_sample_rate_hz to {transport_rate}."
+            )
+            remediation = f"{remediation} {extra}".strip() if remediation else extra
+
+        session.codec_alignment_ok = aligned
+        session.codec_alignment_message = remediation
+        try:
+            _CODEC_ALIGNMENT.labels(session.call_id, provider_name).set(1 if aligned else 0)
+        except Exception:
+            pass
+
+        if not aligned and remediation:
+            logger.warning(
+                "Codec/sample alignment degraded",
+                call_id=session.call_id,
+                provider=provider_name,
+                remediation=remediation,
+            )
+
+        self._emit_transport_card(
+            session.call_id,
+            session,
+            source_encoding=provider_target,
+            source_sample_rate=provider_rate,
+            target_encoding=transport_fmt,
+            target_sample_rate=transport_rate,
+        )
+
+        return transport_fmt, transport_rate, remediation
 
     async def _assign_pipeline_to_session(
         self,

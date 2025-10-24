@@ -1,11 +1,11 @@
 import asyncio
 import json
-import audioop
 import websockets
 import time
 import array
 import aiohttp
 import re
+import audioop
 from typing import Callable, Optional, List, Dict, Any
 import websockets.exceptions
 
@@ -184,9 +184,6 @@ class DeepgramProvider(AIProviderInterface):
         self._settings_retry_attempted: bool = False
         self._last_settings_payload: Optional[dict] = None
         self._last_settings_minimal: Optional[dict] = None
-        # Endianness detection cache (probe once, reuse for all chunks)
-        self._pcm16_endian_probed: bool = False
-        self._pcm16_needs_swap: bool = False
 
     @property
     def supported_codecs(self) -> List[str]:
@@ -1268,7 +1265,6 @@ class DeepgramProvider(AIProviderInterface):
                         logger.debug("Deepgram output inference failed", exc_info=True)
 
                     # Provider-side normalization
-                    payload_ulaw: bytes = b""
                     try:
                         enc = (self._dg_output_encoding or "mulaw").strip().lower()
                         rate = int(self._dg_output_rate or 8000)
@@ -1276,49 +1272,10 @@ class DeepgramProvider(AIProviderInterface):
                         enc = "mulaw"
                         rate = 8000
 
-                    if enc in ("linear16", "slin16", "pcm16"):
-                        # Treat message as PCM16; auto-detect endianness ONCE and cache result
+                    if enc in {"linear16", "pcm16"}:
                         pcm = message
-                        # Endianness probe on first chunk only
-                        if not self._pcm16_endian_probed:
-                            try:
-                                win = pcm[: min(960, len(pcm) - (len(pcm) % 2))]
-                                rms_native = audioop.rms(win, 2) if len(win) >= 2 else 0
-                                swapped = audioop.byteswap(win, 2) if len(win) >= 2 else b""
-                                rms_swapped = audioop.rms(swapped, 2) if swapped else 0
-                                avg_native = audioop.avg(win, 2) if len(win) >= 2 else 0
-                                avg_swapped = audioop.avg(swapped, 2) if swapped else 0
-                                prefer_swapped = False
-                                if rms_swapped >= max(1024, 4 * max(1, rms_native)):
-                                    prefer_swapped = True
-                                elif abs(avg_native) >= 8 * max(1, abs(avg_swapped)) and rms_swapped >= max(256, rms_native // 2):
-                                    prefer_swapped = True
-                                # Cache the result
-                                self._pcm16_endian_probed = True
-                                self._pcm16_needs_swap = prefer_swapped
-                                try:
-                                    logger.info(
-                                        "Deepgram provider PCM16 endian probe (cached)",
-                                        call_id=self.call_id,
-                                        rms_native=rms_native,
-                                        rms_swapped=rms_swapped,
-                                        avg_native=avg_native,
-                                        avg_swapped=avg_swapped,
-                                        prefer_swapped=prefer_swapped,
-                                    )
-                                except Exception:
-                                    pass
-                            except Exception:
-                                self._pcm16_endian_probed = True
-                                self._pcm16_needs_swap = False
-                        # Apply cached swap decision
-                        if self._pcm16_needs_swap:
-                            try:
-                                pcm = audioop.byteswap(pcm, 2)
-                            except Exception:
-                                pass
-                        # No forced resampling - honor configured output rate
-                        # DC-block the PCM payload before handing downstream
+                        if len(pcm) % 2:
+                            pcm = pcm[:-1]
                         try:
                             pcm = self._apply_dc_block(pcm)
                         except Exception:
@@ -1329,48 +1286,18 @@ class DeepgramProvider(AIProviderInterface):
                             'streaming_chunk': True,
                             'call_id': self.call_id,
                             'encoding': 'linear16',
-                            'sample_rate': rate,  # Use actual rate from config, not hardcoded
+                            'sample_rate': rate,
                         }
-                        if not self._first_output_chunk_logged:
-                            logger.info(
-                                "Deepgram AgentAudio first chunk",
-                                call_id=self.call_id,
-                                bytes=len(audio_event['data']),
-                                encoding=audio_event['encoding'],
-                                sample_rate=audio_event['sample_rate'],
-                            )
-                            self._first_output_chunk_logged = True
-                        self._in_audio_burst = True
-                        if self.on_event:
-                            await self.on_event(audio_event)
-                        continue
                     else:
-                        # enc == mulaw: Use Twilio's approach - treat as mulaw directly
-                        # Deepgram Voice Agent with mulaw settings sends mulaw data
-                        payload_ulaw = message  # Use raw mulaw data directly
-                        
-                        # Log first chunk only for diagnostics
-                        if not self._first_output_chunk_logged:
-                            logger.info(
-                                "Deepgram AgentAudio first chunk (mulaw)",
-                                call_id=self.call_id,
-                                bytes=len(message),
-                                encoding="mulaw",
-                                sample_rate=8000,
-                            )
-                            self._first_output_chunk_logged = True
-                        
-                        # Twilio approach: Use mulaw data as-is, no conversion needed
-                        # Already set: payload_ulaw = message
-
-                    audio_event = {
-                        'type': 'AgentAudio',
-                        'data': payload_ulaw if payload_ulaw else message,
-                        'streaming_chunk': True,
-                        'call_id': self.call_id,
-                        'encoding': 'mulaw',
-                        'sample_rate': rate,  # Use config rate, not hardcoded
-                    }
+                        payload_ulaw = message
+                        audio_event = {
+                            'type': 'AgentAudio',
+                            'data': payload_ulaw,
+                            'streaming_chunk': True,
+                            'call_id': self.call_id,
+                            'encoding': 'mulaw',
+                            'sample_rate': rate,
+                        }
                     if not self._first_output_chunk_logged:
                         logger.info(
                             "Deepgram AgentAudio first chunk",
