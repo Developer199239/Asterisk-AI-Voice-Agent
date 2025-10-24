@@ -139,10 +139,15 @@ References:
   - **Unwired egress configuration**: YAML keys `streaming.egress_swap_mode` / `streaming.egress_force_mulaw` were not honored. Streaming manager now ingests both settings from `streaming_config` so swap detection works during regression calls (`src/engine.py`, `src/core/streaming_playback_manager.py`).
   - **Continuous stream pacing**: Greeting segment shows `underflow_events=59`, `drift_pct=-67.1`, and wall duration 47.8 s vs 15.7 s effective despite clear audio. Idle cutoff is blocked because pacer never sees end-of-stream sentinel in continuous mode. Track investigation under “Pacing + idle cutoff” in follow-up tasks.
 
-- **Next Steps**:
+- **Next Steps (in progress)**:
   - Harden diagnostics: keep tap accumulation decoupled from optional callbacks, ensure RCA bundles report non-zero tap bytes, and suppress redundant alignment warnings once conversions are intentional.
   - Instrument pacing metrics: add buffer-depth and idle-cutoff telemetry around `StreamingPlaybackManager` to close the gap between effective and wall duration; evaluate segment-aware idle close for continuous streams.
   - Re-run ulaw baseline regression after fixes to confirm tap bytes populate and drift returns to ≈0 % with underflows near zero.
+
+- **Verification 2025-10-24 13:05 PDT**:
+  - Golden baseline transport restored end-to-end (`audiosocket.format: "slin"`, Deepgram mulaw 8 kHz). Runtime call `1761336116.1987` completed 65 s with clean two-way dialog; pacer emitted 20 ms μ-law frames without underflows.
+  - RCA bundle `rca-20251024-200537` shows `agent_out_to_caller.wav` 8 kHz RMS 2030 (66 dB SNR) and `caller_to_provider.wav` 8 kHz RMS 14866 (18.9 dB SNR). Provider chunk log confirms steady 960-byte μ-law packets.
+  - Remaining gaps: startup still logs codec-alignment warnings despite intentional `slin`↔`mulaw` bridge; diagnostic taps stay at zero bytes. Track suppressing false warnings and wiring tap capture as short-term fixes.
 
 - **Inbound Path Scope (Gap 4)**:
   - P0 focuses on **outbound only** (provider → caller).

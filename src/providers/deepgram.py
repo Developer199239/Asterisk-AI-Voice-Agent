@@ -910,8 +910,20 @@ class DeepgramProvider(AIProviderInterface):
         # Check streaming alignment with actual Deepgram output config (not hardcoded assumptions)
         dg_out_enc = self._canonicalize_encoding(self._dg_output_encoding or "mulaw")
         dg_out_rate = int(self._dg_output_rate or 8000)
-        
-        if streaming_encoding != dg_out_enc:
+
+        stream_enc_canon = self._canonicalize_encoding(streaming_encoding)
+        # Treat raw 'slin' as PCM16 for alignment comparisons
+        if stream_enc_canon == "slin":
+            stream_enc_canon = "linear16"
+
+        audiosocket_canon = self._canonicalize_encoding(audiosocket_format)
+        bridge_handled = (
+            stream_enc_canon in {"linear16", "slin16"}
+            and dg_out_enc == "mulaw"
+            and audiosocket_canon in {"slin", "slin16"}
+        )
+
+        if not bridge_handled and stream_enc_canon != dg_out_enc:
             issues.append(
                 f"Streaming manager emits {streaming_encoding} frames but Deepgram output_encoding is {dg_out_enc}. "
                 f"Ensure downstream playback matches Deepgram output format."
