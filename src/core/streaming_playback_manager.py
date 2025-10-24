@@ -161,9 +161,12 @@ class StreamingPlaybackManager:
         self.audiosocket_format: str = "ulaw"  # default format expected by dialplan
         # Debug: when True, send frames to all AudioSocket conns for the call
         self.audiosocket_broadcast_debug: bool = bool(self.streaming_config.get('audiosocket_broadcast_debug', False))
-        # Egress endianness override mode: 'auto' | 'force_true' | 'force_false'
-        self.egress_swap_mode: str = 'disabled'
-        self.egress_force_mulaw: bool = False
+        # Egress endianness override mode: 'auto' | 'force_true' | 'force_false' | 'disabled'
+        swap_mode_cfg = str(self.streaming_config.get('egress_swap_mode', 'disabled') or 'disabled').lower()
+        if swap_mode_cfg not in {'auto', 'force_true', 'force_false', 'disabled'}:
+            swap_mode_cfg = 'disabled'
+        self.egress_swap_mode: str = swap_mode_cfg
+        self.egress_force_mulaw: bool = bool(self.streaming_config.get('egress_force_mulaw', False))
         # Output conditioning: limiter and attack envelope
         try:
             self.limiter_enabled: bool = bool(self.streaming_config.get('limiter_enabled', True))
@@ -596,11 +599,11 @@ class StreamingPlaybackManager:
                 'startup_ready': bool(initial_startup_ready),
                 'first_frame_observed': False,
                 'min_start_chunks': min_start_chunks,
-                'low_watermark_chunks': low_watermark_chunks,
-                'resume_floor_chunks': resume_floor_chunks,
-                'jitter_buffer_chunks': jb_chunks,
-                'buffered_bytes': 0,
-                'end_reason': None,
+                'empty_backoff_ticks': 0,
+                'buffer_depth_max_frames': 0,
+                'buffer_depth_min_frames': None,
+                'filler_frames': 0,
+                'idle_cutoff_debug': [],
                 'source_encoding': src_encoding,
                 'source_sample_rate': src_rate,
                 'target_format': resolved_target_format,
@@ -897,6 +900,16 @@ class StreamingPlaybackManager:
 
         self.frame_remainders[call_id] = pending
         available_frames = self._estimate_available_frames(call_id, jitter_buffer, include_remainder=True)
+        try:
+            info = self.active_streams.get(call_id, {})
+            current_max = int(info.get('buffer_depth_max_frames', 0) or 0)
+            if available_frames > current_max:
+                info['buffer_depth_max_frames'] = available_frames
+            current_min = info.get('buffer_depth_min_frames')
+            if current_min is None or available_frames < current_min:
+                info['buffer_depth_min_frames'] = available_frames
+        except Exception:
+            pass
 
         if self._should_wait_for_low_water(call_id, stream_info, available_frames, sentinel_seen):
             return "wait"
@@ -1025,6 +1038,14 @@ class StreamingPlaybackManager:
             pass
         return True
 
+    def _note_idle_block(self, stream_info: Dict[str, Any], reason: str) -> None:
+        try:
+            dbg_list = stream_info.setdefault('idle_cutoff_debug', [])
+            if reason not in dbg_list and len(dbg_list) < 8:
+                dbg_list.append(reason)
+        except Exception:
+            pass
+
     def _should_wait_for_low_water(
         self,
         call_id: str,
@@ -1125,6 +1146,7 @@ class StreamingPlaybackManager:
                     pass
                 try:
                     info['underflow_events'] = int(info.get('underflow_events', 0)) + 1
+                    info['filler_frames'] = int(info.get('filler_frames', 0)) + 1
                 except Exception:
                     pass
         return "sent"
@@ -2047,6 +2069,12 @@ class StreamingPlaybackManager:
                     stage = f"transport_out:{stream_info.get('playback_type', 'response')}"
                     await self.audio_diag_callback(call_id, stage, chunk, effective_fmt, effective_rate)
                 except Exception:
+                    try:
+                        info = self.active_streams.get(call_id) or {}
+                        info['diag_callback_failed'] = True
+                        self.active_streams[call_id] = info
+                    except Exception:
+                        pass
                     logger.debug("Streaming diagnostics callback failed", call_id=call_id, exc_info=True)
 
             if self.audio_transport == "externalmedia":
@@ -2275,11 +2303,14 @@ class StreamingPlaybackManager:
         if cutoff_ms <= 0:
             return False
         if not bool(info.get('sentinel_seen', False)):
+            self._note_idle_block(info, 'waiting-for-sentinel')
             return False
         if not jitter_buffer.empty():
+            self._note_idle_block(info, 'buffer-not-empty')
             return False
         remainder = self.frame_remainders.get(call_id, b"")
         if remainder:
+            self._note_idle_block(info, 'pending-remainder')
             return False
         try:
             idle_ticks = int(info.get('idle_ticks', 0) or 0)
@@ -2287,12 +2318,15 @@ class StreamingPlaybackManager:
             idle_ticks = 0
         cutoff_ticks = int(info.get('idle_cutoff_ticks', 0) or 0)
         if cutoff_ticks and idle_ticks < cutoff_ticks:
+            self._note_idle_block(info, 'tick-threshold')
             return False
         last_real_emit_ts = info.get('last_real_emit_ts')
         if last_real_emit_ts is None:
+            self._note_idle_block(info, 'no-real-frame-yet')
             return False
         elapsed_ms = max(0.0, (time.time() - float(last_real_emit_ts)) * 1000.0)
         if elapsed_ms < cutoff_ms:
+            self._note_idle_block(info, 'elapsed-below-cutoff')
             return False
         info['idle_cutoff_triggered'] = True
         info['end_reason'] = info.get('end_reason') or 'idle-cutoff'
