@@ -12,11 +12,30 @@
 | :-- | :-- | :-- | :-- | :-- |
 | μ‑law telephony | ulaw | 8 kHz | mono | n/a (8‑bit companded) |
 | PCM telephony | slin | 8 kHz | mono | little‑endian (LE) |
-| PCM wideband | slin16 | 16 kHz | mono | little‑endian (LE), but probe and auto‑swap if needed |
+| PCM wideband | slin16 | 16 kHz | mono | little‑endian (LE) |
 
 Notes:
-- Some Asterisk builds and AudioSocket app versions have been observed to deliver big‑endian PCM16 on the wire when using 16 kHz (`slin16`). Implement a first‑frame probe and set a byte‑swap flag if `RMS(byteswap(frame)) ≫ RMS(frame)`. This avoids “static”/garble on greeting and prevents forwarding wrong‑endian PCM to providers (per recent RCAs).
-- The TLV header length is big‑endian; the audio payload endianness is independent and must be handled according to the selected profile and probe.
+- Per the official Asterisk documentation, AudioSocket audio message types (0x10–0x18) carry signed 16‑bit PCM in little‑endian byte order. The TLV header’s 2‑byte length is big‑endian, but the audio payload is always little‑endian. Do not confuse header endianness with payload endianness. [^asterisk-doc]
+
+#### Message Types and Endianness (from Asterisk)
+
+| Type | Meaning |
+| :--- | :------ |
+| `0x00` | Terminate the connection |
+| `0x01` | UUID handshake (16‑byte binary UUID) |
+| `0x03` | DTMF digit (payload: 1 ASCII byte) |
+| `0x10` | PCM16 mono, 8 kHz, signed little‑endian |
+| `0x11` | PCM16 mono, 12 kHz, signed little‑endian |
+| `0x12` | PCM16 mono, 16 kHz, signed little‑endian |
+| `0x13` | PCM16 mono, 24 kHz, signed little‑endian |
+| `0x14` | PCM16 mono, 32 kHz, signed little‑endian |
+| `0x15` | PCM16 mono, 44.1 kHz, signed little‑endian |
+| `0x16` | PCM16 mono, 48 kHz, signed little‑endian |
+| `0x17` | PCM16 mono, 96 kHz, signed little‑endian |
+| `0x18` | PCM16 mono, 192 kHz, signed little‑endian |
+| `0xFF` | Error (payload may contain an app‑specific error code) |
+
+Framing reminder: each packet begins with a 1‑byte type and a 2‑byte big‑endian payload length, followed by the payload. Audio payloads for `0x10`–`0x18` are always 16‑bit little‑endian PCM samples. [^asterisk-doc]
 
 ***
 
@@ -221,7 +240,7 @@ class AudioSocketParser:
 5. **Two supported transport profiles**: ulaw@8k or PCM (slin@8k/slin16@16k). Pick one and keep the pipeline consistent.
 
 **Common Mistakes**
-- Assuming PCM16 is always little‑endian on the wire. Probe and swap when running `slin16`.
+- Misreading header endianness: TLV length is big‑endian, but audio payload for PCM types is always little‑endian per Asterisk. Do not swap bytes for AudioSocket PCM types.
 - Forcing 8 kHz linear PCM on a voice that only supports 24 kHz PCM or 8 kHz μ‑law. Request a supported format and resample at the transport boundary. [^3][^4]
 
 This configuration ensures **low latency** and **reliable real‑time streaming** for AI voice agents using Asterisk AudioSocket, while acknowledging real‑world profiles (8/16 kHz PCM and μ‑law) and provider constraints. [^2][^3][^4]
@@ -235,4 +254,7 @@ This configuration ensures **low latency** and **reliable real‑time streaming*
       https://developers.deepgram.com/reference/voice-agent/agent-v-1
 [^4]: Deepgram — Supported audio formats.
       https://developers.deepgram.com/docs/supported-audio-formats
+
+[^asterisk-doc]: Asterisk — AudioSocket channel driver documentation (official). Message types, payload format (PCM16 little‑endian), and TLV framing.
+      https://docs.asterisk.org/Configuration/Channel-Drivers/AudioSocket/
 

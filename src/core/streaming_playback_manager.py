@@ -555,11 +555,33 @@ class StreamingPlaybackManager:
                     self.sample_rate,
                 )
             mulaw_transport = self._is_mulaw(self.audiosocket_format)
+            pcm_transport = self._canonicalize_encoding(self.audiosocket_format)
             if mulaw_transport:
                 resolved_target_format = "ulaw"
                 resolved_target_rate = 8000
-            elif self._canonicalize_encoding(self.audiosocket_format) in {"slin", "slin16", "linear16", "pcm16"}:
-                resolved_target_format = "slin16" if resolved_target_rate >= 16000 else "slin"
+            elif pcm_transport in {"slin16", "linear16", "pcm16"}:
+                resolved_target_format = "slin16"
+                preferred_rate = 0
+                try:
+                    preferred_rate = int(src_rate) if src_rate else 0
+                except Exception:
+                    preferred_rate = 0
+                if preferred_rate < 16000:
+                    preferred_rate = resolved_target_rate if resolved_target_rate and resolved_target_rate >= 16000 else 0
+                if preferred_rate < 16000:
+                    preferred_rate = 16000
+                resolved_target_rate = preferred_rate
+            elif pcm_transport == "slin":
+                resolved_target_format = "slin"
+                preferred_rate = 0
+                try:
+                    preferred_rate = int(src_rate) if src_rate else 0
+                except Exception:
+                    preferred_rate = 0
+                if preferred_rate <= 0:
+                    preferred_rate = resolved_target_rate if resolved_target_rate and resolved_target_rate > 0 else 8000
+                resolved_target_rate = preferred_rate
+            else:
                 resolved_target_rate = self._default_sample_rate_for_format(
                     resolved_target_format,
                     resolved_target_rate,

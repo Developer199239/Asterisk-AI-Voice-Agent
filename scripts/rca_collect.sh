@@ -25,28 +25,113 @@ BASE="logs/remote/rca-$TS"
 mkdir -p "$BASE"/{taps,recordings,logs,transcripts,metrics,timeline}
 mkdir -p "$BASE"/config
 echo "$BASE" > logs/remote/rca-latest.path
-echo "[RCA] Collecting ai_engine logs (since ${SINCE_MIN} minutes)"
-ssh "$SERVER_USER@$SERVER_HOST" "docker logs --since ${SINCE_MIN}m ai_engine > /tmp/ai-engine.latest.log" || true
-scp "$SERVER_USER@$SERVER_HOST:/tmp/ai-engine.latest.log" "$BASE/logs/ai-engine.log" 2>/dev/null || echo "[WARN] ai_engine log not retrieved"
-# Clean up remote tmp log
-ssh "$SERVER_USER@$SERVER_HOST" "rm -f /tmp/ai-engine.latest.log" || true
+
+SERVER_MODE="${SERVER_MODE:-auto}"
+if [ "$SERVER_MODE" = "auto" ]; then
+  SERVER_MODE="remote"
+  if command -v docker >/dev/null 2>&1; then
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx 'ai_engine'; then
+      SERVER_MODE="local"
+    fi
+  fi
+fi
+echo "[RCA] Server access mode: $SERVER_MODE"
+
+run_server_cmd() {
+  local cmd="$1"
+  if [ "$SERVER_MODE" = "local" ]; then
+    bash -lc "$cmd"
+  else
+    ssh "$SERVER_USER@$SERVER_HOST" "$cmd"
+  fi
+}
+
+fetch_file() {
+  local src="$1"
+  local dest="$2"
+  local dest_dir
+  dest_dir="$(dirname "$dest")"
+  mkdir -p "$dest_dir"
+  if [ "$SERVER_MODE" = "local" ]; then
+    if cp -f "$src" "$dest" 2>/dev/null; then
+      return 0
+    else
+      return 1
+    fi
+  else
+    if scp "$SERVER_USER@$SERVER_HOST:$src" "$dest" 2>/dev/null; then
+      return 0
+    else
+      return 1
+    fi
+  fi
+}
+
+fetch_dir() {
+  local src="$1"
+  local dest="$2"
+  mkdir -p "$dest"
+  if [ "$SERVER_MODE" = "local" ]; then
+    if cp -a "$src" "$dest" 2>/dev/null; then
+      return 0
+    else
+      return 1
+    fi
+  else
+    if scp -r "$SERVER_USER@$SERVER_HOST:$src" "$dest" 2>/dev/null; then
+      return 0
+    else
+      return 1
+    fi
+  fi
+}
+
+echo "[RCA] Collecting ai_engine logs (full container history)"
+if [ "$SERVER_MODE" = "local" ]; then
+  if ! docker logs ai_engine > "$BASE/logs/ai-engine.log" 2>/dev/null; then
+    echo "[WARN] ai_engine log not retrieved"
+  fi
+else
+  run_server_cmd "docker logs ai_engine > /tmp/ai-engine.all.log" || true
+  if ! fetch_file "/tmp/ai-engine.all.log" "$BASE/logs/ai-engine.log"; then
+    echo "[WARN] ai_engine log not retrieved"
+  fi
+  run_server_cmd "rm -f /tmp/ai-engine.all.log" || true
+fi
 CID=$(grep -o '"call_id": "[^"]*"' "$BASE/logs/ai-engine.log" | awk -F '"' '{print $4}' | tail -n 1 || true)
 echo -n "$CID" > "$BASE/call_id.txt"
 echo "[RCA] Active Call ID: ${CID:-unknown}"
 if [ -n "$CID" ]; then
-  ssh "$SERVER_USER@$SERVER_HOST" "docker exec ai_engine sh -lc 'cd /tmp/ai-engine-taps 2>/dev/null || exit 0; tar czf /tmp/ai_taps_${CID}.tgz *${CID}*.wav 2>/dev/null || true'; docker cp ai_engine:/tmp/ai_taps_${CID}.tgz /tmp/ai_taps_${CID}.tgz 2>/dev/null || true" || true
-  scp "$SERVER_USER@$SERVER_HOST:/tmp/ai_taps_${CID}.tgz" "$BASE/" 2>/dev/null || echo "[WARN] No tap bundle fetched"
+  run_server_cmd "docker exec ai_engine sh -lc 'cd /tmp/ai-engine-taps 2>/dev/null || exit 0; tar czf /tmp/ai_taps_${CID}.tgz *${CID}*.wav 2>/dev/null || true'" || true
+  if [ "$SERVER_MODE" = "local" ]; then
+    if run_server_cmd "docker cp ai_engine:/tmp/ai_taps_${CID}.tgz '$BASE/ai_taps_${CID}.tgz' 2>/dev/null"; then
+      run_server_cmd "docker exec ai_engine rm -f /tmp/ai_taps_${CID}.tgz" || true
+    else
+      echo "[WARN] No tap bundle fetched"
+      run_server_cmd "docker exec ai_engine rm -f /tmp/ai_taps_${CID}.tgz" || true
+    fi
+  else
+    run_server_cmd "docker cp ai_engine:/tmp/ai_taps_${CID}.tgz /tmp/ai_taps_${CID}.tgz" 2>/dev/null || true
+    if fetch_file "/tmp/ai_taps_${CID}.tgz" "$BASE/ai_taps_${CID}.tgz"; then
+      run_server_cmd "rm -f /tmp/ai_taps_${CID}.tgz" || true
+      run_server_cmd "docker exec ai_engine rm -f /tmp/ai_taps_${CID}.tgz" || true
+    else
+      echo "[WARN] No tap bundle fetched"
+      run_server_cmd "rm -f /tmp/ai_taps_${CID}.tgz" || true
+      run_server_cmd "docker exec ai_engine rm -f /tmp/ai_taps_${CID}.tgz" || true
+    fi
+  fi
 else
   echo "[WARN] No call ID. Skipping tap bundle retrieval"
 fi
-# Clean up remote tmp tap bundle
-ssh "$SERVER_USER@$SERVER_HOST" "rm -f /tmp/ai_taps_${CID}.tgz" 2>/dev/null || true
 if [ -f "$BASE/ai_taps_${CID}.tgz" ]; then tar xzf "$BASE/ai_taps_${CID}.tgz" -C "$BASE/taps"; fi
-REC_LIST=$(ssh "$SERVER_USER@$SERVER_HOST" "find /var/spool/asterisk/monitor -type f -name '*${CID}*.wav' -printf '%p\\n' 2>/dev/null | head -n 10") || true
+REC_LIST=$(run_server_cmd "find /var/spool/asterisk/monitor -type f -name '*${CID}*.wav' -printf '%p\\n' 2>/dev/null | head -n 10") || true
 if [ -n "$REC_LIST" ]; then
   while IFS= read -r f; do
     [ -z "$f" ] && continue
-    scp "$SERVER_USER@$SERVER_HOST:$f" "$BASE/recordings/" || echo "[WARN] Failed to fetch recording $f"
+    if ! fetch_file "$f" "$BASE/recordings/$(basename "$f")"; then
+      echo "[WARN] Failed to fetch recording $f"
+    fi
   done <<< "$REC_LIST"
 else
   echo "[WARN] No recordings detected for CID $CID"
@@ -54,10 +139,8 @@ fi
 # Fetch ARI channel recordings by parsing rec name from engine logs (name field)
 REC_NAME=$(grep -o '"name": "out-[^"]*"' "$BASE/logs/ai-engine.log" | awk -F '"' '{print $4}' | tail -n 1 || true)
 if [ -n "$REC_NAME" ]; then
-  # Default ARI recording directory
-  scp "$SERVER_USER@$SERVER_HOST:/var/spool/asterisk/recording/${REC_NAME}.wav" "$BASE/recordings/" 2>/dev/null || true
-  # Some installs use 'recordings' (plural)
-  scp "$SERVER_USER@$SERVER_HOST:/var/spool/asterisk/recordings/${REC_NAME}.wav" "$BASE/recordings/" 2>/dev/null || true
+  fetch_file "/var/spool/asterisk/recording/${REC_NAME}.wav" "$BASE/recordings/${REC_NAME}.wav" || true
+  fetch_file "/var/spool/asterisk/recordings/${REC_NAME}.wav" "$BASE/recordings/${REC_NAME}.wav" || true
 fi
 TAPS=$(ls "$BASE"/taps/*.wav 2>/dev/null || true)
 RECS=$(ls "$BASE"/recordings/*.wav 2>/dev/null || true)
@@ -84,9 +167,9 @@ if [ -n "$IN_WAVS" ]; then
 fi
 
 if [ -n "$CID" ]; then
-  ssh "$SERVER_USER@$SERVER_HOST" "CID=$CID; SRC=/tmp/ai-engine-captures/$CID; TMP=/tmp/ai-capture-$CID; TAR=/tmp/ai-capture-$CID.tgz; if docker exec ai_engine test -d \"\$SRC\"; then docker cp ai_engine:\"\$SRC\" \"\$TMP\" 2>/dev/null && tar czf \"\$TAR\" -C /tmp ai-capture-$CID && rm -rf \"\$TMP\"; fi" || true
-  if scp "$SERVER_USER@$SERVER_HOST:/tmp/ai-capture-$CID.tgz" "$BASE/" 2>/dev/null; then
-    ssh "$SERVER_USER@$SERVER_HOST" "rm -f /tmp/ai-capture-$CID.tgz" || true
+  run_server_cmd "CID=$CID; SRC=/tmp/ai-engine-captures/$CID; TMP=/tmp/ai-capture-$CID; TAR=/tmp/ai-capture-$CID.tgz; if docker exec ai_engine test -d \"\$SRC\"; then docker cp ai_engine:\"\$SRC\" \"\$TMP\" 2>/dev/null && tar czf \"\$TAR\" -C /tmp ai-capture-$CID && rm -rf \"\$TMP\"; fi" || true
+  if fetch_file "/tmp/ai-capture-$CID.tgz" "$BASE/ai-capture-$CID.tgz"; then
+    run_server_cmd "rm -f /tmp/ai-capture-$CID.tgz" || true
     mkdir -p "$BASE/captures"
     tar xzf "$BASE/ai-capture-$CID.tgz" -C "$BASE/captures" && rm "$BASE/ai-capture-$CID.tgz"
   fi
@@ -106,17 +189,33 @@ if [ ${#CAPTURE_FILES[@]} -gt 0 ]; then
 fi
 
 # Fetch server-side ai-agent.yaml for transport/provider troubleshooting
-scp "$SERVER_USER@$SERVER_HOST:$PROJECT_PATH/config/ai-agent.yaml" "$BASE/config/" 2>/dev/null || echo "[WARN] Failed to fetch ai-agent.yaml"
-
-# Fetch Asterisk dialplan custom file and full log for context
-scp "$SERVER_USER@$SERVER_HOST:/etc/asterisk/extensions_custom.conf" "$BASE/config/" 2>/dev/null || echo "[WARN] Failed to fetch extensions_custom.conf"
-scp "$SERVER_USER@$SERVER_HOST:/var/log/asterisk/full" "$BASE/logs/asterisk-full.log" 2>/dev/null || echo "[WARN] Failed to fetch asterisk full log"
+if ! fetch_file "$PROJECT_PATH/config/ai-agent.yaml" "$BASE/config/ai-agent.yaml"; then
+  echo "[WARN] Failed to fetch ai-agent.yaml"
+fi
+if ! fetch_file "/etc/asterisk/extensions_custom.conf" "$BASE/config/extensions_custom.conf"; then
+  echo "[WARN] Failed to fetch extensions_custom.conf"
+fi
+if ! fetch_file "/var/log/asterisk/full" "$BASE/logs/asterisk-full.log"; then
+  echo "[WARN] Failed to fetch asterisk full log"
+fi
 
 # Copy container log files from /app/logs when available
 CONTAINER_LOG_TMP="/tmp/ai-engine-logs-${CID:-latest}"
-ssh "$SERVER_USER@$SERVER_HOST" "mkdir -p '$CONTAINER_LOG_TMP' && docker cp ai_engine:/app/logs/. '$CONTAINER_LOG_TMP'/ 2>/dev/null" || echo "[WARN] Failed to copy logs from container"
-scp -r "$SERVER_USER@$SERVER_HOST:$CONTAINER_LOG_TMP" "$BASE/logs/" 2>/dev/null || echo "[WARN] Failed to download container logs"
-ssh "$SERVER_USER@$SERVER_HOST" "rm -rf '$CONTAINER_LOG_TMP'" || true
+if [ "$SERVER_MODE" = "local" ]; then
+  if run_server_cmd "mkdir -p '$CONTAINER_LOG_TMP' && docker cp ai_engine:/app/logs/. '$CONTAINER_LOG_TMP'/ 2>/dev/null"; then
+    fetch_dir "$CONTAINER_LOG_TMP" "$BASE/logs" || echo "[WARN] Failed to download container logs"
+  else
+    echo "[WARN] Failed to copy logs from container"
+  fi
+  run_server_cmd "rm -rf '$CONTAINER_LOG_TMP'" || true
+else
+  if run_server_cmd "mkdir -p '$CONTAINER_LOG_TMP' && docker cp ai_engine:/app/logs/. '$CONTAINER_LOG_TMP'/ 2>/dev/null"; then
+    fetch_dir "$CONTAINER_LOG_TMP" "$BASE/logs" || echo "[WARN] Failed to download container logs"
+  else
+    echo "[WARN] Failed to copy logs from container"
+  fi
+  run_server_cmd "rm -rf '$CONTAINER_LOG_TMP'" || true
+fi
 
 # Aggregate audio quality metrics and produce unified summary + narrative
 BASE_DIR="$BASE" python3 - <<'PY'

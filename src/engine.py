@@ -4051,6 +4051,78 @@ class Engine:
         except Exception:
             logger.error("Pipeline runner crashed", call_id=call_id, exc_info=True)
 
+    async def _hydrate_transport_from_dialplan(self, session: CallSession, channel_id: str) -> None:
+        """Load transport hints (format/rate) provided by the dialplan via channel vars."""
+        fmt_token: Optional[str] = None
+        rate_value: Optional[int] = None
+
+        # Fetch AI_TRANSPORT_FORMAT (e.g., ulaw, slin16)
+        try:
+            resp = await self.ari_client.send_command(
+                "GET",
+                f"channels/{channel_id}/variable",
+                params={"variable": "AI_TRANSPORT_FORMAT"},
+            )
+            if isinstance(resp, dict):
+                value = (resp.get("value") or "").strip()
+                if value:
+                    fmt_token = value
+        except Exception:
+            logger.debug(
+                "Dialplan transport format fetch failed",
+                call_id=channel_id,
+                exc_info=True,
+            )
+
+        # Fetch AI_TRANSPORT_RATE (integer Hz)
+        try:
+            resp = await self.ari_client.send_command(
+                "GET",
+                f"channels/{channel_id}/variable",
+                params={"variable": "AI_TRANSPORT_RATE"},
+            )
+            if isinstance(resp, dict):
+                raw = (resp.get("value") or "").strip()
+                if raw:
+                    rate_value = int(float(raw))
+        except Exception:
+            logger.debug(
+                "Dialplan transport rate fetch failed",
+                call_id=channel_id,
+                exc_info=True,
+            )
+
+        if fmt_token is None and rate_value is None:
+            return
+
+        canonical_fmt: Optional[str] = None
+        if fmt_token is not None:
+            canonical_fmt = self._canonicalize_encoding(fmt_token)
+            if canonical_fmt:
+                session.caller_audio_format = canonical_fmt
+
+        if rate_value is not None and rate_value > 0:
+            session.caller_sample_rate = rate_value
+        else:
+            rate_value = None
+
+        await self._update_transport_profile(
+            session,
+            fmt=canonical_fmt,
+            sample_rate=rate_value,
+            source="dialplan",
+        )
+
+        try:
+            logger.info(
+                "Hydrated transport profile from dialplan",
+                call_id=session.call_id,
+                transport_format=canonical_fmt,
+                transport_rate=rate_value,
+            )
+        except Exception:
+            pass
+
     async def _detect_caller_codec(self, session: CallSession, channel_id: str) -> None:
         """Inspect the caller channel via ARI and record its audio format/sample-rate."""
         preferred_fmt: Optional[str] = None
