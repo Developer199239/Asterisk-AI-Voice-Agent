@@ -114,7 +114,7 @@ downstream_mode: "stream"
 audiosocket:
   host: "0.0.0.0"          # Bind address (use 127.0.0.1 when engine and Asterisk share a host)
   port: 8090               # TCP port for AudioSocket connections
-  format: "slin"             # Wire format: PCM16 @ 8kHz (AudioSocket protocol TYPE 0x10)
+  format: "ulaw"             # Wire format: PCM16 @ 8kHz (AudioSocket protocol TYPE 0x10)
 
 # Barge-in configuration
 barge_in:
