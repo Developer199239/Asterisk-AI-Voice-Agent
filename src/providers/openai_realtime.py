@@ -456,7 +456,10 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                             )
                         except Exception:
                             logger.error("Failed to append/commit input audio buffer", call_id=self._call_id, exc_info=True)
-                        await self._ensure_response_request()
+                        # CRITICAL FIX: Do NOT manually trigger response.create after every audio commit
+                        # OpenAI's server_vad automatically generates responses when user stops speaking
+                        # Calling _ensure_response_request() here caused 148 requests in 70s (spam!)
+                        # Let OpenAI handle turn-taking naturally
         except ConnectionClosedError:
             logger.warning("OpenAI Realtime socket closed while sending audio", call_id=self._call_id)
             await self._reconnect_with_backoff()
