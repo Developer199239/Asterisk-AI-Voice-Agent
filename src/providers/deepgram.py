@@ -205,6 +205,51 @@ class DeepgramProvider(AIProviderInterface):
             output_sample_rates_hz=[8000],
             preferred_chunk_ms=20,
         )
+    
+    def parse_ack(self, event_data: Dict[str, Any]) -> Optional[ProviderCapabilities]:
+        """
+        Parse SettingsApplied event from Deepgram to extract actual negotiated formats.
+        
+        Returns capabilities based on provider ACK, or None if not a SettingsApplied event.
+        """
+        event_type = event_data.get('type')
+        if event_type != 'SettingsApplied':
+            return None
+        
+        try:
+            settings = event_data.get('settings', {})
+            audio = settings.get('audio', {})
+            input_audio = audio.get('input', {})
+            output_audio = audio.get('output', {})
+            
+            input_enc = self._canonicalize_encoding(input_audio.get('encoding', 'mulaw'))
+            output_enc = self._canonicalize_encoding(output_audio.get('encoding', 'mulaw'))
+            input_rate = int(input_audio.get('sample_rate', 8000))
+            output_rate = int(output_audio.get('sample_rate', 8000))
+            
+            logger.info(
+                "Parsed Deepgram SettingsApplied ACK",
+                call_id=self.call_id,
+                input_encoding=input_enc,
+                input_sample_rate=input_rate,
+                output_encoding=output_enc,
+                output_sample_rate=output_rate,
+            )
+            
+            return ProviderCapabilities(
+                input_encodings=[input_enc],
+                input_sample_rates_hz=[input_rate],
+                output_encodings=[output_enc],
+                output_sample_rates_hz=[output_rate],
+                preferred_chunk_ms=20,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to parse Deepgram SettingsApplied event",
+                call_id=self.call_id,
+                error=str(exc),
+            )
+            return None
 
     # ------------------------------------------------------------------ #
     # Metrics helpers

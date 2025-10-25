@@ -205,6 +205,59 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             output_sample_rates_hz=[8000, 24000],
             preferred_chunk_ms=20,
         )
+    
+    def parse_ack(self, event_data: Dict[str, Any]) -> Optional[ProviderCapabilities]:
+        """
+        Parse session.updated event from OpenAI Realtime API to extract negotiated formats.
+        
+        Returns capabilities based on provider ACK, or None if not a session.updated event.
+        """
+        event_type = event_data.get('type')
+        if event_type != 'session.updated':
+            return None
+        
+        try:
+            session = event_data.get('session', {})
+            
+            # OpenAI session.updated includes input_audio_format and output_audio_format
+            input_format = session.get('input_audio_format', 'pcm16')
+            output_format = session.get('output_audio_format', 'pcm16')
+            
+            # OpenAI Realtime API only supports 24kHz
+            sample_rate = 24000
+            
+            # Map OpenAI format names to our encoding names
+            format_map = {
+                'pcm16': 'linear16',
+                'g711_ulaw': 'mulaw',
+                'g711_alaw': 'alaw',
+            }
+            
+            input_enc = format_map.get(input_format, input_format)
+            output_enc = format_map.get(output_format, output_format)
+            
+            logger.info(
+                "Parsed OpenAI session.updated ACK",
+                call_id=self._call_id,
+                input_format=input_format,
+                output_format=output_format,
+                sample_rate=sample_rate,
+            )
+            
+            return ProviderCapabilities(
+                input_encodings=[input_enc],
+                input_sample_rates_hz=[sample_rate],
+                output_encodings=[output_enc],
+                output_sample_rates_hz=[sample_rate],
+                preferred_chunk_ms=20,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to parse OpenAI session.updated event",
+                call_id=self._call_id,
+                error=str(exc),
+            )
+            return None
 
     async def start_session(self, call_id: str):
         if not self.config.api_key:

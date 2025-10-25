@@ -641,7 +641,9 @@ Before starting P0 code changes:
 
 - **Baseline**: `logs/remote/golden-baseline-telephony-ulaw/WORKING_BASELINE_DOCUMENTATION.md`
 - **Gap Analysis**: `docs/plan/ROADMAPv4-GAP-ANALYSIS.md`
-- **AudioSocket Spec**: `docs/AudioSocket with Asterisk_ Technical Summary for A.md`
+- **AudioSocket Spec**: `docs/AudioSocket with Asterisk_ Technical Summary for A.md` — Type codes, TLV format, PCM LE payload
+- **AudioSocket-Provider Alignment**: `docs/AudioSocket-Provider-Alignment.md` — Codec alignment patterns, latency optimization, multi-provider strategies
 - **Architecture**: `docs/Architecture.md`
 - **Original Roadmap**: `docs/plan/ROADMAP.md` (Milestones 1-8)
+- **P1 Implementation Plan**: `docs/plan/P1_IMPLEMENTATION_PLAN.md` — Multi-provider support (5-day plan)
 - **Git Tag**: `Working-Two-way-audio-ulaw` (commit b3e9bad)
