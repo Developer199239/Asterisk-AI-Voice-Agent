@@ -257,6 +257,8 @@ def infer_leg(path):
         return "agent_out_to_caller"
     if "post_compand" in name and "first200ms" in name:
         return "post_compand_first200ms"
+    if "pre_compand" in name and "first200ms" in name:
+        return "pre_compand_first200ms"
     if "post_compand" in name and "first.wav" in name:
         return "post_compand_first"
     if "post_compand" in name:
@@ -266,6 +268,13 @@ def infer_leg(path):
     if "in-" in name and name.endswith(".wav"):
         return "caller_recording"
     return None
+
+def is_first_window_snapshot(path: str) -> bool:
+    try:
+        n = Path(path or "").name
+    except Exception:
+        n = str(path or "")
+    return "first200ms" in n
 
 def classify(entry):
     metrics = entry.get("metrics", {})
@@ -288,9 +297,11 @@ def classify(entry):
     if "high_silence_ratio" in impairments:
         notes.append("high silence")
         severity = max([severity, "fair"], key=lambda x: severity_rank[x])
-    leg = infer_leg(entry.get("file"))
+    file_path = entry.get("file")
+    leg = infer_leg(file_path)
+    is_200ms = is_first_window_snapshot(file_path)
     detail = {
-        "file": entry.get("file"),
+        "file": file_path,
         "duration_s": entry.get("header", {}).get("duration_s"),
         "sample_rate_hz": entry.get("header", {}).get("rate"),
         "snr_db": snr,
@@ -301,6 +312,7 @@ def classify(entry):
         "assessment": severity,
         "notes": notes,
         "leg": leg,
+        "snapshot_200ms": bool(is_200ms),
     }
     return severity, detail
 
@@ -316,13 +328,21 @@ for name in ("wav_report_taps.json", "wav_report_rec.json", "wav_report_captures
     results.extend(data.get("results", []))
 
 if results:
-    worst = "good"
+    worst_all = "good"
+    worst_main = "good"
+    main_count = 0
     for res in results:
         severity, detail = classify(res)
         channels.append(detail)
-        if severity_rank[severity] > severity_rank[worst]:
-            worst = severity
-    overall_severity = worst
+        # Track worst across all channels
+        if severity_rank[severity] > severity_rank[worst_all]:
+            worst_all = severity
+        # Exclude first-200ms snapshots from overall unless no main channels exist
+        if not detail.get("snapshot_200ms"):
+            main_count += 1
+            if severity_rank[severity] > severity_rank[worst_main]:
+                worst_main = severity
+    overall_severity = worst_main if main_count > 0 else worst_all
 
 # Parse network metrics from ai-engine log (call-level summary entries)
 network_metrics = {}
