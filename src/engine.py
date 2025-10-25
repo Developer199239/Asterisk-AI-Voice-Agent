@@ -3617,10 +3617,14 @@ class Engine:
                         await self.streaming_playback_manager.end_segment_gating(call_id)
                     except Exception:
                         logger.debug("Failed to end segment gating", call_id=call_id, exc_info=True)
-                    try:
-                        self._segment_tts_active.discard(call_id)
-                    except Exception:
-                        pass
+                    # CRITICAL FIX #1: Do NOT discard call_id for continuous streams
+                    # Discarding causes subsequent chunks to re-trigger gating, interrupting playback
+                    # For OpenAI greeting: 20+ interruptions in 86s call (gating every 3-5s)
+                    # Keep call_id in set so subsequent chunks don't re-gate
+                    # try:
+                    #     self._segment_tts_active.discard(call_id)
+                    # except Exception:
+                    #     pass
                 else:
                     if q is not None:
                         # Signal end of stream (per-segment mode)

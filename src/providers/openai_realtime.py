@@ -446,16 +446,20 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                         audio_b64 = base64.b64encode(chunk).decode("ascii")
                         try:
                             await self._send_json({"type": "input_audio_buffer.append", "audio": audio_b64})
-                            await self._send_json({"type": "input_audio_buffer.commit"})
+                            # CRITICAL FIX #2: Do NOT manually commit input audio buffer
+                            # Manual commits caused 310 "buffer too small" errors (40% failure rate)
+                            # OpenAI automatically commits when speech_stopped is detected (per API design)
+                            # Removes empty buffer errors and lets OpenAI handle turn-taking naturally
+                            # await self._send_json({"type": "input_audio_buffer.commit"})
                             self._last_commit_ts = time.monotonic()
                             logger.info(
-                                "OpenAI committed input audio",
+                                "OpenAI appended input audio (auto-commit on speech_stopped)",
                                 call_id=self._call_id,
                                 ms=len(chunk) // bytes_per_ms,
                                 bytes=len(chunk),
                             )
                         except Exception:
-                            logger.error("Failed to append/commit input audio buffer", call_id=self._call_id, exc_info=True)
+                            logger.error("Failed to append input audio buffer", call_id=self._call_id, exc_info=True)
                         # CRITICAL FIX: Do NOT manually trigger response.create after every audio commit
                         # OpenAI's server_vad automatically generates responses when user stops speaking
                         # Calling _ensure_response_request() here caused 148 requests in 70s (spam!)
