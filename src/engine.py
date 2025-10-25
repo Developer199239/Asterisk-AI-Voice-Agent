@@ -4491,6 +4491,29 @@ class Engine:
                     error=str(exc),
                 )
             
+            # CRITICAL FIX: Apply transport_out settings to provider's target config
+            # The provider needs to know what format/rate to emit based on the profile
+            try:
+                provider = self.providers.get(provider_name)
+                if provider and hasattr(provider, 'config'):
+                    # Update provider's target encoding/rate to match transport_out
+                    provider.config.target_encoding = transport.transport_encoding
+                    provider.config.target_sample_rate_hz = transport.transport_sample_rate
+                    logger.info(
+                        "Applied transport_out settings to provider config",
+                        call_id=session.call_id,
+                        provider=provider_name,
+                        target_encoding=transport.transport_encoding,
+                        target_sample_rate_hz=transport.transport_sample_rate,
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to apply transport settings to provider config",
+                    call_id=session.call_id,
+                    provider=provider_name,
+                    error=str(exc),
+                )
+            
             # Get context config for prompt/greeting
             context_config = None
             if transport.context:
