@@ -920,7 +920,7 @@ class DeepgramProvider(AIProviderInterface):
         bridge_handled = (
             stream_enc_canon in {"linear16", "slin16"}
             and dg_out_enc == "mulaw"
-            and audiosocket_canon in {"slin", "slin16"}
+            and audiosocket_canon in {"slin", "slin16", "linear16"}
         )
 
         if not bridge_handled and stream_enc_canon != dg_out_enc:

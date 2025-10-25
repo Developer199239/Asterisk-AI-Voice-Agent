@@ -1423,6 +1423,85 @@ class StreamingPlaybackManager:
                 # Simple decode: mulaw → PCM16
                 try:
                     pcm16_bytes = mulaw_to_pcm16le(chunk)
+                    # Accumulate diagnostics taps and snapshots in fast path
+                    try:
+                        if getattr(self, 'diag_enable_taps', False) and call_id in self.active_streams and pcm16_bytes:
+                            info = self.active_streams.get(call_id, {})
+                            try:
+                                rate = int(target_rate)
+                            except Exception:
+                                rate = int(self.sample_rate)
+                            # Per-segment pre/post buffers
+                            try:
+                                pre_lim = max(0, int(self.diag_pre_secs * rate * 2))
+                            except Exception:
+                                pre_lim = 0
+                            if pre_lim and isinstance(info.get('tap_pre_pcm16'), (bytearray, bytes)):
+                                pre_buf = info['tap_pre_pcm16']
+                                if len(pre_buf) < pre_lim:
+                                    need = pre_lim - len(pre_buf)
+                                    pre_buf.extend(pcm16_bytes[:need])
+                            try:
+                                post_lim = max(0, int(self.diag_post_secs * rate * 2))
+                            except Exception:
+                                post_lim = 0
+                            if post_lim and isinstance(info.get('tap_post_pcm16'), (bytearray, bytes)):
+                                post_buf = info['tap_post_pcm16']
+                                if len(post_buf) < post_lim:
+                                    need2 = post_lim - len(post_buf)
+                                    post_buf.extend(pcm16_bytes[:need2])
+                            # Call-level accumulation
+                            self._append_call_taps(call_id, pcm16_bytes, pcm16_bytes, int(rate))
+                            # First-window (200ms) snapshots
+                            try:
+                                win_rate = int(rate)
+                            except Exception:
+                                win_rate = int(self.sample_rate)
+                            try:
+                                win_bytes = max(1, int(win_rate * 0.2 * 2))
+                            except Exception:
+                                win_bytes = 3200
+                            try:
+                                if isinstance(info.get('tap_first_window_pre'), bytearray):
+                                    pre_w = info['tap_first_window_pre']
+                                    if len(pre_w) < win_bytes:
+                                        needw = win_bytes - len(pre_w)
+                                        pre_w.extend(pcm16_bytes[:needw])
+                                if isinstance(info.get('tap_first_window_post'), bytearray):
+                                    post_w = info['tap_first_window_post']
+                                    if len(post_w) < win_bytes:
+                                        needw2 = win_bytes - len(post_w)
+                                        post_w.extend(pcm16_bytes[:needw2])
+                                if not info.get('tap_first_window_done'):
+                                    pre_w = info.get('tap_first_window_pre') or bytearray()
+                                    post_w = info.get('tap_first_window_post') or bytearray()
+                                    if len(pre_w) >= win_bytes and len(post_w) >= win_bytes:
+                                        sid = str(info.get('stream_id', 'seg'))
+                                        try:
+                                            fnp200 = os.path.join(self.diag_out_dir, f"pre_compand_pcm16_{call_id}_{sid}_first200ms.wav")
+                                            with wave.open(fnp200, 'wb') as wf:
+                                                wf.setnchannels(1)
+                                                wf.setsampwidth(2)
+                                                wf.setframerate(win_rate)
+                                                wf.writeframes(bytes(pre_w[:win_bytes]))
+                                            logger.info("Wrote pre-compand 200ms snapshot", call_id=call_id, stream_id=sid, path=fnp200, bytes=win_bytes, rate=win_rate, snapshot="first200ms")
+                                        except Exception:
+                                            logger.warning("Failed 200ms pre snapshot (mulaw->pcm fast)", call_id=call_id, stream_id=sid, rate=win_rate, exc_info=True)
+                                        try:
+                                            fnq200 = os.path.join(self.diag_out_dir, f"post_compand_pcm16_{call_id}_{sid}_first200ms.wav")
+                                            with wave.open(fnq200, 'wb') as wf:
+                                                wf.setnchannels(1)
+                                                wf.setsampwidth(2)
+                                                wf.setframerate(win_rate)
+                                                wf.writeframes(bytes(post_w[:win_bytes]))
+                                            logger.info("Wrote post-compand 200ms snapshot", call_id=call_id, stream_id=sid, path=fnq200, bytes=win_bytes, rate=win_rate, snapshot="first200ms")
+                                        except Exception:
+                                            logger.warning("Failed 200ms post snapshot (mulaw->pcm fast)", call_id=call_id, stream_id=sid, rate=win_rate, exc_info=True)
+                                        info['tap_first_window_done'] = True
+                            except Exception:
+                                logger.debug("First-window snapshot failed (mulaw->pcm fast path)", call_id=call_id, exc_info=True)
+                    except Exception:
+                        logger.debug("Fast-path tap accumulation failed (mulaw->pcm)", call_id=call_id, exc_info=True)
                     return pcm16_bytes
                 except Exception as e:
                     logger.error(

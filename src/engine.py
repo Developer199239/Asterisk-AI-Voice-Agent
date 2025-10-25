@@ -3066,8 +3066,20 @@ class Engine:
                     suggestion="Set providers.openai_realtime.output_sample_rate_hz to 24000",
                 )
 
-            # Deepgram input encoding vs audiosocket
-            if dg_in_enc in ("ulaw", "mulaw", "g711_ulaw", "mu-law") and as_fmt not in ("ulaw", "mulaw", "g711_ulaw", "mu-law"):
+            # Deepgram input encoding vs audiosocket (suppress intentional PCM↔μ-law bridge)
+            try:
+                as_canon = self._canonicalize_encoding(as_fmt)
+            except Exception:
+                as_canon = as_fmt
+            try:
+                dg_in_canon = self._canonicalize_encoding(dg_in_enc)
+            except Exception:
+                dg_in_canon = dg_in_enc
+
+            if dg_in_canon in ("ulaw",) and as_canon in ("slin16",):
+                # Intentional bridge: audiosocket carries PCM16 while Deepgram ingests μ-law
+                pass
+            elif dg_in_enc in ("ulaw", "mulaw", "g711_ulaw", "mu-law") and as_fmt not in ("ulaw", "mulaw", "g711_ulaw", "mu-law"):
                 logger.warning(
                     "Deepgram input encoding expects μ-law but audiosocket is PCM",
                     audiosocket_format=as_fmt,
