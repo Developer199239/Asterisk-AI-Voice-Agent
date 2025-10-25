@@ -688,6 +688,18 @@ class StreamingPlaybackManager:
                 )
             except Exception:
                 pass
+            # One-time frame size observability at start
+            try:
+                logger.info(
+                    "🎼 STREAM FRAME SIZE",
+                    call_id=call_id,
+                    frame_size_bytes=self._frame_size_bytes(call_id),
+                    chunk_ms=int(self.chunk_size_ms),
+                    target_format=resolved_target_format,
+                    target_rate=resolved_target_rate,
+                )
+            except Exception:
+                pass
             
             return stream_id
             
@@ -1235,21 +1247,6 @@ class StreamingPlaybackManager:
             ):
                 self._resample_states[call_id] = None
                 
-                # NEW: Direct passthrough - skip all processing when source and target are both mulaw
-                # This eliminates decode/normalize/encode cycle that degrades quality and adds latency
-                try:
-                    logger.info(
-                        "🚀 μ-law PASSTHROUGH - Skipping all processing",
-                        call_id=call_id,
-                        chunk_bytes=len(chunk),
-                        source=src_encoding_raw,
-                        target=target_fmt,
-                        sample_rate=src_rate,
-                    )
-                except Exception:
-                    pass
-                return chunk  # Return original Deepgram mulaw unchanged
-                
                 # μ-law fast-path sanity guard: verify round-trip μ-law -> PCM16 -> μ-law preserves bytes
                 guard_ok = True
                 try:
@@ -1269,137 +1266,140 @@ class StreamingPlaybackManager:
                                 ratio = matches / float(max(1, lw))
                                 if ratio < 0.98:
                                     guard_ok = False
-                        # if no window, treat as ok
                 except Exception:
                     guard_ok = True
 
+                # If guard passes, keep provider μ-law as-is (passthrough). If guard fails, decode/normalize/re-encode.
                 if guard_ok:
-                    # μ-law path: decode → normalize → optional limit → re-encode
                     try:
-                        logger.debug("MULAW DECODE ATTEMPT", call_id=call_id, chunk_size=len(chunk), chunk_type=type(chunk).__name__)
-                        back_pcm = mulaw_to_pcm16le(chunk)
-                        logger.debug("MULAW DECODE SUCCESS", call_id=call_id, pcm_size=len(back_pcm))
-                    except Exception as e:
-                        logger.error("MULAW DECODE FAILED", call_id=call_id, error=str(e), error_type=type(e).__name__, chunk_size=len(chunk), exc_info=True)
-                        back_pcm = b""
-
-                    working_pcm = back_pcm
-                    
-                    # Trim leading silence before normalization
-                    if working_pcm:
-                        original_size = len(working_pcm)
-                        working_pcm = self._trim_leading_silence(working_pcm, threshold_rms=100)
-                        if len(working_pcm) < original_size:
-                            logger.debug("SILENCE TRIMMING APPLIED",
-                                        call_id=call_id,
-                                        original_bytes=original_size,
-                                        trimmed_bytes=len(working_pcm),
-                                        removed_bytes=original_size - len(working_pcm))
-                    
-                    try:
-                        logger.debug(
-                            "NORMALIZER CONDITION CHECK (ulaw fast-path)",
+                        logger.info(
+                            "μ-law PASSTHROUGH - Skipping all processing",
                             call_id=call_id,
-                            working_pcm_size=(len(working_pcm) if working_pcm else 0),
-                            normalizer_enabled=bool(self.normalizer_enabled),
-                            target_rms=int(self.normalizer_target_rms),
+                            chunk_bytes=len(chunk),
+                            source=src_encoding_raw,
+                            target=target_fmt,
+                            sample_rate=src_rate,
                         )
-                        if working_pcm and self.normalizer_enabled and self.normalizer_target_rms > 0:
-                            logger.debug("ENTERING NORMALIZER (ulaw fast-path)", call_id=call_id)
-                            working_pcm = self._apply_normalizer(working_pcm, self.normalizer_target_rms, self.normalizer_max_gain_db)
-                        else:
-                            logger.warning(
-                                "NORMALIZER SKIPPED - WHY? (ulaw fast-path)",
-                                call_id=call_id,
-                                working_pcm_size=(len(working_pcm) if working_pcm else 0),
-                                normalizer_enabled=bool(self.normalizer_enabled),
-                                target_rms=int(self.normalizer_target_rms),
-                            )
-                            if not working_pcm:
-                                logger.warning("EMPTY PCM AFTER DECODE - NORMALIZER SKIPPED", call_id=call_id)
-                    except Exception:
-                        logger.debug("Normalizer failed in μ-law path", call_id=call_id, exc_info=True)
-                    try:
-                        if working_pcm and self.limiter_enabled:
-                            working_pcm = self._apply_soft_limiter(working_pcm, self.limiter_headroom_ratio)
                     except Exception:
                         pass
-                    try:
-                        ulaw_bytes = pcm16le_to_mulaw(working_pcm) if working_pcm else chunk
-                    except Exception:
-                        ulaw_bytes = chunk
+                    return chunk
+                # Guard failed: decode → normalize (bounded) → optional limit → re-encode back to μ-law
+                try:
+                    logger.debug("MULAW DECODE ATTEMPT", call_id=call_id, chunk_size=len(chunk), chunk_type=type(chunk).__name__)
+                    back_pcm = mulaw_to_pcm16le(chunk)
+                    logger.debug("MULAW DECODE SUCCESS", call_id=call_id, pcm_size=len(back_pcm))
+                except Exception as e:
+                    logger.error("MULAW DECODE FAILED", call_id=call_id, error=str(e), error_type=type(e).__name__, chunk_size=len(chunk), exc_info=True)
+                    back_pcm = b""
 
-                    # Diagnostics on processed PCM
-                    try:
-                        if getattr(self, 'diag_enable_taps', False) and call_id in self.active_streams:
-                            info = self.active_streams.get(call_id, {})
-                            try:
-                                rate = int(target_rate)
-                            except Exception:
-                                rate = int(self.sample_rate)
-                            try:
-                                if not info.get('tap_first_snapshot_done', False):
-                                    stream_id_first = str(info.get('stream_id', 'seg'))
-                                    if working_pcm:
-                                        fn2 = os.path.join(self.diag_out_dir, f"post_compand_pcm16_{call_id}_{stream_id_first}_first.wav")
-                                        with wave.open(fn2, 'wb') as wf:
-                                            wf.setnchannels(1)
-                                            wf.setsampwidth(2)
-                                            wf.setframerate(rate)
-                                            wf.writeframes(working_pcm)
-                                        logger.info("Wrote post-compand PCM16 tap snapshot", call_id=call_id, stream_id=stream_id_first, path=fn2, bytes=len(working_pcm), rate=rate, snapshot="first")
-                                    info['tap_first_snapshot_done'] = True
-                            except Exception:
-                                logger.debug("Fast-path first-chunk tap snapshot failed", call_id=call_id, exc_info=True)
-                            try:
-                                pre_lim = max(0, int(self.diag_pre_secs * rate * 2))
-                            except Exception:
-                                pre_lim = 0
-                            if pre_lim and isinstance(info.get('tap_pre_pcm16'), (bytearray, bytes)) and working_pcm:
-                                pre_buf = info['tap_pre_pcm16']
-                                if len(pre_buf) < pre_lim:
-                                    need = pre_lim - len(pre_buf)
-                                    pre_buf.extend(working_pcm[:need])
-                            try:
-                                post_lim = max(0, int(self.diag_post_secs * rate * 2))
-                            except Exception:
-                                post_lim = 0
-                            if post_lim and isinstance(info.get('tap_post_pcm16'), (bytearray, bytes)) and working_pcm:
-                                post_buf = info['tap_post_pcm16']
-                                if len(post_buf) < post_lim:
-                                    need2 = post_lim - len(post_buf)
-                                    post_buf.extend(working_pcm[:need2])
-                            # Only maintain post window for fast-path
-                            try:
-                                win_rate = int(rate)
-                            except Exception:
-                                win_rate = int(self.sample_rate)
-                            try:
-                                win_bytes = max(1, int(win_rate * 0.2 * 2))
-                            except Exception:
-                                win_bytes = 3200
-                            if isinstance(info.get('tap_first_window_post'), bytearray) and working_pcm:
-                                post_w = info['tap_first_window_post']
-                                if len(post_w) < win_bytes:
-                                    needw2 = win_bytes - len(post_w)
-                                    post_w.extend(working_pcm[:needw2])
-                                if not info.get('tap_first_window_done') and len(post_w) >= win_bytes:
-                                    sid = str(info.get('stream_id', 'seg'))
-                                    try:
-                                        fnq200 = os.path.join(self.diag_out_dir, f"post_compand_pcm16_{call_id}_{sid}_first200ms.wav")
-                                        with wave.open(fnq200, 'wb') as wf:
-                                            wf.setnchannels(1)
-                                            wf.setsampwidth(2)
-                                            wf.setframerate(win_rate)
-                                            wf.writeframes(bytes(post_w[:win_bytes]))
-                                        logger.info("Wrote post-compand 200ms snapshot", call_id=call_id, stream_id=sid, path=fnq200, bytes=win_bytes, rate=win_rate, snapshot="first200ms")
-                                    except Exception:
-                                        logger.warning("Failed 200ms post snapshot (fast-path)", call_id=call_id, stream_id=sid, rate=win_rate, exc_info=True)
-                                    info['tap_first_window_done'] = True
-                    except Exception:
-                        logger.debug("Fast-path tap capture failed", call_id=call_id, exc_info=True)
-                    return ulaw_bytes
-                # If guard failed, fall through to conversion path below
+                working_pcm = back_pcm
+                
+                # Trim leading silence before normalization
+                if working_pcm:
+                    original_size = len(working_pcm)
+                    working_pcm = self._trim_leading_silence(working_pcm, threshold_rms=100)
+                    if len(working_pcm) < original_size:
+                        logger.debug("SILENCE TRIMMING APPLIED",
+                                    call_id=call_id,
+                                    original_bytes=original_size,
+                                    trimmed_bytes=len(working_pcm),
+                                    removed_bytes=original_size - len(working_pcm))
+                
+                try:
+                    logger.debug(
+                        "NORMALIZER CONDITION CHECK (ulaw guarded)",
+                        call_id=call_id,
+                        working_pcm_size=(len(working_pcm) if working_pcm else 0),
+                        normalizer_enabled=bool(self.normalizer_enabled),
+                        target_rms=int(self.normalizer_target_rms),
+                    )
+                    if working_pcm and self.normalizer_enabled and self.normalizer_target_rms > 0:
+                        logger.debug("ENTERING NORMALIZER (ulaw guarded)", call_id=call_id)
+                        working_pcm = self._apply_normalizer(working_pcm, self.normalizer_target_rms, self.normalizer_max_gain_db)
+                    elif not working_pcm:
+                        logger.warning("EMPTY PCM AFTER DECODE - NORMALIZER SKIPPED", call_id=call_id)
+                except Exception:
+                    logger.debug("Normalizer failed in μ-law guarded path", call_id=call_id, exc_info=True)
+                try:
+                    if working_pcm and self.limiter_enabled:
+                        working_pcm = self._apply_soft_limiter(working_pcm, self.limiter_headroom_ratio)
+                except Exception:
+                    pass
+                try:
+                    ulaw_bytes = pcm16le_to_mulaw(working_pcm) if working_pcm else chunk
+                except Exception:
+                    ulaw_bytes = chunk
+
+                # Diagnostics on processed PCM
+                try:
+                    if getattr(self, 'diag_enable_taps', False) and call_id in self.active_streams:
+                        info = self.active_streams.get(call_id, {})
+                        try:
+                            rate = int(target_rate)
+                        except Exception:
+                            rate = int(self.sample_rate)
+                        try:
+                            if not info.get('tap_first_snapshot_done', False):
+                                stream_id_first = str(info.get('stream_id', 'seg'))
+                                if working_pcm:
+                                    fn2 = os.path.join(self.diag_out_dir, f"post_compand_pcm16_{call_id}_{stream_id_first}_first.wav")
+                                    with wave.open(fn2, 'wb') as wf:
+                                        wf.setnchannels(1)
+                                        wf.setsampwidth(2)
+                                        wf.setframerate(rate)
+                                        wf.writeframes(working_pcm)
+                                    logger.info("Wrote post-compand PCM16 tap snapshot", call_id=call_id, stream_id=stream_id_first, path=fn2, bytes=len(working_pcm), rate=rate, snapshot="first")
+                                info['tap_first_snapshot_done'] = True
+                        except Exception:
+                            logger.debug("Fast-path first-chunk tap snapshot failed", call_id=call_id, exc_info=True)
+                        try:
+                            pre_lim = max(0, int(self.diag_pre_secs * rate * 2))
+                        except Exception:
+                            pre_lim = 0
+                        if pre_lim and isinstance(info.get('tap_pre_pcm16'), (bytearray, bytes)) and working_pcm:
+                            pre_buf = info['tap_pre_pcm16']
+                            if len(pre_buf) < pre_lim:
+                                need = pre_lim - len(pre_buf)
+                                pre_buf.extend(working_pcm[:need])
+                        try:
+                            post_lim = max(0, int(self.diag_post_secs * rate * 2))
+                        except Exception:
+                            post_lim = 0
+                        if post_lim and isinstance(info.get('tap_post_pcm16'), (bytearray, bytes)) and working_pcm:
+                            post_buf = info['tap_post_pcm16']
+                            if len(post_buf) < post_lim:
+                                need2 = post_lim - len(post_buf)
+                                post_buf.extend(working_pcm[:need2])
+                        # Maintain post window in guarded path
+                        try:
+                            win_rate = int(rate)
+                        except Exception:
+                            win_rate = int(self.sample_rate)
+                        try:
+                            win_bytes = max(1, int(win_rate * 0.2 * 2))
+                        except Exception:
+                            win_bytes = 3200
+                        if isinstance(info.get('tap_first_window_post'), bytearray) and working_pcm:
+                            post_w = info['tap_first_window_post']
+                            if len(post_w) < win_bytes:
+                                needw2 = win_bytes - len(post_w)
+                                post_w.extend(working_pcm[:needw2])
+                            if not info.get('tap_first_window_done') and len(post_w) >= win_bytes:
+                                sid = str(info.get('stream_id', 'seg'))
+                                try:
+                                    fnq200 = os.path.join(self.diag_out_dir, f"post_compand_pcm16_{call_id}_{sid}_first200ms.wav")
+                                    with wave.open(fnq200, 'wb') as wf:
+                                        wf.setnchannels(1)
+                                        wf.setsampwidth(2)
+                                        wf.setframerate(win_rate)
+                                        wf.writeframes(bytes(post_w[:win_bytes]))
+                                    logger.info("Wrote post-compand 200ms snapshot", call_id=call_id, stream_id=sid, path=fnq200, bytes=win_bytes, rate=win_rate, snapshot="first200ms")
+                                except Exception:
+                                    logger.warning("Failed 200ms post snapshot (guarded)", call_id=call_id, stream_id=sid, rate=win_rate, exc_info=True)
+                                info['tap_first_window_done'] = True
+                except Exception:
+                    logger.debug("Fast-path tap capture failed", call_id=call_id, exc_info=True)
+                return ulaw_bytes
             
             # NEW: Fast path for μ-law → PCM16 (AudioSocket requires PCM16)
             # Just decode, skip attack/normalize/limiter/encode

@@ -1916,7 +1916,7 @@ class Engine:
                 return None
         payload = {
             "call_id": call_id,
-            "event": "Audio Profile Resolution",
+            "log_event": "Audio Profile Resolution",
             "profile": profile_name,
             "context": context_name,
             "provider": getattr(session, "provider_name", None) if session else None,
