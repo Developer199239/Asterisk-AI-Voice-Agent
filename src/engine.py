@@ -4400,6 +4400,183 @@ class Engine:
 
         return canonical, sample_rate, reported
 
+    async def _resolve_audio_profile(self, session: CallSession, channel_id: str) -> None:
+        """
+        P1: Resolve audio profile using TransportOrchestrator.
+        
+        Reads channel variables (AI_PROVIDER, AI_AUDIO_PROFILE, AI_CONTEXT),
+        negotiates with provider capabilities, and applies resolved transport to session.
+        """
+        # Read channel variables
+        channel_vars = {}
+        for var_name in ['AI_PROVIDER', 'AI_AUDIO_PROFILE', 'AI_CONTEXT']:
+            try:
+                resp = await self.ari_client.send_command(
+                    "GET",
+                    f"channels/{channel_id}/variable",
+                    params={"variable": var_name},
+                )
+                if isinstance(resp, dict):
+                    value = (resp.get("value") or "").strip()
+                    if value:
+                        channel_vars[var_name] = value
+            except Exception:
+                logger.debug(
+                    f"{var_name} read failed; continuing",
+                    channel_id=channel_id,
+                    exc_info=True,
+                )
+        
+        # Get provider name (precedence: AI_PROVIDER > context > session.provider_name)
+        provider_name = channel_vars.get('AI_PROVIDER')
+        if not provider_name:
+            # Check if context specifies provider
+            context_name = channel_vars.get('AI_CONTEXT')
+            if context_name:
+                context_config = self.transport_orchestrator.get_context_config(context_name)
+                if context_config and context_config.provider:
+                    provider_name = context_config.provider
+        
+        if not provider_name:
+            provider_name = session.provider_name or self.config.default_provider
+        
+        # Get provider instance
+        provider = self.providers.get(provider_name)
+        if not provider:
+            logger.warning(
+                "Provider not found for audio profile resolution",
+                call_id=session.call_id,
+                provider=provider_name,
+                available=list(self.providers.keys()),
+            )
+            return
+        
+        # Get provider capabilities
+        provider_caps = None
+        try:
+            if hasattr(provider, 'get_capabilities'):
+                provider_caps = provider.get_capabilities()
+        except Exception as exc:
+            logger.debug(
+                "Failed to get provider capabilities",
+                call_id=session.call_id,
+                provider=provider_name,
+                error=str(exc),
+            )
+        
+        # Resolve transport profile
+        try:
+            transport = self.transport_orchestrator.resolve_transport(
+                provider_name=provider_name,
+                provider_caps=provider_caps,
+                channel_vars=channel_vars,
+            )
+            
+            # Store transport in session
+            session.transport_profile = transport.__dict__ if hasattr(transport, '__dict__') else transport
+            await self._save_session(session)
+            
+            # Apply to streaming manager
+            try:
+                self.streaming_playback_manager.audiosocket_format = transport.wire_encoding
+                self.streaming_playback_manager.sample_rate = transport.wire_sample_rate
+                if hasattr(self.streaming_playback_manager, 'chunk_size_ms'):
+                    self.streaming_playback_manager.chunk_size_ms = transport.chunk_ms
+                if hasattr(self.streaming_playback_manager, 'idle_cutoff_ms'):
+                    self.streaming_playback_manager.idle_cutoff_ms = transport.idle_cutoff_ms
+            except Exception as exc:
+                logger.warning(
+                    "Failed to apply transport to streaming manager",
+                    call_id=session.call_id,
+                    error=str(exc),
+                )
+            
+            # Get context config for prompt/greeting
+            context_config = None
+            if transport.context:
+                context_config = self.transport_orchestrator.get_context_config(transport.context)
+            
+            # Emit TransportCard
+            await self._emit_transport_card(
+                call_id=session.call_id,
+                transport=transport,
+                provider_name=provider_name,
+                context_config=context_config,
+            )
+            
+            logger.info(
+                "Audio profile resolved and applied",
+                call_id=session.call_id,
+                profile=transport.profile_name,
+                provider=provider_name,
+                context=transport.context,
+                wire_format=f"{transport.wire_encoding}@{transport.wire_sample_rate}Hz",
+            )
+            
+        except Exception as exc:
+            logger.error(
+                "Audio profile resolution failed",
+                call_id=session.call_id,
+                provider=provider_name,
+                error=str(exc),
+                exc_info=True,
+            )
+    
+    async def _emit_transport_card(
+        self,
+        call_id: str,
+        transport: TransportProfile,
+        provider_name: str,
+        context_config: Optional[Any] = None,
+    ) -> None:
+        """
+        Emit one-shot TransportCard log with complete transport configuration.
+        
+        This provides a single consolidated view of all transport settings for RCA.
+        """
+        try:
+            card = {
+                "event": "TransportCard",
+                "call_id": call_id,
+                "profile": transport.profile_name,
+                "provider": provider_name,
+                "context": transport.context,
+                "wire": {
+                    "encoding": transport.wire_encoding,
+                    "sample_rate_hz": transport.wire_sample_rate,
+                },
+                "provider_input": {
+                    "encoding": transport.provider_input_encoding,
+                    "sample_rate_hz": transport.provider_input_sample_rate,
+                },
+                "provider_output": {
+                    "encoding": transport.provider_output_encoding,
+                    "sample_rate_hz": transport.provider_output_sample_rate,
+                },
+                "internal_rate_hz": transport.internal_rate,
+                "chunk_ms": transport.chunk_ms,
+                "idle_cutoff_ms": transport.idle_cutoff_ms,
+            }
+            
+            if transport.remediation:
+                card["remediation"] = transport.remediation
+            
+            if context_config:
+                card["context_config"] = {
+                    "prompt": context_config.prompt[:100] + "..." if context_config.prompt and len(context_config.prompt) > 100 else context_config.prompt,
+                    "greeting": context_config.greeting,
+                }
+            
+            logger.info("TransportCard", **card)
+            
+        except Exception as exc:
+            logger.debug(
+                "Failed to emit TransportCard",
+                call_id=call_id,
+                error=str(exc),
+                exc_info=True,
+            )
+
     @staticmethod
     def _canonicalize_encoding(value: Optional[str]) -> str:
         """Normalize codec tokens to canonical engine values."""
