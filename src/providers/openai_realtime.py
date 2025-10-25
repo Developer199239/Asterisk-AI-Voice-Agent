@@ -273,6 +273,10 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         self._transcript_buffer = ""
         self._closing = False
         self._closed = False
+        
+        # Initialize session ACK mechanism (similar to Deepgram pattern)
+        self._session_ack_event = asyncio.Event()
+        self._outfmt_acknowledged = False
 
         self._reset_output_meter()
 
@@ -291,8 +295,26 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             logger.error("Failed to connect to OpenAI Realtime", call_id=call_id, exc_info=True)
             raise
 
+        # Send session configuration
         await self._send_session_update()
         self._log_session_assumptions()
+        
+        # CRITICAL: Wait for session.updated ACK (following Deepgram pattern)
+        try:
+            logger.debug("Waiting for OpenAI session.updated ACK...", call_id=call_id)
+            await asyncio.wait_for(self._session_ack_event.wait(), timeout=2.0)
+            logger.info(
+                "✅ OpenAI session configuration ACKed",
+                call_id=call_id,
+                output_format=self._provider_output_format,
+                sample_rate=self._active_output_sample_rate_hz,
+            )
+        except asyncio.TimeoutError:
+            logger.error(
+                "❌ OpenAI session.updated ACK timeout!",
+                call_id=call_id,
+                note="OpenAI may have rejected audio format configuration - will use inference"
+            )
 
         # Proactively request an initial response so the agent can greet
         # even before user audio arrives. Prefer explicit greeting text
@@ -829,6 +851,48 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                 await self._emit_transcript("", is_final=True)
             return
 
+        # CRITICAL FIX #1: Handle session.updated ACK (following Deepgram pattern)
+        if event_type == "session.updated":
+            try:
+                session = event.get("session", {})
+                input_format = session.get("input_audio_format", "pcm16")
+                output_format = session.get("output_audio_format", "pcm16")
+                
+                # Map OpenAI format names to internal format names and sample rates
+                format_map = {
+                    'pcm16': ('pcm16', 24000),
+                    'g711_ulaw': ('g711_ulaw', 8000),
+                    'g711_alaw': ('g711_alaw', 8000),
+                }
+                
+                if output_format in format_map:
+                    fmt, rate = format_map[output_format]
+                    self._provider_output_format = fmt
+                    self._active_output_sample_rate_hz = rate
+                    self._outfmt_acknowledged = True
+                
+                logger.info(
+                    "✅ OpenAI session.updated ACK received",
+                    call_id=self._call_id,
+                    input_format=input_format,
+                    output_format=output_format,
+                    sample_rate=self._active_output_sample_rate_hz,
+                    acknowledged=self._outfmt_acknowledged,
+                )
+                
+                # Unblock audio streaming (similar to Deepgram's _ack_event.set())
+                if hasattr(self, '_session_ack_event') and self._session_ack_event:
+                    self._session_ack_event.set()
+                
+            except Exception as exc:
+                logger.error(
+                    "Failed to process session.updated event",
+                    call_id=self._call_id,
+                    error=str(exc),
+                    exc_info=True
+                )
+            return
+
         logger.debug("Unhandled OpenAI Realtime event", event_type=event_type)
 
     async def _handle_output_audio(self, audio_b64: str):
@@ -893,6 +957,15 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                         pass
                     self._inference_logged = True
 
+            # CRITICAL FIX #3: Warn loudly if format not ACKed (following Deepgram strict pattern)
+            if not self._outfmt_acknowledged and not self._inference_logged:
+                logger.warning(
+                    "⚠️ Processing audio without format ACK - using inference fallback",
+                    call_id=self._call_id,
+                    inferred_format=effective_fmt,
+                    note="Audio quality may be degraded. OpenAI should send session.updated ACK."
+                )
+            
             # Decode to PCM16 according to effective format
             if effective_fmt in ("g711_ulaw", "ulaw", "mulaw", "g711", "mu-law"):
                 try:
