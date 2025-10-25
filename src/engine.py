@@ -2379,6 +2379,22 @@ class Engine:
 
                 min_ms = int(getattr(cfg, 'min_ms', 250))
                 should_trigger = not in_cooldown and session.barge_in_candidate_ms >= min_ms
+                
+                # CRITICAL FIX #2: Skip engine-level barge-in for OpenAI Realtime
+                # OpenAI Realtime handles turn-taking/interruption internally via its own VAD
+                # Engine-level barge-in causes double-cancellation (both systems fighting)
+                provider_name = getattr(session, 'provider_name', None)
+                if should_trigger and provider_name == 'openai_realtime':
+                    logger.debug(
+                        "Skipping engine barge-in for OpenAI Realtime (handles internally)",
+                        call_id=caller_channel_id,
+                        energy=energy,
+                        criteria_met=criteria_met,
+                    )
+                    # Reset candidate counter but don't trigger
+                    session.barge_in_candidate_ms = 0
+                    # Continue forwarding audio to provider (OpenAI will handle it)
+                    should_trigger = False
 
                 if should_trigger:
                     # Trigger barge-in: stop active playback(s), clear gating, and continue forwarding audio
