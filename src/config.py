@@ -282,6 +282,9 @@ class AppConfig(BaseModel):
     logging: Optional[LoggingConfig] = Field(default_factory=LoggingConfig)
     pipelines: Dict[str, PipelineEntry] = Field(default_factory=dict)
     active_pipeline: Optional[str] = None
+    # P1: profiles/contexts for transport orchestration
+    profiles: Dict[str, Any] = Field(default_factory=dict)
+    contexts: Dict[str, Any] = Field(default_factory=dict)
 
     # Ensure tests that construct AppConfig(**dict) directly still get normalized pipelines
     # similar to load_config(), which calls _normalize_pipelines().
@@ -411,6 +414,43 @@ def load_config(path: str = "config/ai-agent.yaml") -> AppConfig:
 
         # Milestone7: Normalize pipelines for PipelineEntry schema while keeping legacy configs valid.
         _normalize_pipelines(config_data)
+
+        # P1: Ensure profiles/contexts blocks exist with sane defaults
+        try:
+            profiles_block = (config_data.get('profiles') or {}) if isinstance(config_data.get('profiles'), dict) else {}
+        except Exception:
+            profiles_block = {}
+
+        # Inject default telephony profile if missing
+        if 'telephony_ulaw_8k' not in profiles_block:
+            profiles_block['telephony_ulaw_8k'] = {
+                'internal_rate_hz': 8000,
+                'transport_out': { 'encoding': 'ulaw', 'sample_rate_hz': 8000 },
+                'provider_pref': {
+                    'input': { 'encoding': 'mulaw', 'sample_rate_hz': 8000 },
+                    'output': { 'encoding': 'mulaw', 'sample_rate_hz': 8000 },
+                    'preferred_chunk_ms': 20,
+                },
+                'idle_cutoff_ms': 1200,
+            }
+        # Provide default selector if not present (string key under profiles)
+        try:
+            default_profile_name = profiles_block.get('default')
+        except Exception:
+            default_profile_name = None
+        if not default_profile_name:
+            profiles_block['default'] = 'telephony_ulaw_8k'
+
+        config_data['profiles'] = profiles_block
+
+        # Contexts mapping (optional). Keep empty by default.
+        try:
+            contexts_block = config_data.get('contexts')
+            if not isinstance(contexts_block, dict):
+                contexts_block = {}
+        except Exception:
+            contexts_block = {}
+        config_data['contexts'] = contexts_block
 
         # Sanitize providers.local for Bash-style ${VAR:-default}/${VAR:=default} tokens.
         # os.path.expandvars does not support these defaults and may leave tokens intact or empty.

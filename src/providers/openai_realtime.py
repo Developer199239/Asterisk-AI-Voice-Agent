@@ -25,7 +25,7 @@ from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
 from structlog import get_logger
 from prometheus_client import Gauge, Info
 
-from .base import AIProviderInterface
+from .base import AIProviderInterface, ProviderCapabilities
 from ..audio import (
     convert_pcm16le_to_target_format,
     mulaw_to_pcm16le,
@@ -194,6 +194,17 @@ class OpenAIRealtimeProvider(AIProviderInterface):
     def supported_codecs(self):
         fmt = (self.config.target_encoding or "ulaw").lower()
         return [fmt]
+
+    # P1: Static capability hints for Transport Orchestrator
+    def get_capabilities(self) -> ProviderCapabilities:
+        return ProviderCapabilities(
+            input_encodings=["ulaw", "linear16"],
+            input_sample_rates_hz=[8000, 16000],
+            # Output depends on session.update and downstream target; we advertise both
+            output_encodings=["mulaw", "pcm16"],
+            output_sample_rates_hz=[8000, 24000],
+            preferred_chunk_ms=20,
+        )
 
     async def start_session(self, call_id: str):
         if not self.config.api_key:

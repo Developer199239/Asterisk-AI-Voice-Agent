@@ -17,7 +17,7 @@ from ..audio.resampler import (
     resample_audio,
 )
 from ..config import LLMConfig
-from .base import AIProviderInterface
+from .base import AIProviderInterface, ProviderCapabilities
 
 logger = get_logger(__name__)
 
@@ -34,6 +34,11 @@ _DEEPGRAM_OUTPUT_RATE = Gauge(
 _DEEPGRAM_SESSION_AUDIO_INFO = Info(
     "ai_agent_deepgram_session_audio",
     "Deepgram session audio encodings/sample rates",
+    labelnames=("call_id",),
+)
+_DEEPGRAM_SETTINGS_ACK_LATENCY_MS = Gauge(
+    "ai_agent_deepgram_settings_ack_latency_ms",
+    "Latency from Settings send to SettingsApplied ACK (ms)",
     labelnames=("call_id",),
 )
 
@@ -190,6 +195,16 @@ class DeepgramProvider(AIProviderInterface):
     @property
     def supported_codecs(self) -> List[str]:
         return ["ulaw"]
+
+    # P1: Static capability hints for orchestrator
+    def get_capabilities(self) -> ProviderCapabilities:
+        return ProviderCapabilities(
+            input_encodings=["mulaw", "linear16"],
+            input_sample_rates_hz=[8000, 16000],
+            output_encodings=["mulaw"],
+            output_sample_rates_hz=[8000],
+            preferred_chunk_ms=20,
+        )
 
     # ------------------------------------------------------------------ #
     # Metrics helpers
@@ -959,6 +974,15 @@ class DeepgramProvider(AIProviderInterface):
                                     self._ack_event.set()
                             except Exception:
                                 pass
+                            # Emit SettingsApplied ACK latency
+                            try:
+                                if self._settings_ts:
+                                    latency_ms = max(0.0, (time.monotonic() - float(self._settings_ts)) * 1000.0)
+                                    if self.call_id:
+                                        _DEEPGRAM_SETTINGS_ACK_LATENCY_MS.labels(self.call_id).set(latency_ms)
+                                        logger.info("Deepgram settings ACK latency", call_id=self.call_id, latency_ms=round(latency_ms, 1))
+                            except Exception:
+                                logger.debug("Failed to record settings ACK latency", exc_info=True)
                         # One-time ACK settings log for effective audio configs (log full payload)
                         try:
                             if getattr(self, "_settings_sent", False) and not getattr(self, "_ack_logged", False):

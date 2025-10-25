@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
-from typing import List, Callable, Dict, Any
+from dataclasses import dataclass
+from typing import List, Callable, Dict, Any, Optional
 
 class AIProviderInterface(ABC):
     """
@@ -44,3 +45,33 @@ class AIProviderInterface(ABC):
         the configured AudioSocket/streaming formats. Defaults to no findings.
         """
         return []
+
+
+@dataclass
+class ProviderCapabilities:
+    """Static capability hints for transport orchestration.
+
+    These are not guarantees; providers may still negotiate different formats at runtime.
+    """
+    input_encodings: List[str]
+    input_sample_rates_hz: List[int]
+    output_encodings: List[str]
+    output_sample_rates_hz: List[int]
+    preferred_chunk_ms: int = 20
+
+
+def _safe_list(val: Optional[List[Any]]) -> List[Any]:
+    try:
+        return list(val or [])
+    except Exception:
+        return []
+
+
+class ProviderCapabilitiesMixin:
+    def get_capabilities(self) -> Optional[ProviderCapabilities]:
+        """Optional capability report. Override in concrete providers.
+
+        Default returns None, meaning the orchestrator should rely on configuration
+        or runtime acknowledgements instead of static capability hints.
+        """
+        return None
