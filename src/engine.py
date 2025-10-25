@@ -4491,20 +4491,21 @@ class Engine:
                     error=str(exc),
                 )
             
-            # CRITICAL FIX: Apply transport_out settings to provider's target config
-            # The provider needs to know what format/rate to emit based on the profile
+            # CRITICAL FIX: Apply wire format settings to provider's target config
+            # The provider needs to emit the same format/rate that AudioSocket expects
             try:
                 provider = self.providers.get(provider_name)
                 if provider and hasattr(provider, 'config'):
-                    # Update provider's target encoding/rate to match transport_out
-                    provider.config.target_encoding = transport.transport_encoding
-                    provider.config.target_sample_rate_hz = transport.transport_sample_rate
+                    # Update provider's target encoding/rate to match wire format
+                    # Wire format = what AudioSocket channel expects = what provider should emit
+                    provider.config.target_encoding = transport.wire_encoding
+                    provider.config.target_sample_rate_hz = transport.wire_sample_rate
                     logger.info(
-                        "Applied transport_out settings to provider config",
+                        "Applied wire format to provider target config",
                         call_id=session.call_id,
                         provider=provider_name,
-                        target_encoding=transport.transport_encoding,
-                        target_sample_rate_hz=transport.transport_sample_rate,
+                        target_encoding=transport.wire_encoding,
+                        target_sample_rate_hz=transport.wire_sample_rate,
                     )
             except Exception as exc:
                 logger.warning(
