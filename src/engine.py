@@ -4403,10 +4403,10 @@ class Engine:
             "g711_ulaw": "ulaw",
             "g711ulaw": "ulaw",
             "g711-ula": "ulaw",
-            # Note: "slin" (8kHz PCM) and "slin16" (16kHz PCM) are distinct formats - do not alias
+            # Note: "slin" (8kHz PCM) and "slin16" (16kHz PCM) are distinct formats
+            "slin": "slin",
             "slin12": "slin16",
             "slin16": "slin16",
-            "slin": "slin16",
         }
         return mapping.get(token, token)
 
