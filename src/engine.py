@@ -4472,8 +4472,8 @@ class Engine:
                 channel_vars=channel_vars,
             )
             
-            # Store transport in session
-            session.transport_profile = transport.__dict__ if hasattr(transport, '__dict__') else transport
+            # Store transport in session (keep as object, not dict, for legacy code compatibility)
+            session.transport_profile = transport
             await self._save_session(session)
             
             # Apply to streaming manager
@@ -4496,13 +4496,7 @@ class Engine:
             if transport.context:
                 context_config = self.transport_orchestrator.get_context_config(transport.context)
             
-            # Emit TransportCard
-            await self._emit_transport_card(
-                call_id=session.call_id,
-                transport=transport,
-                provider_name=provider_name,
-                context_config=context_config,
-            )
+            # Note: TransportCard will be emitted by legacy code path
             
             logger.info(
                 "Audio profile resolved and applied",
@@ -4522,61 +4516,6 @@ class Engine:
                 exc_info=True,
             )
     
-    async def _emit_transport_card(
-        self,
-        call_id: str,
-        transport: TransportProfile,
-        provider_name: str,
-        context_config: Optional[Any] = None,
-    ) -> None:
-        """
-        Emit one-shot TransportCard log with complete transport configuration.
-        
-        This provides a single consolidated view of all transport settings for RCA.
-        """
-        try:
-            card = {
-                "event": "TransportCard",
-                "call_id": call_id,
-                "profile": transport.profile_name,
-                "provider": provider_name,
-                "context": transport.context,
-                "wire": {
-                    "encoding": transport.wire_encoding,
-                    "sample_rate_hz": transport.wire_sample_rate,
-                },
-                "provider_input": {
-                    "encoding": transport.provider_input_encoding,
-                    "sample_rate_hz": transport.provider_input_sample_rate,
-                },
-                "provider_output": {
-                    "encoding": transport.provider_output_encoding,
-                    "sample_rate_hz": transport.provider_output_sample_rate,
-                },
-                "internal_rate_hz": transport.internal_rate,
-                "chunk_ms": transport.chunk_ms,
-                "idle_cutoff_ms": transport.idle_cutoff_ms,
-            }
-            
-            if transport.remediation:
-                card["remediation"] = transport.remediation
-            
-            if context_config:
-                card["context_config"] = {
-                    "prompt": context_config.prompt[:100] + "..." if context_config.prompt and len(context_config.prompt) > 100 else context_config.prompt,
-                    "greeting": context_config.greeting,
-                }
-            
-            logger.info("TransportCard", **card)
-            
-        except Exception as exc:
-            logger.debug(
-                "Failed to emit TransportCard",
-                call_id=call_id,
-                error=str(exc),
-                exc_info=True,
-            )
-
     @staticmethod
     def _canonicalize_encoding(value: Optional[str]) -> str:
         """Normalize codec tokens to canonical engine values."""
@@ -4719,6 +4658,17 @@ class Engine:
     async def _update_transport_profile(self, session: CallSession, *, fmt: Optional[str], sample_rate: Optional[int], source: str) -> None:
         """Persist transport profile updates and sync preferences."""
         profile = session.transport_profile
+        
+        # P1: Check if this is new TransportProfile (has wire_encoding) vs legacy (has format)
+        if hasattr(profile, 'wire_encoding'):
+            # New P1 TransportProfile - don't update, it's immutable per call
+            logger.debug(
+                "Skipping transport profile update for P1 TransportProfile",
+                call_id=session.call_id,
+                source=source,
+            )
+            return
+        
         priority_order = {
             "config": 0,
             "dialplan": 1,
@@ -4880,19 +4830,28 @@ class Engine:
         transport_rate: Optional[int] = None
         if session is not None:
             provider_name = getattr(session, "provider_name", None) or getattr(session, "provider", None) or self.config.default_provider
-            try:
-                transport_source = session.transport_profile.source
-            except Exception:
-                transport_source = None
-            try:
-                transport_fmt = session.transport_profile.format
-            except Exception:
-                transport_fmt = None
-            try:
-                rate = session.transport_profile.sample_rate
-                transport_rate = int(rate) if rate else None
-            except Exception:
-                transport_rate = None
+            
+            # P1: Handle both new TransportProfile and legacy transport_profile
+            if hasattr(session.transport_profile, 'wire_encoding'):
+                # New P1 TransportProfile
+                transport_source = "p1_profile"
+                transport_fmt = session.transport_profile.wire_encoding
+                transport_rate = session.transport_profile.wire_sample_rate
+            else:
+                # Legacy transport_profile
+                try:
+                    transport_source = session.transport_profile.source
+                except Exception:
+                    transport_source = None
+                try:
+                    transport_fmt = session.transport_profile.format
+                except Exception:
+                    transport_fmt = None
+                try:
+                    rate = session.transport_profile.sample_rate
+                    transport_rate = int(rate) if rate else None
+                except Exception:
+                    transport_rate = None
 
         def _canon_rate(value: Optional[Any]) -> Optional[int]:
             if value is None:
