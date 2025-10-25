@@ -513,6 +513,15 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             "session": session,
         }
 
+        # DEBUG: Log what we're actually sending to OpenAI
+        logger.info(
+            "OpenAI session.update payload",
+            call_id=self._call_id,
+            output_audio_format=session.get("output_audio_format"),
+            input_audio_format=session.get("input_audio_format"),
+            modalities=session.get("modalities"),
+        )
+
         await self._send_json(payload)
 
     async def _send_explicit_greeting(self):
