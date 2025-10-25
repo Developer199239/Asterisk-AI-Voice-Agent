@@ -144,6 +144,8 @@ class DeepgramProvider(AIProviderInterface):
         self._input_resample_state = None
         # Settings/stream readiness
         self._settings_sent: bool = False
+        # Only set to True on explicit SettingsApplied lifecycle event
+        self._settings_acked: bool = False
         self._ready_to_stream: bool = False
         self._settings_ts: float = 0.0
         self._prestream_queue: list[bytes] = []  # small buffer for early frames
@@ -425,21 +427,10 @@ class DeepgramProvider(AIProviderInterface):
         except Exception:
             self._settings_ts = 0.0
         # Start a fallback timer to avoid indefinite buffering if ACK never arrives
-        async def _fallback_ready():
-            try:
-                await asyncio.sleep(0.3)
-                if self.websocket and not self.websocket.closed and not self._ready_to_stream:
-                    self._ready_to_stream = True
-                    try:
-                        logger.warning(
-                            "Deepgram settings ACK not received promptly; enabling streaming after fallback delay",
-                            call_id=self.call_id,
-                        )
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-        asyncio.create_task(_fallback_ready())
+        # Disable pre-ACK fallback readiness to avoid sending binary before SettingsApplied
+        # (prevents Deepgram error BINARY_MESSAGE_BEFORE_SETTINGS). We still keep a timestamp
+        # to log if ACK is slow, but we will not open the binary gate without an explicit ACK.
+        # async fallback task intentionally removed.
 
         # Immediately inject greeting once to try to kick off TTS
         async def _inject_greeting_immediate():
@@ -803,7 +794,7 @@ class DeepgramProvider(AIProviderInterface):
                         frames_to_send.append(bytes(self._pcm16_accum[:frame_bytes]))
                         del self._pcm16_accum[:frame_bytes]
 
-                    if not self._ready_to_stream:
+                    if not self._settings_acked:
                         try:
                             for fr in frames_to_send:
                                 self._prestream_queue.append(fr)
@@ -813,7 +804,7 @@ class DeepgramProvider(AIProviderInterface):
                             pass
                         return
 
-                    if self._prestream_queue:
+                    if self._prestream_queue and self._settings_acked:
                         try:
                             for q in self._prestream_queue:
                                 await self.websocket.send(q)
@@ -825,7 +816,7 @@ class DeepgramProvider(AIProviderInterface):
                     for fr in frames_to_send:
                         await self.websocket.send(fr)
                 else:
-                    if not self._ready_to_stream:
+                    if not self._settings_acked:
                         try:
                             self._prestream_queue.append(payload)
                             if len(self._prestream_queue) > 10:
@@ -961,6 +952,7 @@ class DeepgramProvider(AIProviderInterface):
                             pass
                         # Mark readiness only upon SettingsApplied to avoid pre-ACK races
                         if et == "SettingsApplied":
+                            self._settings_acked = True
                             self._ready_to_stream = True
                             try:
                                 if self._ack_event and not self._ack_event.is_set():
