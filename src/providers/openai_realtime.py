@@ -474,10 +474,11 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         if not output_modalities:
             output_modalities = ["audio"]
 
-        # Choose OpenAI output format token for this session based on downstream target.
+        # CRITICAL FIX: Use output_encoding (what OpenAI sends), NOT target_encoding (downstream format)
+        # OpenAI should send in the configured output_encoding, which we then transcode to target_encoding.
         # Server expects a string token for output_audio_format (e.g., 'pcm16', 'g711_ulaw').
-        target_enc = (self.config.target_encoding or "").lower()
-        if target_enc in ("ulaw", "mulaw", "g711_ulaw", "mu-law"):
+        output_enc = (self.config.output_encoding or "linear16").lower()
+        if output_enc in ("ulaw", "mulaw", "g711_ulaw", "mu-law"):
             out_fmt = "g711_ulaw"
         else:
             out_fmt = "pcm16"
