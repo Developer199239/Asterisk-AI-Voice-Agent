@@ -46,6 +46,7 @@ from .providers.openai_realtime import OpenAIRealtimeProvider
 from .core import SessionStore, PlaybackManager, ConversationCoordinator
 from .core.vad_manager import EnhancedVADManager, VADResult
 from .core.streaming_playback_manager import StreamingPlaybackManager
+from .core.transport_orchestrator import TransportOrchestrator, TransportProfile
 from .core.models import CallSession
 from .utils.audio_capture import AudioCaptureManager
 
@@ -300,6 +301,15 @@ class Engine:
         
         # Milestone7: Pipeline orchestrator coordinates per-call STT/LLM/TTS adapters.
         self.pipeline_orchestrator = PipelineOrchestrator(config)
+        
+        # P1: Transport orchestrator for multi-provider audio format negotiation
+        self.transport_orchestrator = TransportOrchestrator(config.dict() if hasattr(config, 'dict') else config.__dict__)
+        logger.info(
+            "TransportOrchestrator initialized",
+            profiles=list(self.transport_orchestrator.profiles.keys()),
+            contexts=list(self.transport_orchestrator.contexts.keys()),
+            default=self.transport_orchestrator.default_profile_name,
+        )
         
         self.providers: Dict[str, AIProviderInterface] = {}
         # Track static codec/sample-rate validation issues per provider

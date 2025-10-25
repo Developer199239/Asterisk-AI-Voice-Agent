@@ -281,3 +281,76 @@ providers:
     # Egress pacer for telephony cadence (20ms frames) with warm-up
     egress_pacer_enabled: true
     egress_pacer_warmup_ms: 320
+
+# P1: Audio Profiles - Transport format configuration per call
+# Profiles define wire format (AudioSocket), provider preferences, and processing settings.
+# Select via AI_AUDIO_PROFILE channel var or context mapping.
+profiles:
+  default: telephony_ulaw_8k
+  
+  # Standard telephony profile for 8kHz μ-law trunks
+  telephony_ulaw_8k:
+    internal_rate_hz: 8000
+    transport_out:
+      encoding: slin          # AudioSocket wire format (PCM16)
+      sample_rate_hz: 8000
+    provider_pref:
+      input_encoding: mulaw   # Prefer μ-law for telephony
+      input_sample_rate_hz: 8000
+      output_encoding: mulaw
+      output_sample_rate_hz: 8000
+    chunk_ms: auto            # Auto = 20ms default
+    idle_cutoff_ms: 1200
+  
+  # Wideband profile for better audio quality
+  wideband_pcm_16k:
+    internal_rate_hz: 16000
+    transport_out:
+      encoding: slin16        # AudioSocket PCM16 @ 16kHz
+      sample_rate_hz: 16000
+    provider_pref:
+      input_encoding: linear16
+      input_sample_rate_hz: 16000
+      output_encoding: linear16
+      output_sample_rate_hz: 16000
+    chunk_ms: auto
+    idle_cutoff_ms: 1200
+  
+  # OpenAI Realtime profile (24kHz native, downsampled for AudioSocket)
+  openai_realtime_24k:
+    internal_rate_hz: 24000
+    transport_out:
+      encoding: slin16        # AudioSocket PCM16 @ 16kHz (downsampled from 24k)
+      sample_rate_hz: 16000
+    provider_pref:
+      input_encoding: linear16
+      input_sample_rate_hz: 24000   # OpenAI native rate
+      output_encoding: linear16
+      output_sample_rate_hz: 24000
+    chunk_ms: auto
+    idle_cutoff_ms: 1200
+
+# P1: Context Mapping - Semantic routing with profile/provider inheritance
+# Select via AI_CONTEXT channel var to apply prompt, greeting, profile, and provider.
+contexts:
+  default:
+    prompt: "You are a helpful AI assistant. Be concise and clear."
+    greeting: "Hello, how can I help you today?"
+    profile: telephony_ulaw_8k
+  
+  sales:
+    prompt: "You are an enthusiastic sales assistant. Be upbeat, helpful, and guide customers to products that meet their needs. Keep responses under 15 words unless explaining features."
+    greeting: "Thanks for calling! How can I help you find what you need today?"
+    profile: wideband_pcm_16k   # Better quality for sales
+    provider: deepgram          # Optional provider override
+  
+  support:
+    prompt: "You are technical support. Be precise, methodical, and patient. Gather information systematically. Provide step-by-step instructions when troubleshooting."
+    greeting: "Technical support, how can we assist you?"
+    profile: telephony_ulaw_8k
+  
+  premium:
+    prompt: "You are a premium concierge assistant. Be courteous, attentive, and provide personalized service. Anticipate needs and offer proactive suggestions."
+    greeting: "Welcome to premium service. How may I assist you today?"
+    profile: openai_realtime_24k
+    provider: openai_realtime
