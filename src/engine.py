@@ -1857,11 +1857,10 @@ class Engine:
         # Wire streaming manager parameters (global fields; per-call override is a future improvement)
         spm = getattr(self, "streaming_playback_manager", None)
         if spm is not None:
-            try:
-                if enc:
-                    spm.audiosocket_format = enc
-            except Exception:
-                pass
+            # CRITICAL: Do NOT override audiosocket_format from transport profile.
+            # AudioSocket wire format must always match config.audiosocket.format (set at engine init),
+            # NOT the caller's SIP codec. Caller codec applies only to provider transcoding.
+            # Bug fix: removed lines that set spm.audiosocket_format = enc
             try:
                 if rate and rate > 0:
                     spm.sample_rate = int(rate)
