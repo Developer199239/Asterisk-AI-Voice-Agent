@@ -177,8 +177,44 @@ References:
 
   Recommended follow-ups:
   - Keep gating: binary audio must only flow after `SettingsApplied`.
-  - Run longer regression (60–90 s) with more agent speech to further extend tap coverage and validate pacing over longer content.
+  - Run longer regression (60–90 s) with more agent speech to further extend tap coverage and validate pacing over longer content.
   - Continue monitoring for `underflow_events` and drift; negative drift is expected with long idle but should approach ~0% when content fills the interval.
+
+- **✅ FINAL VALIDATION & P0 COMPLETION — Oct 25, 2025**:
+  - **Critical Bug Fix**: AudioSocket format override bug discovered and fixed (commit `1a049ce`).
+    - **Root cause**: `src/engine.py` line 1862 incorrectly set `spm.audiosocket_format` from transport profile (caller codec) instead of YAML config.
+    - **Impact**: Caller μ-law codec forced AudioSocket to 160-byte frames; Asterisk expected 320-byte PCM16 → severe garble.
+    - **Fix**: Removed override; AudioSocket format now always from YAML `audiosocket.format: "slin"`, never from caller codec.
+  - **Validation Call**: `1761424308.2043` (45s, two-way conversation) — RCA at `logs/remote/rca-20251025-203447/`.
+  - **User Report**: "Clean audio, clean two-way conversation. Audio pipeline is working really well."
+  
+  **P0 Acceptance Criteria Results**:
+  1. ✅ **No garbled greeting**: User confirmed clean audio; transcripts show clear speech
+  2. ✅ **Underflows ≈ 0**: Actual = 0 underflow events observed
+  3. ✅ **Wall duration appropriate**: 45s call, 11.84s agent audio, no long tails
+  4. ✅ **TransportCard present**: Line 191 logs complete transport card with correct wire format
+  5. ✅ **No egress swap**: All frames show "μ-law → PCM16 FAST PATH"; zero swap messages
+  6. ✅ **Golden metrics match**: Provider bytes 16,320/16,320 (1.0 ratio), SNR 64.6-68.2 dB, frame size 320 bytes
+  
+  **Key Validations**:
+  - AudioSocket wire: `slin` PCM16 @ 320 bytes/frame (correct)
+  - Chunk size: 20ms (auto)
+  - Idle cutoff: 1200ms (working, backoff during silence)
+  - Diagnostic taps: Working (snapshots captured)
+  - Alignment warnings: Suppressed (intentional PCM↔μ-law bridge documented)
+  
+  **Status**: ✅ **P0 COMPLETE** — Production ready. All acceptance criteria met.
+  
+  **Tag**: `v1.0-p0-transport-stable`
+  
+  **Documentation**: 
+  - Success RCA: `logs/remote/rca-20251025-203447/SUCCESS_RCA_ANALYSIS.md`
+  - Acceptance validation: `logs/remote/rca-20251025-203447/P0_ACCEPTANCE_VALIDATION.md`
+  - Progress summary: `PROGRESS_SUMMARY_20251025.md`
+  
+  **Known Issues (Non-Blocking)**:
+  - Engine caller audio captures have high noise floor (diagnostic only; use Asterisk monitor for caller transcripts)
+  - RCA aggregator may skew "overall" score due to attack-phase snapshots (fixed in code, verify next RCA)
 
 - **Inbound Path Scope (Gap 4)**:
   - P0 focuses on **outbound only** (provider → caller).
