@@ -252,7 +252,7 @@ providers:
     chunk_size_ms: 20
     response_timeout_sec: 5.0
   openai_realtime:
-    enabled: false
+    enabled: true
     api_key: "${OPENAI_API_KEY}"
     model: "gpt-4o-realtime-preview-2024-12-17"
     voice: "alloy"
