@@ -149,6 +149,37 @@ References:
   - RCA bundle `rca-20251024-200537` shows `agent_out_to_caller.wav` 8 kHz RMS 2030 (66 dB SNR) and `caller_to_provider.wav` 8 kHz RMS 14866 (18.9 dB SNR). Provider chunk log confirms steady 960-byte μ-law packets.
   - Remaining gaps: startup still logs codec-alignment warnings despite intentional `slin`↔`mulaw` bridge; diagnostic taps stay at zero bytes. Track suppressing false warnings and wiring tap capture as short-term fixes.
 
+- **Verification 2025-10-24 17:59 PDT — Taps & Alignment**:
+  - Call `1761353185.1999` RCA at `logs/remote/rca-20251025-004851/`.
+  - Taps now accumulate (fast-path fixed):
+    - `call_tap_pre_bytes=89600`, `call_tap_post_bytes=89600` at 8 kHz → ~5.6 s each; call-level WAVs written under `taps/`.
+    - First-200 ms pre/post snapshots emitted per segment (for QA).
+  - Alignment warnings suppressed for the intentional PCM↔μ-law bridge:
+    - Startup logs show "Provider codec/sample alignment verified" with no Deepgram input vs audiosocket warnings.
+  - Audio quality: agent/caller legs assessed "good" (SNR ~66–67 dB agent, ~56–63 dB caller). Overall flagged "poor" only because the first-200 ms snapshot has very low SNR (expected during attack/gating). This skews the aggregator.
+  - Streaming tuning summary: `bytes_sent=111680`, `effective_seconds=6.98`, `wall_seconds=44.6`, `drift_pct=-84.4` reflecting long idle vs short speech; no underflow evidence in this run.
+
+  Recommended follow-ups:
+  - Adjust RCA aggregator to exclude or down‑weight first‑200 ms snapshots from the overall score; keep detailed per-leg ratings.
+  - Keep taps enabled for the next few calls to confirm stability across dialogs; target ≥10–15 s of agent audio to extend tap coverage.
+  - Continue monitoring for `underflow_events` and drift; current negative drift is expected with long idle time.
+
+- **Verification 2025-10-24 18:20 PDT — Handshake Gated + 40s Two‑Way Call**:
+  - Call `1761355140.2007` RCA at `logs/remote/rca-20251025-012113/`.
+  - Deepgram handshake gated correctly:
+    - `SettingsApplied` logged before any `AgentAudio` frames.
+    - No `BINARY_MESSAGE_BEFORE_SETTINGS` errors present.
+  - Taps and metrics:
+    - `call_tap_pre_bytes=98560`, `call_tap_post_bytes=98560` at 8 kHz → ~6.16 s each; tap WAVs present.
+    - Main legs assessed "good": `agent_from_provider` SNR ~68 dB; `agent_out_to_caller` SNR ~67.4 dB; `caller_recording` SNR ~63.3 dB.
+    - First‑200 ms snapshots show high silence (as expected) and are excluded from "overall" by aggregator update; overall reported "good".
+  - Streaming tuning summary: `bytes_sent=116800`, `effective_seconds=7.3`, `wall_seconds=38.43`, `drift_pct=-81.0` (idle dominates vs short agent speech). No underflows observed.
+
+  Recommended follow-ups:
+  - Keep gating: binary audio must only flow after `SettingsApplied`.
+  - Run longer regression (60–90 s) with more agent speech to further extend tap coverage and validate pacing over longer content.
+  - Continue monitoring for `underflow_events` and drift; negative drift is expected with long idle but should approach ~0% when content fills the interval.
+
 - **Inbound Path Scope (Gap 4)**:
   - P0 focuses on **outbound only** (provider → caller).
   - Inbound path (caller → provider) is **proven stable** in working baseline:
@@ -524,6 +555,49 @@ Before starting P0 code changes:
 **P3 Success**:
 - Hifi profile demonstrates improved frequency response
 - Side-by-side demos published
+
+---
+
+## Critical Bug Fixes (Pre-P0)
+
+### Fix 1: AudioSocket Format Override from Transport Profile (Oct 25, 2025)
+
+**Issue**: AudioSocket wire format was incorrectly overridden by detected caller SIP codec instead of using YAML config.
+
+**Root Cause**:
+- `src/engine.py` line 1862: `spm.audiosocket_format = enc` (where `enc` came from transport profile detection)
+- Transport profile was set from caller's `NativeFormats: (ulaw)` during Stasis entry
+- This overrode the correct YAML setting `audiosocket.format: "slin"` and dialplan `c(slin)`
+
+**Impact**:
+- Caller with μ-law codec forced AudioSocket wire to μ-law (160 bytes/frame @ 8kHz)
+- Asterisk channel expected PCM16 slin (320 bytes/frame @ 8kHz) per dialplan
+- Mismatch: 160-byte μ-law frames interpreted as 320-byte PCM16 → severe garble/distortion
+- No audio after greeting due to broken bidirectional audio chain
+
+**Fix** (commit 1a049ce):
+
+```python
+# REMOVED: spm.audiosocket_format = enc
+# CRITICAL: Do NOT override audiosocket_format from transport profile.
+# AudioSocket wire format must always match config.audiosocket.format (set at engine init),
+# NOT the caller's SIP codec. Caller codec applies only to provider transcoding.
+```
+
+**Evidence**:
+- RCA: `logs/remote/rca-20251025-062235/`
+- Logs showed: `TransportCard: wire_encoding="ulaw"`, `target_format="ulaw"`, `frame_size_bytes=160`
+- Expected: `audiosocket_format="slin"`, `target_format="slin"`, `frame_size_bytes=320`
+- Golden baseline comparison: wire format must be `slin` PCM16 @ 8kHz per YAML and dialplan
+
+**Validation**:
+- Transport alignment summary now correctly shows: `"audiosocket_format": "slin"`, `"streaming_target_encoding": "slin"`
+- Next test call must verify: clean audio both directions, 320-byte PCM16 frames, no garble
+
+**Lesson**:
+- AudioSocket wire leg is **separate** from caller-side trunk codec
+- Transport profile governs **provider transcoding** only (caller μ-law ↔ Deepgram μ-law)
+- AudioSocket wire format is **static** per YAML/dialplan, not dynamic per call
 
 ---
 
