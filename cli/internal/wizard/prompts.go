@@ -130,6 +130,6 @@ func PrintInfo(msg string) {
 func PrintStep(stepNum int, totalSteps int, title string) {
 	fmt.Println()
 	fmt.Printf("═══════════════════════════════════════════\n")
-	promptColor.Printf("Step %d/%d: %s\n", stepNum, totalSteps)
+	promptColor.Printf("Step %d/%d: %s\n", stepNum, totalSteps, title)
 	fmt.Printf("═══════════════════════════════════════════\n")
 }
