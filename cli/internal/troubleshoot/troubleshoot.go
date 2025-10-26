@@ -56,6 +56,9 @@ func NewRunner(callID, symptom string, interactive, collectOnly, noLLM, list, ve
 
 // Run executes troubleshooting workflow
 func (r *Runner) Run() error {
+	// Load .env file for API keys
+	LoadEnvFile()
+	
 	fmt.Println()
 	fmt.Println("🔍 Call Troubleshooting & RCA")
 	fmt.Println("═══════════════════════════════════════════")
@@ -110,10 +113,32 @@ func (r *Runner) Run() error {
 		checker := NewSymptomChecker(r.symptom)
 		checker.AnalyzeSymptom(analysis, logData)
 	}
+	
+	// LLM analysis
+	var llmDiagnosis *LLMDiagnosis
+	if !r.noLLM {
+		infoColor.Println("Requesting AI diagnosis...")
+		llmAnalyzer, err := NewLLMAnalyzer()
+		if err != nil {
+			warningColor.Printf("⚠️  LLM analysis unavailable: %v\n", err)
+		} else {
+			llmDiagnosis, err = llmAnalyzer.AnalyzeWithLLM(analysis, logData)
+			if err != nil {
+				warningColor.Printf("⚠️  LLM analysis failed: %v\n", err)
+			} else {
+				successColor.Println("✅ AI diagnosis complete")
+			}
+		}
+	}
 	fmt.Println()
 
 	// Show findings
 	r.displayFindings(analysis)
+	
+	// Show LLM diagnosis
+	if llmDiagnosis != nil {
+		r.displayLLMDiagnosis(llmDiagnosis)
+	}
 
 	// Interactive follow-up
 	if r.interactive {
@@ -404,6 +429,16 @@ func (r *Runner) displayRecommendations(analysis *Analysis) {
 		fmt.Println("  • Run: docker logs ai_engine | grep ERROR")
 	}
 	
+	fmt.Println()
+}
+
+// displayLLMDiagnosis shows AI-powered diagnosis
+func (r *Runner) displayLLMDiagnosis(diagnosis *LLMDiagnosis) {
+	fmt.Println("═══════════════════════════════════════════")
+	infoColor.Printf("🤖 AI DIAGNOSIS (%s - %s)\n", diagnosis.Provider, diagnosis.Model)
+	fmt.Println("═══════════════════════════════════════════")
+	fmt.Println()
+	fmt.Println(diagnosis.Analysis)
 	fmt.Println()
 }
 
