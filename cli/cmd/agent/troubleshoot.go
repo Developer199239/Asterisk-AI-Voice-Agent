@@ -1,63 +1,72 @@
 package main
 
 import (
-	"fmt"
-
+	"github.com/hkjarral/asterisk-ai-voice-agent/cli/internal/troubleshoot"
 	"github.com/spf13/cobra"
 )
 
 var (
-	troubleshootCallID string
-	troubleshootLast   int
-	troubleshootLLM    string
-	troubleshootExport string
+	troubleshootCallID      string
+	troubleshootSymptom     string
+	troubleshootInteractive bool
+	troubleshootCollectOnly bool
+	troubleshootNoLLM       bool
+	troubleshootList        bool
 )
 
 var troubleshootCmd = &cobra.Command{
-	Use:   "troubleshoot [call-id]",
+	Use:   "troubleshoot",
 	Short: "Post-call analysis and RCA",
 	Long: `Analyze call issues and provide root cause analysis.
 
-Features:
-  - Collect logs and recordings
-  - Analyze metrics and errors
-  - LLM-powered issue diagnosis
-  - Actionable recommendations
-  - Export detailed reports
+Usage Examples:
+  agent troubleshoot --last              # Analyze most recent call
+  agent troubleshoot --list              # List recent calls
+  agent troubleshoot --call 1761424308.2043
+  agent troubleshoot --last --symptom garbled
+  agent troubleshoot --interactive
 
-Uses LLM providers (OpenAI, Anthropic, Gemini, Ollama) for analysis.
-Configure via TROUBLESHOOT_LLM_PROVIDER and TROUBLESHOOT_LLM_API_KEY in .env`,
+Symptoms:
+  no-audio        Complete silence
+  garbled         Distorted/fast/slow audio
+  echo            Agent hears itself
+  interruption    Self-interruption loop
+  one-way         Only one direction works
+
+Features:
+  - Automatic log collection
+  - Pattern detection and analysis
+  - LLM-powered diagnosis
+  - Actionable recommendations`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println()
-		fmt.Println("🔍 Call Troubleshooting & RCA")
-		fmt.Println("═══════════════════════════════════════════")
-		fmt.Println()
+		verbose, _ := cmd.Flags().GetBool("verbose")
 		
-		// TODO: Implement troubleshooting
-		fmt.Println("⚠️  This command is under development.")
-		fmt.Println()
-		fmt.Println("Coming soon:")
-		fmt.Println("  • Recent calls listing")
-		fmt.Println("  • Log collection and analysis")
-		fmt.Println("  • Metrics extraction")
-		fmt.Println("  • LLM-powered diagnosis")
-		fmt.Println("  • Automated recommendations")
-		fmt.Println("  • Report generation")
-		fmt.Println()
-		fmt.Println("For now, use:")
-		fmt.Println("  • bash scripts/rca_collect.sh")
-		fmt.Println("  • docker logs ai_engine")
-		fmt.Println()
+		// If --last flag is used, set callID to "last"
+		if cmd.Flags().Changed("last") || troubleshootCallID == "" {
+			troubleshootCallID = "last"
+		}
 		
-		return nil
+		runner := troubleshoot.NewRunner(
+			troubleshootCallID,
+			troubleshootSymptom,
+			troubleshootInteractive,
+			troubleshootCollectOnly,
+			troubleshootNoLLM,
+			troubleshootList,
+			verbose,
+		)
+		return runner.Run()
 	},
 }
 
 func init() {
-	troubleshootCmd.Flags().StringVar(&troubleshootCallID, "call-id", "", "analyze specific call ID")
-	troubleshootCmd.Flags().IntVar(&troubleshootLast, "last", 10, "show last N calls")
-	troubleshootCmd.Flags().StringVar(&troubleshootLLM, "llm", "", "LLM provider: openai|anthropic|gemini|ollama")
-	troubleshootCmd.Flags().StringVar(&troubleshootExport, "export", "", "export report to file")
+	troubleshootCmd.Flags().StringVarP(&troubleshootCallID, "call", "c", "", "analyze specific call ID")
+	troubleshootCmd.Flags().BoolVarP(&troubleshootList, "list", "l", false, "list recent calls")
+	troubleshootCmd.Flags().Bool("last", false, "analyze most recent call")
+	troubleshootCmd.Flags().StringVarP(&troubleshootSymptom, "symptom", "s", "", "symptom: no-audio|garbled|echo|interruption|one-way")
+	troubleshootCmd.Flags().BoolVarP(&troubleshootInteractive, "interactive", "i", false, "interactive mode")
+	troubleshootCmd.Flags().BoolVar(&troubleshootCollectOnly, "collect-only", false, "only collect logs, no analysis")
+	troubleshootCmd.Flags().BoolVar(&troubleshootNoLLM, "no-llm", false, "skip LLM analysis")
 	
 	rootCmd.AddCommand(troubleshootCmd)
 }
