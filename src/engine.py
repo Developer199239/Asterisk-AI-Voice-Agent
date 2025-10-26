@@ -2245,7 +2245,11 @@ class Engine:
                     provider = None
                 continuous_input = False
                 try:
-                    if provider_name == "deepgram":
+                    # CRITICAL: Providers requiring continuous audio flow during TTS
+                    # - deepgram: Traditional continuous STT throughout conversation
+                    # - openai_realtime: Full agent mode with server-side VAD managing turn-taking
+                    # NOTE: Does NOT apply to pipeline mode (openai_stt/llm/tts components)
+                    if provider_name in ("deepgram", "openai_realtime"):
                         continuous_input = True
                     else:
                         pcfg = getattr(provider, 'config', None)
