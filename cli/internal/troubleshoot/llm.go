@@ -130,6 +130,13 @@ func (llm *LLMAnalyzer) buildPrompt(analysis *Analysis, logData string) string {
 		prompt.WriteString(analysis.Metrics.FormatForLLM())
 	}
 	
+	// Golden baseline comparison (PROVIDES EXACT FIXES)
+	if analysis.BaselineComparison != nil {
+		prompt.WriteString(analysis.BaselineComparison.FormatForLLM())
+		prompt.WriteString("IMPORTANT: Use the exact configuration values from the golden baseline deviations above.\n")
+		prompt.WriteString("These are VALIDATED production values that are known to work.\n\n")
+	}
+	
 	// Sample logs (truncated)
 	prompt.WriteString("Sample Log Lines:\n")
 	lines := strings.Split(logData, "\n")
@@ -145,16 +152,17 @@ func (llm *LLMAnalyzer) buildPrompt(analysis *Analysis, logData string) string {
 	prompt.WriteString("\n")
 	
 	prompt.WriteString("Please provide:\n")
-	prompt.WriteString("1. Root Cause: What is the most likely root cause based on the metrics?\n")
-	prompt.WriteString("   - Focus on provider_bytes ratio (should be 1.0)\n")
-	prompt.WriteString("   - Check drift_pct (should be <10%)\n")
-	prompt.WriteString("   - Note underflow events\n")
-	prompt.WriteString("   - VAD aggressiveness level (0 = too sensitive)\n")
-	prompt.WriteString("   - Gate flutter (>50 closures = problem)\n")
-	prompt.WriteString("   - Format mismatches\n")
+	prompt.WriteString("1. Root Cause: Identify the root cause based on golden baseline deviations\n")
+	prompt.WriteString("   - Prioritize CRITICAL severity deviations first\n")
+	prompt.WriteString("   - Reference the exact current vs expected values shown above\n")
 	prompt.WriteString("2. Confidence: How confident are you? (High/Medium/Low)\n")
-	prompt.WriteString("3. Quick Fix: What's the immediate action to take?\n")
+	prompt.WriteString("3. Quick Fix: Provide EXACT configuration changes\n")
+	prompt.WriteString("   - Use the EXACT values from golden baseline (e.g., 'Set webrtc_aggressiveness: 1')\n")
+	prompt.WriteString("   - Specify the EXACT file and section (e.g., 'config/ai-agent.yaml vad section')\n")
+	prompt.WriteString("   - Include the EXACT parameter names from the deviations\n")
 	prompt.WriteString("4. Prevention: How to prevent this in the future?\n")
+	prompt.WriteString("\nIMPORTANT: Your fixes MUST use the exact values from the golden baseline comparison.\n")
+	prompt.WriteString("Do NOT suggest generic fixes. Use the concrete values provided.\n")
 	prompt.WriteString("\nKeep your response concise and actionable (under 400 words).")
 	
 	return prompt.String()

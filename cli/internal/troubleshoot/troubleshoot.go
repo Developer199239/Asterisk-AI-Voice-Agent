@@ -125,6 +125,17 @@ func (r *Runner) Run() error {
 	metrics := ExtractMetrics(logData)
 	analysis.Metrics = metrics
 	
+	// Compare to golden baselines
+	infoColor.Println("Comparing to golden baselines...")
+	baselineName := detectBaseline(logData)
+	if baselineName != "" {
+		comparison := CompareToBaseline(metrics, baselineName)
+		analysis.BaselineComparison = comparison
+		if r.verbose && comparison != nil {
+			infoColor.Printf("  Using baseline: %s\n", comparison.BaselineName)
+		}
+	}
+	
 	// Apply symptom-specific analysis
 	if r.symptom != "" {
 		infoColor.Printf("Applying symptom analysis: %s\n", r.symptom)
@@ -269,17 +280,18 @@ func (r *Runner) collectCallData() (string, error) {
 
 // Analysis holds analysis results
 type Analysis struct {
-	CallID            string
-	Errors            []string
-	Warnings          []string
-	AudioIssues       []string
-	MetricsMap        map[string]string
-	Metrics           *CallMetrics
-	HasAudioSocket    bool
-	HasTranscription  bool
-	HasPlayback       bool
-	Symptom           string
-	SymptomAnalysis   *SymptomAnalysis
+	CallID              string
+	Errors              []string
+	Warnings            []string
+	AudioIssues         []string
+	MetricsMap          map[string]string
+	Metrics             *CallMetrics
+	BaselineComparison  *BaselineComparison
+	HasAudioSocket      bool
+	HasTranscription    bool
+	HasPlayback         bool
+	Symptom             string
+	SymptomAnalysis     *SymptomAnalysis
 }
 
 // analyzeBasic performs basic log analysis
@@ -477,6 +489,28 @@ func (r *Runner) interactiveSession(analysis *Analysis) error {
 	fmt.Println()
 	fmt.Println("Coming soon: Interactive Q&A for deeper diagnosis")
 	return nil
+}
+
+// detectBaseline determines which golden baseline to use
+func detectBaseline(logData string) string {
+	lower := strings.ToLower(logData)
+	
+	// Check for OpenAI Realtime
+	if strings.Contains(lower, "openai") && strings.Contains(lower, "realtime") {
+		return "openai_realtime"
+	}
+	
+	// Check for Deepgram
+	if strings.Contains(lower, "deepgram") {
+		return "deepgram_standard"
+	}
+	
+	// Default to streaming performance baseline
+	if strings.Contains(lower, "streaming tuning") {
+		return "streaming_performance"
+	}
+	
+	return "streaming_performance" // Default baseline
 }
 
 // Helper functions
