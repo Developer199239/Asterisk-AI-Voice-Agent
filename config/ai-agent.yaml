@@ -186,11 +186,12 @@ llm:
 
 
 # VAD Configuration - Optimized for 4+ second utterances
+# GOLDEN BASELINE for OpenAI Realtime: aggressiveness=1 prevents echo false positives
 vad:
   use_provider_vad: false      # Rely on local WebRTC VAD for turn detection
-  enhanced_enabled: false      # Disable local enhanced VAD to avoid double-gating
+  enhanced_enabled: true       # Enable enhanced VAD for gating (OpenAI echo prevention)
   # WebRTC VAD settings
-  webrtc_aggressiveness: 0   # Least aggressive (0-3) for telephony audio
+  webrtc_aggressiveness: 1   # Balanced mode - ignores echo, detects real speech (CRITICAL for OpenAI)
   webrtc_start_frames: 3     # Consecutive frames to start recording
   webrtc_end_silence_frames: 50  # Silence frames to end recording (1000ms)
   
