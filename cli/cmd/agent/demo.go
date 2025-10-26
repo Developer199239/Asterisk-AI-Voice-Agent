@@ -1,8 +1,7 @@
 package main
 
 import (
-	"fmt"
-
+	"github.com/hkjarral/asterisk-ai-voice-agent/cli/internal/demo"
 	"github.com/spf13/cobra"
 )
 
@@ -19,36 +18,17 @@ var demoCmd = &cobra.Command{
 
 Tests:
   - AudioSocket server connectivity
-  - STT provider (transcription test)
-  - LLM provider (response generation)
-  - TTS provider (speech synthesis)
-  - Full round-trip latency
+  - Container health and status
+  - Configuration validation
+  - Provider API connectivity
+  - Audio processing pipeline
 
 This helps validate configuration before production use.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println()
-		fmt.Println("🎤 Audio Pipeline Demo")
-		fmt.Println("═══════════════════════════════════════════")
-		fmt.Println()
-		fmt.Println("Testing full audio pipeline...")
-		fmt.Println()
+		verbose, _ := cmd.Flags().GetBool("verbose")
 		
-		// TODO: Implement pipeline testing
-		fmt.Println("⚠️  This command is under development.")
-		fmt.Println()
-		fmt.Println("Coming soon:")
-		fmt.Println("  • AudioSocket connectivity test")
-		fmt.Println("  • STT provider test with sample audio")
-		fmt.Println("  • LLM provider response test")
-		fmt.Println("  • TTS provider synthesis test")
-		fmt.Println("  • Full pipeline latency measurement")
-		fmt.Println()
-		fmt.Println("For now, test with a real call or use:")
-		fmt.Println("  • docker logs ai_engine")
-		fmt.Println("  • agent doctor (health checks)")
-		fmt.Println()
-		
-		return nil
+		runner := demo.NewRunner(verbose)
+		return runner.Run()
 	},
 }
 
