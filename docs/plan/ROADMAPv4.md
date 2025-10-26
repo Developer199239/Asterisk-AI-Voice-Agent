@@ -335,6 +335,7 @@ References:
 
 ## Milestone P1 — Transport Orchestrator + Audio Profiles
 
+- **Status**: ✅ **IMPLEMENTATION COMPLETE** (Oct 26, 2025) — Ready for validation testing
 - **Goal**: Provider‑agnostic behavior with per‑call Audio Profile selection and automatic negotiation.
 - **Scope**:
   - Add `AudioProfile` (config) with fields: `internal_rate_hz`, `transport_out{encoding, sample_rate_hz}`, `provider_pref{input, output}`, `chunk_ms: auto`, `idle_cutoff_ms`.
@@ -455,10 +456,50 @@ References:
   - Each adapter parses its own ACK format; Orchestrator calls `provider.parse_ack(...)`.
   - Document ACK schemas in `docs/providers/deepgram.md`, `docs/providers/openai.md`.
 
+- **Implementation Achievements (Oct 26, 2025)**:
+  1. ✅ **TransportOrchestrator** class created (`src/core/transport_orchestrator.py`)
+     - Profile resolution with precedence (AI_PROVIDER > AI_CONTEXT > AI_AUDIO_PROFILE > default)
+     - Provider capability negotiation
+     - Format validation and remediation
+     - Legacy config synthesis for backward compatibility
+  
+  2. ✅ **Provider Capabilities** enhanced
+     - Added `can_negotiate` field to `ProviderCapabilities`
+     - Deepgram: `get_capabilities()` + `parse_ack()` (SettingsApplied)
+     - OpenAI Realtime: `get_capabilities()` + `parse_ack()` (session.updated)
+  
+  3. ✅ **Engine Integration** complete
+     - `_resolve_audio_profile()` uses TransportOrchestrator
+     - Reads AI_PROVIDER, AI_AUDIO_PROFILE, AI_CONTEXT channel vars
+     - Applies resolved transport to session, streaming manager, provider config
+     - Backward compatible with legacy TransportProfile
+  
+  4. ✅ **Documentation** created
+     - `P1_IMPLEMENTATION_COMPLETE.md` - comprehensive implementation guide
+     - Testing strategy for both golden baselines
+     - Rollback plan and known limitations documented
+
 - **Acceptance (fast checks)**:
   - Switching `AI_AUDIO_PROFILE` changes end‑to‑end plan without YAML edits; call remains stable.
   - If provider rejects a format (empty ACK), call continues with logged remediation (e.g., 24k→16k, PCM→μ‑law).
   - Logs show TransportCard + segment summaries; metrics align with golden baseline.
+
+- **Next Steps (Testing)**:
+  1. **Deepgram golden baseline validation** (~10 min)
+     - Place 60s call with `AI_PROVIDER=deepgram`
+     - Collect RCA and compare vs P0 golden baseline metrics
+     - Pass criteria: underflows=0, drift≈0%, SNR>64dB
+  
+  2. **OpenAI Realtime golden baseline validation** (~10 min)
+     - Place 60s call with `AI_PROVIDER=openai_realtime`
+     - Collect RCA and compare vs P0.5 golden baseline metrics
+     - Pass criteria: SNR>64dB, gate_closures≤1, no self-interruption
+  
+  3. **Context mapping verification** (~5 min)
+     - Test `AI_CONTEXT=sales` maps to correct profile + provider + prompt
+  
+  4. **Profile override verification** (~5 min)
+     - Test `AI_AUDIO_PROFILE=wideband_pcm_16k` overrides default
 
 - **Impact**: Simplifies operator experience; same engine works across providers/formats.
 

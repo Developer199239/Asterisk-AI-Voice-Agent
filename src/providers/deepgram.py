@@ -204,6 +204,7 @@ class DeepgramProvider(AIProviderInterface):
             output_encodings=["mulaw"],
             output_sample_rates_hz=[8000],
             preferred_chunk_ms=20,
+            can_negotiate=True,  # Uses SettingsApplied ACK for runtime negotiation
         )
     
     def parse_ack(self, event_data: Dict[str, Any]) -> Optional[ProviderCapabilities]:
@@ -242,6 +243,7 @@ class DeepgramProvider(AIProviderInterface):
                 output_encodings=[output_enc],
                 output_sample_rates_hz=[output_rate],
                 preferred_chunk_ms=20,
+                can_negotiate=True,  # ACK confirmed successful negotiation
             )
         except Exception as exc:
             logger.warning(

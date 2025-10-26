@@ -212,6 +212,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             output_encodings=["mulaw", "pcm16"],
             output_sample_rates_hz=[8000, 24000],
             preferred_chunk_ms=20,
+            can_negotiate=False,  # Uses static session.update config, not runtime ACK
         )
     
     def parse_ack(self, event_data: Dict[str, Any]) -> Optional[ProviderCapabilities]:
@@ -258,6 +259,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                 output_encodings=[output_enc],
                 output_sample_rates_hz=[sample_rate],
                 preferred_chunk_ms=20,
+                can_negotiate=False,  # ACK confirmed static session configuration
             )
         except Exception as exc:
             logger.warning(

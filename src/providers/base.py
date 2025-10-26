@@ -58,6 +58,7 @@ class ProviderCapabilities:
     output_encodings: List[str]
     output_sample_rates_hz: List[int]
     preferred_chunk_ms: int = 20
+    can_negotiate: bool = True  # If False, use static config only
 
 
 def _safe_list(val: Optional[List[Any]]) -> List[Any]:
