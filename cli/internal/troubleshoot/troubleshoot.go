@@ -218,21 +218,34 @@ func (r *Runner) getRecentCalls(limit int) ([]Call, error) {
 	}
 
 	callMap := make(map[string]*Call)
+	audioSocketChannels := make(map[string]bool)
 	
-	// Multiple patterns to catch different log formats
+	// First pass: identify AudioSocket channels (internal infrastructure)
+	audioSocketPattern := regexp.MustCompile(`"audiosocket_channel_id":\s*"([0-9]+\.[0-9]+)"`)
+	lines := strings.Split(string(output), "\n")
+	for _, line := range lines {
+		matches := audioSocketPattern.FindStringSubmatch(line)
+		if len(matches) > 1 {
+			audioSocketChannels[matches[1]] = true
+		}
+	}
+	
+	// Second pass: collect call IDs, excluding AudioSocket channels
 	patterns := []*regexp.Regexp{
 		regexp.MustCompile(`"call_id":\s*"([0-9]+\.[0-9]+)"`),           // JSON: "call_id": "1761518880.2191"
 		regexp.MustCompile(`call_id[=:][\s]*"?([0-9]+\.[0-9]+)"?`),      // call_id=1761518880.2191 or call_id: "..."
-		regexp.MustCompile(`channel_id"?:\s*"?([0-9]+\.[0-9]+)"?`),      // channel_id: "1761518880.2191"
-		regexp.MustCompile(`\b([0-9]{10}\.[0-9]{4})\b`),                 // Plain number pattern
+		regexp.MustCompile(`"caller_channel_id":\s*"([0-9]+\.[0-9]+)"`), // Explicit caller channel
 	}
 	
-	lines := strings.Split(string(output), "\n")
 	for _, line := range lines {
 		for _, pattern := range patterns {
 			matches := pattern.FindStringSubmatch(line)
 			if len(matches) > 1 {
 				callID := matches[1]
+				// Skip AudioSocket channels
+				if audioSocketChannels[callID] {
+					continue
+				}
 				if _, exists := callMap[callID]; !exists {
 					callMap[callID] = &Call{
 						ID:        callID,
