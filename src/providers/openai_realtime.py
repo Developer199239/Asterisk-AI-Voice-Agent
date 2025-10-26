@@ -77,6 +77,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         self,
         config: OpenAIRealtimeProviderConfig,
         on_event,
+        gating_manager=None,
     ):
         super().__init__(on_event)
         self.config = config
@@ -98,6 +99,13 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         self._input_info_logged: bool = False
         # Aggregate provider-rate PCM16 bytes (24 kHz default) and commit in >=100ms chunks
         self._pending_audio_provider_rate: bytearray = bytearray()
+        
+        # Audio gating for echo prevention
+        self._gating_manager = gating_manager
+        if self._gating_manager:
+            logger.info("🎛️ Audio gating enabled for OpenAI Realtime (echo prevention)")
+        else:
+            logger.debug("Audio gating not available for OpenAI Realtime")
         self._last_commit_ts: float = 0.0
         # Serialize append/commit to avoid empty commits from races
         self._audio_lock: asyncio.Lock = asyncio.Lock()
@@ -414,60 +422,42 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             pcm16 = self._convert_inbound_audio(audio_chunk)
             if not pcm16:
                 return
-
-            # Log first conversion sizes to verify resample
-            if self._input_info_logged is True and self._input_resample_state is not None:
-                try:
+            
+            # AUDIO GATING: Check if we should forward this audio (echo prevention)
+            if self._gating_manager:
+                should_forward, buffered_chunks = await self._gating_manager.should_forward_audio(
+                    self._call_id,
+                    "openai_realtime",
+                    pcm16,  # Use converted PCM16 for VAD
+                    audio_format="pcm16"
+                )
+                
+                if not should_forward:
+                    # Audio is buffered or dropped, don't send yet
                     logger.debug(
-                        "OpenAI input frame sizes",
+                        "🚫 Audio NOT forwarded (gating active)",
                         call_id=self._call_id,
-                        src_bytes=len(audio_chunk),
-                        dst_bytes=len(pcm16),
                     )
-                except Exception:
-                    pass
-
-            # If server VAD is enabled, just append frames; do not commit.
-            vad_enabled = getattr(self.config, "turn_detection", None) is not None
-            if vad_enabled:
-                try:
-                    audio_b64 = base64.b64encode(pcm16).decode("ascii")
-                    await self._send_json({"type": "input_audio_buffer.append", "audio": audio_b64})
-                except Exception:
-                    logger.error("Failed to append input audio buffer (VAD)", call_id=self._call_id, exc_info=True)
-            else:
-                # Serialize accumulation and commit to avoid empty commits due to races
-                async with self._audio_lock:
-                    # Accumulate until we have >= 160ms to comfortably satisfy >=100ms minimum
-                    self._pending_audio_provider_rate.extend(pcm16)
-                    bytes_per_ms = int(self.config.provider_input_sample_rate_hz * 2 / 1000)
-                    commit_threshold_ms = 160
-                    commit_threshold_bytes = bytes_per_ms * commit_threshold_ms
-
-                    if len(self._pending_audio_provider_rate) >= commit_threshold_bytes:
-                        chunk = bytes(self._pending_audio_provider_rate)
-                        self._pending_audio_provider_rate.clear()
-                        audio_b64 = base64.b64encode(chunk).decode("ascii")
-                        try:
-                            await self._send_json({"type": "input_audio_buffer.append", "audio": audio_b64})
-                            # CRITICAL FIX #2: Do NOT manually commit input audio buffer
-                            # Manual commits caused 310 "buffer too small" errors (40% failure rate)
-                            # OpenAI automatically commits when speech_stopped is detected (per API design)
-                            # Removes empty buffer errors and lets OpenAI handle turn-taking naturally
-                            # await self._send_json({"type": "input_audio_buffer.commit"})
-                            self._last_commit_ts = time.monotonic()
-                            logger.info(
-                                "OpenAI appended input audio (auto-commit on speech_stopped)",
-                                call_id=self._call_id,
-                                ms=len(chunk) // bytes_per_ms,
-                                bytes=len(chunk),
-                            )
-                        except Exception:
-                            logger.error("Failed to append input audio buffer", call_id=self._call_id, exc_info=True)
-                        # CRITICAL FIX: Do NOT manually trigger response.create after every audio commit
-                        # OpenAI's server_vad automatically generates responses when user stops speaking
-                        # Calling _ensure_response_request() here caused 148 requests in 70s (spam!)
-                        # Let OpenAI handle turn-taking naturally
+                    return
+                
+                # Send buffered audio first (if any from interruption)
+                if buffered_chunks:
+                    logger.info(
+                        "📤 Sending buffered audio chunks first",
+                        call_id=self._call_id,
+                        chunk_count=len(buffered_chunks),
+                    )
+                    for buffered_chunk in buffered_chunks:
+                        await self._send_audio_to_openai(buffered_chunk)
+                
+                logger.debug(
+                    "✅ Audio forwarded (gate open)",
+                    call_id=self._call_id,
+                )
+            
+            # Send current chunk
+            await self._send_audio_to_openai(pcm16)
+            
         except ConnectionClosedError:
             logger.warning("OpenAI Realtime socket closed while sending audio", call_id=self._call_id)
             await self._reconnect_with_backoff()
@@ -664,6 +654,54 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         message = json.dumps(payload)
         async with self._send_lock:
             await self.websocket.send(message)
+    
+    async def _send_audio_to_openai(self, pcm16: bytes):
+        """Helper method to send PCM16 audio to OpenAI (extracted for gating logic).
+        
+        This contains the actual audio sending logic that was previously inline in send_audio.
+        It handles both VAD-enabled and manual commit modes.
+        """
+        # If server VAD is enabled, just append frames; do not commit.
+        vad_enabled = getattr(self.config, "turn_detection", None) is not None
+        if vad_enabled:
+            try:
+                audio_b64 = base64.b64encode(pcm16).decode("ascii")
+                await self._send_json({"type": "input_audio_buffer.append", "audio": audio_b64})
+            except Exception:
+                logger.error("Failed to append input audio buffer (VAD)", call_id=self._call_id, exc_info=True)
+        else:
+            # Serialize accumulation and commit to avoid empty commits due to races
+            async with self._audio_lock:
+                # Accumulate until we have >= 160ms to comfortably satisfy >=100ms minimum
+                self._pending_audio_provider_rate.extend(pcm16)
+                bytes_per_ms = int(self.config.provider_input_sample_rate_hz * 2 / 1000)
+                commit_threshold_ms = 160
+                commit_threshold_bytes = bytes_per_ms * commit_threshold_ms
+
+                if len(self._pending_audio_provider_rate) >= commit_threshold_bytes:
+                    chunk = bytes(self._pending_audio_provider_rate)
+                    self._pending_audio_provider_rate.clear()
+                    audio_b64 = base64.b64encode(chunk).decode("ascii")
+                    try:
+                        await self._send_json({"type": "input_audio_buffer.append", "audio": audio_b64})
+                        # CRITICAL FIX #2: Do NOT manually commit input audio buffer
+                        # Manual commits caused 310 "buffer too small" errors (40% failure rate)
+                        # OpenAI automatically commits when speech_stopped is detected (per API design)
+                        # Removes empty buffer errors and lets OpenAI handle turn-taking naturally
+                        # await self._send_json({"type": "input_audio_buffer.commit"})
+                        self._last_commit_ts = time.monotonic()
+                        logger.info(
+                            "OpenAI appended input audio (auto-commit on speech_stopped)",
+                            call_id=self._call_id,
+                            ms=len(chunk) // bytes_per_ms,
+                            bytes=len(chunk),
+                        )
+                    except Exception:
+                        logger.error("Failed to append input audio buffer", call_id=self._call_id, exc_info=True)
+                    # CRITICAL FIX: Do NOT manually trigger response.create after every audio commit
+                    # OpenAI's server_vad automatically generates responses when user stops speaking
+                    # Calling _ensure_response_request() here caused 148 requests in 70s (spam!)
+                    # Let OpenAI handle turn-taking naturally
 
     def _convert_inbound_audio(self, audio_chunk: bytes) -> Optional[bytes]:
         fmt_raw = getattr(self.config, "input_encoding", None) or "slin16"
@@ -842,12 +880,22 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         if event_type == "response.audio.delta":
             audio_b64 = event.get("delta")
             if audio_b64:
+                # AUDIO GATING: Notify gating manager that agent started speaking
+                if self._gating_manager and not self._in_audio_burst:
+                    self._gating_manager.set_agent_speaking(self._call_id, True, "openai_realtime")
+                    self._in_audio_burst = True
+                
                 await self._handle_output_audio(audio_b64)
             else:
                 logger.debug("Missing audio in response.audio.delta", call_id=self._call_id)
             return
 
         if event_type == "response.audio.done":
+            # AUDIO GATING: Notify gating manager that agent finished speaking
+            if self._gating_manager and self._in_audio_burst:
+                self._gating_manager.set_agent_speaking(self._call_id, False, "openai_realtime")
+                self._in_audio_burst = False
+            
             await self._emit_audio_done()
             return
 

@@ -393,6 +393,21 @@ class Engine:
                     logger.warning("🎤 WebRTC VAD not available - install py-webrtcvad")
         except Exception:
             logger.error("Failed to initialize VAD components", exc_info=True)
+        
+        # Initialize Audio Gating Manager (for echo prevention in OpenAI Realtime)
+        self.audio_gating_manager = None
+        try:
+            # Only initialize if VAD is available (needed for interrupt detection)
+            if self.vad_manager:
+                from src.core.audio_gating_manager import AudioGatingManager
+                self.audio_gating_manager = AudioGatingManager(vad_manager=self.vad_manager)
+                logger.info("🎛️ Audio gating manager initialized (OpenAI echo prevention)")
+            else:
+                logger.debug("Audio gating manager not initialized (VAD not available)")
+        except Exception:
+            logger.error("Failed to initialize audio gating manager", exc_info=True)
+            self.audio_gating_manager = None
+        
         # Map our synthesized UUID extension to the real ARI caller channel id
         self.uuidext_to_channel: Dict[str, str] = {}
         # NEW: Caller channel tracking for dual StasisStart handling
@@ -695,9 +710,16 @@ class Engine:
                     if not openai_cfg:
                         continue
 
-                    provider = OpenAIRealtimeProvider(openai_cfg, self.on_provider_event)
+                    provider = OpenAIRealtimeProvider(
+                        openai_cfg, 
+                        self.on_provider_event,
+                        gating_manager=self.audio_gating_manager
+                    )
                     self.providers[name] = provider
-                    logger.info("Provider 'openai_realtime' loaded successfully.")
+                    logger.info(
+                        "Provider 'openai_realtime' loaded successfully",
+                        audio_gating_enabled=self.audio_gating_manager is not None
+                    )
 
                     runtime_issues = self._describe_provider_alignment(name, provider)
                     if runtime_issues:
@@ -1728,6 +1750,13 @@ class Engine:
                     self.vad_manager.context_analyzer.cleanup_call(call_id)
                 except Exception:
                     logger.debug("VAD cleanup failed during call cleanup", call_id=call_id, exc_info=True)
+            
+            # Clean up audio gating manager state for this call
+            if self.audio_gating_manager:
+                try:
+                    await self.audio_gating_manager.cleanup_call(call_id)
+                except Exception:
+                    logger.debug("Audio gating cleanup failed during call cleanup", call_id=call_id, exc_info=True)
 
             try:
                 # If the session still exists in store (rare race), mark completed; otherwise ignore
