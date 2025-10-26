@@ -602,14 +602,6 @@ func formatBytes(bytes int) string {
 	}
 }
 
-// absFloat returns absolute value of float
-func absFloat(x float64) float64 {
-	if x < 0 {
-		return -x
-	}
-	return x
-}
-
 // interactiveSession runs interactive troubleshooting
 func (r *Runner) interactiveSession(analysis *Analysis) error {
 	fmt.Println("═══════════════════════════════════════════")
