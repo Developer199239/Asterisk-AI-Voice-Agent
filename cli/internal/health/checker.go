@@ -37,12 +37,21 @@ type HealthResult struct {
 type Checker struct {
 	verbose bool
 	ctx     context.Context
+	envMap  map[string]string
 }
 
 func NewChecker(verbose bool) *Checker {
+	// Try to load .env file
+	envMap, err := LoadEnvFile(".env")
+	if err != nil {
+		// Try config/.env
+		envMap, _ = LoadEnvFile("config/.env")
+	}
+	
 	return &Checker{
 		verbose: verbose,
 		ctx:     context.Background(),
+		envMap:  envMap,
 	}
 }
 

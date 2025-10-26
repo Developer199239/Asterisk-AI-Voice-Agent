@@ -43,8 +43,8 @@ func (c *Checker) checkDocker() Check {
 }
 
 func (c *Checker) checkContainers() Check {
-	// Check if ai-engine container is running
-	cmd := exec.Command("docker", "ps", "--format", "{{.Names}}\t{{.Status}}", "--filter", "name=ai")
+	// Check if ai_engine container is running (note: underscore not hyphen)
+	cmd := exec.Command("docker", "ps", "--format", "{{.Names}}\t{{.Status}}", "--filter", "name=ai_engine")
 	output, err := cmd.Output()
 	if err != nil {
 		return Check{
@@ -91,24 +91,55 @@ func (c *Checker) checkContainers() Check {
 }
 
 func (c *Checker) checkAsteriskARI() Check {
-	// TODO: Implement ARI connectivity check
-	// For now, check if we can find Asterisk process or container
-	cmd := exec.Command("docker", "ps", "--format", "{{.Names}}", "--filter", "name=asterisk")
-	output, err := cmd.Output()
+	// Get ARI credentials from environment
+	ariHost := GetEnv("ASTERISK_HOST", c.envMap)
+	ariUsername := GetEnv("ASTERISK_ARI_USERNAME", c.envMap)
+	ariPassword := GetEnv("ASTERISK_ARI_PASSWORD", c.envMap)
 	
-	if err != nil || strings.TrimSpace(string(output)) == "" {
+	if ariHost == "" {
+		ariHost = "127.0.0.1"  // Default
+	}
+	
+	if ariUsername == "" || ariPassword == "" {
+		return Check{
+			Name:        "Asterisk ARI",
+			Status:      StatusWarn,
+			Message:     "ARI credentials not configured",
+			Details:     "ASTERISK_ARI_USERNAME or ASTERISK_ARI_PASSWORD not set in .env",
+			Remediation: "Set ASTERISK_ARI_USERNAME and ASTERISK_ARI_PASSWORD in .env file",
+		}
+	}
+	
+	// Try to connect to ARI HTTP endpoint
+	cmd := exec.Command("curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
+		"-u", fmt.Sprintf("%s:%s", ariUsername, ariPassword),
+		fmt.Sprintf("http://%s:8088/ari/asterisk/info", ariHost))
+	
+	output, err := cmd.Output()
+	if err != nil {
+		return Check{
+			Name:        "Asterisk ARI",
+			Status:      StatusWarn,
+			Message:     "Cannot connect to ARI",
+			Details:     fmt.Sprintf("Host: %s, error: %v", ariHost, err),
+			Remediation: "Check if Asterisk is running and ARI is enabled",
+		}
+	}
+	
+	httpCode := strings.TrimSpace(string(output))
+	if httpCode == "200" {
 		return Check{
 			Name:    "Asterisk ARI",
-			Status:  StatusWarn,
-			Message: "Asterisk container not found",
-			Details: "Cannot verify ARI without Asterisk container",
+			Status:  StatusPass,
+			Message: fmt.Sprintf("ARI accessible at %s:8088", ariHost),
 		}
 	}
 	
 	return Check{
 		Name:    "Asterisk ARI",
-		Status:  StatusInfo,
-		Message: "Asterisk container found (detailed check pending)",
+		Status:  StatusWarn,
+		Message: fmt.Sprintf("ARI returned HTTP %s", httpCode),
+		Details: fmt.Sprintf("Expected 200, got %s from %s:8088", httpCode, ariHost),
 	}
 }
 
@@ -177,7 +208,7 @@ func (c *Checker) checkConfiguration() Check {
 }
 
 func (c *Checker) checkProviderKeys() Check {
-	// Check for common provider API keys in environment
+	// Check for common provider API keys in environment or .env file
 	keys := map[string]string{
 		"OPENAI_API_KEY":   "OpenAI",
 		"DEEPGRAM_API_KEY": "Deepgram",
@@ -188,7 +219,8 @@ func (c *Checker) checkProviderKeys() Check {
 	missing := []string{}
 	
 	for env, name := range keys {
-		if val := os.Getenv(env); val != "" {
+		// Check both OS env and .env file
+		if val := GetEnv(env, c.envMap); val != "" {
 			found = append(found, name)
 		} else {
 			missing = append(missing, name)
@@ -218,8 +250,8 @@ func (c *Checker) checkProviderKeys() Check {
 }
 
 func (c *Checker) checkAudioPipeline() Check {
-	// Check if we can find recent audio pipeline logs
-	cmd := exec.Command("docker", "logs", "--tail", "100", "ai-engine")
+	// Check if we can find recent audio pipeline logs (note: ai_engine with underscore)
+	cmd := exec.Command("docker", "logs", "--tail", "100", "ai_engine")
 	output, err := cmd.Output()
 	
 	if err != nil {
@@ -265,7 +297,7 @@ func (c *Checker) checkAudioPipeline() Check {
 }
 
 func (c *Checker) checkNetwork() Check {
-	// Check if Docker network exists
+	// Check Docker network and ARI connectivity
 	cmd := exec.Command("docker", "network", "ls", "--format", "{{.Name}}")
 	output, err := cmd.Output()
 	
@@ -279,27 +311,27 @@ func (c *Checker) checkNetwork() Check {
 	}
 	
 	networks := strings.Split(strings.TrimSpace(string(output)), "\n")
-	found := false
-	for _, net := range networks {
-		if strings.Contains(net, "asterisk") || strings.Contains(net, "ai") {
-			found = true
-			break
-		}
+	
+	// Check if using bridge, host, or custom network
+	ariHost := GetEnv("ASTERISK_HOST", c.envMap)
+	if ariHost == "" {
+		ariHost = "127.0.0.1"
 	}
 	
-	if !found {
-		return Check{
-			Name:    "Network",
-			Status:  StatusWarn,
-			Message: "No asterisk/ai Docker network found",
-			Details: "This may affect container communication",
-		}
+	var networkMode string
+	if ariHost == "127.0.0.1" || ariHost == "localhost" {
+		networkMode = "host network (localhost)"
+	} else if strings.Contains(ariHost, ".") {
+		networkMode = fmt.Sprintf("remote host (%s)", ariHost)
+	} else {
+		networkMode = fmt.Sprintf("container name (%s)", ariHost)
 	}
 	
 	return Check{
 		Name:    "Network",
 		Status:  StatusPass,
-		Message: "Docker network configured",
+		Message: fmt.Sprintf("Using %s", networkMode),
+		Details: fmt.Sprintf("Networks available: %d", len(networks)),
 	}
 }
 
@@ -336,8 +368,8 @@ func (c *Checker) checkMediaDirectory() Check {
 }
 
 func (c *Checker) checkLogs() Check {
-	// Check for recent errors in ai-engine logs
-	cmd := exec.Command("docker", "logs", "--tail", "100", "ai-engine")
+	// Check for recent errors in ai_engine logs (note: underscore)
+	cmd := exec.Command("docker", "logs", "--tail", "100", "ai_engine")
 	output, err := cmd.Output()
 	
 	if err != nil {
@@ -382,8 +414,8 @@ func (c *Checker) checkLogs() Check {
 }
 
 func (c *Checker) checkRecentCalls() Check {
-	// Try to find recent call info from logs
-	cmd := exec.Command("docker", "logs", "--tail", "500", "ai-engine")
+	// Try to find recent call info from logs (note: ai_engine with underscore)
+	cmd := exec.Command("docker", "logs", "--tail", "500", "ai_engine")
 	output, err := cmd.Output()
 	
 	if err != nil {
