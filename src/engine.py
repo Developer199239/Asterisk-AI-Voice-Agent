@@ -2573,11 +2573,40 @@ class Engine:
             except Exception:
                 pass
 
+            # DEBUG: Audio routing state (OpenAI troubleshooting)
             provider_name = session.provider_name or self.config.default_provider
+            if provider_name == "openai_realtime":
+                logger.debug(
+                    "🎤 AUDIO ROUTING - Ready to forward",
+                    call_id=caller_channel_id,
+                    audio_capture_enabled=getattr(session, 'audio_capture_enabled', None),
+                    audio_bytes=len(audio_bytes),
+                    pcm_payload_bytes=len(pcm_payload) if pcm_payload else 0,
+                )
+            
             provider = self.providers.get(provider_name)
-            if not provider or not hasattr(provider, 'send_audio'):
-                logger.debug("Provider unavailable for audio", provider=provider_name)
+            if not provider:
+                logger.warning(
+                    "Provider object is None!",
+                    provider_name=provider_name,
+                    call_id=caller_channel_id,
+                )
                 return
+            if not hasattr(provider, 'send_audio'):
+                logger.warning(
+                    "Provider missing send_audio method!",
+                    provider_name=provider_name,
+                    call_id=caller_channel_id,
+                )
+                return
+            
+            # DEBUG: Provider ready check (OpenAI troubleshooting)
+            if provider_name == "openai_realtime":
+                logger.debug(
+                    "🎤 AUDIO ROUTING - Provider ready",
+                    call_id=caller_channel_id,
+                    provider_name=provider_name,
+                )
             try:
                 self._update_audio_diagnostics(session, "provider_in", pcm_payload, "slin16", payload_rate)
             except Exception:
@@ -2611,6 +2640,15 @@ class Engine:
             except Exception:
                 logger.debug("Provider input capture failed", call_id=session.call_id, exc_info=True)
             await provider.send_audio(provider_payload)
+            
+            # DEBUG: Confirm audio sent (OpenAI troubleshooting)
+            if provider_name == "openai_realtime":
+                logger.debug(
+                    "🎤 AUDIO ROUTING - Sent to provider",
+                    call_id=caller_channel_id,
+                    provider_name=provider_name,
+                    bytes_sent=len(provider_payload) if provider_payload else 0,
+                )
         except Exception as exc:
             logger.error("Error handling AudioSocket audio", conn_id=conn_id, error=str(exc), exc_info=True)
 

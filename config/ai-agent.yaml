@@ -272,14 +272,15 @@ providers:
       - "text"
     # Explicit greeting said immediately on connect via response.create
     greeting: "${OPENAI_GREETING:-Hello, how can I help you today?}"
-    # DISABLED: Let OpenAI use optimized default turn_detection
-    # Previous config was too aggressive (200ms silence = 0.2s, causing premature cutoffs)
-    # OpenAI's defaults are tuned for their WebSocket/audio pipeline
-    # turn_detection:
-    #   type: "server_vad"
-    #   silence_duration_ms: 200
-    #   threshold: 0.5
-    #   prefix_padding_ms: 200
+    # ENABLED: OpenAI server-side VAD for turn-taking and conversation flow
+    # This handles all turn detection internally, eliminating need for engine-level gating
+    # Settings tuned for natural conversation (500ms silence before turn ends)
+    turn_detection:
+      type: "server_vad"
+      silence_duration_ms: 500
+      threshold: 0.5
+      prefix_padding_ms: 200
+      create_response: true
     # Egress pacer for telephony cadence (20ms frames) with warm-up
     egress_pacer_enabled: true
     egress_pacer_warmup_ms: 320
