@@ -217,10 +217,13 @@ func (r *Runner) testProviders() error {
 		infoColor.Printf("  → Checking provider API keys...\n")
 	}
 	
-	// Check for common provider keys in environment
-	hasOpenAI := os.Getenv("OPENAI_API_KEY") != ""
-	hasDeepgram := os.Getenv("DEEPGRAM_API_KEY") != ""
-	hasAnthropic := os.Getenv("ANTHROPIC_API_KEY") != ""
+	// Load .env file manually to check for keys
+	envMap := r.loadEnvFile()
+	
+	// Check for common provider keys in environment or .env
+	hasOpenAI := r.getEnvKey("OPENAI_API_KEY", envMap) != ""
+	hasDeepgram := r.getEnvKey("DEEPGRAM_API_KEY", envMap) != ""
+	hasAnthropic := r.getEnvKey("ANTHROPIC_API_KEY", envMap) != ""
 	
 	providerCount := 0
 	if hasOpenAI {
@@ -243,10 +246,57 @@ func (r *Runner) testProviders() error {
 	}
 	
 	if providerCount == 0 {
-		return fmt.Errorf("warning: no provider API keys detected in environment")
+		return fmt.Errorf("warning: no provider API keys configured")
 	}
 	
 	return nil
+}
+
+// loadEnvFile loads .env file and returns map of keys
+func (r *Runner) loadEnvFile() map[string]string {
+	envMap := make(map[string]string)
+	
+	// Try to find .env
+	envPath := ".env"
+	if _, err := os.Stat(envPath); os.IsNotExist(err) {
+		envPath = "../.env"
+		if _, err := os.Stat(envPath); os.IsNotExist(err) {
+			return envMap
+		}
+	}
+	
+	data, err := os.ReadFile(envPath)
+	if err != nil {
+		return envMap
+	}
+	
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) == 2 {
+			key := strings.TrimSpace(parts[0])
+			value := strings.TrimSpace(parts[1])
+			value = strings.Trim(value, "\"'")
+			envMap[key] = value
+		}
+	}
+	
+	return envMap
+}
+
+// getEnvKey gets value from OS environment or .env map
+func (r *Runner) getEnvKey(key string, envMap map[string]string) string {
+	// Check OS environment first
+	if val := os.Getenv(key); val != "" {
+		return val
+	}
+	// Fallback to .env map
+	return envMap[key]
 }
 
 // testLogs checks for recent errors in container logs
