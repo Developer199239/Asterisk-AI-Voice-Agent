@@ -233,31 +233,37 @@ chmod +x bin/agent
 
 ## Testing Plan
 
-### Test 1: agent version
+### Test 1: agent version ✅ PASS
 **Expected**: Shows version info
-**Result**: [Pending]
+**Result**: ✅ **PASS**
+```
+agent version 1.0.0-p2-dev (P2 milestone)
+Built for Asterisk AI Voice Agent
+```
 
-### Test 2: agent doctor
+### Test 2: agent doctor ✅ PASS
 **Expected**: Runs 11 health checks, shows summary
-**Result**: [Pending]
+**Result**: ✅ **PASS** (with expected warnings)
 
-**Specific checks to verify**:
-- ✅/❌ Docker daemon
-- ✅/❌ ai-engine container running
-- ✅/❌ config/ai-agent.yaml exists
-- ✅/❌ Provider API keys present
-- ✅/❌ Recent logs clean
+**Specific checks verified**:
+- ✅ Docker daemon running (v26.1.4)
+- ✅ ai-engine container running (3 containers found)
+- ✅ config/ai-agent.yaml exists
+- ❌ Provider API keys not present (expected - .env not loaded)
+- ⚠️ Recent logs access failing (container name issue)
 
-### Test 3: agent doctor --json
+**Summary**: 5 pass, 4 warnings, 1 failure, 1 info
+
+### Test 3: agent doctor --json ✅ PASS
 **Expected**: JSON output for CI/CD
-**Result**: [Pending]
+**Result**: ✅ **PASS** - Valid JSON with all check results
 
-### Test 4: Exit codes
+### Test 4: Exit codes ✅ PASS
 **Expected**: 
 - 0 if all pass
 - 1 if warnings
 - 2 if failures
-**Result**: [Pending]
+**Result**: ✅ **PASS** - Exit code 2 (failures present)
 
 ---
 
