@@ -2293,6 +2293,23 @@ class Engine:
                 except Exception:
                     tts_elapsed_ms = 0
                 initial_protect = int(getattr(cfg, 'initial_protection_ms', 200)) if cfg else 200
+                
+                # CRITICAL FIX #3: Extended protection for OpenAI Realtime (echo prevention)
+                # OpenAI's VAD is highly sensitive and detects agent's own audio as "user speech"
+                # This causes 20+ false speech_started events, creating response cancellation loop
+                # 5 seconds ensures complete greeting plays before accepting any input
+                # Other providers unaffected: Deepgram uses continuous_input path (line 2204 early return)
+                try:
+                    if provider_name == "openai_realtime":
+                        initial_protect = 5000  # 5 seconds to prevent echo feedback loop
+                        logger.debug(
+                            "Extended TTS protection for OpenAI Realtime (echo prevention)",
+                            call_id=caller_channel_id,
+                            protect_ms=initial_protect
+                        )
+                except Exception:
+                    pass
+                
                 # Greeting-specific extra protection
                 try:
                     if getattr(session, 'conversation_state', None) == 'greeting' and cfg:
