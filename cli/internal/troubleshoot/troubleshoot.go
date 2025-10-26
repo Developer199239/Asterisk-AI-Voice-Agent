@@ -103,6 +103,13 @@ func (r *Runner) Run() error {
 	// Analyze logs
 	infoColor.Println("Analyzing logs...")
 	analysis := r.analyzeBasic(logData)
+	
+	// Apply symptom-specific analysis
+	if r.symptom != "" {
+		infoColor.Printf("Applying symptom analysis: %s\n", r.symptom)
+		checker := NewSymptomChecker(r.symptom)
+		checker.AnalyzeSymptom(analysis, logData)
+	}
 	fmt.Println()
 
 	// Show findings
@@ -211,15 +218,16 @@ func (r *Runner) collectCallData() (string, error) {
 
 // Analysis holds analysis results
 type Analysis struct {
-	CallID           string
-	Errors           []string
-	Warnings         []string
-	AudioIssues      []string
-	Metrics          map[string]string
-	HasAudioSocket   bool
-	HasTranscription bool
-	HasPlayback      bool
-	Symptom          string
+	CallID            string
+	Errors            []string
+	Warnings          []string
+	AudioIssues       []string
+	Metrics           map[string]string
+	HasAudioSocket    bool
+	HasTranscription  bool
+	HasPlayback       bool
+	Symptom           string
+	SymptomAnalysis   *SymptomAnalysis
 }
 
 // analyzeBasic performs basic log analysis
@@ -338,6 +346,38 @@ func (r *Runner) displayFindings(analysis *Analysis) {
 			fmt.Printf("  ... and %d more\n", len(analysis.Warnings)-3)
 		}
 		fmt.Println()
+	}
+
+	// Symptom-specific analysis
+	if analysis.SymptomAnalysis != nil {
+		fmt.Println("═══════════════════════════════════════════")
+		warningColor.Printf("SYMPTOM ANALYSIS: %s\n", analysis.SymptomAnalysis.Symptom)
+		fmt.Println("═══════════════════════════════════════════")
+		fmt.Printf("%s\n\n", analysis.SymptomAnalysis.Description)
+		
+		if len(analysis.SymptomAnalysis.Findings) > 0 {
+			fmt.Println("Findings:")
+			for _, finding := range analysis.SymptomAnalysis.Findings {
+				fmt.Printf("  %s\n", finding)
+			}
+			fmt.Println()
+		}
+		
+		if len(analysis.SymptomAnalysis.RootCauses) > 0 {
+			errorColor.Println("Likely Root Causes:")
+			for _, cause := range analysis.SymptomAnalysis.RootCauses {
+				fmt.Printf("  • %s\n", cause)
+			}
+			fmt.Println()
+		}
+		
+		if len(analysis.SymptomAnalysis.Actions) > 0 {
+			successColor.Println("Recommended Actions:")
+			for i, action := range analysis.SymptomAnalysis.Actions {
+				fmt.Printf("  %d. %s\n", i+1, action)
+			}
+			fmt.Println()
+		}
 	}
 
 	// Basic recommendations
