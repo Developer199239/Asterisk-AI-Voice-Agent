@@ -33,9 +33,23 @@ type Config struct {
 
 // LoadConfig reads current configuration from .env and YAML
 func LoadConfig() (*Config, error) {
+	// Try to find .env - check current dir and parent dir
+	envPath := ".env"
+	if _, err := os.Stat(envPath); os.IsNotExist(err) {
+		envPath = "../.env"
+		if _, err := os.Stat(envPath); os.IsNotExist(err) {
+			envPath = ".env" // Reset to current for creation
+		}
+	}
+	
+	yamlPath := "config/ai-agent.yaml"
+	if _, err := os.Stat(yamlPath); os.IsNotExist(err) {
+		yamlPath = "../config/ai-agent.yaml"
+	}
+	
 	cfg := &Config{
-		EnvPath:  ".env",
-		YAMLPath: "config/ai-agent.yaml",
+		EnvPath:  envPath,
+		YAMLPath: yamlPath,
 	}
 	
 	// Load .env
@@ -210,10 +224,16 @@ func (c *Config) SaveEnv() error {
 
 // SaveYAML updates config/ai-agent.yaml
 func (c *Config) SaveYAML(template string) error {
+	// Try to find template in current and parent directory
+	templatePath := template
+	if _, err := os.Stat(templatePath); os.IsNotExist(err) {
+		templatePath = "../" + template
+	}
+	
 	// Copy template to config/ai-agent.yaml
-	input, err := os.ReadFile(template)
+	input, err := os.ReadFile(templatePath)
 	if err != nil {
-		return fmt.Errorf("failed to read template %s: %w", template, err)
+		return fmt.Errorf("failed to read template %s: %w", templatePath, err)
 	}
 	
 	// Read as YAML to modify
