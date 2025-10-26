@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 
+	"github.com/hkjarral/asterisk-ai-voice-agent/cli/internal/wizard"
 	"github.com/spf13/cobra"
 )
 
@@ -25,27 +26,19 @@ Guides you through configuration:
 
 This can be run multiple times to reconfigure the system.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Println()
-		fmt.Println("🚀 Asterisk AI Voice Agent - Setup Wizard")
-		fmt.Println("══════════════════════════════════════════")
-		fmt.Println()
-		fmt.Println("This wizard will help you configure your AI voice agent.")
-		fmt.Println()
+		if initNonInteractive {
+			fmt.Println("⚠️  Non-interactive mode not yet implemented")
+			fmt.Println("For now, run without --non-interactive flag")
+			return nil
+		}
 		
-		// TODO: Implement full wizard
-		fmt.Println("⚠️  This command is under development.")
-		fmt.Println()
-		fmt.Println("For now, please use ./install.sh for initial setup.")
-		fmt.Println()
-		fmt.Println("Coming soon:")
-		fmt.Println("  • Interactive configuration wizard")
-		fmt.Println("  • API key validation")
-		fmt.Println("  • ARI connectivity testing")
-		fmt.Println("  • Pipeline selection")
-		fmt.Println("  • Configuration generation")
-		fmt.Println()
+		// Create and run wizard
+		w, err := wizard.NewWizard()
+		if err != nil {
+			return fmt.Errorf("failed to initialize wizard: %w", err)
+		}
 		
-		return nil
+		return w.Run()
 	},
 }
 
