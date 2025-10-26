@@ -164,6 +164,11 @@ func (r *Runner) Run() error {
 	// Show findings
 	r.displayFindings(analysis)
 	
+	// Show detailed metrics (RCA-level)
+	if analysis.Metrics != nil {
+		r.displayMetrics(analysis.Metrics)
+	}
+	
 	// Show LLM diagnosis
 	if llmDiagnosis != nil {
 		r.displayLLMDiagnosis(llmDiagnosis)
@@ -471,6 +476,111 @@ func (r *Runner) displayRecommendations(analysis *Analysis) {
 	fmt.Println()
 }
 
+// displayMetrics shows RCA-level metrics
+func (r *Runner) displayMetrics(metrics *CallMetrics) {
+	fmt.Println("═══════════════════════════════════════════")
+	fmt.Println("📈 DETAILED METRICS (RCA-Level)")
+	fmt.Println("═══════════════════════════════════════════")
+	fmt.Println()
+	
+	// Provider bytes tracking
+	if len(metrics.ProviderSegments) > 0 {
+		successColor.Println("Provider Bytes Tracking:")
+		fmt.Printf("  Segments: %d\n", len(metrics.ProviderSegments))
+		fmt.Printf("  Total provider bytes: %s\n", formatBytes(metrics.ProviderBytesTotal))
+		fmt.Printf("  Total enqueued bytes: %s\n", formatBytes(metrics.EnqueuedBytesTotal))
+		
+		if metrics.ProviderBytesTotal > 0 {
+			actualRatio := float64(metrics.EnqueuedBytesTotal) / float64(metrics.ProviderBytesTotal)
+			if actualRatio >= 0.99 && actualRatio <= 1.01 {
+				successColor.Printf("  Ratio: %.3f ✅ PERFECT\n", actualRatio)
+			} else if actualRatio >= 0.95 && actualRatio <= 1.05 {
+				warningColor.Printf("  Ratio: %.3f ⚠️  ACCEPTABLE\n", actualRatio)
+			} else {
+				errorColor.Printf("  Ratio: %.3f ❌ CRITICAL (should be 1.0)\n", actualRatio)
+				fmt.Println("  Impact: Pacing bug - causes garbled/fast/slow audio")
+			}
+		}
+		fmt.Println()
+	}
+	
+	// Streaming performance
+	if len(metrics.StreamingSummaries) > 0 {
+		successColor.Println("Streaming Performance:")
+		summary := metrics.StreamingSummaries[0]
+		fmt.Printf("  Bytes sent: %s\n", formatBytes(summary.BytesSent))
+		fmt.Printf("  Effective duration: %.2fs\n", summary.EffectiveSeconds)
+		fmt.Printf("  Wall clock duration: %.2fs\n", summary.WallSeconds)
+		
+		if absFloat(metrics.WorstDriftPct) <= 5.0 {
+			successColor.Printf("  Drift: %.1f%% ✅ EXCELLENT\n", metrics.WorstDriftPct)
+		} else if absFloat(metrics.WorstDriftPct) <= 10.0 {
+			warningColor.Printf("  Drift: %.1f%% ⚠️  ACCEPTABLE\n", metrics.WorstDriftPct)
+		} else {
+			errorColor.Printf("  Drift: %.1f%% ❌ CRITICAL (should be <10%%)\n", metrics.WorstDriftPct)
+			fmt.Println("  Impact: Timing mismatch - audio too fast/slow")
+		}
+		
+		if metrics.UnderflowCount > 0 {
+			errorColor.Printf("  Underflows: %d ❌ DETECTED\n", metrics.UnderflowCount)
+			fmt.Println("  Impact: Jitter buffer starvation - choppy audio")
+		} else {
+			successColor.Println("  Underflows: 0 ✅ NONE")
+		}
+		fmt.Println()
+	}
+	
+	// VAD settings
+	if metrics.VADSettings != nil {
+		successColor.Println("VAD Configuration:")
+		if metrics.VADSettings.WebRTCAggressiveness == 1 {
+			successColor.Printf("  WebRTC Aggressiveness: %d ✅ OPTIMAL\n", metrics.VADSettings.WebRTCAggressiveness)
+		} else if metrics.VADSettings.WebRTCAggressiveness == 0 {
+			errorColor.Printf("  WebRTC Aggressiveness: %d ❌ TOO SENSITIVE\n", metrics.VADSettings.WebRTCAggressiveness)
+			fmt.Println("  Impact: Detects echo as speech - causes self-interruption")
+		} else {
+			warningColor.Printf("  WebRTC Aggressiveness: %d\n", metrics.VADSettings.WebRTCAggressiveness)
+		}
+		fmt.Println()
+	}
+	
+	// Audio gating
+	if metrics.GateClosures > 0 {
+		successColor.Println("Audio Gating:")
+		if metrics.GateFlutterDetected {
+			errorColor.Printf("  Gate closures: %d ❌ FLUTTER DETECTED\n", metrics.GateClosures)
+			fmt.Println("  Impact: Echo leakage causing self-interruption")
+		} else if metrics.GateClosures <= 5 {
+			successColor.Printf("  Gate closures: %d ✅ NORMAL\n", metrics.GateClosures)
+		} else {
+			warningColor.Printf("  Gate closures: %d ⚠️  ELEVATED\n", metrics.GateClosures)
+		}
+		fmt.Println()
+	}
+	
+	// Transport/Format
+	if metrics.AudioSocketFormat != "" || metrics.ProviderInputFormat != "" {
+		successColor.Println("Transport Configuration:")
+		if metrics.AudioSocketFormat != "" {
+			if metrics.AudioSocketFormat == "slin" {
+				successColor.Printf("  AudioSocket format: %s ✅ CORRECT\n", metrics.AudioSocketFormat)
+			} else {
+				errorColor.Printf("  AudioSocket format: %s ❌ WRONG (should be slin)\n", metrics.AudioSocketFormat)
+			}
+		}
+		if metrics.ProviderInputFormat != "" {
+			fmt.Printf("  Provider input: %s\n", metrics.ProviderInputFormat)
+		}
+		if metrics.ProviderOutputFormat != "" {
+			fmt.Printf("  Provider output: %s\n", metrics.ProviderOutputFormat)
+		}
+		if metrics.SampleRate > 0 {
+			fmt.Printf("  Sample rate: %d Hz\n", metrics.SampleRate)
+		}
+		fmt.Println()
+	}
+}
+
 // displayLLMDiagnosis shows AI-powered diagnosis
 func (r *Runner) displayLLMDiagnosis(diagnosis *LLMDiagnosis) {
 	fmt.Println("═══════════════════════════════════════════")
@@ -479,6 +589,25 @@ func (r *Runner) displayLLMDiagnosis(diagnosis *LLMDiagnosis) {
 	fmt.Println()
 	fmt.Println(diagnosis.Analysis)
 	fmt.Println()
+}
+
+// formatBytes formats byte count with commas
+func formatBytes(bytes int) string {
+	if bytes < 1000 {
+		return fmt.Sprintf("%d bytes", bytes)
+	} else if bytes < 1000000 {
+		return fmt.Sprintf("%.1f KB", float64(bytes)/1000)
+	} else {
+		return fmt.Sprintf("%.2f MB", float64(bytes)/1000000)
+	}
+}
+
+// absFloat returns absolute value of float
+func absFloat(x float64) float64 {
+	if x < 0 {
+		return -x
+	}
+	return x
 }
 
 // interactiveSession runs interactive troubleshooting
