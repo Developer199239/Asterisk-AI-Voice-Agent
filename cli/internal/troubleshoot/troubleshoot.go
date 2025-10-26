@@ -3,7 +3,6 @@ package troubleshoot
 import (
 	"context"
 	"fmt"
-	"os"
 	"os/exec"
 	"regexp"
 	"sort"
