@@ -3,7 +3,6 @@ package troubleshoot
 import (
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"strings"
 )
 
