@@ -86,24 +86,26 @@ func ExtractMetrics(logData string) *CallMetrics {
 		switch event {
 		case "PROVIDER SEGMENT BYTES":
 			extractProviderBytes(logEntry, metrics)
-			
+		
 		case "🎛️ STREAMING TUNING SUMMARY":
 			extractStreamingSummary(logEntry, metrics)
-			
+		
 		case "Transport alignment summary":
 			extractTransportAlignment(logEntry, metrics)
-			
+		
 		case "🎯 WebRTC VAD settings":
 			extractVADSettings(logEntry, metrics)
-			
+		
+		case "Streaming segment bytes summary v2":
+			// Extract underflow count from segment summary
+			if uf, ok := logEntry["underflow_events"].(float64); ok {
+				metrics.UnderflowCount += int(uf)
+			}
+		
 		default:
 			// Check for other patterns
 			if strings.Contains(event, "gate_closure") {
 				metrics.GateClosures++
-			}
-			
-			if strings.Contains(line, "underflow") {
-				metrics.UnderflowCount++
 			}
 			
 			if strings.Contains(line, "target_encoding") && strings.Contains(line, "error") {
