@@ -578,23 +578,33 @@ class StreamingPlaybackManager:
                     resolved_target_format,
                     self.sample_rate,
                 )
-            mulaw_transport = self._is_mulaw(self.audiosocket_format)
-            pcm_transport = self._canonicalize_encoding(self.audiosocket_format)
+            # For ExternalMedia/RTP, use codec from session instead of audiosocket_format
+            transport_format = self.audiosocket_format
+            if self.audio_transport == "externalmedia":
+                session = await self.session_store.get_by_call_id(call_id)
+                if session and hasattr(session, 'external_media_codec'):
+                    transport_format = session.external_media_codec
+                    logger.debug(
+                        "Using ExternalMedia codec for target format",
+                        call_id=call_id,
+                        codec=transport_format
+                    )
+            
+            mulaw_transport = self._is_mulaw(transport_format)
+            pcm_transport = self._canonicalize_encoding(transport_format)
             if mulaw_transport:
                 resolved_target_format = "ulaw"
                 resolved_target_rate = 8000
             elif pcm_transport in {"slin16", "linear16", "pcm16"}:
                 resolved_target_format = "slin16"
-                preferred_rate = 0
-                try:
-                    preferred_rate = int(src_rate) if src_rate else 0
-                except Exception:
-                    preferred_rate = 0
-                if preferred_rate < 16000:
-                    preferred_rate = resolved_target_rate if resolved_target_rate and resolved_target_rate >= 16000 else 0
-                if preferred_rate < 16000:
-                    preferred_rate = 16000
-                resolved_target_rate = preferred_rate
+                # For slin16 RTP, always use 8kHz (telephony standard)
+                resolved_target_rate = 8000
+                logger.debug(
+                    "RTP slin16 format locked to 8kHz",
+                    call_id=call_id,
+                    provider_rate=src_rate,
+                    target_rate=resolved_target_rate
+                )
             elif pcm_transport == "slin":
                 resolved_target_format = "slin"
                 # CRITICAL FIX #4: slin is ALWAYS 8kHz (AudioSocket Type 0x10)
