@@ -2187,17 +2187,41 @@ class StreamingPlaybackManager:
                     logger.warning("Streaming transport unavailable (no RTP server)", call_id=call_id)
                     return False
 
+                # RTP expects PCM16 in network byte order (big-endian) for slin16 codec
+                # Streaming manager produces little-endian PCM16, so we need to byte-swap
+                rtp_chunk = chunk
+                try:
+                    # Check if we're using slin16 codec (PCM16)
+                    is_pcm16 = False
+                    if hasattr(session, 'external_media_codec'):
+                        codec = str(getattr(session, 'external_media_codec', '')).lower()
+                        is_pcm16 = codec in ('slin16', 'slin', 'pcm16', 'linear16')
+                    
+                    # For PCM16, byte-swap from little-endian to big-endian (network order)
+                    if is_pcm16 and len(chunk) > 0:
+                        import audioop
+                        rtp_chunk = audioop.byteswap(chunk, 2)
+                        if call_id not in self._first_send_logged:
+                            logger.info(
+                                "RTP PCM16 byte-swap applied (LE→BE for network order)",
+                                call_id=call_id,
+                                codec=codec if hasattr(session, 'external_media_codec') else 'unknown'
+                            )
+                except Exception as e:
+                    logger.warning("RTP byte-swap failed, sending original", call_id=call_id, error=str(e))
+                    rtp_chunk = chunk
+
                 ssrc = getattr(session, "ssrc", None)
-                success = await self.rtp_server.send_audio(call_id, chunk, ssrc=ssrc)
+                success = await self.rtp_server.send_audio(call_id, rtp_chunk, ssrc=ssrc)
                 if not success:
                     logger.warning("RTP streaming send failed", call_id=call_id, stream_id=stream_id)
                 else:
                     try:
-                        _STREAM_TX_BYTES.labels(call_id).inc(len(chunk))
+                        _STREAM_TX_BYTES.labels(call_id).inc(len(rtp_chunk))
                         if call_id in self.active_streams:
                             info = self.active_streams[call_id]
-                            info['tx_bytes'] = int(info.get('tx_bytes', 0)) + len(chunk)
-                            info['tx_total_bytes'] = int(info.get('tx_total_bytes', 0) or 0) + len(chunk)
+                            info['tx_bytes'] = int(info.get('tx_bytes', 0)) + len(rtp_chunk)
+                            info['tx_total_bytes'] = int(info.get('tx_total_bytes', 0) or 0) + len(rtp_chunk)
                     except Exception:
                         pass
                 return success

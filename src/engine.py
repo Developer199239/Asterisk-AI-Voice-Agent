@@ -901,6 +901,7 @@ class Engine:
         if session:
             session.pending_external_media_id = channel_id
             session.external_media_port = port
+            session.external_media_codec = codec  # Store codec for RTP byte-swap logic
             await self._save_session(session)
 
         logger.info("🎯 EXTERNAL MEDIA - ExternalMedia channel originated",
