@@ -40,26 +40,27 @@ pipelines:
         format:
           encoding: "mulaw"  # Matches telephony trunks without resampling
           sample_rate: 8000
-  # Hybrid support: local STT/TTS with OpenAI LLM. Targets milestone 7 validation.
+  # Hybrid support: Deepgram STT + OpenAI LLM + Deepgram TTS (for file playback testing)
   hybrid_support:
-    stt: local_stt
+    stt: deepgram_stt
     llm: openai_llm
     tts: deepgram_tts
     options:
       stt:
         mode: "stt"
-        chunk_ms: 320
-        streaming: true
-        stream_format: "pcm16_16k"
+        model: "nova-2"
+        language: "en"
+        encoding: "mulaw"
+        sample_rate: 8000
       llm:
         base_url: "https://api.openai.com/v1"
         model: "gpt-4o-mini"
-        temperature: 0.6
-        max_tokens: 120
+        temperature: 0.7
+        max_tokens: 150
         response_timeout_sec: 15.0
       tts:
         base_url: "https://api.deepgram.com"
-        voice: "aura-asteria-en"
+        voice: "aura-thalia-en"
         format:
           encoding: "mulaw"
           sample_rate: 8000
@@ -108,7 +109,7 @@ active_pipeline: "default"
 #     - `stream`: streams agent audio in 20 ms frames in real time.
 #     - `file`: plays μ-law files via bridge; more tolerant but higher latency.
 audio_transport: "audiosocket"
-downstream_mode: "stream"
+downstream_mode: "file"  # Using file mode for hybrid pipeline testing (AAVA-17)
 
 # AudioSocket listener configuration (when audio_transport=audiosocket)
 audiosocket:
