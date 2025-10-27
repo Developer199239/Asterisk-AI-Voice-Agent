@@ -415,10 +415,10 @@ class DeepgramProvider(AIProviderInterface):
                 "think": { 
                     "provider": {"type": "open_ai"},  # Per Deepgram docs: only type in provider
                     "model": "gpt-4o-mini",            # Model at think level, not in provider
-                    "instructions": think_prompt       # Use instructions instead of prompt
+                    "prompt": think_prompt             # Keep as prompt for safety
                 },
                 "speak": {
-                    "model": speak_model  # Per Deepgram docs: just model for Deepgram TTS
+                    "provider": {"type": "deepgram", "model": speak_model}  # Revert: keep provider format
                 },
                 "greeting": greeting_val
             }
@@ -434,8 +434,8 @@ class DeepgramProvider(AIProviderInterface):
                     "greeting": greeting_val,
                     "language": "en-US",
                     "listen": { "provider": { "type": "deepgram", "model": listen_model } },
-                    "think": { "provider": { "type": "open_ai" }, "model": think_model, "instructions": think_prompt },
-                    "speak": { "model": speak_model }
+                    "think": { "provider": { "type": "open_ai" }, "model": think_model, "prompt": think_prompt },
+                    "speak": { "provider": { "type": "deepgram", "model": speak_model } }
                 }
             }
         except Exception:
