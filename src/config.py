@@ -617,4 +617,70 @@ def load_config(path: str = "config/ai-agent.yaml") -> AppConfig:
         raise FileNotFoundError(f"Configuration file not found at the resolved path: {path}")
     except yaml.YAMLError as e:
         # Re-raise with a more informative error message
-        raise yaml.YAMLError(f"Error parsing YAML file at {path}: {e}")
+        raise yaml.YAMLError(f"Error parsing YAML configuration: {e}")
+
+def validate_production_config(config: AppConfig) -> tuple[list[str], list[str]]:
+    """Validate configuration for production deployment (AAVA-21).
+    
+    Args:
+        config: AppConfig instance to validate
+        
+    Returns:
+        (errors, warnings): Lists of validation errors and warnings
+        
+    Errors block startup, warnings are logged but non-blocking.
+    """
+    errors = []
+    warnings = []
+    
+    # Critical checks (errors)
+    try:
+        # VAD configuration consistency
+        if hasattr(config, 'vad') and config.vad:
+            if getattr(config.vad, 'enhanced_enabled', False):
+                if not hasattr(config.vad, 'webrtc_aggressiveness') or config.vad.webrtc_aggressiveness is None:
+                    errors.append("VAD enabled but webrtc_aggressiveness not set")
+        
+        # AudioSocket format validation
+        if hasattr(config, 'audiosocket') and config.audiosocket:
+            format_val = getattr(config.audiosocket, 'format', None)
+            if format_val and format_val not in ['slin', 'slin16', 'slin24', 'ulaw', 'alaw']:
+                errors.append(f"Invalid audiosocket format: {format_val} (must be slin, slin16, slin24, ulaw, or alaw)")
+        
+        # Provider API keys validation
+        has_openai = bool(os.getenv('OPENAI_API_KEY'))
+        has_deepgram = bool(os.getenv('DEEPGRAM_API_KEY'))
+        if not has_openai and not has_deepgram:
+            errors.append("No provider API keys configured (need OPENAI_API_KEY or DEEPGRAM_API_KEY)")
+        
+        # Port validation
+        if hasattr(config, 'audiosocket') and config.audiosocket:
+            port = getattr(config.audiosocket, 'port', None)
+            if port and (port < 1024 or port > 65535):
+                errors.append(f"AudioSocket port {port} out of valid range (1024-65535)")
+        
+        # Production warnings (non-blocking)
+        log_level = os.getenv('LOG_LEVEL', 'info').lower()
+        if log_level == 'debug':
+            warnings.append("Debug logging enabled (security/performance risk in production)")
+        
+        # Streaming configuration warnings
+        if hasattr(config, 'streaming') and config.streaming:
+            jitter_buffer = getattr(config.streaming, 'jitter_buffer_ms', 100)
+            if jitter_buffer < 100:
+                warnings.append(f"Jitter buffer very small: {jitter_buffer}ms (recommend >= 150ms for production)")
+            elif jitter_buffer > 1000:
+                warnings.append(f"Jitter buffer very large: {jitter_buffer}ms (adds latency, consider reducing)")
+        
+        # Check for deprecated/test settings
+        if hasattr(config, 'streaming') and config.streaming:
+            if hasattr(config.streaming, 'diag_enable_taps'):
+                if getattr(config.streaming, 'diag_enable_taps', False):
+                    warnings.append("Diagnostic taps enabled (performance impact, disable in production)")
+        
+    except Exception as e:
+        # Don't let validation errors crash startup
+        logger.warning("Configuration validation encountered an error", error=str(e), exc_info=True)
+        warnings.append(f"Validation check failed: {str(e)}")
+    
+    return errors, warnings

@@ -5445,6 +5445,20 @@ async def main():
     except Exception:
         # Fallback to INFO if configuration not yet available
         configure_logging(log_level="INFO")
+    
+    # Validate configuration before starting engine (AAVA-21)
+    from .config import validate_production_config
+    errors, warnings = validate_production_config(config)
+    
+    if errors:
+        logger.error("❌ Configuration validation FAILED", errors=errors, warnings=warnings)
+        raise RuntimeError(f"Configuration errors: {errors}")
+    
+    if warnings:
+        logger.warning("⚠️  Configuration warnings", warnings=warnings)
+    
+    logger.info("✅ Configuration validation passed")
+    
     engine = Engine(config)
 
     shutdown_event = asyncio.Event()
