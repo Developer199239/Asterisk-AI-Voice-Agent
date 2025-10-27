@@ -982,9 +982,9 @@ class Engine:
             await self.ari_client.answer_channel(caller_channel_id)
             logger.info("🎯 HYBRID ARI - Step 1: ✅ Caller channel answered", channel_id=caller_channel_id)
             
-            # Create bridge immediately
+            # Create bridge immediately (use default bridge_type to prevent simple_bridge optimization)
             logger.info("🎯 HYBRID ARI - Step 2: Creating bridge immediately", channel_id=caller_channel_id)
-            bridge_id = await self.ari_client.create_bridge(bridge_type="mixing")
+            bridge_id = await self.ari_client.create_bridge()  # Uses default: mixing,dtmf_events,proxy_media
             if not bridge_id:
                 raise RuntimeError("Failed to create mixing bridge")
             logger.info("🎯 HYBRID ARI - Step 2: ✅ Bridge created", 
