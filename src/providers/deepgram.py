@@ -3,7 +3,6 @@ import json
 import websockets
 import time
 import array
-import aiohttp
 import re
 import audioop
 from typing import Callable, Optional, List, Dict, Any
@@ -183,10 +182,6 @@ class DeepgramProvider(AIProviderInterface):
         # Allow optional runtime detection when explicitly enabled
         self.allow_output_autodetect = bool(self._get_config_value('allow_output_autodetect', False))
         self._dg_output_inferred = not self.allow_output_autodetect
-        # Voice catalog cache (TTL)
-        self._model_caps_cache: Optional[Dict[str, Any]] = None
-        self._caps_expires_at: float = 0.0
-        self._caps_last_success: bool = False
         # Settings retry state
         self._settings_retry_attempted: bool = False
         self._last_settings_payload: Optional[dict] = None
@@ -387,36 +382,20 @@ class DeepgramProvider(AIProviderInterface):
         listen_model = self._get_config_value('model', None) or getattr(self.llm_config, 'listen_model', None) or "nova-2-general"
         speak_model = self._get_config_value('tts_model', None) or getattr(self.llm_config, 'tts_model', None) or "aura-asteria-en"
 
-        # Try capability-driven selection for the speak (voice) output
-        try:
-            caps = await self._fetch_voice_capabilities()
-            sel_enc, sel_rate = self._select_audio_profile(speak_model, caps)
-            if sel_enc:
-                output_encoding = sel_enc
-            if sel_rate:
-                output_sample_rate = int(sel_rate)
-            # Reflect chosen in provider state early so downstream expects it
-            self._dg_output_encoding = self._canonicalize_encoding(output_encoding)
-            self._dg_output_rate = int(output_sample_rate)
-            logger.info(
-                "Deepgram voice profile selected",
-                call_id=self.call_id,
-                speak_model=speak_model,
-                chosen_encoding=self._dg_output_encoding,
-                chosen_sample_rate=self._dg_output_rate,
-            )
-        except Exception:
-            logger.debug("Deepgram capability-driven selection failed; using defaults", exc_info=True)
+        # Use configured output encoding/sample rate directly (no catalog fetch needed)
+        self._dg_output_encoding = self._canonicalize_encoding(output_encoding)
+        self._dg_output_rate = int(output_sample_rate)
+        logger.info(
+            "Deepgram audio profile configured",
+            call_id=self.call_id,
+            speak_model=speak_model,
+            output_encoding=self._dg_output_encoding,
+            output_sample_rate=self._dg_output_rate,
+        )
         think_model = getattr(self.llm_config, 'model', None) or "gpt-4o"
         think_prompt = getattr(self.llm_config, 'prompt', None) or "You are a helpful assistant."
 
-        # Only include speak-level override if capabilities were fetched and include this voice
-        include_speak_override = bool(self._caps_last_success and isinstance(locals().get('caps', {}), dict) and speak_model in (caps or {}))
-
-        # Always include explicit audio.output so provider emits the format we expect
-        include_output_override = True
-
-        # Build settings with configured audio formats (not hardcoded)
+        # Build settings with configured audio formats
         settings = {
             "type": "Settings",
             "audio": {
@@ -445,17 +424,6 @@ class DeepgramProvider(AIProviderInterface):
                 "greeting": greeting_val
             }
         }
-        if include_speak_override:
-            try:
-                settings["agent"]["speak"]["audio"] = {
-                    "format": {
-                        "encoding": self._dg_output_encoding,
-                        "sample_rate": int(self._dg_output_rate),
-                        "container": "none"
-                    }
-                }
-            except Exception:
-                pass
         # Build and store a minimal Settings payload for fallback retry on UNPARSABLE error
         try:
             self._last_settings_minimal = {
@@ -541,154 +509,6 @@ class DeepgramProvider(AIProviderInterface):
             call_id=self.call_id,
             **summary,
         )
-
-    async def _fetch_voice_capabilities(self) -> Dict[str, Any]:
-        """Fetch Deepgram voice model capabilities with TTL cache.
-
-        Returns a dict: name -> { encodings: set([...]), sample_rates: set([...]), default_encoding, default_sample_rate }"""
-        try:
-            now = time.time()
-            if self._model_caps_cache and now < self._caps_expires_at:
-                return self._model_caps_cache
-            api_key = self._get_config_value('api_key', None)
-            if not api_key:
-                raise RuntimeError("Deepgram API key missing for capability fetch")
-            base = (self._get_config_value('api_base_url', None) or 'https://api.deepgram.com').rstrip('/')
-            endpoints = [
-                f"{base}/v1/voices",
-                f"{base}/v1/voice/models/deepgram",
-                f"{base}/v1/voice/models",
-            ]
-            headers = { 'Authorization': f'Token {api_key}' }
-            timeout = aiohttp.ClientTimeout(total=8)
-            data = None
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                for ep in endpoints:
-                    async with session.get(ep, headers=headers) as resp:
-                        if resp.status == 200:
-                            data = await resp.json(content_type=None)
-                            break
-                        else:
-                            try:
-                                logger.warning("Deepgram voice catalog fetch failed", status=resp.status)
-                            except Exception:
-                                pass
-                if data is None:
-                    raise RuntimeError("All Deepgram voice catalog endpoints failed")
-            caps: Dict[str, Any] = {}
-            entries = []
-            try:
-                entries = data.get('voices') or data.get('models') or data.get('data') or []
-            except Exception:
-                entries = []
-            for m in entries:
-                try:
-                    name = (m.get('name') or m.get('id') or '').strip()
-                    if not name:
-                        continue
-                    encs = set()
-                    rates = set()
-                    default_enc = None
-                    default_rate = None
-                    # Heuristic parse across possible shapes
-                    audio = m.get('audio') or {}
-                    # Formats array may appear at top-level or under audio
-                    formats = audio.get('formats') or m.get('formats') or []
-                    for f in formats:
-                        try:
-                            e = self._canonicalize_encoding(f.get('encoding')) if f.get('encoding') is not None else None
-                            if e:
-                                encs.add(e)
-                        except Exception:
-                            pass
-                        try:
-                            sr = int(f.get('sample_rate') or 0)
-                            if sr:
-                                rates.add(sr)
-                        except Exception:
-                            pass
-                    try:
-                        encs.update([self._canonicalize_encoding(str(e).lower()) for e in (audio.get('encodings') or [])])
-                    except Exception:
-                        pass
-                    try:
-                        rates.update(int(r) for r in (audio.get('sample_rates') or []))
-                    except Exception:
-                        pass
-                    if not encs:
-                        try:
-                            encs.update([str(e).lower() for e in (m.get('supported_encodings') or [])])
-                        except Exception:
-                            pass
-                    if not rates:
-                        try:
-                            rates.update(int(r) for r in (m.get('sample_rates') or []))
-                        except Exception:
-                            pass
-                    # Default may be nested: audio.default or top-level default
-                    default = audio.get('default') or m.get('default') or {}
-                    default_enc = (default.get('encoding') or audio.get('default_encoding') or m.get('default_encoding') or '')
-                    default_enc = self._canonicalize_encoding(default_enc) if default_enc else None
-                    try:
-                        default_rate = int(default.get('sample_rate') or audio.get('default_sample_rate') or m.get('default_sample_rate') or 0) or None
-                    except Exception:
-                        default_rate = None
-                    caps[name] = {
-                        'encodings': encs,
-                        'sample_rates': rates,
-                        'default_encoding': default_enc,
-                        'default_sample_rate': default_rate,
-                    }
-                except Exception:
-                    continue
-            # Cache with TTL
-            self._model_caps_cache = caps
-            self._caps_expires_at = time.time() + 600.0
-            self._caps_last_success = True
-            logger.info("Deepgram voice catalog cached", count=len(caps))
-            return caps
-        except Exception:
-            logger.debug("Deepgram voice catalog retrieval failed", exc_info=True)
-            self._caps_last_success = False
-            return self._model_caps_cache or {}
-
-    def _select_audio_profile(self, voice_model: str, caps_map: Dict[str, Any]) -> tuple:
-        """Select provider output (encoding, sample_rate) based on voice capabilities."""
-        # Defaults - prefer mulaw @ 8000 for telephony
-        enc_pref_order = [
-            ('mulaw', 8000),
-            ('mulaw', 16000),
-            ('linear16', 8000),
-            ('linear16', 16000),
-        ]
-        model_caps = caps_map.get(voice_model) or {}
-        encs = set([self._canonicalize_encoding(e) for e in (model_caps.get('encodings') or [])])
-        rates = set(int(r) for r in (model_caps.get('sample_rates') or []))
-        # If capabilities are missing/empty, prefer the model defaults rather than assuming support
-        def_enc = self._canonicalize_encoding(model_caps.get('default_encoding')) if model_caps.get('default_encoding') else None
-        try:
-            def_rate = int(model_caps.get('default_sample_rate') or 0) or None
-        except Exception:
-            def_rate = None
-        if not encs and not rates and (def_enc or def_rate):
-            return def_enc or 'mulaw', def_rate or 8000
-        # Otherwise, only choose from preference order when both encoding and rate are explicitly supported
-        for enc, rate in enc_pref_order:
-            enc_canon = self._canonicalize_encoding(enc)
-            if (not encs or enc_canon in encs) and (not rates or rate in rates):
-                # Require at least one of encs/rates to explicitly confirm support
-                if (encs and enc_canon in encs) or (rates and rate in rates):
-                    return enc_canon, rate
-        # Fallback to defaults advertised by model
-        if def_enc and def_rate:
-            return def_enc, def_rate
-        # Last resort: use our configured defaults
-        try:
-            cfg_enc = self._canonicalize_encoding(self._get_config_value('output_encoding', 'mulaw'))
-            cfg_rate = int(self._get_config_value('output_sample_rate_hz', 8000) or 8000)
-            return cfg_enc, cfg_rate
-        except Exception:
-            return 'mulaw', 8000
 
     async def send_audio(self, audio_chunk: bytes):
         """Send caller audio to Deepgram in the declared input format.
