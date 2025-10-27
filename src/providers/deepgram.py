@@ -163,6 +163,8 @@ class DeepgramProvider(AIProviderInterface):
         self._rms_ma: float = 0.0
         self._low_rms_streak: int = 0
         self._rms_log_started: bool = False
+        # Per-call low RMS warning suppression (AAVA-15)
+        self._low_rms_warnings_logged: Dict[str, int] = {}
         # User transcript counters
         self._user_txn_count: int = 0
         self._user_last_ts: float = 0.0
@@ -631,14 +633,30 @@ class DeepgramProvider(AIProviderInterface):
                         if gate and rms < threshold:
                             self._low_rms_streak += 1
                             if self._low_rms_streak % 10 == 0:
-                                logger.warning(
-                                    "Deepgram upstream low RMS sustained",
-                                    rms=rms,
-                                    rms_ma=int(self._rms_ma),
-                                    streak=self._low_rms_streak,
-                                    bytes=chunk_len,
-                                    target_rate=target_rate,
-                                )
+                                # AAVA-15: Suppress low RMS warnings after first 3
+                                call_id = self.call_id or "unknown"
+                                warnings_count = self._low_rms_warnings_logged.get(call_id, 0)
+                                
+                                if warnings_count < 3:
+                                    logger.warning(
+                                        "Deepgram upstream low RMS sustained",
+                                        rms=rms,
+                                        rms_ma=int(self._rms_ma),
+                                        streak=self._low_rms_streak,
+                                        bytes=chunk_len,
+                                        target_rate=target_rate,
+                                        call_id=call_id,
+                                    )
+                                    self._low_rms_warnings_logged[call_id] = warnings_count + 1
+                                elif warnings_count == 3:
+                                    logger.info(
+                                        "Deepgram low RMS warnings suppressed (silence is normal)",
+                                        call_id=call_id,
+                                        total_warnings=3,
+                                        streak=self._low_rms_streak,
+                                    )
+                                    self._low_rms_warnings_logged[call_id] = warnings_count + 1
+                                # Else: suppress (already logged 3 warnings + suppression notice)
                         else:
                             if gate and not self._rms_log_started and rms >= threshold:
                                 logger.info(
