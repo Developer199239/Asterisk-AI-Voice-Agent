@@ -9,6 +9,9 @@ import os
 import yaml
 from pydantic import BaseModel, Field
 from typing import Dict, Any, Optional, List
+import structlog
+
+logger = structlog.get_logger(__name__)
 
 # Determine the absolute path to the project root from this file's location
 # This makes the config loading independent of the current working directory.
