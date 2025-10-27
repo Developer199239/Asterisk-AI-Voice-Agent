@@ -856,9 +856,8 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         if event_type == "response.audio.delta":
             audio_b64 = event.get("delta")
             if audio_b64:
-                # AUDIO GATING: Notify gating manager that agent started speaking
-                if self._gating_manager and not self._in_audio_burst:
-                    self._gating_manager.set_agent_speaking(self._call_id, True, "openai_realtime")
+                # Track audio burst for metrics, but don't use gating for server-side VAD
+                if not self._in_audio_burst:
                     self._in_audio_burst = True
                 
                 await self._handle_output_audio(audio_b64)
@@ -867,9 +866,8 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             return
 
         if event_type == "response.audio.done":
-            # AUDIO GATING: Notify gating manager that agent finished speaking
-            if self._gating_manager and self._in_audio_burst:
-                self._gating_manager.set_agent_speaking(self._call_id, False, "openai_realtime")
+            # Track end of audio burst for metrics
+            if self._in_audio_burst:
                 self._in_audio_burst = False
             
             await self._emit_audio_done()
