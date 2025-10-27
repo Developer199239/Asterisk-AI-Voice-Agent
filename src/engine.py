@@ -4675,20 +4675,44 @@ class Engine:
             
             # CRITICAL FIX: Apply wire format settings to provider's target config
             # The provider needs to emit the same format/rate that AudioSocket expects
+            # BUT: P1 continuous_input providers (OpenAI Realtime, Deepgram Voice Agent)
+            # handle their own internal format needs and should NOT be overridden
             try:
                 provider = self.providers.get(provider_name)
                 if provider and hasattr(provider, 'config'):
-                    # Update provider's target encoding/rate to match wire format
-                    # Wire format = what AudioSocket channel expects = what provider should emit
-                    provider.config.target_encoding = transport.wire_encoding
-                    provider.config.target_sample_rate_hz = transport.wire_sample_rate
-                    logger.info(
-                        "Applied wire format to provider target config",
-                        call_id=session.call_id,
-                        provider=provider_name,
-                        target_encoding=transport.wire_encoding,
-                        target_sample_rate_hz=transport.wire_sample_rate,
-                    )
+                    # Check if this is a continuous_input provider (P1)
+                    is_continuous_input = False
+                    try:
+                        if provider_name in ("deepgram", "openai_realtime"):
+                            is_continuous_input = True
+                        else:
+                            pcfg = getattr(provider, 'config', None)
+                            if isinstance(pcfg, dict):
+                                is_continuous_input = bool(pcfg.get('continuous_input', False))
+                            else:
+                                is_continuous_input = bool(getattr(pcfg, 'continuous_input', False))
+                    except Exception:
+                        is_continuous_input = False
+                    
+                    if not is_continuous_input:
+                        # Only update target config for P2/hybrid providers
+                        # Wire format = what AudioSocket channel expects = what provider should emit
+                        provider.config.target_encoding = transport.wire_encoding
+                        provider.config.target_sample_rate_hz = transport.wire_sample_rate
+                        logger.info(
+                            "Applied wire format to provider target config",
+                            call_id=session.call_id,
+                            provider=provider_name,
+                            target_encoding=transport.wire_encoding,
+                            target_sample_rate_hz=transport.wire_sample_rate,
+                        )
+                    else:
+                        logger.debug(
+                            "Skipping wire format override for continuous_input provider",
+                            call_id=session.call_id,
+                            provider=provider_name,
+                            reason="P1 provider manages its own format needs"
+                        )
             except Exception as exc:
                 logger.warning(
                     "Failed to apply transport settings to provider config",
