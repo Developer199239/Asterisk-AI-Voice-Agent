@@ -30,6 +30,7 @@ class RTPSession:
     sequence_number: int = 0
     timestamp: int = 0
     ssrc: Optional[int] = None
+    outbound_ssrc: Optional[int] = None  # Track our own SSRC for echo filtering
     expected_sequence: int = 0
     packet_loss_count: int = 0
     last_sequence: int = 0
@@ -40,6 +41,7 @@ class RTPSession:
     receiver_task: Optional[asyncio.Task] = None
     send_sequence_initialized: bool = False
     send_timestamp_initialized: bool = False
+    echo_packets_filtered: int = 0  # Count filtered echo packets
 
 
 class RTPServer:
@@ -205,6 +207,15 @@ class RTPServer:
             logger.debug("RTP send deferred; SSRC not established", call_id=call_id)
             return False
 
+        # Store our outbound SSRC for echo filtering
+        if session.outbound_ssrc is None:
+            session.outbound_ssrc = out_ssrc
+            logger.info(
+                "RTP outbound SSRC established for echo filtering",
+                call_id=call_id,
+                outbound_ssrc=out_ssrc,
+            )
+
         # Initialise outbound sequence / timestamp the first time we transmit.
         if not session.send_sequence_initialized:
             session.sequence_number = session.sequence_number or random.randint(0, 0xFFFF)
@@ -278,6 +289,19 @@ class RTPServer:
             ssrc = struct.unpack("!I", data[8:12])[0]
             payload = data[self.RTP_HEADER_SIZE:]
 
+            # CRITICAL: Filter echo - drop packets with our own outbound SSRC
+            # This prevents the agent from hearing its own audio output in the bridge
+            if session.outbound_ssrc is not None and ssrc == session.outbound_ssrc:
+                session.echo_packets_filtered += 1
+                if session.echo_packets_filtered <= 5:  # Log first few
+                    logger.debug(
+                        "RTP echo packet filtered (our own SSRC)",
+                        call_id=call_id,
+                        ssrc=ssrc,
+                        filtered_count=session.echo_packets_filtered,
+                    )
+                continue
+
             # Record remote endpoint on first packet.
             if session.remote_host is None:
                 session.remote_host, session.remote_port = addr[0], addr[1]
@@ -296,9 +320,15 @@ class RTPServer:
                     remote_port=session.remote_port,
                 )
 
-            # Maintain SSRC mapping.
-            session.ssrc = ssrc
-            self.ssrc_to_call_id[ssrc] = call_id
+            # Maintain SSRC mapping (only for inbound caller audio, not our echo)
+            if session.ssrc is None:
+                session.ssrc = ssrc
+                self.ssrc_to_call_id[ssrc] = call_id
+                logger.info(
+                    "RTP inbound SSRC established (caller audio)",
+                    call_id=call_id,
+                    inbound_ssrc=ssrc,
+                )
 
             # Seed outbound sequence/timestamp with inbound values so the far-end sees continuity.
             if not session.send_sequence_initialized:
