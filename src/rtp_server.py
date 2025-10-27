@@ -202,19 +202,27 @@ class RTPServer:
             logger.debug("RTP send deferred; remote endpoint unknown", call_id=call_id)
             return False
 
-        out_ssrc = ssrc or session.ssrc
-        if out_ssrc is None:
-            logger.debug("RTP send deferred; SSRC not established", call_id=call_id)
-            return False
-
-        # Store our outbound SSRC for echo filtering
+        # Generate unique outbound SSRC (different from caller's SSRC for echo filtering)
         if session.outbound_ssrc is None:
-            session.outbound_ssrc = out_ssrc
+            # Generate a unique SSRC for our outbound stream
+            # Make it different from caller's inbound SSRC
+            if session.ssrc is not None:
+                # Flip some bits to make it different but deterministic
+                session.outbound_ssrc = (session.ssrc ^ 0xFFFFFFFF) & 0xFFFFFFFF
+            else:
+                # Random if we don't have caller's SSRC yet
+                session.outbound_ssrc = random.randint(0, 0xFFFFFFFF)
             logger.info(
                 "RTP outbound SSRC established for echo filtering",
                 call_id=call_id,
-                outbound_ssrc=out_ssrc,
+                outbound_ssrc=session.outbound_ssrc,
+                inbound_ssrc=session.ssrc,
             )
+        
+        out_ssrc = session.outbound_ssrc
+        if out_ssrc is None:
+            logger.debug("RTP send deferred; SSRC not established", call_id=call_id)
+            return False
 
         # Initialise outbound sequence / timestamp the first time we transmit.
         if not session.send_sequence_initialized:
