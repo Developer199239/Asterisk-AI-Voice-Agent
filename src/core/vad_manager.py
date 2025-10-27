@@ -23,6 +23,8 @@ except ImportError:  # pragma: no cover
 
 logger = structlog.get_logger(__name__)
 
+# WebRTC VAD supported sample rates
+WEBRTC_SUPPORTED_RATES = [8000, 16000, 32000]
 
 # Prometheus metrics ---------------------------------------------------------
 _VAD_FRAMES_TOTAL = Counter(
@@ -131,7 +133,7 @@ class EnhancedVADManager:
         self.context_analyzer = CallContextAnalyzer()
         self._adaptation_interval = 100  # Adapt every 100 frames (2 seconds)
 
-    async def process_frame(self, call_id: str, audio_frame_pcm16: bytes) -> VADResult:
+    async def process_frame(self, call_id: str, audio_frame_pcm16: bytes, sample_rate: int = 8000) -> VADResult:
         if len(audio_frame_pcm16) < 320:
             audio_frame_pcm16 = audio_frame_pcm16.ljust(320, b"\x00")
             
@@ -145,11 +147,18 @@ class EnhancedVADManager:
             
         energy = audioop.rms(audio_frame_pcm16, 2)
         webrtc_result = False
-        if self.webrtc_vad:
+        if self.webrtc_vad and sample_rate in WEBRTC_SUPPORTED_RATES:
             try:
-                webrtc_result = self.webrtc_vad.is_speech(audio_frame_pcm16, 8000)
+                webrtc_result = self.webrtc_vad.is_speech(audio_frame_pcm16, sample_rate)
             except Exception:
-                logger.debug("Enhanced VAD - WebRTC processing error", exc_info=True)
+                logger.debug("Enhanced VAD - WebRTC processing error", exc_info=True, sample_rate=sample_rate)
+        elif self.webrtc_vad and sample_rate not in WEBRTC_SUPPORTED_RATES:
+            logger.debug(
+                "Sample rate not supported by WebRTC VAD, using energy-only detection",
+                sample_rate=sample_rate,
+                supported_rates=WEBRTC_SUPPORTED_RATES,
+                call_id=call_id
+            )
 
         # Use per-call adaptive threshold
         threshold = call_state['adaptive_threshold'].get_threshold() if self.adaptive_threshold_enabled else self.base_energy_threshold

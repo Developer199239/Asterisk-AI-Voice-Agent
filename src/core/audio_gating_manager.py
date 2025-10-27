@@ -80,15 +80,19 @@ class AudioGatingManager:
                 'vad_threshold': 0.7,  # High confidence needed for interrupt
                 'post_speech_grace_ms': 100,  # Grace period after agent stops
                 'buffer_on_no_vad': True,  # Buffer if VAD unavailable
+                'sample_rate': 24000,  # OpenAI Realtime uses 24kHz
             },
             'deepgram': {
                 'gating_enabled': False,  # Deepgram handles echo internally
+                'sample_rate': 8000,  # Deepgram uses 8kHz
             },
             'local_only': {
                 'gating_enabled': False,  # Local provider doesn't need gating
+                'sample_rate': 16000,  # Common for local models
             },
             'hybrid_support': {
                 'gating_enabled': False,  # Hybrid mode doesn't need gating
+                'sample_rate': 16000,  # Common for hybrid pipelines
             }
         }
         
@@ -158,7 +162,8 @@ class AudioGatingManager:
             # Check if user is trying to interrupt
             if self._vad and audio_format == "pcm16":
                 try:
-                    vad_result = await self._vad.process_frame(call_id, audio_chunk)
+                    sample_rate = config.get('sample_rate', 8000)
+                    vad_result = await self._vad.process_frame(call_id, audio_chunk, sample_rate)
                     
                     logger.debug(
                         "🎤 VAD interrupt check",
@@ -167,6 +172,7 @@ class AudioGatingManager:
                         threshold=config['vad_threshold'],
                         energy=vad_result.energy_level,
                         is_speech=vad_result.is_speech,
+                        sample_rate=sample_rate,
                     )
                     
                     if vad_result.confidence > config['vad_threshold']:
