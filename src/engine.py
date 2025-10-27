@@ -2266,6 +2266,28 @@ class Engine:
             # Self-echo mitigation and barge-in/continuous-input handling during TTS playback
             if hasattr(session, 'audio_capture_enabled') and not session.audio_capture_enabled:
                 cfg = getattr(self.config, 'barge_in', None)
+                
+                # AAVA-22: Check pipeline mode FIRST - route to pipeline queue regardless of audio_capture state
+                # Pipelines need continuous audio flow for STT component
+                if self._pipeline_forced.get(caller_channel_id):
+                    q = self._pipeline_queues.get(caller_channel_id)
+                    if q:
+                        try:
+                            pcm16 = pcm_bytes
+                            if pcm16 and pcm_rate != 16000:
+                                try:
+                                    state = self._resample_state_pipeline16k.get(caller_channel_id)
+                                    pcm16, state = audioop.ratecv(pcm16, 2, 1, pcm_rate, 16000, state)
+                                    self._resample_state_pipeline16k[caller_channel_id] = state
+                                except Exception:
+                                    pcm16 = pcm_bytes
+                            if pcm16:
+                                q.put_nowait(pcm16)
+                            return
+                        except asyncio.QueueFull:
+                            logger.debug("Pipeline queue full; dropping AudioSocket frame (during TTS)", call_id=caller_channel_id)
+                            return
+                
                 # Determine provider and continuous-input capability FIRST to allow forwarding during greeting guard
                 try:
                     provider_name = getattr(session, 'provider_name', None) or self.config.default_provider
@@ -2277,7 +2299,7 @@ class Engine:
                     # CRITICAL: Providers requiring continuous audio flow during TTS
                     # - deepgram: Traditional continuous STT throughout conversation
                     # - openai_realtime: Full agent mode with server-side VAD managing turn-taking
-                    # NOTE: Does NOT apply to pipeline mode (openai_stt/llm/tts components)
+                    # NOTE: Does NOT apply to pipeline mode (handled above)
                     if provider_name in ("deepgram", "openai_realtime"):
                         continuous_input = True
                     else:
