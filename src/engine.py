@@ -2973,9 +2973,10 @@ class Engine:
                 return
 
             # Post-TTS end guard to avoid self-echo re-capture
-            # Skip for P1 pipelines (Deepgram Voice Agent) - they handle turn-taking internally
-            is_p1_pipeline = getattr(session, 'pipeline_type', None) == 'p1'
-            if not is_p1_pipeline:
+            # Skip for P1 providers (Deepgram Voice Agent, OpenAI Realtime) - they handle turn-taking internally
+            provider_name = getattr(session, 'provider_name', '')
+            is_p1_provider = provider_name in ('deepgram', 'openai_realtime')
+            if not is_p1_provider:
                 try:
                     cfg = getattr(self.config, 'barge_in', None)
                     post_guard_ms = int(getattr(cfg, 'post_tts_end_protection_ms', 0)) if cfg else 0
