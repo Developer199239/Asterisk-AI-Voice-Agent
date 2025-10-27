@@ -24,17 +24,47 @@ type CallMetrics struct {
 	GateClosures         int
 	GateFlutterDetected  bool
 	
-	// Transport/Format
+	// Transport/Format (from logs)
 	AudioSocketFormat    string
 	ProviderInputFormat  string
 	ProviderOutputFormat string
 	SampleRate           int
 	
+	// Format alignment (from config + logs)
+	FormatAlignment      *FormatAlignment
+
 	// Call timing
 	CallDurationSeconds  float64
 	
 	// Configuration issues
 	ConfigErrors         []string
+}
+
+// FormatAlignment tracks format/sampling configuration and actual behavior
+type FormatAlignment struct {
+	// From config
+	ConfigAudioSocketFormat    string
+	ConfigProviderInputFormat  string
+	ConfigProviderOutputFormat string
+	ConfigSampleRate           int
+	
+	// From runtime logs
+	RuntimeAudioSocketFormat   string
+	RuntimeProviderInputFormat string
+	RuntimeSampleRate          int
+	
+	// Frame size analysis
+	ObservedFrameSize          int
+	ExpectedFrameSize          int
+	
+	// Alignment issues
+	AudioSocketMismatch        bool
+	ProviderFormatMismatch     bool
+	SampleRateMismatch         bool
+	FrameSizeMismatch          bool
+	
+	// Detailed issues
+	Issues                     []string
 }
 
 // ProviderSegment tracks provider bytes per segment

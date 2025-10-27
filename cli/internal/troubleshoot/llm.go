@@ -137,6 +137,13 @@ func (llm *LLMAnalyzer) buildPrompt(analysis *Analysis, logData string) string {
 		prompt.WriteString("These are VALIDATED production values that are known to work.\n\n")
 	}
 	
+	// Format/Sampling alignment (CRITICAL FOR AUDIO QUALITY)
+	if analysis.Metrics != nil && analysis.Metrics.FormatAlignment != nil {
+		prompt.WriteString(analysis.Metrics.FormatAlignment.FormatForLLM())
+		prompt.WriteString("CRITICAL: Format mismatches cause garbled audio, distortion, or complete audio failure.\n")
+		prompt.WriteString("Golden baseline: audiosocket.format=slin, provider transcodes as needed.\n\n")
+	}
+	
 	// Sample logs (truncated)
 	prompt.WriteString("Sample Log Lines:\n")
 	lines := strings.Split(logData, "\n")

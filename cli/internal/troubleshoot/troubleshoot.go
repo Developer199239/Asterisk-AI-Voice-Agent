@@ -125,6 +125,11 @@ func (r *Runner) Run() error {
 	metrics := ExtractMetrics(logData)
 	analysis.Metrics = metrics
 	
+	// Analyze format/sampling alignment
+	infoColor.Println("Analyzing format alignment...")
+	formatAlignment := AnalyzeFormatAlignment(metrics)
+	metrics.FormatAlignment = formatAlignment
+	
 	// Compare to golden baselines
 	infoColor.Println("Comparing to golden baselines...")
 	baselineName := detectBaseline(logData)
@@ -629,6 +634,18 @@ func (r *Runner) displayMetrics(metrics *CallMetrics) {
 		}
 		fmt.Println()
 	}
+	
+	// Format Alignment Analysis
+	if metrics.FormatAlignment != nil && len(metrics.FormatAlignment.Issues) > 0 {
+		errorColor.Println("⚠️  FORMAT/SAMPLING ALIGNMENT ISSUES:")
+		for i, issue := range metrics.FormatAlignment.Issues {
+			fmt.Printf("  %d. %s\n", i+1, issue)
+		}
+		fmt.Println()
+		fmt.Println("Impact: Format mismatches cause garbled audio, distortion, or no audio")
+		fmt.Println("Action: Verify config/ai-agent.yaml format settings match golden baseline")
+		fmt.Println()
+	}
 }
 
 // displayCallQuality shows overall call quality verdict
@@ -687,6 +704,22 @@ func (r *Runner) displayCallQuality(metrics *CallMetrics) {
 	if metrics.VADSettings != nil && metrics.VADSettings.WebRTCAggressiveness == 0 {
 		issues = append(issues, "VAD too sensitive")
 		score -= 15.0
+	}
+	
+	// Check format alignment issues (CRITICAL)
+	if metrics.FormatAlignment != nil {
+		if metrics.FormatAlignment.AudioSocketMismatch {
+			issues = append(issues, "AudioSocket format mismatch")
+			score -= 30.0 // Critical - causes garbled audio
+		}
+		if metrics.FormatAlignment.ProviderFormatMismatch {
+			issues = append(issues, "Provider format mismatch")
+			score -= 25.0
+		}
+		if metrics.FormatAlignment.FrameSizeMismatch {
+			issues = append(issues, "Frame size mismatch")
+			score -= 20.0
+		}
 	}
 	
 	// Determine verdict
