@@ -169,7 +169,7 @@ def write_files(config_path, cleaned_config, env_content, dry_run=True):
     # Write cleaned config
     try:
         with open(new_config_path, 'w') as f:
-            yaml.dump(cleaned_config, f, default_flow_style=False, sort_keys=False)
+            yaml.dump(cleaned_config, f, default_flow_style=False)
         print(f"✅ Written: {new_config_path}")
     except Exception as e:
         print(f"❌ Error writing config: {e}")
