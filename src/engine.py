@@ -2995,9 +2995,26 @@ class Engine:
                 if not provider or not hasattr(provider, 'send_audio'):
                     logger.debug("Provider unavailable for continuous RTP audio", provider=provider_name)
                     return
-                # Forward PCM16 16kHz directly to provider
+                # Encode audio for provider (same as AudioSocket path)
                 try:
-                    await provider.send_audio(pcm_16k)
+                    prov_payload, prov_enc, prov_rate = self._encode_for_provider(
+                        session.call_id,
+                        provider_name,
+                        provider,
+                        pcm_16k,
+                        16000,  # Input is PCM16 16kHz from RTP
+                    )
+                    try:
+                        self.audio_capture.append_encoded(
+                            session.call_id,
+                            "caller_to_provider",
+                            prov_payload,
+                            prov_enc,
+                            prov_rate,
+                        )
+                    except Exception:
+                        logger.debug("Provider input capture failed (continuous-input RTP)", call_id=session.call_id, exc_info=True)
+                    await provider.send_audio(prov_payload)
                 except Exception as exc:
                     logger.debug("Continuous-input RTP forward error", call_id=caller_channel_id, error=str(exc))
                 return
