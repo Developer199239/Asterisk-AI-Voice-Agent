@@ -196,6 +196,8 @@ class StreamingPlaybackManager:
         self._dc_block_state: Dict[str, Tuple[float, float]] = {}
         # First outbound frame logged tracker
         self._first_send_logged: Set[str] = set()
+        # RTP codec cache for performance (avoid repeated codec checks on every packet)
+        self._rtp_codec_cache: Dict[str, bool] = {}
         # Startup gating to allow jitter buffers to fill before playback begins
         self._startup_ready: Dict[str, bool] = {}
         # Track last segment end time per call for adaptive warm-up
@@ -2199,27 +2201,20 @@ class StreamingPlaybackManager:
 
                 # RTP expects PCM16 in network byte order (big-endian) for slin16 codec
                 # Streaming manager produces little-endian PCM16, so we need to byte-swap
+                # Cache codec check per call for performance
                 rtp_chunk = chunk
-                try:
-                    # Check if we're using slin16 codec (PCM16)
-                    is_pcm16 = False
-                    if hasattr(session, 'external_media_codec'):
-                        codec = str(getattr(session, 'external_media_codec', '')).lower()
-                        is_pcm16 = codec in ('slin16', 'slin', 'pcm16', 'linear16')
+                if call_id not in self._rtp_codec_cache:
+                    codec_str = str(getattr(session, 'external_media_codec', 'ulaw')).lower()
+                    self._rtp_codec_cache[call_id] = codec_str in ('slin16', 'slin', 'pcm16', 'linear16')
                     
-                    # For PCM16, byte-swap from little-endian to big-endian (network order)
-                    if is_pcm16 and len(chunk) > 0:
+                # Fast path: byte-swap only if needed for PCM16
+                if self._rtp_codec_cache.get(call_id, False) and len(chunk) > 0:
+                    try:
                         import audioop
                         rtp_chunk = audioop.byteswap(chunk, 2)
-                        if call_id not in self._first_send_logged:
-                            logger.info(
-                                "RTP PCM16 byte-swap applied (LE→BE for network order)",
-                                call_id=call_id,
-                                codec=codec if hasattr(session, 'external_media_codec') else 'unknown'
-                            )
-                except Exception as e:
-                    logger.warning("RTP byte-swap failed, sending original", call_id=call_id, error=str(e))
-                    rtp_chunk = chunk
+                    except Exception as e:
+                        logger.warning("RTP byte-swap failed, sending original", call_id=call_id, error=str(e))
+                        rtp_chunk = chunk
 
                 ssrc = getattr(session, "ssrc", None)
                 success = await self.rtp_server.send_audio(call_id, rtp_chunk, ssrc=ssrc)
@@ -3169,6 +3164,7 @@ class StreamingPlaybackManager:
             self._startup_ready.pop(call_id, None)
             self._resample_states.pop(call_id, None)
             self._dc_block_state.pop(call_id, None)
+            self._rtp_codec_cache.pop(call_id, None)
             # Reset metrics
             try:
                 _STREAMING_ACTIVE_GAUGE.labels(call_id).set(0)
