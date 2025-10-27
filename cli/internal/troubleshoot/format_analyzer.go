@@ -99,7 +99,10 @@ func detectMisalignments(alignment *FormatAlignment) {
 	// Check frame size alignment
 	if alignment.ExpectedFrameSize > 0 && alignment.ObservedFrameSize > 0 {
 		// Allow 10% tolerance
-		diff := abs(alignment.ExpectedFrameSize - alignment.ObservedFrameSize)
+		diff := alignment.ExpectedFrameSize - alignment.ObservedFrameSize
+		if diff < 0 {
+			diff = -diff
+		}
 		tolerance := alignment.ExpectedFrameSize / 10
 		if diff > tolerance {
 			alignment.FrameSizeMismatch = true
