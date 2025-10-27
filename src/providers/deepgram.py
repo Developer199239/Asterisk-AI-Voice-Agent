@@ -413,15 +413,12 @@ class DeepgramProvider(AIProviderInterface):
                     } 
                 },
                 "think": { 
-                    "provider": { 
-                        "type": "open_ai", 
-                        "model": "gpt-4o-mini",  # Twilio uses gpt-4o-mini
-                        "temperature": 0.7
-                    }, 
-                    "prompt": think_prompt 
+                    "provider": {"type": "open_ai"},  # Per Deepgram docs: only type in provider
+                    "model": "gpt-4o-mini",            # Model at think level, not in provider
+                    "instructions": think_prompt       # Use instructions instead of prompt
                 },
                 "speak": {
-                    "provider": { "type": "deepgram", "model": speak_model }
+                    "model": speak_model  # Per Deepgram docs: just model for Deepgram TTS
                 },
                 "greeting": greeting_val
             }
@@ -437,8 +434,8 @@ class DeepgramProvider(AIProviderInterface):
                     "greeting": greeting_val,
                     "language": "en-US",
                     "listen": { "provider": { "type": "deepgram", "model": listen_model } },
-                    "think": { "provider": { "type": "open_ai", "model": think_model }, "prompt": think_prompt },
-                    "speak": { "provider": { "type": "deepgram", "model": speak_model } }
+                    "think": { "provider": { "type": "open_ai" }, "model": think_model, "instructions": think_prompt },
+                    "speak": { "model": speak_model }
                 }
             }
         except Exception:
