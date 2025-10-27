@@ -2973,24 +2973,27 @@ class Engine:
                 return
 
             # Post-TTS end guard to avoid self-echo re-capture
-            try:
-                cfg = getattr(self.config, 'barge_in', None)
-                post_guard_ms = int(getattr(cfg, 'post_tts_end_protection_ms', 0)) if cfg else 0
-            except Exception:
-                post_guard_ms = 0
-            if post_guard_ms and getattr(session, 'tts_ended_ts', 0.0) and session.audio_capture_enabled:
+            # Skip for P1 pipelines (Deepgram Voice Agent) - they handle turn-taking internally
+            is_p1_pipeline = getattr(session, 'pipeline_type', None) == 'p1'
+            if not is_p1_pipeline:
                 try:
-                    elapsed_ms = int((time.time() - float(session.tts_ended_ts)) * 1000)
+                    cfg = getattr(self.config, 'barge_in', None)
+                    post_guard_ms = int(getattr(cfg, 'post_tts_end_protection_ms', 0)) if cfg else 0
                 except Exception:
-                    elapsed_ms = post_guard_ms
-                if elapsed_ms < post_guard_ms:
-                    logger.debug(
-                        "Dropping inbound RTP during post-TTS protection window",
-                        call_id=caller_channel_id,
-                        elapsed_ms=elapsed_ms,
-                        protect_ms=post_guard_ms,
-                    )
-                    return
+                    post_guard_ms = 0
+                if post_guard_ms and getattr(session, 'tts_ended_ts', 0.0) and session.audio_capture_enabled:
+                    try:
+                        elapsed_ms = int((time.time() - float(session.tts_ended_ts)) * 1000)
+                    except Exception:
+                        elapsed_ms = post_guard_ms
+                    if elapsed_ms < post_guard_ms:
+                        logger.debug(
+                            "Dropping inbound RTP during post-TTS protection window",
+                            call_id=caller_channel_id,
+                            elapsed_ms=elapsed_ms,
+                            protect_ms=post_guard_ms,
+                        )
+                        return
 
             # If TTS is playing (capture disabled), decide whether to drop or barge-in
             if hasattr(session, 'audio_capture_enabled') and not session.audio_capture_enabled:
