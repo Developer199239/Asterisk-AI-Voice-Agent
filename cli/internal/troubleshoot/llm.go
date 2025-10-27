@@ -155,6 +155,8 @@ func (llm *LLMAnalyzer) buildPrompt(analysis *Analysis, logData string) string {
 	prompt.WriteString("1. Root Cause: Identify the root cause based on golden baseline deviations\n")
 	prompt.WriteString("   - Prioritize CRITICAL severity deviations first\n")
 	prompt.WriteString("   - Reference the exact current vs expected values shown above\n")
+	prompt.WriteString("   - IMPORTANT: Greeting segments have high drift and underflows during conversation pauses - this is NORMAL\n")
+	prompt.WriteString("   - If provider_bytes ratio is 1.0 and drift is only from greeting segments, call is GOOD\n")
 	prompt.WriteString("   - If ALL metrics are GOOD (ratio ~1.0, drift <10%, no underflows), state: 'No issues detected - call quality is EXCELLENT'\n")
 	prompt.WriteString("2. Confidence: How confident are you? (High/Medium/Low)\n")
 	prompt.WriteString("3. Quick Fix: Provide EXACT configuration changes\n")

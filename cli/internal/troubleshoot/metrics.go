@@ -46,12 +46,14 @@ type ProviderSegment struct {
 
 // StreamingSummary holds streaming tuning data
 type StreamingSummary struct {
+	StreamID         string
 	BytesSent        int
 	EffectiveSeconds float64
 	WallSeconds      float64
 	DriftPct         float64
 	LowWatermark     int
 	MinStart         int
+	IsGreeting       bool
 }
 
 // VADSettings holds VAD configuration
@@ -150,38 +152,46 @@ func extractProviderBytes(entry map[string]interface{}, metrics *CallMetrics) {
 }
 
 func extractStreamingSummary(entry map[string]interface{}, metrics *CallMetrics) {
-	summary := StreamingSummary{}
+	sum := StreamingSummary{}
+	
+	// Extract stream_id to detect greeting segments
+	if sid, ok := entry["stream_id"].(string); ok {
+		sum.StreamID = sid
+		sum.IsGreeting = strings.Contains(sid, "greeting")
+	}
 	
 	if bs, ok := entry["bytes_sent"].(float64); ok {
-		summary.BytesSent = int(bs)
+		sum.BytesSent = int(bs)
 	}
 	
 	if es, ok := entry["effective_seconds"].(float64); ok {
-		summary.EffectiveSeconds = es
+		sum.EffectiveSeconds = es
 	}
 	
 	if ws, ok := entry["wall_seconds"].(float64); ok {
-		summary.WallSeconds = ws
+		sum.WallSeconds = ws
 	}
 	
 	if drift, ok := entry["drift_pct"].(float64); ok {
-		summary.DriftPct = drift
+		sum.DriftPct = drift
 		
-		// Track worst drift
-		if abs(drift) > abs(metrics.WorstDriftPct) {
-			metrics.WorstDriftPct = drift
+		// Track worst drift (but only for non-greeting segments)
+		if !sum.IsGreeting {
+			if abs(drift) > abs(metrics.WorstDriftPct) {
+				metrics.WorstDriftPct = drift
+			}
 		}
 	}
 	
 	if lw, ok := entry["low_watermark"].(float64); ok {
-		summary.LowWatermark = int(lw)
+		sum.LowWatermark = int(lw)
 	}
 	
 	if ms, ok := entry["min_start"].(float64); ok {
-		summary.MinStart = int(ms)
+		sum.MinStart = int(ms)
 	}
 	
-	metrics.StreamingSummaries = append(metrics.StreamingSummaries, summary)
+	metrics.StreamingSummaries = append(metrics.StreamingSummaries, sum)
 }
 
 func extractTransportAlignment(entry map[string]interface{}, metrics *CallMetrics) {

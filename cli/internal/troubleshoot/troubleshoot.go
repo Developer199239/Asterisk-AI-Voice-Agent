@@ -523,12 +523,33 @@ func (r *Runner) displayMetrics(metrics *CallMetrics) {
 	// Streaming performance
 	if len(metrics.StreamingSummaries) > 0 {
 		successColor.Println("Streaming Performance:")
-		summary := metrics.StreamingSummaries[0]
-		fmt.Printf("  Bytes sent: %s\n", formatBytes(summary.BytesSent))
-		fmt.Printf("  Effective duration: %.2fs\n", summary.EffectiveSeconds)
-		fmt.Printf("  Wall clock duration: %.2fs\n", summary.WallSeconds)
 		
-		if absFloat(metrics.WorstDriftPct) <= 5.0 {
+		// Separate greeting and conversation segments
+		var greetingSegment *StreamingSummary
+		conversationSegments := []StreamingSummary{}
+		
+		for _, seg := range metrics.StreamingSummaries {
+			if seg.IsGreeting {
+				greetingSegment = &seg
+			} else {
+				conversationSegments = append(conversationSegments, seg)
+			}
+		}
+		
+		// Show primary summary
+		summary := metrics.StreamingSummaries[0]
+		fmt.Printf("  Segments: %d", len(metrics.StreamingSummaries))
+		if greetingSegment != nil {
+			fmt.Printf(" (1 greeting, %d conversation)", len(conversationSegments))
+		}
+		fmt.Println()
+		
+		// Drift analysis (excluding greeting)
+		if metrics.WorstDriftPct == 0.0 && greetingSegment != nil {
+			// Only greeting segment exists, show its drift as informational
+			warningColor.Printf("  Greeting drift: %.1f%% (expected - includes conversation pauses)\n", greetingSegment.DriftPct)
+			successColor.Println("  Conversation drift: N/A (no separate segments)")
+		} else if absFloat(metrics.WorstDriftPct) <= 5.0 {
 			successColor.Printf("  Drift: %.1f%% ✅ EXCELLENT\n", metrics.WorstDriftPct)
 		} else if absFloat(metrics.WorstDriftPct) <= 10.0 {
 			warningColor.Printf("  Drift: %.1f%% ⚠️  ACCEPTABLE\n", metrics.WorstDriftPct)
@@ -537,9 +558,23 @@ func (r *Runner) displayMetrics(metrics *CallMetrics) {
 			fmt.Println("  Impact: Timing mismatch - audio too fast/slow")
 		}
 		
+		// Underflow analysis
 		if metrics.UnderflowCount > 0 {
-			errorColor.Printf("  Underflows: %d ❌ DETECTED\n", metrics.UnderflowCount)
-			fmt.Println("  Impact: Jitter buffer starvation - choppy audio")
+			// Calculate underflow rate
+			totalFrames := 0
+			for _, seg := range metrics.StreamingSummaries {
+				totalFrames += seg.BytesSent / 320 // 320 bytes per 20ms frame
+			}
+			underflowRate := float64(metrics.UnderflowCount) / float64(totalFrames) * 100
+			
+			if underflowRate < 1.0 {
+				warningColor.Printf("  Underflows: %d (%.1f%% of frames - acceptable)\n", metrics.UnderflowCount, underflowRate)
+			} else if underflowRate < 5.0 {
+				warningColor.Printf("  Underflows: %d (%.1f%% of frames - minor impact)\n", metrics.UnderflowCount, underflowRate)
+			} else {
+				errorColor.Printf("  Underflows: %d (%.1f%% of frames - significant) ❌\n", metrics.UnderflowCount, underflowRate)
+				fmt.Println("  Impact: Jitter buffer starvation - choppy audio")
+			}
 		} else {
 			successColor.Println("  Underflows: 0 ✅ NONE")
 		}
@@ -617,16 +652,30 @@ func (r *Runner) displayCallQuality(metrics *CallMetrics) {
 		}
 	}
 	
-	// Check drift
+	// Check drift (excluding greeting segments)
 	if absFloat(metrics.WorstDriftPct) > 10.0 {
 		issues = append(issues, fmt.Sprintf("High drift (%.1f%%)", metrics.WorstDriftPct))
 		score -= 25.0
 	}
 	
-	// Check underflows
-	if metrics.UnderflowCount > 0 {
-		issues = append(issues, fmt.Sprintf("%d underflow events", metrics.UnderflowCount))
-		score -= 20.0
+	// Check underflows (with rate-based severity)
+	if metrics.UnderflowCount > 0 && len(metrics.StreamingSummaries) > 0 {
+		totalFrames := 0
+		for _, seg := range metrics.StreamingSummaries {
+			totalFrames += seg.BytesSent / 320
+		}
+		underflowRate := float64(metrics.UnderflowCount) / float64(totalFrames) * 100
+		
+		if underflowRate >= 5.0 {
+			// Significant underflows
+			issues = append(issues, fmt.Sprintf("%d underflows (%.1f%% rate - significant)", metrics.UnderflowCount, underflowRate))
+			score -= 20.0
+		} else if underflowRate >= 1.0 {
+			// Minor underflows
+			issues = append(issues, fmt.Sprintf("%d underflows (%.1f%% rate - minor)", metrics.UnderflowCount, underflowRate))
+			score -= 5.0
+		}
+		// < 1% underflow rate is considered acceptable, no score deduction
 	}
 	
 	// Check gate flutter
