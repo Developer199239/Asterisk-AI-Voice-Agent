@@ -167,6 +167,9 @@ func (r *Runner) Run() error {
 	// Show detailed metrics (RCA-level)
 	if analysis.Metrics != nil {
 		r.displayMetrics(analysis.Metrics)
+		
+		// Show overall call quality verdict
+		r.displayCallQuality(analysis.Metrics)
 	}
 	
 	// Show LLM diagnosis
@@ -592,6 +595,79 @@ func (r *Runner) displayMetrics(metrics *CallMetrics) {
 		}
 		fmt.Println()
 	}
+}
+
+// displayCallQuality shows overall call quality verdict
+func (r *Runner) displayCallQuality(metrics *CallMetrics) {
+	fmt.Println("═══════════════════════════════════════════")
+	fmt.Println("🎯 OVERALL CALL QUALITY")
+	fmt.Println("═══════════════════════════════════════════")
+	fmt.Println()
+	
+	// Calculate score based on metrics
+	issues := []string{}
+	score := 100.0
+	
+	// Check provider bytes ratio
+	if len(metrics.ProviderSegments) > 0 && metrics.ProviderBytesTotal > 0 {
+		actualRatio := float64(metrics.EnqueuedBytesTotal) / float64(metrics.ProviderBytesTotal)
+		if actualRatio < 0.95 || actualRatio > 1.05 {
+			issues = append(issues, "Provider bytes pacing issue")
+			score -= 30.0
+		}
+	}
+	
+	// Check drift
+	if absFloat(metrics.WorstDriftPct) > 10.0 {
+		issues = append(issues, fmt.Sprintf("High drift (%.1f%%)", metrics.WorstDriftPct))
+		score -= 25.0
+	}
+	
+	// Check underflows
+	if metrics.UnderflowCount > 0 {
+		issues = append(issues, fmt.Sprintf("%d underflow events", metrics.UnderflowCount))
+		score -= 20.0
+	}
+	
+	// Check gate flutter
+	if metrics.GateFlutterDetected {
+		issues = append(issues, "Gate flutter detected")
+		score -= 20.0
+	}
+	
+	// Check VAD issues
+	if metrics.VADSettings != nil && metrics.VADSettings.WebRTCAggressiveness == 0 {
+		issues = append(issues, "VAD too sensitive")
+		score -= 15.0
+	}
+	
+	// Determine verdict
+	if score >= 90 {
+		successColor.Println("Verdict: ✅ EXCELLENT - No significant issues detected")
+	} else if score >= 70 {
+		warningColor.Println("Verdict: ⚠️  FAIR - Minor issues detected")
+	} else if score >= 50 {
+		warningColor.Println("Verdict: ⚠️  POOR - Multiple issues affecting quality")
+	} else {
+		errorColor.Println("Verdict: ❌ CRITICAL - Severe issues detected")
+	}
+	
+	fmt.Printf("Quality Score: %.0f/100\n", score)
+	
+	if len(issues) > 0 {
+		fmt.Println("\nIssues Detected:")
+		for _, issue := range issues {
+			fmt.Printf("  • %s\n", issue)
+		}
+	} else {
+		fmt.Println("\n✅ All metrics within acceptable thresholds")
+		fmt.Println("✅ Provider bytes ratio: ~1.0")
+		fmt.Println("✅ Drift: <10%")
+		fmt.Println("✅ No underflows")
+		fmt.Println("✅ Clean audio expected")
+	}
+	
+	fmt.Println()
 }
 
 // displayLLMDiagnosis shows AI-powered diagnosis
