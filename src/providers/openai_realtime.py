@@ -425,39 +425,13 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             if not pcm16:
                 return
             
-            # AUDIO GATING: Check if we should forward this audio (echo prevention)
-            if self._gating_manager:
-                should_forward, buffered_chunks = await self._gating_manager.should_forward_audio(
-                    self._call_id,
-                    "openai_realtime",
-                    pcm16,  # Use converted PCM16 for VAD
-                    audio_format="pcm16"
-                )
-                
-                if not should_forward:
-                    # Audio is buffered or dropped, don't send yet
-                    logger.debug(
-                        "🚫 Audio NOT forwarded (gating active)",
-                        call_id=self._call_id,
-                    )
-                    return
-                
-                # Send buffered audio first (if any from interruption)
-                if buffered_chunks:
-                    logger.info(
-                        "📤 Sending buffered audio chunks first",
-                        call_id=self._call_id,
-                        chunk_count=len(buffered_chunks),
-                    )
-                    for buffered_chunk in buffered_chunks:
-                        await self._send_audio_to_openai(buffered_chunk)
-                
-                logger.debug(
-                    "✅ Audio forwarded (gate open)",
-                    call_id=self._call_id,
-                )
+            # IMPORTANT: For OpenAI Realtime with server-side VAD, DO NOT use client-side gating
+            # OpenAI handles turn detection and echo cancellation server-side
+            # Client-side gating fights OpenAI's server-side VAD and causes self-interruption
+            # See: OpenAI Realtime Golden Baseline (webrtc_aggressiveness: 1)
+            # The gate should stay OPEN and let OpenAI handle everything
             
-            # Send current chunk
+            # Send audio directly - no gating for continuous input with server-side VAD
             await self._send_audio_to_openai(pcm16)
             
         except ConnectionClosedError:
