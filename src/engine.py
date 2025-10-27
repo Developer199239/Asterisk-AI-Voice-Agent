@@ -2972,29 +2972,57 @@ class Engine:
                 logger.debug("No session for caller; dropping RTP audio", ssrc=ssrc, caller_channel_id=caller_channel_id)
                 return
 
-            # Post-TTS end guard to avoid self-echo re-capture
-            # Skip for P1 providers (Deepgram Voice Agent, OpenAI Realtime) - they handle turn-taking internally
-            provider_name = getattr(session, 'provider_name', '')
-            is_p1_provider = provider_name in ('deepgram', 'openai_realtime')
-            if not is_p1_provider:
+            # Check if provider requires continuous audio input (P1 providers: Deepgram, OpenAI Realtime)
+            # These providers handle turn-taking internally and need uninterrupted audio flow
+            provider_name = getattr(session, 'provider_name', None) or self.config.default_provider
+            provider = self.providers.get(provider_name)
+            continuous_input = False
+            try:
+                if provider_name in ("deepgram", "openai_realtime"):
+                    continuous_input = True
+                else:
+                    pcfg = getattr(provider, 'config', None)
+                    if isinstance(pcfg, dict):
+                        continuous_input = bool(pcfg.get('continuous_input', False))
+                    else:
+                        continuous_input = bool(getattr(pcfg, 'continuous_input', False))
+            except Exception:
+                continuous_input = False
+
+            # For continuous-input providers, forward audio immediately and skip all gating/barge-in logic
+            # This matches the AudioSocket behavior for Deepgram/OpenAI Realtime (lines 2304-2342)
+            if continuous_input:
+                if not provider or not hasattr(provider, 'send_audio'):
+                    logger.debug("Provider unavailable for continuous RTP audio", provider=provider_name)
+                    return
+                # Forward PCM16 16kHz directly to provider
                 try:
-                    cfg = getattr(self.config, 'barge_in', None)
-                    post_guard_ms = int(getattr(cfg, 'post_tts_end_protection_ms', 0)) if cfg else 0
+                    await provider.send_audio(pcm_16k)
+                except Exception as exc:
+                    logger.debug("Continuous-input RTP forward error", call_id=caller_channel_id, error=str(exc))
+                return
+
+            # Below: standard gating/barge-in logic for hybrid (P2) providers only
+            
+            # Post-TTS end guard to avoid self-echo re-capture
+            try:
+                cfg = getattr(self.config, 'barge_in', None)
+                post_guard_ms = int(getattr(cfg, 'post_tts_end_protection_ms', 0)) if cfg else 0
+            except Exception:
+                post_guard_ms = 0
+            if post_guard_ms and getattr(session, 'tts_ended_ts', 0.0) and session.audio_capture_enabled:
+                try:
+                    elapsed_ms = int((time.time() - float(session.tts_ended_ts)) * 1000)
                 except Exception:
-                    post_guard_ms = 0
-                if post_guard_ms and getattr(session, 'tts_ended_ts', 0.0) and session.audio_capture_enabled:
-                    try:
-                        elapsed_ms = int((time.time() - float(session.tts_ended_ts)) * 1000)
-                    except Exception:
-                        elapsed_ms = post_guard_ms
-                    if elapsed_ms < post_guard_ms:
-                        logger.debug(
-                            "Dropping inbound RTP during post-TTS protection window",
-                            call_id=caller_channel_id,
-                            elapsed_ms=elapsed_ms,
-                            protect_ms=post_guard_ms,
-                        )
-                        return
+                    elapsed_ms = post_guard_ms
+                if elapsed_ms < post_guard_ms:
+                    logger.debug(
+                        "Dropping inbound RTP during post-TTS protection window",
+                        call_id=caller_channel_id,
+                        elapsed_ms=elapsed_ms,
+                        protect_ms=post_guard_ms,
+                    )
+                    return
 
             # If TTS is playing (capture disabled), decide whether to drop or barge-in
             if hasattr(session, 'audio_capture_enabled') and not session.audio_capture_enabled:
