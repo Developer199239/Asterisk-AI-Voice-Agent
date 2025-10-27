@@ -536,8 +536,7 @@ func (r *Runner) displayMetrics(metrics *CallMetrics) {
 			}
 		}
 		
-		// Show primary summary
-		summary := metrics.StreamingSummaries[0]
+		// Show segment summary
 		fmt.Printf("  Segments: %d", len(metrics.StreamingSummaries))
 		if greetingSegment != nil {
 			fmt.Printf(" (1 greeting, %d conversation)", len(conversationSegments))
