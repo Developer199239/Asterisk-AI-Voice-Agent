@@ -225,7 +225,7 @@ class DeepgramSTTAdapter(STTComponent):
         )
 
         await session.websocket.send(api_audio)
-        await session.websocket.send(json.dumps({"type": "flush"}))
+        await session.websocket.send(json.dumps({"type": "Finalize"}))
 
         started_at = time.perf_counter()
         try:
