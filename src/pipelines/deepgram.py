@@ -3,8 +3,8 @@
 
 This module introduces concrete implementations for Deepgram STT and TTS adapters
 used by the pipeline orchestrator. Both adapters honour pipeline/provider options,
-support latency-aware logging, and integrate with Deepgram's WebSocket (STT) and
-REST (TTS) APIs.
+support latency-aware logging, and integrate with Deepgram's REST APIs for
+pre-recorded STT (batch processing) and TTS (synthesis).
 """
 
 from __future__ import annotations
@@ -18,8 +18,6 @@ from typing import Any, AsyncIterator, Callable, Dict, Iterable, Optional, Tuple
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import aiohttp
-import websockets
-from websockets.client import WebSocketClientProtocol
 
 from ..audio import convert_pcm16le_to_target_format, mulaw_to_pcm16le, resample_audio
 from ..config import AppConfig, DeepgramProviderConfig
@@ -32,21 +30,16 @@ logger = get_logger(__name__)
 # Shared helpers -----------------------------------------------------------------
 
 
-def _normalize_ws_url(base_url: Optional[str]) -> str:
-    default = "wss://api.deepgram.com/v1/listen"
+def _normalize_stt_url(base_url: Optional[str]) -> str:
+    """Normalize base URL to Deepgram pre-recorded STT endpoint."""
+    default = "https://api.deepgram.com/v1/listen"
     if not base_url:
         return default
     parsed = urlparse(base_url)
-    if parsed.scheme in ("ws", "wss"):
-        if not parsed.path or parsed.path == "/":
-            parsed = parsed._replace(path="/v1/listen")
+    if parsed.path.endswith("/v1/listen"):
         return urlunparse(parsed)
-    if parsed.scheme in ("http", "https"):
-        scheme = "wss" if parsed.scheme == "https" else "ws"
-        path = parsed.path if parsed.path and parsed.path != "/" else "/v1/listen"
-        return urlunparse(parsed._replace(scheme=scheme, path=path))
-    # Assume bare host
-    return f"wss://{base_url.strip('/')}/v1/listen"
+    path = parsed.path.rstrip("/") + "/v1/listen"
+    return urlunparse(parsed._replace(path=path))
 
 
 def _normalize_rest_url(base_url: Optional[str]) -> str:
@@ -83,15 +76,18 @@ def _bytes_per_sample(encoding: str) -> int:
 
 @dataclass
 class _STTSessionState:
-    websocket: WebSocketClientProtocol
+    """Tracks per-call STT session state (API key, model, encoding, etc)."""
     options: Dict[str, Any]
+    http_session: aiohttp.ClientSession
 
 
 class DeepgramSTTAdapter(STTComponent):
     """
-    # Milestone7: Deepgram WebSocket streaming STT adapter.
+    # Milestone7: Deepgram REST pre-recorded STT adapter.
 
-    Maintains a per-call WebSocket session and exposes a simple transcription API.
+    Uses Deepgram's batch/pre-recorded API (HTTP POST) for request/response
+    transcription. Suitable for discrete audio chunks (3-5 seconds) rather than
+    continuous streaming. Maintains per-call HTTP session for efficient reuse.
     """
 
     def __init__(
@@ -127,45 +123,25 @@ class DeepgramSTTAdapter(STTComponent):
         if not api_key:
             raise RuntimeError("Deepgram STT requires an API key")
 
-        query_params = {
-            "model": merged.get("model"),
-            "language": merged.get("language"),
-            "encoding": merged.get("encoding"),
-            "sample_rate": merged.get("sample_rate"),
-            "smart_format": str(merged.get("smart_format", True)).lower(),
-        }
-        query_params = {k: v for k, v in query_params.items() if v}
-
-        ws_url = _normalize_ws_url(merged.get("base_url"))
-        parsed = urlparse(ws_url)
-        existing = dict(parse_qsl(parsed.query))
-        existing.update({k: str(v) for k, v in query_params.items()})
-        ws_url = urlunparse(parsed._replace(query=urlencode(existing)))
+        # Create HTTP session for reuse across multiple transcribe() calls
+        http_session = aiohttp.ClientSession()
+        self._sessions[call_id] = _STTSessionState(options=merged, http_session=http_session)
 
         logger.info(
-            "Deepgram STT opening session",
+            "Deepgram STT session opened (REST API)",
             call_id=call_id,
-            url=ws_url,
+            model=merged.get("model"),
+            encoding=merged.get("encoding"),
+            sample_rate=merged.get("sample_rate"),
             component=self.component_key,
         )
-
-        headers = [
-            ("Authorization", f"Token {api_key}"),
-            ("User-Agent", "Asterisk-AI-Voice-Agent/1.0"),
-        ]
-        websocket = await websockets.connect(
-            ws_url,
-            extra_headers=headers,
-            max_size=16 * 1024 * 1024,  # allow generous transcript payloads
-        )
-        self._sessions[call_id] = _STTSessionState(websocket=websocket, options=merged)
 
     async def close_call(self, call_id: str) -> None:
         session = self._sessions.pop(call_id, None)
         if not session:
             return
         try:
-            await session.websocket.close()
+            await session.http_session.close()
         finally:
             logger.info("Deepgram STT session closed", call_id=call_id)
 
@@ -214,37 +190,88 @@ class DeepgramSTTAdapter(STTComponent):
             logger.debug("STT encoded PCM16 → alaw", call_id=call_id, bytes=len(api_audio))
         # "linear16", "pcm16" = no encoding needed
 
-        # Log upstream chunk metadata for debugging/telemetry
+        # Build query parameters
+        query_params = {
+            "model": merged.get("model"),
+            "language": merged.get("language"),
+            "smart_format": str(merged.get("smart_format", True)).lower(),
+        }
+        query_params = {k: v for k, v in query_params.items() if v}
+
+        # Build REST URL
+        base_url = _normalize_stt_url(merged.get("base_url"))
+        parsed = urlparse(base_url)
+        existing = dict(parse_qsl(parsed.query))
+        existing.update({k: str(v) for k, v in query_params.items()})
+        rest_url = urlunparse(parsed._replace(query=urlencode(existing)))
+
+        # Determine Content-Type based on encoding
+        if api_encoding in ("mulaw", "g711_ulaw", "mu-law"):
+            content_type = f"audio/mulaw; rate={api_sample_rate}"
+        elif api_encoding in ("alaw", "g711_alaw"):
+            content_type = f"audio/alaw; rate={api_sample_rate}"
+        elif api_encoding in ("linear16", "pcm16"):
+            content_type = f"audio/pcm; rate={api_sample_rate}"
+        else:
+            content_type = "audio/wav"
+
+        headers = {
+            "Authorization": f"Token {merged.get('api_key')}",
+            "Content-Type": content_type,
+            "User-Agent": "Asterisk-AI-Voice-Agent/1.0",
+        }
+
         logger.debug(
-            "Deepgram STT sending audio chunk",
+            "Deepgram STT sending audio chunk (REST)",
             call_id=call_id,
             request_id=request_id,
             chunk_bytes=len(api_audio),
             api_encoding=api_encoding,
             api_sample_rate=api_sample_rate,
+            url=rest_url,
         )
-
-        await session.websocket.send(api_audio)
-        await session.websocket.send(json.dumps({"type": "Finalize"}))
 
         started_at = time.perf_counter()
         try:
-            while True:
-                message = await asyncio.wait_for(session.websocket.recv(), timeout=timeout)
-                transcript = self._extract_transcript(message)
-                if transcript is None:
-                    continue
+            async with session.http_session.post(
+                rest_url,
+                headers=headers,
+                data=api_audio,
+                timeout=aiohttp.ClientTimeout(total=timeout),
+            ) as response:
+                if response.status != 200:
+                    error_text = await response.text()
+                    raise RuntimeError(
+                        f"Deepgram API error {response.status}: {error_text}"
+                    )
+                
+                result = await response.json()
+                transcript = self._extract_transcript_from_rest(result)
+                
+                if not transcript:
+                    raise RuntimeError("No transcript in Deepgram response")
+                
                 latency_ms = (time.perf_counter() - started_at) * 1000.0
                 logger.info(
-                    "Deepgram STT transcript received",
+                    "Deepgram STT transcript received (REST)",
                     call_id=call_id,
                     request_id=request_id,
                     latency_ms=round(latency_ms, 2),
+                    transcript_preview=transcript[:50],
                 )
                 return transcript
-        except (asyncio.TimeoutError, websockets.ConnectionClosed) as exc:
+                
+        except asyncio.TimeoutError:
             logger.warning(
-                "Deepgram STT failed to deliver transcript",
+                "Deepgram STT request timeout",
+                call_id=call_id,
+                request_id=request_id,
+                timeout_sec=timeout,
+            )
+            raise
+        except Exception as exc:
+            logger.warning(
+                "Deepgram STT request failed",
                 call_id=call_id,
                 request_id=request_id,
                 error=str(exc),
@@ -267,24 +294,37 @@ class DeepgramSTTAdapter(STTComponent):
         return merged
 
     @staticmethod
-    def _extract_transcript(message: Any) -> Optional[str]:
-        if isinstance(message, bytes):
-            return None
+    def _extract_transcript_from_rest(result: Dict[str, Any]) -> Optional[str]:
+        """
+        Extract transcript from Deepgram pre-recorded API response.
+        Response format:
+        {
+          "results": {
+            "channels": [
+              {
+                "alternatives": [
+                  {"transcript": "...", "confidence": 0.95}
+                ]
+              }
+            ]
+          }
+        }
+        """
         try:
-            payload = json.loads(message)
-        except json.JSONDecodeError:
-            logger.debug("Deepgram STT received non-JSON message", message=message)
+            results = result.get("results", {})
+            channels = results.get("channels", [])
+            if not channels:
+                return None
+            
+            alternatives = channels[0].get("alternatives", [])
+            if not alternatives:
+                return None
+            
+            transcript = alternatives[0].get("transcript", "")
+            return transcript.strip() if transcript else None
+        except (KeyError, IndexError, AttributeError) as exc:
+            logger.debug("Failed to extract transcript from Deepgram response", error=str(exc))
             return None
-
-        if isinstance(payload, dict):
-            channel = payload.get("channel") or {}
-            alternatives = channel.get("alternatives") or []
-            for alt in alternatives:
-                transcript = alt.get("transcript")
-                is_final = payload.get("is_final", True)
-                if transcript and (is_final or alt.get("confidence") is not None):
-                    return transcript
-        return None
 
 
 # Deepgram TTS Adapter ------------------------------------------------------------
