@@ -184,16 +184,47 @@ class DeepgramSTTAdapter(STTComponent):
         timeout = float(merged.get("response_timeout_sec", self._default_timeout))
         request_id = f"dg-stt-{uuid.uuid4().hex[:12]}"
 
-        # # Milestone7: Log upstream chunk metadata for debugging/telemetry.
+        # Get API requirements from session options (set during open_call)
+        api_encoding = merged.get("encoding", "linear16")
+        api_sample_rate = int(merged.get("sample_rate", 16000))
+        
+        # Transcode audio to match API expectations
+        api_audio = audio_pcm16
+        
+        # Resample if needed
+        if sample_rate_hz != api_sample_rate:
+            import audioop
+            api_audio, _ = audioop.ratecv(api_audio, 2, 1, sample_rate_hz, api_sample_rate, None)
+            logger.debug(
+                "STT resampled audio",
+                call_id=call_id,
+                from_rate=sample_rate_hz,
+                to_rate=api_sample_rate,
+                bytes=len(api_audio),
+            )
+        
+        # Encode if needed
+        if api_encoding in ("mulaw", "g711_ulaw", "mu-law"):
+            import audioop
+            api_audio = audioop.lin2ulaw(api_audio, 2)
+            logger.debug("STT encoded PCM16 → mulaw", call_id=call_id, bytes=len(api_audio))
+        elif api_encoding in ("alaw", "g711_alaw"):
+            import audioop
+            api_audio = audioop.lin2alaw(api_audio, 2)
+            logger.debug("STT encoded PCM16 → alaw", call_id=call_id, bytes=len(api_audio))
+        # "linear16", "pcm16" = no encoding needed
+
+        # Log upstream chunk metadata for debugging/telemetry
         logger.debug(
             "Deepgram STT sending audio chunk",
             call_id=call_id,
             request_id=request_id,
-            chunk_bytes=len(audio_pcm16),
-            sample_rate=sample_rate_hz,
+            chunk_bytes=len(api_audio),
+            api_encoding=api_encoding,
+            api_sample_rate=api_sample_rate,
         )
 
-        await session.websocket.send(audio_pcm16)
+        await session.websocket.send(api_audio)
         await session.websocket.send(json.dumps({"type": "flush"}))
 
         started_at = time.perf_counter()

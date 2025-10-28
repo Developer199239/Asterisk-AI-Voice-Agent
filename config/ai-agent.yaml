@@ -94,11 +94,11 @@ pipelines:
         temperature: 0.7
       stt:
         base_url: https://api.deepgram.com
-        encoding: mulaw
+        encoding: linear16
         language: en
         mode: stt
         model: nova-2
-        sample_rate: 8000
+        sample_rate: 16000
       tts:
         base_url: https://api.deepgram.com
         format:
