@@ -3048,7 +3048,11 @@ class Engine:
     def _build_deepgram_config(self, provider_cfg: Dict[str, Any]) -> Optional[DeepgramProviderConfig]:
         """Construct a DeepgramProviderConfig from raw provider settings with validation."""
         try:
-            cfg = DeepgramProviderConfig(**provider_cfg)
+            # SECURITY: API keys ONLY from environment variables, never from YAML
+            merged = dict(provider_cfg)
+            merged['api_key'] = os.getenv('DEEPGRAM_API_KEY')  # Force from .env only
+            
+            cfg = DeepgramProviderConfig(**merged)
             if not cfg.api_key:
                 logger.error("Deepgram provider API key missing (DEEPGRAM_API_KEY)")
                 return None
@@ -3062,6 +3066,10 @@ class Engine:
         try:
             # Respect provider overrides; only fill when missing/empty
             merged = dict(provider_cfg)
+            
+            # SECURITY: API key ONLY from environment variables, never from YAML
+            merged['api_key'] = os.getenv('OPENAI_API_KEY')  # Force from .env only
+            
             try:
                 instr = (merged.get("instructions") or "").strip()
             except Exception:

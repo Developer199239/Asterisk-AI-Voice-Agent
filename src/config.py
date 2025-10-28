@@ -345,21 +345,13 @@ def load_config(path: str = "config/ai-agent.yaml") -> AppConfig:
         
         config_data = yaml.safe_load(config_str_expanded)
 
-        # Manually construct and inject the Asterisk config from environment variables.
-        # This keeps secrets out of the YAML file and aligns with the Pydantic model.
+        # Asterisk config from environment variables ONLY.
+        # SECURITY: Credentials must NEVER be in YAML files.
         asterisk_yaml = (config_data.get('asterisk') or {}) if isinstance(config_data.get('asterisk'), dict) else {}
         config_data['asterisk'] = {
-            "host": os.getenv("ASTERISK_HOST", asterisk_yaml.get("host")),
-            "username": (
-                os.getenv("ASTERISK_ARI_USERNAME")
-                or os.getenv("ARI_USERNAME")
-                or asterisk_yaml.get("username")
-            ),
-            "password": (
-                os.getenv("ASTERISK_ARI_PASSWORD")
-                or os.getenv("ARI_PASSWORD")
-                or asterisk_yaml.get("password")
-            ),
+            "host": os.getenv("ASTERISK_HOST", "127.0.0.1"),
+            "username": os.getenv("ASTERISK_ARI_USERNAME") or os.getenv("ARI_USERNAME"),
+            "password": os.getenv("ASTERISK_ARI_PASSWORD") or os.getenv("ARI_PASSWORD"),
             "app_name": asterisk_yaml.get("app_name", "asterisk-ai-voice-agent")
         }
 
@@ -379,8 +371,9 @@ def load_config(path: str = "config/ai-agent.yaml") -> AppConfig:
         if not _nonempty_string(prompt_val):
             prompt_val = os.getenv("AI_ROLE", "You are a helpful assistant.")
         # Resolve model and api_key
+        # SECURITY: API keys must ONLY come from environment variables
         model_val = llm_yaml.get('model') or "gpt-4o"
-        api_key_val = llm_yaml.get('api_key') or os.getenv("OPENAI_API_KEY")
+        api_key_val = os.getenv("OPENAI_API_KEY")  # ONLY from .env
 
         # Apply environment variable interpolation to final strings to support ${VAR} placeholders
         try:

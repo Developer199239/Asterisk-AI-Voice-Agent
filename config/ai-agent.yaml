@@ -162,10 +162,9 @@ streaming:
   diag_post_secs: 1
   diag_out_dir: "/tmp/ai-engine-taps"
 
-# Asterisk connection settings (will be overridden by environment variables)
+# Asterisk connection settings (configured via .env file)
+# Required env vars: ASTERISK_HOST, ASTERISK_ARI_USERNAME, ASTERISK_ARI_PASSWORD
 asterisk:
-  host: "your_asterisk_host"
-  username: "your_ari_username"
   app_name: "asterisk-ai-voice-agent"
 
 # External Media configuration for RTP-based audio capture
@@ -184,7 +183,7 @@ llm:
   prompt: "Voice assistant. Answer in 5-8 words. Be direct. Expand only if asked."
   model: "gpt-4o-mini"
   temperature: 0.7
-  api_key: "${OPENAI_API_KEY}" # Example of using env var substitution
+  # API key configured via OPENAI_API_KEY environment variable
 
 
 # VAD Configuration - Optimized for 4+ second utterances
@@ -222,7 +221,7 @@ providers:
     max_tokens: 64
   deepgram:
     enabled: true
-    api_key: "${DEEPGRAM_API_KEY}"
+    # API key configured via DEEPGRAM_API_KEY environment variable
     model: "nova-2-phonecall"
     tts_model: "aura-2-thalia-en"
     greeting: "Hello, how can I help you today?"
@@ -236,7 +235,7 @@ providers:
     output_sample_rate_hz: 8000
   openai:
     enabled: false
-    api_key: "${OPENAI_API_KEY}"
+    # API key configured via OPENAI_API_KEY environment variable
     organization: ""
     project: ""
     realtime_base_url: "wss://api.openai.com/v1/realtime"
@@ -256,7 +255,7 @@ providers:
     response_timeout_sec: 5.0
   openai_realtime:
     enabled: true
-    api_key: "${OPENAI_API_KEY}"
+    # API key configured via OPENAI_API_KEY environment variable
     model: "gpt-4o-realtime-preview-2024-12-17"
     voice: "alloy"
     base_url: "wss://api.openai.com/v1/realtime"
