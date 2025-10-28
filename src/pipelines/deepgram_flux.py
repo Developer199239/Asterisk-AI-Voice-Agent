@@ -211,7 +211,7 @@ class DeepgramFluxSTTAdapter(STTComponent):
             session_id=session.session_id,
         )
     
-    async def start_stream(self, call_id: str) -> None:
+    async def start_stream(self, call_id: str, options: Dict[str, Any]) -> None:
         """
         Start streaming session (already opened in open_call).
         
