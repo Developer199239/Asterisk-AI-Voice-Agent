@@ -606,23 +606,8 @@ exten => s,1,NoOp(Test AI engine with pipeline: $PIPELINE_NAME)
 EOF
     fi
 
-    cat <<'EOF'
-
-; Optional: AudioSocket helper context for media transport (telephony μ-law 8kHz)
-[from-ai-agent-audiosocket]
-exten => _X.,1,NoOp(Local channel starting AudioSocket for ${EXTEN})
- same => n,Answer()
- same => n,Set(AUDIOSOCKET_HOST=127.0.0.1)
- same => n,Set(AUDIOSOCKET_PORT=8090)
- same => n,Set(AUDIOSOCKET_UUID=${EXTEN})
- same => n,AudioSocket(${AUDIOSOCKET_UUID},${AUDIOSOCKET_HOST}:${AUDIOSOCKET_PORT},ulaw)
- same => n,Hangup()
-
-; Keepalive leg for ;1 while engine streams audio (optional)
-exten => s,1,NoOp(Local keepalive for AudioSocket leg)
- same => n,Wait(60)
- same => n,Hangup()
-EOF
+    # Note: ExternalMedia RTP and AudioSocket use direct ARI approach
+    # No additional dialplan contexts required beyond from-ai-agent-* entry points
 
     echo
     echo "Next steps:"
