@@ -3672,15 +3672,32 @@ class Engine:
                         if not source_sample_rate:
                             source_sample_rate = self.config.streaming.sample_rate
                         
-                        await self.streaming_playback_manager.start_streaming_playback(
-                            call_id,
-                            q,
-                            playback_type=playback_type,
-                            source_encoding=fmt_info.get("encoding"),
-                            source_sample_rate=source_sample_rate,
-                            target_encoding=target_encoding,
-                            target_sample_rate=target_sample_rate,
-                        )
+                        # DOWNSTREAM_MODE GATING: Check if streaming playback is allowed
+                        # downstream_mode="file" forces file-based playback (useful for debugging/testing)
+                        # downstream_mode="stream" allows streaming playback (default for full agents)
+                        use_streaming = self.config.downstream_mode != "file"
+                        
+                        if use_streaming:
+                            await self.streaming_playback_manager.start_streaming_playback(
+                                call_id,
+                                q,
+                                playback_type=playback_type,
+                                source_encoding=fmt_info.get("encoding"),
+                                source_sample_rate=source_sample_rate,
+                                target_encoding=target_encoding,
+                                target_sample_rate=target_sample_rate,
+                            )
+                        else:
+                            # downstream_mode="file" - use file playback instead of streaming
+                            logger.info("Using file playback (downstream_mode=file)", call_id=call_id)
+                            try:
+                                playback_id = await self.playback_manager.play_audio(call_id, bytes(buf), "streaming-response")
+                                logger.info("File playback started (forced by downstream_mode)", 
+                                           call_id=call_id, playback_id=playback_id, buf_ms=buf_ms)
+                            except Exception:
+                                logger.error("File playback failed (downstream_mode=file)", call_id=call_id, exc_info=True)
+                            self._provider_coalesce_buf.pop(call_id, None)
+                            return
                         self._emit_transport_card(
                             call_id,
                             session,
@@ -3727,15 +3744,33 @@ class Engine:
                                 session.audio_diagnostics["codec_remediation"] = remediation
                             src_encoding = fmt_info.get("encoding") or encoding
                             src_rate = fmt_info.get("sample_rate") or sample_rate_int or getattr(session.provider, "_dg_output_rate", None)
-                            await self.streaming_playback_manager.start_streaming_playback(
-                                call_id,
-                                q,
-                                playback_type=playback_type,
-                                source_encoding=src_encoding,
-                                source_sample_rate=src_rate,
-                                target_encoding=target_encoding,
-                                target_sample_rate=target_sample_rate,
-                            )
+                            
+                            # DOWNSTREAM_MODE GATING: Check if streaming playback is allowed
+                            use_streaming = self.config.downstream_mode != "file"
+                            
+                            if use_streaming:
+                                await self.streaming_playback_manager.start_streaming_playback(
+                                    call_id,
+                                    q,
+                                    playback_type=playback_type,
+                                    source_encoding=src_encoding,
+                                    source_sample_rate=src_rate,
+                                    target_encoding=target_encoding,
+                                    target_sample_rate=target_sample_rate,
+                                )
+                            else:
+                                # downstream_mode="file" - use file playback instead of streaming
+                                logger.info("Using file playback (downstream_mode=file)", call_id=call_id)
+                                try:
+                                    playback_id = await self.playback_manager.play_audio(call_id, out_chunk, "streaming-response")
+                                    if playback_id:
+                                        logger.info("File playback started (forced by downstream_mode)", 
+                                                   call_id=call_id, playback_id=playback_id)
+                                    else:
+                                        logger.error("File playback failed (downstream_mode=file)", call_id=call_id)
+                                except Exception:
+                                    logger.error("File playback exception (downstream_mode=file)", call_id=call_id, exc_info=True)
+                                return
                             self._emit_transport_card(
                                 call_id,
                                 session,

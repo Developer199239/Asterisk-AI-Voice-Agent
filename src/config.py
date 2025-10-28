@@ -31,7 +31,8 @@ class ExternalMediaConfig(BaseModel):
     port_range: Optional[str] = Field(default=None)
     codec: str = Field(default="ulaw")  # ulaw or slin16
     direction: str = Field(default="both")  # both, sendonly, recvonly
-    jitter_buffer_ms: int = Field(default=20)
+    # Note: jitter_buffer_ms removed - RTP has built-in buffering, not configurable
+    # streaming.jitter_buffer_ms controls StreamingPlaybackManager buffering instead
 
 
 class AudioSocketConfig(BaseModel):
@@ -151,7 +152,7 @@ class BargeInConfig(BaseModel):
 class LLMConfig(BaseModel):
     initial_greeting: str = "Hello, I am an AI Assistant for Jugaar LLC. How can I help you today."
     prompt: str = "You are a helpful AI assistant."
-    model: str = "gpt-4o"
+    # Note: model field removed - not used by any provider (each provider has its own model config)
     api_key: Optional[str] = None
 
 

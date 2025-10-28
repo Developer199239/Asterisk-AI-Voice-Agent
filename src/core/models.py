@@ -175,4 +175,4 @@ class TransportConfig:
     rtp_port: int = 18080
     codec: str = "ulaw"
     direction: str = "both"
-    jitter_buffer_ms: int = 20
+    # Note: jitter_buffer_ms removed - not used by RTP server
