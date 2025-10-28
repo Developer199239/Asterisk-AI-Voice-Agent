@@ -737,6 +737,33 @@ class Engine:
             logger.error(f"Default provider '{self.config.default_provider}' not available. Available providers: {available_providers}")
         else:
             logger.info(f"Default provider '{self.config.default_provider}' is available and ready.")
+            
+            # Validate provider connectivity (full agent mode)
+            for provider_name, provider in self.providers.items():
+                # Check basic readiness
+                try:
+                    ready = provider.is_ready() if hasattr(provider, 'is_ready') else True
+                    if not ready:
+                        logger.error(
+                            "Provider NOT ready",
+                            provider=provider_name,
+                            reason="is_ready() returned False"
+                        )
+                    else:
+                        logger.info(
+                            "Provider validated and ready",
+                            provider=provider_name,
+                            type=provider.__class__.__name__
+                        )
+                except Exception as exc:
+                    logger.error(
+                        "Provider readiness check failed",
+                        provider=provider_name,
+                        error=str(exc),
+                        exc_info=True
+                    )
+            
+            # Check codec/sample alignment
             for provider_name in self.providers:
                 issues = self.provider_alignment_issues.get(provider_name, [])
                 for detail in dict.fromkeys(issues):

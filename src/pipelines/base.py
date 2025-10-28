@@ -176,26 +176,20 @@ class Component(ABC):
     async def validate_connectivity(self, options: Dict[str, Any]) -> Dict[str, Any]:
         """Smart generic validation that auto-detects URLs, credentials, and protocols.
         
-        This default implementation works for 90% of adapters:
-        - Auto-finds API keys from environment based on component name
-        - Extracts base_url from options (supports base_url, ws_url, url, endpoint)
-        - Protocol-aware testing (websocket vs HTTP)
-        - Smart header detection based on service domain
+        Primary providers (OpenAI, Deepgram, Local): Full connectivity testing
+        Other providers (Google, etc.): Basic URL + credential validation only
         
         Returns dict with:
             - healthy: bool - Whether component is ready
             - error: str - Error message if unhealthy
             - details: Dict[str, Any] - Additional diagnostic info
-        
-        Adapters can override for custom validation logic.
         """
         # 1. Extract base URL from options
         base_url = self._extract_base_url(options)
-        
-        # Local components without URLs are considered healthy
         component_key = getattr(self, "component_key", "")
+        
+        # Local components default to localhost websocket
         if component_key.startswith("local_") and not base_url:
-            # Local components default to localhost websocket
             base_url = "ws://127.0.0.1:8765/ws"
         
         if not base_url:
@@ -209,7 +203,27 @@ class Component(ABC):
             provider_prefix = component_key.split("_")[0].upper() if component_key else "UNKNOWN"
             return {"healthy": False, "error": f"No API credentials found (checked {provider_prefix}_API_KEY env var)", "details": {"component": component_key}}
         
-        # 3. Protocol-based testing
+        # 3. Determine validation depth based on provider priority
+        provider_prefix = component_key.split("_")[0].lower() if component_key else ""
+        is_primary = provider_prefix in ["openai", "deepgram", "local"]
+        
+        # For non-primary providers: Just validate URL format and credentials presence
+        if not is_primary:
+            # Basic validation: URL is valid and credentials exist
+            if base_url.startswith(("http://", "https://", "ws://", "wss://")):
+                return {
+                    "healthy": True,
+                    "error": None,
+                    "details": {
+                        "endpoint": base_url,
+                        "validation_level": "basic",
+                        "note": "URL format valid, credentials present (full connectivity test not performed)"
+                    }
+                }
+            else:
+                return {"healthy": False, "error": f"Invalid URL format: {base_url}", "details": {"url": base_url}}
+        
+        # 4. For primary providers: Full connectivity testing
         if base_url.startswith(("ws://", "wss://")):
             return await self._test_websocket_connection(base_url, api_key)
         elif base_url.startswith(("http://", "https://")):
