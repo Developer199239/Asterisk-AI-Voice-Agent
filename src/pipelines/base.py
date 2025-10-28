@@ -29,6 +29,19 @@ class Component(ABC):
     async def close_call(self, call_id: str) -> None:
         """Release per-call state (optional)."""
 
+    async def validate_connectivity(self, options: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate component can connect to required services.
+        
+        Returns dict with:
+            - healthy: bool - Whether component is ready
+            - error: str - Error message if unhealthy
+            - details: Dict[str, Any] - Additional diagnostic info
+        
+        Default implementation returns healthy=True.
+        Components should override to test actual connectivity.
+        """
+        return {"healthy": True, "error": None, "details": {}}
+
 
 class STTComponent(Component):
     """Speech-to-text component."""

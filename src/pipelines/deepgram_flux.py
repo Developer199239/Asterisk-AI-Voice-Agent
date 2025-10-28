@@ -110,6 +110,85 @@ class DeepgramFluxSTTAdapter(STTComponent):
         for call_id in list(self._sessions.keys()):
             await self.close_call(call_id)
     
+    async def validate_connectivity(self, options: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate Deepgram Flux API connectivity."""
+        merged = self._compose_options(options)
+        api_key = merged.get("api_key")
+        
+        # Check API key
+        if not api_key:
+            return {
+                "healthy": False,
+                "error": "Deepgram API key not configured",
+                "details": {"check": "api_key_present"},
+            }
+        
+        # Build test connection URL
+        query_params = {
+            "model": "flux-general-en",
+            "language": merged.get("language", "en-US"),
+            "encoding": merged.get("encoding", "linear16"),
+            "sample_rate": merged.get("sample_rate", "16000"),
+            "channels": "1",
+        }
+        
+        base_url = merged.get("base_url")
+        if not base_url or not base_url.startswith("wss://"):
+            ws_url = "wss://api.deepgram.com/v2/listen"
+        else:
+            ws_url = base_url
+            
+        parsed = urlparse(ws_url)
+        existing = dict(parse_qsl(parsed.query))
+        existing.update(query_params)
+        test_url = urlunparse(parsed._replace(query=urlencode(existing)))
+        
+        headers = [
+            ("Authorization", f"Token {api_key}"),
+            ("User-Agent", "Asterisk-AI-Voice-Agent/1.0-validation"),
+        ]
+        
+        # Test websocket connection
+        try:
+            websocket = await websockets.connect(
+                test_url,
+                extra_headers=headers,
+                max_size=16 * 1024 * 1024,
+                ping_interval=20,
+                ping_timeout=10,
+                open_timeout=5,  # 5 second timeout for validation
+            )
+            # Connection successful, close it
+            await websocket.close()
+            
+            return {
+                "healthy": True,
+                "error": None,
+                "details": {
+                    "endpoint": "wss://api.deepgram.com/v2/listen",
+                    "model": "flux-general-en",
+                },
+            }
+        except Exception as exc:
+            error_msg = str(exc)
+            if "401" in error_msg or "Unauthorized" in error_msg:
+                error_detail = "Invalid API key"
+            elif "400" in error_msg or "Bad Request" in error_msg:
+                error_detail = f"Invalid request parameters: {error_msg}"
+            elif "timeout" in error_msg.lower():
+                error_detail = "Connection timeout - network issue or service unavailable"
+            else:
+                error_detail = f"Connection failed: {error_msg}"
+            
+            return {
+                "healthy": False,
+                "error": error_detail,
+                "details": {
+                    "endpoint": test_url,
+                    "exception": error_msg,
+                },
+            }
+    
     async def open_call(self, call_id: str, options: Dict[str, Any]) -> None:
         """Open a Flux streaming session with continuous audio support."""
         merged = self._compose_options(options)

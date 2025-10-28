@@ -229,14 +229,40 @@ class PipelineOrchestrator:
             return
 
         pipelines = getattr(self.config, "pipelines", {}) or {}
+        
+        # Phase 1: Validate factory existence
         for name, entry in pipelines.items():
             self._validate_pipeline_entry(name, entry)
-
+        
+        # Phase 2: Validate connectivity for all pipelines
+        validation_results = {}
+        for name, entry in pipelines.items():
+            validation_results[name] = await self._validate_pipeline_connectivity(name, entry)
+        
+        # Check if active pipeline is healthy
+        active_healthy = True
+        if self._active_pipeline_name:
+            active_result = validation_results.get(self._active_pipeline_name, {})
+            active_healthy = active_result.get("healthy", False)
+            if not active_healthy:
+                logger.error(
+                    "Active pipeline validation FAILED - pipeline disabled",
+                    pipeline=self._active_pipeline_name,
+                    failures=active_result.get("failures", []),
+                )
+                self._active_pipeline_name = None
+        
+        # Log summary
+        healthy_count = sum(1 for r in validation_results.values() if r.get("healthy"))
+        unhealthy_count = len(validation_results) - healthy_count
+        
         self._started = True
         logger.info(
             "Pipeline orchestrator initialized",
             active_pipeline=self._active_pipeline_name,
             pipeline_count=len(pipelines),
+            healthy_pipelines=healthy_count,
+            unhealthy_pipelines=unhealthy_count,
         )
 
     async def stop(self) -> None:
@@ -713,8 +739,129 @@ class PipelineOrchestrator:
         return None
 
     def _validate_pipeline_entry(self, pipeline_name: str, entry: PipelineEntry) -> None:
+        """Validate that component factories exist (static check)."""
         for key in (entry.stt, entry.llm, entry.tts):
             self._resolve_factory(key)
+    
+    async def _validate_pipeline_connectivity(self, pipeline_name: str, entry: PipelineEntry) -> Dict[str, Any]:
+        """Validate pipeline components can connect to required services.
+        
+        Returns:
+            Dict with:
+                - healthy: bool
+                - failures: List[Dict] - Component failure details
+        """
+        failures = []
+        options_map = entry.options or {}
+        
+        # Validate STT
+        try:
+            stt_options = dict(options_map.get("stt", {}))
+            stt_adapter = self._build_component(entry.stt, stt_options)
+            result = await stt_adapter.validate_connectivity(stt_options)
+            if not result.get("healthy"):
+                failures.append({
+                    "component": "stt",
+                    "key": entry.stt,
+                    "error": result.get("error"),
+                    "details": result.get("details", {}),
+                })
+                logger.error(
+                    "Pipeline STT validation FAILED",
+                    pipeline=pipeline_name,
+                    component_key=entry.stt,
+                    error=result.get("error"),
+                    details=result.get("details", {}),
+                )
+        except Exception as exc:
+            failures.append({
+                "component": "stt",
+                "key": entry.stt,
+                "error": f"Validation exception: {exc}",
+                "details": {},
+            })
+            logger.error(
+                "Pipeline STT validation exception",
+                pipeline=pipeline_name,
+                component_key=entry.stt,
+                exc_info=True,
+            )
+        
+        # Validate LLM
+        try:
+            llm_options = dict(options_map.get("llm", {}))
+            llm_adapter = self._build_component(entry.llm, llm_options)
+            result = await llm_adapter.validate_connectivity(llm_options)
+            if not result.get("healthy"):
+                failures.append({
+                    "component": "llm",
+                    "key": entry.llm,
+                    "error": result.get("error"),
+                    "details": result.get("details", {}),
+                })
+                logger.error(
+                    "Pipeline LLM validation FAILED",
+                    pipeline=pipeline_name,
+                    component_key=entry.llm,
+                    error=result.get("error"),
+                    details=result.get("details", {}),
+                )
+        except Exception as exc:
+            failures.append({
+                "component": "llm",
+                "key": entry.llm,
+                "error": f"Validation exception: {exc}",
+                "details": {},
+            })
+            logger.error(
+                "Pipeline LLM validation exception",
+                pipeline=pipeline_name,
+                component_key=entry.llm,
+                exc_info=True,
+            )
+        
+        # Validate TTS
+        try:
+            tts_options = dict(options_map.get("tts", {}))
+            tts_adapter = self._build_component(entry.tts, tts_options)
+            result = await tts_adapter.validate_connectivity(tts_options)
+            if not result.get("healthy"):
+                failures.append({
+                    "component": "tts",
+                    "key": entry.tts,
+                    "error": result.get("error"),
+                    "details": result.get("details", {}),
+                })
+                logger.error(
+                    "Pipeline TTS validation FAILED",
+                    pipeline=pipeline_name,
+                    component_key=entry.tts,
+                    error=result.get("error"),
+                    details=result.get("details", {}),
+                )
+        except Exception as exc:
+            failures.append({
+                "component": "tts",
+                "key": entry.tts,
+                "error": f"Validation exception: {exc}",
+                "details": {},
+            })
+            logger.error(
+                "Pipeline TTS validation exception",
+                pipeline=pipeline_name,
+                component_key=entry.tts,
+                exc_info=True,
+            )
+        
+        healthy = len(failures) == 0
+        if healthy:
+            logger.info(
+                "Pipeline validation SUCCESS",
+                pipeline=pipeline_name,
+                components={"stt": entry.stt, "llm": entry.llm, "tts": entry.tts},
+            )
+        
+        return {"healthy": healthy, "failures": failures}
 
     def _build_resolution(
         self,
