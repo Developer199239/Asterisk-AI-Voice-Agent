@@ -2861,6 +2861,17 @@ class Engine:
                 logger.debug("No session for caller; dropping RTP audio", ssrc=ssrc, caller_channel_id=caller_channel_id)
                 return
 
+            # Check for pipeline mode FIRST (before continuous_input provider routing)
+            # Pipeline adapters need audio in their queue, not sent to monolithic providers
+            if self._pipeline_forced.get(caller_channel_id):
+                q = self._pipeline_queues.get(caller_channel_id)
+                if q:
+                    try:
+                        q.put_nowait(pcm_16k)  # Pipeline expects PCM16@16kHz
+                    except Exception as exc:
+                        logger.debug("Pipeline queue full or unavailable (RTP)", call_id=caller_channel_id, error=str(exc))
+                    return  # Done - don't route to monolithic provider
+
             # Check if provider requires continuous audio input (P1 providers: Deepgram, OpenAI Realtime)
             # These providers handle turn-taking internally and need uninterrupted audio flow
             provider_name = getattr(session, 'provider_name', None) or self.config.default_provider
