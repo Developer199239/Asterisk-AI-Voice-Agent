@@ -3139,13 +3139,22 @@ class Engine:
                         "set to 24000 so downstream audio plays at the correct speed."
                     )
 
+                # Check target encoding vs audiosocket format
+                # NOTE: Intentional transcoding is supported - system handles conversion
                 target_encoding = (provider_cfg.get("target_encoding") or "ulaw").lower()
-                if target_encoding in ("ulaw", "mulaw", "g711_ulaw", "mu-law") and audiosocket_format != "ulaw":
-                    issues.append(
-                        f"OpenAI Realtime target_encoding={target_encoding} but audiosocket.format={audiosocket_format}; "
-                        "set audiosocket.format=ulaw or adjust provider target encoding."
-                    )
-                if target_encoding in ("slin16", "linear16", "pcm16") and audiosocket_format != "slin16":
+                if target_encoding in ("ulaw", "mulaw", "g711_ulaw", "mu-law"):
+                    if audiosocket_format in ("ulaw", "mulaw"):
+                        # Perfect alignment
+                        pass
+                    elif audiosocket_format in ("slin", "slin16", "linear16", "pcm16"):
+                        # Intentional transcoding: AudioSocket PCM → Provider μ-law (system handles this)
+                        pass
+                    else:
+                        issues.append(
+                            f"OpenAI Realtime target_encoding={target_encoding} but audiosocket.format={audiosocket_format}; "
+                            "set audiosocket.format=ulaw or adjust provider target encoding."
+                        )
+                if target_encoding in ("slin16", "linear16", "pcm16") and audiosocket_format not in ("slin", "slin16", "linear16", "pcm16"):
                     issues.append(
                         f"OpenAI Realtime target_encoding={target_encoding} but audiosocket.format={audiosocket_format}; "
                         "set audiosocket.format=slin16 or change provider target encoding."
