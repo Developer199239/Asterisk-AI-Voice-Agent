@@ -165,6 +165,9 @@ class Component(ABC):
                         return {"healthy": False, "error": "Invalid API key", "details": {"status": 401, "endpoint": test_endpoint}}
                     elif resp.status == 403:
                         return {"healthy": False, "error": "API key lacks required permissions", "details": {"status": 403, "endpoint": test_endpoint}}
+                    elif resp.status == 405:
+                        # Method not allowed - endpoint exists but requires POST (e.g., OpenAI TTS)
+                        return {"healthy": True, "error": None, "details": {"status": 405, "endpoint": test_endpoint, "note": "Endpoint exists (requires POST)"}}
                     elif resp.status == 429:
                         # Rate limited but key is valid
                         return {"healthy": True, "error": None, "details": {"status": 429, "endpoint": test_endpoint, "note": "Rate limited but API key valid"}}
