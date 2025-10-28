@@ -147,7 +147,12 @@ class Component(ABC):
         # Build test endpoint
         test_endpoint = url
         if "openai.com/v1" in url and not url.endswith("/models"):
-            test_endpoint = f"{url.rstrip('/')}/models"
+            # Only append /models if it's a base v1 URL, not a specific service endpoint
+            if url.rstrip('/').endswith("/v1"):
+                test_endpoint = f"{url.rstrip('/')}/models"
+            else:
+                # For service endpoints like /audio/speech, /chat/completions, use as-is
+                test_endpoint = url
         elif "deepgram.com" in url and not url.endswith("/projects"):
             test_endpoint = f"{url.rstrip('/')}/v1/projects"
         elif "generativelanguage.googleapis.com" in url:

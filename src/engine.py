@@ -3325,10 +3325,11 @@ class Engine:
             except Exception:
                 dg_in_canon = dg_in_enc
 
-            if dg_in_canon in ("ulaw",) and as_canon in ("slin16",):
-                # Intentional bridge: audiosocket carries PCM16 while Deepgram ingests μ-law
+            if dg_in_canon in ("ulaw",) and as_canon in ("slin", "slin16"):
+                # Intentional bridge: audiosocket carries PCM16 (slin/slin16) while Deepgram ingests μ-law
+                # System transcodes between them - this is the golden baseline configuration
                 pass
-            elif dg_in_enc in ("ulaw", "mulaw", "g711_ulaw", "mu-law") and as_fmt not in ("ulaw", "mulaw", "g711_ulaw", "mu-law"):
+            elif dg_in_enc in ("ulaw", "mulaw", "g711_ulaw", "mu-law") and as_fmt not in ("ulaw", "mulaw", "g711_ulaw", "mu-law", "slin", "slin16"):
                 logger.warning(
                     "Deepgram input encoding expects μ-law but audiosocket is PCM",
                     audiosocket_format=as_fmt,
