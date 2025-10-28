@@ -21,7 +21,6 @@ Documentation: https://developers.deepgram.com/docs/flux/quickstart
 
 import asyncio
 import json
-import logging
 import time
 import uuid
 from typing import Any, AsyncGenerator, Dict, Optional
@@ -29,10 +28,11 @@ from urllib.parse import urlencode, urlparse, urlunparse, parse_qsl
 
 import websockets
 
-from src.config import AppConfig, DeepgramProviderConfig
-from src.pipelines.base import STTComponent
+from ..config import AppConfig, DeepgramProviderConfig
+from ..logging_config import get_logger
+from .base import STTComponent
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def _normalize_ws_url(base_url: Optional[str]) -> str:
