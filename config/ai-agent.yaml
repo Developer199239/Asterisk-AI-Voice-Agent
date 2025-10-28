@@ -93,19 +93,20 @@ pipelines:
         response_timeout_sec: 15.0
         temperature: 0.7
       stt:
-        base_url: https://api.deepgram.com
+        base_url: wss://api.deepgram.com
         encoding: linear16
-        language: en
+        language: en-US
         mode: stt
-        model: nova-2
         sample_rate: 16000
+        streaming: true
+        stream_format: pcm16_16k
       tts:
         base_url: https://api.deepgram.com
         format:
           encoding: mulaw
           sample_rate: 8000
         voice: aura-thalia-en
-    stt: deepgram_stt
+    stt: deepgram_flux_stt
     tts: deepgram_tts
   local_only:
     llm: local_llm
