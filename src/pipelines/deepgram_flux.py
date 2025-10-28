@@ -244,6 +244,31 @@ class DeepgramFluxSTTAdapter(STTComponent):
                 exc_info=True,
             )
     
+    async def transcribe(
+        self,
+        call_id: str,
+        audio_pcm16: bytes,
+        sample_rate_hz: int,
+        options: Dict[str, Any],
+    ) -> str:
+        """
+        Flux requires streaming mode - transcribe() not supported.
+        
+        Flux is designed for continuous bidirectional streaming and cannot
+        operate in request/response mode. Configure pipeline with:
+        
+        options:
+          stt:
+            streaming: true
+        
+        This method is only here to satisfy the STTComponent interface.
+        """
+        raise NotImplementedError(
+            "Deepgram Flux requires streaming mode. "
+            "Set options.stt.streaming=true in pipeline configuration. "
+            "Flux cannot operate in request/response mode."
+        )
+    
     async def iter_results(self, call_id: str) -> AsyncGenerator[str, None]:
         """
         Yield transcripts as they arrive from Flux.
