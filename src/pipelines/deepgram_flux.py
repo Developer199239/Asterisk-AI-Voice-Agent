@@ -123,6 +123,7 @@ class DeepgramFluxSTTAdapter(STTComponent):
             "language": merged.get("language", "en-US"),
             "encoding": merged.get("encoding", "linear16"),
             "sample_rate": merged.get("sample_rate", "16000"),
+            "channels": "1",  # Mono audio (required for Flux)
             # Turn detection parameters
             "eot_threshold": merged.get("eot_threshold", "0.7"),
             "eot_timeout_ms": merged.get("eot_timeout_ms", "5000"),
@@ -135,7 +136,16 @@ class DeepgramFluxSTTAdapter(STTComponent):
         # Remove None values
         query_params = {k: str(v) for k, v in query_params.items() if v is not None}
         
-        ws_url = _normalize_ws_url(merged.get("base_url"))
+        # Use Flux-specific websocket URL directly instead of trying to convert
+        # from provider config (which defaults to https:// for REST APIs)
+        base_url = merged.get("base_url")
+        if not base_url or not base_url.startswith("wss://"):
+            # Default to Flux endpoint
+            ws_url = "wss://api.deepgram.com/v2/listen"
+        else:
+            # User provided a websocket URL
+            ws_url = base_url
+            
         parsed = urlparse(ws_url)
         existing = dict(parse_qsl(parsed.query))
         existing.update(query_params)
