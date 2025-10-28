@@ -211,6 +211,21 @@ class DeepgramFluxSTTAdapter(STTComponent):
             session_id=session.session_id,
         )
     
+    async def start_stream(self, call_id: str) -> None:
+        """
+        Start streaming session (already opened in open_call).
+        
+        This method is called by the pipeline runner when using streaming mode.
+        For Flux, the stream is already active after open_call, so this is a no-op.
+        """
+        session = self._sessions.get(call_id)
+        if session:
+            logger.debug(
+                "Deepgram Flux stream already active",
+                call_id=call_id,
+                session_id=session.session_id,
+            )
+    
     async def send_audio(
         self,
         call_id: str,
@@ -242,6 +257,21 @@ class DeepgramFluxSTTAdapter(STTComponent):
                 call_id=call_id,
                 error=str(exc),
                 exc_info=True,
+            )
+    
+    async def stop_stream(self, call_id: str) -> None:
+        """
+        Stop streaming session (cleanup handled in close_call).
+        
+        This method is called by the pipeline runner when using streaming mode.
+        For Flux, we handle cleanup in close_call, so this is a no-op.
+        """
+        session = self._sessions.get(call_id)
+        if session:
+            logger.debug(
+                "Deepgram Flux stop_stream (cleanup in close_call)",
+                call_id=call_id,
+                session_id=session.session_id,
             )
     
     async def transcribe(
