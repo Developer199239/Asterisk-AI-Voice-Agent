@@ -392,94 +392,37 @@ def load_config(path: str = "config/ai-agent.yaml") -> AppConfig:
             "api_key": api_key_val,
         }
 
-        # Config version validation (P2.3)
-        config_version = config_data.get('config_version', 3)  # Default to v3 for old configs
-        if config_version < 4:
-            logger.info(f"Config version {config_version} detected. Consider running: python scripts/migrate_config_v4.py")
+        # Config version 4
+        config_version = config_data.get('config_version', 4)
         
-        # Defaults for new flags if not present in YAML
+        # Transport and mode defaults
         config_data.setdefault('audio_transport', os.getenv('AUDIO_TRANSPORT', 'externalmedia'))
         config_data.setdefault('downstream_mode', os.getenv('DOWNSTREAM_MODE', 'file'))
         if 'streaming' not in config_data:
             config_data['streaming'] = {}
         
-        # P2.3: Diagnostic settings - environment variable fallbacks with deprecation warnings
+        # Diagnostic settings - read from environment variables only
         streaming_cfg = config_data['streaming']
         
-        # Egress swap mode (diagnostic)
-        yaml_swap_mode = streaming_cfg.get('egress_swap_mode')
-        env_swap_mode = os.getenv('DIAG_EGRESS_SWAP_MODE')
-        if yaml_swap_mode is not None:
-            logger.warning("DEPRECATED: streaming.egress_swap_mode in YAML - use DIAG_EGRESS_SWAP_MODE env var instead")
-            if env_swap_mode is None:
-                streaming_cfg['egress_swap_mode'] = yaml_swap_mode
-            else:
-                streaming_cfg['egress_swap_mode'] = env_swap_mode  # Env var wins
-        elif env_swap_mode is not None:
-            streaming_cfg['egress_swap_mode'] = env_swap_mode
-        else:
-            streaming_cfg['egress_swap_mode'] = 'none'  # New default: no swap
+        # Egress swap mode (diagnostic only)
+        streaming_cfg['egress_swap_mode'] = os.getenv('DIAG_EGRESS_SWAP_MODE', 'none')
         
-        # Egress force mulaw (diagnostic)
-        yaml_force_mulaw = streaming_cfg.get('egress_force_mulaw')
-        env_force_mulaw = os.getenv('DIAG_EGRESS_FORCE_MULAW')
-        if yaml_force_mulaw is not None:
-            logger.warning("DEPRECATED: streaming.egress_force_mulaw in YAML - use DIAG_EGRESS_FORCE_MULAW env var instead")
-            if env_force_mulaw is None:
-                streaming_cfg['egress_force_mulaw'] = yaml_force_mulaw
-            else:
-                streaming_cfg['egress_force_mulaw'] = env_force_mulaw.lower() in ('true', '1', 'yes')
-        elif env_force_mulaw is not None:
-            streaming_cfg['egress_force_mulaw'] = env_force_mulaw.lower() in ('true', '1', 'yes')
-        else:
-            streaming_cfg['egress_force_mulaw'] = False
+        # Egress force mulaw (diagnostic only)
+        env_force_mulaw = os.getenv('DIAG_EGRESS_FORCE_MULAW', 'false')
+        streaming_cfg['egress_force_mulaw'] = env_force_mulaw.lower() in ('true', '1', 'yes')
         
-        # Attack ms (diagnostic - deprecated)
-        yaml_attack = streaming_cfg.get('attack_ms')
-        env_attack = os.getenv('DIAG_ATTACK_MS')
-        if yaml_attack is not None:
-            logger.warning("DEPRECATED: streaming.attack_ms in YAML - use DIAG_ATTACK_MS env var instead")
-            if env_attack is None:
-                streaming_cfg['attack_ms'] = yaml_attack
-            else:
-                streaming_cfg['attack_ms'] = int(env_attack)
-        elif env_attack is not None:
-            streaming_cfg['attack_ms'] = int(env_attack)
-        else:
-            streaming_cfg['attack_ms'] = 0  # Disabled by default
+        # Attack ms (diagnostic only - disabled by default)
+        streaming_cfg['attack_ms'] = int(os.getenv('DIAG_ATTACK_MS', '0'))
         
-        # Diagnostic taps
-        yaml_taps = streaming_cfg.get('diag_enable_taps')
-        env_taps = os.getenv('DIAG_ENABLE_TAPS')
-        if yaml_taps is not None:
-            logger.warning("DEPRECATED: streaming.diag_enable_taps in YAML - use DIAG_ENABLE_TAPS env var instead")
-            if env_taps is None:
-                streaming_cfg['diag_enable_taps'] = yaml_taps
-            else:
-                streaming_cfg['diag_enable_taps'] = env_taps.lower() in ('true', '1', 'yes')
-        elif env_taps is not None:
-            streaming_cfg['diag_enable_taps'] = env_taps.lower() in ('true', '1', 'yes')
-        else:
-            streaming_cfg['diag_enable_taps'] = False  # Disabled by default
+        # Diagnostic audio taps (disabled by default)
+        env_taps = os.getenv('DIAG_ENABLE_TAPS', 'false')
+        streaming_cfg['diag_enable_taps'] = env_taps.lower() in ('true', '1', 'yes')
+        streaming_cfg['diag_pre_secs'] = int(os.getenv('DIAG_TAP_PRE_SECS', '1'))
+        streaming_cfg['diag_post_secs'] = int(os.getenv('DIAG_TAP_POST_SECS', '1'))
+        streaming_cfg['diag_out_dir'] = os.getenv('DIAG_TAP_OUTPUT_DIR', '/tmp/ai-engine-taps')
         
-        # Tap pre/post duration
-        streaming_cfg['diag_pre_secs'] = int(os.getenv('DIAG_TAP_PRE_SECS', streaming_cfg.get('diag_pre_secs', 1)))
-        streaming_cfg['diag_post_secs'] = int(os.getenv('DIAG_TAP_POST_SECS', streaming_cfg.get('diag_post_secs', 1)))
-        streaming_cfg['diag_out_dir'] = os.getenv('DIAG_TAP_OUTPUT_DIR', streaming_cfg.get('diag_out_dir', '/tmp/ai-engine-taps'))
-        
-        # Logging level
-        yaml_log_level = streaming_cfg.get('logging_level')
-        env_log_level = os.getenv('STREAMING_LOG_LEVEL')
-        if yaml_log_level is not None:
-            logger.warning("DEPRECATED: streaming.logging_level in YAML - use STREAMING_LOG_LEVEL env var instead")
-            if env_log_level is None:
-                streaming_cfg['logging_level'] = yaml_log_level
-            else:
-                streaming_cfg['logging_level'] = env_log_level
-        elif env_log_level is not None:
-            streaming_cfg['logging_level'] = env_log_level
-        else:
-            streaming_cfg['logging_level'] = 'info'  # Default to info
+        # Streaming logger verbosity
+        streaming_cfg['logging_level'] = os.getenv('STREAMING_LOG_LEVEL', 'info')
 
         # AudioSocket configuration defaults
         audiosocket_cfg = config_data.get('audiosocket', {}) or {}

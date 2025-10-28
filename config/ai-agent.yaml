@@ -1,375 +1,290 @@
-# config/ai-agent.yaml
-# Default provider to use if not specified in the dialplan
-default_provider: "deepgram"
-
-# Pipeline definitions specify which STT/LLM/TTS components power each call.
-# Pipelines can mix local and cloud services; the orchestrator selects components
-# based on `active_pipeline`. Per-component options override defaults (base URLs,
-# models, voices, codec formats, etc.).
-pipelines:
-  # Hosted OpenAI realtime stack across STT/LLM/TTS. Requires OPENAI_API_KEY for bearer auth.
-  default:
-    stt: openai_stt
-    llm: openai_llm
-    tts: openai_tts
-    options:
-      stt:
-        base_url: "wss://api.openai.com/v1/realtime"  # Bearer auth with OPENAI_API_KEY
-      llm:
-        base_url: "https://api.openai.com/v1"
-        model: "gpt-4o-realtime-preview-2024-12-17"
-      tts:
-        base_url: "https://api.openai.com/v1/audio/speech"
-        format:
-          encoding: "mulaw"  # Match telephony trunk for immediate playback
-          sample_rate: 8000
-  # Fully local inference pipeline; runs entirely inside local_ai_server.
-  local_only:
-    stt: local_stt
-    llm: local_llm
-    tts: local_tts
-    options:
-      stt:
-        mode: "stt"  # Restrict local provider to speech recognition only
-        chunk_ms: 160  # Lower chunk size for faster cadence while streaming
-        streaming: true  # Enable continuous streaming via send_audio/iter_results
-        stream_format: "pcm16_16k"
-      llm:
-        llm_response_timeout_sec: 60.0  # Allow slower local LLM to respond within this window
-      tts:
-        format:
-          encoding: "mulaw"  # Matches telephony trunks without resampling
-          sample_rate: 8000
-  # Hybrid support: Deepgram STT + OpenAI LLM + Deepgram TTS (for file playback testing)
-  hybrid_support:
-    stt: deepgram_stt
-    llm: openai_llm
-    tts: deepgram_tts
-    options:
-      stt:
-        base_url: "https://api.deepgram.com"
-        mode: "stt"
-        model: "nova-2"
-        language: "en"
-        encoding: "mulaw"
-        sample_rate: 8000
-      llm:
-        base_url: "https://api.openai.com/v1"
-        model: "gpt-4o-mini"
-        temperature: 0.7
-        max_tokens: 150
-        response_timeout_sec: 15.0
-      tts:
-        base_url: "https://api.deepgram.com"
-        voice: "aura-thalia-en"
-        format:
-          encoding: "mulaw"
-          sample_rate: 8000
-  # Hybrid pipeline: local STT + OpenAI LLM + Deepgram Aura TTS.
-  local_stt_cloud_tts:
-    stt: local_stt
-    llm: openai_llm
-    tts: deepgram_tts
-    options:
-      stt:
-        mode: "stt"  # Local provider ingests AudioSocket frames for recognition
-      llm:
-        base_url: "https://api.openai.com/v1"
-        model: "gpt-4o"  # Uses OPENAI_API_KEY via bearer auth
-      tts:
-        base_url: "https://api.deepgram.com"  # Requires DEEPGRAM_API_KEY
-        format:
-          encoding: "mulaw"  # Deepgram Aura emits 8 kHz μ-law ready for playback
-          sample_rate: 8000
-  # Cloud vendor mix: Deepgram STT + Google Gemini LLM + Google TTS.
-  cloud_only:
-    stt: deepgram_stt
-    llm: google_llm
-    tts: google_tts
-    options:
-      stt:
-        base_url: "https://api.deepgram.com"  # Authenticates with DEEPGRAM_API_KEY
-        language: "en-US"  # See Deepgram docs for supported locales
-      llm:
-        base_url: "https://generativelanguage.googleapis.com/v1"
-        model: "models/gemini-1.5-pro-latest"  # Requires Google API credentials
-      tts:
-        base_url: "https://texttospeech.googleapis.com/v1"
-        voice_name: "en-US-Neural2-C"
-        audio_config:
-          audio_encoding: "MULAW"  # Telephony μ-law output for direct playback
-          sample_rate_hz: 8000
-
-active_pipeline: "default"
-
-# Audio transport controls (AudioSocket-first, ExternalMedia as fallback)
-#
-# Tuning notes:
-# - `audio_transport`: prefer `audiosocket` for full-duplex PCM over TCP; use `externalmedia` for RTP.
-# - `downstream_mode`:
-#     - `stream`: streams agent audio in 20 ms frames in real time.
-#     - `file`: plays μ-law files via bridge; more tolerant but higher latency.
-audio_transport: "externalmedia"  # Testing RTP transport (AAVA-18)
-downstream_mode: "stream"
-
-# AudioSocket listener configuration (when audio_transport=audiosocket)
+active_pipeline: default
+asterisk:
+  app_name: asterisk-ai-voice-agent
+audio_transport: externalmedia
 audiosocket:
-  host: "0.0.0.0"          # Bind address (use 127.0.0.1 when engine and Asterisk share a host)
-  port: 8090               # TCP port for AudioSocket connections
-  format: "slin"             # Wire format: PCM16 @ 8kHz (AudioSocket protocol TYPE 0x10)
-
-# Barge-in configuration
+  format: slin
+  host: 0.0.0.0
+  port: 8090
 barge_in:
   enabled: true
-  initial_protection_ms: 100   # Short initial guard so caller audio reaches provider quickly
-                               # Range: 200–600 ms (higher if trunks echo or agent intros are long)
-  min_ms: 250                  # Sustained speech required to trigger barge-in (de-bounce)
-                               # Range: 250–600 ms (lower = more sensitive barge-in)
-  energy_threshold: 1100       # RMS threshold for speech detection (telephony baseline)
-                               # Range: 1000–3000 (raise on noisy lines)
-                               # Range: 500–1500 ms
-  post_tts_end_protection_ms: 100  # Minimal post-TTS guard to avoid echo without starving input
-                                   # Range: 250–500 ms (lower to allow faster user pickup)
-
-# Streaming configuration (for downstream_mode=stream)
-streaming:
-  sample_rate: 8000           # Output sample rate for streaming audio (telephony μ-law baseline)
-  jitter_buffer_ms: 950         # Larger buffer to reduce underflows during provider silence
-  keepalive_interval_ms: 5000 # Keepalive interval for streaming connections
-  connection_timeout_ms: 120000 # Extended to tolerate long provider pauses in continuous mode
-  fallback_timeout_ms: 8000   # No audio sent for this long → fall back to file playback
-  chunk_size_ms: 20          # Wire pacing for AudioSocket: 20 ms frames (320 bytes PCM16 @ 8kHz)
-  min_start_ms: 120            # Longer warm-up to stabilize buffer before first frame
-  low_watermark_ms: 80         # Pause when depth drops below ~350 ms (keeps cushion)
-  greeting_min_start_ms: 40     # Faster greeting playback start
-  provider_grace_ms: 500      # Short tail grace so cleanup finishes quickly without dragging cadence.
-  logging_level: "debug"      # Optional override for streaming logger verbosity
-  egress_swap_mode: "auto"   # Auto: follow inbound slin16 swap probe for PCM16 byte order
-  egress_force_mulaw: false
-  attack_ms: 0               # DISABLED: Attack envelope was creating initial silence
-  # Maintain a single continuous stream across provider segments (prevents segment loss)
-  continuous_stream: true
-  # Adaptive low-buffer backoff (reduce filler churn during provider gaps)
-  empty_backoff_ticks_max: 5
-  # Audio normalizer (make-up gain before μ-law encode)
-  normalizer:
-    enabled: true
-    target_rms: 1400
-    max_gain_db: 18.0  # Increased to allow ~6x boost for quiet provider audio
-  # Diagnostics (feature-flagged): capture short PCM taps pre/post compand for next call
-  diag_enable_taps: true
-  diag_pre_secs: 1
-  diag_post_secs: 1
-  diag_out_dir: "/tmp/ai-engine-taps"
-
-# Asterisk connection settings (configured via .env file)
-# Required env vars: ASTERISK_HOST, ASTERISK_ARI_USERNAME, ASTERISK_ARI_PASSWORD
-asterisk:
-  app_name: "asterisk-ai-voice-agent"
-
-# External Media configuration for RTP-based audio capture
+  energy_threshold: 1100
+  initial_protection_ms: 100
+  min_ms: 250
+  post_tts_end_protection_ms: 100
+config_version: 4
+contexts:
+  default:
+    greeting: Hello, how can I help you today?
+    profile: telephony_ulaw_8k
+    prompt: You are a helpful AI assistant. Be concise and clear.
+  premium:
+    greeting: Welcome to premium service. How may I assist you today?
+    profile: openai_realtime_24k
+    prompt: You are a premium concierge assistant. Be courteous, attentive, and provide
+      personalized service. Anticipate needs and offer proactive suggestions.
+    provider: openai_realtime
+  sales:
+    greeting: Thanks for calling! How can I help you find what you need today?
+    profile: wideband_pcm_16k
+    prompt: You are an enthusiastic sales assistant. Be upbeat, helpful, and guide
+      customers to products that meet their needs. Keep responses under 15 words unless
+      explaining features.
+    provider: deepgram
+  support:
+    greeting: Technical support, how can we assist you?
+    profile: telephony_ulaw_8k
+    prompt: You are technical support. Be precise, methodical, and patient. Gather
+      information systematically. Provide step-by-step instructions when troubleshooting.
+default_provider: deepgram
+downstream_mode: stream
 external_media:
-  rtp_host: "0.0.0.0"      # target IP for ExternalMedia (localhost for host networking)
-  rtp_port: 18080            # fixed port for simplicity
-  port_range: "18080:18099"  # optional range for dynamic allocation (start:end); leave empty to reuse rtp_port
-  codec: "ulaw"              # ulaw (8k) or slin16 (8k)
-  direction: "both"          # sendrecv | sendonly | recvonly
-  jitter_buffer_ms: 20       # target frame size
-
-
-# Global LLM settings (will be overridden by environment variables)
+  codec: ulaw
+  direction: both
+  jitter_buffer_ms: 20
+  port_range: 18080:18099
+  rtp_host: 0.0.0.0
+  rtp_port: 18080
 llm:
-  initial_greeting: "Hello, how can I help you today?"
-  prompt: "Voice assistant. Answer in 5-8 words. Be direct. Expand only if asked."
-  model: "gpt-4o-mini"
+  initial_greeting: Hello, how can I help you today?
+  model: gpt-4o-mini
+  prompt: Voice assistant. Answer in 5-8 words. Be direct. Expand only if asked.
   temperature: 0.7
-  # API key configured via OPENAI_API_KEY environment variable
-
-
-# VAD Configuration - Optimized for 4+ second utterances
-# GOLDEN BASELINE for OpenAI Realtime: aggressiveness=1 prevents echo false positives
-vad:
-  use_provider_vad: false      # Rely on local WebRTC VAD for turn detection
-  enhanced_enabled: true       # Enable enhanced VAD for gating (OpenAI echo prevention)
-  # WebRTC VAD settings
-  webrtc_aggressiveness: 1   # Balanced mode - ignores echo, detects real speech (CRITICAL for OpenAI)
-  webrtc_start_frames: 3     # Consecutive frames to start recording
-  webrtc_end_silence_frames: 50  # Silence frames to end recording (1000ms)
-  
-  # Utterance settings - optimized for 4+ second utterances
-  min_utterance_duration_ms: 600  # Minimum ~600 ms to allow faster turn-taking
-  max_utterance_duration_ms: 10000 # Maximum 10 seconds
-  utterance_padding_ms: 200        # Padding before/after speech
-  
-  # Fallback settings
-  fallback_enabled: true           # Enable fallback when VAD fails
-  fallback_interval_ms: 4000       # Send audio every 4 seconds as fallback
-  fallback_buffer_size: 128000     # 4 seconds of 16kHz audio (128,000 bytes)
-
-# Provider-specific configurations
-providers:
-  local:
-    enabled: false
-    ws_url: "${LOCAL_WS_URL:-ws://127.0.0.1:8765}"
-    connect_timeout_sec: ${LOCAL_WS_CONNECT_TIMEOUT:=2.0}
-    response_timeout_sec: ${LOCAL_WS_RESPONSE_TIMEOUT:=5.0}
-    chunk_ms: ${LOCAL_WS_CHUNK_MS:=320}
-    stt_model: "models/stt/vosk-model-small-en-us-0.15"   # legacy placeholder (Local AI server now loads via env vars)
-    llm_model: "models/llm/TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf"
-    tts_voice: "models/tts/en_US-lessac-medium.onnx"
-    temperature: 0.4
-    max_tokens: 64
-  deepgram:
-    enabled: true
-    # API key configured via DEEPGRAM_API_KEY environment variable
-    model: "nova-2-phonecall"
-    tts_model: "aura-2-thalia-en"
-    greeting: "Hello, how can I help you today?"
-    instructions: "Voice assistant. Answer in 5-8 words. Be direct. Expand only if asked."
-    input_encoding: "mulaw"
-    input_sample_rate_hz: 8000
-    continuous_input: true        # Stream audio continuously for best responsiveness
-                                  # TIP: Keep this true for real-time conversations
-    allow_output_autodetect: false
-    output_encoding: "mulaw"
-    output_sample_rate_hz: 8000
-  openai:
-    enabled: false
-    # API key configured via OPENAI_API_KEY environment variable
-    organization: ""
-    project: ""
-    realtime_base_url: "wss://api.openai.com/v1/realtime"
-    chat_base_url: "https://api.openai.com/v1"
-    tts_base_url: "https://api.openai.com/v1/audio/speech"
-    realtime_model: "gpt-4o-realtime-preview-2024-12-17"
-    chat_model: "gpt-4o-mini"
-    tts_model: "gpt-4o-mini-tts"
-    voice: "alloy"
-    default_modalities:
-      - "text"
-    input_encoding: "linear16"
-    input_sample_rate_hz: 16000
-    target_encoding: "mulaw"
-    target_sample_rate_hz: 8000
-    chunk_size_ms: 20
-    response_timeout_sec: 5.0
-  openai_realtime:
-    enabled: true
-    # API key configured via OPENAI_API_KEY environment variable
-    model: "gpt-4o-realtime-preview-2024-12-17"
-    voice: "alloy"
-    base_url: "wss://api.openai.com/v1/realtime"
-    instructions: "You are a concise voice assistant. Respond clearly and keep answers under 20 words unless more detail is requested."
-    organization: ""
-    input_encoding: "ulaw"
-    input_sample_rate_hz: 8000
-    provider_input_encoding: "linear16"
-    provider_input_sample_rate_hz: 24000
-    output_encoding: "linear16"
-    output_sample_rate_hz: 24000
-    target_encoding: "mulaw"
-    target_sample_rate_hz: 8000
-    response_modalities:
-      - "audio"
-      - "text"
-    # Explicit greeting said immediately on connect via response.create
-    greeting: "${OPENAI_GREETING:-Hello, how can I help you today?}"
-    # ENABLED: OpenAI server-side VAD for turn-taking and conversation flow
-    # This handles all turn detection internally, eliminating need for engine-level gating
-    # Settings tuned for natural conversation (500ms silence before turn ends)
-    turn_detection:
-      type: "server_vad"
-      silence_duration_ms: 500
-      threshold: 0.5
-      prefix_padding_ms: 200
-      create_response: true
-    # Egress pacer for telephony cadence (20ms frames) with warm-up
-    egress_pacer_enabled: true
-    egress_pacer_warmup_ms: 320
-
-# P1: Audio Profiles - Transport format configuration per call
-# Profiles define wire format (AudioSocket), provider preferences, and processing settings.
-# Select via AI_AUDIO_PROFILE channel var or context mapping.
+pipelines:
+  cloud_only:
+    llm: google_llm
+    options:
+      llm:
+        base_url: https://generativelanguage.googleapis.com/v1
+        model: models/gemini-1.5-pro-latest
+      stt:
+        base_url: https://api.deepgram.com
+        language: en-US
+      tts:
+        audio_config:
+          audio_encoding: MULAW
+          sample_rate_hz: 8000
+        base_url: https://texttospeech.googleapis.com/v1
+        voice_name: en-US-Neural2-C
+    stt: deepgram_stt
+    tts: google_tts
+  default:
+    llm: openai_llm
+    options:
+      llm:
+        base_url: https://api.openai.com/v1
+        model: gpt-4o-realtime-preview-2024-12-17
+      stt:
+        base_url: wss://api.openai.com/v1/realtime
+      tts:
+        base_url: https://api.openai.com/v1/audio/speech
+        format:
+          encoding: mulaw
+          sample_rate: 8000
+    stt: openai_stt
+    tts: openai_tts
+  hybrid_support:
+    llm: openai_llm
+    options:
+      llm:
+        base_url: https://api.openai.com/v1
+        max_tokens: 150
+        model: gpt-4o-mini
+        response_timeout_sec: 15.0
+        temperature: 0.7
+      stt:
+        base_url: https://api.deepgram.com
+        encoding: mulaw
+        language: en
+        mode: stt
+        model: nova-2
+        sample_rate: 8000
+      tts:
+        base_url: https://api.deepgram.com
+        format:
+          encoding: mulaw
+          sample_rate: 8000
+        voice: aura-thalia-en
+    stt: deepgram_stt
+    tts: deepgram_tts
+  local_only:
+    llm: local_llm
+    options:
+      llm:
+        llm_response_timeout_sec: 60.0
+      stt:
+        chunk_ms: 160
+        mode: stt
+        stream_format: pcm16_16k
+        streaming: true
+      tts:
+        format:
+          encoding: mulaw
+          sample_rate: 8000
+    stt: local_stt
+    tts: local_tts
+  local_stt_cloud_tts:
+    llm: openai_llm
+    options:
+      llm:
+        base_url: https://api.openai.com/v1
+        model: gpt-4o
+      stt:
+        mode: stt
+      tts:
+        base_url: https://api.deepgram.com
+        format:
+          encoding: mulaw
+          sample_rate: 8000
+    stt: local_stt
+    tts: deepgram_tts
 profiles:
-  default: telephony_responsive  # Optimized for Deepgram low-latency
-  
-  # Optimized for Deepgram: Fast response with reduced idle_cutoff
+  default: telephony_responsive
+  openai_realtime_24k:
+    chunk_ms: 20
+    idle_cutoff_ms: 0
+    internal_rate_hz: 24000
+    provider_pref:
+      input_encoding: pcm16
+      input_sample_rate_hz: 24000
+      output_encoding: pcm16
+      output_sample_rate_hz: 24000
+    transport_out:
+      encoding: slin
+      sample_rate_hz: 8000
   telephony_responsive:
+    chunk_ms: auto
+    idle_cutoff_ms: 600
     internal_rate_hz: 8000
-    transport_out:
-      encoding: slin          # AudioSocket wire format (PCM16)
-      sample_rate_hz: 8000
     provider_pref:
-      input_encoding: mulaw   # Prefer μ-law for telephony
+      input_encoding: mulaw
       input_sample_rate_hz: 8000
       output_encoding: mulaw
       output_sample_rate_hz: 8000
-    chunk_ms: auto            # Auto = 20ms default
-    idle_cutoff_ms: 600       # REDUCED from 1200 - faster response (0.6s)
-  
-  # Legacy: Standard telephony profile (backward compatibility)
+    transport_out:
+      encoding: slin
+      sample_rate_hz: 8000
   telephony_ulaw_8k:
+    chunk_ms: auto
+    idle_cutoff_ms: 800
     internal_rate_hz: 8000
-    transport_out:
-      encoding: slin          # AudioSocket wire format (PCM16)
-      sample_rate_hz: 8000
     provider_pref:
-      input_encoding: mulaw   # Prefer μ-law for telephony
+      input_encoding: mulaw
       input_sample_rate_hz: 8000
       output_encoding: mulaw
       output_sample_rate_hz: 8000
-    chunk_ms: auto            # Auto = 20ms default
-    idle_cutoff_ms: 800       # Middle ground for mixed use
-  
-  # Wideband profile for better audio quality
-  wideband_pcm_16k:
-    internal_rate_hz: 16000
     transport_out:
-      encoding: slin16        # AudioSocket PCM16 @ 16kHz
-      sample_rate_hz: 16000
+      encoding: slin
+      sample_rate_hz: 8000
+  wideband_pcm_16k:
+    chunk_ms: auto
+    idle_cutoff_ms: 1200
+    internal_rate_hz: 16000
     provider_pref:
       input_encoding: linear16
       input_sample_rate_hz: 16000
       output_encoding: linear16
       output_sample_rate_hz: 16000
-    chunk_ms: auto
-    idle_cutoff_ms: 1200
-  
-  # OpenAI Realtime profile: Rely on provider turn-taking (no idle cutoff)
-  openai_realtime_24k:
-    internal_rate_hz: 24000
     transport_out:
-      encoding: slin          # AudioSocket PCM16 @ 8kHz (downsampled from 24k)
-      sample_rate_hz: 8000
-    provider_pref:
-      input_encoding: pcm16   # OpenAI Realtime format
-      input_sample_rate_hz: 24000   # OpenAI native rate
-      output_encoding: pcm16
-      output_sample_rate_hz: 24000
-    chunk_ms: 20
-    idle_cutoff_ms: 0         # DISABLED - rely on response.done event
-
-# P1: Context Mapping - Semantic routing with profile/provider inheritance
-# Select via AI_CONTEXT channel var to apply prompt, greeting, profile, and provider.
-contexts:
-  default:
-    prompt: "You are a helpful AI assistant. Be concise and clear."
-    greeting: "Hello, how can I help you today?"
-    profile: telephony_ulaw_8k
-  
-  sales:
-    prompt: "You are an enthusiastic sales assistant. Be upbeat, helpful, and guide customers to products that meet their needs. Keep responses under 15 words unless explaining features."
-    greeting: "Thanks for calling! How can I help you find what you need today?"
-    profile: wideband_pcm_16k   # Better quality for sales
-    provider: deepgram          # Optional provider override
-  
-  support:
-    prompt: "You are technical support. Be precise, methodical, and patient. Gather information systematically. Provide step-by-step instructions when troubleshooting."
-    greeting: "Technical support, how can we assist you?"
-    profile: telephony_ulaw_8k
-  
-  premium:
-    prompt: "You are a premium concierge assistant. Be courteous, attentive, and provide personalized service. Anticipate needs and offer proactive suggestions."
-    greeting: "Welcome to premium service. How may I assist you today?"
-    profile: openai_realtime_24k
-    provider: openai_realtime
+      encoding: slin16
+      sample_rate_hz: 16000
+providers:
+  deepgram:
+    continuous_input: true
+    enabled: true
+    greeting: Hello, how can I help you today?
+    input_encoding: mulaw
+    input_sample_rate_hz: 8000
+    instructions: Voice assistant. Answer in 5-8 words. Be direct. Expand only if
+      asked.
+    model: nova-2-phonecall
+    output_encoding: mulaw
+    output_sample_rate_hz: 8000
+    tts_model: aura-2-thalia-en
+  local:
+    chunk_ms: ${LOCAL_WS_CHUNK_MS:=320}
+    connect_timeout_sec: ${LOCAL_WS_CONNECT_TIMEOUT:=2.0}
+    enabled: false
+    llm_model: models/llm/TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf
+    max_tokens: 64
+    response_timeout_sec: ${LOCAL_WS_RESPONSE_TIMEOUT:=5.0}
+    stt_model: models/stt/vosk-model-small-en-us-0.15
+    temperature: 0.4
+    tts_voice: models/tts/en_US-lessac-medium.onnx
+    ws_url: ${LOCAL_WS_URL:-ws://127.0.0.1:8765}
+  openai:
+    chat_base_url: https://api.openai.com/v1
+    chat_model: gpt-4o-mini
+    chunk_size_ms: 20
+    default_modalities:
+    - text
+    enabled: false
+    input_encoding: linear16
+    input_sample_rate_hz: 16000
+    organization: ''
+    project: ''
+    realtime_base_url: wss://api.openai.com/v1/realtime
+    realtime_model: gpt-4o-realtime-preview-2024-12-17
+    response_timeout_sec: 5.0
+    target_encoding: mulaw
+    target_sample_rate_hz: 8000
+    tts_base_url: https://api.openai.com/v1/audio/speech
+    tts_model: gpt-4o-mini-tts
+    voice: alloy
+  openai_realtime:
+    base_url: wss://api.openai.com/v1/realtime
+    egress_pacer_enabled: true
+    egress_pacer_warmup_ms: 320
+    enabled: true
+    greeting: ${OPENAI_GREETING:-Hello, how can I help you today?}
+    input_encoding: ulaw
+    input_sample_rate_hz: 8000
+    instructions: You are a concise voice assistant. Respond clearly and keep answers
+      under 20 words unless more detail is requested.
+    model: gpt-4o-realtime-preview-2024-12-17
+    organization: ''
+    output_encoding: linear16
+    output_sample_rate_hz: 24000
+    provider_input_encoding: linear16
+    provider_input_sample_rate_hz: 24000
+    response_modalities:
+    - audio
+    - text
+    target_encoding: mulaw
+    target_sample_rate_hz: 8000
+    turn_detection:
+      create_response: true
+      prefix_padding_ms: 200
+      silence_duration_ms: 500
+      threshold: 0.5
+      type: server_vad
+    voice: alloy
+streaming:
+  chunk_size_ms: 20
+  connection_timeout_ms: 120000
+  continuous_stream: true
+  empty_backoff_ticks_max: 5
+  fallback_timeout_ms: 8000
+  greeting_min_start_ms: 40
+  jitter_buffer_ms: 950
+  keepalive_interval_ms: 5000
+  low_watermark_ms: 80
+  min_start_ms: 120
+  normalizer:
+    enabled: true
+    max_gain_db: 18.0
+    target_rms: 1400
+  provider_grace_ms: 500
+  sample_rate: 8000
+vad:
+  enhanced_enabled: true
+  fallback_buffer_size: 128000
+  fallback_enabled: true
+  fallback_interval_ms: 4000
+  max_utterance_duration_ms: 10000
+  min_utterance_duration_ms: 600
+  use_provider_vad: false
+  utterance_padding_ms: 200
+  webrtc_aggressiveness: 1
+  webrtc_end_silence_frames: 50
+  webrtc_start_frames: 3
