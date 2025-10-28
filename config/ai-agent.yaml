@@ -96,6 +96,7 @@ pipelines:
         encoding: linear16
         language: en-US
         mode: stt
+        model: nova-2
         sample_rate: 16000
         streaming: true
         stream_format: pcm16_16k
@@ -105,7 +106,7 @@ pipelines:
           encoding: mulaw
           sample_rate: 8000
         voice: aura-thalia-en
-    stt: deepgram_flux_stt
+    stt: deepgram_stt
     tts: deepgram_tts
   local_only:
     llm: local_llm
