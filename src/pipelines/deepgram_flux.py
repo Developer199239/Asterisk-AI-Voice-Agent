@@ -115,7 +115,10 @@ class DeepgramFluxSTTAdapter(STTComponent):
         merged = self._compose_options(options)
         
         # Build Flux-specific URL with required query parameters
-        base_url = merged.get("base_url", "wss://api.deepgram.com/v2/listen")
+        # Always use WSS for Flux, ignore HTTP(S) from provider config
+        base_url = merged.get("base_url", "")
+        if not base_url or not base_url.startswith("wss://"):
+            base_url = "wss://api.deepgram.com/v2/listen"
         query_params = {
             "model": "flux-general-en",
             "language": merged.get("language", "en-US"),
@@ -161,14 +164,11 @@ class DeepgramFluxSTTAdapter(STTComponent):
         # Remove None values
         query_params = {k: str(v) for k, v in query_params.items() if v is not None}
         
-        # Use Flux-specific websocket URL directly instead of trying to convert
-        # from provider config (which defaults to https:// for REST APIs)
-        base_url = merged.get("base_url")
+        # Always use WSS for Flux, ignore HTTP(S) from provider config
+        base_url = merged.get("base_url", "")
         if not base_url or not base_url.startswith("wss://"):
-            # Default to Flux endpoint
             ws_url = "wss://api.deepgram.com/v2/listen"
         else:
-            # User provided a websocket URL
             ws_url = base_url
             
         parsed = urlparse(ws_url)
