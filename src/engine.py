@@ -2026,7 +2026,29 @@ class Engine:
             except Exception:
                 logger.debug("Inbound diagnostics update failed", call_id=caller_channel_id, exc_info=True)
 
-            # Unconditional continuous-input forward: Deepgram expects raw audio flow
+            # CRITICAL FIX: Check for pipeline mode FIRST before routing to monolithic providers
+            # Pipelines need audio regardless of audio_capture_enabled state
+            if self._pipeline_forced.get(caller_channel_id):
+                q = self._pipeline_queues.get(caller_channel_id)
+                if q:
+                    try:
+                        pcm16 = pcm_bytes
+                        if pcm16 and pcm_rate != 16000:
+                            try:
+                                state = self._resample_state_pipeline16k.get(caller_channel_id)
+                                pcm16, state = audioop.ratecv(pcm16, 2, 1, pcm_rate, 16000, state)
+                                self._resample_state_pipeline16k[caller_channel_id] = state
+                            except Exception:
+                                pcm16 = pcm_bytes
+                        if pcm16:
+                            q.put_nowait(pcm16)
+                        return
+                    except asyncio.QueueFull:
+                        logger.debug("Pipeline queue full; dropping AudioSocket frame", call_id=caller_channel_id)
+                        return
+
+            # Unconditional continuous-input forward: Deepgram/OpenAI Realtime expect raw audio flow
+            # NOTE: Only applies to monolithic providers, not pipelines (handled above)
             try:
                 provider_name = getattr(session, 'provider_name', None) or self.config.default_provider
                 provider = self.providers.get(provider_name)
