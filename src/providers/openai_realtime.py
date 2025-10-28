@@ -163,25 +163,47 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             e = (enc or "").lower()
             if e in ("ulaw", "mulaw", "g711_ulaw", "mu-law"):
                 return "ulaw"
-            if e in ("slin16", "linear16", "pcm16"):
+            if e in ("slin", "slin16", "linear16", "pcm16", "pcm"):
                 return "pcm16"
             return e
 
+        # Check inbound encoding vs AudioSocket
+        # NOTE: Intentional transcoding (slin ↔ ulaw) is supported - system handles conversion
         if inbound_enc in ("slin16", "linear16", "pcm16") and _class(audiosocket_format) == "ulaw":
             issues.append(
                 "OpenAI inbound encoding is PCM16 but AudioSocket format is μ-law; set audiosocket.format=slin16 "
                 "or change openai_realtime.input_encoding to ulaw."
             )
-        if inbound_enc in ("ulaw", "mulaw", "g711_ulaw", "mu-law") and _class(audiosocket_format) != "ulaw":
-            issues.append(
-                f"OpenAI inbound encoding {inbound_enc} does not match audiosocket.format={audiosocket_format}."
-            )
+        elif inbound_enc in ("ulaw", "mulaw", "g711_ulaw", "mu-law") and _class(audiosocket_format) == "ulaw":
+            # Perfect alignment: both ulaw
+            pass
+        elif inbound_enc in ("ulaw", "mulaw", "g711_ulaw", "mu-law") and _class(audiosocket_format) in ("pcm16",):
+            # Intentional transcoding: AudioSocket PCM → Provider μ-law (system handles this)
+            pass
+        elif inbound_enc in ("ulaw", "mulaw", "g711_ulaw", "mu-law") and _class(audiosocket_format) != "ulaw":
+            # Only warn if it's not a supported transcoding path
+            if audiosocket_format not in ("slin", "slin16", "linear16", "pcm16"):
+                issues.append(
+                    f"OpenAI inbound encoding {inbound_enc} does not match audiosocket.format={audiosocket_format}."
+                )
         if inbound_enc in ("ulaw", "mulaw", "g711_ulaw", "mu-law") and inbound_rate and inbound_rate != 8000:
             issues.append(
                 f"OpenAI inbound μ-law sample rate is {inbound_rate} Hz; μ-law transport should be 8000 Hz."
             )
 
-        if _class(target_enc) != _class(streaming_encoding):
+        # Check target encoding vs streaming manager output
+        # NOTE: Intentional transcoding is supported - streaming manager transcodes provider output to target
+        if _class(target_enc) == _class(streaming_encoding):
+            # Perfect alignment
+            pass
+        elif _class(target_enc) == "ulaw" and _class(streaming_encoding) == "pcm16":
+            # Intentional transcoding: Provider outputs PCM → Streaming manager transcodes to μ-law
+            pass
+        elif _class(target_enc) == "pcm16" and _class(streaming_encoding) == "ulaw":
+            # Intentional transcoding: Provider outputs μ-law → Streaming manager transcodes to PCM
+            pass
+        else:
+            # Warn only for unexpected mismatches
             issues.append(
                 f"OpenAI target_encoding={target_enc} but streaming manager emits {streaming_encoding}."
             )
