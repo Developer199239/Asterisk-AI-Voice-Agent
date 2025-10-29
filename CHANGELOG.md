@@ -66,6 +66,12 @@ Version 4.0 introduces a **production-ready modular pipeline architecture** that
 - **Inline YAML Documentation**: Comprehensive comments with ranges and impacts
 
 #### Developer Experience
+- **CLI Tools**: Go-based `agent` command with 5 subcommands
+  - `agent init`: Interactive setup wizard
+  - `agent doctor`: Health diagnostics and validation
+  - `agent demo`: Demo call functionality
+  - `agent troubleshoot`: Interactive troubleshooting assistant
+  - `agent version`: Version and build information
 - **Enhanced Logging**: Structured logging with context and call tracking
 - **RCA Tools**: Root cause analysis scripts for audio quality debugging
 - **Test Infrastructure**: Baseline validation and regression testing
@@ -155,11 +161,12 @@ For new deployments:
 ## [Unreleased]
 
 ### Planned for v4.1
-- CLI tools (`agent doctor`, `agent test`, `agent init`)
-- Additional provider integrations (Anthropic Claude, Google Gemini)
-- Advanced call routing and transfer capabilities
-- WebRTC SIP client support
-- High availability and clustering
+- **Build System**: Automated `agent` CLI binary builds (Makefile target)
+- **Additional Provider Integrations**: Anthropic Claude, Google Gemini
+- **Advanced Call Routing**: Transfer capabilities and multi-leg calls
+- **WebRTC Support**: SIP client integration
+- **High Availability**: Clustering and load balancing
+- **Config Cleanup**: Remove deprecated settings (from v3.0)
 
 ---
 
