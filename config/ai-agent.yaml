@@ -31,7 +31,7 @@
 # Related: Linear AAVA-28
 # =============================================================================
 
-active_pipeline: local_hybrid
+active_pipeline: hybrid_support
 asterisk:
   app_name: asterisk-ai-voice-agent
 audio_transport: externalmedia
