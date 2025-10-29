@@ -2054,8 +2054,12 @@ class Engine:
                 logger.debug("Inbound diagnostics update failed", call_id=caller_channel_id, exc_info=True)
 
             # CRITICAL FIX: Check for pipeline mode FIRST before routing to monolithic providers
-            # Pipelines need audio regardless of audio_capture_enabled state
             if self._pipeline_forced.get(caller_channel_id):
+                # AAVA-28: Check gating to prevent agent from hearing its own TTS output
+                if not session.audio_capture_enabled:
+                    # Drop audio during TTS playback (gating active)
+                    return
+                
                 q = self._pipeline_queues.get(caller_channel_id)
                 if q:
                     try:
@@ -2157,26 +2161,11 @@ class Engine:
             if hasattr(session, 'audio_capture_enabled') and not session.audio_capture_enabled:
                 cfg = getattr(self.config, 'barge_in', None)
                 
-                # AAVA-22: Check pipeline mode FIRST - route to pipeline queue regardless of audio_capture state
-                # Pipelines need continuous audio flow for STT component
+                # AAVA-28: Pipelines now respect gating - no special bypass during TTS
+                # Drop audio for pipelines during TTS playback (handled by earlier gating check)
                 if self._pipeline_forced.get(caller_channel_id):
-                    q = self._pipeline_queues.get(caller_channel_id)
-                    if q:
-                        try:
-                            pcm16 = pcm_bytes
-                            if pcm16 and pcm_rate != 16000:
-                                try:
-                                    state = self._resample_state_pipeline16k.get(caller_channel_id)
-                                    pcm16, state = audioop.ratecv(pcm16, 2, 1, pcm_rate, 16000, state)
-                                    self._resample_state_pipeline16k[caller_channel_id] = state
-                                except Exception:
-                                    pcm16 = pcm_bytes
-                            if pcm16:
-                                q.put_nowait(pcm16)
-                            return
-                        except asyncio.QueueFull:
-                            logger.debug("Pipeline queue full; dropping AudioSocket frame (during TTS)", call_id=caller_channel_id)
-                            return
+                    # Audio already dropped by gating check above (line 2059)
+                    return
                 
                 # Determine provider and continuous-input capability FIRST to allow forwarding during greeting guard
                 try:
@@ -2864,6 +2853,11 @@ class Engine:
             # Check for pipeline mode FIRST (before continuous_input provider routing)
             # Pipeline adapters need audio in their queue, not sent to monolithic providers
             if self._pipeline_forced.get(caller_channel_id):
+                # AAVA-28: Check gating to prevent agent from hearing its own TTS output
+                if not session.audio_capture_enabled:
+                    # Drop audio during TTS playback (gating active)
+                    return
+                
                 q = self._pipeline_queues.get(caller_channel_id)
                 if q:
                     try:
@@ -3039,6 +3033,11 @@ class Engine:
 
             # If a pipeline was explicitly requested for this call, route to pipeline queue
             if self._pipeline_forced.get(caller_channel_id):
+                # AAVA-28: Check gating to prevent agent from hearing its own TTS output
+                if not session.audio_capture_enabled:
+                    # Drop audio during TTS playback (gating active)
+                    return
+                
                 q = self._pipeline_queues.get(caller_channel_id)
                 if q:
                     try:
