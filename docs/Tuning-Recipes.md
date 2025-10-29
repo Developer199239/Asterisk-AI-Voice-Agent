@@ -128,3 +128,158 @@ streaming:
   This converts outbound streaming audio back to μ-law/8 kHz right before it is written to Asterisk, regardless of provider output.
 
 - RMS/DC offset diagnostics for each stage are published as `ai_agent_audio_rms{stage=...}` and `ai_agent_audio_dc_offset{stage=...}` so you can alert on silent or biased audio before customers notice.
+
+---
+
+## Pipeline Tuning (v4.0)
+
+v4.0 introduces modular pipelines where STT, LLM, and TTS are separate. Tuning considerations differ from monolithic providers.
+
+### Local Hybrid Pipeline (Vosk + OpenAI + Piper)
+
+**Optimal Settings** for 3-7 second response time:
+
+```yaml
+pipelines:
+  local_hybrid:
+    stt: local_stt
+    llm: openai_llm
+    tts: local_tts
+    options:
+      stt:
+        chunk_ms: 320              # Balanced latency vs context
+        streaming: true
+        stream_format: "pcm16_16k" # Match internal format (no transcoding)
+      llm:
+        model: "gpt-4o-mini"       # Fast, cost-effective
+        temperature: 0.7
+        max_tokens: 150            # Keep responses concise
+      tts:
+        format:
+          encoding: ulaw
+          sample_rate: 8000
+
+vad:
+  enabled: true
+  mode: "webrtc"
+  webrtc_aggressiveness: 2         # Normal (good for Vosk)
+  min_speech_duration_ms: 250
+  silence_duration_ms: 700         # Balance responsiveness vs cutting off
+  speech_pad_ms: 300
+
+barge_in:
+  enabled: true
+  min_ms: 400                      # Prevent false interrupts during silence
+  energy_threshold: 1800
+```
+
+**Why**: Vosk performs better with slightly longer audio chunks. `gpt-4o-mini` is faster than `gpt-4o` (500ms vs 1.5s). Pipeline mode requires `downstream_mode: file`.
+
+**Hardware Note**: Modern CPU (2020+) required for acceptable latency. See [HARDWARE_REQUIREMENTS.md](HARDWARE_REQUIREMENTS.md).
+
+---
+
+### OpenAI Realtime (Monolithic)
+
+**Optimal Settings** for <1.5 second response time:
+
+```yaml
+default_provider: "openai_realtime"
+
+providers:
+  openai_realtime:
+    enabled: true
+    turn_detection:
+      type: "server_vad"           # Use OpenAI's server-side VAD
+      silence_duration_ms: 200     # Quick turn detection
+      threshold: 0.5
+      prefix_padding_ms: 200
+
+vad:
+  enabled: true
+  webrtc_aggressiveness: 1         # CRITICAL: Low for OpenAI (prevents conflicts)
+  silence_duration_ms: 1000        # Let server VAD handle turn detection
+
+barge_in:
+  enabled: false                   # Server-side turn handling sufficient
+
+streaming:
+  jitter_buffer_ms: 90             # Low latency streaming
+  min_start_ms: 250
+  low_watermark_ms: 180
+
+downstream_mode: "stream"          # Real-time streaming for best UX
+```
+
+**Why**: OpenAI Realtime has server-side VAD that handles turn detection. Keep local VAD passive (`aggressiveness: 1`) to avoid conflicts. Streaming mode provides lowest latency.
+
+**Critical**: `webrtc_aggressiveness: 1` is essential - higher values cause audio clipping with OpenAI's VAD.
+
+---
+
+### Deepgram Voice Agent (Monolithic)
+
+**Optimal Settings** for 1-2 second response time:
+
+```yaml
+default_provider: "deepgram"
+
+providers:
+  deepgram:
+    enabled: true
+    model: "nova-2-general"
+    tts_model: "aura-asteria-en"
+    continuous_input: true         # Stream audio continuously
+    input_encoding: "linear16"     # Best quality (PCM16)
+    input_sample_rate_hz: 8000
+    output_encoding: "mulaw"
+    output_sample_rate_hz: 8000
+
+barge_in:
+  enabled: false                   # Deepgram handles turn-taking
+
+vad:
+  enabled: true
+  webrtc_aggressiveness: 1         # Low (Deepgram has server-side VAD)
+  silence_duration_ms: 800
+
+streaming:
+  jitter_buffer_ms: 100
+  min_start_ms: 300
+  low_watermark_ms: 200
+
+downstream_mode: "file"            # More robust for Deepgram
+```
+
+**Why**: Deepgram Voice Agent includes "Think" stage for reasoning. `file` mode is more robust than `stream` with Deepgram's multi-stage processing. `continuous_input: true` required for real-time conversation.
+
+**Cost**: ~$0.03/min (cheaper than OpenAI Realtime)
+
+---
+
+## Provider Comparison
+
+| Configuration | Response Time | Cost/min | Tuning Complexity | Best For |
+|---------------|---------------|----------|-------------------|----------|
+| **OpenAI Realtime** | 0.5-1.5s | ~$0.06 | Low (server VAD) | Speed, simplicity |
+| **Deepgram** | 1-2s | ~$0.03 | Low (server VAD) | Cost, reasoning |
+| **Local Hybrid** | 3-7s | ~$0.002 | Medium (local VAD) | Privacy, cost |
+
+---
+
+## Monitoring Integration
+
+Use Prometheus metrics to validate tuning:
+
+```promql
+# Turn response latency (target: <2s p95)
+histogram_quantile(0.95, rate(ai_agent_turn_response_seconds_bucket[5m]))
+
+# Underflow rate (target: 0 per call)
+rate(ai_agent_stream_underflow_events_total[5m]) / rate(ai_agent_streaming_sessions_total[5m])
+
+# Barge-in effectiveness (if enabled)
+rate(ai_agent_barge_in_triggered_total[5m])
+```
+
+See [MONITORING_GUIDE.md](MONITORING_GUIDE.md) for dashboard setup and alert thresholds.

@@ -2,6 +2,32 @@
 
 This document explains every major option in `config/ai-agent.yaml`, the precedence model for greeting/persona, and the impact of fine‑tuning parameters across AudioSocket/ExternalMedia, VAD, Barge‑In, Streaming, and Providers.
 
+## Configuration Architecture (v4.0)
+
+v4.0 introduces a **modular pipeline architecture** alongside monolithic provider support:
+
+### Monolithic Providers
+- **Single provider** handles STT, LLM, and TTS internally
+- Examples: `openai_realtime`, `deepgram` Voice Agent
+- Configuration: Set `default_provider: "openai_realtime"` or `default_provider: "deepgram"`
+- **Best for**: Simplicity, fastest response times
+
+### Pipeline Configurations
+- **Separate providers** for STT, LLM, and TTS
+- Examples: Local Hybrid (Vosk STT + OpenAI LLM + Piper TTS)
+- Configuration: Define under `pipelines:` block and set `active_pipeline: "pipeline_name"`
+- **Best for**: Flexibility, privacy (local audio processing), cost control
+
+### Golden Baselines
+See the 3 validated configurations in `config/`:
+- `ai-agent.golden-openai.yaml` - OpenAI Realtime (monolithic, fastest)
+- `ai-agent.golden-deepgram.yaml` - Deepgram Voice Agent (monolithic, enterprise)
+- `ai-agent.golden-local-hybrid.yaml` - Local Hybrid (pipeline, privacy-focused)
+
+For comprehensive inline documentation, refer to the golden baseline YAML files directly.
+
+---
+
 ## Canonical persona and greeting
 
 - llm.initial_greeting: Text the agent speaks first (if provider supports explicit greeting or the engine plays via TTS).
