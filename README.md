@@ -1,5 +1,11 @@
 # Asterisk AI Voice Agent v4.0
 
+![Version](https://img.shields.io/badge/version-4.0.0-blue.svg)
+![License](https://img.shields.io/badge/license-MIT-green.svg)
+![Python](https://img.shields.io/badge/python-3.10+-blue.svg)
+![Docker](https://img.shields.io/badge/docker-compose-blue.svg)
+![Asterisk](https://img.shields.io/badge/asterisk-18+-orange.svg)
+
 The most powerful, flexible open-source AI voice agent for Asterisk/FreePBX. Featuring a **modular pipeline architecture** that lets you mix and match STT, LLM, and TTS providers, plus **3 production-ready golden baselines** validated for enterprise deployment.
 
 ## 🎉 What's New in v4.0
@@ -221,11 +227,24 @@ Two-container architecture for performance and scalability:
 
 ## 🗺️ Documentation
 
-* **[Getting Started](docs/FreePBX-Integration-Guide.md)** - Complete integration guide
+### Getting Started
+* **[FreePBX Integration Guide](docs/FreePBX-Integration-Guide.md)** - Complete setup with dialplan examples
+* **[Installation Guide](docs/INSTALLATION.md)** - Detailed installation and deployment
+
+### Configuration
 * **[Configuration Reference](docs/Configuration-Reference.md)** - All YAML settings explained
-* **[Transport Compatibility](docs/Transport-Mode-Compatibility.md)** - AudioSocket vs RTP
-* **[Monitoring](monitoring/README.md)** - Prometheus + Grafana setup
+* **[Transport Compatibility](docs/Transport-Mode-Compatibility.md)** - AudioSocket vs ExternalMedia RTP
+* **[Tuning Recipes](docs/Tuning-Recipes.md)** - Performance optimization guide
+
+### Operations
+* **[Monitoring Guide](docs/MONITORING_GUIDE.md)** - Prometheus + Grafana dashboards *(coming soon)*
+* **[Production Deployment](docs/PRODUCTION_DEPLOYMENT.md)** - Production best practices *(coming soon)*
+* **[Hardware Requirements](docs/HARDWARE_REQUIREMENTS.md)** - System specs and sizing *(coming soon)*
+
+### Development
+* **[Architecture](docs/Architecture.md)** - System design and components
 * **[Contributing](CONTRIBUTING.md)** - How to contribute
+* **[Changelog](CHANGELOG.md)** - Release history and changes
 
 ## 🤝 Contributing
 
