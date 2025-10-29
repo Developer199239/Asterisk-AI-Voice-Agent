@@ -1,4 +1,4 @@
-active_pipeline: default
+active_pipeline: ""
 asterisk:
   app_name: asterisk-ai-voice-agent
 audio_transport: audiosocket
