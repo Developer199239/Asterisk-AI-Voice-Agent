@@ -48,9 +48,7 @@ class LocalProviderConfig(BaseModel):
     response_timeout_sec: float = Field(default=5.0)
     chunk_ms: int = Field(default=200)
     stt_model: Optional[str] = None
-    llm_model: Optional[str] = None
     tts_voice: Optional[str] = None
-    temperature: float = Field(default=0.8)
     max_tokens: int = Field(default=150)
 
 

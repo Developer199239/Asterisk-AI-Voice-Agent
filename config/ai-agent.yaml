@@ -74,15 +74,12 @@ downstream_mode: stream
 external_media:
   codec: ulaw
   direction: both
-  jitter_buffer_ms: 20
   port_range: 18080:18099
   rtp_host: 0.0.0.0
   rtp_port: 18080
 llm:
   initial_greeting: Hello, how can I help you today?
-  model: gpt-4o-mini
   prompt: Voice assistant. Answer in 5-8 words. Be direct. Expand only if asked.
-  temperature: 0.7
 pipelines:
   cloud_only:
     llm: google_llm

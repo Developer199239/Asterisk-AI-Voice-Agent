@@ -125,74 +125,6 @@ _AUDIO_DC_OFFSET = Gauge(
     labelnames=("call_id", "stage"),
 )
 
-class AudioFrameProcessor:
-    """Processes audio in 40ms frames to prevent voice queue backlog."""
-    
-    def __init__(self, frame_size: int = 320):  # 40ms at 8kHz = 320 samples
-        self.frame_size = frame_size
-        self.buffer = bytearray()
-        self.frame_bytes = frame_size * 2  # 2 bytes per sample (PCM16)
-    
-    def process_audio(self, audio_data: bytes) -> List[bytes]:
-        """Process audio data and return complete frames."""
-        # Accumulate audio in buffer
-        self.buffer.extend(audio_data)
-        
-        # Extract complete frames
-        frames = []
-        while len(self.buffer) >= self.frame_bytes:
-            frame = bytes(self.buffer[:self.frame_bytes])
-            self.buffer = self.buffer[self.frame_bytes:]
-            frames.append(frame)
-        
-        # Debug frame processing
-        if len(frames) > 0:
-            logger.debug("🎤 AVR FrameProcessor - Frames Generated",
-                        input_bytes=len(audio_data),
-                        buffer_before=len(self.buffer) + (len(frames) * self.frame_bytes),
-                        buffer_after=len(self.buffer),
-                        frames_generated=len(frames),
-                        frame_size=self.frame_bytes)
-        
-        return frames
-
-    
-    
-    
-    def flush(self) -> bytes:
-        """Flush remaining audio in buffer."""
-        remaining = bytes(self.buffer)
-        self.buffer = bytearray()
-        return remaining
-
-class VoiceActivityDetector:
-    """Simple VAD to reduce unnecessary audio processing."""
-    
-    def __init__(self, speech_threshold: float = 0.3, silence_frames: int = 10):
-        self.speech_threshold = speech_threshold
-        self.max_silence_frames = silence_frames
-        self.silence_frames = 0
-        self.is_speaking = False
-    
-    def is_speech(self, audio_energy: float) -> bool:
-        """Determine if audio contains speech."""
-        if audio_energy > self.speech_threshold:
-            self.silence_frames = 0
-            if not self.is_speaking:
-                self.is_speaking = True
-                logger.debug("🎤 AVR VAD - Speech Started", 
-                           energy=f"{audio_energy:.4f}", 
-                           threshold=f"{self.speech_threshold:.4f}")
-            return True
-        else:
-            self.silence_frames += 1
-            if self.is_speaking and self.silence_frames >= self.max_silence_frames:
-                self.is_speaking = False
-                logger.debug("🎤 AVR VAD - Speech Ended", 
-                           silence_frames=self.silence_frames,
-                           max_silence=self.max_silence_frames)
-            return self.silence_frames < self.max_silence_frames
-
 
 class Engine:
     """The main application engine."""
@@ -346,9 +278,6 @@ class Engine:
         self.headless_sessions: Dict[str, Dict[str, Any]] = {}
         # Bridge and Local channel tracking for Local Channel Bridge pattern
         self.bridges: Dict[str, str] = {}  # channel_id -> bridge_id
-        # Frame processing and VAD for optimized audio handling
-        self.frame_processors: Dict[str, AudioFrameProcessor] = {}  # conn_id -> processor
-        self.vad_detectors: Dict[str, VoiceActivityDetector] = {}  # conn_id -> VAD
         self.local_channels: Dict[str, str] = {}  # channel_id -> legacy local_channel_id
         self.audiosocket_channels: Dict[str, str] = {}  # call_id -> audiosocket_channel_id
         # Streaming per-call persistent stream and gating state
