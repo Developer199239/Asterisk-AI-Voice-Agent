@@ -258,7 +258,7 @@ providers:
   local:
     chunk_ms: ${LOCAL_WS_CHUNK_MS:=320}
     connect_timeout_sec: ${LOCAL_WS_CONNECT_TIMEOUT:=2.0}
-    enabled: false
+    enabled: true
     llm_model: models/llm/TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf
     max_tokens: 64
     response_timeout_sec: ${LOCAL_WS_RESPONSE_TIMEOUT:=5.0}
