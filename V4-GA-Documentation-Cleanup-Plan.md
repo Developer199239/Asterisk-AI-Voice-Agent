@@ -1,346 +1,301 @@
-# V4 GA Documentation Cleanup Plan
+# V4 GA Documentation Cleanup Plan (REVISED)
 
-**Purpose**: Align develop branch documentation with main branch structure for production release  
+**Purpose**: Prepare clean production documentation while preserving development context  
 **Date**: October 29, 2025  
+**Strategy**: 
+- **develop branch**: Keep all development context for IDE/developers
+- **staging/main branch**: Clean production documentation only
+- **Local archived/**: Store non-essential docs (added to .gitignore)
+
 **Target**: staging → main merge for v4.0.0
 
 ---
 
 ## Table of Contents
 
-1. [Documentation Audit](#documentation-audit)
-2. [Main Branch Structure (Reference)](#main-branch-structure-reference)
-3. [Keep - Production Ready](#keep---production-ready)
-4. [Remove - Development Artifacts](#remove---development-artifacts)
-5. [Create - New for GA v4.0](#create---new-for-ga-v40)
-6. [Update - Existing Documents](#update---existing-documents)
-7. [Execution Plan](#execution-plan)
+1. [Strategy Overview](#strategy-overview)
+2. [Documentation Audit](#documentation-audit)
+3. [Keep in develop - Development Context](#keep-in-develop---development-context)
+4. [Archive Locally - Non-Essential](#archive-locally---non-essential)
+5. [Production Documentation (for staging/main)](#production-documentation-for-stagingmain)
+6. [Create - New for GA v4.0](#create---new-for-ga-v40)
+7. [Update - Existing Documents](#update---existing-documents)
+8. [Execution Plan](#execution-plan)
+
+---
+
+## Strategy Overview
+
+### Three-Tier Approach
+
+**1. develop Branch (Full Development Context)**
+- Keep ALL useful development documentation
+- Research documents, design decisions, investigations
+- Provides full context for IDE tools (Cursor, Windsurf)
+- Enables developers to understand "why" decisions were made
+
+**2. Local archived/ Folder (Non-Essential)**
+- Move test logs, RCA documents, obsolete files
+- Added to .gitignore (not tracked in git)
+- Available locally for reference
+- Keeps develop branch clean without losing content
+
+**3. staging/main Branches (Production Only)**
+- Cherry-pick production documentation when merging
+- Clean, professional documentation
+- User-facing guides only
+- No development artifacts
+
+### Benefits
+
+✅ **develop**: Developer-friendly with full context  
+✅ **Local reference**: Quick access to archived docs  
+✅ **Production**: Clean, professional release  
+✅ **No data loss**: Everything preserved  
 
 ---
 
 ## Documentation Audit
 
-### Current Develop Branch (125 .md files)
+### Current Develop Branch: 125 markdown files
 
-**Root Directory** (25 files):
-```
-✅ README.md (update for v4.0)
-✅ CONTRIBUTING.md (keep)
-✅ V4-GA-MasterPlan.md (keep - GA reference)
-✅ GA-CODE-CLEANUP.md (keep - GA reference)
-✅ GA-CLEANUP-COMPLETE.md (keep - GA reference)
+**Root Directory**: 25 files  
+**docs/**: 45 files  
+**docs/plan/**: 5 files  
+**docs/milestones/**: 4 files  
+**logs/**: 50+ files  
+**Other**: 4 files (monitoring, scripts, tests, tools)
 
-❌ Agents.md (remove - superseded by Transport-Mode-Compatibility)
-❌ Gemini.md (remove - not production feature)
-❌ BRIDGE_ARCHITECTURE_VERIFICATION.md (remove - dev artifact)
-❌ CONFIG_V4_RELEASE.md (remove - dev artifact)
-❌ DEPRECATED_CODE_AUDIT.md (remove - dev artifact)
-❌ GAv4-CHECKLIST.md (remove - superseded by V4-GA-MasterPlan)
-❌ PRODUCTION_HARDENING_PLAN.md (remove - dev artifact)
-❌ OPTION3_IMPLEMENTATION_ANALYSIS.md (remove - dev artifact)
-❌ ROADMAP_STATUS_20251025.md (remove - dev artifact)
-❌ ROADMAP_STATUS_REVIEW_OCT27.md (remove - dev artifact)
-❌ TESTING_GUIDE_P1.md (remove - dev artifact)
-❌ OPENAI_*.md (8 files - remove, already removed most)
-```
+---
 
-**docs/ Directory** (45 files):
-```
-✅ docs/README.md (keep)
-✅ docs/Architecture.md (keep)
-✅ docs/Configuration-Reference.md (keep)
-✅ docs/INSTALLATION.md (keep)
-✅ docs/Tuning-Recipes.md (keep)
-✅ docs/FreePBX-Integration-Guide.md (keep)
-✅ docs/Transport-Mode-Compatibility.md (keep - NEW in v4.0)
-✅ docs/local-ai-server/PROTOCOL.md (keep)
-✅ docs/case-studies/OPENAI_REALTIME_GOLDEN_BASELINE.md (keep - MOVED)
+## Keep in develop - Development Context
 
-❌ docs/AudioSocket with Asterisk_ Technical Summary for A.md (remove - dev research)
-❌ docs/AudioSocket-Provider-Alignment.md (remove - dev artifact)
-❌ docs/BENCHMARKING-IMPLEMENTATION-SUMMARY.md (remove - dev artifact)
-❌ docs/EXTERNAL_MEDIA_TEST_GUIDE.md (remove - dev testing)
-❌ docs/ExternalMedia_Deployment_Guide.md (remove - superseded by INSTALLATION.md)
-❌ docs/Hybrid-Pipeline-Golden-Baseline.md (remove - dev validation)
-❌ docs/LOG_ANALYSIS_VAD_IMPLEMENTATION.md (remove - dev artifact)
-❌ docs/Linear-Tracking-Rules.md (remove - internal process)
-❌ docs/OPENAI_FORMAT_DISCOVERY.md (remove - dev research)
-❌ docs/OpenAI-Realtime-Logging-Guide.md (remove - dev debugging)
-❌ docs/Updated-Voice-AI-Stack.md (remove - dev artifact)
-❌ docs/VAD_CRITICAL_FIXES_SUMMARY.md (remove - dev artifact)
-❌ docs/VAD_IMPLEMENTATION_SUMMARY.md (remove - dev artifact)
-❌ docs/baselines/golden/*.md (remove - dev validation, 3 files)
-❌ docs/call-framework.md (remove - internal design)
-❌ docs/deepgram-agent-api.md (remove - internal reference)
-❌ docs/resilience.md (remove - incomplete)
-❌ docs/regression/*.md (remove - dev testing, 4 files)
-❌ docs/regressions/*.md (remove - dev testing, 4 files)
-```
+### Root Directory (15 documents - KEEP IN DEVELOP)
 
-**docs/plan/ Directory** (5 files):
-```
-✅ docs/plan/ROADMAP.md (keep - merge with ROADMAPv4.md)
-✅ docs/plan/CODE_OF_CONDUCT.md (keep)
+✅ **README.md** - Main entry point (update for v4.0)  
+✅ **CONTRIBUTING.md** - Contribution guidelines  
+✅ **V4-GA-MasterPlan.md** - GA v4.0 master plan  
+✅ **GA-CODE-CLEANUP.md** - Code cleanup reference  
+✅ **GA-CLEANUP-COMPLETE.md** - Cleanup completion report  
 
-❌ docs/plan/Asterisk AI Voice Agent_ Your Comprehensive Open Source Launch Strategy.md (remove - planning doc)
-❌ docs/plan/P1_IMPLEMENTATION_PLAN.md (remove - dev artifact)
-❌ docs/plan/README.md (remove - superseded)
-❌ docs/plan/ROADMAPv4-GAP-ANALYSIS.md (remove - planning doc)
-❌ docs/plan/ROADMAPv4.md (merge into ROADMAP.md, then remove)
-```
+✅ **Agents.md** - Provider comparison and selection guide  
+✅ **Gemini.md** - Google Gemini integration notes  
+✅ **BRIDGE_ARCHITECTURE_VERIFICATION.md** - Bridge architecture validation  
+✅ **CONFIG_V4_RELEASE.md** - v4.0 configuration changes  
+✅ **GAv4-CHECKLIST.md** - v4.0 development checklist  
+✅ **PRODUCTION_HARDENING_PLAN.md** - Production hardening notes  
+✅ **ROADMAP_STATUS_20251025.md** - Roadmap status (Oct 25)  
+✅ **ROADMAP_STATUS_REVIEW_OCT27.md** - Roadmap review (Oct 27)  
+✅ **TESTING_GUIDE_P1.md** - P1 testing guide  
+✅ **OPTION3_IMPLEMENTATION_ANALYSIS.md** - Design decision analysis  
 
-**docs/milestones/ Directory** (4 files):
-```
-✅ docs/milestones/milestone-5-streaming-transport.md (keep)
-✅ docs/milestones/milestone-6-openai-realtime.md (keep)
-✅ docs/milestones/milestone-7-configurable-pipelines.md (keep)
-✅ docs/milestones/milestone-8-monitoring-stack.md (keep)
-```
+**Why keep these?**
+- Provide development context
+- Explain design decisions
+- Help new developers understand "why"
+- Useful for Cursor/Windsurf context
 
-**logs/ Directory** (50+ files):
-```
-❌ logs/remote/rca-*/*.md (remove ALL - dev RCA documents, ~40 files)
-❌ logs/remote/golden-baseline-telephony-ulaw/*.md (remove - dev validation, 4 files)
-❌ logs/test-call-logs-*.md (remove ALL - dev test logs, 8 files)
-```
+### docs/ Directory (28 documents - KEEP IN DEVELOP)
 
-**Other Directories**:
-```
-✅ monitoring/README.md (keep)
-✅ scripts/README.md (keep)
-✅ tests/README.md (keep)
-✅ tools/ide/README.md (keep)
+#### Core Documentation (6 files)
+✅ **docs/README.md** - Documentation index  
+✅ **docs/Architecture.md** - System architecture (UPDATE)  
+✅ **docs/INSTALLATION.md** - Installation guide (UPDATE)  
+✅ **docs/Configuration-Reference.md** - Config reference (UPDATE)  
+✅ **docs/Tuning-Recipes.md** - Performance tuning (UPDATE)  
+✅ **docs/FreePBX-Integration-Guide.md** - FreePBX integration  
+
+#### v4.0 Documentation (2 files)
+✅ **docs/Transport-Mode-Compatibility.md** - Transport compatibility matrix  
+✅ **docs/case-studies/OPENAI_REALTIME_GOLDEN_BASELINE.md** - Golden baseline  
+
+#### Development Research (14 files - VALUABLE CONTEXT)
+✅ **docs/AudioSocket with Asterisk_ Technical Summary for A.md** - AudioSocket research  
+✅ **docs/AudioSocket-Provider-Alignment.md** - Provider alignment investigation  
+✅ **docs/BENCHMARKING-IMPLEMENTATION-SUMMARY.md** - Benchmarking work  
+✅ **docs/EXTERNAL_MEDIA_TEST_GUIDE.md** - ExternalMedia testing guide  
+✅ **docs/ExternalMedia_Deployment_Guide.md** - ExternalMedia deployment  
+✅ **docs/Hybrid-Pipeline-Golden-Baseline.md** - Hybrid pipeline validation  
+✅ **docs/LOG_ANALYSIS_VAD_IMPLEMENTATION.md** - VAD analysis  
+✅ **docs/OPENAI_FORMAT_DISCOVERY.md** - OpenAI format discovery  
+✅ **docs/OpenAI-Realtime-Logging-Guide.md** - Debugging guide  
+✅ **docs/Updated-Voice-AI-Stack.md** - Architecture evolution  
+✅ **docs/VAD_CRITICAL_FIXES_SUMMARY.md** - VAD fixes summary  
+✅ **docs/VAD_IMPLEMENTATION_SUMMARY.md** - VAD implementation  
+✅ **docs/call-framework.md** - Call framework design  
+✅ **docs/deepgram-agent-api.md** - Deepgram integration notes  
+
+**Why keep these?**
+- Explain architectural decisions
+- Document investigation process
+- Show "why" certain approaches were chosen
+- Valuable for troubleshooting similar issues
+
+#### Development Validation (7 files - KEEP)
+✅ **docs/baselines/golden/README.md** - Golden baseline overview  
+✅ **docs/baselines/golden/deepgram.md** - Deepgram baseline  
+✅ **docs/baselines/golden/openai.md** - OpenAI baseline  
+✅ **docs/regression/issues/0001-adapter-execution-path.md** - Regression tracking  
+✅ **docs/regressions/deepgram-call-framework.md** - Deepgram regression  
+✅ **docs/regressions/local-call-framework.md** - Local regression  
+✅ **docs/regressions/milestone-7.md** - Milestone 7 regression  
+✅ **docs/regressions/openai-call-framework.md** - OpenAI regression  
+
+**Note**: docs/resilience.md is incomplete - move to archived/
+
+### docs/plan/ Directory (5 documents - KEEP IN DEVELOP)
+
+✅ **docs/plan/ROADMAP.md** - Project roadmap (UPDATE - merge ROADMAPv4)  
+✅ **docs/plan/ROADMAPv4.md** - v4.0 roadmap (merge into ROADMAP.md)  
+✅ **docs/plan/ROADMAPv4-GAP-ANALYSIS.md** - Gap analysis  
+✅ **docs/plan/P1_IMPLEMENTATION_PLAN.md** - P1 implementation plan  
+✅ **docs/plan/CODE_OF_CONDUCT.md** - Code of conduct  
+
+**Note**: After merging ROADMAPv4 into ROADMAP.md, can archive ROADMAPv4.md
+
+### docs/milestones/ Directory (4 documents - KEEP)
+
+✅ **docs/milestones/milestone-5-streaming-transport.md**  
+✅ **docs/milestones/milestone-6-openai-realtime.md**  
+✅ **docs/milestones/milestone-7-configurable-pipelines.md**  
+✅ **docs/milestones/milestone-8-monitoring-stack.md**  
+
+### docs/local-ai-server/ (1 document - KEEP)
+
+✅ **docs/local-ai-server/PROTOCOL.md** - Local AI server protocol  
+
+### Other Directories (4 documents - KEEP)
+
+✅ **monitoring/README.md** - Monitoring documentation  
+✅ **scripts/README.md** - Scripts documentation  
+✅ **tests/README.md** - Testing documentation  
+✅ **tools/ide/README.md** - IDE tools documentation  
+
+### Total Files to Keep in develop: ~80 files
+
+---
+
+## Archive Locally - Non-Essential
+
+### Root Directory (2 documents)
+
+📦 **DEPRECATED_CODE_AUDIT.md** - Code audit (outdated)  
+📦 **OPENAI_*.md** (8 files if any remain) - RCA documents  
+
+### docs/ Directory (2 documents)
+
+📦 **docs/resilience.md** - Incomplete draft  
+📦 **docs/Linear-Tracking-Rules.md** - Internal process (not code-related)  
+
+### docs/plan/ Directory (1 document)
+
+📦 **docs/plan/Asterisk AI Voice Agent_ Your Comprehensive Open Source Launch Strategy.md** - Old launch strategy  
+📦 **docs/plan/README.md** - Superseded by main docs/README.md  
+
+### logs/ Directory (ALL - 50+ documents)
+
+📦 **logs/remote/rca-*/** - All RCA analysis folders (~44 documents)  
+📦 **logs/remote/golden-baseline-telephony-ulaw/** - Golden baseline logs (4 documents)  
+📦 **logs/test-call-logs-*.md** - Test call logs (8 documents)  
+
+**Why archive these?**
+- Test logs are ephemeral
+- RCA documents are historical debugging
+- Critical findings already documented in production docs
+- Not needed for development context
+- Available locally if needed for reference
+
+### Total Files to Archive: ~65 files
+
+### Archive Commands
+
+```bash
+# Create archived directory
+mkdir -p archived
+
+# Move files to archived/
+mv DEPRECATED_CODE_AUDIT.md archived/
+mv OPENAI_*.md archived/ 2>/dev/null || true
+
+# Move docs files
+mkdir -p archived/docs/plan
+mv docs/resilience.md archived/docs/
+mv docs/Linear-Tracking-Rules.md archived/docs/
+mv "docs/plan/Asterisk AI Voice Agent_ Your Comprehensive Open Source Launch Strategy.md" archived/docs/plan/
+mv docs/plan/README.md archived/docs/plan/
+
+# Move entire logs directory
+mv logs/ archived/
+
+# Add to .gitignore
+echo "" >> .gitignore
+echo "# Archived development documentation" >> .gitignore
+echo "archived/" >> .gitignore
+
+# Commit
+git add .
+git commit -m "chore: Archive non-essential documentation
+
+Moved to archived/ folder (not tracked in git):
+- Test logs (50+ files)
+- RCA documents (44 files)
+- Incomplete/obsolete docs (5 files)
+
+Kept in develop:
+- All development context
+- Research documents
+- Design decisions
+- Baseline validations
+
+develop branch remains developer-friendly with full context"
 ```
 
 ---
 
-## Main Branch Structure (Reference)
+## Production Documentation (for staging/main)
 
-**Current main branch** (v3.0) has clean structure:
-
-```
-README.md
-CONTRIBUTING.md
-config/
-  ├── ai-agent.example.yaml
-  └── [profile-specific yamls]
-docs/
-  ├── README.md
-  ├── Architecture.md
-  ├── INSTALLATION.md
-  ├── Configuration-Reference.md
-  ├── Tuning-Recipes.md
-  ├── FreePBX-Integration-Guide.md
-  ├── local-ai-server/
-  │   └── PROTOCOL.md
-  ├── milestones/
-  │   ├── milestone-5-streaming-transport.md
-  │   ├── milestone-6-openai-realtime.md
-  │   └── [2 more]
-  └── plan/
-      ├── ROADMAP.md
-      └── CODE_OF_CONDUCT.md
-monitoring/
-  └── README.md
-scripts/
-  └── README.md
-```
-
-**No development artifacts in main** - clean and production-ready.
-
----
-
-## Keep - Production Ready
+When merging develop → staging → main, **only include these files**:
 
 ### Root Directory (3 documents)
 
-**✅ README.md** (UPDATE)
-- Main entry point
-- Update version to v4.0
-- Add pipeline architecture highlights
-- Update feature list
+✅ README.md (updated for v4.0)  
+✅ CONTRIBUTING.md  
+✅ CHANGELOG.md (NEW - create)  
 
-**✅ CONTRIBUTING.md** (KEEP)
-- Contribution guidelines
-- No changes needed
+### docs/ Directory (11 documents)
 
-**✅ V4-GA-MasterPlan.md** (KEEP)
-- Comprehensive GA release plan
-- Reference document for v4.0
-- Keep as historical record
-
-### docs/ Core Documentation (6 documents)
-
-**✅ docs/README.md** (KEEP)
-- Documentation index
-- No changes needed
-
-**✅ docs/Architecture.md** (UPDATE)
-- System architecture
-- Add pipeline architecture section
-- Update diagrams if needed
-
-**✅ docs/INSTALLATION.md** (UPDATE)
-- Installation guide
-- Add monitoring stack setup
-- Document pipeline selection
-
-**✅ docs/Configuration-Reference.md** (UPDATE)
-- Configuration reference
-- Document new pipeline configs
-- Clean up deprecated settings
-
-**✅ docs/Tuning-Recipes.md** (UPDATE)
-- Performance tuning
-- Add pipeline-specific tuning
-
-**✅ docs/FreePBX-Integration-Guide.md** (KEEP)
-- FreePBX integration
-- No changes needed
-
-### docs/ New v4.0 Documentation (2 documents)
-
-**✅ docs/Transport-Mode-Compatibility.md** (KEEP)
-- Transport compatibility matrix
-- Critical reference for v4.0
-- Already well-documented
-
-**✅ docs/case-studies/OPENAI_REALTIME_GOLDEN_BASELINE.md** (KEEP)
-- OpenAI Realtime golden baseline
-- Valuable production reference
-- Keep in case-studies/
-
-### docs/local-ai-server/ (1 document)
-
-**✅ docs/local-ai-server/PROTOCOL.md** (KEEP)
-- Local AI server protocol
-- Updated and complete
-
-### docs/milestones/ (4 documents)
-
-**✅ All milestone documents** (KEEP)
-- milestone-5-streaming-transport.md
-- milestone-6-openai-realtime.md
-- milestone-7-configurable-pipelines.md
-- milestone-8-monitoring-stack.md
-- Historical record of development
+✅ docs/README.md  
+✅ docs/Architecture.md (updated)  
+✅ docs/INSTALLATION.md (updated)  
+✅ docs/Configuration-Reference.md (updated)  
+✅ docs/Tuning-Recipes.md (updated)  
+✅ docs/FreePBX-Integration-Guide.md  
+✅ docs/Transport-Mode-Compatibility.md  
+✅ docs/case-studies/OPENAI_REALTIME_GOLDEN_BASELINE.md  
+✅ docs/case-studies/DEEPGRAM_HYBRID_GOLDEN_BASELINE.md (NEW - create)  
+✅ docs/local-ai-server/PROTOCOL.md  
+✅ docs/HARDWARE_REQUIREMENTS.md (NEW - create)  
+✅ docs/MONITORING_GUIDE.md (NEW - create)  
+✅ docs/PRODUCTION_DEPLOYMENT.md (NEW - create)  
+✅ docs/TESTING_VALIDATION.md (NEW - create)  
 
 ### docs/plan/ (2 documents)
 
-**✅ docs/plan/ROADMAP.md** (MERGE & UPDATE)
-- Merge ROADMAPv4.md content
-- Update with v4.0 completion status
-- Document v4.1+ future plans
+✅ docs/plan/ROADMAP.md (updated with v4.0 completion)  
+✅ docs/plan/CODE_OF_CONDUCT.md  
 
-**✅ docs/plan/CODE_OF_CONDUCT.md** (KEEP)
-- Code of conduct
-- No changes needed
+### docs/milestones/ (4 documents)
 
-### Other Documentation (4 documents)
+✅ All milestone documents (historical record)  
 
-**✅ monitoring/README.md** (KEEP)
-- Monitoring stack documentation
-- Complete and production-ready
+### Other (4 documents)
 
-**✅ scripts/README.md** (KEEP)
-- Scripts documentation
-- No changes needed
+✅ monitoring/README.md  
+✅ scripts/README.md  
+✅ tests/README.md  
+✅ tools/ide/README.md  
 
-**✅ tests/README.md** (KEEP)
-- Testing documentation
-- No changes needed
-
-**✅ tools/ide/README.md** (KEEP)
-- IDE tools documentation
-- No changes needed
-
----
-
-## Remove - Development Artifacts
-
-### Root Directory (19 documents)
-
-**❌ Development Process Documents**:
-```bash
-rm Agents.md  # Superseded by Transport-Mode-Compatibility.md
-rm Gemini.md  # Not a production feature
-rm BRIDGE_ARCHITECTURE_VERIFICATION.md
-rm CONFIG_V4_RELEASE.md
-rm DEPRECATED_CODE_AUDIT.md
-rm GAv4-CHECKLIST.md  # Superseded by V4-GA-MasterPlan.md
-rm PRODUCTION_HARDENING_PLAN.md
-rm OPTION3_IMPLEMENTATION_ANALYSIS.md
-rm ROADMAP_STATUS_20251025.md
-rm ROADMAP_STATUS_REVIEW_OCT27.md
-rm TESTING_GUIDE_P1.md
-```
-
-**❌ RCA Documents** (if any remain):
-```bash
-rm OPENAI_*.md  # Already removed most, check for any remaining
-```
-
-**Note**: Keep GA-CODE-CLEANUP.md and GA-CLEANUP-COMPLETE.md as v4.0 release references.
-
-### docs/ Directory (22 documents)
-
-**❌ Development Research & Analysis**:
-```bash
-rm docs/AudioSocket\ with\ Asterisk_\ Technical\ Summary\ for\ A.md
-rm docs/AudioSocket-Provider-Alignment.md
-rm docs/BENCHMARKING-IMPLEMENTATION-SUMMARY.md
-rm docs/EXTERNAL_MEDIA_TEST_GUIDE.md
-rm docs/ExternalMedia_Deployment_Guide.md  # Superseded by INSTALLATION.md
-rm docs/Hybrid-Pipeline-Golden-Baseline.md
-rm docs/LOG_ANALYSIS_VAD_IMPLEMENTATION.md
-rm docs/OPENAI_FORMAT_DISCOVERY.md
-rm docs/OpenAI-Realtime-Logging-Guide.md
-rm docs/Updated-Voice-AI-Stack.md
-rm docs/VAD_CRITICAL_FIXES_SUMMARY.md
-rm docs/VAD_IMPLEMENTATION_SUMMARY.md
-rm docs/call-framework.md
-rm docs/deepgram-agent-api.md
-rm docs/resilience.md  # Incomplete
-```
-
-**❌ Development Validation**:
-```bash
-rm -rf docs/baselines/  # Entire directory (3 files)
-rm -rf docs/regression/  # Entire directory (1 file)
-rm -rf docs/regressions/  # Entire directory (4 files)
-```
-
-**❌ Internal Process**:
-```bash
-rm docs/Linear-Tracking-Rules.md  # Internal Linear workflow
-```
-
-### docs/plan/ Directory (4 documents)
-
-**❌ Planning Documents**:
-```bash
-rm docs/plan/Asterisk\ AI\ Voice\ Agent_\ Your\ Comprehensive\ Open\ Source\ Launch\ Strategy.md
-rm docs/plan/P1_IMPLEMENTATION_PLAN.md
-rm docs/plan/README.md  # Superseded
-rm docs/plan/ROADMAPv4-GAP-ANALYSIS.md
-# Note: Merge ROADMAPv4.md into ROADMAP.md first, then:
-rm docs/plan/ROADMAPv4.md
-```
-
-### logs/ Directory (50+ documents)
-
-**❌ ALL RCA and Test Logs**:
-```bash
-rm -rf logs/remote/  # Entire directory (~44 RCA documents)
-rm logs/test-call-logs-*.md  # All test call logs (8 files)
-```
-
-**Justification**: Logs are for development troubleshooting. All critical findings documented in:
-- docs/case-studies/OPENAI_REALTIME_GOLDEN_BASELINE.md
-- docs/Transport-Mode-Compatibility.md
-- Code comments
-
-### Total Files to Remove: ~75 files
+**Total Production Files: ~30 documents**
 
 ---
 
@@ -351,75 +306,53 @@ rm logs/test-call-logs-*.md  # All test call logs (8 files)
 **📝 CHANGELOG.md** (NEW)
 - v4.0.0 release notes
 - Breaking changes (none)
-- New features
+- New features (pipeline architecture)
 - Bug fixes
 - Migration guide
 
-**Template**:
-```markdown
-# Changelog
-
-## [4.0.0] - 2025-10-30
-
-### 🎉 Major Features
-- Modular pipeline architecture
-- Mix local and cloud AI components
-- Production monitoring stack
-
-### ✅ Validated Configurations
-- local_hybrid (recommended)
-- hybrid_support (cloud)
-- local_only (air-gapped)
-
-### 🔧 Improvements
-- Enhanced transport layer
-- Pipeline codec management
-- Production logging
-
-### 📚 Documentation
-- Hardware requirements
-- Monitoring guide
-- Transport compatibility
-
-### ⚠️ Breaking Changes
-None - backward compatible with v3.x
-
-See V4-GA-MasterPlan.md for complete details.
-```
-
-### docs/ Directory (3 documents)
+### docs/ Directory (4 documents)
 
 **📝 docs/HARDWARE_REQUIREMENTS.md** (NEW)
 - Hardware specs for each pipeline
 - Performance benchmarks
 - CPU vs GPU guidance
 - Cost analysis
+- local_only requirements
 
 **📝 docs/MONITORING_GUIDE.md** (NEW)
 - Prometheus + Grafana setup
-- Dashboard descriptions
+- Dashboard descriptions (5 dashboards)
 - Alert configuration
 - Troubleshooting with metrics
+- Production deployment
 
 **📝 docs/PRODUCTION_DEPLOYMENT.md** (NEW)
 - Production best practices
 - Security hardening
 - Backup procedures
 - Upgrade process
-
-### docs/ Directory (1 document)
+- Scaling guidance
 
 **📝 docs/TESTING_VALIDATION.md** (NEW)
 - Pipeline validation results
 - Test call summaries
 - Performance metrics
 - Known limitations
+- Validated configurations
+
+### docs/case-studies/ (1 document)
+
+**📝 docs/case-studies/DEEPGRAM_HYBRID_GOLDEN_BASELINE.md** (NEW)
+- Deepgram + OpenAI + Deepgram pipeline
+- Performance characteristics
+- Golden baseline configuration
+- Tuning guidance
 
 ---
 
 ## Update - Existing Documents
 
-### Root Directory
+### Root Directory (1 document)
 
 **📝 README.md**
 - Update version: v3.0 → v4.0
@@ -429,107 +362,89 @@ See V4-GA-MasterPlan.md for complete details.
   - Add: Production monitoring stack
   - Add: Local + cloud hybrid support
 - Update quick start for pipeline selection
-- Add links to new docs
+- Add links to new docs (hardware requirements, monitoring)
 
-### docs/ Directory
+### docs/ Directory (5 documents)
 
 **📝 docs/Architecture.md**
 - Add pipeline architecture section
 - Document STT → LLM → TTS flow
 - Update architecture diagram
-- Explain transport layer
+- Explain transport layer improvements
 
 **📝 docs/INSTALLATION.md**
 - Add monitoring stack setup section
-- Document pipeline selection
+- Document pipeline selection in install.sh
 - Add hardware requirements reference
-- Update troubleshooting
+- Update troubleshooting section
 
 **📝 docs/Configuration-Reference.md**
-- Document pipeline configuration
-- Remove deprecated settings mention
+- Document pipeline configuration format
+- Remove deprecated settings documentation
 - Add transport compatibility reference
-- Update examples
+- Update examples with v4.0 configs
 
 **📝 docs/Tuning-Recipes.md**
-- Add pipeline-specific tuning
+- Add pipeline-specific tuning section
 - Document local_only hardware optimization
 - Add monitoring integration
+- Update performance baselines
 
 **📝 docs/plan/ROADMAP.md**
 - Merge ROADMAPv4.md content
-- Mark v4.0 as complete
-- Document v4.1+ plans
+- Mark v4.0 as complete ✅
+- Document v4.1+ plans (CLI tools, etc.)
 - Clean up completed items
+- Update timeline
 
 ---
 
 ## Execution Plan
 
-### Phase 1: Remove Development Artifacts (30 min)
+### Phase 1: Setup archived/ Folder (15 min)
 
 ```bash
-# Root directory cleanup
 cd /Users/haider.jarral/Documents/Claude/Asterisk-AI-Voice-Agent
 
-# Remove dev documents
-rm Agents.md Gemini.md BRIDGE_ARCHITECTURE_VERIFICATION.md \
-   CONFIG_V4_RELEASE.md DEPRECATED_CODE_AUDIT.md GAv4-CHECKLIST.md \
-   PRODUCTION_HARDENING_PLAN.md OPTION3_IMPLEMENTATION_ANALYSIS.md \
-   ROADMAP_STATUS_20251025.md ROADMAP_STATUS_REVIEW_OCT27.md \
-   TESTING_GUIDE_P1.md
+# Create archived structure
+mkdir -p archived/docs/plan archived/logs
 
-# Check for any remaining OPENAI_ files
-ls OPENAI_*.md 2>/dev/null && rm OPENAI_*.md
+# Move non-essential files
+mv DEPRECATED_CODE_AUDIT.md archived/ 2>/dev/null || true
+mv OPENAI_*.md archived/ 2>/dev/null || true
+mv docs/resilience.md archived/docs/ 2>/dev/null || true
+mv docs/Linear-Tracking-Rules.md archived/docs/ 2>/dev/null || true
+mv "docs/plan/Asterisk AI Voice Agent_ Your Comprehensive Open Source Launch Strategy.md" archived/docs/plan/ 2>/dev/null || true
+mv docs/plan/README.md archived/docs/plan/ 2>/dev/null || true
 
-# Remove docs/ artifacts
-rm docs/AudioSocket\ with\ Asterisk_\ Technical\ Summary\ for\ A.md \
-   docs/AudioSocket-Provider-Alignment.md \
-   docs/BENCHMARKING-IMPLEMENTATION-SUMMARY.md \
-   docs/EXTERNAL_MEDIA_TEST_GUIDE.md \
-   docs/ExternalMedia_Deployment_Guide.md \
-   docs/Hybrid-Pipeline-Golden-Baseline.md \
-   docs/LOG_ANALYSIS_VAD_IMPLEMENTATION.md \
-   docs/OPENAI_FORMAT_DISCOVERY.md \
-   docs/OpenAI-Realtime-Logging-Guide.md \
-   docs/Updated-Voice-AI-Stack.md \
-   docs/VAD_CRITICAL_FIXES_SUMMARY.md \
-   docs/VAD_IMPLEMENTATION_SUMMARY.md \
-   docs/call-framework.md \
-   docs/deepgram-agent-api.md \
-   docs/resilience.md \
-   docs/Linear-Tracking-Rules.md
+# Move logs
+mv logs/ archived/ 2>/dev/null || true
 
-# Remove entire directories
-rm -rf docs/baselines/ docs/regression/ docs/regressions/
+# Add to .gitignore
+echo "" >> .gitignore
+echo "# Archived development documentation" >> .gitignore
+echo "archived/" >> .gitignore
 
-# Remove docs/plan/ artifacts  
-rm docs/plan/Asterisk\ AI\ Voice\ Agent_\ Your\ Comprehensive\ Open\ Source\ Launch\ Strategy.md \
-   docs/plan/P1_IMPLEMENTATION_PLAN.md \
-   docs/plan/README.md \
-   docs/plan/ROADMAPv4-GAP-ANALYSIS.md
+# Commit
+git add .
+git commit -m "chore: Archive non-essential documentation locally
 
-# Remove logs
-rm -rf logs/remote/
-rm logs/test-call-logs-*.md
+Created archived/ folder for:
+- Test logs (50+ files)
+- RCA documents (44 files)
+- Obsolete/incomplete docs (5 files)
 
-# Git commit
-git add -A
-git commit -m "docs: Remove development artifacts for GA v4.0
+Added archived/ to .gitignore (not tracked in git)
 
-Removed ~75 development documentation files:
-- Dev process documents (11 files)
-- Dev research and analysis (14 files)
-- Planning documents (4 files)
-- RCA and test logs (50+ files)
-- Incomplete/superseded docs
+develop branch keeps all useful development context:
+- Research documents
+- Design decisions
+- Validation baselines
+- Implementation analysis
 
-All critical information preserved in:
-- Production documentation
-- Case studies
-- Code comments
+Total: ~80 development docs remain in develop"
 
-Clean repository for GA release"
+git push origin develop
 ```
 
 ### Phase 2: Create New Documentation (4 hours)
@@ -540,6 +455,7 @@ Clean repository for GA release"
 3. docs/MONITORING_GUIDE.md (1 hour)
 4. docs/PRODUCTION_DEPLOYMENT.md (1 hour)
 5. docs/TESTING_VALIDATION.md (30 min)
+6. docs/case-studies/DEEPGRAM_HYBRID_GOLDEN_BASELINE.md (30 min - from notes)
 
 ### Phase 3: Update Existing Documentation (2 hours)
 
@@ -555,7 +471,7 @@ Clean repository for GA release"
 1. Merge ROADMAPv4.md content into docs/plan/ROADMAP.md
 2. Mark v4.0 complete
 3. Document v4.1+ plans
-4. Remove ROADMAPv4.md
+4. Move ROADMAPv4.md to archived/docs/plan/
 
 ### Phase 5: Final Review (1 hour)
 
@@ -564,21 +480,23 @@ Clean repository for GA release"
 - [ ] Review for consistency
 - [ ] Check formatting
 - [ ] Test examples
+- [ ] Verify .gitignore working
 
-### Phase 6: Commit and Push
+### Phase 6: Commit and Push (5 min)
 
 ```bash
-git add -A
+git add .
 git commit -m "docs: Complete GA v4.0 documentation
 
-Created:
+Created (6 new):
 - CHANGELOG.md
 - docs/HARDWARE_REQUIREMENTS.md
 - docs/MONITORING_GUIDE.md
 - docs/PRODUCTION_DEPLOYMENT.md
 - docs/TESTING_VALIDATION.md
+- docs/case-studies/DEEPGRAM_HYBRID_GOLDEN_BASELINE.md
 
-Updated:
+Updated (6 documents):
 - README.md (v4.0)
 - docs/Architecture.md
 - docs/INSTALLATION.md
@@ -586,8 +504,8 @@ Updated:
 - docs/Tuning-Recipes.md
 - docs/plan/ROADMAP.md
 
-Total: 5 new + 6 updated documents
-Status: Ready for production"
+Status: develop branch ready with full context
+Ready: Production docs ready for staging/main merge"
 
 git push origin develop
 ```
@@ -598,25 +516,48 @@ git push origin develop
 
 ### Files by Action
 
-| Action | Count | Time |
-|--------|-------|------|
-| **Remove** | ~75 files | 30 min |
-| **Create** | 5 files | 4 hours |
-| **Update** | 6 files | 2 hours |
-| **Keep** | 23 files | - |
-| **Total** | 109 files | 6.5 hours |
+| Action | Count | Location | Tracked in Git |
+|--------|-------|----------|----------------|
+| **Keep in develop** | ~80 files | develop branch | ✅ Yes |
+| **Archive locally** | ~65 files | archived/ folder | ❌ No (.gitignore) |
+| **Create new** | 6 files | develop branch | ✅ Yes |
+| **Update** | 6 files | develop branch | ✅ Yes |
+| **For production** | ~30 files | staging/main (cherry-pick) | ✅ Yes |
 
-### Final Structure
+### Three-Tier Structure
 
-**Production-ready documentation**:
-- Clean root directory (4 core docs)
-- Organized docs/ structure (14 user-facing docs)
-- Complete monitoring/ docs (1 file)
-- Preserved milestones (4 files)
-- Clean plan/ directory (2 files)
-- Supporting README files (4 files)
+**develop Branch** (~86 files):
+- Full development context
+- Research and design decisions
+- Implementation analysis
+- Baseline validations
+- All useful documentation
+- Perfect for IDE tools (Cursor, Windsurf)
 
-**Total**: 29 production documents
+**Local archived/** (~65 files):
+- Test logs
+- RCA documents
+- Obsolete docs
+- Not tracked in git
+- Available for reference
+
+**staging/main Branches** (~30 files):
+- Production documentation only
+- User-facing guides
+- Clean, professional
+- No development artifacts
+
+### Timeline
+
+| Phase | Task | Time |
+|-------|------|------|
+| **Phase 1** | Setup archived/ folder | 15 min |
+| **Phase 2** | Create new docs (6 files) | 4 hours |
+| **Phase 3** | Update existing (6 files) | 2 hours |
+| **Phase 4** | Merge ROADMAP | 30 min |
+| **Phase 5** | Final review | 1 hour |
+| **Phase 6** | Commit and push | 5 min |
+| **Total** | | **~8 hours** |
 
 ---
 
@@ -624,18 +565,31 @@ git push origin develop
 
 Before merge to staging:
 
-- [ ] All development artifacts removed
+- [ ] archived/ folder created with correct files
+- [ ] archived/ added to .gitignore
 - [ ] All new documentation created
 - [ ] All existing documentation updated
 - [ ] All links verified
 - [ ] Examples tested
 - [ ] Formatting consistent
 - [ ] No broken references
-- [ ] Git history clean
+- [ ] develop branch has full context
+- [ ] Production docs identified
+
+---
+
+## Benefits of This Approach
+
+✅ **develop branch**: Full development context for IDE tools  
+✅ **Local archived/**: Quick reference without git clutter  
+✅ **Production clean**: Professional staging/main branches  
+✅ **No data loss**: Everything preserved  
+✅ **Developer friendly**: New developers get full context  
+✅ **Production ready**: Clean merge to staging/main  
 
 ---
 
 **Status**: 🟢 READY TO EXECUTE  
-**Timeline**: 6.5 hours total  
-**Risk**: Low (all changes reversible via git)  
-**Impact**: Clean, professional documentation for GA v4.0
+**Timeline**: 8 hours total  
+**Risk**: Low (all changes reversible, archived locally)  
+**Impact**: Developer-friendly develop + clean production release
