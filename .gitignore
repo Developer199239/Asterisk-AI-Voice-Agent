@@ -227,3 +227,6 @@ logs/remote/
 # RCA analysis artifacts (should remain local-only)
 OPENAI_*RCA*.md
 logs/remote/
+
+# Archived development documentation (GA v4.0 cleanup)
+archived/

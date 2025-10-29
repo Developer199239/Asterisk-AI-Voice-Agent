@@ -390,12 +390,23 @@ configure_env() {
         DEEPGRAM_API_KEY_DEFAULT=$(grep -E '^[# ]*DEEPGRAM_API_KEY=' .env | tail -n1 | sed -E 's/^[# ]*DEEPGRAM_API_KEY=//')
     fi
 
-    # Asterisk (blank keeps existing)
-    read -p "Enter your Asterisk Host [${ASTERISK_HOST_DEFAULT:-127.0.0.1}]: " ASTERISK_HOST_INPUT
+    # Asterisk Connection Details
+    echo ""
+    echo "Asterisk Connection Configuration"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "ASTERISK_HOST determines how ai-engine connects to Asterisk ARI:"
+    echo "  • 127.0.0.1 or localhost  - Asterisk on the SAME host (default)"
+    echo "  • IP address              - Asterisk on a remote host (e.g., 192.168.1.100)"
+    echo "  • Hostname/FQDN           - Remote via DNS (e.g., asterisk.example.com)"
+    echo "  • Container name          - Containerized Asterisk on same Docker network"
+    echo ""
+    read -p "Enter Asterisk Host [${ASTERISK_HOST_DEFAULT:-127.0.0.1}]: " ASTERISK_HOST_INPUT
     ASTERISK_HOST=${ASTERISK_HOST_INPUT:-${ASTERISK_HOST_DEFAULT:-127.0.0.1}}
-    read -p "Enter your ARI Username [${ASTERISK_ARI_USERNAME_DEFAULT:-asterisk}]: " ASTERISK_ARI_USERNAME_INPUT
+    
+    read -p "Enter ARI Username [${ASTERISK_ARI_USERNAME_DEFAULT:-asterisk}]: " ASTERISK_ARI_USERNAME_INPUT
     ASTERISK_ARI_USERNAME=${ASTERISK_ARI_USERNAME_INPUT:-${ASTERISK_ARI_USERNAME_DEFAULT:-asterisk}}
-    read -s -p "Enter your ARI Password [unchanged if blank]: " ASTERISK_ARI_PASSWORD_INPUT
+    
+    read -s -p "Enter ARI Password [unchanged if blank]: " ASTERISK_ARI_PASSWORD_INPUT
     echo
     if [ -n "$ASTERISK_ARI_PASSWORD_INPUT" ]; then
         ASTERISK_ARI_PASSWORD="$ASTERISK_ARI_PASSWORD_INPUT"
@@ -442,178 +453,276 @@ configure_env() {
 }
 
 select_config_template() {
-    echo "Select a configuration template for config/ai-agent.yaml:"
-    echo "  [1] General example (pipelines + monolithic fallback)"
-    echo "  [2] Local-only pipeline"
-    echo "  [3] Cloud-only OpenAI pipeline"
-    echo "  [4] Hybrid (Local STT + OpenAI LLM + Deepgram TTS)"
-    echo "  [5] Monolithic OpenAI Realtime agent"
-    echo "  [6] Monolithic Deepgram Voice Agent"
+    echo ""
+    echo "╔═══════════════════════════════════════════════════════════╗"
+    echo "║   Asterisk AI Voice Agent v4.0 - Configuration Setup     ║"
+    echo "╚═══════════════════════════════════════════════════════════╝"
+    echo ""
+    echo "Select your AI voice agent configuration:"
+    echo ""
+    echo "  [1] OpenAI Realtime (Recommended)"
+    echo "      • Cloud-based, modern AI with natural conversations"
+    echo "      • Requires: OPENAI_API_KEY"
+    echo "      • Best for: Quick setup, enterprise deployments"
+    echo ""
+    echo "  [2] Deepgram Voice Agent"
+    echo "      • Enterprise-grade cloud AI with Think stage"
+    echo "      • Requires: DEEPGRAM_API_KEY + OPENAI_API_KEY (for Think)"
+    echo "      • Best for: Deepgram ecosystem, advanced features"
+    echo ""
+    echo "  [3] Local Hybrid (Privacy-Focused)"
+    echo "      • Local voice processing + cloud intelligence"
+    echo "      • Requires: OPENAI_API_KEY, 8GB+ RAM"
+    echo "      • Best for: Audio privacy, cost control"
+    echo "      • Note: First start downloads ~200MB models (5-10 min)"
+    echo ""
+    echo "  [A] Advanced: Custom configuration"
+    echo "      (Expert users only)"
+    echo ""
     read -p "Enter your choice [1]: " cfg_choice
-    # Always start from the canonical pipelines template, then set active/defaults
-    CFG_SRC="config/ai-agent.example.yaml"
-    PROFILE="example"
-    PIPELINE_CHOICE=""
-    case "$cfg_choice" in
-        2) PROFILE="local"; PIPELINE_CHOICE="local_only" ;;
-        3) PROFILE="cloud-openai"; PIPELINE_CHOICE="cloud_openai" ;;
-        4) PROFILE="hybrid"; PIPELINE_CHOICE="hybrid_deepgram_openai" ;;
-        5) PROFILE="openai-agent" ;;
-        6) PROFILE="deepgram-agent" ;;
-        *) PROFILE="example"; PIPELINE_CHOICE="cloud_openai" ;;
-    esac
+    
+    # Map choices to profiles and config files
     CFG_DST="config/ai-agent.yaml"
+    NEEDS_OPENAI=0
+    NEEDS_DEEPGRAM=0
+    NEEDS_LOCAL=0
+    
+    case "$cfg_choice" in
+        1|"")
+            PROFILE="golden-openai"
+            CFG_SRC="config/ai-agent.golden-openai.yaml"
+            NEEDS_OPENAI=1
+            print_info "Selected: OpenAI Realtime"
+            ;;
+        2)
+            PROFILE="golden-deepgram"
+            CFG_SRC="config/ai-agent.golden-deepgram.yaml"
+            NEEDS_DEEPGRAM=1
+            NEEDS_OPENAI=1  # For Think stage
+            print_info "Selected: Deepgram Voice Agent"
+            ;;
+        3)
+            PROFILE="golden-local-hybrid"
+            CFG_SRC="config/ai-agent.golden-local-hybrid.yaml"
+            NEEDS_OPENAI=1  # For LLM
+            NEEDS_LOCAL=1   # For STT/TTS
+            print_info "Selected: Local Hybrid"
+            ;;
+        [Aa])
+            PROFILE="custom"
+            CFG_SRC="config/ai-agent.example.yaml"
+            print_info "Selected: Advanced (Custom configuration)"
+            print_warning "You will need to manually configure providers and API keys."
+            ;;
+        *)
+            print_error "Invalid choice. Please run ./install.sh again."
+            exit 1
+            ;;
+    esac
+    
+    # Verify template exists
     if [ ! -f "$CFG_SRC" ]; then
         print_error "Template not found: $CFG_SRC"
+        print_error "This may indicate a corrupted installation. Please re-clone the repository."
         exit 1
     fi
+    
+    # Copy golden baseline to active config
     if [ -f "$CFG_DST" ]; then
-        print_info "Overwriting existing config/ai-agent.yaml with $CFG_SRC"
+        print_info "Overwriting existing config/ai-agent.yaml"
     fi
     cp "$CFG_SRC" "$CFG_DST"
-    print_success "Wrote $CFG_DST from $CFG_SRC"
-
-    # Set active_pipeline or default_provider based on selection
-    if [ -n "$PIPELINE_CHOICE" ]; then
-        if command -v yq >/dev/null 2>&1; then
-            yq -i ".active_pipeline = \"$PIPELINE_CHOICE\"" "$CFG_DST" || true
-        else
-            # sed fallback
-            if grep -qE '^[# ]*active_pipeline:' "$CFG_DST"; then
-                sed -i.bak -E "s|^([# ]*active_pipeline: ).*|\1$PIPELINE_CHOICE|" "$CFG_DST" || true
-            else
-                echo "active_pipeline: $PIPELINE_CHOICE" >> "$CFG_DST"
-            fi
-        fi
-    else
-        # Monolithic choices: adjust default_provider accordingly
-        case "$PROFILE" in
-            openai-agent)
-                if command -v yq >/dev/null 2>&1; then
-                    yq -i '.default_provider = "openai_realtime"' "$CFG_DST" || true
-                else
-                    sed -i.bak -E 's|^([# ]*default_provider: ).*|\1"openai_realtime"|' "$CFG_DST" || true
-                fi
-                ;;
-            deepgram-agent)
-                if command -v yq >/dev/null 2>&1; then
-                    yq -i '.default_provider = "deepgram"' "$CFG_DST" || true
-                else
-                    sed -i.bak -E 's|^([# ]*default_provider: ).*|\1"deepgram"|' "$CFG_DST" || true
-                fi
-                ;;
-        esac
-    fi
-
+    print_success "Configuration copied from: $(basename $CFG_SRC)"
+    
+    # Smart API key prompting based on profile needs
+    prompt_required_api_keys
+    
     # Ensure yq is available and update llm.* from the values captured earlier
     ensure_yq || true
     update_yaml_llm || true
-
-    # Offer local model setup for Local or Hybrid
-    if [ "$PROFILE" = "local" ] || [ "$PROFILE" = "hybrid" ]; then
-        read -p "Run local model setup now (downloads/caches models)? [Y/n]: " do_models
+    
+    # Handle local model setup for Local Hybrid
+    if [ "$NEEDS_LOCAL" -eq 1 ]; then
+        echo ""
+        print_info "Local Hybrid mode requires local AI models (~200MB)"
+        print_info "Models: Vosk STT + Piper TTS"
+        read -p "Download and setup local models now? [Y/n]: " do_models
         if [[ "$do_models" =~ ^[Yy]$|^$ ]]; then
-            if command -v make >/dev/null 2>&1; then
-                make model-setup || true
+            if command -v bash >/dev/null 2>&1 && [ -f scripts/model_setup.sh ]; then
+                print_info "Running model setup..."
+                bash scripts/model_setup.sh --assume-yes || print_warning "Model setup encountered issues. Check logs."
+            elif command -v python3 >/dev/null 2>&1 && [ -f scripts/model_setup.py ]; then
+                print_info "Running model setup with Python..."
+                python3 scripts/model_setup.py --assume-yes || print_warning "Model setup encountered issues."
             else
-                if command -v python3 >/dev/null 2>&1; then
-                    print_info "Running model setup with host python3..."
-                    python3 scripts/model_setup.py --assume-yes || true
-                else
-                    print_info "Host python3 not found; running one-off container for model setup."
-                    $COMPOSE run --rm ai-engine python /app/scripts/model_setup.py --assume-yes || true
-                fi
+                print_warning "Model setup scripts not found. Models will be downloaded on first container start."
             fi
+            
+            # Auto-detect and set model paths in .env
+            autodetect_local_models
+        else
+            print_info "Skipping model setup. Models will be downloaded on first container start (~5-10 min)."
         fi
-        # Note: LLM/STT/TTS settings are configured in YAML; .env is not mutated for models.
+    fi
+}
+
+# Smart API key prompting based on profile requirements
+prompt_required_api_keys() {
+    local missing_keys=0
+    
+    # Check for OpenAI API key if needed
+    if [ "$NEEDS_OPENAI" -eq 1 ]; then
+        if [ -z "$OPENAI_API_KEY_DEFAULT" ] || [ "$OPENAI_API_KEY_DEFAULT" = "your-openai-api-key-here" ]; then
+            echo ""
+            print_warning "⚠️  This configuration requires an OpenAI API key"
+            if [ "$PROFILE" = "golden-local-hybrid" ]; then
+                print_info "   (Used for LLM only - STT/TTS are local)"
+            fi
+            read -p "Enter your OpenAI API Key: " OPENAI_API_KEY_INPUT
+            if [ -z "$OPENAI_API_KEY_INPUT" ]; then
+                print_error "OpenAI API key is required for this profile"
+                exit 1
+            fi
+            upsert_env OPENAI_API_KEY "$OPENAI_API_KEY_INPUT"
+            print_success "OpenAI API key configured"
+        else
+            print_info "✓ Using existing OpenAI API key from .env"
+        fi
+    fi
+    
+    # Check for Deepgram API key if needed
+    if [ "$NEEDS_DEEPGRAM" -eq 1 ]; then
+        if [ -z "$DEEPGRAM_API_KEY_DEFAULT" ] || [ "$DEEPGRAM_API_KEY_DEFAULT" = "your-deepgram-api-key-here" ]; then
+            echo ""
+            print_warning "⚠️  This configuration requires a Deepgram API key"
+            print_info "   Get your API key at: https://console.deepgram.com/"
+            read -p "Enter your Deepgram API Key: " DEEPGRAM_API_KEY_INPUT
+            if [ -z "$DEEPGRAM_API_KEY_INPUT" ]; then
+                print_error "Deepgram API key is required for this profile"
+                exit 1
+            fi
+            upsert_env DEEPGRAM_API_KEY "$DEEPGRAM_API_KEY_INPUT"
+            print_success "Deepgram API key configured"
+        else
+            print_info "✓ Using existing Deepgram API key from .env"
+        fi
+    fi
+    
+    # Info message for local-only setup
+    if [ "$NEEDS_LOCAL" -eq 1 ]; then
+        echo ""
+        print_info "ℹ️  Local Hybrid mode selected"
+        print_info "   • Audio stays local (privacy)"
+        print_info "   • Only LLM calls use cloud API"
+        print_info "   • Cost: ~$0.001-0.003 per minute"
     fi
 }
 
 start_services() {
+    echo ""
     read -p "Build and start services now? [Y/n]: " start_service
     if [[ "$start_service" =~ ^[Yy]$|^$ ]]; then
-        if [ "$PROFILE" = "local" ] || [ "$PROFILE" = "hybrid" ]; then
-            print_info "Starting local-ai-server first..."
-            print_info "Note: first startup of local models may take 15–20 minutes depending on CPU/RAM/disk. Monitor: $COMPOSE logs -f local-ai-server"
-            wait_for_local_ai_health
-            print_info "Starting ai-engine..."
-            $COMPOSE up -d --build ai-engine
-        else
-            print_info "Building and starting ai-engine only (no local models required)..."
-            $COMPOSE up --build -d ai-engine
-        fi
-        print_success "Services started."
-        print_info "Logs:   $COMPOSE logs -f ai-engine"
-        print_info "Health: curl http://127.0.0.1:15000/health"
+        case "$PROFILE" in
+            golden-local-hybrid)
+                # Local Hybrid: needs local-ai-server + ai-engine
+                print_info "Starting local-ai-server (STT/TTS)..."
+                print_info "Note: First startup may take 5-10 minutes to load models"
+                print_info "Monitor progress: $COMPOSE logs -f local-ai-server"
+                wait_for_local_ai_health
+                print_info "Starting ai-engine (orchestrator)..."
+                $COMPOSE up -d --build ai-engine
+                ;;
+            golden-openai|golden-deepgram)
+                # Cloud-only: just ai-engine
+                print_info "Starting ai-engine (cloud mode - no local models)..."
+                $COMPOSE up --build -d ai-engine
+                ;;
+            custom)
+                # Advanced: start everything, let user decide
+                print_info "Starting all services (advanced mode)..."
+                $COMPOSE up --build -d
+                ;;
+        esac
+        
+        echo ""
+        print_success "✅ Services started successfully!"
+        echo ""
+        print_info "Next steps:"
+        print_info "  1. Check health:  curl http://127.0.0.1:15000/health"
+        print_info "  2. View logs:     $COMPOSE logs -f ai-engine"
+        print_info "  3. Configure Asterisk dialplan (see below)"
     else
-        print_info "Setup complete. Start later with: $COMPOSE up --build -d"
+        echo ""
+        print_info "Setup complete. Start services later with:"
+        print_info "  $COMPOSE up --build -d"
     fi
 
-    # Always print recommended Asterisk dialplan snippet to test the chosen pipeline/provider
+    # Always print recommended Asterisk dialplan snippet
     print_asterisk_dialplan_snippet
 }
 
 # --- Output recommended Asterisk dialplan for the chosen profile ---
 print_asterisk_dialplan_snippet() {
-    echo
-    echo "=========================================="
-    echo " Asterisk Dialplan Snippet (copy/paste)"
-    echo "=========================================="
+    echo ""
+    echo "╔═══════════════════════════════════════════════════════════╗"
+    echo "║            Asterisk Dialplan Configuration                ║"
+    echo "╚═══════════════════════════════════════════════════════════╝"
+    echo ""
 
     APP_NAME="asterisk-ai-voice-agent"
-    PIPELINE_NAME=""
-    PROVIDER_OVERRIDE=""
-
+    
+    # Determine configuration based on profile
     case "$PROFILE" in
-        local)
-            PIPELINE_NAME="local_only"
+        golden-openai)
+            DISPLAY_NAME="OpenAI Realtime"
+            TRANSPORT="AudioSocket or ExternalMedia RTP"
             ;;
-        hybrid)
-            PIPELINE_NAME="hybrid_deepgram_openai"
+        golden-deepgram)
+            DISPLAY_NAME="Deepgram Voice Agent"
+            TRANSPORT="AudioSocket or ExternalMedia RTP"
             ;;
-        cloud-openai)
-            PIPELINE_NAME="cloud_openai"
+        golden-local-hybrid)
+            DISPLAY_NAME="Local Hybrid Pipeline"
+            TRANSPORT="ExternalMedia RTP (recommended)"
             ;;
-        openai-agent)
-            PROVIDER_OVERRIDE="openai"
-            ;;
-        deepgram-agent)
-            PROVIDER_OVERRIDE="deepgram"
+        custom)
+            DISPLAY_NAME="Custom Configuration"
+            TRANSPORT="See your config"
             ;;
         *)
-            # Example template defaults to cloud_openai pipeline
-            PIPELINE_NAME="cloud_openai"
+            DISPLAY_NAME="AI Voice Agent"
+            TRANSPORT="AudioSocket or ExternalMedia RTP"
             ;;
     esac
 
-    echo "Add this to your extensions_custom.conf (or via FreePBX Config Edit):"
-    echo
-    if [ -n "$PROVIDER_OVERRIDE" ]; then
-        cat <<EOF
-[from-ai-agent-test]
-exten => s,1,NoOp(Test AI engine with provider override: $PROVIDER_OVERRIDE)
- same => n,Set(AI_PROVIDER=$PROVIDER_OVERRIDE)
- same => n,Stasis($APP_NAME)
+    echo "Configuration: $DISPLAY_NAME"
+    echo "Transport: $TRANSPORT"
+    echo ""
+    echo "Add this to extensions_custom.conf (or via FreePBX GUI):"
+    echo ""
+    cat <<'EOF'
+[from-ai-agent]
+exten => s,1,NoOp(Asterisk AI Voice Agent)
+ same => n,Answer()
+ same => n,Stasis(asterisk-ai-voice-agent)
  same => n,Hangup()
 EOF
-    else
-        cat <<EOF
-[from-ai-agent-test]
-exten => s,1,NoOp(Test AI engine with pipeline: $PIPELINE_NAME)
- same => n,Set(AI_PROVIDER=$PIPELINE_NAME)
- same => n,Stasis($APP_NAME)
- same => n,Hangup()
-EOF
-    fi
-
-    # Note: ExternalMedia RTP and AudioSocket use direct ARI approach
-    # No additional dialplan contexts required beyond from-ai-agent-* entry points
-
-    echo
-    echo "Next steps:"
-    echo " - Create a FreePBX Custom Destination to from-ai-agent-test,s,1 and route a test call to it."
-    echo " - Ensure modules are loaded: asterisk -rx 'module show like res_ari_applications' and 'module show like app_audiosocket'"
-    echo " - Watch logs: $COMPOSE logs -f ai-engine | sed -n '1,200p'"
+    
+    echo ""
+    echo "Then create a FreePBX Custom Destination:"
+    echo "  • Target: from-ai-agent,s,1"
+    echo "  • Route an inbound route or extension to this destination"
+    echo ""
+    echo "Verify Asterisk modules are loaded:"
+    echo "  asterisk -rx 'module show like res_ari'"
+    echo "  asterisk -rx 'module show like app_audiosocket'"
+    echo ""
+    echo "For detailed integration steps, see:"
+    echo "  docs/FreePBX-Integration-Guide.md"
+    echo ""
+    print_success "Installation complete! 🎉"
+    echo ""
+    print_info "Make a test call to verify everything works."
 }
 
 # --- Main ---

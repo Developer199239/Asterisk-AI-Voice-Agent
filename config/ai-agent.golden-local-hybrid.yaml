@@ -1,0 +1,146 @@
+# Golden Baseline #3: Local Hybrid Pipeline
+# Privacy-focused configuration with local audio processing + cloud intelligence
+#
+# Architecture:
+#   STT: Vosk (local) - Audio privacy, no cloud transmission
+#   LLM: OpenAI (cloud) - Fast, intelligent responses
+#   TTS: Piper (local) - Natural voice, offline capability
+#
+# Requirements:
+#   - OPENAI_API_KEY in .env (for LLM only)
+#   - 8GB+ RAM recommended
+#   - First start downloads ~200MB models (5-10 min)
+#
+# Best for:
+#   - Audio privacy (voice data stays local)
+#   - Cost control (only LLM calls charged)
+#   - Hybrid cloud-local deployment
+#   - Regulatory compliance scenarios
+#
+# Transport: ExternalMedia RTP (recommended for pipelines)
+# Playback: File-based (required for pipelines)
+# Performance: 3-7 second response time on modern hardware
+
+# Pipeline definition
+pipelines:
+  local_hybrid:
+    stt: local_stt
+    llm: openai_llm
+    tts: local_tts
+    options:
+      stt:
+        chunk_ms: 320
+        streaming: true
+        stream_format: "pcm16_16k"
+      llm:
+        base_url: "https://api.openai.com/v1"
+        model: "gpt-4o-mini"
+        temperature: 0.7
+        max_tokens: 150
+      tts:
+        format:
+          encoding: ulaw
+          sample_rate: 8000
+
+# Set local_hybrid as active pipeline
+active_pipeline: local_hybrid
+
+# Transport configuration
+audio_transport: "externalmedia"  # ExternalMedia RTP recommended for pipelines
+downstream_mode: "file"           # File-based playback required for pipelines
+
+# AudioSocket (if you prefer audiosocket transport instead)
+audiosocket:
+  host: "0.0.0.0"
+  port: 8090
+  format: "ulaw"
+
+# ExternalMedia RTP configuration (default transport)
+external_media:
+  rtp_host: "0.0.0.0"
+  rtp_port: 18080
+  port_range: "18080:18099"
+  codec: "ulaw"
+  direction: "both"
+
+# Barge-in configuration (interruption handling)
+barge_in:
+  enabled: true
+  initial_protection_ms: 400    # Protects greeting from echo
+  min_ms: 400                   # Sustained speech to trigger
+  energy_threshold: 1800        # RMS threshold for speech
+  cooldown_ms: 1000             # Ignore retriggers
+  post_tts_end_protection_ms: 250  # Guard after TTS
+
+# Streaming and buffering
+streaming:
+  sample_rate: 8000
+  jitter_buffer_ms: 100
+  keepalive_interval_ms: 5000
+  connection_timeout_ms: 10000
+  fallback_timeout_ms: 8000
+  chunk_size_ms: 20
+  min_start_ms: 300
+  low_watermark_ms: 200
+  provider_grace_ms: 500
+  logging_level: "info"
+
+# VAD configuration (Voice Activity Detection)
+vad:
+  enabled: true
+  mode: "webrtc"
+  webrtc_aggressiveness: 2      # 0-3, higher = more aggressive silence detection
+  min_speech_duration_ms: 250   # Minimum speech to process
+  silence_duration_ms: 700      # Silence to consider utterance complete
+  speech_pad_ms: 300            # Padding around speech
+  max_utterance_duration_s: 30  # Maximum single utterance
+
+# Provider configurations
+providers:
+  # Local AI server (Vosk STT + Piper TTS)
+  local:
+    enabled: true
+    ws_url: "${LOCAL_WS_URL:-ws://local-ai-server:8765}"
+    connect_timeout_sec: 5.0
+    response_timeout_sec: 10.0
+    chunk_ms: 320
+    
+  # OpenAI (for LLM only in this configuration)
+  openai:
+    enabled: true
+    api_key: "${OPENAI_API_KEY}"
+    
+  # OpenAI Realtime (disabled, not used in pipeline mode)
+  openai_realtime:
+    enabled: false
+    
+  # Deepgram (disabled, not used in this configuration)
+  deepgram:
+    enabled: false
+
+# LLM defaults (persona and greeting)
+llm:
+  initial_greeting: "Hello, how can I help you today?"
+  prompt: "You are a concise and helpful voice assistant. Keep replies under 20 words unless asked for detail."
+  model: "gpt-4o-mini"
+
+# App metadata
+app_name: "ai-voice-agent"
+app_instance_id: "${APP_INSTANCE_ID:-default}"
+
+# Performance notes:
+# - STT (Vosk): ~100-200ms latency, local processing
+# - LLM (OpenAI gpt-4o-mini): ~500-1500ms, cloud API
+# - TTS (Piper): ~200-400ms, local synthesis
+# - Total: 3-7 seconds per turn (typical)
+#
+# Cost optimization:
+# - Only LLM calls are charged (OpenAI API)
+# - STT and TTS are free (local processing)
+# - Estimated: $0.001-0.003 per minute of conversation
+#
+# Hardware requirements:
+# - CPU: Modern 4+ cores (2020+) recommended
+# - RAM: 8GB minimum, 16GB recommended
+# - Disk: ~500MB for models
+# - Network: Stable internet for LLM API calls

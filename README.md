@@ -1,29 +1,56 @@
-# Asterisk AI Voice Agent v3.0
+# Asterisk AI Voice Agent v4.0
 
-An open-source AI Voice Agent that integrates with Asterisk/FreePBX using the Asterisk REST Interface (ARI). It features a **production-ready, two-container architecture** with **Hybrid ARI** call control, **SessionStore** state management, ExternalMedia RTP integration for reliable real-time audio capture and file-based TTS playback for robust conversation handling.
+The most powerful, flexible open-source AI voice agent for Asterisk/FreePBX. Featuring a **modular pipeline architecture** that lets you mix and match STT, LLM, and TTS providers, plus **3 production-ready golden baselines** validated for enterprise deployment.
+
+## 🎉 What's New in v4.0
+
+* **🏗️ Modular Pipeline Architecture**: Mix and match STT, LLM, and TTS providers independently
+* **✅ 3 Golden Baselines**: Production-validated configurations ready to deploy
+* **🔒 Privacy-Focused Options**: Local Hybrid keeps audio processing on-premises
+* **⚡ Simplified Setup**: 3 clear configuration choices (down from 6)
+* **📊 Enterprise Monitoring**: Prometheus + Grafana out of the box
+* **🚀 ExternalMedia RTP**: Modern, reliable audio transport for pipelines
+* **🎯 Validated Performance**: Every config tested in production
 
 ## 🌟 Why Asterisk AI Voice Agent?
 
-This project is designed to be the most powerful, flexible, and easy-to-use open-source AI voice agent for Asterisk. Here’s what makes it different:
-
-* **Asterisk-Native:** No external telephony providers required. It works directly with your existing Asterisk/FreePBX installation.
-* **Truly Open Source:** The entire project is open source (MIT licensed), so you have complete transparency and control.
-* **Hybrid AI:** Seamlessly switch between cloud and local AI providers, giving you the best of both worlds.
-* **Production-Ready:** This isn’t just a demo. It’s a battle-tested, production-ready solution.
-* **Cost-Effective:** With local AI, you can have predictable costs without per-minute charges.
+* **Asterisk-Native:** Works directly with your existing Asterisk/FreePBX - no external telephony providers required
+* **Truly Open Source:** MIT licensed with complete transparency and control
+* **Modular Architecture:** Choose cloud, local, or hybrid - mix providers as needed
+* **Production-Ready:** Battle-tested with validated configurations and enterprise monitoring
+* **Cost-Effective:** Local Hybrid costs ~$0.001-0.003/minute (LLM only)
+* **Privacy-First:** Keep audio local while using cloud intelligence
 
 ## ✨ Features
 
-* **Modular AI Providers**: Easily switch between cloud and local AI providers.
-  * ✅ **Deepgram Voice Agent**: Fully implemented for a powerful cloud-based solution.
-  * ✅ **OpenAI Realtime**: Works out of the box—just set `OPENAI_API_KEY` in `.env` and select the OpenAI template/provider.
-  * ✅ **Local AI Server**: A dedicated container that runs local models (Vosk for STT, Llama for LLM, and Piper for TTS) for full control and privacy.
-* **High-Performance Architecture**: A lean `ai-engine` for call control and a separate `local-ai-server` for heavy AI processing ensures stability and scalability.
-* **Hybrid ARI Architecture**: Call control using ARI with "answer caller → create mixing bridge → add caller → create ExternalMedia and add it to bridge" flow.
-* **SessionStore State Management**: Centralized, typed store for all call session state, replacing legacy dictionary-based state management.
-* **Real-time Communication**: ExternalMedia RTP upstream capture from Asterisk with ARI-commanded file-based playback; engine↔AI servers use WebSocket.
-* **Docker-based Deployment**: Simple, two-service orchestration using Docker Compose.
-* **Customizable**: Configure greetings, AI roles, and voice personalities in a simple YAML file.
+### 3 Golden Baseline Configurations
+
+1. **OpenAI Realtime** (Recommended for Quick Start)
+   * Modern cloud AI with natural conversations
+   * Response time: <2 seconds
+   * Best for: Enterprise deployments, quick setup
+
+2. **Deepgram Voice Agent** (Enterprise Cloud)
+   * Advanced Think stage for complex reasoning
+   * Response time: <3 seconds
+   * Best for: Deepgram ecosystem, advanced features
+
+3. **Local Hybrid** (Privacy-Focused)
+   * Local STT/TTS + Cloud LLM (OpenAI)
+   * Audio stays on-premises, only text to cloud
+   * Response time: 3-7 seconds
+   * Best for: Audio privacy, cost control, compliance
+
+### Technical Features
+
+* **Modular Pipeline System**: Independent STT, LLM, and TTS provider selection
+* **Dual Transport Support**: AudioSocket (legacy) and ExternalMedia RTP (modern)
+* **High-Performance Architecture**: Separate `ai-engine` and `local-ai-server` containers
+* **Enterprise Monitoring**: Prometheus + Grafana with 5 dashboards and 50+ metrics
+* **State Management**: SessionStore for centralized, typed call state
+* **Barge-In Support**: Interrupt handling with configurable gating
+* **Docker Deployment**: Simple two-service orchestration
+* **Customizable**: YAML configuration for greetings, personas, and behavior
 
 ## 🎥 Demo
 
@@ -31,9 +58,9 @@ This project is designed to be the most powerful, flexible, and easy-to-use open
 
 ## 🚀 Quick Start
 
-Follow these 3 steps to get a working agent.
+Get up and running in **5 minutes**:
 
-1) Clone and install
+### 1. Clone and Install
 
 ```bash
 git clone https://github.com/hkjarral/Asterisk-AI-Voice-Agent.git
@@ -41,118 +68,114 @@ cd Asterisk-AI-Voice-Agent
 ./install.sh
 ```
 
-When prompted, choose your preferred configuration. The installer will:
+The installer will:
+* Guide you through **3 simple configuration choices**
+* Prompt for required API keys (only what you need)
+* Set up Docker containers automatically
+* Configure Asterisk integration
 
-* Create/update `.env` (prefilled from existing values on reruns; blank keeps current).
-* Write `config/ai-agent.yaml` from the canonical pipelines template and set your selection as the active default (pipeline or monolithic provider).
-* Set up the media path symlink.
-* Start only what is required for your selection:
-  * Local/Hybrid: start `local-ai-server` (wait for health), then `ai-engine`.
-  * Cloud-only/Monolithic: start `ai-engine` only.
+### 2. Choose Your Configuration
 
-2) Verify health
+When prompted, select one of the 3 golden baselines:
 
+* **[1] OpenAI Realtime** - Fastest setup, modern AI (requires `OPENAI_API_KEY`)
+* **[2] Deepgram Voice Agent** - Enterprise features (requires `DEEPGRAM_API_KEY` + `OPENAI_API_KEY`)
+* **[3] Local Hybrid** - Privacy-focused (requires `OPENAI_API_KEY`, 8GB+ RAM)
+
+The installer automatically starts the correct services for your choice.
+
+### 3. Configure Asterisk Dialplan
+
+Add this to your FreePBX (Config Edit → extensions_custom.conf):
+
+```asterisk
+[from-ai-agent]
+exten => s,1,NoOp(Asterisk AI Voice Agent)
+ same => n,Answer()
+ same => n,Stasis(asterisk-ai-voice-agent)
+ same => n,Hangup()
+```
+
+Then create a Custom Destination pointing to `from-ai-agent,s,1` and route calls to it.
+
+### 4. Test Your Agent
+
+Make a call to your configured destination and have a conversation!
+
+**Verify health** (optional):
 ```bash
 curl http://127.0.0.1:15000/health
 ```
 
-Expect `"audiosocket_listening": true`.
-
-3) FreePBX dialplan (AudioSocket-first)
-Add the context from `docs/FreePBX-Integration-Guide.md` (`from-ai-agent`, etc.), then route a test call to it.
-
-Hello World (optional, Local AI):
-
+**View logs**:
 ```bash
-python3 tests/test_local_ai_server_protocol.py  # With local-ai-server running
+docker compose logs -f ai-engine
 ```
 
-#### OpenAI Realtime quick start (cloud-only)
+**That's it!** Your AI voice agent is ready. 🎉
 
-If you want to use OpenAI Realtime out of the box:
-
-1) During `./install.sh`, select the OpenAI Realtime option when prompted (the installer keeps the pipelines template and sets `default_provider` to OpenAI Realtime for monolithic operation).
-2) Add your API key in `.env`:
-
-   ```bash
-   echo "OPENAI_API_KEY=sk-..." >> .env
-   ```
-
-3) Start just the engine (no local models needed):
-
-    ```bash
-    docker-compose up --build -d ai-engine
-    ```
+For detailed setup, see [docs/FreePBX-Integration-Guide.md](docs/FreePBX-Integration-Guide.md)
 
 ## ⚙️ Configuration
 
-The system is configured via `config/ai-agent.yaml` and a `.env` file for secrets.
-The installer is idempotent and pipeline-aware. It always writes `config/ai-agent.yaml` from the canonical pipelines template and then:
+### Two-File Configuration
 
-* Sets `active_pipeline` for Local/Hybrid/Cloud-OpenAI choices.
-* Sets `default_provider` for monolithic choices (OpenAI Realtime or Deepgram).
-* Updates `llm.initial_greeting` and `llm.prompt` via `yq` when available, with a safe append fallback otherwise.
+* **`config/ai-agent.yaml`** - Golden baseline configs (safe to commit)
+* **`.env`** - Secrets and API keys (git-ignored)
 
-### Canonical persona and greeting
+The installer handles everything automatically. To customize:
 
-* The canonical source for the agent greeting and persona lives in `config/ai-agent.yaml` under the `llm` block:
-  * `llm.initial_greeting`
-  * `llm.prompt`
-* Precedence rules at runtime:
-  1) Provider or pipeline-specific overrides (e.g., `providers.openai_realtime.instructions` or `providers.deepgram.greeting`) if explicitly set
-  2) `llm.prompt` and `llm.initial_greeting` in YAML
-  3) Environment variables `AI_ROLE` and `GREETING` as defaults
+**Change greeting or persona**:
+Edit `config/ai-agent.yaml`:
+```yaml
+llm:
+  initial_greeting: "Your custom greeting"
+  prompt: "Your custom AI persona"
+```
 
-This ensures all providers and pipelines stay aligned unless you intentionally override them per provider/pipeline.
+**Add/change API keys**:
+Edit `.env`:
+```bash
+OPENAI_API_KEY=sk-your-key-here
+DEEPGRAM_API_KEY=your-key-here
+ASTERISK_ARI_USERNAME=asterisk
+ASTERISK_ARI_PASSWORD=your-password
+```
 
-### Installer behavior (idempotent and pipeline-aware)
+**Switch configurations**:
+```bash
+# Copy a different golden baseline
+cp config/ai-agent.golden-deepgram.yaml config/ai-agent.yaml
+docker compose up -d --force-recreate ai-engine
+```
 
-* [`./install.sh`](install.sh) prompts for ARI credentials, API keys, Greeting, and AI Role.
-  * All prompts are prefilled from `.env` on reruns; leaving a field blank keeps its existing value.
-* The installer always writes `config/ai-agent.yaml` from the canonical pipelines template and then:
-  * Sets `active_pipeline` for Local/Hybrid/Cloud-OpenAI choices.
-  * Sets `default_provider` for monolithic choices (OpenAI Realtime or Deepgram).
-* It updates `llm.initial_greeting` and `llm.prompt` via `yq` when available, with a safe append fallback otherwise.
-* `${VAR}` placeholders in YAML remain supported; the loader expands these at runtime.
-* Service startup is selection-aware:
-  * Local/Hybrid: `local-ai-server` is started first and waited on, then `ai-engine`.
-  * Cloud-only/Monolithic: only `ai-engine` is started.
-
-### Key `ai-agent.yaml` settings
-
-* `default_provider`: `openai_realtime` (monolithic fallback; pipelines are the default path via `active_pipeline`)
-* `asterisk`: Connection details for ARI.
-* `providers`: Specific configurations for each AI provider.
-
-For a full, option-by-option reference (with recommended ranges and impact), see [`docs/Configuration-Reference.md`](docs/Configuration-Reference.md). For practical presets, see [`docs/Tuning-Recipes.md`](docs/Tuning-Recipes.md).
-
-### Required `.env` variables
-
-* `ASTERISK_ARI_USERNAME` & `ASTERISK_ARI_PASSWORD`
-* `DEEPGRAM_API_KEY` (if using Deepgram)
-
-### Optional local AI tuning (set via environment variables)
-
-* `LOCAL_LLM_MODEL_PATH`: absolute path to an alternative GGUF file mounted into the container.
-* `LOCAL_LLM_MAX_TOKENS`: cap the number of response tokens (default `48` for faster replies).
-* `LOCAL_LLM_TEMPERATURE`, `LOCAL_LLM_TOP_P`, `LOCAL_LLM_REPEAT_PENALTY`: sampling controls for the TinyLlama runtime.
-* `LOCAL_LLM_THREADS`, `LOCAL_LLM_CONTEXT`, `LOCAL_LLM_BATCH`: advanced performance knobs; defaults auto-detect CPU cores and favour latency.
-* `LOCAL_STT_MODEL_PATH`, `LOCAL_TTS_MODEL_PATH`: override default Vosk/Piper models if you preload alternates under `models/`.
+For advanced tuning, see:
+* [docs/Configuration-Reference.md](docs/Configuration-Reference.md) - Complete reference
+* [docs/Transport-Mode-Compatibility.md](docs/Transport-Mode-Compatibility.md) - Transport modes
 
 ## 🏗️ Project Architecture
 
-The application is split into two Docker containers for performance and scalability:
+Two-container architecture for performance and scalability:
 
-1. **`ai-engine`**: A lightweight service that connects to Asterisk via ARI, manages the call lifecycle, and communicates with AI providers.
-2. **`local-ai-server`**: A dedicated, powerful service that pre-loads and runs local STT, LLM, and TTS models, exposing them via a WebSocket interface.
+**`ai-engine`** (Lightweight orchestrator)
+* Connects to Asterisk via ARI
+* Manages call lifecycle
+* Routes audio to/from AI providers
+* Handles state management
+
+**`local-ai-server`** (Optional, for Local Hybrid)
+* Runs local STT/TTS models
+* Vosk (speech-to-text)
+* Piper (text-to-speech)
+* WebSocket interface
 
 ```
 ┌─────────────────┐      ┌───────────┐      ┌───────────────────┐
 │ Asterisk Server │◀────▶│ ai-engine │◀────▶│ AI Provider       │
-│ (ARI, RTP)      │      │ (Docker)  │      │ (Deepgram, etc.)  │
+│ (ARI, RTP)      │      │ (Docker)  │      │ (Cloud or Local)  │
 └─────────────────┘      └───────────┘      └───────────────────┘
                            │     ▲
-                           │ WSS │ WebSocket
+                           │ WS  │ (Local Hybrid only)
                            ▼     │
                          ┌─────────────────┐
                          │ local-ai-server │
@@ -160,22 +183,49 @@ The application is split into two Docker containers for performance and scalabil
                          └─────────────────┘
 ```
 
-This separation ensures that the resource-intensive AI models do not impact the real-time call handling performance of the `ai-engine`. The system uses ExternalMedia RTP for reliable audio capture and file-based TTS playback for robust conversation handling. Streaming TTS is planned as a future enhancement.
+**Key Design Principles**:
+* Separation of concerns - AI processing isolated from call handling
+* Modular pipelines - Mix and match STT, LLM, TTS providers
+* Transport flexibility - AudioSocket (legacy) or ExternalMedia RTP (modern)
+* Enterprise-ready - Monitoring, observability, production-hardened
 
-## 🎯 Current Status
+## 📊 Requirements
 
-* ✅ **PRODUCTION READY**: Full two-way conversation system working perfectly!
-* ✅ **Real-time Audio Processing**: ExternalMedia RTP with SSRC mapping
-* ✅ **State Management**: SessionStore-based centralized state management
-* ✅ **TTS Gating**: Perfect feedback prevention during AI responses
-* ✅ **Local AI Integration**: Vosk STT, TinyLlama LLM, Piper TTS
-* ✅ **Conversation Flow**: Complete STT → LLM → TTS pipeline working
-* ✅ **Architecture Validation**: Refactored codebase with clean separation of concerns
-* ✅ **Observability**: ConversationCoordinator drives `/health` + `/metrics` (Prometheus friendly)
+### Minimum System Requirements
 
-## 🗺️ Roadmap
+**For Cloud Configurations** (OpenAI Realtime, Deepgram):
+* CPU: 2+ cores
+* RAM: 4GB
+* Disk: 1GB
+* Network: Stable internet connection
 
-Current milestones and acceptance criteria live in [`docs/plan/ROADMAP.md`](docs/plan/ROADMAP.md). Update that file after each deliverable so anyone (or any AI assistant) can resume the project with a single reference.
+**For Local Hybrid** (Local STT/TTS + Cloud LLM):
+* CPU: 4+ cores (modern 2020+)
+* RAM: 8GB+ recommended
+* Disk: 2GB (models + workspace)
+* Network: Stable internet for LLM API
+
+### Software Requirements
+
+* Docker + Docker Compose
+* Asterisk 18+ with ARI enabled
+* FreePBX (recommended) or vanilla Asterisk
+
+### API Keys Required
+
+| Configuration | Required Keys |
+|--------------|---------------|
+| OpenAI Realtime | `OPENAI_API_KEY` |
+| Deepgram Voice Agent | `DEEPGRAM_API_KEY` + `OPENAI_API_KEY` |
+| Local Hybrid | `OPENAI_API_KEY` |
+
+## 🗺️ Documentation
+
+* **[Getting Started](docs/FreePBX-Integration-Guide.md)** - Complete integration guide
+* **[Configuration Reference](docs/Configuration-Reference.md)** - All YAML settings explained
+* **[Transport Compatibility](docs/Transport-Mode-Compatibility.md)** - AudioSocket vs RTP
+* **[Monitoring](monitoring/README.md)** - Prometheus + Grafana setup
+* **[Contributing](CONTRIBUTING.md)** - How to contribute
 
 ## 🤝 Contributing
 
