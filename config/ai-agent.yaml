@@ -31,10 +31,10 @@
 # Related: Linear AAVA-28
 # =============================================================================
 
-active_pipeline: ""
+active_pipeline: local_hybrid
 asterisk:
   app_name: asterisk-ai-voice-agent
-audio_transport: audiosocket
+audio_transport: externalmedia
 audiosocket:
   format: slin
   host: 0.0.0.0
@@ -172,6 +172,25 @@ pipelines:
           sample_rate: 8000
     stt: local_stt
     tts: deepgram_tts
+  local_hybrid:
+    llm: openai_llm
+    options:
+      llm:
+        base_url: https://api.openai.com/v1
+        model: gpt-4o-mini
+        max_tokens: 150
+        temperature: 0.7
+      stt:
+        chunk_ms: 160
+        mode: stt
+        stream_format: pcm16_16k
+        streaming: true
+      tts:
+        format:
+          encoding: mulaw
+          sample_rate: 8000
+    stt: local_stt
+    tts: local_tts
 profiles:
   default: telephony_responsive
   openai_realtime_24k:
