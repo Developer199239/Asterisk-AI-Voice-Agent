@@ -3,7 +3,7 @@
 **Version**: 4.0.0  
 **Status**: 🟢 READY FOR RELEASE  
 **Date**: October 28, 2025  
-**Branch**: `develop` → `main`
+**Branch**: `develop` → `staging`
 
 ---
 
@@ -153,45 +153,40 @@ All monitoring infrastructure is complete and production-ready.
 
 ## CLI Tools Status
 
-### 🚨 GAP IDENTIFIED: CLI Tools Not Implemented
+### ✅ CLI Tools Implemented
 
-**Status**: ⚠️ **MISSING**
+**Status**: ✅ **COMPLETE**
 
-The following CLI tools referenced in issues **do not exist**:
-- agent doctor
-- agent demo
-- agent init
-- agent troubleshoot
+**Location**: `cli/cmd/agent/` (Go implementation)
 
-### Current Tooling
+**Available Commands**:
+- `agent doctor` - System health check (cli/cmd/agent/doctor.go)
+- `agent demo` - Demo functionality (cli/cmd/agent/demo.go)
+- `agent init` - Initialize configuration (cli/cmd/agent/init.go)
+- `agent troubleshoot` - Post-call analysis (cli/cmd/agent/troubleshoot.go)
+- `agent version` - Show version (cli/cmd/agent/version.go)
+
+**Build**:
+```bash
+cd cli/cmd/agent
+go build -o agent
+```
+
+### Scripts Directory
 
 **Available Scripts**:
 - `rca_collect.sh` - RCA collection ✅
-- `analyze_logs.py` - Log analysis
-- `model_setup.py` - Model management
+- `analyze_logs.py` - Log analysis (convert to shell script)
+- `model_setup.py` - Model management (convert to shell script)
 - Various testing/monitoring scripts
 
-### GA Decision: DEFER TO POST-GA
+### GA Action Items
 
-**Justification**:
-1. Core functionality works without CLI wrappers
-2. Scripts provide equivalent functionality
-3. Would require 3-4 days development
-4. Not blocking for GA release
-
-**Workarounds**:
-```bash
-# Health check
-docker ps && curl http://localhost:15000/health
-
-# RCA collection
-bash scripts/rca_collect.sh
-
-# Configuration
-# Use install.sh (working)
-```
-
-**Post-GA Plan**: v4.1 - Implement unified CLI wrapper
+**Before Release**:
+1. Convert `analyze_logs.py` to shell script (Python version compatibility)
+2. Convert `model_setup.py` to shell script (Python version compatibility)
+3. Document CLI tools in README.md
+4. Add build instructions for `agent` binary
 
 ---
 
@@ -268,13 +263,36 @@ mv OPENAI_REALTIME_GOLDEN_BASELINE.md docs/case-studies/
    - Document 3 validated pipeline calls
    - Test results summary
 
-### Phase 3: Final Review (1 hour)
+### Phase 3: Code Cleanup (1-2 hours)
+
+**Remove Dead Code**:
+1. **Remove unused classes** (src/engine.py):
+   - `AudioFrameProcessor` (lines 128-167) - Defined but never instantiated
+   - `VoiceActivityDetector` (lines 168-195) - Defined but never used
+
+2. **Clean LLM Config** (src/config.py, config/ai-agent.yaml):
+   - Remove `model` field from `LLMConfig` (not used, providers have own model fields)
+   - Remove `temperature` from `LLMConfig` (not used at top level)
+   - Remove from YAML: `llm.model`, `llm.temperature`
+
+3. **Remove unused config** (config/ai-agent.yaml):
+   - Delete `external_media.jitter_buffer_ms` (not consumed by RTP server)
+
+4. **Convert Python scripts to shell**:
+   - `scripts/analyze_logs.py` → `scripts/analyze_logs.sh`
+   - `scripts/model_setup.py` → `scripts/model_setup.sh`
+   - Reason: Python version compatibility across systems
+
+**Impact**: Cleaner codebase, no functional changes
+
+### Phase 4: Final Review (1 hour)
 
 - Read through all documentation
 - Check links work
 - Verify examples correct
+- Test CLI tools build
 
-**Total Time**: ~6-7 hours
+**Total Time**: ~8-9 hours
 
 ---
 
@@ -294,10 +312,16 @@ mv OPENAI_REALTIME_GOLDEN_BASELINE.md docs/case-studies/
 - [ ] **Create docs/PRODUCTION_DEPLOYMENT.md** (1 hour)
 - [ ] **Update README.md** (30 min)
 - [ ] **Create docs/TESTING_VALIDATION.md** (30 min)
+- [ ] **Code cleanup** (1-2 hours)
+  - Remove dead classes (AudioFrameProcessor, VoiceActivityDetector)
+  - Clean LLM config (remove unused fields)
+  - Remove external_media.jitter_buffer_ms
+  - Convert Python scripts to shell
 - [ ] **Remove development artifacts** (30 min)
+- [ ] **Document CLI tools** (30 min)
 - [ ] **Final documentation review** (1 hour)
 
-**Total Time**: ~6-7 hours
+**Total Time**: ~8-9 hours
 
 ### Verification Steps
 
@@ -361,9 +385,9 @@ mv OPENAI_REALTIME_GOLDEN_BASELINE.md docs/case-studies/
 
 ### CLI Tools
 
-**Status**: Not implemented in v4.0
-**Workaround**: Use scripts directly
-**Plan**: Implement in v4.1
+**Status**: ✅ Implemented (Go binaries in cli/cmd/agent)
+**Commands**: doctor, demo, init, troubleshoot, version
+**Build**: `cd cli/cmd/agent && go build -o agent`
 
 ### Monitoring
 
