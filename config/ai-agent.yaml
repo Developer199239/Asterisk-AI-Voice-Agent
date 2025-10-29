@@ -1,3 +1,36 @@
+# =============================================================================
+# TRANSPORT & PLAYBACK MODE CONFIGURATION
+# =============================================================================
+# 
+# IMPORTANT: Choose the correct audio_transport based on provider mode
+#
+# ✅ VALIDATED CONFIGURATIONS:
+#
+# 1. ExternalMedia RTP + Pipelines (RECOMMENDED for hybrid_support)
+#    audio_transport: externalmedia
+#    active_pipeline: hybrid_support  # or local_only, etc.
+#    downstream_mode: stream  # Ignored by pipelines (always uses file playback)
+#    WHY: Clean audio routing, no Asterisk bridge conflicts
+#    STATUS: Validated ✅ (Call 1761698845.2619)
+#
+# 2. AudioSocket + Full Agent (for monolithic providers)
+#    audio_transport: audiosocket
+#    active_pipeline: ""  # Disable pipelines
+#    default_provider: deepgram  # or openai_realtime
+#    downstream_mode: stream  # Uses StreamingPlaybackManager
+#    WHY: Streaming playback, no Announcer channel conflicts
+#    STATUS: Validated ✅
+#
+# ❌ UNSUPPORTED: AudioSocket + Pipelines
+#    audio_transport: audiosocket + active_pipeline: hybrid_support
+#    ISSUE: Asterisk bridge routing conflict with Announcer channel
+#    SYMPTOM: Only greeting heard, no subsequent audio
+#    SOLUTION: Use externalmedia instead
+#
+# For detailed explanation, see: docs/Transport-Mode-Compatibility.md
+# Related: Linear AAVA-28
+# =============================================================================
+
 active_pipeline: ""
 asterisk:
   app_name: asterisk-ai-voice-agent
