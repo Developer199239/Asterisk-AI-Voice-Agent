@@ -1328,34 +1328,47 @@ class Engine:
             if not session.provider_session_active:
                 await self._start_provider_session(caller_channel_id)
 
-            # Start ARI channel recording on the AudioSocket channel to capture agent leg for RCA
+            # Start ARI channel recording on the AudioSocket channel (only when diagnostics enabled)
+            # Check if diagnostic taps are enabled
+            diag_enabled = False
             try:
-                ts = time.strftime("%Y%m%d-%H%M%S")
-                rec_name = f"out-{caller_channel_id}-{ts}"
-                ok = await self.ari_client.record_channel(
-                    audiosocket_channel_id,
-                    name=rec_name,
-                    format="wav",
-                    if_exists="overwrite",
-                    max_duration_seconds=360,
-                    max_silence_seconds=0,
-                    beep=False,
-                    terminate_on="none",
-                )
-                if ok:
-                    logger.info(
-                        "📼 ARI channel recording started on AudioSocket channel",
-                        audiosocket_channel_id=audiosocket_channel_id,
-                        name=rec_name,
-                    )
-                else:
-                    logger.warning(
-                        "Failed to start ARI channel recording on AudioSocket channel",
-                        audiosocket_channel_id=audiosocket_channel_id,
-                        name=rec_name,
-                    )
+                diag_enabled = bool(getattr(self.config.streaming, 'diag_enable_taps', False)) if hasattr(self.config, 'streaming') else False
             except Exception:
-                logger.debug("ARI channel recording start failed on AudioSocket channel", exc_info=True)
+                pass
+            
+            if diag_enabled:
+                try:
+                    ts = time.strftime("%Y%m%d-%H%M%S")
+                    rec_name = f"out-{caller_channel_id}-{ts}"
+                    ok = await self.ari_client.record_channel(
+                        audiosocket_channel_id,
+                        name=rec_name,
+                        format="wav",
+                        if_exists="overwrite",
+                        max_duration_seconds=360,
+                        max_silence_seconds=0,
+                        beep=False,
+                        terminate_on="none",
+                    )
+                    if ok:
+                        logger.info(
+                            "📼 ARI channel recording started on AudioSocket channel",
+                            audiosocket_channel_id=audiosocket_channel_id,
+                            name=rec_name,
+                        )
+                    else:
+                        logger.debug(
+                            "ARI channel recording failed to start (diagnostic recording)",
+                            audiosocket_channel_id=audiosocket_channel_id,
+                            name=rec_name,
+                        )
+                except Exception:
+                    logger.debug("ARI channel recording start failed (diagnostic recording)", exc_info=True)
+            else:
+                logger.debug(
+                    "ARI channel recording skipped (diag_enable_taps not enabled)",
+                    audiosocket_channel_id=audiosocket_channel_id,
+                )
         except Exception as exc:
             logger.error(
                 "🎯 HYBRID ARI - Failed to process AudioSocket channel",
@@ -4557,12 +4570,34 @@ class Engine:
                     value = (resp.get("value") or "").strip()
                     if value:
                         channel_vars[var_name] = value
-            except Exception:
-                logger.debug(
-                    f"{var_name} read failed; continuing",
-                    channel_id=channel_id,
-                    exc_info=True,
-                )
+                        logger.debug(
+                            f"Channel variable {var_name} read",
+                            channel_id=channel_id,
+                            variable=var_name,
+                            value=value,
+                        )
+                    else:
+                        logger.info(
+                            f"Channel variable {var_name} not set (using defaults)",
+                            channel_id=channel_id,
+                            variable=var_name,
+                        )
+            except Exception as exc:
+                # 404 is expected when variable not set - log as info, not error
+                if "404" in str(exc) or "not found" in str(exc).lower():
+                    logger.info(
+                        f"Channel variable {var_name} not set (using defaults)",
+                        channel_id=channel_id,
+                        variable=var_name,
+                    )
+                else:
+                    logger.debug(
+                        f"Failed to read channel variable {var_name}",
+                        channel_id=channel_id,
+                        variable=var_name,
+                        error=str(exc),
+                        exc_info=True,
+                    )
         
         # Get provider name (precedence: AI_PROVIDER > context > session.provider_name)
         provider_name = channel_vars.get('AI_PROVIDER')
