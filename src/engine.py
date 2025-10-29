@@ -4565,6 +4565,7 @@ class Engine:
                     "GET",
                     f"channels/{channel_id}/variable",
                     params={"variable": var_name},
+                    tolerate_statuses=[404],  # 404 is expected when variable not set
                 )
                 if isinstance(resp, dict):
                     value = (resp.get("value") or "").strip()
@@ -5243,8 +5244,8 @@ class Engine:
                     session.provider_name = provider_override
                     updated = True
             else:
-                logger.warning(
-                    "Milestone7 pipeline requested provider not loaded; continuing with session provider",
+                logger.debug(
+                    "Pipeline requested provider not in monolithic providers; using pipeline adapters directly",
                     call_id=session.call_id,
                     requested_provider=provider_override,
                     current_provider=session.provider_name,
