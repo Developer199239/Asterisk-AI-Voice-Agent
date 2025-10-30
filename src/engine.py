@@ -5310,6 +5310,38 @@ class Engine:
             except Exception:
                 logger.debug("Provider set_input_mode failed or unsupported", exc_info=True)
 
+            # Inject context-specific greeting and prompt into provider config (if available)
+            try:
+                context_name = getattr(session.transport_profile, 'context', None)
+                if context_name and hasattr(self, 'transport_orchestrator'):
+                    context_config = self.transport_orchestrator.get_context_config(context_name)
+                    if context_config:
+                        # Override provider config with context-specific values
+                        if isinstance(provider.config, dict):
+                            if context_config.greeting:
+                                provider.config['greeting'] = context_config.greeting
+                                logger.debug(
+                                    "Injected context greeting into provider config",
+                                    call_id=call_id,
+                                    context=context_name,
+                                    greeting_length=len(context_config.greeting),
+                                )
+                            if context_config.prompt:
+                                provider.config['prompt'] = context_config.prompt
+                                logger.debug(
+                                    "Injected context prompt into provider config",
+                                    call_id=call_id,
+                                    context=context_name,
+                                    prompt_length=len(context_config.prompt),
+                                )
+                        elif hasattr(provider.config, '__dict__'):
+                            if context_config.greeting:
+                                setattr(provider.config, 'greeting', context_config.greeting)
+                            if context_config.prompt:
+                                setattr(provider.config, 'prompt', context_config.prompt)
+            except Exception:
+                logger.debug("Failed to inject context config into provider", call_id=call_id, exc_info=True)
+
             await provider.start_session(call_id)
             # If provider supports an explicit greeting (e.g., LocalProvider), trigger it now
             try:
