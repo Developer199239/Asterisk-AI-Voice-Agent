@@ -161,7 +161,6 @@ For new deployments:
 ## [Unreleased]
 
 ### Planned for v4.1
-- **Build System**: Automated `agent` CLI binary builds (Makefile target)
 - **Additional Provider Integrations**: Anthropic Claude, Google Gemini
 - **Advanced Call Routing**: Transfer capabilities and multi-leg calls
 - **WebRTC Support**: SIP client integration
@@ -173,7 +172,7 @@ For new deployments:
 ## Version History
 
 - **v4.0.0** (2025-10-29) - Modular pipeline architecture, production monitoring, golden baselines
-- **v3.0.0** - Internal development version (never released)
+- **v3.0.0** (2025-09-16) - Modular pipeline architecture, file based playback
 - **v2.0.0** - Internal development version (never released)
 - **v1.0.0** - Initial concept (never released)
 
