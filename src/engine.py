@@ -4652,8 +4652,21 @@ class Engine:
             
             # Get context config for prompt/greeting and apply to provider
             context_config = None
+            logger.debug(
+                "DEBUG: Checking context config",
+                call_id=session.call_id,
+                transport_context=transport.context if hasattr(transport, 'context') else None,
+            )
             if transport.context:
                 context_config = self.transport_orchestrator.get_context_config(transport.context)
+                logger.debug(
+                    "DEBUG: Context config loaded",
+                    call_id=session.call_id,
+                    context=transport.context,
+                    has_config=context_config is not None,
+                    has_greeting=context_config.greeting if context_config else None,
+                    has_prompt=context_config.prompt if context_config else None,
+                )
                 if context_config:
                     # Inject context greeting/prompt into provider config NOW (not later)
                     try:
