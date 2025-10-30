@@ -189,35 +189,42 @@ docker-compose logs -f ai-engine
 
 Look for a message indicating a successful connection to the Asterisk ARI and that the AudioSocket listener is ready on port 8090.
 
-### Make a Test Call (AudioSocket + Stasis)
+### 5. Configure Asterisk Dialplan
 
-Use an AudioSocket-first dialplan so Asterisk streams raw audio to the agent before handing control to the Stasis app.
+The engine uses **ARI-based architecture** - the dialplan just hands calls to Stasis. The engine manages audio transport internally.
 
-**Example Dialplan (`extensions_custom.conf`):**
+**Minimal Dialplan** (works for all 3 golden baselines):
 
+Add to `/etc/asterisk/extensions_custom.conf`:
+
+```asterisk
 [from-ai-agent]
-exten => s,1,NoOp(Handing call directly to AI engine (default provider))
-  same => n,Set(AI_PROVIDER=local_only)
-  same => n,Stasis(asterisk-ai-voice-agent)
-  same => n,Hangup()
-
-[from-ai-agent-custom]
-exten => s,1,NoOp(Handing call to AI engine with Deepgram override)
- same => n,Set(AI_PROVIDER=hybrid_support)
+exten => s,1,NoOp(Asterisk AI Voice Agent v4.0)
+ same => n,Answer()
  same => n,Stasis(asterisk-ai-voice-agent)
  same => n,Hangup()
+```
 
-[from-ai-agent-deepgram]
-exten => s,1,NoOp(Handing call to AI engine with Deepgram override)
+**Optional: Provider Override via Channel Variables**:
+
+```asterisk
+[from-ai-agent-support]
+exten => s,1,NoOp(AI Agent - Customer Support)
+ same => n,Answer()
  same => n,Set(AI_PROVIDER=deepgram)
+ same => n,Set(AI_CONTEXT=support)
  same => n,Stasis(asterisk-ai-voice-agent)
  same => n,Hangup()
 
 [from-ai-agent-openai]
-exten => s,1,NoOp(Handing call to AI engine with Deepgram override)
+exten => s,1,NoOp(AI Agent - OpenAI Realtime)
+ same => n,Answer()
  same => n,Set(AI_PROVIDER=openai_realtime)
  same => n,Stasis(asterisk-ai-voice-agent)
  same => n,Hangup()
+```
+
+**Important:** Do NOT use `AudioSocket()` in the dialplan. The engine originates AudioSocket channels via ARI automatically.
 
 ## 4. Troubleshooting
 

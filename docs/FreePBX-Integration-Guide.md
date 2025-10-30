@@ -242,7 +242,11 @@ exten => s,1,NoOp(Asterisk AI Voice Agent v4.0)
  same => n,Hangup()
 ```
 
-**That's it!** This is all you need for basic operation.
+**That's it!** The engine manages audio transport internally via ARI:
+- **Full agents** (OpenAI Realtime, Deepgram): Engine originates AudioSocket channel
+- **Hybrid pipelines** (Local Hybrid): Engine originates ExternalMedia RTP channel
+
+No `AudioSocket()` or `ExternalMedia()` needed in dialplan.
 
 ### 3.4 Advanced: Context-Specific Routing
 

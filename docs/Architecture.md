@@ -12,7 +12,7 @@ The Asterisk AI Voice Agent v4.0 is a **production-ready, modular conversational
 
 ### Key Architecture Components
 
-- **Dual Transport Support** – AudioSocket (TCP, recommended) and ExternalMedia RTP (UDP) for audio capture
+- **Dual Transport Support** – AudioSocket (TCP, modern) for full agents and ExternalMedia RTP (UDP, legacy) for hybrid pipelines
 - **Adaptive Streaming** – Downstream audio with automatic jitter buffering and file playback fallback
 - **Modular Pipelines** – Independent STT, LLM, and TTS provider selection via YAML configuration
 - **Production Monitoring** – Prometheus + Grafana stack with 50+ metrics and 5 dashboards
@@ -436,62 +436,44 @@ The current implementation keeps Asterisk in control of the media pipe while the
 
 This orchestration leverages ExternalMedia for reliable inbound audio while keeping outbound playback file-based until streaming TTS is released.
 
-## FreePBX Dialplan Configuration
+## Dialplan Configuration
 
-### Working Dialplan Implementation
+### ARI-Based Architecture (v4.0)
 
-The system uses a simple, effective dialplan that directly hands calls to the Stasis application:
+v4.0 uses **ARI-based architecture** where the engine handles all audio transport setup. The dialplan's sole responsibility is to hand the call to Stasis.
+
+**Minimal Dialplan** (works for all 3 golden baselines):
 
 ```asterisk
 [from-ai-agent]
-exten => s,1,NoOp(Handing call directly to Stasis for AI processing)
- same => n,Stasis(asterisk-ai-voice-agent)
- same => n,Hangup()
-
-[ai-externalmedia]
-exten => s,1,NoOp(ExternalMedia + RTP AI Voice Agent)
+exten => s,1,NoOp(Asterisk AI Voice Agent v4.0)
  same => n,Answer()
- same => n,Wait(1)
  same => n,Stasis(asterisk-ai-voice-agent)
  same => n,Hangup()
 ```
 
-### AudioSocket-first Contexts (mirrors Agents.md)
+**How It Works:**
+1. Call enters `Stasis(asterisk-ai-voice-agent)`
+2. Engine receives StasisStart event via ARI
+3. Engine creates mixing bridge
+4. **For full agents** (OpenAI Realtime, Deepgram): Engine originates `AudioSocket/<host:port>/<uuid>/c(slin)` channel via ARI
+5. **For hybrid pipelines** (Local Hybrid): Engine originates ExternalMedia channel via ARI
+6. Engine bridges transport channel with caller
+7. Two-way audio flows through bridge
 
-When using the AudioSocket-first capture path with Hybrid ARI, prefer the following contexts. These mirror the snippets in `Agents.md` so all IDE docs stay consistent:
+**Optional: Provider Override via Channel Variables:**
 
 ```asterisk
-[ai-voice-agent]
-exten => s,1,NoOp(Starting AI Voice Agent with AudioSocket)
- same => n,Set(AUDIOSOCKET_HOST=127.0.0.1)
- same => n,Set(AUDIOSOCKET_PORT=8090)
- same => n,Set(AUDIOSOCKET_UUID=${UNIQUEID})
- same => n,AudioSocket(${AUDIOSOCKET_UUID},${AUDIOSOCKET_HOST}:${AUDIOSOCKET_PORT},ulaw)
- same => n,Stasis(asterisk-ai-voice-agent)
- same => n,Hangup()
-
-[ai-voice-agent-deepgram]
-exten => s,1,NoOp(AudioSocket AI Voice Agent using Deepgram)
- same => n,Set(AI_PROVIDER=deepgram)
- same => n,Stasis(asterisk-ai-voice-agent)
- same => n,Hangup()
-
-[ai-agent-media-fork]
-exten => _X.,1,NoOp(Local channel starting AudioSocket for ${EXTEN})
+[from-ai-agent-support]
+exten => s,1,NoOp(AI Agent - Customer Support)
  same => n,Answer()
- same => n,Set(AUDIOSOCKET_HOST=127.0.0.1)
- same => n,Set(AUDIOSOCKET_PORT=8090)
- same => n,Set(AUDIOSOCKET_UUID=${EXTEN})
- same => n,AudioSocket(${AUDIOSOCKET_UUID},${AUDIOSOCKET_HOST}:${AUDIOSOCKET_PORT},ulaw)
- same => n,Hangup()
-
-; keep ;1 leg alive while the engine streams audio
-exten => s,1,NoOp(Local)
- same => n,Wait(60)
+ same => n,Set(AI_PROVIDER=deepgram)  ; Optional override
+ same => n,Set(AI_CONTEXT=support)    ; Custom context
+ same => n,Stasis(asterisk-ai-voice-agent)
  same => n,Hangup()
 ```
 
-These coexist with `[from-ai-agent]` for simple Stasis routing and allow the engine to originate a Local channel into `[ai-agent-media-fork]` to start the upstream AudioSocket.
+**Important:** Do NOT use `AudioSocket()` in the dialplan. The engine manages AudioSocket channels internally via ARI.
 
 ### AudioSocket Streaming (Feature-Flag) — Wire Format & Pacing
 
@@ -505,16 +487,7 @@ When `audio_transport=audiosocket` and `downstream_mode=stream` are enabled, the
 - Codec guardrail: startup audits now warn if provider `input_encoding` disagrees with `audiosocket.format`; keep both set to `ulaw` when the dialplan calls `AudioSocket(...,ulaw)`.
 - Provider streaming events: providers emit `AgentAudio` bytes with `streaming_chunk=true` and a final `AgentAudioDone` with `streaming_done=true` to control the streaming window.
 
-#### AudioSocket Duplicate Legs and Outbound Selection
-
-- Local channels create two AudioSocket TCP connections (`;1` and `;2`) which will both bind with the same UUID.
-- The engine now pins the outbound streaming target to the first connection that successfully binds the UUID and keeps secondary legs open to avoid `EPIPE` write errors in Asterisk.
-- We no longer switch outbound targets on the first inbound frame; doing so can select the non-playback leg and cause silence.
-- For diagnostics, a broadcast mode can be enabled to send outbound frames to all bound legs for a call:
-  - Set environment variable `AUDIOSOCKET_BROADCAST_DEBUG=1` to enable temporary broadcast.
-  - When enabled, the `StreamingPlaybackManager` will send each frame to every connection listed in `session.audiosocket_conns` and log `AudioSocket broadcast sent` with recipient count.
-
-#### AudioSocket Channel Interface (No Local Leg)
+#### AudioSocket Channel Interface (ARI-Originated)
 
 - The Hybrid ARI flow now originates an `AudioSocket/<host:port>/<uuid>/c(slin)` channel directly via ARI and bridges it with the caller.
 - Dialplan responsibility is limited to answering the inbound call and running `Stasis(asterisk-ai-voice-agent)`; the `ai-agent-media-fork` Local context is no longer required.
@@ -529,28 +502,26 @@ Implementation references:
 - `src/providers/deepgram.py` — emits `AgentAudio`/`AgentAudioDone` with streaming flags and call_id
 - `src/config.py::AudioSocketConfig` — `audiosocket.format` (default `ulaw`)
 
-### Dialplan Contexts Explained
+### Transport Selection
 
-**`[from-ai-agent]`**:
+**AudioSocket (Modern - Recommended for Full Agents)**:
+- **Use for**: OpenAI Realtime, Deepgram Voice Agent (monolithic providers)
+- **Advantages**: Lower latency, streaming TTS support, simpler architecture
+- **Implementation**: Engine originates AudioSocket channel via ARI
+- **Configuration**: `audio_transport: audiosocket` in config YAML
 
-- **Purpose**: Direct call routing to AI processing
-- **Usage**: Main entry point for incoming calls
-- **Flow**: Call → Stasis → AI Engine → RTP Server
-- **Benefits**: Simple, reliable, no complex audio handling
+**ExternalMedia RTP (Legacy - For Hybrid Pipelines)**:
+- **Use for**: Local Hybrid, modular STT+LLM+TTS pipelines
+- **Advantages**: Battle-tested, file-based playback compatibility
+- **Implementation**: Engine originates ExternalMedia channel via ARI
+- **Configuration**: `audio_transport: externalmedia` in config YAML
 
-**`[ai-externalmedia]`**:
+### Integration Quick Start
 
-- **Purpose**: ExternalMedia context for RTP audio processing
-- **Usage**: Alternative entry point with explicit ExternalMedia setup
-- **Flow**: Call → Answer → Wait → Stasis → AI Engine
-- **Benefits**: Explicit audio setup, better for complex scenarios
-
-### Integration Steps
-
-1. **Add to FreePBX**: Copy the dialplan contexts to your FreePBX dialplan
-2. **Route Calls**: Configure your inbound routes to use `from-ai-agent` context
-3. **Test**: Place test calls to verify Stasis application receives calls
-4. **Monitor**: Check AI engine logs for successful call processing
+1. **Add Dialplan**: Create `[from-ai-agent]` context (3 lines)
+2. **Configure FreePBX Route**: Point inbound route to `from-ai-agent` custom destination
+3. **Select Configuration**: Choose golden baseline in `config/ai-agent.yaml`
+4. **Test**: Place call, monitor engine logs for StasisStart → bridge creation
 
 ### Optional: ExternalMedia RTP Bridging
 

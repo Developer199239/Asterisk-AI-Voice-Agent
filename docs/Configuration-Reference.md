@@ -40,11 +40,11 @@ For comprehensive inline documentation, refer to the golden baseline YAML files 
 ## Transports
 
 - audio_transport: `audiosocket` | `externalmedia`
-  - audiosocket: Full‑duplex PCM over TCP; recommended for GA. Downstream can be streamed with pacing.
-  - externalmedia: RTP capture path; best for explicit RTP analysis or legacy setups.
+  - **audiosocket** (Modern - Recommended for Full Agents): TCP-based, low latency, streaming TTS support. Use with OpenAI Realtime and Deepgram Voice Agent.
+  - **externalmedia** (Legacy - For Hybrid Pipelines): RTP/UDP-based, battle-tested, file-based playback. Use with Local Hybrid and modular pipelines.
 - downstream_mode: `stream` | `file`
-  - stream: Sends 20 ms frames immediately; best UX, slightly more sensitive to jitter.
-  - file: Plays μ‑law files via the bridge; more tolerant but higher latency.
+  - **stream**: Real-time streaming (20ms frames). Best UX. Requires stable network. Works with full agents.
+  - **file**: File-based playback via bridge. More robust to jitter. Required for hybrid pipelines.
 
 ## AudioSocket
 
