@@ -6,7 +6,7 @@
 ![Docker](https://img.shields.io/badge/docker-compose-blue.svg)
 ![Asterisk](https://img.shields.io/badge/asterisk-18+-orange.svg)
 
-An open-source AI Voice Agent that integrates with Asterisk/FreePBX using AudioSocket/RTP technology. Featuring a **modular pipeline architecture** that lets you mix and match STT, LLM, and TTS providers, plus **3 production-ready golden baselines** validated for enterprise deployment.
+The most powerful, flexible open-source AI voice agent for Asterisk/FreePBX. Featuring a **modular pipeline architecture** that lets you mix and match STT, LLM, and TTS providers, plus **3 production-ready golden baselines** validated for enterprise deployment.
 
 ## 🎉 What's New in v4.0
 
@@ -97,6 +97,7 @@ Add this to your FreePBX (Config Edit → extensions_custom.conf):
 ```asterisk
 [from-ai-agent]
 exten => s,1,NoOp(Asterisk AI Voice Agent)
+ same => n,Set(AI_PROVIDER=local_only)
  same => n,Stasis(asterisk-ai-voice-agent)
  same => n,Hangup()
 ```
@@ -254,7 +255,7 @@ Contributions are welcome! Please see our [Contributing Guide](CONTRIBUTING.md) 
 Have questions or want to chat with other users? Join our community:
 
 * [GitHub Issues](https://github.com/hkjarral/Asterisk-AI-Voice-Agent/issues)
-* Community Forum (coming soon)
+* [Community Forum](https://github.com/hkjarral/Asterisk-AI-Voice-Agent/discussions)
 
 ## 📝 License
 
