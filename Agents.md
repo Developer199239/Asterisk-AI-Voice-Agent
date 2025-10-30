@@ -33,14 +33,26 @@ Active contexts and call path (server):
 
 ## Feature Flags & Config
 
-- `audio_transport`: `audiosocket` (preferred default) | `externalmedia` (RTP fallback) | `legacy` (deprecated snoop path).
-- `downstream_mode`: `stream` (preferred; automatic file fallback is built-in) | `file` (force file-based playback for debugging).
+**Transport Configuration (Critical):**
+- `audio_transport`: Transport mode selection
+  - **`audiosocket`**: For full agents (OpenAI Realtime, Deepgram Voice Agent). TCP-based, streaming support.
+  - **`externalmedia`**: For hybrid pipelines (local_hybrid, hybrid_support). RTP/UDP-based, file playback.
+  
+- `downstream_mode`: Playback mode selection
+  - **`stream`**: Real-time streaming (20ms frames). Required for full agents with audiosocket.
+  - **`file`**: File-based playback. Required for hybrid pipelines with externalmedia.
+
+**Configuration Matrix:**
+| Provider Type | Transport | Playback Mode | Example |
+|--------------|-----------|---------------|---------|
+| Full Agents | audiosocket | stream | OpenAI Realtime, Deepgram Voice Agent |
+| Hybrid Pipelines | externalmedia | file | local_hybrid, hybrid_support |
+
+**Other Settings:**
 - `streaming.*` (Milestone 5 shipped): `min_start_ms`, `low_watermark_ms`, `fallback_timeout_ms`, `provider_grace_ms`, `chunk_size_ms`, `jitter_buffer_ms`.
 - `pipelines` (Milestone 7): defines STT/LLM/TTS combinations; `active_pipeline` selects which pipeline new calls use.
 - `vad.use_provider_vad`: when `true`, rely on provider (e.g., OpenAI server VAD) and disable local WebRTC/Enhanced VAD.
-- `openai_realtime.provider_input_sample_rate_hz`: set to `24000` so ingested audio is upsampled to the Realtime API’s expected 24 kHz linear PCM before commit.
-- OpenAI session config should advertise `input_audio_format` / `output_audio_format` as PCM16 24 kHz; the engine handles μ-law conversion at the AudioSocket edges.
-- Logging levels are configurable per service via YAML once the hot-reload work lands; default is INFO for GA builds.
+- Logging levels are configurable per service via YAML; default is INFO for GA builds.
 
 ## Pre‑flight Checklist (Local or Server)
 
@@ -54,81 +66,72 @@ Active contexts and call path (server):
 - Secrets:
   - `.env` present with `ASTERISK_HOST`, `ASTERISK_ARI_USERNAME`, `ASTERISK_ARI_PASSWORD`, provider API keys.
 
-## Dialplan Example (AudioSocket + Stasis)
+## Dialplan Examples (ARI-Based, v4.0)
 
-```
-[ai-voice-agent]
-exten => s,1,NoOp(Starting AI Voice Agent with AudioSocket)
- same => n,Set(AUDIOSOCKET_HOST=127.0.0.1)
- same => n,Set(AUDIOSOCKET_PORT=8090)
- same => n,Set(AUDIOSOCKET_UUID=${UNIQUEID})
- same => n,AudioSocket(${AUDIOSOCKET_UUID},${AUDIOSOCKET_HOST}:${AUDIOSOCKET_PORT},ulaw)
- same => n,Stasis(asterisk-ai-voice-agent)
- same => n,Hangup()
-```
+**Important:** Do NOT use `AudioSocket()` or `ExternalMedia()` in the dialplan. The engine originates audio channels automatically via ARI based on your configuration.
 
-### Deepgram Test Entry (Provider Override)
+### Basic Entry (All Providers)
 
-Add a dedicated context when you want to force the Deepgram provider without touching the default local flow:
-
-```
-[ai-voice-agent-deepgram]
-exten => s,1,NoOp(AudioSocket AI Voice Agent using Deepgram)
- same => n,Set(AI_PROVIDER=deepgram)
- same => n,Stasis(asterisk-ai-voice-agent)
- same => n,Hangup()
-
-[ai-agent-media-fork]
-exten => _X.,1,NoOp(Local channel starting AudioSocket for ${EXTEN})
+```asterisk
+[from-ai-agent]
+exten => s,1,NoOp(Asterisk AI Voice Agent)
  same => n,Answer()
- same => n,Set(AUDIOSOCKET_HOST=127.0.0.1)
- same => n,Set(AUDIOSOCKET_PORT=8090)
- same => n,Set(AUDIOSOCKET_UUID=${EXTEN})
- same => n,AudioSocket(${AUDIOSOCKET_UUID},${AUDIOSOCKET_HOST}:${AUDIOSOCKET_PORT},ulaw)
- same => n,Hangup()
-
-; keep ;1 leg alive while the engine streams audio
-exten => s,1,NoOp(Local)
- same => n,Wait(60)
+ same => n,Stasis(asterisk-ai-voice-agent)
  same => n,Hangup()
 ```
 
-Route specific DIDs or test extensions to `ai-voice-agent-deepgram` when exercising streaming; leave existing routes on `[ai-voice-agent]` so the local provider flow stays untouched. The engine reads `AI_PROVIDER` on `StasisStart` and falls back to the configured default when the variable is absent.
+### Provider-Specific Routing
+
+Use channel variables to override provider selection:
+
+```asterisk
+[from-ai-agent-openai]
+exten => s,1,NoOp(Route to OpenAI Realtime)
+ same => n,Set(AI_PROVIDER=openai_realtime)
+ same => n,Set(AI_AUDIO_PROFILE=openai_realtime_24k)
+ same => n,Answer()
+ same => n,Stasis(asterisk-ai-voice-agent)
+ same => n,Hangup()
+
+[from-ai-agent-deepgram]
+exten => s,1,NoOp(Route to Deepgram Voice Agent)
+ same => n,Set(AI_PROVIDER=deepgram)
+ same => n,Answer()
+ same => n,Stasis(asterisk-ai-voice-agent)
+ same => n,Hangup()
+
+[from-ai-agent-local-hybrid]
+exten => s,1,NoOp(Route to Local Hybrid Pipeline)
+ same => n,Set(AI_PROVIDER=local_hybrid)
+ same => n,Answer()
+ same => n,Stasis(asterisk-ai-voice-agent)
+ same => n,Hangup()
+```
+
+**How It Works:**
+1. Call enters `Stasis(asterisk-ai-voice-agent)`
+2. Engine reads `AI_PROVIDER` channel variable (or uses default from config)
+3. Engine originates appropriate audio channel via ARI:
+   - **Full agents** (openai_realtime, deepgram): AudioSocket channel
+   - **Hybrid pipelines** (local_hybrid): ExternalMedia RTP channel
+4. No additional dialplan contexts needed
 
 ## Active Contexts & Usage (Server)
 
-- Entry context (`from-ai-agent`): hands call directly to `Stasis(asterisk-ai-voice-agent)`.
-- Media-fork context (`ai-agent-media-fork`): originated by the engine to start AudioSocket.
-  - Generates canonical UUID and calls `AudioSocket(UUID, host:port)`
-  - Sets `AUDIOSOCKET_UUID=${EXTEN}` to trigger engine binder to map the socket to the original caller channel.
-  - Minimal `s` extension keeps the Local ;1 leg alive.
+Current production dialplan (working v4.0):
 
-Current server snippet (working):
-
-```
+```asterisk
 [from-ai-agent]
 exten => s,1,NoOp(Handing call directly to Stasis for AI processing)
+ same => n,Answer()
  same => n,Stasis(asterisk-ai-voice-agent)
  same => n,Hangup()
-
-[ai-agent-media-fork]
-exten => _X.,1,NoOp(Local channel starting AudioSocket for ${EXTEN})
- same => n,Answer()
- same => n,Set(AUDIOSOCKET_HOST=127.0.0.1)
- same => n,Set(AUDIOSOCKET_PORT=8090)
- same => n,Set(AUDIOSOCKET_UUID=${EXTEN})
- same => n,Set(AS_UUID_RAW=${SHELL(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen 2>/dev/null)})
- same => n,Set(AS_UUID=${TOUPPER(${FILTER(0-9A-Fa-f-,${AS_UUID_RAW})})})
- same => n,ExecIf($[${LEN(${AS_UUID})} != 36]?Set(AS_UUID=${TOUPPER(${FILTER(0-9A-Fa-f-,${SHELL(uuidgen 2>/dev/null)})})}))
- same => n,NoOp(AS_UUID=${AS_UUID} LEN=${LEN(${AS_UUID})})
- same => n,AudioSocket(${AS_UUID},${AUDIOSOCKET_HOST}:${AUDIOSOCKET_PORT})
- same => n,Hangup()
-
-; keep ;1 leg alive
-exten => s,1,NoOp(Local)
- same => n,Wait(60)
- same => n,Hangup()
 ```
+
+**That's it!** The engine handles all audio channel setup via ARI:
+- Detects provider from `AI_PROVIDER` channel variable or config default
+- Originates AudioSocket (for full agents) or ExternalMedia RTP (for pipelines)
+- Manages all audio routing automatically
 
 ## Runtime Context — Quick Checks Before Each Test
 
