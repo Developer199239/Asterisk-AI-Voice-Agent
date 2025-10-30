@@ -1071,14 +1071,23 @@ class Engine:
                     )
                     pipeline_resolution = await self._assign_pipeline_to_session(session)
             else:
-                # Default behavior (use active_pipeline if configured)
-                pipeline_resolution = await self._assign_pipeline_to_session(session)
-                if not pipeline_resolution and getattr(self.pipeline_orchestrator, "started", False):
+                # Default behavior: only use active_pipeline if no valid provider already set
+                # Skip pipeline resolution if context already set a monolithic provider
+                if session.provider_name and session.provider_name in self.providers:
                     logger.info(
-                        "Milestone7 pipeline orchestrator falling back to legacy provider flow",
+                        "Skipping pipeline resolution - context already set valid provider",
                         call_id=caller_channel_id,
                         provider=session.provider_name,
+                        source="context",
                     )
+                else:
+                    pipeline_resolution = await self._assign_pipeline_to_session(session)
+                    if not pipeline_resolution and getattr(self.pipeline_orchestrator, "started", False):
+                        logger.info(
+                            "Milestone7 pipeline orchestrator falling back to legacy provider flow",
+                            call_id=caller_channel_id,
+                            provider=session.provider_name,
+                        )
             
             # Step 5: Create ExternalMedia channel or originate Local channel
             if self.config.audio_transport == "externalmedia":
