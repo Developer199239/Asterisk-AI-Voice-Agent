@@ -4688,7 +4688,7 @@ class Engine:
                                     prompt_length=len(context_config.prompt),
                                 )
                         elif hasattr(provider.config, '__dict__'):
-                            if context_config.greeting:
+                            if context_config.greeting and hasattr(provider.config, 'greeting'):
                                 setattr(provider.config, 'greeting', context_config.greeting)
                                 logger.info(
                                     "Applied context greeting to provider",
@@ -4696,13 +4696,21 @@ class Engine:
                                     context=transport.context,
                                     greeting_preview=context_config.greeting[:50] + "...",
                                 )
-                            if context_config.prompt:
+                            if context_config.prompt and hasattr(provider.config, 'prompt'):
                                 setattr(provider.config, 'prompt', context_config.prompt)
                                 logger.info(
                                     "Applied context prompt to provider",
                                     call_id=session.call_id,
                                     context=transport.context,
                                     prompt_length=len(context_config.prompt),
+                                )
+                            # Log if provider doesn't support prompt injection
+                            if context_config.prompt and not hasattr(provider.config, 'prompt'):
+                                logger.debug(
+                                    "Provider config does not support prompt field (greeting only)",
+                                    call_id=session.call_id,
+                                    provider=provider_name,
+                                    context=transport.context,
                                 )
                     except Exception as exc:
                         logger.error(
