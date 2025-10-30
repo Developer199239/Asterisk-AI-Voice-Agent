@@ -447,7 +447,6 @@ v4.0 uses **ARI-based architecture** where the engine handles all audio transpor
 ```asterisk
 [from-ai-agent]
 exten => s,1,NoOp(Asterisk AI Voice Agent v4.0)
- same => n,Answer()
  same => n,Stasis(asterisk-ai-voice-agent)
  same => n,Hangup()
 ```
@@ -466,7 +465,6 @@ exten => s,1,NoOp(Asterisk AI Voice Agent v4.0)
 ```asterisk
 [from-ai-agent-support]
 exten => s,1,NoOp(AI Agent - Customer Support)
- same => n,Answer()
  same => n,Set(AI_PROVIDER=deepgram)  ; Optional override
  same => n,Set(AI_CONTEXT=support)    ; Custom context
  same => n,Stasis(asterisk-ai-voice-agent)

@@ -237,7 +237,6 @@ This simple context works for all 3 golden baselines. The `ai-engine` automatica
 ```asterisk
 [from-ai-agent]
 exten => s,1,NoOp(Asterisk AI Voice Agent v4.0)
- same => n,Answer()
  same => n,Stasis(asterisk-ai-voice-agent)
  same => n,Hangup()
 ```
@@ -256,7 +255,6 @@ For more control, you can set different contexts per department or call type:
 ; Customer Support context
 [from-ai-agent-support]
 exten => s,1,NoOp(AI Agent - Customer Support)
- same => n,Answer()
  same => n,Set(AI_CONTEXT=customer_support)
  same => n,Set(AI_PERSONA=You are a helpful customer support agent. Be empathetic and solution-focused.)
  same => n,Stasis(asterisk-ai-voice-agent)
@@ -265,7 +263,6 @@ exten => s,1,NoOp(AI Agent - Customer Support)
 ; Sales context
 [from-ai-agent-sales]
 exten => s,1,NoOp(AI Agent - Sales)
- same => n,Answer()
  same => n,Set(AI_CONTEXT=sales)
  same => n,Set(AI_GREETING=Hello! Thanks for your interest. How can I help you today?)
  same => n,Stasis(asterisk-ai-voice-agent)
@@ -274,7 +271,6 @@ exten => s,1,NoOp(AI Agent - Sales)
 ; Billing context with caller lookup
 [from-ai-agent-billing]
 exten => s,1,NoOp(AI Agent - Billing for ${CALLERID(num)})
- same => n,Answer()
  same => n,Set(AI_CONTEXT=billing)
  same => n,Set(AI_PERSONA=You are a billing specialist. Be clear about charges and payment options.)
  same => n,Set(CALLERID(name)=${ODBC_CUSTOMER_LOOKUP(${CALLERID(num)})})  ; Optional: CRM lookup
@@ -287,7 +283,6 @@ exten => s,1,NoOp(AI Agent - Billing for ${CALLERID(num)})
 ```asterisk
 [from-ai-agent-after-hours]
 exten => s,1,NoOp(AI Agent - After Hours)
- same => n,Answer()
  same => n,Set(AI_CONTEXT=after_hours)
  same => n,Set(AI_GREETING=Thank you for calling. Our office is currently closed. I can help answer questions or take a message.)
  same => n,Stasis(asterisk-ai-voice-agent)

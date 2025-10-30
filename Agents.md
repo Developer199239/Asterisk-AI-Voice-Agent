@@ -75,7 +75,6 @@ Active contexts and call path (server):
 ```asterisk
 [from-ai-agent]
 exten => s,1,NoOp(Asterisk AI Voice Agent)
- same => n,Answer()
  same => n,Stasis(asterisk-ai-voice-agent)
  same => n,Hangup()
 ```
@@ -89,21 +88,18 @@ Use channel variables to override provider selection:
 exten => s,1,NoOp(Route to OpenAI Realtime)
  same => n,Set(AI_PROVIDER=openai_realtime)
  same => n,Set(AI_AUDIO_PROFILE=openai_realtime_24k)
- same => n,Answer()
  same => n,Stasis(asterisk-ai-voice-agent)
  same => n,Hangup()
 
 [from-ai-agent-deepgram]
 exten => s,1,NoOp(Route to Deepgram Voice Agent)
  same => n,Set(AI_PROVIDER=deepgram)
- same => n,Answer()
  same => n,Stasis(asterisk-ai-voice-agent)
  same => n,Hangup()
 
 [from-ai-agent-local-hybrid]
 exten => s,1,NoOp(Route to Local Hybrid Pipeline)
  same => n,Set(AI_PROVIDER=local_hybrid)
- same => n,Answer()
  same => n,Stasis(asterisk-ai-voice-agent)
  same => n,Hangup()
 ```
@@ -123,7 +119,6 @@ Current production dialplan (working v4.0):
 ```asterisk
 [from-ai-agent]
 exten => s,1,NoOp(Handing call directly to Stasis for AI processing)
- same => n,Answer()
  same => n,Stasis(asterisk-ai-voice-agent)
  same => n,Hangup()
 ```

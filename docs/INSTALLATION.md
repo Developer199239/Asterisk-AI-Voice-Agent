@@ -200,7 +200,6 @@ Add to `/etc/asterisk/extensions_custom.conf`:
 ```asterisk
 [from-ai-agent]
 exten => s,1,NoOp(Asterisk AI Voice Agent v4.0)
- same => n,Answer()
  same => n,Stasis(asterisk-ai-voice-agent)
  same => n,Hangup()
 ```
@@ -210,7 +209,6 @@ exten => s,1,NoOp(Asterisk AI Voice Agent v4.0)
 ```asterisk
 [from-ai-agent-support]
 exten => s,1,NoOp(AI Agent - Customer Support)
- same => n,Answer()
  same => n,Set(AI_PROVIDER=deepgram)
  same => n,Set(AI_CONTEXT=support)
  same => n,Stasis(asterisk-ai-voice-agent)
@@ -218,7 +216,6 @@ exten => s,1,NoOp(AI Agent - Customer Support)
 
 [from-ai-agent-openai]
 exten => s,1,NoOp(AI Agent - OpenAI Realtime)
- same => n,Answer()
  same => n,Set(AI_PROVIDER=openai_realtime)
  same => n,Stasis(asterisk-ai-voice-agent)
  same => n,Hangup()

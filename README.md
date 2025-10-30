@@ -97,7 +97,6 @@ Add this to your FreePBX (Config Edit → extensions_custom.conf):
 ```asterisk
 [from-ai-agent]
 exten => s,1,NoOp(Asterisk AI Voice Agent)
- same => n,Set(AI_PROVIDER=local_hybrid)
  same => n,Stasis(asterisk-ai-voice-agent)
  same => n,Hangup()
 ```
