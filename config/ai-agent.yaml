@@ -19,9 +19,7 @@ contexts:
     profile: telephony_ulaw_8k
     prompt: You are a helpful AI assistant. Be concise and clear.
   demo_deepgram:
-    greeting: Hi, I'm Ava demonstrating Deepgram Voice Agent! I can tell you all about
-      the Asterisk AI Voice Agent project - ask me anything about how it works, setup,
-      or features.
+    greeting: "Hi {caller_name}, I'm Ava demonstrating Deepgram Voice Agent! I can tell you all about the Asterisk AI Voice Agent project - ask me anything about how it works, setup, or features."
     prompt: "You are Ava (Asterisk Voice Agent) demonstrating the Deepgram Voice Agent\
       \ configuration.\n\n\nABOUT ASTERISK AI VOICE AGENT v4.0:\n- Open-source (MIT),\
       \ production-ready AI voice agent for Asterisk/FreePBX\n- Enables real-time,\
@@ -115,8 +113,7 @@ contexts:
       \ to user's technical level\n- Keep responses concise unless user asks for detail"
     profile: telephony_ulaw_8k
   demo_openai:
-    greeting: Hello! I'm Ava powered by OpenAI Realtime API. I'm here to explain the
-      Asterisk AI Voice Agent project - what would you like to know?
+    greeting: "Hello {caller_name}! I'm Ava powered by OpenAI Realtime API. I'm here to explain the Asterisk AI Voice Agent project - what would you like to know?"
     prompt: "You are Ava (Asterisk Voice Agent) demonstrating the OpenAI Realtime\
       \ API configuration.\n\n\nABOUT ASTERISK AI VOICE AGENT v4.0:\n- Open-source\
       \ (MIT), production-ready AI voice agent for Asterisk/FreePBX\n- Enables real-time,\
