@@ -74,6 +74,8 @@ Experience all three golden baseline configurations with a single phone call:
 
 Each configuration uses the same Ava persona with full project knowledge. Compare response times, conversation quality, and naturalness!
 
+Demo Monitoring Dashboards: [https://demo.jugaar.llc](https://demo.jugaar.llc) User:Pass = demo/demo
+
 ## 🚀 Quick Start
 
 Get up and running in **5 minutes**:
