@@ -218,8 +218,7 @@ class TransportOrchestrator:
         )
         
         # Step 2: Negotiate formats with provider capabilities
-        transport = self._negotiate_formats(profile, provider_name, provider_caps)
-        transport.context = context_name
+        transport = self._negotiate_formats(profile, provider_name, provider_caps, context_name)
         
         # Step 3: Validate and add remediation if needed
         transport = self._validate_and_remediate(transport, provider_caps)
@@ -273,6 +272,7 @@ class TransportOrchestrator:
         profile: AudioProfile,
         provider_name: str,
         provider_caps: Optional[ProviderCapabilities],
+        context_name: Optional[str] = None,
     ) -> TransportProfile:
         """
         Negotiate formats between profile preferences and provider capabilities.
