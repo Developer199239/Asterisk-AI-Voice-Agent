@@ -128,8 +128,8 @@ _AUDIO_DC_OFFSET = Gauge(
 # Call metadata and duration tracking for dashboard
 _CALL_METADATA = Gauge(
     "ai_agent_call_metadata",
-    "Call metadata including caller info and pipeline selection",
-    labelnames=("call_id", "caller_name", "caller_number", "pipeline", "provider"),
+    "Call metadata including caller info, pipeline, provider, and context selection",
+    labelnames=("call_id", "caller_name", "caller_number", "pipeline", "provider", "context"),
 )
 _CALL_DURATION = Histogram(
     "ai_agent_call_duration_seconds",
@@ -5648,6 +5648,7 @@ class Engine:
                 caller_name = getattr(session, 'caller_name', None) or "Unknown"
                 caller_number = getattr(session, 'caller_number', None) or "Unknown"
                 pipeline_name = getattr(session, 'pipeline_name', None) or "default"
+                context_name = getattr(session, 'context_name', None) or "default"
                 
                 # Set call metadata gauge (value=1 means active)
                 _CALL_METADATA.labels(
@@ -5655,14 +5656,16 @@ class Engine:
                     caller_name=caller_name,
                     caller_number=caller_number,
                     pipeline=pipeline_name,
-                    provider=provider_name
+                    provider=provider_name,
+                    context=context_name
                 ).set(1)
                 
                 logger.debug("Recorded call metadata", 
                             call_id=call_id,
                             caller_name=caller_name,
                             pipeline=pipeline_name,
-                            provider=provider_name)
+                            provider=provider_name,
+                            context=context_name)
             except Exception as e:
                 logger.debug("Failed to record call metadata", call_id=call_id, error=str(e))
                 

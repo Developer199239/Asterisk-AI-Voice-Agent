@@ -150,16 +150,18 @@
               "call_id": 0,
               "caller_name": 1,
               "caller_number": 2,
-              "pipeline": 3,
-              "provider": 4,
-              "Value #Duration": 5,
-              "Value #BargeIns": 6,
-              "Value #Underflows": 7
+              "context": 3,
+              "pipeline": 4,
+              "provider": 5,
+              "Value #Duration": 6,
+              "Value #BargeIns": 7,
+              "Value #Underflows": 8
             },
             "renameByName": {
               "call_id": "Call ID",
               "caller_name": "Caller Name",
               "caller_number": "Caller Number",
+              "context": "Demo Agent",
               "pipeline": "Pipeline",
               "provider": "Provider",
               "Value #Duration": "Duration (s)",
