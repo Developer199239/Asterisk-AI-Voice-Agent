@@ -441,10 +441,7 @@ class DeepgramProvider(AIProviderInterface):
                         "model": "gpt-4o-mini",  # Twilio uses gpt-4o-mini
                         "temperature": 0.7
                     }, 
-                    "prompt": think_prompt,
-                    "endpointing": {
-                        "delay_ms": 300  # How long to wait before considering user utterance complete
-                    }
+                    "prompt": think_prompt 
                 },
                 "speak": {
                     "provider": {"type": "deepgram", "model": speak_model}  # Revert: keep provider format
