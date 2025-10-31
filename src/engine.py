@@ -3864,6 +3864,26 @@ class Engine:
             if not pipeline:
                 logger.debug("Pipeline runner: no pipeline resolved", call_id=call_id)
                 return
+            # Inject context prompt into LLM options if available
+            llm_options = pipeline.llm_options or {}
+            try:
+                if hasattr(session, 'transport_profile') and hasattr(session.transport_profile, 'context'):
+                    context_name = session.transport_profile.context
+                    if context_name:
+                        context_config = self.transport_orchestrator.get_context_config(context_name)
+                        if context_config and context_config.prompt:
+                            # Create a copy to avoid mutating the pipeline's original options
+                            llm_options = dict(llm_options)
+                            llm_options['system_prompt'] = context_config.prompt
+                            logger.info(
+                                "Using context prompt for pipeline LLM",
+                                call_id=call_id,
+                                context=context_name,
+                                prompt_length=len(context_config.prompt),
+                            )
+            except Exception:
+                logger.debug("Failed to inject context prompt into pipeline LLM options", call_id=call_id, exc_info=True)
+            
             # Open per-call state for adapters (best-effort)
             try:
                 await pipeline.stt_adapter.open_call(call_id, pipeline.stt_options)
@@ -3872,7 +3892,7 @@ class Engine:
             else:
                 logger.info("Pipeline STT adapter session opened", call_id=call_id)
             try:
-                await pipeline.llm_adapter.open_call(call_id, pipeline.llm_options)
+                await pipeline.llm_adapter.open_call(call_id, llm_options)
             except Exception:
                 logger.debug("LLM open_call failed", call_id=call_id, exc_info=True)
             else:
@@ -3885,9 +3905,24 @@ class Engine:
                 logger.info("Pipeline TTS adapter session opened", call_id=call_id)
 
             # Pipeline-managed initial greeting (optional)
+            # Try context greeting first, then config
             greeting = ""
             try:
-                greeting = (getattr(self.config.llm, "initial_greeting", None) or "").strip()
+                # Check if context has a custom greeting
+                if hasattr(session, 'transport_profile') and hasattr(session.transport_profile, 'context'):
+                    context_name = session.transport_profile.context
+                    if context_name:
+                        context_config = self.transport_orchestrator.get_context_config(context_name)
+                        if context_config and context_config.greeting:
+                            greeting = context_config.greeting.strip()
+                            logger.info(
+                                "Using context greeting for pipeline",
+                                call_id=call_id,
+                                context=context_name,
+                            )
+                # Fall back to config greeting
+                if not greeting:
+                    greeting = (getattr(self.config.llm, "initial_greeting", None) or "").strip()
             except Exception:
                 greeting = ""
             if greeting:
@@ -4159,7 +4194,7 @@ class Engine:
                             call_id,
                             transcript_text,
                             {"messages": [{"role": "user", "content": transcript_text}]},
-                            pipeline.llm_options,
+                            llm_options,  # Use context-injected options
                         )
                     except Exception:
                         logger.debug("LLM generate failed", call_id=call_id, exc_info=True)
@@ -4696,22 +4731,31 @@ class Engine:
                                     context=transport.context,
                                     greeting_preview=context_config.greeting[:50] + "...",
                                 )
-                            if context_config.prompt and hasattr(provider.config, 'prompt'):
-                                setattr(provider.config, 'prompt', context_config.prompt)
-                                logger.info(
-                                    "Applied context prompt to provider",
-                                    call_id=session.call_id,
-                                    context=transport.context,
-                                    prompt_length=len(context_config.prompt),
-                                )
-                            # Log if provider doesn't support prompt injection
-                            if context_config.prompt and not hasattr(provider.config, 'prompt'):
-                                logger.debug(
-                                    "Provider config does not support prompt field (greeting only)",
-                                    call_id=session.call_id,
-                                    provider=provider_name,
-                                    context=transport.context,
-                                )
+                            if context_config.prompt:
+                                # Try 'prompt' field first, then 'instructions' (OpenAI uses this)
+                                if hasattr(provider.config, 'prompt'):
+                                    setattr(provider.config, 'prompt', context_config.prompt)
+                                    logger.info(
+                                        "Applied context prompt to provider",
+                                        call_id=session.call_id,
+                                        context=transport.context,
+                                        prompt_length=len(context_config.prompt),
+                                    )
+                                elif hasattr(provider.config, 'instructions'):
+                                    setattr(provider.config, 'instructions', context_config.prompt)
+                                    logger.info(
+                                        "Applied context prompt to provider (as instructions)",
+                                        call_id=session.call_id,
+                                        context=transport.context,
+                                        prompt_length=len(context_config.prompt),
+                                    )
+                                else:
+                                    logger.debug(
+                                        "Provider config does not support prompt or instructions field",
+                                        call_id=session.call_id,
+                                        provider=provider_name,
+                                        context=transport.context,
+                                    )
                     except Exception as exc:
                         logger.error(
                             "Failed to apply context config to provider",

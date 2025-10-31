@@ -238,12 +238,16 @@ class TransportOrchestrator:
         """
         context_name = None
         
+        # Always read AI_CONTEXT first (needed for greeting/prompt injection)
+        context_name = channel_vars.get('AI_CONTEXT', '').strip() or None
+        
         # Precedence 1: AI_AUDIO_PROFILE directly specified
         if 'AI_AUDIO_PROFILE' in channel_vars and channel_vars['AI_AUDIO_PROFILE']:
             profile_name = channel_vars['AI_AUDIO_PROFILE']
             logger.debug(
                 "Profile from AI_AUDIO_PROFILE channel var",
                 profile=profile_name,
+                context=context_name,
             )
             return profile_name, context_name
         

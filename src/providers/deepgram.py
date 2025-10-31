@@ -395,7 +395,12 @@ class DeepgramProvider(AIProviderInterface):
             output_sample_rate=self._dg_output_rate,
         )
         think_model = getattr(self.llm_config, 'model', None) or "gpt-4o"
-        think_prompt = getattr(self.llm_config, 'prompt', None) or "You are a helpful assistant."
+        # Try context-injected prompt first, then llm_config, then default
+        think_prompt = (
+            self._get_config_value('prompt', None) or
+            getattr(self.llm_config, 'prompt', None) or
+            "You are a helpful assistant."
+        )
 
         # Build settings with configured audio formats
         settings = {
