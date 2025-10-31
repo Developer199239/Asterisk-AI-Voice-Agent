@@ -113,7 +113,7 @@ exten => s,1,NoOp(Asterisk AI Voice Agent v4.0)
  same => n,Hangup()
 ```
 
-**That's it!** Without any variables, the system uses `local_hybrid` by default. For advanced configuration with per-call provider/context selection, see [Dialplan Configuration Guide](docs/DIALPLAN_CONFIGURATION.md).
+**That's it!** Without any variables, the system uses `local_hybrid` by default.
 
 Then create a Custom Destination pointing to `from-ai-agent,s,1` and route calls to it.
 
