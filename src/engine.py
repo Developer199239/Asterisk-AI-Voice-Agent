@@ -4643,6 +4643,16 @@ class Engine:
                         exc_info=True,
                     )
         
+        # CRITICAL: Store context_name FIRST, before any early returns
+        # This ensures pipeline mode gets the context even if provider lookup fails
+        session.context_name = channel_vars.get('AI_CONTEXT')
+        await self._save_session(session)
+        logger.debug(
+            "Stored context_name in session",
+            call_id=session.call_id,
+            context_name=session.context_name,
+        )
+        
         # Get provider name (precedence: AI_PROVIDER > context > session.provider_name)
         provider_name = channel_vars.get('AI_PROVIDER')
         if not provider_name:
@@ -4660,10 +4670,11 @@ class Engine:
         provider = self.providers.get(provider_name)
         if not provider:
             logger.warning(
-                "Provider not found for audio profile resolution",
+                "Provider not found for audio profile resolution (pipeline mode will use context_name)",
                 call_id=session.call_id,
                 provider=provider_name,
                 available=list(self.providers.keys()),
+                context_name=session.context_name,
             )
             return
         
@@ -4691,10 +4702,8 @@ class Engine:
             # Store transport in session (keep as object, not dict, for legacy code compatibility)
             session.transport_profile = transport
             
-            # CRITICAL FIX: Store context_name separately for pipeline mode
-            # The transport_profile object doesn't always persist through session store,
-            # so we store context_name as a simple string field on CallSession
-            session.context_name = channel_vars.get('AI_CONTEXT')
+            # Note: context_name already stored earlier (before provider lookup)
+            # so pipeline mode gets it even if provider not found
             
             await self._save_session(session)
             
