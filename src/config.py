@@ -9,6 +9,9 @@ import os
 import yaml
 from pydantic import BaseModel, Field
 from typing import Dict, Any, Optional, List
+import structlog
+
+logger = structlog.get_logger(__name__)
 
 # Determine the absolute path to the project root from this file's location
 # This makes the config loading independent of the current working directory.
@@ -25,9 +28,11 @@ class AsteriskConfig(BaseModel):
 class ExternalMediaConfig(BaseModel):
     rtp_host: str = Field(default="0.0.0.0")
     rtp_port: int = Field(default=18080)
+    port_range: Optional[str] = Field(default=None)
     codec: str = Field(default="ulaw")  # ulaw or slin16
     direction: str = Field(default="both")  # both, sendonly, recvonly
-    jitter_buffer_ms: int = Field(default=20)
+    # Note: jitter_buffer_ms removed - RTP has built-in buffering, not configurable
+    # streaming.jitter_buffer_ms controls StreamingPlaybackManager buffering instead
 
 
 class AudioSocketConfig(BaseModel):
@@ -43,21 +48,23 @@ class LocalProviderConfig(BaseModel):
     response_timeout_sec: float = Field(default=5.0)
     chunk_ms: int = Field(default=200)
     stt_model: Optional[str] = None
-    llm_model: Optional[str] = None
     tts_voice: Optional[str] = None
-    temperature: float = Field(default=0.8)
     max_tokens: int = Field(default=150)
 
 
 class DeepgramProviderConfig(BaseModel):
     api_key: Optional[str] = None
+    enabled: bool = Field(default=True)
     model: str = Field(default="nova-2-general")
     tts_model: str = Field(default="aura-asteria-en")
     greeting: Optional[str] = None
     instructions: Optional[str] = None
-    input_encoding: str = Field(default="linear16")
-    input_sample_rate_hz: int = Field(default=16000)
+    input_encoding: str = Field(default="mulaw")
+    input_sample_rate_hz: int = Field(default=8000)
     continuous_input: bool = Field(default=True)
+    output_encoding: str = Field(default="mulaw")
+    output_sample_rate_hz: int = Field(default=8000)
+    allow_output_autodetect: bool = Field(default=False)
     base_url: str = Field(default="https://api.deepgram.com")
     tts_voice: Optional[str] = None
     stt_language: str = Field(default="en-US")
@@ -77,7 +84,7 @@ class OpenAIProviderConfig(BaseModel):
     voice: str = Field(default="alloy")
     default_modalities: List[str] = Field(default_factory=lambda: ["text"])
     input_encoding: str = Field(default="linear16")
-    input_sample_rate_hz: int = Field(default=16000)
+    input_sample_rate_hz: int = Field(default=24000)
     target_encoding: str = Field(default="mulaw")
     target_sample_rate_hz: int = Field(default=8000)
     chunk_size_ms: int = Field(default=20)
@@ -108,12 +115,14 @@ class OpenAIRealtimeProviderConfig(BaseModel):
     input_encoding: str = Field(default="slin16")  # AudioSocket inbound default (8 kHz PCM16)
     input_sample_rate_hz: int = Field(default=8000)  # AudioSocket source sample rate
     provider_input_encoding: str = Field(default="linear16")  # Provider expects PCM16 LE
-    provider_input_sample_rate_hz: int = Field(default=16000)  # OpenAI Realtime input sample rate
+    provider_input_sample_rate_hz: int = Field(default=24000)  # OpenAI Realtime input sample rate
     output_encoding: str = Field(default="linear16")  # Provider emits PCM16 frames
     output_sample_rate_hz: int = Field(default=24000)
     target_encoding: str = Field(default="ulaw")  # Downstream AudioSocket expectations
     target_sample_rate_hz: int = Field(default=8000)
     response_modalities: List[str] = Field(default_factory=lambda: ["text", "audio"])
+    egress_pacer_enabled: bool = Field(default=False)
+    egress_pacer_warmup_ms: int = Field(default=320)
     # Optional explicit greeting to speak immediately on connect
     greeting: Optional[str] = None
     # Optional server-side turn detection configuration
@@ -134,29 +143,38 @@ class BargeInConfig(BaseModel):
     cooldown_ms: int = Field(default=500)
     # New: short guard window after TTS ends to avoid self-echo re-capture
     post_tts_end_protection_ms: int = Field(default=250)
+    # Extra protection during the first greeting turn
+    greeting_protection_ms: int = Field(default=0)
 
 
 class LLMConfig(BaseModel):
     initial_greeting: str = "Hello, I am an AI Assistant for Jugaar LLC. How can I help you today."
     prompt: str = "You are a helpful AI assistant."
-    model: str = "gpt-4o"
+    # Note: model field removed - not used by any provider (each provider has its own model config)
     api_key: Optional[str] = None
 
 
 class VADConfig(BaseModel):
-    # WebRTC VAD settings
-    webrtc_aggressiveness: int = 0
-    webrtc_start_frames: int = 3
-    webrtc_end_silence_frames: int = 50
+    use_provider_vad: bool = Field(default=False)
+    enhanced_enabled: bool = Field(default=False)
+    # WebRTC VAD settings - optimized for real-time conversation
+    webrtc_aggressiveness: int = 1
+    webrtc_start_frames: int = 2
+    webrtc_end_silence_frames: int = 15
+    # Enhanced VAD thresholds
+    energy_threshold: int = 1500
+    confidence_threshold: float = 0.6
+    adaptive_threshold_enabled: bool = True
+    noise_adaptation_rate: float = 0.1
     
-    # Utterance settings - optimized for 4+ second duration
-    min_utterance_duration_ms: int = 4000
-    max_utterance_duration_ms: int = 10000
-    utterance_padding_ms: int = 200
+    # Utterance settings - optimized for real-time conversation
+    min_utterance_duration_ms: int = 800
+    max_utterance_duration_ms: int = 8000
+    utterance_padding_ms: int = 100
     
     # Fallback settings
     fallback_enabled: bool = True
-    fallback_interval_ms: int = 4000
+    fallback_interval_ms: int = 1500
     fallback_buffer_size: int = 128000
 
 
@@ -171,6 +189,15 @@ class StreamingConfig(BaseModel):
     low_watermark_ms: int = Field(default=80)
     provider_grace_ms: int = Field(default=500)
     logging_level: str = Field(default="info")
+    # Smaller warm-up only for the initial greeting to get first audio out sooner
+    greeting_min_start_ms: int = Field(default=0)
+    # Egress endianness control for PCM16 slin16 over AudioSocket: 'auto'|'force_true'|'force_false'
+    # - auto: derive from inbound probe (current behavior)
+    # - force_true: always byteswap outbound PCM16
+    # - force_false: never byteswap outbound PCM16 (send native LE)
+    egress_swap_mode: str = Field(default="auto")
+    # When true, force outbound streaming audio to μ-law regardless of provider encoding.
+    egress_force_mulaw: bool = Field(default=False)
 
 
 class LoggingConfig(BaseModel):
@@ -257,6 +284,9 @@ class AppConfig(BaseModel):
     logging: Optional[LoggingConfig] = Field(default_factory=LoggingConfig)
     pipelines: Dict[str, PipelineEntry] = Field(default_factory=dict)
     active_pipeline: Optional[str] = None
+    # P1: profiles/contexts for transport orchestration
+    profiles: Dict[str, Any] = Field(default_factory=dict)
+    contexts: Dict[str, Any] = Field(default_factory=dict)
 
     # Ensure tests that construct AppConfig(**dict) directly still get normalized pipelines
     # similar to load_config(), which calls _normalize_pipelines().
@@ -313,13 +343,14 @@ def load_config(path: str = "config/ai-agent.yaml") -> AppConfig:
         
         config_data = yaml.safe_load(config_str_expanded)
 
-        # Manually construct and inject the Asterisk config from environment variables.
-        # This keeps secrets out of the YAML file and aligns with the Pydantic model.
+        # Asterisk config from environment variables ONLY.
+        # SECURITY: Credentials must NEVER be in YAML files.
+        asterisk_yaml = (config_data.get('asterisk') or {}) if isinstance(config_data.get('asterisk'), dict) else {}
         config_data['asterisk'] = {
-            "host": os.getenv("ASTERISK_HOST"),
-            "username": os.getenv("ASTERISK_ARI_USERNAME"),
-            "password": os.getenv("ASTERISK_ARI_PASSWORD"),
-            "app_name": "asterisk-ai-voice-agent"
+            "host": os.getenv("ASTERISK_HOST", "127.0.0.1"),
+            "username": os.getenv("ASTERISK_ARI_USERNAME") or os.getenv("ARI_USERNAME"),
+            "password": os.getenv("ASTERISK_ARI_PASSWORD") or os.getenv("ARI_PASSWORD"),
+            "app_name": asterisk_yaml.get("app_name", "asterisk-ai-voice-agent")
         }
 
         # Merge YAML LLM section with environment variables without clobbering YAML values.
@@ -338,8 +369,9 @@ def load_config(path: str = "config/ai-agent.yaml") -> AppConfig:
         if not _nonempty_string(prompt_val):
             prompt_val = os.getenv("AI_ROLE", "You are a helpful assistant.")
         # Resolve model and api_key
+        # SECURITY: API keys must ONLY come from environment variables
         model_val = llm_yaml.get('model') or "gpt-4o"
-        api_key_val = llm_yaml.get('api_key') or os.getenv("OPENAI_API_KEY")
+        api_key_val = os.getenv("OPENAI_API_KEY")  # ONLY from .env
 
         # Apply environment variable interpolation to final strings to support ${VAR} placeholders
         try:
@@ -358,11 +390,37 @@ def load_config(path: str = "config/ai-agent.yaml") -> AppConfig:
             "api_key": api_key_val,
         }
 
-        # Defaults for new flags if not present in YAML
+        # Config version 4
+        config_version = config_data.get('config_version', 4)
+        
+        # Transport and mode defaults
         config_data.setdefault('audio_transport', os.getenv('AUDIO_TRANSPORT', 'externalmedia'))
         config_data.setdefault('downstream_mode', os.getenv('DOWNSTREAM_MODE', 'file'))
         if 'streaming' not in config_data:
             config_data['streaming'] = {}
+        
+        # Diagnostic settings - read from environment variables only
+        streaming_cfg = config_data['streaming']
+        
+        # Egress swap mode (diagnostic only)
+        streaming_cfg['egress_swap_mode'] = os.getenv('DIAG_EGRESS_SWAP_MODE', 'none')
+        
+        # Egress force mulaw (diagnostic only)
+        env_force_mulaw = os.getenv('DIAG_EGRESS_FORCE_MULAW', 'false')
+        streaming_cfg['egress_force_mulaw'] = env_force_mulaw.lower() in ('true', '1', 'yes')
+        
+        # Attack ms (diagnostic only - disabled by default)
+        streaming_cfg['attack_ms'] = int(os.getenv('DIAG_ATTACK_MS', '0'))
+        
+        # Diagnostic audio taps (disabled by default)
+        env_taps = os.getenv('DIAG_ENABLE_TAPS', 'false')
+        streaming_cfg['diag_enable_taps'] = env_taps.lower() in ('true', '1', 'yes')
+        streaming_cfg['diag_pre_secs'] = int(os.getenv('DIAG_TAP_PRE_SECS', '1'))
+        streaming_cfg['diag_post_secs'] = int(os.getenv('DIAG_TAP_POST_SECS', '1'))
+        streaming_cfg['diag_out_dir'] = os.getenv('DIAG_TAP_OUTPUT_DIR', '/tmp/ai-engine-taps')
+        
+        # Streaming logger verbosity
+        streaming_cfg['logging_level'] = os.getenv('STREAMING_LOG_LEVEL', 'info')
 
         # AudioSocket configuration defaults
         audiosocket_cfg = config_data.get('audiosocket', {}) or {}
@@ -377,6 +435,43 @@ def load_config(path: str = "config/ai-agent.yaml") -> AppConfig:
 
         # Milestone7: Normalize pipelines for PipelineEntry schema while keeping legacy configs valid.
         _normalize_pipelines(config_data)
+
+        # P1: Ensure profiles/contexts blocks exist with sane defaults
+        try:
+            profiles_block = (config_data.get('profiles') or {}) if isinstance(config_data.get('profiles'), dict) else {}
+        except Exception:
+            profiles_block = {}
+
+        # Inject default telephony profile if missing
+        if 'telephony_ulaw_8k' not in profiles_block:
+            profiles_block['telephony_ulaw_8k'] = {
+                'internal_rate_hz': 8000,
+                'transport_out': { 'encoding': 'ulaw', 'sample_rate_hz': 8000 },
+                'provider_pref': {
+                    'input': { 'encoding': 'mulaw', 'sample_rate_hz': 8000 },
+                    'output': { 'encoding': 'mulaw', 'sample_rate_hz': 8000 },
+                    'preferred_chunk_ms': 20,
+                },
+                'idle_cutoff_ms': 1200,
+            }
+        # Provide default selector if not present (string key under profiles)
+        try:
+            default_profile_name = profiles_block.get('default')
+        except Exception:
+            default_profile_name = None
+        if not default_profile_name:
+            profiles_block['default'] = 'telephony_ulaw_8k'
+
+        config_data['profiles'] = profiles_block
+
+        # Contexts mapping (optional). Keep empty by default.
+        try:
+            contexts_block = config_data.get('contexts')
+            if not isinstance(contexts_block, dict):
+                contexts_block = {}
+        except Exception:
+            contexts_block = {}
+        config_data['contexts'] = contexts_block
 
         # Sanitize providers.local for Bash-style ${VAR:-default}/${VAR:=default} tokens.
         # os.path.expandvars does not support these defaults and may leave tokens intact or empty.
@@ -432,6 +527,33 @@ def load_config(path: str = "config/ai-agent.yaml") -> AppConfig:
             # Non-fatal; Pydantic may still coerce correctly
             pass
 
+        # SECURITY: Inject API keys into provider configs for pipeline adapters
+        # API keys must ONLY come from environment variables, never YAML
+        try:
+            providers_block = config_data.get('providers', {}) or {}
+            
+            # Inject OPENAI_API_KEY
+            openai_block = providers_block.get('openai', {}) or {}
+            if isinstance(openai_block, dict):
+                openai_block['api_key'] = os.getenv('OPENAI_API_KEY')
+                providers_block['openai'] = openai_block
+            
+            # Inject DEEPGRAM_API_KEY
+            deepgram_block = providers_block.get('deepgram', {}) or {}
+            if isinstance(deepgram_block, dict):
+                deepgram_block['api_key'] = os.getenv('DEEPGRAM_API_KEY')
+                providers_block['deepgram'] = deepgram_block
+            
+            # Inject GOOGLE_API_KEY
+            google_block = providers_block.get('google', {}) or {}
+            if isinstance(google_block, dict):
+                google_block['api_key'] = os.getenv('GOOGLE_API_KEY')
+                providers_block['google'] = google_block
+            
+            config_data['providers'] = providers_block
+        except Exception:
+            pass
+
         # Barge-in configuration defaults + env overrides
         barge_cfg = config_data.get('barge_in', {}) or {}
         try:
@@ -457,4 +579,70 @@ def load_config(path: str = "config/ai-agent.yaml") -> AppConfig:
         raise FileNotFoundError(f"Configuration file not found at the resolved path: {path}")
     except yaml.YAMLError as e:
         # Re-raise with a more informative error message
-        raise yaml.YAMLError(f"Error parsing YAML file at {path}: {e}")
+        raise yaml.YAMLError(f"Error parsing YAML configuration: {e}")
+
+def validate_production_config(config: AppConfig) -> tuple[list[str], list[str]]:
+    """Validate configuration for production deployment (AAVA-21).
+    
+    Args:
+        config: AppConfig instance to validate
+        
+    Returns:
+        (errors, warnings): Lists of validation errors and warnings
+        
+    Errors block startup, warnings are logged but non-blocking.
+    """
+    errors = []
+    warnings = []
+    
+    # Critical checks (errors)
+    try:
+        # VAD configuration consistency
+        if hasattr(config, 'vad') and config.vad:
+            if getattr(config.vad, 'enhanced_enabled', False):
+                if not hasattr(config.vad, 'webrtc_aggressiveness') or config.vad.webrtc_aggressiveness is None:
+                    errors.append("VAD enabled but webrtc_aggressiveness not set")
+        
+        # AudioSocket format validation
+        if hasattr(config, 'audiosocket') and config.audiosocket:
+            format_val = getattr(config.audiosocket, 'format', None)
+            if format_val and format_val not in ['slin', 'slin16', 'slin24', 'ulaw', 'alaw']:
+                errors.append(f"Invalid audiosocket format: {format_val} (must be slin, slin16, slin24, ulaw, or alaw)")
+        
+        # Provider API keys validation
+        has_openai = bool(os.getenv('OPENAI_API_KEY'))
+        has_deepgram = bool(os.getenv('DEEPGRAM_API_KEY'))
+        if not has_openai and not has_deepgram:
+            errors.append("No provider API keys configured (need OPENAI_API_KEY or DEEPGRAM_API_KEY)")
+        
+        # Port validation
+        if hasattr(config, 'audiosocket') and config.audiosocket:
+            port = getattr(config.audiosocket, 'port', None)
+            if port and (port < 1024 or port > 65535):
+                errors.append(f"AudioSocket port {port} out of valid range (1024-65535)")
+        
+        # Production warnings (non-blocking)
+        log_level = os.getenv('LOG_LEVEL', 'info').lower()
+        if log_level == 'debug':
+            warnings.append("Debug logging enabled (security/performance risk in production)")
+        
+        # Streaming configuration warnings
+        if hasattr(config, 'streaming') and config.streaming:
+            jitter_buffer = getattr(config.streaming, 'jitter_buffer_ms', 100)
+            if jitter_buffer < 100:
+                warnings.append(f"Jitter buffer very small: {jitter_buffer}ms (recommend >= 150ms for production)")
+            elif jitter_buffer > 1000:
+                warnings.append(f"Jitter buffer very large: {jitter_buffer}ms (adds latency, consider reducing)")
+        
+        # Check for deprecated/test settings
+        if hasattr(config, 'streaming') and config.streaming:
+            if hasattr(config.streaming, 'diag_enable_taps'):
+                if getattr(config.streaming, 'diag_enable_taps', False):
+                    warnings.append("Diagnostic taps enabled (performance impact, disable in production)")
+        
+    except Exception as e:
+        # Don't let validation errors crash startup
+        logger.warning("Configuration validation encountered an error", error=str(e), exc_info=True)
+        warnings.append(f"Validation check failed: {str(e)}")
+    
+    return errors, warnings

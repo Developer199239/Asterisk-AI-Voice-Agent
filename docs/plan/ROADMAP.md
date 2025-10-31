@@ -3,6 +3,7 @@
 This roadmap tracks the open-source enablement work for the Asterisk AI Voice Agent. Each milestone includes scope, primary tasks, and quick verification steps that should take less than a minute after deployment.
 
 ## Milestone 1 — SessionStore-Only State (✅ Completed)
+
 - **Goal**: Remove remaining legacy dictionaries from `engine.py` and rely exclusively on `SessionStore` / `PlaybackManager` for call state.
 - **Tasks**:
   - Replace reads/writes to `active_calls`, `caller_channels`, etc. with SessionStore helpers.
@@ -13,6 +14,7 @@ This roadmap tracks the open-source enablement work for the Asterisk AI Voice Ag
   - No `active_calls[...]` or similar dict mutations remain in the codebase.
 
 ## Milestone 2 — Provider Switch CLI (✅ Completed)
+
 - **Goal**: Provide one command to switch the active provider, restart the engine, and confirm readiness.
 - **What We Shipped**:
   - Added `scripts/switch_provider.py` and Makefile targets `provider-switch`, `provider-switch-remote`, and `provider-reload` for local + server workflows.
@@ -21,6 +23,7 @@ This roadmap tracks the open-source enablement work for the Asterisk AI Voice Ag
   - `make provider=<name> provider-reload` updates `config/ai-agent.yaml`, restarts `ai-engine`, and the next call uses the requested provider. Logged on 2025-09-22 during regression.
 
 ## Milestone 3 — Model Auto-Fetch (✅ Completed)
+
 - **Goal**: Automatically download and cache local AI models based on the host architecture.
 - **What We Shipped**:
   - Added `models/registry.json` and the `scripts/model_setup.py` utility to detect hardware tier, download the right STT/LLM/TTS bundles, and verify integrity.
@@ -29,6 +32,7 @@ This roadmap tracks the open-source enablement work for the Asterisk AI Voice Ag
   - First-run downloads populate `models/` on both laptops and the server; subsequent runs detect cached artifacts and exit quickly. Local provider boots cleanly after `make model-setup`.
 
 ## Milestone 4 — Conversation Coordinator & Metrics (✅ Completed)
+
 - **Goal**: Centralize gating/barge-in decisions and expose observability.
 - **What We Shipped**:
   - Introduced `ConversationCoordinator` (SessionStore-integrated) plus Prometheus gauges/counters for capture state and barge-in attempts.
@@ -37,19 +41,23 @@ This roadmap tracks the open-source enablement work for the Asterisk AI Voice Ag
   - 2025-09-22 regression call shows coordinator toggling capture around playback, `ai_agent_tts_gating_active` returning to zero post-call, and `/metrics` scrape succeeding from the server.
 
 ## Milestone 5 — Streaming Transport Production Readiness (✅ Completed)
+
 - **Goal**: Promote the AudioSocket streaming path to production quality with adaptive pacing, configurable defaults, and telemetry. Details and task breakdown live in `docs/milestones/milestone-5-streaming-transport.md`.
 - **What We Shipped**:
   - Configurable streaming defaults in `config/ai-agent.yaml` (`min_start_ms`, `low_watermark_ms`, `fallback_timeout_ms`, `provider_grace_ms`, `jitter_buffer_ms`).
   - Post‑TTS end protection window (`barge_in.post_tts_end_protection_ms`) to prevent agent self‑echo when capture resumes.
   - Deepgram input alignment to 8 kHz (`providers.deepgram.input_sample_rate_hz: 8000`) to match AudioSocket frames.
+  - AudioSocket default format set to μ-law with provider guardrails (`audiosocket.format=ulaw`, Deepgram/OpenAI `input_encoding=ulaw`) so inbound frames are decoded correctly.
   - Expanded YAML comments with tuning guidance for operators.
   - Regression docs updated with findings and resolutions.
 - **Verification (2025‑09‑24 13:17 PDT)**:
   - Two-way telephonic conversation acceptable end‑to‑end; no echo‑loop in follow‑on turns.
   - Gating toggles around playback as expected; post‑TTS guard drops residual frames.
+  - Deepgram regression replay shows no “low RMS” warnings once μ-law alignment is in place.
   - Operators can fine‑tune behaviour via YAML without code changes.
 
 ## Milestone 6 — OpenAI Realtime Voice Agent (✅ Completed)
+
 - **Goal**: Add an OpenAI Realtime provider so Deepgram ↔️ OpenAI switching happens via configuration alone. Milestone instructions: `docs/milestones/milestone-6-openai-realtime.md`.
 - **Dependencies**: Milestone 5 complete; OpenAI API credentials configured.
 - **Primary Tasks**:
@@ -67,10 +75,12 @@ This roadmap tracks the open-source enablement work for the Asterisk AI Voice Ag
 - **What We Shipped**:
   - Implemented `src/providers/openai_realtime.py` with robust event handling and transcript parsing.
   - Fixed keepalive to use native WebSocket `ping()` frames (no invalid `{"type":"ping"}` payloads).
+  - Resampled AudioSocket PCM16 (8 kHz) to 24 kHz before commit and advertised 24 kHz PCM16 input/output in `session.update` so OpenAI Realtime codecs stay in sync.
   - μ-law alignment: requested `g711_ulaw` from OpenAI and passed μ-law bytes directly to Asterisk (file playback path), eliminating conversion artifacts.
   - Greeting on connect using `response.create` with explicit instructions.
   - Hardened error logging to avoid structlog conflicts; added correlation and visibility of `input_audio_buffer.*` acks.
   - Added YAML streaming tuning knobs (`min_start_ms`, `low_watermark_ms`, `jitter_buffer_ms`, `provider_grace_ms`) and wired them into `StreamingPlaybackManager`.
+  - Refreshed `examples/pipelines/cloud_only_openai.yaml` so the monolithic OpenAI pipeline defaults to the 24 kHz settings and works out-of-the-box.
 
 - **Verification (2025‑09‑25 08:59 PDT)**:
   - Successful regression call with initial greeting; two-way conversation sustained.
@@ -82,6 +92,7 @@ This roadmap tracks the open-source enablement work for the Asterisk AI Voice Ag
   - Logs show `response.created` → output audio chunks → playback start/finish with gating clear; no `unknown_parameter` errors.
 
 ## Milestone 7 — Configurable Pipelines & Hot Reload (✅ Completed)
+
 - **Goal**: Support multiple named pipelines (STT/LLM/TTS) defined in YAML, with hot reload for rapid iteration. See `docs/milestones/milestone-7-configurable-pipelines.md`.
 - **What We Shipped**:
   - YAML pipelines with `active_pipeline` switching and safe hot reload.
@@ -98,15 +109,105 @@ This roadmap tracks the open-source enablement work for the Asterisk AI Voice Ag
   - Custom pipeline regressions succeed using YAML only.
   - Changing OpenAI/Deepgram endpoints or voice/model via YAML takes effect on next call.
 
-## Milestone 8 — Optional Monitoring & Analytics Stack (Planned)
-- **Goal**: Provide an opt-in Prometheus + Grafana stack for streaming metrics and future analytics. Instructions: `docs/milestones/milestone-8-monitoring-stack.md`.
-- **Dependencies**: Milestones 5–7 expose required telemetry.
-- **Primary Tasks**:
-  - Add monitoring services to `docker-compose.yml` and Make targets (`monitor-up`, `monitor-down`).
-  - Ship starter dashboards visualising streaming health and latency.
-  - Document setup in `docs/Monitoring.md` (or equivalent section in Architecture).
-- **Acceptance**:
-  - `make monitor-up` brings stack online; dashboards show live call metrics.
-  - Monitoring stack remains optional and does not impact base deployment when disabled.
+## Milestone 8 — Monitoring, Feedback & Guided Setup (Planned)
+
+- **Goal**: Ship an opt-in monitoring + analytics experience that is turnkey, captures per-call transcripts/metrics, and surfaces actionable YAML tuning guidance. Implementation details live in `docs/milestones/milestone-8-monitoring-stack.md`.
+- **Dependencies**: Milestones 5–7 in place so streaming telemetry, pipeline metadata, and configuration hot-reload already work.
+- **Workstreams & Tasks**:
+  1. **Observability Foundation**
+     - Add Prometheus & Grafana services to `docker-compose.yml` with persistent volumes and optional compose profile.
+     - Expose Make targets (`monitor-up`, `monitor-down`, `monitor-logs`, `monitor-status`) plus SSH-friendly variants in `tools/ide/Makefile.ide` if needed.
+     - Ensure `ai-engine` and `local-ai-server` `/metrics` export call/pipeline labels (`session_uuid`, `pipeline_name`, `provider_id`, `model_variant`).
+  2. **Call Analytics & Storage**
+     - Extend `SessionStore` (or dedicated collector) to emit end-of-call summaries: duration, turn count, fallback/jitter totals, sentiment score placeholder, pipeline + model names.
+     - Archive transcripts and the associated config snapshot per call (e.g., `monitoring/call_sessions/<uuid>.jsonl` + `settings.json`).
+     - Publish Prometheus metrics for recommendations (`ai_agent_setting_recommendation_total{field="streaming.low_watermark_ms"}`) and sentiment/quality trends.
+  3. **Recommendations & Feedback Loop**
+     - Implement rule-based analyzer that inspects call summaries and suggests YAML tweaks (buffer warmup, fallback timeouts, pipeline swaps) exposed via Prometheus labels and a lightweight `/feedback/latest` endpoint.
+     - Document how to interpret each recommendation and where to edit (`config/ai-agent.yaml`).
+  4. **Dashboards & UX**
+     - Curate Grafana dashboards: real-time call board, pipeline/model leaderboards, sentiment timeline, recommendation feed, transcript quick links.
+     - Keep dashboards auto-provisioned (`monitoring/dashboards/`) so `make monitor-up` renders data without manual import.
+  5. **Guided Setup for Non-Linux Users**
+     - Deliver a helper script (e.g., `scripts/setup_monitoring.py`) that checks Docker, scaffolds `.env`, snapshots current YAML, enables the monitoring profile, and prints Grafana credentials/URL.
+     - Update docs/Architecture, Agents.md, `.cursor/…`, `.windsurf/…`, `Gemini.md` to mention the optional workflow.
+- **Acceptance & Fast Verification**:
+  - `make monitor-up` (or helper script) starts Prometheus + Grafana; Grafana reachable on documented port with dashboards populated during a smoke call.
+  - After a call, a transcript + metrics artifact is created and the recommendation endpoint lists at least one actionable suggestion referencing YAML keys.
+  - Disabling the stack (`make monitor-down`) leaves core services unaffected and removes Prometheus/Grafana containers.
 
 Keep this roadmap updated after each milestone to help any collaborator—or future AI assistant—pick up where we left off.
+
+---
+
+## Future Roadmap (v4.1+)
+
+### Vision: Transport Orchestrator & Audio Profiles
+
+**Goal**: Make the engine provider-agnostic and format-agnostic with declarative audio profiles and automatic capability negotiation.
+
+**Key Concepts**:
+- **Single Internal Format**: Standardize on PCM16 internally; transcode once at edges
+- **Audio Profiles**: Declarative profiles (e.g., `telephony_ulaw_8k`, `wideband_pcm_16k`, `hifi_pcm_24k`)
+- **Capability Negotiation**: Auto-discover provider I/O formats and map to profiles
+- **Continuous Streaming**: Unified pacer per call, providers don't control pacing
+
+**Planned Work** (detailed in `docs/plan/ROADMAPv4.md`):
+1. **Transport Orchestrator** - Centralized audio routing and format management
+2. **Audio Profile System** - YAML-defined profiles with validation
+3. **Provider Capability Discovery** - Auto-detection of provider formats
+4. **Legacy Config Migration** - Backward-compatible upgrade path
+5. **Enhanced Monitoring** - Per-profile metrics and recommendations
+
+**Dependencies**:
+- v4.0 GA complete (3 golden baselines validated)
+- Testing & regression protocol established
+- Production monitoring stack operational
+
+**Target**: v4.1 release (Q1 2026)
+
+For detailed technical specifications, milestones, and implementation plan, see `docs/plan/ROADMAPv4.md`.
+
+---
+
+### v4.1 Feature Backlog
+
+**CLI Enhancements**:
+- `agent` binary builds (Makefile automation)
+- `agent config validate` - Pre-flight config validation
+- `agent test` - Automated test call execution
+
+**Additional Providers**:
+- Anthropic Claude integration
+- Google Gemini integration  
+- Azure Speech Services
+
+**Advanced Features**:
+- Call transfer and multi-leg support
+- WebRTC SIP client integration
+- High availability / clustering
+- Real-time dashboard (active calls)
+
+**Config Cleanup**:
+- Remove deprecated v3.0 settings
+- Automated config migration tool
+- Schema validation on startup
+
+**Performance**:
+- GPU acceleration for local-ai-server
+- Streaming latency optimizations
+- Memory usage profiling
+
+**Documentation**:
+- Video tutorials
+- Architecture deep-dives
+- Case studies from production deployments
+
+---
+
+## Release History
+
+- **v4.0.0** (October 2025) - Modular pipeline architecture, 3 golden baselines, production monitoring
+- **v3.0** - Internal development (never released)
+- **v2.0** - Internal development (never released)
+- **v1.0** - Initial concept (never released)

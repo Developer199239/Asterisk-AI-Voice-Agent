@@ -270,18 +270,18 @@ class PlaybackManager:
             # Create sound URI (remove .ulaw extension - Asterisk adds it)
             sound_uri = f"sound:ai-generated/{os.path.basename(audio_file).replace('.ulaw', '')}"
             
-            # Play via bridge. Prefer deterministic ID method when available.
+            # Play via bridge. Prefer deterministic ID method to correlate PlaybackFinished.
             play_basic = getattr(self.ari_client, "play_audio_via_bridge", None)
             play_with_id = getattr(self.ari_client, "play_media_on_bridge_with_id", None)
 
             success = False
-            if play_basic and callable(play_basic):
-                result = play_basic(session.bridge_id, sound_uri)
+            if play_with_id and callable(play_with_id):
+                result = play_with_id(session.bridge_id, sound_uri, playback_id)
                 if inspect.isawaitable(result):
                     result = await result
                 success = bool(result)
-            elif play_with_id and callable(play_with_id):
-                result = play_with_id(session.bridge_id, sound_uri, playback_id)
+            elif play_basic and callable(play_basic):
+                result = play_basic(session.bridge_id, sound_uri)
                 if inspect.isawaitable(result):
                     result = await result
                 success = bool(result)
@@ -326,20 +326,26 @@ class PlaybackManager:
         
         Args:
             call_id: Call ID
-            playback_id: Playback ID to clear
-            audio_size: Size of audio in bytes (used to calculate duration)
+            playback_id: Playback ID
+            audio_size: Size of audio in bytes (μ-law @ 8kHz)
         """
         try:
             # Calculate audio duration: 8kHz uLaw = 8000 samples/sec = 1 byte per sample
-            # Add safety margin of 0.5 seconds
             audio_duration = audio_size / 8000.0  # seconds
-            fallback_delay = audio_duration + 0.5  # safety margin
+            
+            # Use longer safety margin for pipeline mode (file-based playback has more latency)
+            # Pipeline mode: Asterisk file loading + processing + event delivery = 0.8-1.8s typical
+            # Full agent mode: Streaming has lower latency, use shorter margin
+            is_pipeline = playback_id.startswith("pipeline-")
+            fallback_delay = audio_duration + (2.5 if is_pipeline else 0.5)  # safety margin
             
             logger.debug("Scheduling gating fallback",
                         call_id=call_id,
                         playback_id=playback_id,
                         audio_duration=audio_duration,
-                        fallback_delay=fallback_delay)
+                        fallback_delay=fallback_delay,
+                        is_pipeline=is_pipeline,
+                        safety_margin=2.5 if is_pipeline else 0.5)
             
             # Schedule the fallback task
             asyncio.create_task(self._gating_fallback_task(call_id, playback_id, fallback_delay))

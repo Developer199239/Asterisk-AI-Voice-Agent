@@ -1,3 +1,11 @@
+# Asterisk AI Voice Agent - Main Services
+#
+# This compose file includes only the core AI engine services.
+# For optional monitoring (Prometheus + Grafana), use:
+#   docker compose -f docker-compose.monitoring.yml up -d
+#
+# See monitoring/README.md for details.
+
 services:
   ai-engine:
     build:
@@ -21,9 +29,7 @@ services:
     stdin_open: true
     restart: unless-stopped
     network_mode: "host"
-    depends_on:
-      local-ai-server:
-        condition: service_started
+
 
   local-ai-server:
     build:
@@ -36,8 +42,8 @@ services:
       - ./models:/app/models
     environment:
       - PYTHONUNBUFFERED=1
-      - LOCAL_STT_IDLE_MS=3000
-      - LOCAL_LLM_INFER_TIMEOUT_SEC=${LOCAL_LLM_INFER_TIMEOUT_SEC:-12}
+      - LOCAL_STT_IDLE_MS=${LOCAL_STT_IDLE_MS:-5000}
+      - LOCAL_LLM_INFER_TIMEOUT_SEC=${LOCAL_LLM_INFER_TIMEOUT_SEC:-30}
       - LOCAL_LLM_MODEL_PATH=${LOCAL_LLM_MODEL_PATH:-/app/models/llm/phi-3-mini-4k-instruct.Q4_K_M.gguf}
       - LOCAL_LLM_THREADS=${LOCAL_LLM_THREADS:-16}
       - LOCAL_LLM_CONTEXT=${LOCAL_LLM_CONTEXT:-4096}
@@ -54,8 +60,8 @@ services:
     restart: unless-stopped
     network_mode: "host"
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import socket; s=socket.socket(); s.settimeout(1); s.connect(('127.0.0.1',8765)); s.close()\""]
-      interval: 10s
+      test: ["CMD-SHELL", "python -c \"import asyncio; import websockets; async def check(): async with websockets.connect('ws://127.0.0.1:8765', ping_interval=None) as ws: await ws.close(); asyncio.run(check())\""]
+      interval: 60s
       timeout: 5s
       retries: 180
-      start_period: 60s
+      start_period: 120s

@@ -1,22 +1,43 @@
 ---
 trigger: always_on
-description: Architecture Details for Asterisk AI Voice Agent v3.0 project
+description: Architecture Details for Asterisk AI Voice Agent v4.0 project
 globs: src/**/*.py, *.py, docker-compose.yml, Dockerfile, config/ai-agent.yaml
 ---
 
-# Asterisk AI Voice Agent - Architecture Documentation
+# Asterisk AI Voice Agent - Architecture Documentation (v4.0)
 
 ## System Overview
 
-The Asterisk AI Voice Agent v3.0 is a **two-container, modular conversational AI system** that enables **real-time, two-way voice conversations** through Asterisk/FreePBX systems. The production stack runs an **AudioSocket-first upstream capture path**, maintains **ExternalMedia RTP** as a safety fallback, and now delivers downstream audio through a streaming transport that automatically falls back to file playback when the jitter buffer under-runs.
+The Asterisk AI Voice Agent v4.0 is a **production-ready, modular conversational AI system** that enables **real-time, two-way voice conversations** through Asterisk/FreePBX systems. It features a **modular pipeline architecture** that allows mixing and matching STT, LLM, and TTS providers, alongside support for **monolithic providers** like OpenAI Realtime and Deepgram Voice Agent.
 
-The GA program focuses on three pillars:
+### Key Architecture Components
 
-- **Streaming Quality** – adaptive jitter buffering, pacing, and provider hand-off so greetings and responses are clear out of the box (`docs/milestones/milestone-5-streaming-transport.md`).
-- **Provider Breadth** – first-class Deepgram and OpenAI Realtime integrations with codec-aware transport (`docs/milestones/milestone-6-openai-realtime.md`).
-- **Configurable Pipelines** – YAML-driven composition of STT/LLM/TTS components with safe hot reload (`docs/milestones/milestone-7-configurable-pipelines.md`).
+- **Dual Transport Support** – AudioSocket (TCP, modern) for full agents and ExternalMedia RTP (UDP, legacy) for hybrid pipelines
+- **Adaptive Streaming** – Downstream audio with automatic jitter buffering and file playback fallback
+- **Modular Pipelines** – Independent STT, LLM, and TTS provider selection via YAML configuration
+- **Production Monitoring** – Prometheus + Grafana stack with 50+ metrics and 5 dashboards
+- **State Management** – Centralized SessionStore with type-safe call state tracking
 
-An optional **monitoring stack** (Prometheus + Grafana) ships as part of Milestone 8 so operators can visualise streaming health, latency, and provider performance before extending analytics (`docs/milestones/milestone-8-monitoring-stack.md`).
+### Golden Baselines (v4.0)
+
+Three validated configurations ship production-ready:
+
+1. **OpenAI Realtime** (`config/ai-agent.golden-openai.yaml`)
+   - Monolithic provider (STT+LLM+TTS integrated)
+   - Response time: 0.5-1.5 seconds
+   - Server-side VAD for optimal turn detection
+
+2. **Deepgram Voice Agent** (`config/ai-agent.golden-deepgram.yaml`)
+   - Monolithic provider with Think stage reasoning
+   - Response time: 1-2 seconds
+   - Enterprise-grade quality
+
+3. **Local Hybrid** (`config/ai-agent.golden-local-hybrid.yaml`)
+   - Pipeline: Vosk (STT) + OpenAI (LLM) + Piper (TTS)
+   - Response time: 3-7 seconds
+   - Privacy-focused (audio stays local)
+
+For deployment guidance, see [docs/PRODUCTION_DEPLOYMENT.md](PRODUCTION_DEPLOYMENT.md).
 
 ## Architecture Overview
 
@@ -30,6 +51,7 @@ The production code still follows the **Hybrid ARI** call-control pattern and is
 - **Local Provider Tuning**: The local AI server now reads `LOCAL_LLM_*` and `LOCAL_STT/TTS_*` environment variables so operators can swap GGUF/ONNX assets or lower response latency without rebuilding images.
 
 This staged architecture provides:
+
 - **Improved State Consistency**: Critical paths (playback gating, RTP routing, TTS cleanup) now rely on a single store.
 - **Type Safety for New Code**: New helpers work with dataclasses (`CallSession`, `PlaybackRef`) instead of ad-hoc dicts, while older handlers are refactored gradually.
 - **Observability**: `/metrics` now exposes `ai_agent_tts_gating_active`, `ai_agent_audio_capture_enabled`, and `ai_agent_barge_in_events_total` counters, while `/health` includes a `conversation` block summarising gating and capture status.
@@ -46,6 +68,8 @@ This staged architecture provides:
 - Defaults currently favour reliability: 120 ms warm-up, 80 ms low watermark, 4 s fallback timeout, and 500 ms grace for late provider chunks.
 
 Defaults align with Deepgram’s recommended 100–120 ms buffering window and can be overridden per deployment. Refer to `docs/milestones/milestone-5-streaming-transport.md` for implementation details and tuning guidance.
+
+- **OpenAI Realtime codec alignment** – inbound AudioSocket PCM16 (8 kHz) is upsampled to 24 kHz before publishing via `input_audio_buffer`, and OpenAI’s 24 kHz PCM16 output is resampled back to the configured target (8 kHz PCM16 for AudioSocket playback by default). Keep `openai_realtime.provider_input_sample_rate_hz` and `openai_realtime.output_sample_rate_hz` at 24000 so the session advertises the correct formats while the engine handles the final downsampling.
 
 #### Post‑TTS End Protection (Echo‑Loop Mitigation)
 
@@ -120,6 +144,7 @@ active_pipeline: hybrid_support
 
 - `providers.*` blocks define credentials and provider-wide defaults; adapters retrieve them through provider-specific config dataclasses. The local provider now accepts `ws_url`, `connect_timeout_sec`, `response_timeout_sec`, and `chunk_ms` so deployments can tune the WebSocket handshake and batching cadence without code changes.
 - `pipelines.*.options` is merged with provider defaults and handed to adapters via `AdapterContext`. Nested maps (e.g., `options.tts.voice`) are preserved.
+- `examples/pipelines/cloud_only_openai.yaml` provides a turnkey OpenAI-only configuration that advertises 24 kHz provider audio while the engine resamples back to 8 kHz for AudioSocket playback.
 
 ##### Adapter Mapping
 
@@ -162,7 +187,7 @@ Dashboards are stored under `monitoring/dashboards/`, and configuration instruct
 - **AudioSocket Regression Pass (2025-09-22)**: Latest regression validated the AudioSocket-first capture path from `ai-agent-media-fork`, with a two-way Deepgram call completing successfully end-to-end.
 - **SessionStore Adoption Started**: Playback gating, RTP SSRC tracking, and health reporting use `SessionStore`, with remaining handlers scheduled for migration.
 - **AudioSocket Listener Integration**: With `audio_transport=audiosocket` the engine now exposes the TCP listener itself (default `0.0.0.0:8090`, configurable via the new `audiosocket.*` block) and binds inbound UUIDs straight into `SessionStore` before forwarding frames through the VAD pipeline.
-- **ExternalMedia RTP Integration**: When `audio_transport=externalmedia` the engine accepts RTP (UDP) on port 18080, resamples to 16 kHz, and forwards frames through the VAD pipeline.
+- **ExternalMedia RTP Integration**: When `audio_transport=externalmedia` the engine accepts RTP (UDP) on the configured port or range (default `18080:18099`), resamples to 16 kHz, and forwards frames through the VAD pipeline.
 - **Downstream Playback**: `PlaybackManager` writes μ-law files to `/mnt/asterisk_media/ai-generated` and triggers deterministic bridge playbacks with gating.
 - **Complete Pipeline**: RTP → VAD/Fallback → Provider WebSocket → LLM/TTS → File playback all operate in production.
 - **Deepgram Integration Hardened**: The Deepgram provider now uses a typed config with environment fallbacks, so the cloud path can be enabled without disturbing the local provider wiring.
@@ -187,11 +212,12 @@ Dashboards are stored under `monitoring/dashboards/`, and configuration instruct
   - `conversation`: summary now includes `latest_turn_latency_s` and `latest_transcription_latency_s` derived from new latency timers.
   
 Configure via env:
+
 - `HEALTH_HOST` (default `0.0.0.0`), `HEALTH_PORT` (default `15000`).
 
 ### Known Constraints
 
-- RTP server requires port 18080 to be available for ExternalMedia integration
+- RTP server requires the configured port or port range (default `18080:18099`) to be available for ExternalMedia integration
 - ExternalMedia channels must be properly bridged with caller channels for audio flow
 - SSRC mapping is critical for audio routing - first RTP packet automatically maps SSRC to caller
 - TTS gating requires proper PlaybackFinished event handling for feedback prevention
@@ -211,9 +237,11 @@ Configure via env:
    - Run full regression suite (Deepgram + OpenAI), publish telemetry-backed tuning guide, update quick-start/install docs, and tag the GA release.
 
 ### Roadmap Tracking
+
 Ongoing milestones and their acceptance criteria live in `docs/plan/ROADMAP.md`. Update that file after each deliverable so any collaborator—or tool-specific assistant—can resume work without manual hand-off.
 
 ### IDE Playbooks
+
 - **Codex / CLI**: `Agents.md` and `call-framework.md` summarize deployment runbooks and regression expectations for terminal-first workflows.
 - **Cursor**: `.cursor/rules/asterisk_ai_voice_agent.mdc` mirrors the same guardrails, emphasising SessionStore usage and AudioSocket-first assumptions.
 - **Windsurf**: `.windsurf/rules/asterisk_ai_voice_agent.md` keeps IDE prompts aligned with the roadmap so code and documentation stays in sync.
@@ -230,7 +258,7 @@ Ongoing milestones and their acceptance criteria live in `docs/plan/ROADMAP.md`.
 
 ## Architecture Diagrams
 
-### 1. EXTERNALMEDIA CALL FLOW 
+### 1. EXTERNALMEDIA CALL FLOW
 
 ```
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
@@ -279,7 +307,7 @@ Ongoing milestones and their acceptance criteria live in `docs/plan/ROADMAP.md`.
          │                       │                       │                       │
 ```
 
-### 2. DEEPGRAM PROVIDER CALL FLOW 
+### 2. DEEPGRAM PROVIDER CALL FLOW
 
 ```
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
@@ -322,13 +350,14 @@ Ongoing milestones and their acceptance criteria live in `docs/plan/ROADMAP.md`.
          │                       │                       │                       │
 ```
 
-### 3. EXTERNALMEDIA SERVER ARCHITECTURE 
+### 3. EXTERNALMEDIA SERVER ARCHITECTURE
 
 ```
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
 │   ASTERISK      │    │   AI ENGINE     │    │   PROVIDER      │
 │   ExternalMedia   │    │   ExternalMedia   │    │   SYSTEM        │
-│   (Port 18080)   │    │   Server        │    │                 │
+│ (Port Range      │    │   Server        │    │                 │
+│ 18080-18099)     │    │                 │    │                 │
 └─────────────────┘    └─────────────────┘    └─────────────────┘
          │                       │                       │
          │ 1. TCP Connection     │                       │
@@ -362,7 +391,7 @@ src/
 │   ├── session_store.py         # Central store for call/session/playback state
 │   └── playback_manager.py      # Deterministic playback + gating logic
 │
-├── rtp_server.py               # ExternalMedia RTP server (UDP listener on port 18080)
+├── rtp_server.py               # ExternalMedia RTP server (per-call UDP sockets, default range 18080-18099)
 │   ├── start()                  # Bind UDP socket and launch receiver loop
 │   ├── _rtp_receiver()          # Parse RTP headers, resample μ-law → PCM16 16 kHz
 │   └── engine_callback          # Dispatches SSRC-tagged audio back to engine
@@ -396,7 +425,7 @@ The current implementation keeps Asterisk in control of the media pipe while the
 
 1. **Call Initiation**: A new call hits the Stasis dialplan context (`from-ai-agent` or similar), handing control to `engine.py`.
 2. **ExternalMedia Origination**: `_handle_caller_stasis_start_hybrid()` answers the caller, creates a mixing bridge, and originates an ExternalMedia channel via ARI (`_start_external_media_channel`). When that channel enters Stasis, the engine bridges it with the caller and records the mapping in `SessionStore`.
-3. **Audio Stream Starts**: Once bridged, Asterisk streams μ-law RTP packets to the engine’s `RTPServer` (default `0.0.0.0:18080`). `RTPServer` parses RTP headers, resamples audio to 16 kHz, and calls `_on_rtp_audio(ssrc, pcm_16k)`.
+3. **Audio Stream Starts**: Once bridged, Asterisk streams μ-law RTP packets to the engine’s `RTPServer` (default `0.0.0.0:18080-18099`). `RTPServer` parses RTP headers, resamples audio to 16 kHz, and calls `_on_rtp_audio(ssrc, pcm_16k)`.
 4. **Real-time Conversation**:
    - `_on_rtp_audio` tracks the SSRC→call association in `SessionStore`, applies VAD / fallback buffering, and forwards PCM frames to the active provider through `provider.send_audio`.
    - The provider (Deepgram or Local WebSocket server) performs STT → LLM → TTS and emits AgentAudio events back to the engine.
@@ -407,62 +436,42 @@ The current implementation keeps Asterisk in control of the media pipe while the
 
 This orchestration leverages ExternalMedia for reliable inbound audio while keeping outbound playback file-based until streaming TTS is released.
 
-## FreePBX Dialplan Configuration
+## Dialplan Configuration
 
-### Working Dialplan Implementation
+### ARI-Based Architecture (v4.0)
 
-The system uses a simple, effective dialplan that directly hands calls to the Stasis application:
+v4.0 uses **ARI-based architecture** where the engine handles all audio transport setup. The dialplan's sole responsibility is to hand the call to Stasis.
+
+**Minimal Dialplan** (works for all 3 golden baselines):
 
 ```asterisk
 [from-ai-agent]
-exten => s,1,NoOp(Handing call directly to Stasis for AI processing)
- same => n,Stasis(asterisk-ai-voice-agent)
- same => n,Hangup()
-
-[ai-externalmedia]
-exten => s,1,NoOp(ExternalMedia + RTP AI Voice Agent)
- same => n,Answer()
- same => n,Wait(1)
+exten => s,1,NoOp(Asterisk AI Voice Agent v4.0)
  same => n,Stasis(asterisk-ai-voice-agent)
  same => n,Hangup()
 ```
 
-### AudioSocket-first Contexts (mirrors Agents.md)
+**How It Works:**
+1. Call enters `Stasis(asterisk-ai-voice-agent)`
+2. Engine receives StasisStart event via ARI
+3. Engine creates mixing bridge
+4. **For full agents** (OpenAI Realtime, Deepgram): Engine originates `AudioSocket/<host:port>/<uuid>/c(slin)` channel via ARI
+5. **For hybrid pipelines** (Local Hybrid): Engine originates ExternalMedia channel via ARI
+6. Engine bridges transport channel with caller
+7. Two-way audio flows through bridge
 
-When using the AudioSocket-first capture path with Hybrid ARI, prefer the following contexts. These mirror the snippets in `Agents.md` so all IDE docs stay consistent:
+**Optional: Provider Override via Channel Variables:**
 
 ```asterisk
-[ai-voice-agent]
-exten => s,1,NoOp(Starting AI Voice Agent with AudioSocket)
- same => n,Set(AUDIOSOCKET_HOST=127.0.0.1)
- same => n,Set(AUDIOSOCKET_PORT=8090)
- same => n,Set(AUDIOSOCKET_UUID=${UNIQUEID})
- same => n,AudioSocket(${AUDIOSOCKET_UUID},${AUDIOSOCKET_HOST}:${AUDIOSOCKET_PORT},ulaw)
+[from-ai-agent-support]
+exten => s,1,NoOp(AI Agent - Customer Support)
+ same => n,Set(AI_PROVIDER=deepgram)  ; Optional override
+ same => n,Set(AI_CONTEXT=support)    ; Custom context
  same => n,Stasis(asterisk-ai-voice-agent)
- same => n,Hangup()
-
-[ai-voice-agent-deepgram]
-exten => s,1,NoOp(AudioSocket AI Voice Agent using Deepgram)
- same => n,Set(AI_PROVIDER=deepgram)
- same => n,Stasis(asterisk-ai-voice-agent)
- same => n,Hangup()
-
-[ai-agent-media-fork]
-exten => _X.,1,NoOp(Local channel starting AudioSocket for ${EXTEN})
- same => n,Answer()
- same => n,Set(AUDIOSOCKET_HOST=127.0.0.1)
- same => n,Set(AUDIOSOCKET_PORT=8090)
- same => n,Set(AUDIOSOCKET_UUID=${EXTEN})
- same => n,AudioSocket(${AUDIOSOCKET_UUID},${AUDIOSOCKET_HOST}:${AUDIOSOCKET_PORT},ulaw)
- same => n,Hangup()
-
-; keep ;1 leg alive while the engine streams audio
-exten => s,1,NoOp(Local)
- same => n,Wait(60)
  same => n,Hangup()
 ```
 
-These coexist with `[from-ai-agent]` for simple Stasis routing and allow the engine to originate a Local channel into `[ai-agent-media-fork]` to start the upstream AudioSocket.
+**Important:** Do NOT use `AudioSocket()` in the dialplan. The engine manages AudioSocket channels internally via ARI.
 
 ### AudioSocket Streaming (Feature-Flag) — Wire Format & Pacing
 
@@ -473,18 +482,10 @@ When `audio_transport=audiosocket` and `downstream_mode=stream` are enabled, the
   - `slin16` (aka `slinear`): engine converts provider μ-law to PCM16 and sends 320-byte frames per 20 ms.
 - Outbound pacing: the engine segments audio into exact 20 ms frames and sends them at real-time cadence to prevent Asterisk buffer overruns (`translate.c: Out of buffer space`).
 - Inbound decode: if the dialplan sends μ-law (typical), the engine decodes μ-law → PCM16 at 8 kHz before resampling to 16 kHz for VAD.
+- Codec guardrail: startup audits now warn if provider `input_encoding` disagrees with `audiosocket.format`; keep both set to `ulaw` when the dialplan calls `AudioSocket(...,ulaw)`.
 - Provider streaming events: providers emit `AgentAudio` bytes with `streaming_chunk=true` and a final `AgentAudioDone` with `streaming_done=true` to control the streaming window.
 
-#### AudioSocket Duplicate Legs and Outbound Selection
-
-- Local channels create two AudioSocket TCP connections (`;1` and `;2`) which will both bind with the same UUID.
-- The engine now pins the outbound streaming target to the first connection that successfully binds the UUID and keeps secondary legs open to avoid `EPIPE` write errors in Asterisk.
-- We no longer switch outbound targets on the first inbound frame; doing so can select the non-playback leg and cause silence.
-- For diagnostics, a broadcast mode can be enabled to send outbound frames to all bound legs for a call:
-  - Set environment variable `AUDIOSOCKET_BROADCAST_DEBUG=1` to enable temporary broadcast.
-  - When enabled, the `StreamingPlaybackManager` will send each frame to every connection listed in `session.audiosocket_conns` and log `AudioSocket broadcast sent` with recipient count.
-
-#### AudioSocket Channel Interface (No Local Leg)
+#### AudioSocket Channel Interface (ARI-Originated)
 
 - The Hybrid ARI flow now originates an `AudioSocket/<host:port>/<uuid>/c(slin)` channel directly via ARI and bridges it with the caller.
 - Dialplan responsibility is limited to answering the inbound call and running `Stasis(asterisk-ai-voice-agent)`; the `ai-agent-media-fork` Local context is no longer required.
@@ -493,36 +494,39 @@ When `audio_transport=audiosocket` and `downstream_mode=stream` are enabled, the
 - Cleanup tears down the AudioSocket channel, removes its bridge mapping, and disconnects the TCP connection to keep compatibility with both Deepgram and the local provider.
 
 Implementation references:
+
 - `src/core/streaming_playback_manager.py` — format-aware conversion, 20 ms frame segmentation, pacing, remainder buffering
 - `src/engine.py::_audiosocket_handle_audio` — inbound μ-law decode and 8k→16k resample for VAD
 - `src/providers/deepgram.py` — emits `AgentAudio`/`AgentAudioDone` with streaming flags and call_id
 - `src/config.py::AudioSocketConfig` — `audiosocket.format` (default `ulaw`)
 
-### Dialplan Contexts Explained
+### Transport Selection
 
-**`[from-ai-agent]`**:
-- **Purpose**: Direct call routing to AI processing
-- **Usage**: Main entry point for incoming calls
-- **Flow**: Call → Stasis → AI Engine → RTP Server
-- **Benefits**: Simple, reliable, no complex audio handling
+**AudioSocket (Modern - Recommended for Full Agents)**:
+- **Use for**: OpenAI Realtime, Deepgram Voice Agent (monolithic providers)
+- **Advantages**: Lower latency, streaming TTS support, simpler architecture
+- **Implementation**: Engine originates AudioSocket channel via ARI
+- **Configuration**: `audio_transport: audiosocket` in config YAML
 
-**`[ai-externalmedia]`**:
-- **Purpose**: ExternalMedia context for RTP audio processing
-- **Usage**: Alternative entry point with explicit ExternalMedia setup
-- **Flow**: Call → Answer → Wait → Stasis → AI Engine
-- **Benefits**: Explicit audio setup, better for complex scenarios
+**ExternalMedia RTP (Legacy - For Hybrid Pipelines)**:
+- **Use for**: Local Hybrid, modular STT+LLM+TTS pipelines
+- **Advantages**: Battle-tested, file-based playback compatibility
+- **Implementation**: Engine originates ExternalMedia channel via ARI
+- **Configuration**: `audio_transport: externalmedia` in config YAML
 
-### Integration Steps
+### Integration Quick Start
 
-1. **Add to FreePBX**: Copy the dialplan contexts to your FreePBX dialplan
-2. **Route Calls**: Configure your inbound routes to use `from-ai-agent` context
-3. **Test**: Place test calls to verify Stasis application receives calls
-4. **Monitor**: Check AI engine logs for successful call processing
+1. **Add Dialplan**: Create `[from-ai-agent]` context (3 lines)
+2. **Configure FreePBX Route**: Point inbound route to `from-ai-agent` custom destination
+3. **Select Configuration**: Choose golden baseline in `config/ai-agent.yaml`
+4. **Test**: Place call, monitor engine logs for StasisStart → bridge creation
 
 ### Optional: ExternalMedia RTP Bridging
+
 In deployments that require RTP/SRTP interop, an optional path using Asterisk `ExternalMedia` may be enabled to bridge media via RTP. This is not required for the default ExternalMedia architecture and should be considered only when standards-based RTP interop is necessary.
 
 ## Streaming TTS over ExternalMedia Gateway (Feature Flag)
+
 With `downstream_mode=stream`, the engine now streams provider audio directly back to Asterisk over the ExternalMedia RTP leg (μ-law @ 8 kHz). The jitter buffer is managed in process and the transport will automatically fall back to file playback if the downstream path becomes unhealthy. The remaining work in this area focuses on:
 
 - **Barge-in**: detect inbound speech while streaming and cancel/attenuate TTS on demand.
@@ -567,15 +571,18 @@ All streaming state is also reflected in `SessionStore` (`CallSession` fields: `
 ## Real-Time Conversation Management
 
 ### RTP Server Pattern
+
 Two-way audio hinges on the `RTPServer` implementation in `src/rtp_server.py`:
 
-- **Transport**: UDP socket bound to `0.0.0.0:18080` (configurable via YAML) – Asterisk’s `ExternalMedia()` application sends 20 ms μ-law frames to this port.
+- **Transport**: UDP socket bound to the configured host/port range (default `0.0.0.0:18080-18099`) – Asterisk’s `ExternalMedia()` application sends 20 ms μ-law frames to this endpoint.
 - **Packet Handling**: `_rtp_receiver()` parses RTP headers, tracks expected sequence numbers/packet loss, converts μ-law to PCM16, and resamples 8 kHz audio to 16 kHz using `audioop.ratecv`.
 - **Engine Callback**: Every decoded frame is delivered back to `engine._on_rtp_audio(ssrc, pcm_16k)` where VAD, fallback buffering, and provider routing are performed. SSRCs are mapped to call sessions on the first packet through `SessionStore`.
 - **Outbound Audio**: Downstream audio remains file-based (no RTP transmit path yet); playback continues to flow through ARI bridges managed by `PlaybackManager`.
 
 ### State Management
+
 Call lifecycle is tracked across both the legacy dictionaries and the new `SessionStore`:
+
 - **Connecting**: Caller enters Stasis, bridge is created, and ExternalMedia channel is originated.
 - **Streaming**: ExternalMedia RTP arrives; SSRC mapping enables per-call routing into the VAD pipeline.
 - **Processing**: Providers receive buffered frames via `send_audio`; responses transition conversation state to `processing` until playback completes.
@@ -583,11 +590,13 @@ Call lifecycle is tracked across both the legacy dictionaries and the new `Sessi
 - **Cleanup**: `_cleanup_call()` tears down bridges/channels and removes sessions from both legacy maps and `SessionStore`.
 
 ### Connection & Error Handling
+
 - **Per-call Isolation**: Each SSRC maps to a single call; `RTPServer` maintains lightweight `RTPSession` stats (packet loss, jitter buffer state).
 - **Resilience**: Packet loss and out-of-order packets are logged; fallback buffering ensures speech still reaches STT if VAD misses it.
 - **Resource Cleanup**: `engine.stop()` stops the RTP server and `SessionStore.cleanup_expired_sessions()` removes stale entries.
 
 ### Performance Targets
+
 - **Audio Latency**: Maintain <200 ms decode/dispatch for inbound RTP frames.
 - **End-to-End Response**: Aim for <2 s voice response; provider timeout watchdogs reset conversations after 30 s.
 - **Streaming STT**: Fallback sends 4 s audio chunks (configurable) when VAD is silent to keep transcripts flowing.
@@ -596,13 +605,15 @@ Call lifecycle is tracked across both the legacy dictionaries and the new `Sessi
 ## Testing and Verification
 
 ### ExternalMedia Testing
-- **Socket Availability**: Confirm the RTP server binds to UDP port 18080 (default) without collisions.
+
+- **Socket Availability**: Confirm the RTP server binds to the configured UDP port or port range (default `18080:18099`) without collisions.
 - **Audio Stream Testing**: Stream μ-law audio over ExternalMedia and verify RTP frames reach `_on_rtp_audio`.
 - **Provider Integration**: Ensure buffered audio reaches the active provider WebSocket session.
 - **Error Handling**: Simulate packet loss / SSRC churn and monitor recovery logging.
 
 ### Critical Testing Points
-- **RTP Server**: Must be listening on UDP port 18080 (or configured override)
+
+- **RTP Server**: Must be listening on the configured UDP port or range (default `18080:18099`)
 - **SSRC Mapping**: Must associate the first packet on each SSRC with the active call
 - **Audio Format Handling**: Must process μ-law audio correctly
 - **Provider Integration**: Must forward audio to correct provider
@@ -614,29 +625,34 @@ Call lifecycle is tracked across both the legacy dictionaries and the new `Sessi
 ### ExternalMedia-Specific Issues
 
 **No RTP Packets Observed**:
-- Check that the RTP server is running on UDP port 18080 (or configured port)
+
+- Check that the RTP server is running on the configured UDP port/range (default `18080:18099`)
 - Verify the dialplan invokes `ExternalMedia()` with the correct host/port
 - Confirm firewall rules allow UDP traffic on the configured port
 
 **Audio Not Received**:
+
 - Verify the ExternalMedia channel is established (confirm `StasisStart` for the caller and ExternalMedia entries)
 - Check audio format compatibility (μ-law when `external_media.codec=ulaw`)
 - Monitor RTP server logs for packet receipt and decoder errors
 
 **Connection Drops**:
+
 - Confirm Asterisk keeps the ExternalMedia channel bridged; unbridged channels stop media immediately
 - Check network stability between Asterisk and the container hosting the RTP server
 - Review RTP server logs for timeouts (`last_packet_at`) and packet-loss counters
 
 **Performance Issues**:
+
 - Monitor RTP packet loss and jitter metrics emitted by `RTPServer`
 - Check VAD/fallback buffer sizes in engine logs for overflows
 - Verify provider processing speed (watch WebSocket send queue depth)
 
 When issues arise:
+
 1. Check RTP server logs for packet activity and SSRC mapping events
 2. Verify Asterisk dialplan configuration
-3. Send test RTP packets (e.g., `rtpplay`, `pjsip send media`) to UDP port 18080
+3. Send test RTP packets (e.g., `rtpplay`, `pjsip send media`) to the configured RTP port (default `18080`)
 4. Monitor audio stream processing
 5. Check provider integration and response times
 6. Verify file-based playback functionality

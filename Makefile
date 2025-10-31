@@ -37,6 +37,11 @@ endef
 PY := $(shell if command -v python3 >/dev/null 2>&1; then echo python3; else echo "docker-compose exec -T ai-engine python"; fi)
 PY_INFO := $(shell if command -v python3 >/dev/null 2>&1; then echo ""; else echo "Host python3 not found; using 'docker-compose exec -T ai-engine python' inside the ai-engine container."; fi)
 
+# ----------------------------------------------------------------------------
+# Compose detection (supports Docker Compose v2 plugin and legacy docker-compose)
+# ----------------------------------------------------------------------------
+DC := $(shell (docker compose version >/dev/null 2>&1 && echo "docker compose") || (docker-compose --version >/dev/null 2>&1 && echo "docker-compose") || echo "")
+
 # ==============================================================================
 # LOCAL DEVELOPMENT
 # ==============================================================================
@@ -328,7 +333,6 @@ verify-config:
 ## monitor-externalmedia: Monitor ExternalMedia + RTP status
 monitor-externalmedia:
 	@echo "--> Starting ExternalMedia + RTP monitoring..."
-	@echo "$(PY_INFO)"; \
 	$(PY) scripts/monitor_externalmedia.py
 
 ## monitor-externalmedia-once: Check ExternalMedia + RTP status once
@@ -337,11 +341,25 @@ monitor-externalmedia-once:
 	@echo "$(PY_INFO)"; \
 	$(PY) scripts/monitor_externalmedia.py --once
 
+## monitor-up: Start Prometheus +Grafana monitoring stack (host network)
+monitor-up:
+	@echo "--> Starting monitoring stack (Prometheus +Grafana) on host network..."
+	$(DOCKER_COMPOSE) -f docker-compose.yml -f docker-compose.monitor.yml up -d prometheus grafana
+{{ ... }}
+## monitor-down: Stop monitoring stack
+monitor-down:
+	@echo "--> Stopping monitoring stack..."
+	$(DOCKER_COMPOSE) -f docker-compose.yml -f docker-compose.monitor.yml down
+
+## monitor-logs: Tail monitoring stack logs
+monitor-logs:
+	@echo "--> Tailing Prometheus +Grafana logs... (Ctrl+C to exit)"
+	$(DOCKER_COMPOSE) -f docker-compose.yml -f docker-compose.monitor.yml logs -f prometheus grafana
+{{ ... }}
 ## capture-logs: Capture structured logs during test call (default: 40 seconds)
 capture-logs:
 	@echo "--> Starting structured log capture for test call..."
-	@echo "📞 Make your test call now!"
-	@echo "$(PY_INFO)"; \
+	@echo "Make your test call now!"
 	$(PY) scripts/capture_test_logs.py --duration 40
 
 ## capture-logs-short: Capture logs for 30 seconds
@@ -388,6 +406,11 @@ test-call:
 		echo "   cat $$LATEST_FRAMEWORK"; \
 	fi
 
+## rca-collect: Collect RCA artifacts (logs, taps, recordings) and run analyzer (env: SERVER_HOST, PROJECT_PATH, SINCE_MIN)
+rca-collect:
+	@echo "--> Collecting RCA artifacts from server..."
+	@bash scripts/rca_collect.sh
+
 ## check-python: Check for host python3 and print fallback guidance
 check-python:
 	@if command -v python3 >/dev/null 2>&1; then \
@@ -413,4 +436,4 @@ help:
 	@echo "Targets:"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
-.PHONY: build up down logs logs-all ps deploy deploy-safe deploy-force deploy-full deploy-no-cache server-logs server-logs-snapshot server-status server-clear-logs server-health test-local test-integration test-ari test-externalmedia verify-deployment verify-remote-sync verify-server-commit verify-config monitor-externalmedia monitor-externalmedia-once help
+.PHONY: build up down logs logs-all ps deploy deploy-safe deploy-force deploy-full deploy-no-cache server-logs server-logs-snapshot server-status server-clear-logs server-health test-local test-integration test-ari test-externalmedia verify-deployment verify-remote-sync verify-server-commit verify-config monitor-externalmedia monitor-externalmedia-once monitor-up monitor-down monitor-logs monitor-status help

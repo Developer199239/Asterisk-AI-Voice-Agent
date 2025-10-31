@@ -3,7 +3,7 @@ OpenAI Realtime provider implementation.
 
 This module integrates OpenAI's server-side Realtime WebSocket transport into the
 Asterisk AI Voice Agent without requiring WebRTC. Audio from AudioSocket is
-converted to PCM16 @ 16 kHz, streamed to OpenAI, and PCM16 24 kHz output is
+upsampled to PCM16 @ 24 kHz, streamed to OpenAI, and PCM16 24 kHz output is
 resampled to the configured downstream AudioSocket format (µ-law or PCM16 8 kHz).
 """
 
@@ -15,15 +15,17 @@ import contextlib
 import json
 import time
 import uuid
-from typing import Any, Dict, Optional
+import audioop
+from typing import Any, Dict, Optional, List
 
 import websockets
 from websockets import WebSocketClientProtocol
 from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
 
 from structlog import get_logger
+from prometheus_client import Gauge, Info
 
-from .base import AIProviderInterface
+from .base import AIProviderInterface, ProviderCapabilities
 from ..audio import (
     convert_pcm16le_to_target_format,
     mulaw_to_pcm16le,
@@ -36,6 +38,27 @@ logger = get_logger(__name__)
 _COMMIT_INTERVAL_SEC = 0.2
 _KEEPALIVE_INTERVAL_SEC = 15.0
 
+_OPENAI_ASSUMED_OUTPUT_RATE = Gauge(
+    "ai_agent_openai_assumed_output_sample_rate_hz",
+    "Configured OpenAI Realtime output sample rate per call",
+    labelnames=("call_id",),
+)
+_OPENAI_PROVIDER_OUTPUT_RATE = Gauge(
+    "ai_agent_openai_provider_output_sample_rate_hz",
+    "Provider-advertised OpenAI Realtime output sample rate per call",
+    labelnames=("call_id",),
+)
+_OPENAI_MEASURED_OUTPUT_RATE = Gauge(
+    "ai_agent_openai_measured_output_sample_rate_hz",
+    "Measured OpenAI Realtime output sample rate per call",
+    labelnames=("call_id",),
+)
+_OPENAI_SESSION_AUDIO_INFO = Info(
+    "ai_agent_openai_session_audio",
+    "OpenAI Realtime session audio format assumptions and provider acknowledgements",
+    labelnames=("call_id",),
+)
+
 
 class OpenAIRealtimeProvider(AIProviderInterface):
     """
@@ -43,7 +66,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
 
     Lifecycle:
     1. start_session(call_id) -> establishes WebSocket session.
-    2. send_audio(bytes) -> converts inbound AudioSocket frames to PCM16 16 kHz,
+    2. send_audio(bytes) -> converts inbound AudioSocket frames to PCM16 24 kHz,
        base64-encodes, and streams via input_audio_buffer.
     3. Provider output deltas are decoded, resampled to AudioSocket format, and
        emitted as AgentAudio / AgentAudioDone events.
@@ -54,6 +77,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         self,
         config: OpenAIRealtimeProviderConfig,
         on_event,
+        gating_manager=None,
     ):
         super().__init__(on_event)
         self.config = config
@@ -73,18 +97,199 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         self._output_resample_state: Optional[tuple] = None
         self._transcript_buffer: str = ""
         self._input_info_logged: bool = False
-        # Aggregate converted 16 kHz PCM16 bytes and commit in >=100ms chunks
-        self._pending_audio_16k: bytearray = bytearray()
+        # Aggregate provider-rate PCM16 bytes (24 kHz default) and commit in >=100ms chunks
+        self._pending_audio_provider_rate: bytearray = bytearray()
+        
+        # Audio gating for echo prevention
+        self._gating_manager = gating_manager
+        if self._gating_manager:
+            logger.info("🎛️ Audio gating enabled for OpenAI Realtime (echo prevention)")
+        else:
+            logger.debug("Audio gating not available for OpenAI Realtime")
         self._last_commit_ts: float = 0.0
         # Serialize append/commit to avoid empty commits from races
         self._audio_lock: asyncio.Lock = asyncio.Lock()
-        # Track provider output format we requested in session.update
         self._provider_output_format: str = "pcm16"
+        self._provider_reported_output_rate: Optional[int] = None
+        self._output_meter_start_ts: float = 0.0
+        self._output_meter_last_log_ts: float = 0.0
+        self._output_meter_bytes: int = 0
+        self._output_rate_warned: bool = False
+        self._active_output_sample_rate_hz: Optional[float] = (
+            float(self.config.output_sample_rate_hz) if getattr(self.config, "output_sample_rate_hz", None) else None
+        )
+        self._session_output_bytes_per_sample: int = 2
+        self._session_output_encoding: str = "pcm16"
+        # Output format acknowledgment flag: only enable μ-law pass-through after server ACK
+        self._outfmt_acknowledged: bool = False
+        # Heuristic inference state when provider does not ACK output format
+        self._inferred_provider_encoding: Optional[str] = None
+        self._inference_logged: bool = False
+        # Egress pacing and buffering (telephony cadence)
+        self._egress_pacer_enabled: bool = bool(getattr(config, "egress_pacer_enabled", True))
+        try:
+            self._egress_pacer_warmup_ms: int = int(getattr(config, "egress_pacer_warmup_ms", 320))
+        except Exception:
+            self._egress_pacer_warmup_ms = 320
+        self._outbuf: bytearray = bytearray()
+        self._pacer_task: Optional[asyncio.Task] = None
+        self._pacer_running: bool = False
+        self._pacer_start_ts: float = 0.0
+        self._pacer_underruns: int = 0
+        self._pacer_lock: asyncio.Lock = asyncio.Lock()
+        self._fallback_pcm24k_done: bool = False
+        self._reconnect_task: Optional[asyncio.Task] = None
+
+        try:
+            if self.config.input_encoding:
+                self.config.input_encoding = self.config.input_encoding.strip()
+        except Exception:
+            pass
+
+    def describe_alignment(
+        self,
+        *,
+        audiosocket_format: str,
+        streaming_encoding: str,
+        streaming_sample_rate: int,
+    ) -> List[str]:
+        issues: List[str] = []
+        inbound_enc = (self.config.input_encoding or "slin16").lower()
+        inbound_rate = int(self.config.input_sample_rate_hz or 0)
+        target_enc = (self.config.target_encoding or "ulaw").lower()
+        target_rate = int(self.config.target_sample_rate_hz or 0)
+
+        def _class(enc: str) -> str:
+            e = (enc or "").lower()
+            if e in ("ulaw", "mulaw", "g711_ulaw", "mu-law"):
+                return "ulaw"
+            if e in ("slin", "slin16", "linear16", "pcm16", "pcm"):
+                return "pcm16"
+            return e
+
+        # Check inbound encoding vs AudioSocket
+        # NOTE: Intentional transcoding (slin ↔ ulaw) is supported - system handles conversion
+        if inbound_enc in ("slin16", "linear16", "pcm16") and _class(audiosocket_format) == "ulaw":
+            issues.append(
+                "OpenAI inbound encoding is PCM16 but AudioSocket format is μ-law; set audiosocket.format=slin16 "
+                "or change openai_realtime.input_encoding to ulaw."
+            )
+        elif inbound_enc in ("ulaw", "mulaw", "g711_ulaw", "mu-law") and _class(audiosocket_format) == "ulaw":
+            # Perfect alignment: both ulaw
+            pass
+        elif inbound_enc in ("ulaw", "mulaw", "g711_ulaw", "mu-law") and _class(audiosocket_format) in ("pcm16",):
+            # Intentional transcoding: AudioSocket PCM → Provider μ-law (system handles this)
+            pass
+        elif inbound_enc in ("ulaw", "mulaw", "g711_ulaw", "mu-law") and _class(audiosocket_format) != "ulaw":
+            # Only warn if it's not a supported transcoding path
+            if audiosocket_format not in ("slin", "slin16", "linear16", "pcm16"):
+                issues.append(
+                    f"OpenAI inbound encoding {inbound_enc} does not match audiosocket.format={audiosocket_format}."
+                )
+        if inbound_enc in ("ulaw", "mulaw", "g711_ulaw", "mu-law") and inbound_rate and inbound_rate != 8000:
+            issues.append(
+                f"OpenAI inbound μ-law sample rate is {inbound_rate} Hz; μ-law transport should be 8000 Hz."
+            )
+
+        # Check target encoding vs streaming manager output
+        # NOTE: Intentional transcoding is supported - streaming manager transcodes provider output to target
+        if _class(target_enc) == _class(streaming_encoding):
+            # Perfect alignment
+            pass
+        elif _class(target_enc) == "ulaw" and _class(streaming_encoding) == "pcm16":
+            # Intentional transcoding: Provider outputs PCM → Streaming manager transcodes to μ-law
+            pass
+        elif _class(target_enc) == "pcm16" and _class(streaming_encoding) == "ulaw":
+            # Intentional transcoding: Provider outputs μ-law → Streaming manager transcodes to PCM
+            pass
+        else:
+            # Warn only for unexpected mismatches
+            issues.append(
+                f"OpenAI target_encoding={target_enc} but streaming manager emits {streaming_encoding}."
+            )
+        if target_rate and target_rate != streaming_sample_rate:
+            issues.append(
+                f"OpenAI target_sample_rate_hz={target_rate} but streaming sample rate is {streaming_sample_rate}."
+            )
+
+        provider_rate = int(self.config.provider_input_sample_rate_hz or 0)
+        if provider_rate and provider_rate < 24000:
+            issues.append(
+                f"OpenAI provider_input_sample_rate_hz={provider_rate}; recommend 24000 for realtime streaming."
+            )
+
+        return issues
 
     @property
     def supported_codecs(self):
         fmt = (self.config.target_encoding or "ulaw").lower()
         return [fmt]
+
+    # P1: Static capability hints for Transport Orchestrator
+    def get_capabilities(self) -> ProviderCapabilities:
+        return ProviderCapabilities(
+            input_encodings=["ulaw", "linear16"],
+            input_sample_rates_hz=[8000, 16000],
+            # Output depends on session.update and downstream target; we advertise both
+            output_encodings=["mulaw", "pcm16"],
+            output_sample_rates_hz=[8000, 24000],
+            preferred_chunk_ms=20,
+            can_negotiate=False,  # Uses static session.update config, not runtime ACK
+        )
+    
+    def parse_ack(self, event_data: Dict[str, Any]) -> Optional[ProviderCapabilities]:
+        """
+        Parse session.updated event from OpenAI Realtime API to extract negotiated formats.
+        
+        Returns capabilities based on provider ACK, or None if not a session.updated event.
+        """
+        event_type = event_data.get('type')
+        if event_type != 'session.updated':
+            return None
+        
+        try:
+            session = event_data.get('session', {})
+            
+            # OpenAI session.updated includes input_audio_format and output_audio_format
+            input_format = session.get('input_audio_format', 'pcm16')
+            output_format = session.get('output_audio_format', 'pcm16')
+            
+            # OpenAI Realtime API only supports 24kHz
+            sample_rate = 24000
+            
+            # Map OpenAI format names to our encoding names
+            format_map = {
+                'pcm16': 'linear16',
+                'g711_ulaw': 'mulaw',
+                'g711_alaw': 'alaw',
+            }
+            
+            input_enc = format_map.get(input_format, input_format)
+            output_enc = format_map.get(output_format, output_format)
+            
+            logger.info(
+                "Parsed OpenAI session.updated ACK",
+                call_id=self._call_id,
+                input_format=input_format,
+                output_format=output_format,
+                sample_rate=sample_rate,
+            )
+            
+            return ProviderCapabilities(
+                input_encodings=[input_enc],
+                input_sample_rates_hz=[sample_rate],
+                output_encodings=[output_enc],
+                output_sample_rates_hz=[sample_rate],
+                preferred_chunk_ms=20,
+                can_negotiate=False,  # ACK confirmed static session configuration
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to parse OpenAI session.updated event",
+                call_id=self._call_id,
+                error=str(exc),
+            )
+            return None
 
     async def start_session(self, call_id: str):
         if not self.config.api_key:
@@ -100,6 +305,12 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         self._transcript_buffer = ""
         self._closing = False
         self._closed = False
+        
+        # Initialize session ACK mechanism (similar to Deepgram pattern)
+        self._session_ack_event = asyncio.Event()
+        self._outfmt_acknowledged = False
+
+        self._reset_output_meter()
 
         url = self._build_ws_url()
         headers = [
@@ -116,21 +327,97 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             logger.error("Failed to connect to OpenAI Realtime", call_id=call_id, exc_info=True)
             raise
 
-        await self._send_session_update()
+        # CRITICAL FIX: Wait for session.created before configuring (per OpenAI docs)
+        # "The server sends session.created as the first inbound message.
+        # session.update sent before session.created is ignored."
+        logger.debug("Waiting for session.created from OpenAI...", call_id=call_id)
+        try:
+            first_message = await asyncio.wait_for(
+                self.websocket.recv(),
+                timeout=5.0
+            )
+            first_event = json.loads(first_message)
+            
+            if first_event.get("type") == "session.created":
+                session_data = first_event.get("session", {})
+                logger.info(
+                    "✅ Received session.created - session ready",
+                    call_id=call_id,
+                    session_id=session_data.get("id"),
+                    model=session_data.get("model"),
+                )
+            else:
+                logger.warning(
+                    "Unexpected first event (expected session.created)",
+                    call_id=call_id,
+                    event_type=first_event.get("type")
+                )
+        except asyncio.TimeoutError:
+            logger.error(
+                "Timeout waiting for session.created",
+                call_id=call_id
+            )
+            raise RuntimeError("OpenAI did not send session.created within 5s")
+        except Exception as exc:
+            logger.error(
+                "Error receiving session.created",
+                call_id=call_id,
+                error=str(exc),
+                exc_info=True
+            )
+            raise
 
+        # NOW send session configuration (server is ready)
+        await self._send_session_update()
+        self._log_session_assumptions()
+        
+        # CRITICAL FIX #2: Send greeting IMMEDIATELY, don't wait for ACK
+        # Waiting for ACK blocks greeting for 3+ seconds (ACK arrives 8ms after timeout)
+        # This creates 4.5 second silence gap before greeting plays
         # Proactively request an initial response so the agent can greet
         # even before user audio arrives. Prefer explicit greeting text
         # when provided; otherwise fall back to generic instructions.
         try:
             if (self.config.greeting or "").strip():
+                logger.info("Sending explicit greeting (before ACK wait)", call_id=call_id)
                 await self._send_explicit_greeting()
             else:
                 await self._ensure_response_request()
         except Exception:
             logger.debug("Initial response.create request failed", call_id=call_id, exc_info=True)
+        
+        # THEN wait for session.updated ACK (doesn't block greeting anymore)
+        try:
+            logger.debug("Waiting for OpenAI session.updated ACK...", call_id=call_id)
+            await asyncio.wait_for(self._session_ack_event.wait(), timeout=3.0)  # Increased from 2.0s - ACK arrives at ~2.005s
+            logger.info(
+                "✅ OpenAI session.updated ACK received",
+                call_id=call_id,
+                output_format=self._provider_output_format,
+                sample_rate=self._active_output_sample_rate_hz,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "❌ OpenAI session.updated ACK timeout (greeting already sent)",
+                call_id=call_id,
+                note="OpenAI may have rejected audio format configuration - will use inference"
+            )
 
         self._receive_task = asyncio.create_task(self._receive_loop())
         self._keepalive_task = asyncio.create_task(self._keepalive_loop())
+
+        # Reset egress pacer state at session start
+        try:
+            async with self._pacer_lock:
+                self._outbuf.clear()
+            self._pacer_running = False
+            self._pacer_start_ts = 0.0
+            self._pacer_underruns = 0
+            self._fallback_pcm24k_done = False
+            if self._pacer_task and not self._pacer_task.done():
+                self._pacer_task.cancel()
+        except Exception:
+            logger.debug("Failed to reset pacer state on session start", exc_info=True)
 
         logger.info("OpenAI Realtime session established", call_id=call_id)
 
@@ -159,57 +446,40 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             pcm16 = self._convert_inbound_audio(audio_chunk)
             if not pcm16:
                 return
-
-            # Log first conversion sizes to verify resample
-            if self._input_info_logged is True and self._input_resample_state is not None:
-                try:
-                    logger.debug(
-                        "OpenAI input frame sizes",
-                        call_id=self._call_id,
-                        src_bytes=len(audio_chunk),
-                        dst_bytes=len(pcm16),
-                    )
-                except Exception:
-                    pass
-
-            # If server VAD is enabled, just append frames; do not commit.
-            vad_enabled = getattr(self.config, "turn_detection", None) is not None
-            if vad_enabled:
-                try:
-                    audio_b64 = base64.b64encode(pcm16).decode("ascii")
-                    await self._send_json({"type": "input_audio_buffer.append", "audio": audio_b64})
-                except Exception:
-                    logger.error("Failed to append input audio buffer (VAD)", call_id=self._call_id, exc_info=True)
-            else:
-                # Serialize accumulation and commit to avoid empty commits due to races
-                async with self._audio_lock:
-                    # Accumulate until we have >= 160ms to comfortably satisfy >=100ms minimum
-                    self._pending_audio_16k.extend(pcm16)
-                    bytes_per_ms = int(self.config.provider_input_sample_rate_hz * 2 / 1000)
-                    commit_threshold_ms = 160
-                    commit_threshold_bytes = bytes_per_ms * commit_threshold_ms
-
-                    if len(self._pending_audio_16k) >= commit_threshold_bytes:
-                        chunk = bytes(self._pending_audio_16k)
-                        self._pending_audio_16k.clear()
-                        audio_b64 = base64.b64encode(chunk).decode("ascii")
-                        try:
-                            await self._send_json({"type": "input_audio_buffer.append", "audio": audio_b64})
-                            await self._send_json({"type": "input_audio_buffer.commit"})
-                            self._last_commit_ts = time.monotonic()
-                            logger.debug(
-                                "OpenAI committed input audio",
-                                call_id=self._call_id,
-                                ms=len(chunk) // bytes_per_ms,
-                                bytes=len(chunk),
-                            )
-                        except Exception:
-                            logger.error("Failed to append/commit input audio buffer", call_id=self._call_id, exc_info=True)
-                        await self._ensure_response_request()
+            
+            # IMPORTANT: For OpenAI Realtime with server-side VAD, DO NOT use client-side gating
+            # OpenAI handles turn detection and echo cancellation server-side
+            # Client-side gating fights OpenAI's server-side VAD and causes self-interruption
+            # See: OpenAI Realtime Golden Baseline (webrtc_aggressiveness: 1)
+            # The gate should stay OPEN and let OpenAI handle everything
+            
+            # Send audio directly - no gating for continuous input with server-side VAD
+            await self._send_audio_to_openai(pcm16)
+            
         except ConnectionClosedError:
             logger.warning("OpenAI Realtime socket closed while sending audio", call_id=self._call_id)
+            await self._reconnect_with_backoff()
         except Exception:
             logger.error("Failed to send audio to OpenAI Realtime", call_id=self._call_id, exc_info=True)
+
+    async def cancel_response(self):
+        """Cancel any in-progress response generation (for barge-in)."""
+        if not self.websocket or self.websocket.closed:
+            return
+        if not self._pending_response:
+            logger.debug("No pending response to cancel", call_id=self._call_id)
+            return
+        
+        try:
+            cancel_payload = {
+                "type": "response.cancel",
+                "event_id": f"cancel-{uuid.uuid4()}",
+            }
+            await self._send_json(cancel_payload)
+            logger.info("Sent response.cancel to OpenAI (barge-in)", call_id=self._call_id)
+            self._pending_response = False
+        except Exception:
+            logger.error("Failed to send response.cancel", call_id=self._call_id, exc_info=True)
 
     async def stop_session(self):
         if self._closing or self._closed:
@@ -231,6 +501,14 @@ class OpenAIRealtimeProvider(AIProviderInterface):
 
             await self._emit_audio_done()
         finally:
+            # Cleanup pacer
+            try:
+                self._pacer_running = False
+                if self._pacer_task:
+                    self._pacer_task.cancel()
+            except Exception:
+                pass
+            previous_call_id = self._call_id
             self._receive_task = None
             self._keepalive_task = None
             self.websocket = None
@@ -243,6 +521,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             self._output_resample_state = None
             self._transcript_buffer = ""
             logger.info("OpenAI Realtime session stopped")
+            self._clear_metrics(previous_call_id)
 
     def get_provider_info(self) -> Dict[str, Any]:
         return {
@@ -275,26 +554,36 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         if not output_modalities:
             output_modalities = ["audio"]
 
-        # Choose OpenAI output format for this session:
-        # If downstream target is μ-law, request g711_ulaw from provider to test end-to-end μ-law.
-        # Otherwise keep PCM16.
-        out_fmt = "pcm16"
-        try:
-            if (self.config.target_encoding or "").lower() in ("ulaw", "mulaw", "g711_ulaw"):
-                out_fmt = "g711_ulaw"
-        except Exception:
-            pass
+        # CRITICAL FIX: Use output_encoding (what OpenAI sends), NOT target_encoding (downstream format)
+        # OpenAI should send in the configured output_encoding, which we then transcode to target_encoding.
+        # Server expects a string token for output_audio_format (e.g., 'pcm16', 'g711_ulaw').
+        output_enc = (self.config.output_encoding or "linear16").lower()
+        if output_enc in ("ulaw", "mulaw", "g711_ulaw", "mu-law"):
+            out_fmt = "g711_ulaw"
+        else:
+            out_fmt = "pcm16"
+        
+        # Map provider_input_encoding to OpenAI's input_audio_format
+        # provider_input_encoding = what WE send TO OpenAI
+        input_enc = (getattr(self.config, "provider_input_encoding", None) or "linear16").lower()
+        if input_enc in ("ulaw", "mulaw", "g711_ulaw", "mu-law"):
+            in_fmt = "g711_ulaw"
+        elif input_enc in ("alaw", "g711_alaw"):
+            in_fmt = "g711_alaw"
+        else:
+            in_fmt = "pcm16"
+        # Do not mutate local provider format state here; wait for session ACK/events
 
         session: Dict[str, Any] = {
             # Model is selected via URL; keep accepted keys here
             "modalities": output_modalities,
-            "input_audio_format": "pcm16",
+            "input_audio_format": in_fmt,
             "output_audio_format": out_fmt,
             "voice": self.config.voice,
         }
-        # Record provider output format for runtime handling
-        self._provider_output_format = out_fmt
-        # Optional server-side VAD/turn detection at session level
+        # CRITICAL FIX #2: Let OpenAI handle VAD with its optimized defaults
+        # Only override if explicitly configured in YAML
+        # OpenAI's defaults are tuned for their audio processing pipeline
         if getattr(self.config, "turn_detection", None):
             try:
                 td = self.config.turn_detection
@@ -304,8 +593,16 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                     "threshold": td.threshold,
                     "prefix_padding_ms": td.prefix_padding_ms,
                 }
+                logger.info(
+                    "Using custom turn_detection config from YAML",
+                    call_id=self._call_id,
+                    threshold=td.threshold,
+                    silence_ms=td.silence_duration_ms,
+                )
             except Exception:
                 logger.debug("Failed to include turn_detection in session.update", call_id=self._call_id, exc_info=True)
+        # If not configured, DON'T SET IT - let OpenAI use optimized defaults
+        # This prevents us from interfering with OpenAI's audio processing
 
         if self.config.instructions:
             session["instructions"] = self.config.instructions
@@ -315,6 +612,15 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             "event_id": f"sess-{uuid.uuid4()}",
             "session": session,
         }
+
+        # DEBUG: Log what we're actually sending to OpenAI
+        logger.info(
+            "OpenAI session.update payload",
+            call_id=self._call_id,
+            output_audio_format=session.get("output_audio_format"),
+            input_audio_format=session.get("input_audio_format"),
+            modalities=session.get("modalities"),
+        )
 
         await self._send_json(payload)
 
@@ -375,27 +681,151 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         message = json.dumps(payload)
         async with self._send_lock:
             await self.websocket.send(message)
+    
+    async def _send_audio_to_openai(self, pcm16: bytes):
+        """Helper method to send PCM16 audio to OpenAI (extracted for gating logic).
+        
+        This contains the actual audio sending logic that was previously inline in send_audio.
+        It handles both VAD-enabled and manual commit modes.
+        """
+        # If server VAD is enabled, just append frames; do not commit.
+        vad_enabled = getattr(self.config, "turn_detection", None) is not None
+        if vad_enabled:
+            try:
+                audio_b64 = base64.b64encode(pcm16).decode("ascii")
+                await self._send_json({"type": "input_audio_buffer.append", "audio": audio_b64})
+            except Exception:
+                logger.error("Failed to append input audio buffer (VAD)", call_id=self._call_id, exc_info=True)
+        else:
+            # Serialize accumulation and commit to avoid empty commits due to races
+            async with self._audio_lock:
+                # Accumulate until we have >= 160ms to comfortably satisfy >=100ms minimum
+                self._pending_audio_provider_rate.extend(pcm16)
+                bytes_per_ms = int(self.config.provider_input_sample_rate_hz * 2 / 1000)
+                commit_threshold_ms = 160
+                commit_threshold_bytes = bytes_per_ms * commit_threshold_ms
+
+                if len(self._pending_audio_provider_rate) >= commit_threshold_bytes:
+                    chunk = bytes(self._pending_audio_provider_rate)
+                    self._pending_audio_provider_rate.clear()
+                    audio_b64 = base64.b64encode(chunk).decode("ascii")
+                    try:
+                        await self._send_json({"type": "input_audio_buffer.append", "audio": audio_b64})
+                        # CRITICAL FIX #2: Do NOT manually commit input audio buffer
+                        # Manual commits caused 310 "buffer too small" errors (40% failure rate)
+                        # OpenAI automatically commits when speech_stopped is detected (per API design)
+                        # Removes empty buffer errors and lets OpenAI handle turn-taking naturally
+                        # await self._send_json({"type": "input_audio_buffer.commit"})
+                        self._last_commit_ts = time.monotonic()
+                        logger.info(
+                            "OpenAI appended input audio (auto-commit on speech_stopped)",
+                            call_id=self._call_id,
+                            ms=len(chunk) // bytes_per_ms,
+                            bytes=len(chunk),
+                        )
+                    except Exception:
+                        logger.error("Failed to append input audio buffer", call_id=self._call_id, exc_info=True)
+                    # CRITICAL FIX: Do NOT manually trigger response.create after every audio commit
+                    # OpenAI's server_vad automatically generates responses when user stops speaking
+                    # Calling _ensure_response_request() here caused 148 requests in 70s (spam!)
+                    # Let OpenAI handle turn-taking naturally
 
     def _convert_inbound_audio(self, audio_chunk: bytes) -> Optional[bytes]:
-        fmt = (self.config.input_encoding or "slin16").lower()
-        pcm_8k = audio_chunk
+        fmt_raw = getattr(self.config, "input_encoding", None) or "slin16"
+        fmt = fmt_raw.strip().lower()
+        # Persist sanitized value so future checks stay consistent
+        try:
+            self.config.input_encoding = fmt
+        except Exception:
+            pass
 
-        if fmt in ("ulaw", "mulaw", "mu-law"):
-            pcm_8k = mulaw_to_pcm16le(audio_chunk)
-        elif fmt not in ("slin16", "linear16", "pcm16"):
-            logger.warning("Unsupported input encoding for OpenAI Realtime", encoding=fmt)
-            return None
+        valid_encodings = {
+            "ulaw",
+            "mulaw",
+            "g711_ulaw",
+            "mu-law",
+            "slin16",
+            "linear16",
+            "pcm16",
+        }
+        if fmt not in valid_encodings:
+            logger.warning("Unsupported input encoding for OpenAI Realtime", encoding=fmt_raw)
+            fmt = "slin16"
+            try:
+                self.config.input_encoding = fmt
+            except Exception:
+                pass
 
-        if self.config.input_sample_rate_hz != self.config.provider_input_sample_rate_hz:
-            pcm_16k, self._input_resample_state = resample_audio(
-                pcm_8k,
-                self.config.input_sample_rate_hz,
-                self.config.provider_input_sample_rate_hz,
+        chunk_len = len(audio_chunk)
+        # Infer actual transport format from canonical 20 ms frame sizes when possible
+        #  - 160 B ≈ μ-law @ 8 kHz (20 ms)
+        #  - 320 B ≈ PCM16 @ 8 kHz (20 ms)
+        #  - 640 B ≈ PCM16 @ 16 kHz (20 ms)
+        if chunk_len == 160:
+            actual_format = "ulaw"
+            inferred_rate = 8000
+        elif chunk_len == 320:
+            actual_format = "pcm16"
+            inferred_rate = 8000
+        elif chunk_len == 640:
+            actual_format = "pcm16"
+            inferred_rate = 16000
+        else:
+            actual_format = "pcm16" if fmt in ("slin16", "linear16", "pcm16") else "ulaw"
+            inferred_rate = int(getattr(self.config, "input_sample_rate_hz", 0) or 0) or 8000
+
+        # Select source_rate based on declared encoding and inference
+        if actual_format == "ulaw":
+            source_rate = 8000
+        else:
+            # PCM path: prefer declared input_sample_rate_hz if set, else inference
+            declared_rate = int(getattr(self.config, "input_sample_rate_hz", 0) or 0)
+            source_rate = declared_rate or inferred_rate or 8000
+        if actual_format == "ulaw":
+            pcm_src = mulaw_to_pcm16le(audio_chunk)
+        else:
+            pcm_src = audio_chunk
+
+        # Diagnostics-only: probe PCM16 RMS native vs swapped once; do not mutate audio
+        try:
+            if actual_format == "pcm16" and not getattr(self, "_endianness_probe_done", False):
+                import audioop  # local import to avoid top-level dependency for non-PCM paths
+                rms_native = audioop.rms(pcm_src, 2) if pcm_src else 0
+                try:
+                    swapped = audioop.byteswap(pcm_src, 2) if pcm_src else b""
+                    rms_swapped = audioop.rms(swapped, 2) if swapped else 0
+                except Exception:
+                    rms_swapped = 0
+                try:
+                    logger.info(
+                        "OpenAI inbound PCM16 probe",
+                        call_id=self._call_id,
+                        rms_native=rms_native,
+                        rms_swapped=rms_swapped,
+                    )
+                except Exception:
+                    pass
+                try:
+                    self._endianness_probe_done = True
+                except Exception:
+                    pass
+        except Exception:
+            # Non-fatal; proceed without probe
+            pass
+
+        provider_rate = int(getattr(self.config, "provider_input_sample_rate_hz", 0) or 0)
+
+        if provider_rate and provider_rate != source_rate:
+            pcm_provider_rate, self._input_resample_state = resample_audio(
+                pcm_src,
+                source_rate,
+                provider_rate,
                 state=self._input_resample_state,
             )
-            return pcm_16k
+            return pcm_provider_rate
 
-        return pcm_8k
+        self._input_resample_state = None
+        return pcm_src
 
     async def _receive_loop(self):
         assert self.websocket is not None
@@ -418,6 +848,12 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         finally:
             await self._emit_audio_done()
             self._pending_response = False
+            try:
+                if not self._closing and not self._closed and self._call_id:
+                    if not self._reconnect_task or self._reconnect_task.done():
+                        self._reconnect_task = asyncio.create_task(self._reconnect_with_backoff())
+            except Exception:
+                logger.debug("Failed to schedule OpenAI reconnect", call_id=self._call_id, exc_info=True)
 
     async def _handle_event(self, event: Dict[str, Any]):
         event_type = event.get("type")
@@ -471,12 +907,20 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         if event_type == "response.audio.delta":
             audio_b64 = event.get("delta")
             if audio_b64:
+                # Track audio burst for metrics, but don't use gating for server-side VAD
+                if not self._in_audio_burst:
+                    self._in_audio_burst = True
+                
                 await self._handle_output_audio(audio_b64)
             else:
                 logger.debug("Missing audio in response.audio.delta", call_id=self._call_id)
             return
 
         if event_type == "response.audio.done":
+            # Track end of audio burst for metrics
+            if self._in_audio_burst:
+                self._in_audio_burst = False
+            
             await self._emit_audio_done()
             return
 
@@ -521,7 +965,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
 
         # Optional acks/telemetry for audio buffer operations
         if event_type and event_type.startswith("input_audio_buffer"):
-            logger.debug("OpenAI input_audio_buffer ack", call_id=self._call_id, event_type=event_type)
+            logger.info("OpenAI input_audio_buffer ack", call_id=self._call_id, event_type=event_type)
             return
 
         # Additional transcript variants per guide
@@ -541,26 +985,143 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                 await self._emit_transcript("", is_final=True)
             return
 
+        # CRITICAL FIX #1: Handle session.updated ACK (following Deepgram pattern)
+        if event_type == "session.updated":
+            try:
+                session = event.get("session", {})
+                input_format = session.get("input_audio_format", "pcm16")
+                output_format = session.get("output_audio_format", "pcm16")
+                
+                # Map OpenAI format names to internal format names and sample rates
+                format_map = {
+                    'pcm16': ('pcm16', 24000),
+                    'g711_ulaw': ('g711_ulaw', 8000),
+                    'g711_alaw': ('g711_alaw', 8000),
+                }
+                
+                if output_format in format_map:
+                    fmt, rate = format_map[output_format]
+                    self._provider_output_format = fmt
+                    self._active_output_sample_rate_hz = rate
+                    self._outfmt_acknowledged = True
+                
+                logger.info(
+                    "✅ OpenAI session.updated ACK received",
+                    call_id=self._call_id,
+                    input_format=input_format,
+                    output_format=output_format,
+                    sample_rate=self._active_output_sample_rate_hz,
+                    acknowledged=self._outfmt_acknowledged,
+                )
+                
+                # Unblock audio streaming (similar to Deepgram's _ack_event.set())
+                if hasattr(self, '_session_ack_event') and self._session_ack_event:
+                    self._session_ack_event.set()
+                
+            except Exception as exc:
+                logger.error(
+                    "Failed to process session.updated event",
+                    call_id=self._call_id,
+                    error=str(exc),
+                    exc_info=True
+                )
+            return
+
         logger.debug("Unhandled OpenAI Realtime event", event_type=event_type)
 
     async def _handle_output_audio(self, audio_b64: str):
         try:
-            pcm_24k = base64.b64decode(audio_b64)
+            raw_bytes = base64.b64decode(audio_b64)
         except Exception:
             logger.warning("Invalid base64 audio payload from OpenAI", call_id=self._call_id)
             return
 
-        if not pcm_24k:
+        if not raw_bytes:
             return
 
-        # If provider is emitting μ-law (g711_ulaw), pass-through directly to downstream.
-        if (self._provider_output_format or "").lower() == "g711_ulaw":
-            outbound = pcm_24k  # Note: despite variable name, this holds μ-law bytes in this mode
+        # Always update the output meter with provider-native bytes
+        self._update_output_meter(len(raw_bytes))
+
+        # Fast-path: only after server ACK, if provider emits μ-law and downstream target is μ-law@8k, pass through bytes
+        target_enc = (self.config.target_encoding or "").lower()
+        if (
+            self._outfmt_acknowledged
+            and self._provider_output_format in ("g711_ulaw", "ulaw", "mulaw", "g711", "mu-law")
+            and target_enc in ("ulaw", "mulaw", "g711_ulaw", "mu-law")
+            and int(self.config.target_sample_rate_hz or 0) == 8000
+            and int(round(self._active_output_sample_rate_hz or 8000)) == 8000
+        ):
+            outbound = raw_bytes
         else:
+            # Otherwise, normalize to PCM16 using either ACK'ed format or inferred format, then convert
+            effective_fmt = self._provider_output_format
+            if not self._outfmt_acknowledged:
+                # Heuristic inference when ACK missing: prefer μ-law if odd length or RMS-ulaw >> RMS-pcm
+                inferred = None
+                try:
+                    l = len(raw_bytes)
+                    if l % 2 == 1:
+                        inferred = "ulaw"
+                    else:
+                        # Compare RMS when treated as PCM16 vs μ-law→PCM16 on a small window
+                        win_pcm = raw_bytes[: min(640, l - (l % 2))]
+                        rms_pcm = audioop.rms(win_pcm, 2) if win_pcm else 0
+                        try:
+                            win_mulaw_pcm16 = mulaw_to_pcm16le(raw_bytes[: min(320, l)])
+                        except Exception:
+                            win_mulaw_pcm16 = b""
+                        rms_ulaw = audioop.rms(win_mulaw_pcm16, 2) if win_mulaw_pcm16 else 0
+                        if rms_ulaw > max(50, int(1.5 * (rms_pcm or 1))):
+                            inferred = "ulaw"
+                        else:
+                            inferred = "pcm16"
+                except Exception:
+                    inferred = None
+                self._inferred_provider_encoding = inferred or self._inferred_provider_encoding or "pcm16"
+                effective_fmt = self._inferred_provider_encoding
+                if not self._inference_logged:
+                    try:
+                        logger.info(
+                            "OpenAI output format not ACKed; using inferred decode path",
+                            call_id=self._call_id,
+                            inferred=effective_fmt,
+                            bytes=len(raw_bytes),
+                        )
+                    except Exception:
+                        pass
+                    self._inference_logged = True
+
+            # CRITICAL FIX #3: Warn loudly if format not ACKed (following Deepgram strict pattern)
+            if not self._outfmt_acknowledged and not self._inference_logged:
+                logger.warning(
+                    "⚠️ Processing audio without format ACK - using inference fallback",
+                    call_id=self._call_id,
+                    inferred_format=effective_fmt,
+                    note="Audio quality may be degraded. OpenAI should send session.updated ACK."
+                )
+            
+            # Decode to PCM16 according to effective format
+            if effective_fmt in ("g711_ulaw", "ulaw", "mulaw", "g711", "mu-law"):
+                try:
+                    pcm_provider_output = mulaw_to_pcm16le(raw_bytes)
+                except Exception:
+                    logger.warning("Failed to convert μ-law provider output to PCM16", call_id=self._call_id, exc_info=True)
+                    return
+            else:
+                pcm_provider_output = raw_bytes
+
             target_rate = self.config.target_sample_rate_hz
+            # Determine source_rate more safely when provider hasn't ACKed.
+            # If we inferred μ-law, the true source is 8000 Hz regardless of config defaults.
+            if not self._outfmt_acknowledged and effective_fmt in ("g711_ulaw", "ulaw", "mulaw", "g711", "mu-law"):
+                source_rate = 8000
+            else:
+                source_rate = int(round(self._active_output_sample_rate_hz or self.config.output_sample_rate_hz or 0))
+                if not source_rate:
+                    source_rate = self.config.output_sample_rate_hz
             pcm_target, self._output_resample_state = resample_audio(
-                pcm_24k,
-                self.config.output_sample_rate_hz,
+                pcm_provider_output,
+                source_rate,
                 target_rate,
                 state=self._output_resample_state,
             )
@@ -569,28 +1130,40 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             if not outbound:
                 return
 
-        if self.on_event:
-            if not self._first_output_chunk_logged:
-                logger.info(
-                    "OpenAI Realtime first audio chunk",
-                    call_id=self._call_id,
-                    bytes=len(outbound),
-                    target_encoding=self.config.target_encoding,
-                )
-                self._first_output_chunk_logged = True
+        # Append to egress buffer and start pacer, or emit immediately if disabled
+        try:
+            async with self._pacer_lock:
+                self._outbuf.extend(outbound)
+        except Exception:
+            logger.debug("Failed appending to pacer buffer", call_id=self._call_id, exc_info=True)
 
-            self._in_audio_burst = True
-            try:
-                await self.on_event(
-                    {
-                        "type": "AgentAudio",
-                        "data": outbound,
-                        "streaming_chunk": True,
-                        "call_id": self._call_id,
-                    }
-                )
-            except Exception:
-                logger.error("Failed to emit AgentAudio event", call_id=self._call_id, exc_info=True)
+        if self._egress_pacer_enabled:
+            await self._ensure_pacer_started()
+        else:
+            # Fallback to immediate emit (legacy behavior)
+            if self.on_event:
+                if not self._first_output_chunk_logged:
+                    logger.info(
+                        "OpenAI Realtime first audio chunk",
+                        call_id=self._call_id,
+                        bytes=len(outbound),
+                        target_encoding=self.config.target_encoding,
+                    )
+                    self._first_output_chunk_logged = True
+                self._in_audio_burst = True
+                try:
+                    await self.on_event(
+                        {
+                            "type": "AgentAudio",
+                            "data": outbound,
+                            "streaming_chunk": True,
+                            "call_id": self._call_id,
+                            "encoding": (self.config.target_encoding or "slin16"),
+                            "sample_rate": self.config.target_sample_rate_hz,
+                        }
+                    )
+                except Exception:
+                    logger.error("Failed to emit AgentAudio event", call_id=self._call_id, exc_info=True)
 
     async def _emit_audio_done(self):
         if not self._in_audio_burst or not self.on_event or not self._call_id:
@@ -607,6 +1180,13 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             logger.error("Failed to emit AgentAudioDone event", call_id=self._call_id, exc_info=True)
         finally:
             self._in_audio_burst = False
+            # Pause pacer between bursts so we don't emit prolonged silence
+            try:
+                self._pacer_running = False
+                if self._pacer_task and not self._pacer_task.done():
+                    self._pacer_task.cancel()
+            except Exception:
+                logger.debug("Failed to pause pacer on AgentAudioDone", call_id=self._call_id, exc_info=True)
             self._output_resample_state = None
             self._first_output_chunk_logged = False
 
@@ -651,3 +1231,445 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                     break
         except asyncio.CancelledError:
             pass
+
+    async def _reconnect_with_backoff(self):
+        call_id = self._call_id
+        if not call_id:
+            return
+        backoff = 0.5
+        for attempt in range(1, 6):
+            if self._closing or self._closed:
+                return
+            try:
+                url = self._build_ws_url()
+                headers = [
+                    ("Authorization", f"Bearer {self.config.api_key}"),
+                    ("OpenAI-Beta", "realtime=v1"),
+                ]
+                if self.config.organization:
+                    headers.append(("OpenAI-Organization", self.config.organization))
+                logger.info("Reconnecting to OpenAI Realtime", call_id=call_id, attempt=attempt)
+                self.websocket = await websockets.connect(url, extra_headers=headers)
+                # Reset minor state
+                self._pending_response = False
+                self._in_audio_burst = False
+                self._first_output_chunk_logged = False
+                # Send session update again and restart loops
+                await self._send_session_update()
+                self._log_session_assumptions()
+                self._receive_task = asyncio.create_task(self._receive_loop())
+                self._keepalive_task = asyncio.create_task(self._keepalive_loop())
+                logger.info("OpenAI Realtime reconnected", call_id=call_id)
+                return
+            except Exception:
+                logger.warning("OpenAI Realtime reconnect failed", call_id=call_id, attempt=attempt, exc_info=True)
+                try:
+                    await asyncio.sleep(backoff)
+                except asyncio.CancelledError:
+                    return
+                backoff = min(6.0, backoff * 2)
+        logger.error("OpenAI Realtime reconnection exhausted attempts", call_id=call_id)
+
+    # ------------------------------------------------------------------ #
+    # Metrics and session metadata helpers ------------------------------ #
+    # ------------------------------------------------------------------ #
+
+    def _reset_output_meter(self) -> None:
+        self._output_meter_start_ts = 0.0
+        self._output_meter_last_log_ts = 0.0
+        self._output_meter_bytes = 0
+        self._output_rate_warned = False
+        self._provider_reported_output_rate = None
+        try:
+            self._active_output_sample_rate_hz = float(self.config.output_sample_rate_hz)
+        except Exception:
+            self._active_output_sample_rate_hz = None
+
+    def _log_session_assumptions(self) -> None:
+        call_id = self._call_id
+        if not call_id:
+            return
+
+        assumed_output = int(getattr(self.config, "output_sample_rate_hz", 0) or 0)
+        try:
+            _OPENAI_ASSUMED_OUTPUT_RATE.labels(call_id).set(assumed_output)
+        except Exception:
+            pass
+
+        info_payload = {
+            "input_encoding": str(getattr(self.config, "input_encoding", "") or ""),
+            "input_sample_rate_hz": str(getattr(self.config, "input_sample_rate_hz", "") or ""),
+            "provider_input_encoding": str(getattr(self.config, "provider_input_encoding", "") or ""),
+            "provider_input_sample_rate_hz": str(getattr(self.config, "provider_input_sample_rate_hz", "") or ""),
+            "output_encoding": self._session_output_encoding,
+            "output_sample_rate_hz": str(int(self._active_output_sample_rate_hz or getattr(self.config, "output_sample_rate_hz", "") or 0)),
+            "target_encoding": str(getattr(self.config, "target_encoding", "") or ""),
+            "target_sample_rate_hz": str(getattr(self.config, "target_sample_rate_hz", "") or ""),
+        }
+
+        try:
+            _OPENAI_SESSION_AUDIO_INFO.labels(call_id).info(info_payload)
+        except Exception:
+            pass
+
+        try:
+            logger.info(
+                "OpenAI Realtime session assumptions",
+                call_id=call_id,
+                input_encoding=info_payload["input_encoding"],
+                input_sample_rate_hz=info_payload["input_sample_rate_hz"],
+                provider_input_sample_rate_hz=info_payload["provider_input_sample_rate_hz"],
+                output_sample_rate_hz=info_payload["output_sample_rate_hz"],
+                target_encoding=info_payload["target_encoding"],
+                target_sample_rate_hz=info_payload["target_sample_rate_hz"],
+            )
+        except Exception:
+            logger.debug("Failed to log OpenAI session assumptions", exc_info=True)
+
+    def _handle_session_info_event(self, event: Dict[str, Any]) -> None:
+        call_id = self._call_id
+        if not call_id:
+            return
+
+        session_data = event.get("session") or {}
+        output_meta = session_data.get("output_audio_format") or {}
+        provider_rate = self._extract_sample_rate(output_meta)
+        provider_encoding = self._extract_encoding(output_meta)
+
+        if provider_rate:
+            self._provider_reported_output_rate = provider_rate
+            try:
+                _OPENAI_PROVIDER_OUTPUT_RATE.labels(call_id).set(provider_rate)
+            except Exception:
+                pass
+            try:
+                self._active_output_sample_rate_hz = float(provider_rate)
+            except Exception:
+                self._active_output_sample_rate_hz = provider_rate
+
+        # Acknowledge μ-law only when provider confirms it
+        enc_norm = (provider_encoding or "").lower()
+        if enc_norm in ("g711_ulaw", "ulaw", "mulaw", "mu-law") and int(provider_rate or 0) == 8000:
+            self._outfmt_acknowledged = True
+            self._provider_output_format = "g711_ulaw"
+            self._session_output_bytes_per_sample = 1
+            self._session_output_encoding = "g711_ulaw"
+        else:
+            # Default to PCM16 assumptions until μ-law is confirmed
+            self._outfmt_acknowledged = False
+            self._provider_output_format = "pcm16"
+            self._session_output_bytes_per_sample = 2
+            self._session_output_encoding = "pcm16"
+
+        info_payload = {
+            "input_encoding": str(getattr(self.config, "input_encoding", "") or ""),
+            "input_sample_rate_hz": str(getattr(self.config, "input_sample_rate_hz", "") or ""),
+            "provider_input_encoding": str(getattr(self.config, "provider_input_encoding", "") or ""),
+            "provider_input_sample_rate_hz": str(getattr(self.config, "provider_input_sample_rate_hz", "") or ""),
+            "output_encoding": provider_encoding or self._session_output_encoding,
+            "output_sample_rate_hz": str(provider_rate or self._active_output_sample_rate_hz or getattr(self.config, "output_sample_rate_hz", "") or ""),
+            "target_encoding": str(getattr(self.config, "target_encoding", "") or ""),
+            "target_sample_rate_hz": str(getattr(self.config, "target_sample_rate_hz", "") or ""),
+        }
+
+        try:
+            _OPENAI_SESSION_AUDIO_INFO.labels(call_id).info(info_payload)
+        except Exception:
+            pass
+
+        try:
+            logger.info(
+                "OpenAI Realtime session acknowledged audio format",
+                call_id=call_id,
+                provider_output_encoding=provider_encoding,
+                provider_output_sample_rate_hz=provider_rate,
+                event_type=event.get("type"),
+            )
+        except Exception:
+            logger.debug("Failed to log OpenAI session metadata", exc_info=True)
+
+    def _update_output_meter(self, chunk_bytes: int) -> None:
+        if not chunk_bytes or not self._call_id:
+            return
+
+        now = time.monotonic()
+        if not self._output_meter_start_ts:
+            self._output_meter_start_ts = now
+            self._output_meter_last_log_ts = now
+
+        self._output_meter_bytes += chunk_bytes
+        elapsed = max(1e-6, now - self._output_meter_start_ts)
+        bytes_per_sample = max(1, self._session_output_bytes_per_sample)
+        measured_rate = (self._output_meter_bytes / bytes_per_sample) / elapsed
+
+        # Guardrails: when target is μ-law, avoid "learning" sub-8kHz rates unless PCM is confirmed
+        try:
+            target_is_ulaw = str(getattr(self.config, "target_encoding", "") or "").lower() in (
+                "ulaw",
+                "mulaw",
+                "g711_ulaw",
+                "mu-law",
+            )
+        except Exception:
+            target_is_ulaw = False
+        confirmed_pcm = bool(self._outfmt_acknowledged and self._provider_output_format == "pcm16")
+
+        try:
+            _OPENAI_MEASURED_OUTPUT_RATE.labels(self._call_id).set(measured_rate)
+        except Exception:
+            pass
+
+        # Early drift correction (within ~250ms) so we don't wait a full second
+        # before aligning the active source rate. This minimizes initial warble.
+        try:
+            assumed_now = float(self._active_output_sample_rate_hz or getattr(self.config, "output_sample_rate_hz", 0) or 0)
+        except Exception:
+            assumed_now = float(getattr(self.config, "output_sample_rate_hz", 0) or 0)
+        # CRITICAL FIX: Never adjust sample rate based on measured_rate for streaming audio
+        # OpenAI sends PCM16@24kHz at playback speed (real-time), not processing speed.
+        # Measuring bytes/time gives playback rate (~1-3 kHz), NOT sample rate (24kHz).
+        # Always keep the configured sample rate (24000 Hz) for accurate resampling.
+        if elapsed >= 0.25 and assumed_now > 0:
+            try:
+                drift_now = abs(measured_rate - assumed_now) / assumed_now
+            except Exception:
+                drift_now = 0.0
+            if drift_now > 0.10 and not self._output_rate_warned:
+                self._output_rate_warned = True
+                # Log the drift for diagnostics but DO NOT change _active_output_sample_rate_hz
+                logger.debug(
+                    "OpenAI output rate drift detected (expected for real-time streaming)",
+                    call_id=self._call_id,
+                    measured_rate_hz=round(measured_rate, 2),
+                    configured_rate_hz=assumed_now,
+                    note="Measured rate reflects playback speed, not sample rate. Ignoring.",
+                )
+
+        if now - self._output_meter_last_log_ts >= 1.0:
+            self._output_meter_last_log_ts = now
+            assumed = float(self._active_output_sample_rate_hz or getattr(self.config, "output_sample_rate_hz", 0) or 0)
+            reported = self._provider_reported_output_rate
+            log_payload = {
+                "call_id": self._call_id,
+                "assumed_output_sample_rate_hz": assumed or None,
+                "provider_reported_sample_rate_hz": reported,
+                "measured_output_sample_rate_hz": round(measured_rate, 2),
+                "window_seconds": round(elapsed, 2),
+                "bytes_window": self._output_meter_bytes,
+            }
+            try:
+                logger.info(
+                    "OpenAI Realtime output rate check",
+                    **{k: v for k, v in log_payload.items() if v is not None},
+                )
+            except Exception:
+                logger.debug("Failed to log OpenAI output rate check", exc_info=True)
+
+            # CRITICAL FIX: Same as above - do not adjust rate based on measured_rate
+            # Keep this section for logging only, never modify _active_output_sample_rate_hz
+            if assumed > 0:
+                drift = abs(measured_rate - assumed) / assumed
+                # Log drift for diagnostics only - rate adjustment removed
+                if drift > 0.10:
+                    try:
+                        logger.debug(
+                            "OpenAI output rate drift info (streaming timing, not sample rate error)",
+                            call_id=self._call_id,
+                            measured_streaming_rate_hz=round(measured_rate, 2),
+                            configured_sample_rate_hz=assumed,
+                            provider_reported_rate_hz=reported,
+                            drift_ratio=round(drift, 4),
+                            note="This is expected for real-time streaming. Sample rate remains fixed.",
+                        )
+                    except Exception:
+                        logger.debug("Failed to log OpenAI output rate info", exc_info=True)
+
+            # Fallback trigger: if stream has been running >10s and measured rate remains <7.6–8 kHz, switch to PCM16@24k
+            try:
+                if not self._fallback_pcm24k_done:
+                    # Use pacer start when available, otherwise meter start as a conservative window
+                    window_anchor = self._pacer_start_ts if self._pacer_start_ts > 0.0 else self._output_meter_start_ts
+                    window = now - window_anchor if window_anchor > 0.0 else elapsed
+                    if window >= 10.0 and measured_rate and measured_rate < 7600.0:
+                        asyncio.create_task(self._switch_to_pcm24k_output())
+                        self._fallback_pcm24k_done = True
+            except Exception:
+                logger.debug("PCM24k fallback evaluation error", exc_info=True)
+
+    async def _ensure_pacer_started(self) -> None:
+        if self._pacer_running:
+            return
+        if not self.on_event or not self._call_id:
+            return
+        self._pacer_running = True
+        self._pacer_start_ts = time.monotonic()
+        try:
+            if self._pacer_task and not self._pacer_task.done():
+                self._pacer_task.cancel()
+        except Exception:
+            pass
+        self._pacer_task = asyncio.create_task(self._pacer_loop())
+
+    async def _pacer_loop(self) -> None:
+        call_id = self._call_id
+        if not call_id or not self.on_event:
+            self._pacer_running = False
+            return
+        # Determine 20ms chunk sizing based on target encoding/sample-rate
+        chunk_bytes, silence_factory = self._pacer_params()
+        warmup_bytes = int(max(0, self._egress_pacer_warmup_ms) / 20) * chunk_bytes
+        # Warm-up buffer
+        try:
+            while self.websocket and not self.websocket.closed and self._pacer_running:
+                async with self._pacer_lock:
+                    buf_len = len(self._outbuf)
+                if buf_len >= warmup_bytes or not self._egress_pacer_enabled:
+                    break
+                await asyncio.sleep(0.01)
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            logger.debug("Pacer warm-up error", call_id=call_id, exc_info=True)
+
+        # Emit loop at 20 ms cadence
+        try:
+            while self.websocket and not self.websocket.closed and self._pacer_running:
+                chunk = b""
+                async with self._pacer_lock:
+                    if len(self._outbuf) >= chunk_bytes:
+                        chunk = bytes(self._outbuf[:chunk_bytes])
+                        del self._outbuf[:chunk_bytes]
+                if not chunk:
+                    # Underrun: emit silence to maintain cadence
+                    self._pacer_underruns += 1
+                    chunk = silence_factory(chunk_bytes)
+
+                if not self._first_output_chunk_logged:
+                    try:
+                        logger.info(
+                            "OpenAI Realtime first paced audio chunk",
+                            call_id=call_id,
+                            bytes=len(chunk),
+                            target_encoding=self.config.target_encoding,
+                        )
+                    except Exception:
+                        pass
+                    self._first_output_chunk_logged = True
+                self._in_audio_burst = True
+                try:
+                    await self.on_event(
+                        {
+                            "type": "AgentAudio",
+                            "data": chunk,
+                            "streaming_chunk": True,
+                            "call_id": call_id,
+                            "encoding": (self.config.target_encoding or "slin16"),
+                            "sample_rate": self.config.target_sample_rate_hz,
+                        }
+                    )
+                except Exception:
+                    logger.error("Failed to emit paced AgentAudio", call_id=call_id, exc_info=True)
+                await asyncio.sleep(0.02)
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            logger.debug("Pacer loop error", call_id=call_id, exc_info=True)
+        finally:
+            self._pacer_running = False
+
+    def _pacer_params(self) -> (int, Any):
+        # Compute chunk size for 20 ms frames and a silence factory matching target encoding
+        enc = (self.config.target_encoding or "ulaw").lower()
+        rate = int(self.config.target_sample_rate_hz or 8000)
+        if enc in ("ulaw", "mulaw", "g711_ulaw", "mu-law"):
+            bytes_per_sample = 1
+            chunk_bytes = int(rate / 50) * bytes_per_sample
+            def silence(n: int) -> bytes:
+                return bytes([0xFF]) * max(0, n)
+            return chunk_bytes, silence
+        # PCM16 path (e.g., slin16)
+        bytes_per_sample = 2
+        chunk_bytes = int(rate / 50) * bytes_per_sample
+        def silence(n: int) -> bytes:
+            return b"\x00" * max(0, n)
+        return chunk_bytes, silence
+
+    async def _switch_to_pcm24k_output(self) -> None:
+        if not self.websocket or self.websocket.closed:
+            return
+        call_id = self._call_id
+        try:
+            logger.warning(
+                "Switching OpenAI output to PCM16@24k due to sustained low measured rate",
+                call_id=call_id,
+            )
+        except Exception:
+            pass
+        payload: Dict[str, Any] = {
+            "type": "session.update",
+            "event_id": f"sess-{uuid.uuid4()}",
+            "session": {
+                "output_audio_format": "pcm16",
+            },
+        }
+        try:
+            await self._send_json(payload)
+            self._provider_output_format = "pcm16"
+            self._session_output_bytes_per_sample = 2
+            try:
+                self._active_output_sample_rate_hz = float(24000)
+            except Exception:
+                self._active_output_sample_rate_hz = 24000.0
+            self._reset_output_meter()
+        except Exception:
+            logger.debug("Failed to switch OpenAI session to PCM16@24k", call_id=call_id, exc_info=True)
+
+    @staticmethod
+    def _extract_sample_rate(fmt: Any) -> Optional[int]:
+        if isinstance(fmt, str):
+            # Some previews may send "pcm16@24000"
+            if "@" in fmt:
+                try:
+                    return int(float(fmt.split("@", 1)[1]))
+                except (IndexError, ValueError):
+                    return None
+            return None
+        if not isinstance(fmt, dict):
+            return None
+        for key in ("sample_rate", "sample_rate_hz", "rate"):
+            value = fmt.get(key)
+            if value is None:
+                continue
+            try:
+                return int(float(value))
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    @staticmethod
+    def _extract_encoding(fmt: Any) -> Optional[str]:
+        if isinstance(fmt, str):
+            if "@" in fmt:
+                return fmt.split("@", 1)[0].strip().lower()
+            return fmt.lower()
+        if not isinstance(fmt, dict):
+            return None
+        for key in ("encoding", "format", "type"):
+            value = fmt.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.lower()
+        return None
+
+    def _clear_metrics(self, call_id: Optional[str]) -> None:
+        if not call_id:
+            return
+        for metric in (_OPENAI_ASSUMED_OUTPUT_RATE, _OPENAI_PROVIDER_OUTPUT_RATE, _OPENAI_MEASURED_OUTPUT_RATE):
+            try:
+                metric.remove(call_id)
+            except (KeyError, ValueError):
+                pass
+        try:
+            _OPENAI_SESSION_AUDIO_INFO.remove(call_id)
+        except (KeyError, ValueError):
+            pass
+        self._reset_output_meter()

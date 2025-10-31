@@ -11,6 +11,7 @@ import logging
 import sys
 import contextvars
 import uuid
+import time
 
 import structlog
 from structlog import dev as structlog_dev
@@ -138,11 +139,46 @@ def configure_logging(log_level="INFO", log_to_file=False, log_file_path="servic
     root_logger.addHandler(console_handler)
 
     if log_to_file:
-        file_handler = RotatingFileHandler(
-            log_file_path, maxBytes=10*1024*1024, backupCount=5
-        )
-        file_handler.setFormatter(processor_formatter)
-        root_logger.addHandler(file_handler)
+        try:
+            # Allow directory or templated file path. If a directory is provided (endswith slash
+            # or path exists and isdir), generate a timestamped file name using service_name.
+            ts = time.strftime("%Y%m%d-%H%M%S")
+            path = log_file_path
+            try:
+                looks_like_dir = path.endswith(os.sep) or (os.path.exists(path) and os.path.isdir(path))
+            except Exception:
+                looks_like_dir = path.endswith(os.sep)
+            if looks_like_dir:
+                dirpath = path
+                if not dirpath.endswith(os.sep):
+                    dirpath = dirpath + os.sep
+                filename = f"{service_name}-{ts}.log"
+                path = os.path.join(dirpath, filename)
+            else:
+                # Optional placeholder replacement
+                if "{ts}" in path:
+                    path = path.replace("{ts}", ts)
+            # Ensure directory exists
+            try:
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+            except Exception:
+                pass
+            file_handler = RotatingFileHandler(
+                path, maxBytes=10*1024*1024, backupCount=5
+            )
+            file_handler.setFormatter(processor_formatter)
+            root_logger.addHandler(file_handler)
+            root_logger.info("File logging configured", log_file_path=path)
+        except Exception as e:
+            # Fall back to console-only if file logging fails
+            try:
+                root_logger.warning(
+                    "File logging disabled due to error; continuing with console only",
+                    error=str(e),
+                    configured_path=log_file_path,
+                )
+            except Exception:
+                pass
 
     # Reduce noisy third-party loggers
     try:

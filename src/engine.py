@@ -10,7 +10,7 @@ import uuid
 import audioop
 import base64
 from collections import deque
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Set, Tuple
 
 # Simple audio capture system removed - not used in production
 
@@ -22,7 +22,7 @@ except ImportError:
     WEBRTC_VAD_AVAILABLE = False
     webrtcvad = None
 
-from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest, Histogram, Counter, Gauge
 
 from .ari_client import ARIClient
 from aiohttp import web
@@ -44,78 +44,86 @@ from .providers.deepgram import DeepgramProvider
 from .providers.local import LocalProvider
 from .providers.openai_realtime import OpenAIRealtimeProvider
 from .core import SessionStore, PlaybackManager, ConversationCoordinator
+from .core.vad_manager import EnhancedVADManager, VADResult
 from .core.streaming_playback_manager import StreamingPlaybackManager
+from .core.transport_orchestrator import TransportOrchestrator, TransportProfile
 from .core.models import CallSession
+from .utils.audio_capture import AudioCaptureManager
 
 logger = get_logger(__name__)
 
-class AudioFrameProcessor:
-    """Processes audio in 40ms frames to prevent voice queue backlog."""
-    
-    def __init__(self, frame_size: int = 320):  # 40ms at 8kHz = 320 samples
-        self.frame_size = frame_size
-        self.buffer = bytearray()
-        self.frame_bytes = frame_size * 2  # 2 bytes per sample (PCM16)
-    
-    def process_audio(self, audio_data: bytes) -> List[bytes]:
-        """Process audio data and return complete frames."""
-        # Accumulate audio in buffer
-        self.buffer.extend(audio_data)
-        
-        # Extract complete frames
-        frames = []
-        while len(self.buffer) >= self.frame_bytes:
-            frame = bytes(self.buffer[:self.frame_bytes])
-            self.buffer = self.buffer[self.frame_bytes:]
-            frames.append(frame)
-        
-        # Debug frame processing
-        if len(frames) > 0:
-            logger.debug("🎤 AVR FrameProcessor - Frames Generated",
-                        input_bytes=len(audio_data),
-                        buffer_before=len(self.buffer) + (len(frames) * self.frame_bytes),
-                        buffer_after=len(self.buffer),
-                        frames_generated=len(frames),
-                        frame_size=self.frame_bytes)
-        
-        return frames
+# -----------------------------------------------------------------------------
+# Prometheus latency histograms (module scope, registered once)
+# -----------------------------------------------------------------------------
+_TURN_STT_TO_TTS = Histogram(
+    "ai_agent_stt_to_tts_seconds",
+    "Time from STT final transcript to first TTS bytes",
+    buckets=(0.1, 0.2, 0.3, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 5.0),
+    labelnames=("pipeline", "provider"),
+)
+_TURN_RESPONSE_SECONDS = Histogram(
+    "ai_agent_turn_response_seconds",
+    "Approx time from STT final transcript to ARI playback start",
+    buckets=(0.2, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 5.0, 8.0),
+    labelnames=("pipeline", "provider"),
+)
 
-    
-    
-    
-    def flush(self) -> bytes:
-        """Flush remaining audio in buffer."""
-        remaining = bytes(self.buffer)
-        self.buffer = bytearray()
-        return remaining
+# Config exposure gauges (per call at session start)
+_CFG_BARGE_MS = Gauge(
+    "ai_agent_config_barge_in_ms",
+    "Configured barge-in timing values (ms)",
+    labelnames=("call_id", "param"),
+)
+_CFG_BARGE_THRESHOLD = Gauge(
+    "ai_agent_config_barge_in_threshold",
+    "Configured barge-in energy threshold",
+    labelnames=("call_id",),
+)
+_CFG_STREAM_MS = Gauge(
+    "ai_agent_config_streaming_ms",
+    "Configured streaming timing values (ms)",
+    labelnames=("call_id", "param"),
+)
+_CFG_TD_MS = Gauge(
+    "ai_agent_config_turn_detection_ms",
+    "Configured provider turn detection timing values (ms)",
+    labelnames=("call_id", "param"),
+)
+_CFG_TD_THRESHOLD = Gauge(
+    "ai_agent_config_turn_detection_threshold",
+    "Configured provider turn detection threshold",
+    labelnames=("call_id",),
+)
 
-class VoiceActivityDetector:
-    """Simple VAD to reduce unnecessary audio processing."""
-    
-    def __init__(self, speech_threshold: float = 0.3, silence_frames: int = 10):
-        self.speech_threshold = speech_threshold
-        self.max_silence_frames = silence_frames
-        self.silence_frames = 0
-        self.is_speaking = False
-    
-    def is_speech(self, audio_energy: float) -> bool:
-        """Determine if audio contains speech."""
-        if audio_energy > self.speech_threshold:
-            self.silence_frames = 0
-            if not self.is_speaking:
-                self.is_speaking = True
-                logger.debug("🎤 AVR VAD - Speech Started", 
-                           energy=f"{audio_energy:.4f}", 
-                           threshold=f"{self.speech_threshold:.4f}")
-            return True
-        else:
-            self.silence_frames += 1
-            if self.is_speaking and self.silence_frames >= self.max_silence_frames:
-                self.is_speaking = False
-                logger.debug("🎤 AVR VAD - Speech Ended", 
-                           silence_frames=self.silence_frames,
-                           max_silence=self.max_silence_frames)
-            return self.silence_frames < self.max_silence_frames
+# Barge-in reaction latency (seconds) from first energy to trigger
+_BARGE_REACTION_SECONDS = Histogram(
+    "ai_agent_barge_in_reaction_seconds",
+    "Time from first speech energy to barge-in trigger",
+    buckets=(0.1, 0.2, 0.3, 0.5, 0.8, 1.2, 2.0),
+    labelnames=("call_id",),
+)
+
+# Per-call audio byte counters (ingress)
+_STREAM_RX_BYTES = Counter(
+    "ai_agent_stream_rx_bytes_total",
+    "Inbound audio bytes from caller (per call)",
+    labelnames=("call_id",),
+)
+_CODEC_ALIGNMENT = Gauge(
+    "ai_agent_codec_alignment",
+    "Codec/sample-rate alignment status per call/provider (1=aligned,0=degraded)",
+    labelnames=("call_id", "provider"),
+)
+_AUDIO_RMS_GAUGE = Gauge(
+    "ai_agent_audio_rms",
+    "Observed RMS levels for audio stages",
+    labelnames=("call_id", "stage"),
+)
+_AUDIO_DC_OFFSET = Gauge(
+    "ai_agent_audio_dc_offset",
+    "Observed DC offset (mean sample value) for audio stages",
+    labelnames=("call_id", "stage"),
+)
 
 
 class Engine:
@@ -142,12 +150,28 @@ class Engine:
             conversation_coordinator=self.conversation_coordinator,
         )
         self.conversation_coordinator.set_playback_manager(self.playback_manager)
+        # Per-call transcript timing cache for latency histograms
+        self._last_transcript_ts: Dict[str, float] = {}
         
         # Initialize streaming playback manager
         streaming_config = {}
         if hasattr(config, 'streaming') and config.streaming:
+            audiosocket_fmt = "ulaw"
+            try:
+                if getattr(config, "audiosocket", None) and getattr(config.audiosocket, "format", None):
+                    audiosocket_fmt = str(config.audiosocket.format).lower()
+            except Exception:
+                audiosocket_fmt = "ulaw"
+            streaming_sample_rate = int(getattr(config.streaming, 'sample_rate', 8000) or 8000)
+            # For PCM transport over AudioSocket, prefer 16 kHz by default unless explicitly set
+            if self._canonicalize_encoding(audiosocket_fmt) in {"slin16", "linear16", "pcm16"}:
+                try:
+                    if not getattr(config.streaming, 'sample_rate', None):
+                        streaming_sample_rate = 16000
+                except Exception:
+                    streaming_sample_rate = 16000
             streaming_config = {
-                'sample_rate': config.streaming.sample_rate,
+                'sample_rate': streaming_sample_rate,
                 'jitter_buffer_ms': config.streaming.jitter_buffer_ms,
                 'keepalive_interval_ms': config.streaming.keepalive_interval_ms,
                 'connection_timeout_ms': config.streaming.connection_timeout_ms,
@@ -158,13 +182,32 @@ class Engine:
                 'low_watermark_ms': config.streaming.low_watermark_ms,
                 'provider_grace_ms': config.streaming.provider_grace_ms,
                 'logging_level': config.streaming.logging_level,
+                'egress_swap_mode': getattr(config.streaming, 'egress_swap_mode', 'auto'),
+                'egress_force_mulaw': self._should_force_mulaw(
+                    getattr(config.streaming, 'egress_force_mulaw', False),
+                    audiosocket_fmt,
+                ),
+                # Continuous stream across provider segments (single pacer per call)
+                'continuous_stream': bool(getattr(config.streaming, 'continuous_stream', True)),
+                # Audio normalizer (RMS make-up gain prior to μ-law encode)
+                'normalizer': {
+                    'enabled': bool(getattr(getattr(config, 'streaming', {}), 'normalizer', {}).get('enabled', True)) if hasattr(config, 'streaming') else True,
+                    'target_rms': int(getattr(getattr(config, 'streaming', {}), 'normalizer', {}).get('target_rms', 1400)) if hasattr(config, 'streaming') else 1400,
+                    'max_gain_db': float(getattr(getattr(config, 'streaming', {}), 'normalizer', {}).get('max_gain_db', 9.0)) if hasattr(config, 'streaming') else 9.0,
+                },
+                # Diagnostics (optional): enable short PCM taps pre/post compand
+                'diag_enable_taps': bool(getattr(config.streaming, 'diag_enable_taps', False)),
+                'diag_pre_secs': int(getattr(config.streaming, 'diag_pre_secs', 0) or 0),
+                'diag_post_secs': int(getattr(config.streaming, 'diag_post_secs', 0) or 0),
+                'diag_out_dir': str(getattr(config.streaming, 'diag_out_dir', '') or ''),
             }
         # Debug/diagnostics: allow broadcasting outbound frames to all AudioSocket conns
         try:
             streaming_config['audiosocket_broadcast_debug'] = bool(int(os.getenv('AUDIOSOCKET_BROADCAST_DEBUG', '0')))
         except Exception:
             streaming_config['audiosocket_broadcast_debug'] = False
-        
+
+        self.audio_capture = AudioCaptureManager()
         self.streaming_playback_manager = StreamingPlaybackManager(
             self.session_store,
             self.ari_client,
@@ -172,18 +215,58 @@ class Engine:
             fallback_playback_manager=self.playback_manager,
             streaming_config=streaming_config,
             audio_transport=self.config.audio_transport,
+            audio_diag_callback=self._update_audio_diagnostics_by_call,
+            audio_capture_manager=self.audio_capture,
         )
+        # Pre-seed audiosocket_format from YAML so provider audits use correct value
+        try:
+            initial_as_fmt = None
+            if getattr(self.config, "audiosocket", None) and hasattr(self.config.audiosocket, "format"):
+                initial_as_fmt = self.config.audiosocket.format
+            if initial_as_fmt:
+                self.streaming_playback_manager.set_transport(
+                    audio_transport=self.config.audio_transport,
+                    audiosocket_format=initial_as_fmt,
+                )
+        except Exception:
+            logger.debug("Failed to pre-seed streaming manager format", exc_info=True)
         
         # Milestone7: Pipeline orchestrator coordinates per-call STT/LLM/TTS adapters.
         self.pipeline_orchestrator = PipelineOrchestrator(config)
         
+        # P1: Transport orchestrator for multi-provider audio format negotiation
+        self.transport_orchestrator = TransportOrchestrator(config.dict() if hasattr(config, 'dict') else config.__dict__)
+        logger.info(
+            "TransportOrchestrator initialized",
+            profiles=list(self.transport_orchestrator.profiles.keys()),
+            contexts=list(self.transport_orchestrator.contexts.keys()),
+            default=self.transport_orchestrator.default_profile_name,
+        )
+        
         self.providers: Dict[str, AIProviderInterface] = {}
+        # Track static codec/sample-rate validation issues per provider
+        self.provider_alignment_issues: Dict[str, List[str]] = {}
+        # Per-call provider streaming queues (AgentAudio -> streaming playback)
+        self._provider_stream_queues: Dict[str, asyncio.Queue] = {}
+        self._provider_stream_formats: Dict[str, Dict[str, Any]] = {}
+        # Prevent duplicate runtime warnings per call when misalignment persists
+        self._runtime_alignment_logged: Set[str] = set()
+        # Per-call downstream audio preferences (format/sample-rate)
+        self.call_audio_preferences: Dict[str, Dict[str, Any]] = {}
         self.conn_to_channel: Dict[str, str] = {}
         self.channel_to_conn: Dict[str, str] = {}
         self.conn_to_caller: Dict[str, str] = {}  # conn_id -> caller_channel_id
         self.audio_socket_server: Optional[AudioSocketServer] = None
         self.audiosocket_conn_to_ssrc: Dict[str, int] = {}
         self.audiosocket_resample_state: Dict[str, Optional[tuple]] = {}
+        self.audio_capture = AudioCaptureManager()
+        # Stateful resampling: maintain per-call/per-provider ratecv states to avoid drift
+        # Provider input (caller -> provider) resample state
+        self._resample_state_provider_in: Dict[str, Dict[str, Optional[tuple]]] = {}
+        # Forced pipeline PCM16@16k path (per-call)
+        self._resample_state_pipeline16k: Dict[str, Optional[tuple]] = {}
+        # Enhanced VAD normalization to 8 kHz (per-call)
+        self._resample_state_vad8k: Dict[str, Optional[tuple]] = {}
         self.pending_channel_for_bind: Optional[str] = None
         # Support duplicate Local ;1/;2 AudioSocket connections per call
         self.channel_to_conns: Dict[str, set] = {}
@@ -195,25 +278,65 @@ class Engine:
         self.headless_sessions: Dict[str, Dict[str, Any]] = {}
         # Bridge and Local channel tracking for Local Channel Bridge pattern
         self.bridges: Dict[str, str] = {}  # channel_id -> bridge_id
-        # Frame processing and VAD for optimized audio handling
-        self.frame_processors: Dict[str, AudioFrameProcessor] = {}  # conn_id -> processor
-        self.vad_detectors: Dict[str, VoiceActivityDetector] = {}  # conn_id -> VAD
         self.local_channels: Dict[str, str] = {}  # channel_id -> legacy local_channel_id
         self.audiosocket_channels: Dict[str, str] = {}  # call_id -> audiosocket_channel_id
+        # Streaming per-call persistent stream and gating state
+        self._provider_stream_ids: Dict[str, str] = {}
+        self._segment_tts_active: Set[str] = set()
         
-        # WebRTC VAD for robust speech detection
+        self.vad_manager: Optional[EnhancedVADManager] = None
         self.webrtc_vad = None
-        if WEBRTC_VAD_AVAILABLE:
-            try:
-                # Use VAD configuration section
-                aggressiveness = config.vad.webrtc_aggressiveness
-                self.webrtc_vad = webrtcvad.Vad(aggressiveness)
-                logger.info("🎤 WebRTC VAD initialized", aggressiveness=aggressiveness)
-            except Exception as e:
-                logger.warning("🎤 WebRTC VAD initialization failed", error=str(e))
-                self.webrtc_vad = None
-        else:
-            logger.warning("🎤 WebRTC VAD not available - install py-webrtcvad")
+        try:
+            vad_cfg = getattr(config, "vad", None)
+            use_provider_vad = bool(getattr(vad_cfg, "use_provider_vad", False)) if vad_cfg else False
+            if use_provider_vad:
+                logger.info("Using provider-managed VAD; local VAD disabled")
+            elif vad_cfg and getattr(vad_cfg, "enhanced_enabled", False):
+                self.vad_manager = EnhancedVADManager(
+                    energy_threshold=int(getattr(vad_cfg, "energy_threshold", 1500)),
+                    confidence_threshold=float(getattr(vad_cfg, "confidence_threshold", 0.6)),
+                    adaptive_threshold_enabled=bool(getattr(vad_cfg, "adaptive_threshold_enabled", False)),
+                    noise_adaptation_rate=float(getattr(vad_cfg, "noise_adaptation_rate", 0.1)),
+                    webrtc_aggressiveness=int(getattr(vad_cfg, "webrtc_aggressiveness", 1)),
+                    min_speech_frames=int(getattr(vad_cfg, "webrtc_start_frames", 2)),
+                    max_silence_frames=int(getattr(vad_cfg, "webrtc_end_silence_frames", 15)),
+                )
+                logger.info(
+                    "Enhanced VAD enabled",
+                    energy_threshold=self.vad_manager.energy_threshold,
+                    confidence_threshold=self.vad_manager.confidence_threshold,
+                )
+                logger.info(
+                    "🎯 WebRTC VAD settings",
+                    aggressiveness=int(getattr(vad_cfg, "webrtc_aggressiveness", 1)),
+                )
+                if WEBRTC_VAD_AVAILABLE:
+                    try:
+                        aggressiveness = config.vad.webrtc_aggressiveness
+                        self.webrtc_vad = webrtcvad.Vad(aggressiveness)
+                        logger.info("🎤 WebRTC VAD initialized", aggressiveness=aggressiveness)
+                    except Exception as e:
+                        logger.warning("🎤 WebRTC VAD initialization failed", error=str(e))
+                        self.webrtc_vad = None
+                elif not use_provider_vad:
+                    logger.warning("🎤 WebRTC VAD not available - install py-webrtcvad")
+        except Exception:
+            logger.error("Failed to initialize VAD components", exc_info=True)
+        
+        # Initialize Audio Gating Manager (for echo prevention in OpenAI Realtime)
+        self.audio_gating_manager = None
+        try:
+            # Only initialize if VAD is available (needed for interrupt detection)
+            if self.vad_manager:
+                from src.core.audio_gating_manager import AudioGatingManager
+                self.audio_gating_manager = AudioGatingManager(vad_manager=self.vad_manager)
+                logger.info("🎛️ Audio gating manager initialized (OpenAI echo prevention)")
+            else:
+                logger.debug("Audio gating manager not initialized (VAD not available)")
+        except Exception:
+            logger.error("Failed to initialize audio gating manager", exc_info=True)
+            self.audio_gating_manager = None
+        
         # Map our synthesized UUID extension to the real ARI caller channel id
         self.uuidext_to_channel: Dict[str, str] = {}
         # NEW: Caller channel tracking for dual StasisStart handling
@@ -221,6 +344,19 @@ class Engine:
         self.pending_audiosocket_channels: Dict[str, str] = {}  # audiosocket_channel_id -> caller_channel_id
         self._audio_rx_debug: Dict[str, int] = {}
         self._keepalive_tasks: Dict[str, asyncio.Task] = {}
+        # Track provider segment start timestamps per call for duration logging
+        self._provider_segment_start_ts: Dict[str, float] = {}
+        # Track provider AgentAudio chunk sequence per call for duration logging
+        self._provider_chunk_seq: Dict[str, int] = {}
+        # Track per-segment provider bytes vs. bytes enqueued to streaming
+        self._provider_bytes: Dict[str, int] = {}
+        self._enqueued_bytes: Dict[str, int] = {}
+        # Transport observability
+        self._transport_card_logged: Set[str] = set()
+        # Audio Profile Resolution card one-shot tracker
+        self._profile_card_logged: Set[str] = set()
+        # Experimental coalescing: per-call buffer for provider TTS chunks
+        self._provider_coalesce_buf: Dict[str, bytearray] = {}
         # Active playbacks are now managed by SessionStore
         # ExternalMedia to caller channel mapping is now managed by SessionStore
         # SSRC to caller channel mapping for RTP audio routing
@@ -335,6 +471,11 @@ class Engine:
                     audiosocket_server=self.audio_socket_server,
                     audiosocket_format=as_format,
                 )
+                # Pre-call transport summary and alignment audit
+                try:
+                    self._audit_transport_alignment()
+                except Exception:
+                    logger.debug("Transport alignment audit failed", exc_info=True)
             except Exception as exc:
                 logger.error("Failed to start AudioSocket transport", error=str(exc), exc_info=True)
                 self.audio_socket_server = None
@@ -348,13 +489,15 @@ class Engine:
                 rtp_host = self.config.external_media.rtp_host
                 rtp_port = self.config.external_media.rtp_port
                 codec = self.config.external_media.codec
+                port_range = self._parse_port_range(getattr(self.config.external_media, "port_range", None), rtp_port)
                 
                 # Create RTP server with callback to route audio to providers
                 self.rtp_server = RTPServer(
                     host=rtp_host,
                     port=rtp_port,
                     engine_callback=self._on_rtp_audio,
-                    codec=codec
+                    codec=codec,
+                    port_range=port_range,
                 )
                 
                 # Start RTP server
@@ -365,6 +508,11 @@ class Engine:
                     rtp_server=self.rtp_server,
                     audio_transport=self.config.audio_transport,
                 )
+                # Pre-call transport summary and alignment audit
+                try:
+                    self._audit_transport_alignment()
+                except Exception:
+                    logger.debug("Transport alignment audit failed", exc_info=True)
             except Exception as exc:
                 logger.error("Failed to start ExternalMedia RTP transport", error=str(exc), exc_info=True)
                 self.rtp_server = None
@@ -375,6 +523,39 @@ class Engine:
         self.ari_client.add_event_handler("PlaybackFinished", self._on_playback_finished)
         asyncio.create_task(self.ari_client.start_listening())
         logger.info("Engine started and listening for calls.")
+
+    def _parse_port_range(self, value: Optional[Any], fallback_port: int) -> Tuple[int, int]:
+        """Parse external_media.port_range into an inclusive (start, end) tuple."""
+        try:
+            if value is None:
+                return (int(fallback_port), int(fallback_port))
+
+            if isinstance(value, (list, tuple)) and len(value) == 2:
+                start, end = int(value[0]), int(value[1])
+            else:
+                raw = str(value).strip()
+                if not raw:
+                    return (int(fallback_port), int(fallback_port))
+                if ":" in raw:
+                    start_s, end_s = raw.split(":", 1)
+                elif "-" in raw:
+                    start_s, end_s = raw.split("-", 1)
+                else:
+                    start_s = end_s = raw
+                start, end = int(start_s), int(end_s)
+
+            if start > end:
+                start, end = end, start
+            if start <= 0 or end <= 0:
+                raise ValueError("Ports must be positive integers")
+            return (start, end)
+        except Exception:
+            logger.warning(
+                "Invalid external_media.port_range configuration; using fallback port",
+                value=value,
+                fallback=fallback_port,
+            )
+            return (int(fallback_port), int(fallback_port))
 
     async def stop(self):
         """Disconnect from ARI and stop the engine."""
@@ -410,12 +591,17 @@ class Engine:
                 logger.info("Provider '%s' disabled in configuration; skipping initialization.", name)
                 continue
             try:
+                issues = self._audit_provider_config(name, provider_config_data)
+                if issues:
+                    self.provider_alignment_issues[name] = issues
+                elif name in self.provider_alignment_issues:
+                    self.provider_alignment_issues.pop(name, None)
                 if name == "local":
                     config = LocalProviderConfig(**provider_config_data)
                     provider = LocalProvider(config, self.on_provider_event)
                     self.providers[name] = provider
                     logger.info(f"Provider '{name}' loaded successfully.")
-                    
+
                     # Provide initial greeting from global LLM config
                     try:
                         if hasattr(provider, 'set_initial_greeting'):
@@ -427,6 +613,10 @@ class Engine:
                     if hasattr(provider, 'initialize'):
                         await provider.initialize()
                         logger.info(f"Provider '{name}' connection initialized.")
+
+                    runtime_issues = self._describe_provider_alignment(name, provider)
+                    if runtime_issues:
+                        self.provider_alignment_issues.setdefault(name, []).extend(runtime_issues)
                 elif name == "deepgram":
                     deepgram_config = self._build_deepgram_config(provider_config_data)
                     if not deepgram_config:
@@ -440,14 +630,29 @@ class Engine:
                     provider = DeepgramProvider(deepgram_config, self.config.llm, self.on_provider_event)
                     self.providers[name] = provider
                     logger.info("Provider 'deepgram' loaded successfully with OpenAI LLM dependency.")
+
+                    runtime_issues = self._describe_provider_alignment(name, provider)
+                    if runtime_issues:
+                        self.provider_alignment_issues.setdefault(name, []).extend(runtime_issues)
                 elif name == "openai_realtime":
                     openai_cfg = self._build_openai_realtime_config(provider_config_data)
                     if not openai_cfg:
                         continue
 
-                    provider = OpenAIRealtimeProvider(openai_cfg, self.on_provider_event)
+                    provider = OpenAIRealtimeProvider(
+                        openai_cfg, 
+                        self.on_provider_event,
+                        gating_manager=self.audio_gating_manager
+                    )
                     self.providers[name] = provider
-                    logger.info("Provider 'openai_realtime' loaded successfully.")
+                    logger.info(
+                        "Provider 'openai_realtime' loaded successfully",
+                        audio_gating_enabled=self.audio_gating_manager is not None
+                    )
+
+                    runtime_issues = self._describe_provider_alignment(name, provider)
+                    if runtime_issues:
+                        self.provider_alignment_issues.setdefault(name, []).extend(runtime_issues)
                 else:
                     logger.warning(f"Unknown provider type: {name}")
                     continue
@@ -461,6 +666,46 @@ class Engine:
             logger.error(f"Default provider '{self.config.default_provider}' not available. Available providers: {available_providers}")
         else:
             logger.info(f"Default provider '{self.config.default_provider}' is available and ready.")
+            
+            # Validate provider connectivity (full agent mode)
+            for provider_name, provider in self.providers.items():
+                # Check basic readiness
+                try:
+                    ready = provider.is_ready() if hasattr(provider, 'is_ready') else True
+                    if not ready:
+                        logger.error(
+                            "Provider NOT ready",
+                            provider=provider_name,
+                            reason="is_ready() returned False"
+                        )
+                    else:
+                        logger.info(
+                            "Provider validated and ready",
+                            provider=provider_name,
+                            type=provider.__class__.__name__
+                        )
+                except Exception as exc:
+                    logger.error(
+                        "Provider readiness check failed",
+                        provider=provider_name,
+                        error=str(exc),
+                        exc_info=True
+                    )
+            
+            # Check codec/sample alignment
+            for provider_name in self.providers:
+                issues = self.provider_alignment_issues.get(provider_name, [])
+                for detail in dict.fromkeys(issues):
+                    logger.warning(
+                        "Provider codec/sample alignment issue",
+                        provider=provider_name,
+                        detail=detail,
+                    )
+                if not issues:
+                    logger.info(
+                        "Provider codec/sample alignment verified",
+                        provider=provider_name,
+                    )
 
     def _is_caller_channel(self, channel: dict) -> bool:
         """Check if this is a caller channel (SIP, PJSIP, etc.)"""
@@ -538,6 +783,92 @@ class Engine:
                           channel_id=channel_id, 
                           channel_name=channel_name)
 
+    async def _start_external_media_channel(self, caller_channel_id: str) -> Optional[str]:
+        """Allocate RTP resources and originate the ExternalMedia channel via ARI."""
+        if not self.config.external_media:
+            logger.error("🎯 EXTERNAL MEDIA - Configuration missing; cannot start ExternalMedia channel",
+                         caller_channel_id=caller_channel_id)
+            return None
+        if not self.rtp_server:
+            logger.error("🎯 EXTERNAL MEDIA - RTP server unavailable; cannot start ExternalMedia channel",
+                         caller_channel_id=caller_channel_id)
+            return None
+
+        try:
+            port = await self.rtp_server.allocate_session(caller_channel_id)
+        except Exception as exc:
+            logger.error("🎯 EXTERNAL MEDIA - RTP session allocation failed",
+                         caller_channel_id=caller_channel_id,
+                         error=str(exc),
+                         exc_info=True)
+            return None
+
+        host = self.config.external_media.rtp_host
+        codec = getattr(self.config.external_media, "codec", "ulaw")
+        direction = getattr(self.config.external_media, "direction", "both")
+        external_host = f"{host}:{port}"
+
+        try:
+            response = await self.ari_client.create_external_media_channel(
+                app=self.config.asterisk.app_name,
+                external_host=external_host,
+                format=codec,
+                direction=direction,
+                encapsulation="rtp",
+            )
+        except Exception as exc:
+            logger.error("🎯 EXTERNAL MEDIA - ARI create_external_media_channel failed",
+                         caller_channel_id=caller_channel_id,
+                         external_host=external_host,
+                         error=str(exc),
+                         exc_info=True)
+            await self.rtp_server.cleanup_session(caller_channel_id)
+            try:
+                session = await self.session_store.get_by_call_id(caller_channel_id)
+                if session:
+                    session.external_media_port = None
+                    session.pending_external_media_id = None
+                    await self._save_session(session)
+            except Exception:
+                logger.debug("Failed to reset session after ARI external media failure",
+                             caller_channel_id=caller_channel_id,
+                             exc_info=True)
+            return None
+
+        channel_id = response.get("id") if isinstance(response, dict) else None
+        if not channel_id:
+            logger.error("🎯 EXTERNAL MEDIA - ARI create_external_media_channel returned no channel id",
+                         caller_channel_id=caller_channel_id,
+                         response=response)
+            await self.rtp_server.cleanup_session(caller_channel_id)
+            try:
+                session = await self.session_store.get_by_call_id(caller_channel_id)
+                if session:
+                    session.external_media_port = None
+                    session.pending_external_media_id = None
+                    await self._save_session(session)
+            except Exception:
+                logger.debug("Failed to reset session after missing ExternalMedia channel id",
+                             caller_channel_id=caller_channel_id,
+                             exc_info=True)
+            return None
+
+        session = await self.session_store.get_by_call_id(caller_channel_id)
+        if session:
+            session.pending_external_media_id = channel_id
+            session.external_media_port = port
+            session.external_media_codec = codec  # Store codec for RTP byte-swap logic
+            await self._save_session(session)
+
+        logger.info("🎯 EXTERNAL MEDIA - ExternalMedia channel originated",
+                    caller_channel_id=caller_channel_id,
+                    external_media_id=channel_id,
+                    rtp_host=host,
+                    rtp_port=port,
+                    codec=codec,
+                    direction=direction)
+        return channel_id
+
     async def _handle_external_media_stasis_start(self, external_media_id: str, channel: dict):
         """Handle ExternalMedia channel entering Stasis."""
         try:
@@ -563,6 +894,9 @@ class Engine:
             if bridge_id:
                 success = await self.ari_client.add_channel_to_bridge(bridge_id, external_media_id)
                 if success:
+                    session.external_media_id = external_media_id
+                    session.pending_external_media_id = None
+                    await self._save_session(session)
                     logger.info("🎯 EXTERNAL MEDIA - ExternalMedia channel added to bridge", 
                                external_media_id=external_media_id,
                                bridge_id=bridge_id,
@@ -600,21 +934,21 @@ class Engine:
             return
         
         try:
-            # Step 1: Answer the caller
+            # Answer the caller
             logger.info("🎯 HYBRID ARI - Step 1: Answering caller channel", channel_id=caller_channel_id)
             await self.ari_client.answer_channel(caller_channel_id)
             logger.info("🎯 HYBRID ARI - Step 1: ✅ Caller channel answered", channel_id=caller_channel_id)
             
-            # Step 2: Create bridge immediately
+            # Create bridge immediately (use default bridge_type to prevent simple_bridge optimization)
             logger.info("🎯 HYBRID ARI - Step 2: Creating bridge immediately", channel_id=caller_channel_id)
-            bridge_id = await self.ari_client.create_bridge(bridge_type="mixing")
+            bridge_id = await self.ari_client.create_bridge()  # Uses default: mixing,dtmf_events,proxy_media
             if not bridge_id:
                 raise RuntimeError("Failed to create mixing bridge")
             logger.info("🎯 HYBRID ARI - Step 2: ✅ Bridge created", 
                        channel_id=caller_channel_id, 
                        bridge_id=bridge_id)
             
-            # Step 3: Add caller to bridge
+            # Add caller to bridge
             logger.info("🎯 HYBRID ARI - Step 3: Adding caller to bridge", 
                        channel_id=caller_channel_id, 
                        bridge_id=bridge_id)
@@ -626,19 +960,43 @@ class Engine:
                        bridge_id=bridge_id)
             self.bridges[caller_channel_id] = bridge_id
             
-            # Step 4: Create CallSession and store in SessionStore
+            # Create CallSession and store in SessionStore
             session = CallSession(
                 call_id=caller_channel_id,
                 caller_channel_id=caller_channel_id,
                 bridge_id=bridge_id,
                 provider_name=self.config.default_provider,
-                audio_capture_enabled=False,
+                audio_capture_enabled=True,  # FIX #1: Start with capture enabled, only disable when TTS actually starts
                 status="connected"
             )
+            session.enhanced_vad_enabled = bool(self.vad_manager)
             await self._save_session(session, new=True)
+            # Export config metrics for this call
+            try:
+                await self._export_config_metrics(caller_channel_id)
+            except Exception:
+                logger.debug("Failed to export config metrics for call", call_id=caller_channel_id, exc_info=True)
             logger.info("🎯 HYBRID ARI - Step 4: ✅ Caller session created and stored",
                        channel_id=caller_channel_id,
                        bridge_id=bridge_id)
+
+            # Resolve transport profile from dialplan hints/config defaults
+            try:
+                await self._hydrate_transport_from_dialplan(session, caller_channel_id)
+            except Exception:
+                logger.debug("Transport profile hydration failed", call_id=caller_channel_id, exc_info=True)
+
+            # Detect caller codec/sample-rate so downstream playback matches the trunk.
+            try:
+                await self._detect_caller_codec(session, caller_channel_id)
+            except Exception:
+                logger.debug("Caller codec detection failed", call_id=caller_channel_id, exc_info=True)
+
+            # P1: Resolve Audio Profile (profiles.* + contexts.* + channel var overrides)
+            try:
+                await self._resolve_audio_profile(session, caller_channel_id)
+            except Exception:
+                logger.debug("Audio profile resolution failed", call_id=caller_channel_id, exc_info=True)
 
             # Milestone7: Per-call override via Asterisk channel var AI_PROVIDER.
             # Values:
@@ -713,14 +1071,23 @@ class Engine:
                     )
                     pipeline_resolution = await self._assign_pipeline_to_session(session)
             else:
-                # Default behavior (use active_pipeline if configured)
-                pipeline_resolution = await self._assign_pipeline_to_session(session)
-                if not pipeline_resolution and getattr(self.pipeline_orchestrator, "started", False):
+                # Default behavior: only use active_pipeline if no valid provider already set
+                # Skip pipeline resolution if context already set a monolithic provider
+                if session.provider_name and session.provider_name in self.providers:
                     logger.info(
-                        "Milestone7 pipeline orchestrator falling back to legacy provider flow",
+                        "Skipping pipeline resolution - context already set valid provider",
                         call_id=caller_channel_id,
                         provider=session.provider_name,
+                        source="context",
                     )
+                else:
+                    pipeline_resolution = await self._assign_pipeline_to_session(session)
+                    if not pipeline_resolution and getattr(self.pipeline_orchestrator, "started", False):
+                        logger.info(
+                            "Milestone7 pipeline orchestrator falling back to legacy provider flow",
+                            call_id=caller_channel_id,
+                            provider=session.provider_name,
+                        )
             
             # Step 5: Create ExternalMedia channel or originate Local channel
             if self.config.audio_transport == "externalmedia":
@@ -810,17 +1177,49 @@ class Engine:
 
         caller_channel_id = self.pending_audiosocket_channels.pop(audiosocket_channel_id, None)
         if not caller_channel_id:
-            # Fallback lookup via SessionStore
-            sessions = await self.session_store.get_all_sessions()
-            for s in sessions:
-                if getattr(s, 'audiosocket_channel_id', None) == audiosocket_channel_id:
-                    caller_channel_id = s.caller_channel_id
-                    break
+            # Fallback 1: try to parse the AudioSocket UUID from the channel name and map via uuidext_to_channel
+            name = channel.get('name', '') or ''
+            parsed_uuid = None
+            try:
+                # Expected form: "AudioSocket/host:port-<uuid>"; take substring after last '-'
+                if name.startswith('AudioSocket/') and '-' in name:
+                    candidate = name.rsplit('-', 1)[-1]
+                    # Basic UUID sanity (contains 4 dashes)
+                    if candidate.count('-') == 4:
+                        parsed_uuid = candidate
+            except Exception:
+                parsed_uuid = None
+
+            if parsed_uuid and parsed_uuid in self.uuidext_to_channel:
+                caller_channel_id = self.uuidext_to_channel.get(parsed_uuid)
+            
+            # Fallback 2: brief retry loop to allow originate path to record mappings
+            if not caller_channel_id:
+                for attempt in range(5):
+                    await asyncio.sleep(0.05)
+                    # Recheck pending mapping
+                    caller_channel_id = self.pending_audiosocket_channels.pop(audiosocket_channel_id, None)
+                    if caller_channel_id:
+                        break
+                    # Recheck uuid mapping if we parsed one
+                    if parsed_uuid and parsed_uuid in self.uuidext_to_channel:
+                        caller_channel_id = self.uuidext_to_channel.get(parsed_uuid)
+                        if caller_channel_id:
+                            break
+            
+            # Fallback 3: scan sessions as a last resort
+            if not caller_channel_id:
+                sessions = await self.session_store.get_all_sessions()
+                for s in sessions:
+                    if getattr(s, 'audiosocket_channel_id', None) == audiosocket_channel_id:
+                        caller_channel_id = s.caller_channel_id
+                        break
 
         if not caller_channel_id:
             logger.error(
                 "🎯 HYBRID ARI - No caller found for AudioSocket channel",
                 audiosocket_channel_id=audiosocket_channel_id,
+                channel_name=channel.get('name'),
             )
             await self.ari_client.hangup_channel(audiosocket_channel_id)
             return
@@ -866,6 +1265,48 @@ class Engine:
 
             if not session.provider_session_active:
                 await self._start_provider_session(caller_channel_id)
+
+            # Start ARI channel recording on the AudioSocket channel (only when diagnostics enabled)
+            # Check if diagnostic taps are enabled
+            diag_enabled = False
+            try:
+                diag_enabled = bool(getattr(self.config.streaming, 'diag_enable_taps', False)) if hasattr(self.config, 'streaming') else False
+            except Exception:
+                pass
+            
+            if diag_enabled:
+                try:
+                    ts = time.strftime("%Y%m%d-%H%M%S")
+                    rec_name = f"out-{caller_channel_id}-{ts}"
+                    ok = await self.ari_client.record_channel(
+                        audiosocket_channel_id,
+                        name=rec_name,
+                        format="wav",
+                        if_exists="overwrite",
+                        max_duration_seconds=360,
+                        max_silence_seconds=0,
+                        beep=False,
+                        terminate_on="none",
+                    )
+                    if ok:
+                        logger.info(
+                            "📼 ARI channel recording started on AudioSocket channel",
+                            audiosocket_channel_id=audiosocket_channel_id,
+                            name=rec_name,
+                        )
+                    else:
+                        logger.debug(
+                            "ARI channel recording failed to start (diagnostic recording)",
+                            audiosocket_channel_id=audiosocket_channel_id,
+                            name=rec_name,
+                        )
+                except Exception:
+                    logger.debug("ARI channel recording start failed (diagnostic recording)", exc_info=True)
+            else:
+                logger.debug(
+                    "ARI channel recording skipped (diag_enable_taps not enabled)",
+                    audiosocket_channel_id=audiosocket_channel_id,
+                )
         except Exception as exc:
             logger.error(
                 "🎯 HYBRID ARI - Failed to process AudioSocket channel",
@@ -875,78 +1316,6 @@ class Engine:
                 exc_info=True,
             )
             await self.ari_client.hangup_channel(audiosocket_channel_id)
-
-    async def _handle_caller_stasis_start(self, caller_channel_id: str, channel: dict):
-        """Handle caller channel entering Stasis - LEGACY (kept for reference)."""
-        caller_info = channel.get('caller', {})
-        logger.info("Caller channel entered Stasis", 
-                    channel_id=caller_channel_id,
-                    caller_name=caller_info.get('name'),
-                    caller_number=caller_info.get('number'))
-        
-        # Check if call is already in progress
-        existing_session = await self.session_store.get_by_call_id(caller_channel_id)
-        if existing_session:
-            logger.warning("Caller already in progress", channel_id=caller_channel_id)
-            return
-        
-        try:
-            # Answer the caller
-            await self.ari_client.answer_channel(caller_channel_id)
-            logger.info("Caller channel answered", channel_id=caller_channel_id)
-            
-            # Create session in SessionStore
-            session = CallSession(
-                call_id=caller_channel_id,
-                caller_channel_id=caller_channel_id,
-                provider_name=self.config.default_provider,
-                status="waiting_for_local",
-                audio_capture_enabled=False
-            )
-            await self._save_session(session, new=True)
-            
-            # Originate Local channel
-            await self._originate_local_channel(caller_channel_id)
-            
-        except Exception as e:
-            logger.error("Failed to handle caller StasisStart", 
-                        caller_channel_id=caller_channel_id, 
-                        error=str(e), exc_info=True)
-            await self._cleanup_call(caller_channel_id)
-
-    async def _handle_local_stasis_start(self, local_channel_id: str, channel: dict):
-        """Handle Local channel entering Stasis."""
-        logger.info("Local channel entered Stasis", 
-                    channel_id=local_channel_id,
-                    channel_name=channel.get('name'))
-        
-        try:
-            # Find the caller this Local channel belongs to
-            caller_channel_id = await self._find_caller_for_local(local_channel_id)
-            if not caller_channel_id:
-                logger.error("No caller found for Local channel", local_channel_id=local_channel_id)
-                await self.ari_client.hangup_channel(local_channel_id)
-                return
-            
-            # Update session with Local channel ID
-            session = await self.session_store.get_by_call_id(caller_channel_id)
-            if session:
-                session.local_channel_id = local_channel_id
-                await self._save_session(session)
-                self.local_channels[caller_channel_id] = local_channel_id
-            
-            # Create bridge and connect channels
-            await self._create_bridge_and_connect(caller_channel_id, local_channel_id)
-            
-        except Exception as e:
-            logger.error("Failed to handle Local StasisStart", 
-                        local_channel_id=local_channel_id, 
-                        error=str(e), exc_info=True)
-            # Clean up both channels
-            caller_channel_id = await self._find_caller_for_local(local_channel_id)
-            if caller_channel_id:
-                await self._cleanup_call(caller_channel_id)
-            await self.ari_client.hangup_channel(local_channel_id)
 
     async def _originate_audiosocket_channel_hybrid(self, caller_channel_id: str):
         """Originate an AudioSocket channel using the native channel interface."""
@@ -966,9 +1335,12 @@ class Engine:
         codec = "slin"
         try:
             fmt = (getattr(self.config.audiosocket, 'format', '') or '').lower()
-            if fmt in ("ulaw", "mulaw", "g711_ulaw"):
+            if fmt in ("ulaw", "mulaw", "g711_ulaw", "mu-law"):
                 codec = "ulaw"
+            elif fmt in ("slin16", "linear16", "pcm16"):
+                codec = "slin16"
             else:
+                # Treat any other/legacy value (e.g., 'slin') as 8 kHz PCM16
                 codec = "slin"
         except Exception:
             codec = "slin"
@@ -1001,17 +1373,11 @@ class Engine:
                 if session:
                     session.audiosocket_uuid = audio_uuid
                     await self._save_session(session)
-                else:
-                    logger.warning(
-                        "🎯 HYBRID ARI - Session not found while recording AudioSocket UUID",
+                    logger.info(
+                        "🎯 HYBRID ARI - AudioSocket channel originated",
                         caller_channel_id=caller_channel_id,
+                        audiosocket_channel_id=audiosocket_channel_id,
                     )
-
-                logger.info(
-                    "🎯 HYBRID ARI - AudioSocket channel originated",
-                    caller_channel_id=caller_channel_id,
-                    audiosocket_channel_id=audiosocket_channel_id,
-                )
             else:
                 raise RuntimeError("Failed to originate AudioSocket channel")
         except Exception as e:
@@ -1021,93 +1387,6 @@ class Engine:
                 error=str(e),
                 exc_info=True,
             )
-            raise
-
-    async def _originate_local_channel_hybrid(self, caller_channel_id: str):
-        """Originate single Local channel - Dialplan approach."""
-        # Generate UUID for channel binding
-        audio_uuid = str(uuid.uuid4())
-        # Originate Local channel directly to dialplan context
-        local_endpoint = f"Local/{audio_uuid}@ai-agent-media-fork/n"
-        
-        orig_params = {
-            "endpoint": local_endpoint,
-            "extension": audio_uuid,  # Use UUID as extension
-            "context": "ai-agent-media-fork",  # Specify the dialplan context
-            "timeout": "30"
-        }
-        
-        logger.info("🎯 DIALPLAN EXTERNALMEDIA - Originating ExternalMedia Local channel", 
-                    endpoint=local_endpoint, 
-                    caller_channel_id=caller_channel_id,
-                    audio_uuid=audio_uuid)
-        
-        try:
-            response = await self.ari_client.send_command("POST", "channels", params=orig_params)
-            if response and response.get("id"):
-                local_channel_id = response["id"]
-                # Store mapping for ExternalMedia binding
-                self.pending_local_channels[local_channel_id] = caller_channel_id
-                self.uuidext_to_channel[audio_uuid] = caller_channel_id
-                logger.info("🎯 DIALPLAN EXTERNALMEDIA - ExternalMedia Local channel originated", 
-                           local_channel_id=local_channel_id, 
-                           caller_channel_id=caller_channel_id,
-                           audio_uuid=audio_uuid)
-                
-                # Store Local channel info - will be added to bridge when ExternalMedia connects
-                session = await self.session_store.get_by_call_id(caller_channel_id)
-                if session:
-                    session.external_media_id = local_channel_id
-                    await self._save_session(session)
-                    logger.info("🎯 DIALPLAN EXTERNALMEDIA - ExternalMedia channel ready for connection", 
-                               local_channel_id=local_channel_id,
-                               caller_channel_id=caller_channel_id)
-                else:
-                    logger.error("🎯 DIALPLAN EXTERNALMEDIA - Caller channel not found for ExternalMedia channel", 
-                               local_channel_id=local_channel_id,
-                               caller_channel_id=caller_channel_id)
-                    raise RuntimeError("Caller channel not found")
-            else:
-                raise RuntimeError("Failed to originate ExternalMedia Local channel")
-        except Exception as e:
-            logger.error("🎯 DIALPLAN EXTERNALMEDIA - ExternalMedia channel originate failed", 
-                        caller_channel_id=caller_channel_id,
-                        audio_uuid=audio_uuid,
-                        error=str(e), exc_info=True)
-            raise
-
-    async def _originate_local_channel(self, caller_channel_id: str):
-        """Originate Local channel for ExternalMedia - LEGACY (kept for reference)."""
-        local_endpoint = f"Local/{caller_channel_id}@ai-agent-media-fork/n"
-        
-        orig_params = {
-            "endpoint": local_endpoint,
-            "extension": caller_channel_id,
-            "context": "ai-agent-media-fork",
-            "priority": "1",
-            "timeout": "30",
-            "app": self.config.asterisk.app_name,
-        }
-        
-        logger.info("Originating Local channel", 
-                    endpoint=local_endpoint, 
-                    caller_channel_id=caller_channel_id)
-        
-        try:
-            response = await self.ari_client.send_command("POST", "channels", params=orig_params)
-            if response and response.get("id"):
-                local_channel_id = response["id"]
-                # Store pending mapping
-                self.pending_local_channels[local_channel_id] = caller_channel_id
-                logger.info("Local channel originated", 
-                           local_channel_id=local_channel_id, 
-                           caller_channel_id=caller_channel_id)
-            else:
-                raise RuntimeError("Failed to originate Local channel")
-        except Exception as e:
-            logger.error("Local channel originate failed", 
-                        caller_channel_id=caller_channel_id, 
-                        error=str(e), exc_info=True)
             raise
 
     async def _handle_stasis_end(self, event: dict):
@@ -1222,6 +1501,12 @@ class Engine:
                 except Exception:
                     logger.debug("Hangup failed during cleanup", call_id=call_id, channel_id=channel_id, exc_info=True)
 
+            if getattr(self, 'rtp_server', None):
+                try:
+                    await self.rtp_server.cleanup_session(call_id)
+                except Exception:
+                    logger.debug("RTP session cleanup failed during call cleanup", call_id=call_id, exc_info=True)
+
             # Remove residual mappings so new calls don’t inherit.
             self.bridges.pop(session.caller_channel_id, None)
             if session.local_channel_id:
@@ -1248,6 +1533,9 @@ class Engine:
             except Exception:
                 logger.debug("Pipeline cleanup failed", call_id=call_id, exc_info=True)
 
+            # Clear detected codec preferences
+            self.call_audio_preferences.pop(call_id, None)
+
             # Remove SSRC mapping for this call (if any)
             try:
                 to_delete = [ssrc for ssrc, cid in self.ssrc_to_caller.items() if cid == call_id]
@@ -1266,8 +1554,28 @@ class Engine:
             # Finally remove the session.
             await self.session_store.remove_call(call_id)
 
+            try:
+                self.audio_capture.close_call(call_id)
+            except Exception:
+                logger.debug("Audio capture cleanup failed", call_id=call_id, exc_info=True)
+
             if self.conversation_coordinator:
                 await self.conversation_coordinator.unregister_call(call_id)
+            
+            # Clean up VAD manager state for this call
+            if self.vad_manager:
+                try:
+                    await self.vad_manager.reset_call(call_id)
+                    self.vad_manager.context_analyzer.cleanup_call(call_id)
+                except Exception:
+                    logger.debug("VAD cleanup failed during call cleanup", call_id=call_id, exc_info=True)
+            
+            # Clean up audio gating manager state for this call
+            if self.audio_gating_manager:
+                try:
+                    await self.audio_gating_manager.cleanup_call(call_id)
+                except Exception:
+                    logger.debug("Audio gating cleanup failed during call cleanup", call_id=call_id, exc_info=True)
 
             try:
                 # If the session still exists in store (rare race), mark completed; otherwise ignore
@@ -1278,6 +1586,9 @@ class Engine:
                     await self.session_store.upsert_call(sess2)
             except Exception:
                 pass
+
+            # Reset per-call alignment warning state
+            self._runtime_alignment_logged.discard(call_id)
 
             logger.info("Call cleanup completed", call_id=call_id)
         except Exception as exc:
@@ -1294,104 +1605,189 @@ class Engine:
             except Exception:
                 pass
 
-    async def _create_bridge_and_connect(self, caller_channel_id: str, local_channel_id: str):
-        """Create bridge and connect both channels."""
-        try:
-            # Create mixing bridge
-            bridge_id = await self.ari_client.create_bridge(bridge_type="mixing")
-            if not bridge_id:
-                raise RuntimeError("Failed to create mixing bridge")
-            
-            logger.info("Bridge created", bridge_id=bridge_id, 
-                       caller_channel_id=caller_channel_id, 
-                       local_channel_id=local_channel_id)
-            
-            # Add both channels to bridge
-            caller_success = await self.ari_client.add_channel_to_bridge(bridge_id, caller_channel_id)
-            local_success = await self.ari_client.add_channel_to_bridge(bridge_id, local_channel_id)
-            
-            if not caller_success:
-                logger.error("Failed to add caller channel to bridge", 
-                            bridge_id=bridge_id, caller_channel_id=caller_channel_id)
-                raise RuntimeError("Failed to add caller channel to bridge")
-            
-            if not local_success:
-                logger.error("Failed to add Local channel to bridge", 
-                            bridge_id=bridge_id, local_channel_id=local_channel_id)
-                raise RuntimeError("Failed to add Local channel to bridge")
-            
-            # Store bridge info
-            self.bridges[caller_channel_id] = bridge_id
-            # Update session with bridge info
-            call_id = session.call_id
-            
-            # Signal end of stream
-            queue = getattr(session, "streaming_audio_queue", None)
-            if queue:
-                await queue.put(None)  # End of stream signal
-            
-            # Stop streaming playback
-            if hasattr(session, "current_stream_id"):
-                await self.streaming_playback_manager.stop_streaming_playback(call_id)
-                session.current_stream_id = None
-                session.streaming_started = False
-            
-            # Reset queue for the next response
-            session.streaming_audio_queue = asyncio.Queue()
-            await self._save_session(session)
-            await self._reset_vad_after_playback(session)
+    async def _resolve_audio_profile(self, session: CallSession, channel_id: str) -> None:
+        """Resolve TransportProfile and provider prefs from profiles/contexts.
 
-            logger.info(
-                "🎵 STREAMING DONE - Real-time audio streaming completed",
-                call_id=call_id,
+        Precedence (provider): AI_PROVIDER (later) > contexts.*.provider > default_provider.
+        """
+        call_id = session.call_id
+        # Read channel vars
+        ai_profile = None
+        ai_context = None
+        try:
+            resp = await self.ari_client.send_command(
+                "GET",
+                f"channels/{channel_id}/variable",
+                params={"variable": "AI_AUDIO_PROFILE"},
             )
-            
-            # Update conversation state
-            if session.conversation_state == "greeting":
-                session.conversation_state = "listening"
-                logger.info("Greeting completed, now listening for conversation", call_id=call_id)
-            elif session.conversation_state == "processing":
-                session.conversation_state = "listening"
-                logger.info("Response streamed, listening for next user input", call_id=call_id)
-            
-            await self._save_session(session)
-            
-            if self.conversation_coordinator:
-                await self.conversation_coordinator.update_conversation_state(call_id, "listening")
-                
-        except Exception as e:
-            logger.error("Error handling streaming audio done",
-                        call_id=session.call_id,
-                        error=str(e),
-                        exc_info=True)
-    
-    async def _handle_streaming_ready(self, call_id: str) -> None:
-        """Handle streaming ready event."""
+            if isinstance(resp, dict):
+                ai_profile = (resp.get("value") or "").strip()
+        except Exception:
+            pass
         try:
-            session = await self.session_store.get_by_call_id(call_id)
-            if session:
-                session.streaming_ready = True
-                await self._save_session(session)
-                logger.info("🎵 STREAMING READY - Agent ready for streaming",
-                           call_id=call_id)
-        except Exception as e:
-            logger.error("Error handling streaming ready",
-                        call_id=call_id,
-                        error=str(e))
-    
-    async def _handle_streaming_response(self, call_id: str) -> None:
-        """Handle streaming response event."""
+            resp = await self.ari_client.send_command(
+                "GET",
+                f"channels/{channel_id}/variable",
+                params={"variable": "AI_CONTEXT"},
+            )
+            if isinstance(resp, dict):
+                ai_context = (resp.get("value") or "").strip()
+        except Exception:
+            pass
+
+        cfg_profiles = getattr(self.config, "profiles", {}) or {}
+        cfg_contexts = getattr(self.config, "contexts", {}) or {}
+        # Extract default profile name
+        default_profile_name = None
         try:
-            session = await self.session_store.get_by_call_id(call_id)
-            if session:
-                session.streaming_response = True
-                await self._save_session(session)
-                logger.info("🎵 STREAMING RESPONSE - Agent generating streaming response",
-                           call_id=call_id)
-        except Exception as e:
-            logger.error("Error handling streaming response",
-                        call_id=call_id,
-                        error=str(e))
+            dp = cfg_profiles.get("default")
+            if isinstance(dp, str) and dp:
+                default_profile_name = dp
+        except Exception:
+            default_profile_name = None
+        # Build profile map excluding the 'default' selector key
+        profile_map = {k: v for (k, v) in cfg_profiles.items() if isinstance(v, dict)}
+
+        # Resolve profile name from channel var, then context mapping, else default
+        context_block = cfg_contexts.get(ai_context) if ai_context else None
+        ctx_profile = None
+        try:
+            if isinstance(context_block, dict):
+                ctx_profile = context_block.get("profile")
+        except Exception:
+            ctx_profile = None
+        selected_profile_name = ai_profile or ctx_profile or default_profile_name
+        profile_obj = profile_map.get(selected_profile_name) if selected_profile_name else None
+        if profile_obj is None and default_profile_name:
+            profile_obj = profile_map.get(default_profile_name)
+
+        # Extract transport_out and provider prefs
+        transport_out = (profile_obj or {}).get("transport_out", {}) if isinstance(profile_obj, dict) else {}
+        prov_pref = (profile_obj or {}).get("provider_pref", {}) if isinstance(profile_obj, dict) else {}
+        chunk_ms = None
+        idle_cutoff_ms = None
+        try:
+            v = prov_pref.get("preferred_chunk_ms")
+            if v is not None:
+                chunk_ms = int(v)
+        except Exception:
+            pass
+        try:
+            v = (profile_obj or {}).get("idle_cutoff_ms")
+            if v is not None:
+                idle_cutoff_ms = int(v)
+        except Exception:
+            pass
+
+        # Determine transport encoding/rate from profile (fallback to existing)
+        enc = self._canonicalize_encoding(transport_out.get("encoding")) or session.transport_profile.format
+        try:
+            rate = int(transport_out.get("sample_rate_hz") or 0)
+        except Exception:
+            rate = 0
+        if rate <= 0:
+            rate = session.transport_profile.sample_rate
+
+        # Apply transport settings with 'config' source (won't override dialplan/detected)
+        try:
+            await self._update_transport_profile(session, fmt=enc, sample_rate=rate, source="config")
+        except Exception:
+            logger.debug("Transport profile update from profile failed", call_id=call_id, exc_info=True)
+
+        # Apply context-level provider override (Option A), lower precedence than AI_PROVIDER.
+        provider_origin = None
+        try:
+            ctx_provider = None
+            if isinstance(context_block, dict):
+                ctx_provider = (context_block.get("provider") or "").strip()
+            if ctx_provider:
+                aliases = {"openai": "openai_realtime", "deepgram_agent": "deepgram"}
+                resolved = aliases.get(ctx_provider, ctx_provider)
+                if resolved in self.providers and session.provider_name != resolved:
+                    prev = session.provider_name
+                    session.provider_name = resolved
+                    await self._save_session(session)
+                    provider_origin = "context"
+                    logger.info("Context provider override applied", call_id=call_id, context=ai_context, previous_provider=prev, provider=resolved)
+        except Exception:
+            logger.debug("Context provider override failed", call_id=call_id, exc_info=True)
+
+        # Wire streaming manager parameters (global fields; per-call override is a future improvement)
+        spm = getattr(self, "streaming_playback_manager", None)
+        if spm is not None:
+            # CRITICAL: Do NOT override audiosocket_format from transport profile.
+            # AudioSocket wire format must always match config.audiosocket.format (set at engine init),
+            # NOT the caller's SIP codec. Caller codec applies only to provider transcoding.
+            # Bug fix: removed lines that set spm.audiosocket_format = enc
+            try:
+                if rate and rate > 0:
+                    spm.sample_rate = int(rate)
+            except Exception:
+                pass
+            try:
+                if chunk_ms and int(chunk_ms) > 0:
+                    spm.chunk_size_ms = int(chunk_ms)
+            except Exception:
+                pass
+            try:
+                if idle_cutoff_ms and int(idle_cutoff_ms) > 0:
+                    spm.idle_cutoff_ms = int(idle_cutoff_ms)
+            except Exception:
+                pass
+
+        # Emit one-shot profile resolution card
+        try:
+            self._emit_profile_resolution_card(
+                session.call_id,
+                session,
+                profile_name=selected_profile_name,
+                context_name=ai_context,
+                transport_encoding=enc,
+                transport_sample_rate=rate,
+                chunk_ms=chunk_ms,
+                idle_cutoff_ms=idle_cutoff_ms,
+                provider_origin=provider_origin or ("profile" if ai_profile else ("context" if ai_context else None)),
+            )
+        except Exception:
+            logger.debug("Audio Profile Resolution card logging failed", call_id=call_id, exc_info=True)
+
+    def _emit_profile_resolution_card(
+        self,
+        call_id: Optional[str],
+        session: Optional[CallSession],
+        *,
+        profile_name: Optional[str],
+        context_name: Optional[str],
+        transport_encoding: Optional[Any],
+        transport_sample_rate: Optional[Any],
+        chunk_ms: Optional[Any],
+        idle_cutoff_ms: Optional[Any],
+        provider_origin: Optional[str],
+    ) -> None:
+        if not call_id or call_id in self._profile_card_logged:
+            return
+        def _ir(v):
+            try:
+                return int(v) if v is not None else None
+            except Exception:
+                return None
+        payload = {
+            "call_id": call_id,
+            "log_event": "Audio Profile Resolution",
+            "profile": profile_name,
+            "context": context_name,
+            "provider": getattr(session, "provider_name", None) if session else None,
+            "provider_origin": provider_origin,
+            "transport_encoding": self._canonicalize_encoding(transport_encoding) or None,
+            "transport_sample_rate_hz": _ir(transport_sample_rate),
+            "chunk_size_ms": _ir(chunk_ms),
+            "idle_cutoff_ms": _ir(idle_cutoff_ms),
+        }
+        try:
+            logger.info("AudioProfileResolution", **{k: v for k, v in payload.items() if v is not None})
+            self._profile_card_logged.add(call_id)
+        except Exception:
+            logger.debug("Profile resolution card logging failed", call_id=call_id, exc_info=True)
 
     async def _audiosocket_handle_uuid(self, conn_id: str, uuid_str: str) -> bool:
         """Bind inbound AudioSocket connection to the caller channel via UUID."""
@@ -1432,6 +1828,11 @@ class Engine:
             session = await self.session_store.get_by_call_id(caller_channel_id)
             if session:
                 session.audiosocket_uuid = uuid_str
+                # Record current AudioSocket connection for streaming playback
+                try:
+                    session.audiosocket_conn_id = conn_id
+                except Exception:
+                    pass
                 session.status = "audiosocket_bound"
                 await self._save_session(session)
 
@@ -1470,6 +1871,212 @@ class Engine:
                 logger.debug("No session for caller; dropping AudioSocket audio", conn_id=conn_id, caller_channel_id=caller_channel_id)
                 return
 
+            diagnostics_flags = session.audio_diagnostics
+            if "inbound_first_frame" not in diagnostics_flags:
+                fmt, rate = self._infer_transport_from_frame(len(audio_bytes))
+                await self._update_transport_profile(session, fmt=fmt, sample_rate=rate, source="audiosocket")
+                diagnostics_flags["inbound_first_frame"] = True
+
+            # Per-call RX bytes
+            try:
+                _STREAM_RX_BYTES.labels(caller_channel_id).inc(len(audio_bytes))
+            except Exception:
+                pass
+
+            # First-frame diagnostics probe (no mutation): log RMS for format verification
+            try:
+                vad_state = session.vad_state
+            except Exception:
+                vad_state = session.vad_state = {}
+            if not vad_state.get('format_probe_done'):
+                try:
+                    try:
+                        as_fmt = (getattr(self.config, 'audiosocket', None).format or 'ulaw').lower()
+                    except Exception:
+                        as_fmt = 'ulaw'
+                    if as_fmt in ('slin16', 'linear16', 'pcm16'):
+                        rms_native = audioop.rms(audio_bytes, 2)
+                        try:
+                            swapped = audioop.byteswap(audio_bytes, 2)
+                            rms_swapped = audioop.rms(swapped, 2)
+                        except Exception:
+                            rms_swapped = 0
+                        logger.info(
+                            "AudioSocket frame probe",
+                            call_id=caller_channel_id,
+                            audiosocket_format=as_fmt,
+                            frame_bytes=len(audio_bytes),
+                            rms_native=rms_native,
+                            rms_swapped=rms_swapped,
+                        )
+                        # Determine if inbound PCM16 appears byte-swapped (big-endian on wire)
+                        try:
+                            frame_bytes = len(audio_bytes)
+                            # Conservative rule: only flag swap when swapped energy is clearly higher
+                            swap_flag = (
+                                frame_bytes >= 640 and  # 20ms @ 16k PCM
+                                rms_swapped >= 2048 and
+                                rms_swapped >= 16 * max(1, rms_native)
+                            )
+                            vad_state['pcm16_inbound_swap'] = bool(swap_flag)
+                            if swap_flag:
+                                logger.warning(
+                                    "Inbound slin16 appears byte-swapped; will normalize to PCM16-LE for processing",
+                                    call_id=caller_channel_id,
+                                    rms_native=rms_native,
+                                    rms_swapped=rms_swapped,
+                                )
+                        except Exception:
+                            pass
+                    else:
+                        try:
+                            pcm = audioop.ulaw2lin(audio_bytes, 2)
+                            rms_pcm = audioop.rms(pcm, 2)
+                        except Exception:
+                            rms_pcm = 0
+                        logger.info(
+                            "AudioSocket frame probe",
+                            call_id=caller_channel_id,
+                            audiosocket_format=as_fmt,
+                            frame_bytes=len(audio_bytes),
+                            rms_pcm8k=rms_pcm,
+                        )
+                        # μ-law path: no PCM16 swap needed
+                        vad_state['pcm16_inbound_swap'] = False
+                    vad_state['format_probe_done'] = True
+                except Exception:
+                    pass
+
+            try:
+                swap_needed_flag = bool(session.vad_state.get('pcm16_inbound_swap', False))
+            except Exception:
+                swap_needed_flag = False
+            try:
+                profile_fmt = session.transport_profile.format or ""
+                if not profile_fmt:
+                    profile_fmt = getattr(self.config.audiosocket, "format", "ulaw") if getattr(self.config, "audiosocket", None) else "ulaw"
+                profile_rate = session.transport_profile.sample_rate or getattr(self.config.streaming, "sample_rate", 8000)
+            except Exception:
+                profile_fmt = "ulaw"
+                profile_rate = 8000
+            pcm_bytes, pcm_rate = self._wire_to_pcm16(audio_bytes, profile_fmt, swap_needed_flag, profile_rate)
+            # Remove DC bias and apply a light DC-block filter to stabilize ASR input
+            try:
+                if pcm_bytes:
+                    try:
+                        mean = int(audioop.avg(pcm_bytes, 2))
+                    except Exception:
+                        mean = 0
+                    if mean:
+                        try:
+                            pcm_bytes = audioop.bias(pcm_bytes, 2, -mean)
+                        except Exception:
+                            pass
+                    # Per-call DC-block state
+                    if not hasattr(self, "_dc_block_state_inbound"):
+                        self._dc_block_state_inbound = {}
+                    prev_x, prev_y = self._dc_block_state_inbound.get(caller_channel_id, (0.0, 0.0))
+                    try:
+                        import array
+                        r = 0.995
+                        buf = array.array('h')
+                        buf.frombytes(pcm_bytes)
+                        if buf.itemsize == 2:
+                            for i, s in enumerate(buf):
+                                x = float(int(s))
+                                y = x - prev_x + r * prev_y
+                                prev_x, prev_y = x, y
+                                if y > 32767.0:
+                                    y = 32767.0
+                                elif y < -32768.0:
+                                    y = -32768.0
+                                buf[i] = int(y)
+                            pcm_bytes = buf.tobytes()
+                            self._dc_block_state_inbound[caller_channel_id] = (prev_x, prev_y)
+                    except Exception:
+                        pass
+            except Exception:
+                logger.debug("Inbound DC conditioning failed", call_id=caller_channel_id, exc_info=True)
+            try:
+                if pcm_bytes:
+                    self._update_audio_diagnostics(session, "transport_in", pcm_bytes, "slin16", pcm_rate)
+                    self.audio_capture.append_pcm16(session.call_id, "caller_inbound", pcm_bytes, pcm_rate)
+            except Exception:
+                logger.debug("Inbound diagnostics update failed", call_id=caller_channel_id, exc_info=True)
+
+            # CRITICAL FIX: Check for pipeline mode FIRST before routing to monolithic providers
+            if self._pipeline_forced.get(caller_channel_id):
+                # AAVA-28: Check gating to prevent agent from hearing its own TTS output
+                if not session.audio_capture_enabled:
+                    # Drop audio during TTS playback (gating active)
+                    return
+                
+                q = self._pipeline_queues.get(caller_channel_id)
+                if q:
+                    try:
+                        pcm16 = pcm_bytes
+                        if pcm16 and pcm_rate != 16000:
+                            try:
+                                state = self._resample_state_pipeline16k.get(caller_channel_id)
+                                pcm16, state = audioop.ratecv(pcm16, 2, 1, pcm_rate, 16000, state)
+                                self._resample_state_pipeline16k[caller_channel_id] = state
+                            except Exception:
+                                pcm16 = pcm_bytes
+                        if pcm16:
+                            q.put_nowait(pcm16)
+                        return
+                    except asyncio.QueueFull:
+                        logger.debug("Pipeline queue full; dropping AudioSocket frame", call_id=caller_channel_id)
+                        return
+
+            # Unconditional continuous-input forward: Deepgram/OpenAI Realtime expect raw audio flow
+            # NOTE: Only applies to monolithic providers, not pipelines (handled above)
+            try:
+                provider_name = getattr(session, 'provider_name', None) or self.config.default_provider
+                provider = self.providers.get(provider_name)
+            except Exception:
+                provider = None
+            continuous_input = False
+            try:
+                if provider_name == "deepgram":
+                    continuous_input = True
+                else:
+                    pcfg = getattr(provider, 'config', None)
+                    if isinstance(pcfg, dict):
+                        continuous_input = bool(pcfg.get('continuous_input', False))
+                    else:
+                        continuous_input = bool(getattr(pcfg, 'continuous_input', False))
+            except Exception:
+                continuous_input = False
+            if continuous_input and provider and hasattr(provider, 'send_audio'):
+                # Forward immediately, independent of audio_capture_enabled/VAD
+                try:
+                    self._update_audio_diagnostics(session, "provider_in", pcm_bytes, "slin16", pcm_rate)
+                except Exception:
+                    logger.debug("Provider input diagnostics update failed (unconditional)", call_id=caller_channel_id, exc_info=True)
+                try:
+                    prov_payload, prov_enc, prov_rate = self._encode_for_provider(
+                        session.call_id,
+                        provider_name,
+                        provider,
+                        pcm_bytes,
+                        pcm_rate,
+                    )
+                    try:
+                        self.audio_capture.append_encoded(
+                            session.call_id,
+                            "caller_to_provider",
+                            prov_payload,
+                            prov_enc,
+                            prov_rate,
+                        )
+                    except Exception:
+                        logger.debug("Provider input capture failed (unconditional)", call_id=session.call_id, exc_info=True)
+                    await provider.send_audio(prov_payload)
+                except Exception:
+                    logger.debug("Provider continuous-input forward error (unconditional)", call_id=caller_channel_id, exc_info=True)
+                return
+
             # Post-TTS end protection: drop inbound briefly after gating clears to avoid agent echo re-capture
             try:
                 cfg = getattr(self.config, 'barge_in', None)
@@ -1490,16 +2097,79 @@ class Engine:
                     )
                     return
 
-            # Self-echo mitigation and barge-in detection
-            # If TTS is playing (capture disabled), decide whether to drop or trigger barge-in
+            vad_result: Optional[VADResult] = None
+            if self.vad_manager:
+                try:
+                    vad_result = await self._run_enhanced_vad(session, audio_bytes)
+                except Exception:
+                    logger.debug(
+                        "Enhanced VAD processing error",
+                        call_id=caller_channel_id,
+                        exc_info=True,
+                    )
+
+            # Self-echo mitigation and barge-in/continuous-input handling during TTS playback
             if hasattr(session, 'audio_capture_enabled') and not session.audio_capture_enabled:
                 cfg = getattr(self.config, 'barge_in', None)
-                if not cfg or not getattr(cfg, 'enabled', True):
-                    logger.debug("Dropping inbound AudioSocket audio during TTS playback (barge-in disabled)",
-                                 conn_id=conn_id, caller_channel_id=caller_channel_id, bytes=len(audio_bytes))
+                
+                # AAVA-28: Pipelines now respect gating - no special bypass during TTS
+                # Drop audio for pipelines during TTS playback (handled by earlier gating check)
+                if self._pipeline_forced.get(caller_channel_id):
+                    # Audio already dropped by gating check above (line 2059)
                     return
-
-                # Protection window from TTS start to avoid initial self-echo
+                
+                # Determine provider and continuous-input capability FIRST to allow forwarding during greeting guard
+                try:
+                    provider_name = getattr(session, 'provider_name', None) or self.config.default_provider
+                    provider = self.providers.get(provider_name)
+                except Exception:
+                    provider = None
+                continuous_input = False
+                try:
+                    # CRITICAL: Providers requiring continuous audio flow during TTS
+                    # - deepgram: Traditional continuous STT throughout conversation
+                    # - openai_realtime: Full agent mode with server-side VAD managing turn-taking
+                    # NOTE: Does NOT apply to pipeline mode (handled above)
+                    if provider_name in ("deepgram", "openai_realtime"):
+                        continuous_input = True
+                    else:
+                        pcfg = getattr(provider, 'config', None)
+                        if isinstance(pcfg, dict):
+                            continuous_input = bool(pcfg.get('continuous_input', False))
+                        else:
+                            continuous_input = bool(getattr(pcfg, 'continuous_input', False))
+                except Exception:
+                    continuous_input = False
+                # If provider supports continuous input, forward provider-encoded PCM immediately (during TTS guard)
+                if continuous_input and provider and hasattr(provider, 'send_audio'):
+                    try:
+                        # Diagnostics on the PCM payload we are about to send
+                        self._update_audio_diagnostics(session, "provider_in", pcm_bytes, "slin16", pcm_rate)
+                    except Exception:
+                        logger.debug("Provider input diagnostics update failed (continuous-input)", call_id=caller_channel_id, exc_info=True)
+                    try:
+                        prov_payload, prov_enc, prov_rate = self._encode_for_provider(
+                            session.call_id,
+                            provider_name,
+                            provider,
+                            pcm_bytes,
+                            pcm_rate,
+                        )
+                        try:
+                            self.audio_capture.append_encoded(
+                                session.call_id,
+                                "caller_to_provider",
+                                prov_payload,
+                                prov_enc,
+                                prov_rate,
+                            )
+                        except Exception:
+                            logger.debug("Provider input capture failed (continuous-input)", call_id=session.call_id, exc_info=True)
+                        await provider.send_audio(prov_payload)
+                    except Exception:
+                        logger.debug("Provider continuous-input forward error", call_id=caller_channel_id, exc_info=True)
+                    return
+                # Protection window from TTS start to avoid initial self-echo (applies when not using continuous-input)
                 now = time.time()
                 tts_elapsed_ms = 0
                 try:
@@ -1507,26 +2177,104 @@ class Engine:
                         tts_elapsed_ms = int((now - session.tts_started_ts) * 1000)
                 except Exception:
                     tts_elapsed_ms = 0
-
-                initial_protect = int(getattr(cfg, 'initial_protection_ms', 200))
+                initial_protect = int(getattr(cfg, 'initial_protection_ms', 200)) if cfg else 200
+                
+                # CRITICAL FIX #3: Extended protection for OpenAI Realtime (echo prevention)
+                # OpenAI's VAD is highly sensitive and detects agent's own audio as "user speech"
+                # This causes 20+ false speech_started events, creating response cancellation loop
+                # 5 seconds ensures complete greeting plays before accepting any input
+                # Other providers unaffected: Deepgram uses continuous_input path (line 2204 early return)
+                # CRITICAL: Only apply if TTS has actually started (not during pre-TTS initialization)
+                try:
+                    if provider_name == "openai_realtime" and getattr(session, 'tts_started_ts', 0.0) > 0.0:
+                        initial_protect = 5000  # 5 seconds to prevent echo feedback loop
+                        logger.debug(
+                            "Extended TTS protection for OpenAI Realtime (echo prevention)",
+                            call_id=caller_channel_id,
+                            protect_ms=initial_protect,
+                            tts_started_ts=session.tts_started_ts
+                        )
+                except Exception:
+                    pass
+                
+                # Greeting-specific extra protection
+                try:
+                    if getattr(session, 'conversation_state', None) == 'greeting' and cfg:
+                        greet_ms = int(getattr(cfg, 'greeting_protection_ms', 0))
+                        if greet_ms > initial_protect:
+                            initial_protect = greet_ms
+                except Exception:
+                    pass
                 if tts_elapsed_ms < initial_protect:
                     logger.debug("Dropping inbound during initial TTS protection window",
                                  conn_id=conn_id, caller_channel_id=caller_channel_id,
                                  tts_elapsed_ms=tts_elapsed_ms, protect_ms=initial_protect)
                     return
-
-                # Barge-in detection: accumulate candidate window based on energy
-                try:
-                    energy = audioop.rms(audio_bytes, 2)
-                except Exception:
-                    energy = 0
-
+                # If barge-in disabled and no continuous-input path, drop
+                if not cfg or not getattr(cfg, 'enabled', True):
+                    logger.debug("Dropping inbound AudioSocket audio during TTS playback (barge-in disabled)",
+                                 conn_id=conn_id, caller_channel_id=caller_channel_id, bytes=len(audio_bytes))
+                    return
+                # Barge-in detection: accumulate candidate window based on multi-criteria (VAD + energy)
                 threshold = int(getattr(cfg, 'energy_threshold', 1000))
-                frame_ms = 20  # AudioSocket frames are 20 ms
-                if energy >= threshold:
-                    session.barge_in_candidate_ms = int(getattr(session, 'barge_in_candidate_ms', 0)) + frame_ms
+                frame_ms = 20
+                energy = 0
+                confidence = 0.0
+                vad_speech = False
+                webrtc_positive = False
+
+                if vad_result:
+                    frame_ms = max(vad_result.frame_duration_ms, 1)
+                    energy = vad_result.energy_level
+                    confidence = vad_result.confidence
+                    vad_speech = vad_result.is_speech
+                    webrtc_positive = vad_result.webrtc_result
+                    try:
+                        session.vad_state['last_vad_result'] = {
+                            'is_speech': vad_speech,
+                            'confidence': confidence,
+                            'energy': energy,
+                            'webrtc': webrtc_positive,
+                        }
+                    except Exception:
+                        pass
                 else:
-                    session.barge_in_candidate_ms = 0
+                    try:
+                        pcm16_frame = pcm_bytes
+                        energy = audioop.rms(pcm16_frame, 2) if pcm16_frame else 0
+                    except Exception:
+                        energy = 0
+
+                criteria_met = 0
+                if vad_speech:
+                    criteria_met += 1
+                if energy >= threshold:
+                    criteria_met += 1
+                if vad_result and confidence >= getattr(self.vad_manager, 'confidence_threshold', 0.6):
+                    criteria_met += 1
+                if webrtc_positive:
+                    criteria_met += 1
+
+                if vad_result:
+                    if criteria_met >= 2:
+                        if int(getattr(session, 'barge_in_candidate_ms', 0)) == 0:
+                            try:
+                                session.barge_start_ts = now
+                            except Exception:
+                                session.barge_start_ts = 0.0
+                        session.barge_in_candidate_ms = int(getattr(session, 'barge_in_candidate_ms', 0)) + frame_ms
+                    else:
+                        session.barge_in_candidate_ms = 0
+                else:
+                    if energy >= threshold:
+                        if int(getattr(session, 'barge_in_candidate_ms', 0)) == 0:
+                            try:
+                                session.barge_start_ts = now
+                            except Exception:
+                                session.barge_start_ts = 0.0
+                        session.barge_in_candidate_ms = int(getattr(session, 'barge_in_candidate_ms', 0)) + frame_ms
+                    else:
+                        session.barge_in_candidate_ms = 0
 
                 # Cooldown check to avoid flapping
                 cooldown_ms = int(getattr(cfg, 'cooldown_ms', 500))
@@ -1534,7 +2282,33 @@ class Engine:
                 in_cooldown = (now - last_barge_in_ts) * 1000 < cooldown_ms if last_barge_in_ts else False
 
                 min_ms = int(getattr(cfg, 'min_ms', 250))
-                if not in_cooldown and session.barge_in_candidate_ms >= min_ms:
+                should_trigger = not in_cooldown and session.barge_in_candidate_ms >= min_ms
+                
+                # CRITICAL FIX #2: Skip engine-level barge-in for OpenAI Realtime
+                # OpenAI Realtime handles turn-taking/interruption internally via its own VAD
+                # Engine-level barge-in causes double-cancellation (both systems fighting)
+                provider_name = getattr(session, 'provider_name', None)
+                if should_trigger and provider_name == 'openai_realtime':
+                    logger.debug(
+                        "Local barge-in detected for OpenAI Realtime - sending cancellation to server",
+                        call_id=caller_channel_id,
+                        energy=energy,
+                        criteria_met=criteria_met,
+                    )
+                    # Notify OpenAI to cancel any in-progress response generation
+                    try:
+                        provider = self.providers.get('openai_realtime')
+                        if provider and hasattr(provider, 'cancel_response'):
+                            await provider.cancel_response()
+                    except Exception:
+                        logger.debug("Failed to cancel OpenAI response", call_id=caller_channel_id, exc_info=True)
+                    
+                    # Reset candidate counter but don't trigger local playback stops
+                    session.barge_in_candidate_ms = 0
+                    # Continue forwarding audio to provider (OpenAI will handle the rest)
+                    should_trigger = False
+
+                if should_trigger:
                     # Trigger barge-in: stop active playback(s), clear gating, and continue forwarding audio
                     try:
                         playback_ids = await self.session_store.list_playbacks_for_call(caller_channel_id)
@@ -1555,21 +2329,51 @@ class Engine:
 
                         session.barge_in_candidate_ms = 0
                         session.last_barge_in_ts = now
+                        # Observe reaction latency if we captured onset
+                        try:
+                            if float(getattr(session, 'barge_start_ts', 0.0) or 0.0) > 0.0:
+                                reaction_s = max(0.0, now - float(session.barge_start_ts))
+                                _BARGE_REACTION_SECONDS.labels(caller_channel_id).observe(reaction_s)
+                                session.barge_start_ts = 0.0
+                        except Exception:
+                            pass
                         await self._save_session(session)
-                        logger.info("🎧 BARGE-IN triggered", call_id=caller_channel_id)
+                        
+                        # Notify VAD manager of barge-in event for adaptive learning
+                        if self.vad_manager and vad_result:
+                            self.vad_manager.notify_call_event(
+                                caller_channel_id, 
+                                "barge_in", 
+                                {"confidence": confidence, "energy": energy, "criteria_met": criteria_met}
+                            )
+                        
+                        logger.info(
+                            "🎧 BARGE-IN triggered",
+                            call_id=caller_channel_id,
+                            energy=energy,
+                            criteria_met=criteria_met,
+                            confidence=confidence,
+                            vad_speech=vad_speech,
+                            webrtc=webrtc_positive,
+                        )
                     except Exception:
                         logger.error("Error triggering barge-in", call_id=caller_channel_id, exc_info=True)
                     # After barge-in, fall through to forward this frame to provider
                 else:
                     # Not yet triggered; drop inbound frame while TTS is active
-                    if energy > 0:
-                        if self.conversation_coordinator:
-                            try:
-                                self.conversation_coordinator.note_audio_during_tts(caller_channel_id)
-                            except Exception:
-                                pass
-                    logger.debug("Dropping inbound during TTS (candidate_ms=%d, energy=%d)",
-                                 session.barge_in_candidate_ms, energy)
+                    if energy > 0 and self.conversation_coordinator:
+                        try:
+                            self.conversation_coordinator.note_audio_during_tts(caller_channel_id)
+                        except Exception:
+                            pass
+                    logger.debug(
+                        "Dropping inbound during TTS",
+                        call_id=caller_channel_id,
+                        candidate_ms=session.barge_in_candidate_ms,
+                        energy=energy,
+                        criteria_met=criteria_met,
+                        confidence=confidence,
+                    )
                     return
 
             # If pipeline execution is forced, route to pipeline queue after converting to PCM16 @ 16 kHz
@@ -1577,22 +2381,355 @@ class Engine:
                 q = self._pipeline_queues.get(caller_channel_id)
                 if q:
                     try:
-                        pcm16 = self._as_to_pcm16_16k(audio_bytes)
-                        q.put_nowait(pcm16)
+                        pcm16 = pcm_bytes
+                        if pcm16 and pcm_rate != 16000:
+                            try:
+                                state = self._resample_state_pipeline16k.get(caller_channel_id)
+                                pcm16, state = audioop.ratecv(pcm16, 2, 1, pcm_rate, 16000, state)
+                                self._resample_state_pipeline16k[caller_channel_id] = state
+                            except Exception:
+                                pcm16 = pcm_bytes
+                        if pcm16:
+                            q.put_nowait(pcm16)
                         return
                     except asyncio.QueueFull:
                         logger.debug("Pipeline queue full; dropping AudioSocket frame", call_id=caller_channel_id)
                         return
 
-            provider_name = session.provider_name or self.config.default_provider
-            provider = self.providers.get(provider_name)
-            if not provider or not hasattr(provider, 'send_audio'):
-                logger.debug("Provider unavailable for audio", provider=provider_name)
-                return
+            # Enhanced VAD Audio Filtering with continuous delivery
+            forward_original_audio = True
+            pcm_payload = pcm_bytes
+            payload_rate = pcm_rate
 
-            await provider.send_audio(audio_bytes)
+            # Pre-guard RMS for instrumentation
+            try:
+                pre_guard_rms = audioop.rms(pcm_bytes, 2) if pcm_bytes else 0
+            except Exception:
+                pre_guard_rms = 0
+
+            if vad_result:
+                now = time.time()
+                state = session.vad_state
+
+                # Initialize VAD state if needed
+                if 'vad_start_time' not in state:
+                    state['vad_start_time'] = now
+                    state['last_speech_time'] = now
+                    state['frames_since_speech'] = 0
+
+                frames_since_speech = int(state.get('frames_since_speech', 0))
+                call_duration = now - float(state.get('vad_start_time', now))
+
+                if call_duration >= 2.0:
+                    forward_original_audio = (
+                        vad_result.is_speech
+                        or vad_result.confidence > 0.3
+                        or frames_since_speech < 25
+                        or self._should_use_vad_fallback(session)
+                    )
+
+                if vad_result.is_speech:
+                    state['last_speech_time'] = now
+                    state['frames_since_speech'] = 0
+                else:
+                    state['frames_since_speech'] = frames_since_speech + 1
+
+                if not forward_original_audio:
+                    # During greeting, avoid zeroing frames; allow audio to pass to provider
+                    if getattr(session, 'conversation_state', None) == 'greeting':
+                        pcm_payload = pcm_bytes
+                        forward_original_audio = True
+                    else:
+                        silence_len = len(pcm_bytes) if pcm_bytes else len(audio_bytes) * 2
+                        pcm_payload = b"\x00" * silence_len
+                        logger.debug(
+                            "🎤 VAD - Replacing frame with silence",
+                            call_id=caller_channel_id,
+                            confidence=f"{vad_result.confidence:.2f}",
+                            energy=vad_result.energy_level,
+                            is_speech=vad_result.is_speech,
+                            frames_since_speech=state.get('frames_since_speech', 0),
+                        )
+
+            # Post-guard RMS instrumentation
+            try:
+                post_guard_rms = audioop.rms(pcm_payload, 2) if pcm_payload else 0
+            except Exception:
+                post_guard_rms = 0
+            try:
+                logger.info(
+                    "Inbound PCM guard RMS",
+                    call_id=caller_channel_id,
+                    pre_guard_pcm_rms=pre_guard_rms,
+                    post_guard_pcm_rms=post_guard_rms,
+                )
+            except Exception:
+                pass
+
+            # DEBUG: Audio routing state (OpenAI troubleshooting)
+            provider_name = session.provider_name or self.config.default_provider
+            if provider_name == "openai_realtime":
+                logger.debug(
+                    "🎤 AUDIO ROUTING - Ready to forward",
+                    call_id=caller_channel_id,
+                    audio_capture_enabled=getattr(session, 'audio_capture_enabled', None),
+                    audio_bytes=len(audio_bytes),
+                    pcm_payload_bytes=len(pcm_payload) if pcm_payload else 0,
+                )
+            
+            provider = self.providers.get(provider_name)
+            if not provider:
+                logger.warning(
+                    "Provider object is None!",
+                    provider_name=provider_name,
+                    call_id=caller_channel_id,
+                )
+                return
+            if not hasattr(provider, 'send_audio'):
+                logger.warning(
+                    "Provider missing send_audio method!",
+                    provider_name=provider_name,
+                    call_id=caller_channel_id,
+                )
+                return
+            
+            # DEBUG: Provider ready check (OpenAI troubleshooting)
+            if provider_name == "openai_realtime":
+                logger.debug(
+                    "🎤 AUDIO ROUTING - Provider ready",
+                    call_id=caller_channel_id,
+                    provider_name=provider_name,
+                )
+            try:
+                self._update_audio_diagnostics(session, "provider_in", pcm_payload, "slin16", payload_rate)
+            except Exception:
+                logger.debug("Provider input diagnostics update failed", call_id=caller_channel_id, exc_info=True)
+
+            provider_payload, provider_encoding, provider_rate = self._encode_for_provider(
+                session.call_id,
+                provider_name,
+                provider,
+                pcm_payload,
+                payload_rate,
+            )
+
+            # Preserve original μ-law frames for Deepgram when the payload was replaced with silence
+            if (
+                provider_name == "deepgram"
+                and provider_encoding in ("ulaw", "mulaw", "g711_ulaw", "mu-law")
+                and provider_payload
+                and not any(provider_payload)
+            ):
+                provider_payload = audio_bytes
+                provider_rate = 8000
+            try:
+                self.audio_capture.append_encoded(
+                    session.call_id,
+                    "caller_to_provider",
+                    provider_payload,
+                    provider_encoding,
+                    provider_rate,
+                )
+            except Exception:
+                logger.debug("Provider input capture failed", call_id=session.call_id, exc_info=True)
+            await provider.send_audio(provider_payload)
+            
+            # DEBUG: Confirm audio sent (OpenAI troubleshooting)
+            if provider_name == "openai_realtime":
+                logger.debug(
+                    "🎤 AUDIO ROUTING - Sent to provider",
+                    call_id=caller_channel_id,
+                    provider_name=provider_name,
+                    bytes_sent=len(provider_payload) if provider_payload else 0,
+                )
         except Exception as exc:
             logger.error("Error handling AudioSocket audio", conn_id=conn_id, error=str(exc), exc_info=True)
+
+    async def _run_enhanced_vad(self, session: CallSession, audio_bytes: bytes) -> Optional[VADResult]:
+        """Normalize inbound AudioSocket audio to PCM16 @ 8 kHz 20 ms frames and run enhanced VAD."""
+        if not self.vad_manager or not audio_bytes:
+            return None
+
+        try:
+            # Detect AudioSocket wire format from session first (actual negotiated),
+            # then fall back to YAML. Map 'slin' (Asterisk) to PCM16 @ 8 kHz.
+            try:
+                fmt_token = (session.transport_profile.format or '').lower()
+            except Exception:
+                fmt_token = ''
+            if not fmt_token:
+                try:
+                    fmt_token = (getattr(self.config, 'audiosocket', None).format or 'ulaw').lower()
+                except Exception:
+                    fmt_token = 'ulaw'
+
+            # Determine source rate preference from session profile when available
+            try:
+                prof_rate = int(session.transport_profile.sample_rate or 0)
+            except Exception:
+                prof_rate = 0
+
+            if fmt_token in ('ulaw', 'mulaw', 'g711_ulaw', 'mu-law'):
+                pcm_src = EnhancedVADManager.mu_law_to_pcm16(audio_bytes)
+                src_rate = 8000
+            elif fmt_token in ('slin', 'slin8', 'linear16_8k', 'pcm16_8k'):
+                # Asterisk 'slin' is 8 kHz PCM16
+                pcm_src = audio_bytes
+                src_rate = 8000
+            else:
+                # Generic PCM16: prefer session sample rate, default to 16000 only if unknown
+                pcm_src = audio_bytes
+                src_rate = prof_rate if prof_rate > 0 else 16000
+                # Normalize endian if probe indicated swap
+                try:
+                    if bool(session.vad_state.get('pcm16_inbound_swap', False)):
+                        pcm_src = audioop.byteswap(pcm_src, 2)
+                except Exception:
+                    pass
+            if src_rate != 8000:
+                try:
+                    state = self._resample_state_vad8k.get(session.call_id)
+                    pcm16, state = audioop.ratecv(pcm_src, 2, 1, src_rate, 8000, state)
+                    self._resample_state_vad8k[session.call_id] = state
+                except Exception:
+                    pcm16 = pcm_src
+            else:
+                pcm16 = pcm_src
+        except Exception:
+            logger.debug(
+                "Enhanced VAD conversion failed",
+                call_id=session.call_id,
+                exc_info=True,
+            )
+            return None
+
+        if not pcm16:
+            return None
+
+        vad_state = session.vad_state.setdefault("enhanced_vad", {})
+        frame_buffer: bytearray = vad_state.setdefault("frame_buffer", bytearray())
+        frame_buffer.extend(pcm16)
+
+        result: Optional[VADResult] = None
+        stats = vad_state.setdefault("stats", {"frames": 0, "speech_frames": 0})
+
+        while len(frame_buffer) >= 320:
+            frame = bytes(frame_buffer[:320])
+            del frame_buffer[:320]
+            result = await self.vad_manager.process_frame(session.call_id, frame)
+            stats["frames"] = stats.get("frames", 0) + 1
+            if result.is_speech:
+                stats["speech_frames"] = stats.get("speech_frames", 0) + 1
+
+        if result:
+            try:
+                total = max(stats.get("frames", 0), 1)
+                speech_ratio = stats.get("speech_frames", 0) / total
+                session.vad_state["enhanced_summary"] = {
+                    "frames": stats.get("frames", 0),
+                    "speech_frames": stats.get("speech_frames", 0),
+                    "speech_ratio": speech_ratio,
+                    "last_confidence": result.confidence,
+                    "last_energy": result.energy_level,
+                }
+            except Exception:
+                pass
+
+        return result
+
+    def _should_use_vad_fallback(self, session: CallSession) -> bool:
+        """Determine if we should use fallback audio forwarding when VAD doesn't detect speech."""
+        try:
+            vad_config = getattr(self.config, 'vad', None)
+            if not vad_config or not getattr(vad_config, 'fallback_enabled', True):
+                return False
+            
+            now = time.time()
+            last_speech_time = session.vad_state.get('last_speech_time')
+            if not last_speech_time:
+                session.vad_state['last_speech_time'] = now
+                return False
+
+            silence_duration = (now - float(last_speech_time)) * 1000
+            fallback_interval = getattr(vad_config, 'fallback_interval_ms', 1500)
+            if silence_duration < fallback_interval:
+                return False
+
+            fallback_state = session.vad_state.setdefault('fallback_state', {
+                'last_fallback_ts': 0.0,
+            })
+
+            last_fallback_ts = float(fallback_state.get('last_fallback_ts', 0.0) or 0.0)
+            fallback_period_ms = 200  # Forward real audio every 200 ms during extended silence
+
+            if (now - last_fallback_ts) * 1000 >= fallback_period_ms:
+                fallback_state['last_fallback_ts'] = now
+                logger.debug(
+                    "🎤 VAD - Periodic fallback forwarding original audio",
+                    call_id=session.call_id,
+                    silence_duration_ms=int(silence_duration),
+                    fallback_interval_ms=fallback_interval,
+                )
+                return True
+
+            return False
+            
+        except Exception as e:
+            logger.debug("VAD fallback logic error", call_id=session.call_id, error=str(e))
+            return True  # Default to allowing audio through on error
+
+    @staticmethod
+    def _ulaw_silence(length: int) -> bytes:
+        if length <= 0:
+            return b""
+        return bytes([0xFF]) * length
+
+    def _silence_for_format(self, length: int) -> bytes:
+        """Generate silence matching the negotiated AudioSocket format (μ-law or PCM16)."""
+        if length <= 0:
+            return b""
+        try:
+            as_fmt = (getattr(self.config, 'audiosocket', None).format or 'ulaw').lower()
+        except Exception:
+            as_fmt = 'ulaw'
+        if as_fmt in ('ulaw', 'mulaw', 'g711_ulaw', 'mu-law'):
+            return bytes([0xFF]) * length  # μ-law silence
+        return b"\x00" * length  # PCM16 silence (zeroed samples)
+
+    async def _export_config_metrics(self, call_id: str) -> None:
+        """Expose configured knobs as Prometheus gauges for this call."""
+        try:
+            b = getattr(self.config, 'barge_in', None)
+            if b:
+                _CFG_BARGE_MS.labels(call_id, "initial_protection_ms").set(int(getattr(b, 'initial_protection_ms', 0)))
+                _CFG_BARGE_MS.labels(call_id, "min_ms").set(int(getattr(b, 'min_ms', 0)))
+                _CFG_BARGE_MS.labels(call_id, "post_tts_end_protection_ms").set(int(getattr(b, 'post_tts_end_protection_ms', 0)))
+                _CFG_BARGE_MS.labels(call_id, "greeting_protection_ms").set(int(getattr(b, 'greeting_protection_ms', 0)))
+                _CFG_BARGE_THRESHOLD.labels(call_id).set(int(getattr(b, 'energy_threshold', 0)))
+        except Exception:
+            pass
+        try:
+            s = getattr(self.config, 'streaming', None)
+            if s:
+                _CFG_STREAM_MS.labels(call_id, "min_start_ms").set(int(getattr(s, 'min_start_ms', 0)))
+                _CFG_STREAM_MS.labels(call_id, "greeting_min_start_ms").set(int(getattr(s, 'greeting_min_start_ms', 0)))
+                _CFG_STREAM_MS.labels(call_id, "low_watermark_ms").set(int(getattr(s, 'low_watermark_ms', 0)))
+                _CFG_STREAM_MS.labels(call_id, "jitter_buffer_ms").set(int(getattr(s, 'jitter_buffer_ms', 0)))
+                _CFG_STREAM_MS.labels(call_id, "fallback_timeout_ms").set(int(getattr(s, 'fallback_timeout_ms', 0)))
+        except Exception:
+            pass
+        try:
+            pblock = (getattr(self.config, 'providers', {}) or {}).get('openai_realtime', {})
+            td = (pblock or {}).get('turn_detection') or {}
+            if td:
+                _CFG_TD_MS.labels(call_id, "silence_duration_ms").set(int(td.get('silence_duration_ms', 0)))
+                _CFG_TD_MS.labels(call_id, "prefix_padding_ms").set(int(td.get('prefix_padding_ms', 0)))
+                try:
+                    _CFG_TD_THRESHOLD.labels(call_id).set(float(td.get('threshold', 0.0)))
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     async def _audiosocket_handle_disconnect(self, conn_id: str) -> None:
         """Cleanup mappings when an AudioSocket connection disconnects."""
@@ -1608,6 +2745,14 @@ class Engine:
                     self.audiosocket_primary_conn.pop(caller_channel_id, None)
                     if conns:
                         self.audiosocket_primary_conn[caller_channel_id] = next(iter(conns))
+                # Clear audiosocket_conn_id on session if it matched
+                try:
+                    sess = await self.session_store.get_by_call_id(caller_channel_id)
+                    if sess and getattr(sess, 'audiosocket_conn_id', None) == conn_id:
+                        sess.audiosocket_conn_id = None
+                        await self._save_session(sess)
+                except Exception:
+                    pass
             logger.info("AudioSocket connection disconnected", conn_id=conn_id, caller_channel_id=caller_channel_id)
         except Exception as exc:
             logger.error("Error during AudioSocket disconnect cleanup", conn_id=conn_id, error=str(exc), exc_info=True)
@@ -1664,6 +2809,74 @@ class Engine:
                 logger.debug("No session for caller; dropping RTP audio", ssrc=ssrc, caller_channel_id=caller_channel_id)
                 return
 
+            # Check for pipeline mode FIRST (before continuous_input provider routing)
+            # Pipeline adapters need audio in their queue, not sent to monolithic providers
+            if self._pipeline_forced.get(caller_channel_id):
+                # AAVA-28: Check gating to prevent agent from hearing its own TTS output
+                if not session.audio_capture_enabled:
+                    # Drop audio during TTS playback (gating active)
+                    return
+                
+                q = self._pipeline_queues.get(caller_channel_id)
+                if q:
+                    try:
+                        q.put_nowait(pcm_16k)  # Pipeline expects PCM16@16kHz
+                        logger.debug("RTP audio routed to pipeline queue", call_id=caller_channel_id, bytes=len(pcm_16k))
+                    except Exception as exc:
+                        logger.warning("Pipeline queue full or unavailable (RTP)", call_id=caller_channel_id, error=str(exc))
+                    return  # Done - don't route to monolithic provider
+                else:
+                    logger.warning("Pipeline mode active but no queue found (RTP)", call_id=caller_channel_id)
+
+            # Check if provider requires continuous audio input (P1 providers: Deepgram, OpenAI Realtime)
+            # These providers handle turn-taking internally and need uninterrupted audio flow
+            provider_name = getattr(session, 'provider_name', None) or self.config.default_provider
+            provider = self.providers.get(provider_name)
+            continuous_input = False
+            try:
+                if provider_name in ("deepgram", "openai_realtime"):
+                    continuous_input = True
+                else:
+                    pcfg = getattr(provider, 'config', None)
+                    if isinstance(pcfg, dict):
+                        continuous_input = bool(pcfg.get('continuous_input', False))
+                    else:
+                        continuous_input = bool(getattr(pcfg, 'continuous_input', False))
+            except Exception:
+                continuous_input = False
+
+            # For continuous-input providers, forward audio immediately and skip all gating/barge-in logic
+            # This matches the AudioSocket behavior for Deepgram/OpenAI Realtime (lines 2304-2342)
+            if continuous_input:
+                if not provider or not hasattr(provider, 'send_audio'):
+                    logger.debug("Provider unavailable for continuous RTP audio", provider=provider_name)
+                    return
+                # Encode audio for provider (same as AudioSocket path)
+                try:
+                    prov_payload, prov_enc, prov_rate = self._encode_for_provider(
+                        session.call_id,
+                        provider_name,
+                        provider,
+                        pcm_16k,
+                        16000,  # Input is PCM16 16kHz from RTP
+                    )
+                    try:
+                        self.audio_capture.append_encoded(
+                            session.call_id,
+                            "caller_to_provider",
+                            prov_payload,
+                            prov_enc,
+                            prov_rate,
+                        )
+                    except Exception:
+                        logger.debug("Provider input capture failed (continuous-input RTP)", call_id=session.call_id, exc_info=True)
+                    await provider.send_audio(prov_payload)
+                except Exception as exc:
+                    logger.debug("Continuous-input RTP forward error", call_id=caller_channel_id, error=str(exc))
+                return
+
+            # Below: standard gating/barge-in logic for hybrid (P2) providers only
+            
             # Post-TTS end guard to avoid self-echo re-capture
             try:
                 cfg = getattr(self.config, 'barge_in', None)
@@ -1701,6 +2914,13 @@ class Engine:
                     tts_elapsed_ms = 0
 
                 initial_protect = int(getattr(cfg, 'initial_protection_ms', 200))
+                try:
+                    if getattr(session, 'conversation_state', None) == 'greeting':
+                        greet_ms = int(getattr(cfg, 'greeting_protection_ms', 0))
+                        if greet_ms > initial_protect:
+                            initial_protect = greet_ms
+                except Exception:
+                    pass
                 if tts_elapsed_ms < initial_protect:
                     logger.debug("Dropping inbound RTP during initial TTS protection window",
                                  ssrc=ssrc, caller_channel_id=caller_channel_id,
@@ -1715,6 +2935,11 @@ class Engine:
                 threshold = int(getattr(cfg, 'energy_threshold', 1000))
                 frame_ms = 20
                 if energy >= threshold:
+                    if int(getattr(session, 'barge_in_candidate_ms', 0)) == 0:
+                        try:
+                            session.barge_start_ts = now
+                        except Exception:
+                            session.barge_start_ts = 0.0
                     session.barge_in_candidate_ms = int(getattr(session, 'barge_in_candidate_ms', 0)) + frame_ms
                 else:
                     session.barge_in_candidate_ms = 0
@@ -1743,6 +2968,13 @@ class Engine:
 
                         session.barge_in_candidate_ms = 0
                         session.last_barge_in_ts = now
+                        try:
+                            if float(getattr(session, 'barge_start_ts', 0.0) or 0.0) > 0.0:
+                                reaction_s = max(0.0, now - float(session.barge_start_ts))
+                                _BARGE_REACTION_SECONDS.labels(caller_channel_id).observe(reaction_s)
+                                session.barge_start_ts = 0.0
+                        except Exception:
+                            pass
                         await self._save_session(session)
                         logger.info("🎧 BARGE-IN (RTP) triggered", call_id=caller_channel_id)
                     except Exception:
@@ -1760,6 +2992,11 @@ class Engine:
 
             # If a pipeline was explicitly requested for this call, route to pipeline queue
             if self._pipeline_forced.get(caller_channel_id):
+                # AAVA-28: Check gating to prevent agent from hearing its own TTS output
+                if not session.audio_capture_enabled:
+                    # Drop audio during TTS playback (gating active)
+                    return
+                
                 q = self._pipeline_queues.get(caller_channel_id)
                 if q:
                     try:
@@ -1783,7 +3020,11 @@ class Engine:
     def _build_deepgram_config(self, provider_cfg: Dict[str, Any]) -> Optional[DeepgramProviderConfig]:
         """Construct a DeepgramProviderConfig from raw provider settings with validation."""
         try:
-            cfg = DeepgramProviderConfig(**provider_cfg)
+            # SECURITY: API keys ONLY from environment variables, never from YAML
+            merged = dict(provider_cfg)
+            merged['api_key'] = os.getenv('DEEPGRAM_API_KEY')  # Force from .env only
+            
+            cfg = DeepgramProviderConfig(**merged)
             if not cfg.api_key:
                 logger.error("Deepgram provider API key missing (DEEPGRAM_API_KEY)")
                 return None
@@ -1797,6 +3038,10 @@ class Engine:
         try:
             # Respect provider overrides; only fill when missing/empty
             merged = dict(provider_cfg)
+            
+            # SECURITY: API key ONLY from environment variables, never from YAML
+            merged['api_key'] = os.getenv('OPENAI_API_KEY')  # Force from .env only
+            
             try:
                 instr = (merged.get("instructions") or "").strip()
             except Exception:
@@ -1822,6 +3067,266 @@ class Engine:
             logger.error("Failed to build OpenAIRealtimeProviderConfig", error=str(exc), exc_info=True)
             return None
 
+    def _audit_provider_config(self, name: str, provider_cfg: Dict[str, Any]) -> List[str]:
+        """Static sanity checks for provider/audio format alignment.
+
+        Returns a list of descriptive issue strings when mismatches are detected."""
+        issues: List[str] = []
+        try:
+            audiosocket_format = "ulaw"
+            try:
+                if getattr(self.config, "audiosocket", None):
+                    audiosocket_format = (self.config.audiosocket.format or "ulaw").lower()
+            except Exception:
+                audiosocket_format = "ulaw"
+            audiosocket_canon = self._canonicalize_encoding(audiosocket_format)
+
+            if name == "deepgram":
+                enc = (provider_cfg.get("input_encoding") or "linear16").lower()
+                enc_canon = self._canonicalize_encoding(enc)
+                if enc_canon in {"slin16", "linear16", "pcm16"} and audiosocket_canon not in {"slin", "slin16"}:
+                    issues.append(
+                        f"Deepgram expects PCM input but audiosocket.format={audiosocket_format}; "
+                        "set audiosocket.format=slin16 or change deepgram.input_encoding to ulaw."
+                    )
+                if enc_canon in {"ulaw", "mulaw", "g711_ulaw", "mu-law"} and audiosocket_canon not in {"ulaw", "mulaw"}:
+                    # Allow intentional bridge: audiosocket carries PCM16 while provider works in μ-law
+                    if audiosocket_canon not in {"slin", "slin16"}:
+                        issues.append(
+                            f"Deepgram expects μ-law input but audiosocket.format={audiosocket_format}; "
+                            "set audiosocket.format=ulaw or change deepgram.input_encoding to linear16."
+                        )
+
+            if name == "openai_realtime":
+                provider_rate = int(provider_cfg.get("provider_input_sample_rate_hz") or 0)
+                output_rate = int(provider_cfg.get("output_sample_rate_hz") or 0)
+                if provider_rate and provider_rate < 24000:
+                    issues.append(
+                        f"OpenAI Realtime provider_input_sample_rate_hz={provider_rate}; "
+                        "set to 24000 for correct streaming."
+                    )
+                if output_rate and output_rate < 24000:
+                    issues.append(
+                        f"OpenAI Realtime output_sample_rate_hz={output_rate}; "
+                        "set to 24000 so downstream audio plays at the correct speed."
+                    )
+
+                # Check target encoding vs audiosocket format
+                # NOTE: Intentional transcoding is supported - system handles conversion
+                target_encoding = (provider_cfg.get("target_encoding") or "ulaw").lower()
+                if target_encoding in ("ulaw", "mulaw", "g711_ulaw", "mu-law"):
+                    if audiosocket_format in ("ulaw", "mulaw"):
+                        # Perfect alignment
+                        pass
+                    elif audiosocket_format in ("slin", "slin16", "linear16", "pcm16"):
+                        # Intentional transcoding: AudioSocket PCM → Provider μ-law (system handles this)
+                        pass
+                    else:
+                        issues.append(
+                            f"OpenAI Realtime target_encoding={target_encoding} but audiosocket.format={audiosocket_format}; "
+                            "set audiosocket.format=ulaw or adjust provider target encoding."
+                        )
+                if target_encoding in ("slin16", "linear16", "pcm16") and audiosocket_format not in ("slin", "slin16", "linear16", "pcm16"):
+                    issues.append(
+                        f"OpenAI Realtime target_encoding={target_encoding} but audiosocket.format={audiosocket_format}; "
+                        "set audiosocket.format=slin16 or change provider target encoding."
+                    )
+        except Exception:
+            logger.debug("Provider configuration audit failed", provider=name, exc_info=True)
+        return issues
+
+    def _describe_provider_alignment(self, name: str, provider: AIProviderInterface) -> List[str]:
+        issues: List[str] = []
+        try:
+            audiosocket_format = "ulaw"
+            try:
+                if getattr(self.config, "audiosocket", None):
+                    audiosocket_format = (self.config.audiosocket.format or "ulaw").lower()
+            except Exception:
+                audiosocket_format = "ulaw"
+            audiosocket_canon = self._canonicalize_encoding(audiosocket_format)
+
+            streaming_encoding = getattr(self.streaming_playback_manager, "audiosocket_format", None)
+            if streaming_encoding:
+                streaming_encoding = streaming_encoding.lower()
+            else:
+                streaming_encoding = audiosocket_format
+            streaming_canon = self._canonicalize_encoding(streaming_encoding) or audiosocket_canon
+
+            try:
+                streaming_rate = int(getattr(self.streaming_playback_manager, "sample_rate", 8000) or 8000)
+            except Exception:
+                streaming_rate = 8000
+
+            describe_method = getattr(provider, "describe_alignment", None)
+            if callable(describe_method):
+                issues.extend(
+                    describe_method(
+                        audiosocket_format=audiosocket_canon,
+                        streaming_encoding=streaming_canon,
+                        streaming_sample_rate=streaming_rate,
+                    )
+                )
+        except Exception:
+            logger.debug("Provider alignment description failed", provider=name, exc_info=True)
+        return issues
+
+    def _audit_transport_alignment(self) -> None:
+        """Log a pre-call summary of transport settings and warn on misalignment.
+
+        YAML is the source of truth. We check:
+        - audiosocket.format vs streaming.sample_rate
+        - provider target vs audiosocket.format
+        - OpenAI Realtime provider input/output sample rates
+        """
+        try:
+            # Gather core transport settings
+            as_fmt = "ulaw"
+            if getattr(self.config, "audiosocket", None):
+                try:
+                    as_fmt = (self.config.audiosocket.format or "ulaw").lower()
+                except Exception:
+                    as_fmt = "ulaw"
+            try:
+                streaming_rate = int(getattr(self.streaming_playback_manager, "sample_rate", 8000) or 8000)
+            except Exception:
+                streaming_rate = 8000
+
+            # Provider configs (raw YAML dicts)
+            providers_cfg = getattr(self.config, "providers", {}) or {}
+            oair_cfg = providers_cfg.get("openai_realtime", {}) or {}
+            dg_cfg = providers_cfg.get("deepgram", {}) or {}
+
+            # Normalize key fields
+            def _lower_str(d: dict, key: str, default: str = "") -> str:
+                val = d.get(key, default)
+                if isinstance(val, str):
+                    return val.lower()
+                return str(val).lower()
+
+            oair_target_enc = _lower_str(oair_cfg, "target_encoding", "ulaw")
+            oair_target_rate = int(oair_cfg.get("target_sample_rate_hz") or 8000)
+            oair_in_rate = int(oair_cfg.get("provider_input_sample_rate_hz") or 24000)
+            oair_out_rate = int(oair_cfg.get("output_sample_rate_hz") or 24000)
+
+            dg_in_enc = _lower_str(dg_cfg, "input_encoding", "linear16")
+            try:
+                dg_in_rate = int(dg_cfg.get("input_sample_rate_hz") or 8000)
+            except Exception:
+                dg_in_rate = 8000
+
+            # Info summary
+            streaming_target_fmt = (getattr(self.streaming_playback_manager, "audiosocket_format", None) or as_fmt).lower()
+            streaming_swap_mode = getattr(self.streaming_playback_manager, "egress_swap_mode", "auto")
+            streaming_force_mulaw = bool(getattr(self.streaming_playback_manager, "egress_force_mulaw", False))
+
+            dg_out_enc = _lower_str(dg_cfg, "output_encoding", "")
+            try:
+                dg_out_rate = int(dg_cfg.get("output_sample_rate_hz") or 0)
+            except Exception:
+                dg_out_rate = 0
+
+            summary = {
+                "audiosocket_format": as_fmt,
+                "streaming_target_encoding": streaming_target_fmt,
+                "streaming_sample_rate_hz": streaming_rate,
+                "streaming_egress_swap_mode": streaming_swap_mode,
+                "streaming_egress_force_mulaw": streaming_force_mulaw,
+                "openai_realtime_input_encoding": _lower_str(oair_cfg, "input_encoding", ""),
+                "openai_realtime_input_sample_rate_hz": int(oair_cfg.get("input_sample_rate_hz") or 0),
+                "openai_realtime_provider_input_sample_rate_hz": oair_in_rate,
+                "openai_realtime_output_sample_rate_hz": oair_out_rate,
+                "openai_realtime_target_encoding": oair_target_enc,
+                "openai_realtime_target_sample_rate_hz": oair_target_rate,
+                "deepgram_input_encoding": dg_in_enc,
+                "deepgram_input_sample_rate_hz": dg_in_rate,
+                "deepgram_output_encoding": dg_out_enc,
+                "deepgram_output_sample_rate_hz": dg_out_rate,
+            }
+
+            logger.info("Transport alignment summary", **summary)
+
+            # Expected streaming rate from audiosocket format
+            expected_rate = None
+            if as_fmt in ("ulaw", "mulaw", "g711_ulaw", "mu-law"):
+                expected_rate = 8000
+            elif as_fmt in ("slin16", "linear16", "pcm16"):
+                expected_rate = 16000
+
+            # Warn on streaming rate mismatch
+            if expected_rate and streaming_rate != expected_rate:
+                logger.warning(
+                    "Streaming sample rate misaligned with audiosocket.format",
+                    audiosocket_format=as_fmt,
+                    streaming_sample_rate=streaming_rate,
+                    expected_sample_rate=expected_rate,
+                    suggestion=(
+                        "Set streaming.sample_rate to %d or change audiosocket.format to match"
+                        % expected_rate
+                    ),
+                )
+
+            # Provider target vs audiosocket.format
+            if as_fmt in ("ulaw", "mulaw", "g711_ulaw", "mu-law") and oair_target_enc not in ("ulaw", "mulaw", "g711_ulaw", "mu-law"):
+                logger.warning(
+                    "OpenAI target encoding misaligned with audiosocket.format",
+                    audiosocket_format=as_fmt,
+                    openai_target_encoding=oair_target_enc,
+                    suggestion="Set providers.openai_realtime.target_encoding to 'ulaw' or change audiosocket.format",
+                )
+            if as_fmt in ("slin16", "linear16", "pcm16") and oair_target_enc not in ("slin16", "linear16", "pcm16"):
+                logger.warning(
+                    "OpenAI target encoding misaligned with audiosocket.format",
+                    audiosocket_format=as_fmt,
+                    openai_target_encoding=oair_target_enc,
+                    suggestion="Set providers.openai_realtime.target_encoding to 'slin16' or change audiosocket.format",
+                )
+
+            # OpenAI provider IO rates
+            if oair_in_rate and oair_in_rate < 24000:
+                logger.warning(
+                    "OpenAI provider_input_sample_rate_hz suboptimal",
+                    value=oair_in_rate,
+                    suggestion="Set providers.openai_realtime.provider_input_sample_rate_hz to 24000",
+                )
+            if oair_out_rate and oair_out_rate < 24000:
+                logger.warning(
+                    "OpenAI output_sample_rate_hz suboptimal",
+                    value=oair_out_rate,
+                    suggestion="Set providers.openai_realtime.output_sample_rate_hz to 24000",
+                )
+
+            # Deepgram input encoding vs audiosocket (suppress intentional PCM↔μ-law bridge)
+            try:
+                as_canon = self._canonicalize_encoding(as_fmt)
+            except Exception:
+                as_canon = as_fmt
+            try:
+                dg_in_canon = self._canonicalize_encoding(dg_in_enc)
+            except Exception:
+                dg_in_canon = dg_in_enc
+
+            if dg_in_canon in ("ulaw",) and as_canon in ("slin", "slin16"):
+                # Intentional bridge: audiosocket carries PCM16 (slin/slin16) while Deepgram ingests μ-law
+                # System transcodes between them - this is the golden baseline configuration
+                pass
+            elif dg_in_enc in ("ulaw", "mulaw", "g711_ulaw", "mu-law") and as_fmt not in ("ulaw", "mulaw", "g711_ulaw", "mu-law", "slin", "slin16"):
+                logger.warning(
+                    "Deepgram input encoding expects μ-law but audiosocket is PCM",
+                    audiosocket_format=as_fmt,
+                    deepgram_input_encoding=dg_in_enc,
+                    suggestion="Set audiosocket.format to 'ulaw' or change deepgram.input_encoding to 'linear16'",
+                )
+            if dg_in_enc in ("slin16", "linear16", "pcm16") and as_fmt not in ("slin16", "linear16", "pcm16"):
+                logger.warning(
+                    "Deepgram input encoding expects PCM16 but audiosocket is μ-law",
+                    audiosocket_format=as_fmt,
+                    deepgram_input_encoding=dg_in_enc,
+                    suggestion="Set audiosocket.format to 'slin16' or change deepgram.input_encoding to 'ulaw'",
+                )
+        except Exception:
+            logger.debug("Transport audit encountered an error", exc_info=True)
+
     async def on_provider_event(self, event: Dict[str, Any]):
         """Handle async events from the active provider (Deepgram/OpenAI/local).
 
@@ -1839,24 +3344,464 @@ class Engine:
                 logger.warning("Provider event for unknown call", event_type=etype, call_id=call_id)
                 return
 
-            # Downstream strategy: default to file playback; streaming path to be enabled later
+            # Provider announced its audio format before first audio chunk
+            if etype == "ProviderAudioFormat":
+                encoding = event.get("encoding")
+                if isinstance(encoding, bytes):
+                    try:
+                        encoding = encoding.decode("utf-8", "ignore")
+                    except Exception:
+                        encoding = None
+                if isinstance(encoding, str):
+                    encoding = encoding.lower().strip() or None
+                sr_val = event.get("sample_rate")
+                try:
+                    sample_rate = int(sr_val) if sr_val is not None else None
+                except (TypeError, ValueError):
+                    sample_rate = None
+
+                # Persist as the stream's expected source format so streaming manager can align
+                fmt_entry = self._provider_stream_formats.get(call_id, {}).copy()
+                if encoding is not None:
+                    fmt_entry["encoding"] = encoding
+                if sample_rate is not None:
+                    fmt_entry["sample_rate"] = sample_rate
+                if fmt_entry:
+                    self._provider_stream_formats[call_id] = fmt_entry
+
+                # Update transport profile early (source="provider") for downstream alignment
+                try:
+                    await self._update_transport_profile(session, fmt=encoding, sample_rate=sample_rate, source="provider")
+                except Exception:
+                    logger.debug("ProviderAudioFormat profile update failed", call_id=call_id, exc_info=True)
+
+                logger.info("Provider audio format announced", call_id=call_id, encoding=encoding, sample_rate=sample_rate)
+                return
+
+            # Downstream strategy: stream provider audio in near-real time via StreamingPlaybackManager
             if etype == "AgentAudio":
                 chunk: bytes = event.get("data") or b""
-                if chunk:
-                    session.agent_audio_buffer.extend(chunk)
-                    session.last_agent_audio_ts = time.time()
-                    await self._save_session(session)
-            elif etype == "AgentAudioDone":
-                if session.agent_audio_buffer:
-                    audio = bytes(session.agent_audio_buffer)
-                    session.agent_audio_buffer = bytearray()
-                    await self._save_session(session)
-                    # Play the accumulated response
-                    playback_id = await self.playback_manager.play_audio(call_id, audio, "streaming-response")
-                    if not playback_id:
-                        logger.error("Failed to play provider audio", call_id=call_id, size=len(audio))
+                if not chunk:
+                    return
+                encoding = event.get("encoding")
+                if isinstance(encoding, bytes):
+                    try:
+                        encoding = encoding.decode("utf-8", "ignore")
+                    except Exception:
+                        encoding = None
+                if isinstance(encoding, str):
+                    encoding = encoding.lower().strip()
+                    if not encoding:
+                        encoding = None
+                sample_rate_val = event.get("sample_rate")
+                sample_rate_int: Optional[int]
+                try:
+                    sample_rate_int = int(sample_rate_val) if sample_rate_val is not None else None
+                except (TypeError, ValueError):
+                    sample_rate_int = None
+                # Persist latest provider format hints per call
+                fmt_entry = self._provider_stream_formats.get(call_id, {}).copy()
+                if encoding is not None:
+                    fmt_entry["encoding"] = encoding
+                if sample_rate_int is not None:
+                    fmt_entry["sample_rate"] = sample_rate_int
+                if fmt_entry:
+                    self._provider_stream_formats[call_id] = fmt_entry
+                try:
+                    diag_encoding = fmt_entry.get("encoding") or encoding or session.transport_profile.format
+                    diag_rate = int(fmt_entry.get("sample_rate") or sample_rate_int or session.transport_profile.sample_rate)
+                    self._update_audio_diagnostics(session, "provider_out", chunk, diag_encoding, diag_rate)
+                except Exception:
+                    logger.debug("Provider audio diagnostics update failed", call_id=call_id, exc_info=True)
+                try:
+                    self.audio_capture.append_encoded(
+                        call_id,
+                        "agent_from_provider",
+                        chunk,
+                        diag_encoding,
+                        diag_rate,
+                    )
+                except Exception:
+                    logger.debug("Provider audio capture failed", call_id=call_id, exc_info=True)
+                # Log provider AgentAudio chunk metrics for RCA
+                try:
+                    rate = int(sample_rate_int or diag_rate or 0) if (locals().get('diag_rate') is not None) else int(sample_rate_int or 0)
+                except Exception:
+                    rate = 0
+                try:
+                    enc = (encoding or diag_encoding or "").lower() if (locals().get('diag_encoding') is not None) else (encoding or "")
+                except Exception:
+                    enc = encoding or ""
+                bps = 2 if enc in ("linear16", "pcm16", "slin", "slin16") else 1
+                duration_ms = 0.0
+                try:
+                    if rate and bps:
+                        duration_ms = round((len(chunk) / float(bps * rate)) * 1000.0, 3)
+                except Exception:
+                    duration_ms = 0.0
+                seq = self._provider_chunk_seq.get(call_id, 0) + 1
+                self._provider_chunk_seq[call_id] = seq
+                try:
+                    logger.info(
+                        "PROVIDER CHUNK",
+                        call_id=call_id,
+                        seq=seq,
+                        size_bytes=len(chunk),
+                        encoding=enc,
+                        sample_rate_hz=rate,
+                        approx_duration_ms=duration_ms,
+                    )
+                except Exception:
+                    pass
+                # Use streaming config rate for provider audio, not transport_profile which can be
+                # corrupted by inbound audio detection (user's 8kHz vs provider's 16kHz)
+                wire_rate = getattr(self.config.streaming, "sample_rate", 16000) or rate or 16000
+                try:
+                    transport_encoding = self._canonicalize_encoding(session.transport_profile.format)
+                except Exception:
+                    transport_encoding = ""
+                out_chunk = chunk
+                if enc in ("linear16", "pcm16", "slin", "slin16") and rate and wire_rate and rate != wire_rate:
+                    try:
+                        out_chunk, _ = audioop.ratecv(chunk, 2, 1, rate, wire_rate, None)
+                        seq = self._provider_chunk_seq.get(call_id, 0) + 1
+                        self._provider_chunk_seq[call_id] = seq
+                        logger.info(
+                            "PROVIDER CHUNK",
+                            call_id=call_id,
+                            seq=seq,
+                            size_bytes=len(chunk),
+                            encoding=enc,
+                            sample_rate_hz=rate,
+                            approx_duration_ms=duration_ms,
+                        )
+                    except Exception:
+                        logger.debug("Provider chunk resample failed; passing original", call_id=call_id, exc_info=True)
+                # Do not slice μ-law in engine; StreamingPlaybackManager handles segmentation/pacing
+
+                # Coalescing settings
+                coalesce_enabled = bool(getattr(getattr(self.config, 'streaming', {}), 'coalesce_enabled', False))
+                try:
+                    coalesce_min_ms = int(getattr(self.config.streaming, 'coalesce_min_ms', 600))
+                except Exception:
+                    coalesce_min_ms = 600
+                try:
+                    micro_fallback_ms = int(getattr(self.config.streaming, 'micro_fallback_ms', 300))
+                except Exception:
+                    micro_fallback_ms = 300
+
+                q = self._provider_stream_queues.get(call_id)
+                # In continuous-stream mode, ensure per-segment gating is active
+                try:
+                    if getattr(self.streaming_playback_manager, 'continuous_stream', False):
+                        if call_id not in self._segment_tts_active:
+                            await self.streaming_playback_manager.start_segment_gating(call_id)
+                            self._segment_tts_active.add(call_id)
+                except Exception:
+                    logger.debug("Failed to start segment gating", call_id=call_id, exc_info=True)
+                if coalesce_enabled and q is None and not isinstance(out_chunk, list):
+                    buf = self._provider_coalesce_buf.setdefault(call_id, bytearray())
+                    buf.extend(out_chunk)
+                    try:
+                        # Respect μ-law 1 byte/sample vs PCM16 2 bytes/sample
+                        fmt = self._canonicalize_encoding(session.transport_profile.format)
+                        bps = 1 if fmt == "mulaw" or fmt == "ulaw" else 2
+                        buf_ms = round((len(buf) / float(max(1, bps * max(1, wire_rate)))) * 1000.0, 3)
+                    except Exception:
+                        buf_ms = 0.0
+                    logger.info("PROVIDER COALESCE BUFFER", call_id=call_id, buf_ms=buf_ms, bytes=len(buf))
+                    if buf_ms < coalesce_min_ms:
+                        # Keep buffering until threshold
+                        return
+                    # Start streaming now with coalesced buffer
+                    try:
+                        q = asyncio.Queue(maxsize=256)
+                        self._provider_stream_queues[call_id] = q
+                        playback_type = "greeting" if getattr(session, "conversation_state", "") == "greeting" else "streaming-response"
+                        fmt_info = self._provider_stream_formats.get(call_id, {})
+                        provider_name = getattr(session, "provider_name", None) or self.config.default_provider
+                        alignment_issues = self.provider_alignment_issues.get(provider_name, [])
+                        if alignment_issues and call_id not in self._runtime_alignment_logged:
+                            for detail in alignment_issues:
+                                logger.warning("Provider codec/sample alignment issue persists during streaming", call_id=call_id, provider=provider_name, detail=detail)
+                            self._runtime_alignment_logged.add(call_id)
+                        target_encoding, target_sample_rate, remediation = self._resolve_stream_targets(session, session.provider_name)
+                        if target_sample_rate <= 0:
+                            target_sample_rate = session.transport_profile.sample_rate
+                        if remediation:
+                            session.audio_diagnostics["codec_remediation"] = remediation
+                        
+                        # Get source sample rate with fallback to provider's configured output rate
+                        source_sample_rate = fmt_info.get("sample_rate")
+                        if not source_sample_rate:
+                            # Fallback: use provider's configured output rate (prevents 8kHz default)
+                            try:
+                                provider = session.provider
+                                if hasattr(provider, '_dg_output_rate'):
+                                    source_sample_rate = provider._dg_output_rate
+                                    logger.debug(
+                                        "Using provider configured output rate as source_sample_rate fallback",
+                                        call_id=call_id,
+                                        rate=source_sample_rate,
+                                        reason="fmt_info empty"
+                                    )
+                            except Exception:
+                                pass
+                        # Final fallback to streaming config
+                        if not source_sample_rate:
+                            source_sample_rate = self.config.streaming.sample_rate
+                        
+                        # DOWNSTREAM_MODE GATING: Check if streaming playback is allowed
+                        # downstream_mode="file" forces file-based playback (useful for debugging/testing)
+                        # downstream_mode="stream" allows streaming playback (default for full agents)
+                        use_streaming = self.config.downstream_mode != "file"
+                        
+                        if use_streaming:
+                            await self.streaming_playback_manager.start_streaming_playback(
+                                call_id,
+                                q,
+                                playback_type=playback_type,
+                                source_encoding=fmt_info.get("encoding"),
+                                source_sample_rate=source_sample_rate,
+                                target_encoding=target_encoding,
+                                target_sample_rate=target_sample_rate,
+                            )
+                        else:
+                            # downstream_mode="file" - use file playback instead of streaming
+                            logger.info("Using file playback (downstream_mode=file)", call_id=call_id)
+                            try:
+                                playback_id = await self.playback_manager.play_audio(call_id, bytes(buf), "streaming-response")
+                                logger.info("File playback started (forced by downstream_mode)", 
+                                           call_id=call_id, playback_id=playback_id, buf_ms=buf_ms)
+                            except Exception:
+                                logger.error("File playback failed (downstream_mode=file)", call_id=call_id, exc_info=True)
+                            self._provider_coalesce_buf.pop(call_id, None)
+                            return
+                        self._emit_transport_card(
+                            call_id,
+                            session,
+                            source_encoding=fmt_info.get("encoding") or encoding,
+                            source_sample_rate=source_sample_rate,
+                            target_encoding=target_encoding,
+                            target_sample_rate=target_sample_rate,
+                        )
+                        logger.info("COALESCE START", call_id=call_id, coalesced_ms=buf_ms, coalesced_bytes=len(buf))
+                        try:
+                            q.put_nowait(bytes(buf))
+                        except asyncio.QueueFull:
+                            logger.debug("Coalesced enqueue dropped (queue full)", call_id=call_id)
+                        self._provider_coalesce_buf.pop(call_id, None)
+                    except Exception:
+                        logger.error("Coalesced start_streaming_playback failed", call_id=call_id, exc_info=True)
+                        # Fallback: play coalesced buffer via file
+                        try:
+                            playback_id = await self.playback_manager.play_audio(call_id, bytes(buf), "streaming-response")
+                            logger.info("MICRO SEGMENT FILE FALLBACK (start)", call_id=call_id, buf_ms=buf_ms, playback_id=playback_id)
+                        except Exception:
+                            logger.error("File fallback failed after coalesce start error", call_id=call_id, exc_info=True)
+                        self._provider_coalesce_buf.pop(call_id, None)
+                        return
                 else:
-                    logger.debug("AgentAudioDone with empty buffer", call_id=call_id)
+                    # Normal path: ensure stream and enqueue
+                    if q is None:
+                        # No existing queue - create new one
+                        q = asyncio.Queue(maxsize=256)
+                        self._provider_stream_queues[call_id] = q
+                        try:
+                            playback_type = "greeting" if getattr(session, "conversation_state", "") == "greeting" else "streaming-response"
+                            fmt_info = self._provider_stream_formats.get(call_id, {})
+                            provider_name = getattr(session, "provider_name", None) or self.config.default_provider
+                            alignment_issues = self.provider_alignment_issues.get(provider_name, [])
+                            if alignment_issues and call_id not in self._runtime_alignment_logged:
+                                for detail in alignment_issues:
+                                    logger.warning("Provider codec/sample alignment issue persists during streaming", call_id=call_id, provider=provider_name, detail=detail)
+                                self._runtime_alignment_logged.add(call_id)
+                            target_encoding, target_sample_rate, remediation = self._resolve_stream_targets(session, session.provider_name)
+                            if target_sample_rate <= 0:
+                                target_sample_rate = session.transport_profile.sample_rate
+                            if remediation:
+                                session.audio_diagnostics["codec_remediation"] = remediation
+                            src_encoding = fmt_info.get("encoding") or encoding
+                            src_rate = fmt_info.get("sample_rate") or sample_rate_int or getattr(session.provider, "_dg_output_rate", None)
+                            
+                            # DOWNSTREAM_MODE GATING: Check if streaming playback is allowed
+                            use_streaming = self.config.downstream_mode != "file"
+                            
+                            if use_streaming:
+                                await self.streaming_playback_manager.start_streaming_playback(
+                                    call_id,
+                                    q,
+                                    playback_type=playback_type,
+                                    source_encoding=src_encoding,
+                                    source_sample_rate=src_rate,
+                                    target_encoding=target_encoding,
+                                    target_sample_rate=target_sample_rate,
+                                )
+                            else:
+                                # downstream_mode="file" - use file playback instead of streaming
+                                logger.info("Using file playback (downstream_mode=file)", call_id=call_id)
+                                try:
+                                    playback_id = await self.playback_manager.play_audio(call_id, out_chunk, "streaming-response")
+                                    if playback_id:
+                                        logger.info("File playback started (forced by downstream_mode)", 
+                                                   call_id=call_id, playback_id=playback_id)
+                                    else:
+                                        logger.error("File playback failed (downstream_mode=file)", call_id=call_id)
+                                except Exception:
+                                    logger.error("File playback exception (downstream_mode=file)", call_id=call_id, exc_info=True)
+                                return
+                            self._emit_transport_card(
+                                call_id,
+                                session,
+                                source_encoding=src_encoding,
+                                source_sample_rate=src_rate,
+                                target_encoding=target_encoding,
+                                target_sample_rate=target_sample_rate,
+                            )
+                            logger.info("Streaming playback started", call_id=call_id)
+                        except Exception:
+                            logger.error("Failed to start streaming playback", call_id=call_id, exc_info=True)
+                            try:
+                                playback_id = await self.playback_manager.play_audio(call_id, out_chunk, "streaming-response")
+                                if not playback_id:
+                                    logger.error("Fallback file playback failed", call_id=call_id, size=len(out_chunk))
+                            except Exception:
+                                logger.error("Fallback file playback exception", call_id=call_id, exc_info=True)
+                            return
+                    try:
+                        # Track provider bytes
+                        self._provider_bytes[call_id] = int(self._provider_bytes.get(call_id, 0)) + (len(chunk) if isinstance(chunk, (bytes, bytearray)) else sum(len(f) for f in (out_chunk if isinstance(out_chunk, list) else [out_chunk])))
+                        if isinstance(out_chunk, list):
+                            for frame in out_chunk:
+                                q.put_nowait(frame)
+                                self._enqueued_bytes[call_id] = int(self._enqueued_bytes.get(call_id, 0)) + len(frame)
+                        else:
+                            q.put_nowait(out_chunk)
+                            self._enqueued_bytes[call_id] = int(self._enqueued_bytes.get(call_id, 0)) + len(out_chunk)
+                    except asyncio.QueueFull:
+                        logger.debug("Provider streaming queue full; dropping chunk", call_id=call_id)
+            elif etype == "AgentAudioDone":
+                continuous = bool(getattr(self.streaming_playback_manager, 'continuous_stream', False))
+                q = self._provider_stream_queues.get(call_id)
+                if continuous:
+                    # Do NOT end the stream; mark boundary and end per-segment gating
+                    try:
+                        await self.streaming_playback_manager.mark_segment_boundary(call_id)
+                    except Exception:
+                        logger.debug("Failed to mark segment boundary", call_id=call_id, exc_info=True)
+                    try:
+                        await self.streaming_playback_manager.end_segment_gating(call_id)
+                    except Exception:
+                        logger.debug("Failed to end segment gating", call_id=call_id, exc_info=True)
+                    # CRITICAL FIX #1: Do NOT discard call_id for continuous streams
+                    # Discarding causes subsequent chunks to re-trigger gating, interrupting playback
+                    # For OpenAI greeting: 20+ interruptions in 86s call (gating every 3-5s)
+                    # Keep call_id in set so subsequent chunks don't re-gate
+                    # try:
+                    #     self._segment_tts_active.discard(call_id)
+                    # except Exception:
+                    #     pass
+                else:
+                    if q is not None:
+                        # Signal end of stream (per-segment mode)
+                        try:
+                            q.put_nowait(None)  # sentinel for StreamingPlaybackManager
+                        except asyncio.QueueFull:
+                            asyncio.create_task(q.put(None))
+                        # Clear queue reference so next chunk creates new queue/stream
+                        self._provider_stream_queues.pop(call_id, None)
+                    else:
+                        logger.debug("AgentAudioDone with no active stream queue", call_id=call_id)
+                    self._provider_stream_formats.pop(call_id, None)
+                # Log provider segment wall duration
+                try:
+                    start_ts = self._provider_segment_start_ts.pop(call_id, None)
+                    if start_ts is not None:
+                        wall = max(0.0, time.time() - float(start_ts))
+                        logger.info(
+                            "PROVIDER SEGMENT END",
+                            call_id=call_id,
+                            segment_wall_seconds=round(wall, 3),
+                        )
+                    # Segment byte accounting summary
+                    prov = int(self._provider_bytes.pop(call_id, 0))
+                    enq = int(self._enqueued_bytes.pop(call_id, 0))
+                    try:
+                        ratio = 0.0 if prov <= 0 else (enq / float(prov))
+                    except Exception:
+                        ratio = 0.0
+                    logger.info("PROVIDER SEGMENT BYTES",
+                                call_id=call_id,
+                                provider_bytes=prov,
+                                enqueued_bytes=enq,
+                                enqueued_ratio=round(ratio, 3))
+                    try:
+                        if hasattr(self, 'streaming_playback_manager') and self.streaming_playback_manager:
+                            self.streaming_playback_manager.record_provider_bytes(call_id, int(prov))
+                    except Exception:
+                        logger.debug("Failed to propagate provider_bytes to streaming manager",
+                                     call_id=call_id, exc_info=True)
+                    # Reset chunk sequence at segment end
+                    self._provider_chunk_seq.pop(call_id, None)
+                except Exception:
+                    pass
+                # Experimental: if coalescing buffer exists but stream never started, play or stream it now
+                try:
+                    coalesce_enabled = bool(getattr(getattr(self.config, 'streaming', {}), 'coalesce_enabled', False))
+                except Exception:
+                    coalesce_enabled = False
+                if coalesce_enabled and call_id in self._provider_coalesce_buf:
+                    buf = self._provider_coalesce_buf.pop(call_id, bytearray())
+                    try:
+                        wire_rate = int(getattr(self.config.streaming, 'sample_rate', 16000))
+                    except Exception:
+                        wire_rate = 16000
+                    try:
+                        buf_ms = round((len(buf) / float(2 * max(1, wire_rate))) * 1000.0, 3)
+                    except Exception:
+                        buf_ms = 0.0
+                    micro_fallback_ms = int(getattr(self.config.streaming, 'micro_fallback_ms', 300)) if hasattr(self.config, 'streaming') else 300
+                    if buf and buf_ms < micro_fallback_ms:
+                        try:
+                            playback_id = await self.playback_manager.play_audio(call_id, bytes(buf), "streaming-response")
+                            logger.info("MICRO SEGMENT FILE FALLBACK (end)", call_id=call_id, buf_ms=buf_ms, playback_id=playback_id)
+                        except Exception:
+                            logger.error("File fallback failed at segment end", call_id=call_id, exc_info=True)
+                    elif buf:
+                        # Stream coalesced buffer now as a short segment
+                        try:
+                            q2 = asyncio.Queue(maxsize=256)
+                            self._provider_stream_queues[call_id] = q2
+                            playback_type = "streaming-response"
+                            fmt_info = self._provider_stream_formats.get(call_id, {})
+                            target_encoding, target_sample_rate, remediation = self._resolve_stream_targets(session, session.provider_name)
+                            if target_sample_rate <= 0:
+                                target_sample_rate = session.transport_profile.sample_rate
+                            await self.streaming_playback_manager.start_streaming_playback(
+                                call_id,
+                                q2,
+                                playback_type=playback_type,
+                                source_encoding=fmt_info.get("encoding"),
+                                source_sample_rate=fmt_info.get("sample_rate"),
+                                target_encoding=target_encoding,
+                                target_sample_rate=target_sample_rate,
+                            )
+                            self._emit_transport_card(
+                                call_id,
+                                session,
+                                source_encoding=fmt_info.get("encoding"),
+                                source_sample_rate=fmt_info.get("sample_rate"),
+                                target_encoding=target_encoding,
+                                target_sample_rate=target_sample_rate,
+                            )
+                            logger.info("COALESCE START (end)", call_id=call_id, coalesced_ms=buf_ms, coalesced_bytes=len(buf))
+                            try:
+                                q2.put_nowait(bytes(buf))
+                                q2.put_nowait(None)
+                            except asyncio.QueueFull:
+                                logger.debug("Coalesced enqueue dropped at end (queue full)", call_id=call_id)
+                        except Exception:
+                            logger.error("Coalesced streaming failed at segment end", call_id=call_id, exc_info=True)
             else:
                 # Log control/JSON events at debug for now
                 logger.debug("Provider control event", provider_event=event)
@@ -1881,8 +3826,14 @@ class Engine:
             else:
                 # Treat as PCM16 8 kHz
                 pcm8k = audio_bytes
-            pcm16k, _ = audioop.ratecv(pcm8k, 2, 1, 8000, 16000, None)
-            return pcm16k
+            try:
+                # Use pipeline16k resample state under synthetic key 'pipeline'
+                state = self._resample_state_pipeline16k.get('pipeline')
+                pcm16, state = audioop.ratecv(pcm8k, 2, 1, 8000, 16000, state)
+                self._resample_state_pipeline16k['pipeline'] = state
+            except Exception:
+                pcm16 = pcm8k
+            return pcm16
         except Exception:
             logger.debug("AudioSocket -> PCM16 16k conversion failed", exc_info=True)
             return audio_bytes
@@ -1921,6 +3872,62 @@ class Engine:
             if not pipeline:
                 logger.debug("Pipeline runner: no pipeline resolved", call_id=call_id)
                 return
+            # Inject context prompt into LLM options with fallback chain
+            # Fallback chain: AI_CONTEXT → pipeline default → global llm_config
+            llm_options = pipeline.llm_options or {}
+            prompt_source = "pipeline_default"
+            try:
+                # Priority 1: Check if context has a custom prompt
+                # Use session.context_name (persisted string) instead of transport_profile.context (object may not persist)
+                context_prompt_injected = False
+                context_name = getattr(session, 'context_name', None)
+                if context_name:
+                    context_config = self.transport_orchestrator.get_context_config(context_name)
+                    if context_config and context_config.prompt:
+                            # Create a copy to avoid mutating the pipeline's original options
+                            llm_options = dict(llm_options)
+                            llm_options['system_prompt'] = context_config.prompt
+                            prompt_source = "context_injection"
+                            context_prompt_injected = True
+                            logger.info(
+                                "Pipeline LLM prompt resolved from context",
+                                call_id=call_id,
+                                context=context_name,
+                                prompt_length=len(context_config.prompt),
+                                prompt_preview=context_config.prompt[:80] + "..." if len(context_config.prompt) > 80 else context_config.prompt,
+                            )
+                
+                # Priority 2: If no context prompt, check if pipeline has default or use global
+                if not context_prompt_injected:
+                    # Check if system_prompt already in llm_options (pipeline default)
+                    if llm_options.get('system_prompt'):
+                        prompt_source = "pipeline_default"
+                        logger.info(
+                            "Pipeline LLM prompt using pipeline default",
+                            call_id=call_id,
+                            prompt_length=len(llm_options['system_prompt']),
+                        )
+                    else:
+                        # Priority 3: Fall back to global llm_config
+                        global_prompt = getattr(self.config.llm, 'prompt', None)
+                        if global_prompt:
+                            llm_options = dict(llm_options)
+                            llm_options['system_prompt'] = global_prompt
+                            prompt_source = "global_llm_config"
+                            logger.info(
+                                "Pipeline LLM prompt resolved from global config",
+                                call_id=call_id,
+                                prompt_length=len(global_prompt),
+                            )
+            except Exception as exc:
+                logger.error(
+                    "Failed to inject context prompt into pipeline LLM options",
+                    call_id=call_id,
+                    error=str(exc),
+                    exc_info=True,
+                )
+                prompt_source = "error"
+            
             # Open per-call state for adapters (best-effort)
             try:
                 await pipeline.stt_adapter.open_call(call_id, pipeline.stt_options)
@@ -1929,7 +3936,7 @@ class Engine:
             else:
                 logger.info("Pipeline STT adapter session opened", call_id=call_id)
             try:
-                await pipeline.llm_adapter.open_call(call_id, pipeline.llm_options)
+                await pipeline.llm_adapter.open_call(call_id, llm_options)
             except Exception:
                 logger.debug("LLM open_call failed", call_id=call_id, exc_info=True)
             else:
@@ -1942,11 +3949,52 @@ class Engine:
                 logger.info("Pipeline TTS adapter session opened", call_id=call_id)
 
             # Pipeline-managed initial greeting (optional)
+            # Fallback chain: AI_CONTEXT → global llm_config → empty
             greeting = ""
+            greeting_source = "none"
             try:
-                greeting = (getattr(self.config.llm, "initial_greeting", None) or "").strip()
-            except Exception:
+                # Priority 1: Check if context has a custom greeting
+                # Use session.context_name (persisted string) instead of transport_profile.context
+                context_name = getattr(session, 'context_name', None)
+                if context_name:
+                    context_config = self.transport_orchestrator.get_context_config(context_name)
+                    if context_config and context_config.greeting:
+                        greeting = context_config.greeting.strip()
+                        greeting_source = "context_injection"
+                        logger.info(
+                            "Pipeline greeting resolved from context",
+                            call_id=call_id,
+                            context=context_name,
+                            greeting_length=len(greeting),
+                        )
+                
+                # Priority 2: Fall back to global config greeting
+                if not greeting:
+                    global_greeting = (getattr(self.config.llm, "initial_greeting", None) or "").strip()
+                    if global_greeting:
+                        greeting = global_greeting
+                        greeting_source = "global_llm_config"
+                        logger.info(
+                            "Pipeline greeting resolved from global config",
+                            call_id=call_id,
+                            greeting_length=len(greeting),
+                        )
+                
+                # Log if no greeting found
+                if not greeting:
+                    logger.info(
+                        "Pipeline greeting not configured (no greeting will be played)",
+                        call_id=call_id,
+                    )
+            except Exception as exc:
+                logger.error(
+                    "Pipeline greeting resolution failed",
+                    call_id=call_id,
+                    error=str(exc),
+                    exc_info=True,
+                )
                 greeting = ""
+                greeting_source = "error"
             if greeting:
                 max_attempts = 2
                 for attempt in range(1, max_attempts + 1):
@@ -2084,6 +4132,11 @@ class Engine:
                     transcript = (transcript or "").strip()
                     if not transcript:
                         return
+                    # Record time when a final transcript is obtained
+                    try:
+                        self._last_transcript_ts[call_id] = time.time()
+                    except Exception:
+                        pass
                     try:
                         transcript_queue.put_nowait(transcript)
                     except asyncio.QueueFull:
@@ -2158,25 +4211,13 @@ class Engine:
                                 )
                     except asyncio.CancelledError:
                         pass
-                    finally:
-                        if local_buf:
-                            try:
-                                await pipeline.stt_adapter.send_audio(
-                                    call_id,
-                                    bytes(local_buf),
-                                    fmt=stream_format,
-                                )
-                            except Exception:
-                                logger.debug(
-                                    "Streaming STT residual send failed",
-                                    call_id=call_id,
-                                    exc_info=True,
-                                )
 
                 async def stt_receiver() -> None:
                     try:
                         async for final in pipeline.stt_adapter.iter_results(call_id):
                             try:
+                                # Record time when a final transcript arrives
+                                self._last_transcript_ts[call_id] = time.time()
                                 transcript_queue.put_nowait(final)
                             except asyncio.QueueFull:
                                 try:
@@ -2215,12 +4256,28 @@ class Engine:
 
                 async def run_turn(transcript_text: str) -> None:
                     response_text = ""
+                    pipeline_label = getattr(session, 'pipeline_name', None) or 'none'
+                    provider_label = getattr(session, 'provider_name', None) or 'unknown'
+                    t_start = self._last_transcript_ts.get(call_id)
+                    
+                    # Build context with system prompt from llm_options (injected from AI_CONTEXT)
+                    context_messages = []
+                    system_prompt = llm_options.get('system_prompt')
+                    if system_prompt:
+                        context_messages.append({"role": "system", "content": system_prompt})
+                        logger.debug(
+                            "Pipeline LLM context with system prompt",
+                            call_id=call_id,
+                            system_prompt_length=len(system_prompt),
+                        )
+                    context_messages.append({"role": "user", "content": transcript_text})
+                    
                     try:
                         response_text = await pipeline.llm_adapter.generate(
                             call_id,
                             transcript_text,
-                            {"messages": [{"role": "user", "content": transcript_text}]},
-                            pipeline.llm_options,
+                            {"messages": context_messages},  # Include system prompt in messages
+                            llm_options,  # Use context-injected options
                         )
                     except Exception:
                         logger.debug("LLM generate failed", call_id=call_id, exc_info=True)
@@ -2229,6 +4286,7 @@ class Engine:
                     if not response_text:
                         return
                     tts_bytes = bytearray()
+                    first_tts_ts: Optional[float] = None
                     try:
                         async for tts_chunk in pipeline.tts_adapter.synthesize(
                             call_id,
@@ -2236,6 +4294,13 @@ class Engine:
                             pipeline.tts_options,
                         ):
                             if tts_chunk:
+                                if first_tts_ts is None:
+                                    first_tts_ts = time.time()
+                                    try:
+                                        if t_start is not None:
+                                            _TURN_STT_TO_TTS.labels(pipeline_label, provider_label).observe(max(0.0, first_tts_ts - t_start))
+                                    except Exception:
+                                        pass
                                 tts_bytes.extend(tts_chunk)
                     except Exception:
                         logger.debug("TTS synth failed", call_id=call_id, exc_info=True)
@@ -2248,6 +4313,11 @@ class Engine:
                             bytes(tts_bytes),
                             "pipeline-tts",
                         )
+                        try:
+                            if playback_id and t_start is not None:
+                                _TURN_RESPONSE_SECONDS.labels(pipeline_label, provider_label).observe(max(0.0, time.time() - t_start))
+                        except Exception:
+                            pass
                         if not playback_id:
                             logger.error(
                                 "Pipeline playback failed",
@@ -2379,6 +4449,884 @@ class Engine:
         except Exception:
             logger.error("Pipeline runner crashed", call_id=call_id, exc_info=True)
 
+    async def _hydrate_transport_from_dialplan(self, session: CallSession, channel_id: str) -> None:
+        """Load transport hints (format/rate) provided by the dialplan via channel vars."""
+        fmt_token: Optional[str] = None
+        rate_value: Optional[int] = None
+
+        # Fetch AI_TRANSPORT_FORMAT (e.g., ulaw, slin16)
+        try:
+            resp = await self.ari_client.send_command(
+                "GET",
+                f"channels/{channel_id}/variable",
+                params={"variable": "AI_TRANSPORT_FORMAT"},
+            )
+            if isinstance(resp, dict):
+                value = (resp.get("value") or "").strip()
+                if value:
+                    fmt_token = value
+        except Exception:
+            logger.debug(
+                "Dialplan transport format fetch failed",
+                call_id=channel_id,
+                exc_info=True,
+            )
+
+        # Fetch AI_TRANSPORT_RATE (integer Hz)
+        try:
+            resp = await self.ari_client.send_command(
+                "GET",
+                f"channels/{channel_id}/variable",
+                params={"variable": "AI_TRANSPORT_RATE"},
+            )
+            if isinstance(resp, dict):
+                raw = (resp.get("value") or "").strip()
+                if raw:
+                    rate_value = int(float(raw))
+        except Exception:
+            logger.debug(
+                "Dialplan transport rate fetch failed",
+                call_id=channel_id,
+                exc_info=True,
+            )
+
+        if fmt_token is None and rate_value is None:
+            return
+
+        canonical_fmt: Optional[str] = None
+        if fmt_token is not None:
+            canonical_fmt = self._canonicalize_encoding(fmt_token)
+            if canonical_fmt:
+                session.caller_audio_format = canonical_fmt
+
+        if rate_value is not None and rate_value > 0:
+            session.caller_sample_rate = rate_value
+        else:
+            rate_value = None
+
+        await self._update_transport_profile(
+            session,
+            fmt=canonical_fmt,
+            sample_rate=rate_value,
+            source="dialplan",
+        )
+
+        try:
+            logger.info(
+                "Hydrated transport profile from dialplan",
+                call_id=session.call_id,
+                transport_format=canonical_fmt,
+                transport_rate=rate_value,
+            )
+        except Exception:
+            pass
+
+    async def _detect_caller_codec(self, session: CallSession, channel_id: str) -> None:
+        """Inspect the caller channel via ARI and record its audio format/sample-rate."""
+        preferred_fmt: Optional[str] = None
+        variables = (
+            "CHANNEL(audionativeformat)",
+            "CHANNEL(audioreadformat)",
+        )
+
+        for variable in variables:
+            try:
+                resp = await self.ari_client.send_command(
+                    "GET",
+                    f"channels/{channel_id}/variable",
+                    params={"variable": variable},
+                )
+            except Exception:
+                logger.debug("Codec variable fetch failed", call_id=channel_id, variable=variable, exc_info=True)
+                continue
+
+            if isinstance(resp, dict):
+                value = (resp.get("value") or "").strip()
+                if value:
+                    preferred_fmt = value
+                    break
+
+        canonical_fmt, sample_rate, reported = self._normalize_audio_format(preferred_fmt)
+
+        await self._update_transport_profile(
+            session,
+            fmt=canonical_fmt,
+            sample_rate=sample_rate,
+            source="detected",
+        )
+
+        try:
+            logger.info(
+                "Detected caller codec",
+                call_id=session.call_id,
+                reported_format=reported,
+                normalized_format=canonical_fmt,
+                sample_rate=sample_rate,
+            )
+        except Exception:
+            pass
+
+    @staticmethod
+    def _normalize_audio_format(raw_format: Optional[str]) -> Tuple[str, int, str]:
+        """Map assorted codec tokens to canonical AudioSocket format + sample rate."""
+        reported = (raw_format or "").strip()
+        token = reported.lower()
+
+        alias_map = {
+            "mulaw": "ulaw",
+            "mu-law": "ulaw",
+            "g711_ulaw": "ulaw",
+            "g711ulaw": "ulaw",
+            "g711-ula": "ulaw",
+            "g711_alaw": "alaw",
+            "g711alaw": "alaw",
+            "slin": "slin16",
+            "slin12": "slin16",
+            "slin16": "slin16",
+            "linear16": "slin16",
+            "pcm16": "slin16",
+            "g722": "slin16",
+        }
+
+        canonical = alias_map.get(token, token if token else "ulaw")
+
+        # We only stream μ-law or PCM16 internally; fall back to μ-law for others (e.g. alaw).
+        if canonical not in {"ulaw", "slin16"}:
+            canonical = "ulaw"
+
+        sample_map = {
+            "ulaw": 8000,
+            "slin16": 16000,
+        }
+        sample_rate = sample_map.get(canonical, 8000)
+
+        # If the original token hinted at 8 kHz PCM, honor it.
+        if canonical == "slin16" and token in {"slin", "slin8"}:
+            sample_rate = 8000
+
+        return canonical, sample_rate, reported
+
+    async def _resolve_audio_profile(self, session: CallSession, channel_id: str) -> None:
+        """
+        P1: Resolve audio profile using TransportOrchestrator.
+        
+        Reads channel variables (AI_PROVIDER, AI_AUDIO_PROFILE, AI_CONTEXT),
+        negotiates with provider capabilities, and applies resolved transport to session.
+        """
+        # Read channel variables
+        channel_vars = {}
+        for var_name in ['AI_PROVIDER', 'AI_AUDIO_PROFILE', 'AI_CONTEXT']:
+            try:
+                resp = await self.ari_client.send_command(
+                    "GET",
+                    f"channels/{channel_id}/variable",
+                    params={"variable": var_name},
+                    tolerate_statuses=[404],  # 404 is expected when variable not set
+                )
+                if isinstance(resp, dict):
+                    value = (resp.get("value") or "").strip()
+                    if value:
+                        channel_vars[var_name] = value
+                        logger.debug(
+                            f"Channel variable {var_name} read",
+                            channel_id=channel_id,
+                            variable=var_name,
+                            value=value,
+                        )
+                    else:
+                        logger.info(
+                            f"Channel variable {var_name} not set (using defaults)",
+                            channel_id=channel_id,
+                            variable=var_name,
+                        )
+            except Exception as exc:
+                # 404 is expected when variable not set - log as info, not error
+                if "404" in str(exc) or "not found" in str(exc).lower():
+                    logger.info(
+                        f"Channel variable {var_name} not set (using defaults)",
+                        channel_id=channel_id,
+                        variable=var_name,
+                    )
+                else:
+                    logger.debug(
+                        f"Failed to read channel variable {var_name}",
+                        channel_id=channel_id,
+                        variable=var_name,
+                        error=str(exc),
+                        exc_info=True,
+                    )
+        
+        # CRITICAL: Store context_name FIRST, before any early returns
+        # This ensures pipeline mode gets the context even if provider lookup fails
+        session.context_name = channel_vars.get('AI_CONTEXT')
+        await self._save_session(session)
+        logger.debug(
+            "Stored context_name in session",
+            call_id=session.call_id,
+            context_name=session.context_name,
+        )
+        
+        # Get provider name (precedence: AI_PROVIDER > context > session.provider_name)
+        provider_name = channel_vars.get('AI_PROVIDER')
+        if not provider_name:
+            # Check if context specifies provider
+            context_name = channel_vars.get('AI_CONTEXT')
+            if context_name:
+                context_config = self.transport_orchestrator.get_context_config(context_name)
+                if context_config and context_config.provider:
+                    provider_name = context_config.provider
+        
+        if not provider_name:
+            provider_name = session.provider_name or self.config.default_provider
+        
+        # Get provider instance
+        provider = self.providers.get(provider_name)
+        if not provider:
+            logger.warning(
+                "Provider not found for audio profile resolution (pipeline mode will use context_name)",
+                call_id=session.call_id,
+                provider=provider_name,
+                available=list(self.providers.keys()),
+                context_name=session.context_name,
+            )
+            return
+        
+        # Get provider capabilities
+        provider_caps = None
+        try:
+            if hasattr(provider, 'get_capabilities'):
+                provider_caps = provider.get_capabilities()
+        except Exception as exc:
+            logger.debug(
+                "Failed to get provider capabilities",
+                call_id=session.call_id,
+                provider=provider_name,
+                error=str(exc),
+            )
+        
+        # Resolve transport profile
+        try:
+            transport = self.transport_orchestrator.resolve_transport(
+                provider_name=provider_name,
+                provider_caps=provider_caps,
+                channel_vars=channel_vars,
+            )
+            
+            # Store transport in session (keep as object, not dict, for legacy code compatibility)
+            session.transport_profile = transport
+            
+            # Note: context_name already stored earlier (before provider lookup)
+            # so pipeline mode gets it even if provider not found
+            
+            await self._save_session(session)
+            
+            # Apply to streaming manager
+            try:
+                self.streaming_playback_manager.audiosocket_format = transport.wire_encoding
+                self.streaming_playback_manager.sample_rate = transport.wire_sample_rate
+                if hasattr(self.streaming_playback_manager, 'chunk_size_ms'):
+                    self.streaming_playback_manager.chunk_size_ms = transport.chunk_ms
+                if hasattr(self.streaming_playback_manager, 'idle_cutoff_ms'):
+                    self.streaming_playback_manager.idle_cutoff_ms = transport.idle_cutoff_ms
+            except Exception as exc:
+                logger.warning(
+                    "Failed to apply transport to streaming manager",
+                    call_id=session.call_id,
+                    error=str(exc),
+                )
+            
+            # CRITICAL FIX: Apply wire format settings to provider's target config
+            # The provider needs to emit the same format/rate that AudioSocket expects
+            # BUT: P1 continuous_input providers (OpenAI Realtime, Deepgram Voice Agent)
+            # handle their own internal format needs and should NOT be overridden
+            try:
+                provider = self.providers.get(provider_name)
+                if provider and hasattr(provider, 'config'):
+                    # Check if this is a continuous_input provider (P1)
+                    is_continuous_input = False
+                    try:
+                        if provider_name in ("deepgram", "openai_realtime"):
+                            is_continuous_input = True
+                        else:
+                            pcfg = getattr(provider, 'config', None)
+                            if isinstance(pcfg, dict):
+                                is_continuous_input = bool(pcfg.get('continuous_input', False))
+                            else:
+                                is_continuous_input = bool(getattr(pcfg, 'continuous_input', False))
+                    except Exception:
+                        is_continuous_input = False
+                    
+                    if not is_continuous_input:
+                        # Only update target config for P2/hybrid providers
+                        # Wire format = what AudioSocket channel expects = what provider should emit
+                        provider.config.target_encoding = transport.wire_encoding
+                        provider.config.target_sample_rate_hz = transport.wire_sample_rate
+                        logger.info(
+                            "Applied wire format to provider target config",
+                            call_id=session.call_id,
+                            provider=provider_name,
+                            target_encoding=transport.wire_encoding,
+                            target_sample_rate_hz=transport.wire_sample_rate,
+                        )
+                    else:
+                        logger.debug(
+                            "Skipping wire format override for continuous_input provider",
+                            call_id=session.call_id,
+                            provider=provider_name,
+                            reason="P1 provider manages its own format needs"
+                        )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to apply transport settings to provider config",
+                    call_id=session.call_id,
+                    provider=provider_name,
+                    error=str(exc),
+                )
+            
+            # Get context config for prompt/greeting and apply to provider
+            context_config = None
+            logger.debug(
+                "DEBUG: Checking context config",
+                call_id=session.call_id,
+                transport_context=transport.context if hasattr(transport, 'context') else None,
+            )
+            if transport.context:
+                context_config = self.transport_orchestrator.get_context_config(transport.context)
+                logger.debug(
+                    "DEBUG: Context config loaded",
+                    call_id=session.call_id,
+                    context=transport.context,
+                    has_config=context_config is not None,
+                    has_greeting=context_config.greeting if context_config else None,
+                    has_prompt=context_config.prompt if context_config else None,
+                )
+                if context_config:
+                    # Inject context greeting/prompt into provider config NOW (not later)
+                    try:
+                        if isinstance(provider.config, dict):
+                            if context_config.greeting:
+                                provider.config['greeting'] = context_config.greeting
+                                logger.info(
+                                    "Applied context greeting to provider",
+                                    call_id=session.call_id,
+                                    context=transport.context,
+                                    greeting_preview=context_config.greeting[:50] + "...",
+                                )
+                            if context_config.prompt:
+                                provider.config['prompt'] = context_config.prompt
+                                logger.info(
+                                    "Applied context prompt to provider",
+                                    call_id=session.call_id,
+                                    context=transport.context,
+                                    prompt_length=len(context_config.prompt),
+                                )
+                        elif hasattr(provider.config, '__dict__'):
+                            if context_config.greeting and hasattr(provider.config, 'greeting'):
+                                setattr(provider.config, 'greeting', context_config.greeting)
+                                logger.info(
+                                    "Applied context greeting to provider",
+                                    call_id=session.call_id,
+                                    context=transport.context,
+                                    greeting_preview=context_config.greeting[:50] + "...",
+                                )
+                            if context_config.prompt:
+                                # Try 'prompt' field first, then 'instructions' (OpenAI uses this)
+                                if hasattr(provider.config, 'prompt'):
+                                    setattr(provider.config, 'prompt', context_config.prompt)
+                                    logger.info(
+                                        "Applied context prompt to provider",
+                                        call_id=session.call_id,
+                                        context=transport.context,
+                                        prompt_length=len(context_config.prompt),
+                                    )
+                                elif hasattr(provider.config, 'instructions'):
+                                    setattr(provider.config, 'instructions', context_config.prompt)
+                                    logger.info(
+                                        "Applied context prompt to provider (as instructions)",
+                                        call_id=session.call_id,
+                                        context=transport.context,
+                                        prompt_length=len(context_config.prompt),
+                                    )
+                                else:
+                                    logger.debug(
+                                        "Provider config does not support prompt or instructions field",
+                                        call_id=session.call_id,
+                                        provider=provider_name,
+                                        context=transport.context,
+                                    )
+                    except Exception as exc:
+                        logger.error(
+                            "Failed to apply context config to provider",
+                            call_id=session.call_id,
+                            context=transport.context,
+                            error=str(exc),
+                            exc_info=True,
+                        )
+            
+            # Note: TransportCard will be emitted by legacy code path
+            
+            logger.info(
+                "Audio profile resolved and applied",
+                call_id=session.call_id,
+                profile=transport.profile_name,
+                provider=provider_name,
+                context=transport.context,
+                wire_format=f"{transport.wire_encoding}@{transport.wire_sample_rate}Hz",
+            )
+            
+        except Exception as exc:
+            logger.error(
+                "Audio profile resolution failed",
+                call_id=session.call_id,
+                provider=provider_name,
+                error=str(exc),
+                exc_info=True,
+            )
+    
+    @staticmethod
+    def _canonicalize_encoding(value: Optional[str]) -> str:
+        """Normalize codec tokens to canonical engine values."""
+        if not value:
+            return ""
+        token = value.lower().strip()
+        mapping = {
+            "mu-law": "ulaw",
+            "mulaw": "ulaw",
+            "g711_ulaw": "ulaw",
+            "g711ulaw": "ulaw",
+            "g711-ula": "ulaw",
+            # Note: "slin" (8kHz PCM) and "slin16" (16kHz PCM) are distinct formats
+            "slin": "slin",
+            "slin12": "slin16",
+            "slin16": "slin16",
+        }
+        return mapping.get(token, token)
+
+    @staticmethod
+    def _should_force_mulaw(force_flag: bool, audiosocket_fmt: Optional[str]) -> bool:
+        """Gate egress μ-law forcing to transports that actually expect μ-law frames."""
+        if not force_flag:
+            return False
+        canonical = Engine._canonicalize_encoding(audiosocket_fmt)
+        if canonical in ("", "ulaw", "mulaw", "g711_ulaw", "mu-law"):
+            return True
+        try:
+            logger.info(
+                "Disabling egress_force_mulaw for non-μ-law AudioSocket transport",
+                audiosocket_format=audiosocket_fmt,
+            )
+        except Exception:
+            pass
+        return False
+
+    @staticmethod
+    def _infer_transport_from_frame(frame_len: int) -> Tuple[str, int]:
+        """Infer transport format/sample-rate from canonical frame lengths."""
+        mapping = {
+            160: ("ulaw", 8000),   # 20ms @8k μ-law
+            320: ("slin16", 8000), # 20ms @8k PCM16
+            640: ("slin16", 16000),# 20ms @16k PCM16
+            960: ("slin16", 24000),
+        }
+        fmt, rate = mapping.get(frame_len, ("slin16" if frame_len % 2 == 0 else "ulaw", 8000))
+        return fmt, rate
+
+    def _wire_to_pcm16(
+        self,
+        audio_bytes: bytes,
+        wire_fmt: str,
+        swap_needed: bool,
+        wire_rate: int,
+    ) -> Tuple[bytes, int]:
+        """Convert wire-format audio to PCM16 little-endian."""
+        canonical = self._canonicalize_encoding(wire_fmt) or "ulaw"
+        rate = wire_rate or 0
+        if rate <= 0:
+            try:
+                _, inferred_rate = self._infer_transport_from_frame(len(audio_bytes))
+            except Exception:
+                inferred_rate = 0
+            rate = inferred_rate or 8000
+        pcm = audio_bytes
+        try:
+            if canonical in ("ulaw", "mulaw", "g711_ulaw", "mu-law"):
+                pcm = audioop.ulaw2lin(audio_bytes, 2)
+                rate = 8000
+            else:
+                if swap_needed:
+                    pcm = audioop.byteswap(audio_bytes, 2)
+                else:
+                    pcm = audio_bytes
+        except Exception:
+            pcm = b""
+        return pcm or b"", rate
+
+    def _encode_for_provider(
+        self,
+        call_id: str,
+        provider_name: str,
+        provider,
+        pcm_bytes: bytes,
+        pcm_rate: int,
+    ) -> Tuple[bytes, str, int]:
+        """Encode PCM audio based on provider configuration expectations."""
+        if pcm_bytes is None:
+            pcm_bytes = b""
+        if pcm_rate <= 0:
+            pcm_rate = 8000
+
+        expected_enc = ""
+        expected_rate = pcm_rate
+        try:
+            provider_cfg = getattr(provider, "config", None)
+            if provider_cfg is not None:
+                expected_enc = self._canonicalize_encoding(getattr(provider_cfg, "input_encoding", None))
+                expected_rate = int(getattr(provider_cfg, "input_sample_rate_hz", pcm_rate) or pcm_rate)
+        except Exception:
+            expected_enc = ""
+            expected_rate = pcm_rate
+
+        # Prepare per-call/provider resample state holder
+        prov_states = self._resample_state_provider_in.setdefault(call_id, {})
+        state_key = f"{provider_name}:{expected_rate}"
+        if expected_enc in ("slin16", "linear16", "pcm16", ""):
+            if expected_rate <= 0:
+                expected_rate = pcm_rate
+            if pcm_rate != expected_rate and pcm_bytes:
+                try:
+                    state = prov_states.get(state_key)
+                    pcm_bytes, state = audioop.ratecv(pcm_bytes, 2, 1, pcm_rate, expected_rate, state)
+                    prov_states[state_key] = state
+                    pcm_rate = expected_rate
+                except Exception:
+                    pass
+            return pcm_bytes, "slin16", pcm_rate
+
+        if expected_enc in ("ulaw", "mulaw", "g711_ulaw", "mu-law"):
+            if expected_rate <= 0:
+                expected_rate = 8000
+            working = pcm_bytes
+            if pcm_rate != expected_rate and working:
+                try:
+                    state = prov_states.get(state_key)
+                    working, state = audioop.ratecv(working, 2, 1, pcm_rate, expected_rate, state)
+                    prov_states[state_key] = state
+                except Exception:
+                    working = pcm_bytes
+            try:
+                encoded = audioop.lin2ulaw(working, 2)
+            except Exception:
+                encoded = b""
+            return encoded, "ulaw", expected_rate
+
+        # Fallback: return PCM as-is
+        return pcm_bytes, "slin16", pcm_rate
+
+    async def _update_transport_profile(self, session: CallSession, *, fmt: Optional[str], sample_rate: Optional[int], source: str) -> None:
+        """Persist transport profile updates and sync preferences."""
+        profile = session.transport_profile
+        
+        # P1: Check if this is new TransportProfile (has wire_encoding) vs legacy (has format)
+        if hasattr(profile, 'wire_encoding'):
+            # New P1 TransportProfile - don't update, it's immutable per call
+            logger.debug(
+                "Skipping transport profile update for P1 TransportProfile",
+                call_id=session.call_id,
+                source=source,
+            )
+            return
+        
+        priority_order = {
+            "config": 0,
+            "dialplan": 1,
+            "audiosocket": 2,
+            # Provider can refine effective stream source format after transport is known
+            "provider": 3,
+            "detected": 4,
+        }
+        incoming_source = source or profile.source
+        incoming_priority = priority_order.get(incoming_source, 0)
+        current_priority = priority_order.get(profile.source, 0)
+
+        if incoming_priority < current_priority and fmt is not None and sample_rate is not None:
+            # Preserve higher-priority source; ignore lower-priority override.
+            return
+        if not fmt and not sample_rate:
+            return
+        canonical_fmt = self._canonicalize_encoding(fmt) or session.transport_profile.format
+        final_rate = sample_rate or session.transport_profile.sample_rate
+        changed = (
+            profile.format != canonical_fmt
+            or profile.sample_rate != final_rate
+            or profile.source != incoming_source
+        )
+        profile.update(format=canonical_fmt, sample_rate=final_rate, source=incoming_source)
+        session.caller_audio_format = canonical_fmt
+        session.caller_sample_rate = final_rate
+        self.call_audio_preferences[session.call_id] = {
+            "format": canonical_fmt,
+            "sample_rate": final_rate,
+        }
+        if changed:
+            try:
+                await self._save_session(session)
+            except Exception:
+                logger.debug("Failed to persist transport profile", call_id=session.call_id, exc_info=True)
+            try:
+                logger.info(
+                    "Transport profile resolved",
+                    call_id=session.call_id,
+                    format=canonical_fmt,
+                    sample_rate=final_rate,
+                    source=source,
+                )
+            except Exception:
+                pass
+
+    def _update_audio_diagnostics(self, session: CallSession, stage: str, audio_bytes: bytes, encoding: str, sample_rate: int) -> None:
+        """Track audio health metrics (RMS/DC offset) for observability."""
+        try:
+            canonical = self._canonicalize_encoding(encoding) or "slin16"
+            if canonical == "ulaw":
+                pcm = audioop.ulaw2lin(audio_bytes, 2)
+            else:
+                pcm = audio_bytes
+            rms = audioop.rms(pcm, 2) if pcm else 0
+            dc_offset = audioop.avg(pcm, 2) if pcm else 0
+            session.audio_diagnostics[stage] = {
+                "rms": rms,
+                "dc_offset": dc_offset,
+                "sample_rate": sample_rate,
+                "updated": time.time(),
+            }
+            _AUDIO_RMS_GAUGE.labels(session.call_id, stage).set(rms)
+            _AUDIO_DC_OFFSET.labels(session.call_id, stage).set(dc_offset)
+            first_sample_key = f"{stage}_first_sample_logged"
+            if not session.audio_diagnostics.get(first_sample_key):
+                session.audio_diagnostics[first_sample_key] = True
+                logger.info(
+                    "Audio diagnostics sample captured",
+                    call_id=session.call_id,
+                    stage=stage,
+                    format=canonical,
+                    rms=rms,
+                    dc_offset=dc_offset,
+                    sample_rate=sample_rate,
+                )
+            rms_threshold = 50 if canonical == "ulaw" else 200
+            alert_key = f"{stage}_low_rms_alerted"
+            if rms < rms_threshold and not session.audio_diagnostics.get(alert_key):
+                session.audio_diagnostics[alert_key] = True
+                logger.warning(
+                    "Low audio energy detected; degraded audio quality likely",
+                    call_id=session.call_id,
+                    stage=stage,
+                    format=canonical,
+                    rms=rms,
+                    threshold=rms_threshold,
+                )
+            dc_threshold = 600
+            dc_alert_key = f"{stage}_dc_alerted"
+            if abs(dc_offset) > dc_threshold and not session.audio_diagnostics.get(dc_alert_key):
+                session.audio_diagnostics[dc_alert_key] = True
+                logger.warning(
+                    "Significant DC offset detected in audio stream",
+                    call_id=session.call_id,
+                    stage=stage,
+                    dc_offset=dc_offset,
+                    threshold=dc_threshold,
+                )
+        except Exception:
+            logger.debug("Audio diagnostics update failed", call_id=session.call_id, stage=stage, exc_info=True)
+
+    async def _update_audio_diagnostics_by_call(
+        self,
+        call_id: str,
+        stage: str,
+        audio_bytes: bytes,
+        encoding: str,
+        sample_rate: int,
+    ) -> None:
+        session = await self.session_store.get_by_call_id(call_id)
+        if not session:
+            return
+        self._update_audio_diagnostics(session, stage, audio_bytes, encoding, sample_rate)
+
+    def _emit_transport_card(
+        self,
+        call_id: Optional[str],
+        session: Optional[CallSession],
+        *,
+        source_encoding: Optional[Any],
+        source_sample_rate: Optional[Any],
+        target_encoding: Optional[Any],
+        target_sample_rate: Optional[Any],
+    ) -> None:
+        if not call_id or call_id in self._transport_card_logged:
+            return
+
+        spm = getattr(self, "streaming_playback_manager", None)
+        wire_encoding = None
+        wire_rate: Optional[int] = None
+        chunk_ms: Optional[int] = None
+        idle_cutoff_ms: Optional[int] = None
+        if spm is not None:
+            try:
+                wire_encoding = getattr(spm, "audiosocket_format", None)
+            except Exception:
+                wire_encoding = None
+            try:
+                rate_val = getattr(spm, "sample_rate", None)
+                wire_rate = int(rate_val) if rate_val else None
+            except Exception:
+                wire_rate = None
+            try:
+                chunk_val = getattr(spm, "chunk_size_ms", None)
+                chunk_ms = int(chunk_val) if chunk_val else None
+            except Exception:
+                chunk_ms = None
+            try:
+                idle_val = getattr(spm, "idle_cutoff_ms", None)
+                idle_cutoff_ms = int(idle_val) if idle_val else None
+            except Exception:
+                idle_cutoff_ms = None
+
+        provider_name = None
+        transport_source = None
+        transport_fmt = None
+        transport_rate: Optional[int] = None
+        if session is not None:
+            provider_name = getattr(session, "provider_name", None) or getattr(session, "provider", None) or self.config.default_provider
+            
+            # P1: Handle both new TransportProfile and legacy transport_profile
+            if hasattr(session.transport_profile, 'wire_encoding'):
+                # New P1 TransportProfile
+                transport_source = "p1_profile"
+                transport_fmt = session.transport_profile.wire_encoding
+                transport_rate = session.transport_profile.wire_sample_rate
+            else:
+                # Legacy transport_profile
+                try:
+                    transport_source = session.transport_profile.source
+                except Exception:
+                    transport_source = None
+                try:
+                    transport_fmt = session.transport_profile.format
+                except Exception:
+                    transport_fmt = None
+                try:
+                    rate = session.transport_profile.sample_rate
+                    transport_rate = int(rate) if rate else None
+                except Exception:
+                    transport_rate = None
+
+        def _canon_rate(value: Optional[Any]) -> Optional[int]:
+            if value is None:
+                return None
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return None
+
+        payload = {
+            "call_id": call_id,
+            "provider": provider_name,
+            "transport_source": transport_source,
+            "wire_encoding": self._canonicalize_encoding(wire_encoding) or None,
+            "wire_sample_rate_hz": _canon_rate(wire_rate),
+            "transport_encoding": self._canonicalize_encoding(transport_fmt) or None,
+            "transport_sample_rate_hz": _canon_rate(transport_rate),
+            "provider_encoding": self._canonicalize_encoding(source_encoding) or None,
+            "provider_sample_rate_hz": _canon_rate(source_sample_rate),
+            "target_encoding": self._canonicalize_encoding(target_encoding) or None,
+            "target_sample_rate_hz": _canon_rate(target_sample_rate),
+            "chunk_size_ms": _canon_rate(chunk_ms),
+            "idle_cutoff_ms": _canon_rate(idle_cutoff_ms),
+        }
+
+        try:
+            logger.info(
+                "TransportCard",
+                **{k: v for k, v in payload.items() if v is not None},
+            )
+            self._transport_card_logged.add(call_id)
+        except Exception:
+            logger.debug("TransportCard logging failed", call_id=call_id, exc_info=True)
+
+    def _resolve_stream_targets(
+        self,
+        session: CallSession,
+        provider_name: Optional[str],
+    ) -> Tuple[str, int, Optional[str]]:
+        provider_name = provider_name or getattr(session, "provider_name", None) or self.config.default_provider
+
+        transport_fmt = self._canonicalize_encoding(getattr(session.transport_profile, "format", None)) or "ulaw"
+        try:
+            transport_rate = int(getattr(session.transport_profile, "sample_rate", 0) or 0)
+        except Exception:
+            transport_rate = 0
+        if transport_rate <= 0:
+            transport_rate = 8000 if transport_fmt in {"ulaw", "mulaw", "g711_ulaw"} else 16000
+
+        # Always refresh downstream preference view so playback manager aligns with transport
+        self.call_audio_preferences[session.call_id] = {
+            "format": transport_fmt,
+            "sample_rate": transport_rate,
+        }
+
+        provider = self.providers.get(provider_name)
+        provider_target = None
+        provider_rate = None
+        try:
+            provider_cfg = getattr(provider, "config", None)
+            provider_target = self._canonicalize_encoding(getattr(provider_cfg, "target_encoding", None))
+            raw_rate = getattr(provider_cfg, "target_sample_rate_hz", None)
+            provider_rate = int(raw_rate) if raw_rate else None
+        except Exception:
+            provider_cfg = None
+
+        remediation: Optional[str] = None
+        aligned = True
+        if provider_target and provider_target != transport_fmt:
+            aligned = False
+            remediation = (
+                f"Provider target_encoding={provider_target} but transport format={transport_fmt}. "
+                f"Update providers.{provider_name}.target_encoding to '{transport_fmt}' in config/ai-agent.yaml."
+            )
+        if provider_rate and provider_rate != transport_rate:
+            aligned = False
+            extra = (
+                f"Provider target_sample_rate_hz={provider_rate} but transport sample_rate={transport_rate}. "
+                f"Update providers.{provider_name}.target_sample_rate_hz to {transport_rate}."
+            )
+            remediation = f"{remediation} {extra}".strip() if remediation else extra
+
+        session.codec_alignment_ok = aligned
+        session.codec_alignment_message = remediation
+        try:
+            _CODEC_ALIGNMENT.labels(session.call_id, provider_name).set(1 if aligned else 0)
+        except Exception:
+            pass
+
+        if not aligned and remediation:
+            logger.warning(
+                "Codec/sample alignment degraded",
+                call_id=session.call_id,
+                provider=provider_name,
+                remediation=remediation,
+            )
+
+        self._emit_transport_card(
+            session.call_id,
+            session,
+            source_encoding=provider_target,
+            source_sample_rate=provider_rate,
+            target_encoding=transport_fmt,
+            target_sample_rate=transport_rate,
+        )
+
+        return transport_fmt, transport_rate, remediation
+
     async def _assign_pipeline_to_session(
         self,
         session: CallSession,
@@ -2442,8 +5390,8 @@ class Engine:
                     session.provider_name = provider_override
                     updated = True
             else:
-                logger.warning(
-                    "Milestone7 pipeline requested provider not loaded; continuing with session provider",
+                logger.debug(
+                    "Pipeline requested provider not in monolithic providers; using pipeline adapters directly",
                     call_id=session.call_id,
                     requested_provider=provider_override,
                     current_provider=session.provider_name,
@@ -2569,6 +5517,9 @@ class Engine:
                             provider.set_input_mode('pcm16_8k')
             except Exception:
                 logger.debug("Provider set_input_mode failed or unsupported", exc_info=True)
+
+            # Note: Context greeting/prompt injection now happens earlier in P1 _resolve_audio_profile()
+            # to ensure config is set BEFORE provider session starts and reads it.
 
             await provider.start_session(call_id)
             # If provider supports an explicit greeting (e.g., LocalProvider), trigger it now
@@ -2714,7 +5665,8 @@ class Engine:
         """Expose Prometheus metrics."""
         try:
             data = generate_latest()
-            return web.Response(body=data, content_type=CONTENT_TYPE_LATEST)
+            # aiohttp forbids 'charset=' inside content_type arg; pass full header via headers.
+            return web.Response(body=data, headers={"Content-Type": CONTENT_TYPE_LATEST})
         except Exception as exc:
             return web.Response(text=str(exc), status=500)
 
@@ -2729,6 +5681,20 @@ async def main():
     except Exception:
         # Fallback to INFO if configuration not yet available
         configure_logging(log_level="INFO")
+    
+    # Validate configuration before starting engine (AAVA-21)
+    from .config import validate_production_config
+    errors, warnings = validate_production_config(config)
+    
+    if errors:
+        logger.error("❌ Configuration validation FAILED", errors=errors, warnings=warnings)
+        raise RuntimeError(f"Configuration errors: {errors}")
+    
+    if warnings:
+        logger.warning("⚠️  Configuration warnings", warnings=warnings)
+    
+    logger.info("✅ Configuration validation passed")
+    
     engine = Engine(config)
 
     shutdown_event = asyncio.Event()

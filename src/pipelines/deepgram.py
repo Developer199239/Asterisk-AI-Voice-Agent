@@ -3,8 +3,8 @@
 
 This module introduces concrete implementations for Deepgram STT and TTS adapters
 used by the pipeline orchestrator. Both adapters honour pipeline/provider options,
-support latency-aware logging, and integrate with Deepgram's WebSocket (STT) and
-REST (TTS) APIs.
+support latency-aware logging, and integrate with Deepgram's REST APIs for
+pre-recorded STT (batch processing) and TTS (synthesis).
 """
 
 from __future__ import annotations
@@ -19,7 +19,6 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import aiohttp
 import websockets
-from websockets.client import WebSocketClientProtocol
 
 from ..audio import convert_pcm16le_to_target_format, mulaw_to_pcm16le, resample_audio
 from ..config import AppConfig, DeepgramProviderConfig
@@ -32,21 +31,16 @@ logger = get_logger(__name__)
 # Shared helpers -----------------------------------------------------------------
 
 
-def _normalize_ws_url(base_url: Optional[str]) -> str:
-    default = "wss://api.deepgram.com/v1/listen"
+def _normalize_stt_url(base_url: Optional[str]) -> str:
+    """Normalize base URL to Deepgram pre-recorded STT endpoint."""
+    default = "https://api.deepgram.com/v1/listen"
     if not base_url:
         return default
     parsed = urlparse(base_url)
-    if parsed.scheme in ("ws", "wss"):
-        if not parsed.path or parsed.path == "/":
-            parsed = parsed._replace(path="/v1/listen")
+    if parsed.path.endswith("/v1/listen"):
         return urlunparse(parsed)
-    if parsed.scheme in ("http", "https"):
-        scheme = "wss" if parsed.scheme == "https" else "ws"
-        path = parsed.path if parsed.path and parsed.path != "/" else "/v1/listen"
-        return urlunparse(parsed._replace(scheme=scheme, path=path))
-    # Assume bare host
-    return f"wss://{base_url.strip('/')}/v1/listen"
+    path = parsed.path.rstrip("/") + "/v1/listen"
+    return urlunparse(parsed._replace(path=path))
 
 
 def _normalize_rest_url(base_url: Optional[str]) -> str:
@@ -83,15 +77,31 @@ def _bytes_per_sample(encoding: str) -> int:
 
 @dataclass
 class _STTSessionState:
-    websocket: WebSocketClientProtocol
+    """Tracks per-call STT session state (API key, model, encoding, etc)."""
     options: Dict[str, Any]
+    http_session: aiohttp.ClientSession
+    # Streaming fields (optional, only used when streaming: true)
+    websocket: Optional[Any] = None
+    transcript_queue: Optional[asyncio.Queue] = None
+    receiver_task: Optional[asyncio.Task] = None
+    active: bool = True
 
 
 class DeepgramSTTAdapter(STTComponent):
     """
-    # Milestone7: Deepgram WebSocket streaming STT adapter.
+    # Milestone7: Deepgram STT adapter with dual-mode support.
 
-    Maintains a per-call WebSocket session and exposes a simple transcription API.
+    Supports both REST (batch) and WebSocket (streaming) modes:
+    - REST mode (streaming: false): HTTP POST for discrete chunks
+    - Streaming mode (streaming: true): WebSocket for continuous audio
+
+    Configure via pipeline options:
+      options:
+        stt:
+          streaming: false  # Use REST API (transcribe method)
+          streaming: true   # Use WebSocket streaming (start_stream, send_audio, iter_results)
+
+    Note: This is separate from src/providers/deepgram.py (monolithic full agent).
     """
 
     def __init__(
@@ -127,45 +137,41 @@ class DeepgramSTTAdapter(STTComponent):
         if not api_key:
             raise RuntimeError("Deepgram STT requires an API key")
 
-        query_params = {
-            "model": merged.get("model"),
-            "language": merged.get("language"),
-            "encoding": merged.get("encoding"),
-            "sample_rate": merged.get("sample_rate"),
-            "smart_format": str(merged.get("smart_format", True)).lower(),
-        }
-        query_params = {k: v for k, v in query_params.items() if v}
-
-        ws_url = _normalize_ws_url(merged.get("base_url"))
-        parsed = urlparse(ws_url)
-        existing = dict(parse_qsl(parsed.query))
-        existing.update({k: str(v) for k, v in query_params.items()})
-        ws_url = urlunparse(parsed._replace(query=urlencode(existing)))
+        # Create HTTP session for reuse across multiple transcribe() calls
+        http_session = aiohttp.ClientSession()
+        self._sessions[call_id] = _STTSessionState(options=merged, http_session=http_session)
 
         logger.info(
-            "Deepgram STT opening session",
+            "Deepgram STT session opened (REST API)",
             call_id=call_id,
-            url=ws_url,
+            model=merged.get("model"),
+            encoding=merged.get("encoding"),
+            sample_rate=merged.get("sample_rate"),
             component=self.component_key,
         )
-
-        headers = [
-            ("Authorization", f"Token {api_key}"),
-            ("User-Agent", "Asterisk-AI-Voice-Agent/1.0"),
-        ]
-        websocket = await websockets.connect(
-            ws_url,
-            extra_headers=headers,
-            max_size=16 * 1024 * 1024,  # allow generous transcript payloads
-        )
-        self._sessions[call_id] = _STTSessionState(websocket=websocket, options=merged)
 
     async def close_call(self, call_id: str) -> None:
         session = self._sessions.pop(call_id, None)
         if not session:
             return
+        
+        # Close streaming resources if active
+        if session.websocket:
+            session.active = False
+            if session.receiver_task and not session.receiver_task.done():
+                session.receiver_task.cancel()
+                try:
+                    await session.receiver_task
+                except asyncio.CancelledError:
+                    pass
+            try:
+                await session.websocket.close()
+            except Exception:
+                pass
+        
+        # Close HTTP session
         try:
-            await session.websocket.close()
+            await session.http_session.close()
         finally:
             logger.info("Deepgram STT session closed", call_id=call_id)
 
@@ -184,36 +190,118 @@ class DeepgramSTTAdapter(STTComponent):
         timeout = float(merged.get("response_timeout_sec", self._default_timeout))
         request_id = f"dg-stt-{uuid.uuid4().hex[:12]}"
 
-        # # Milestone7: Log upstream chunk metadata for debugging/telemetry.
+        # Get API requirements from session options (set during open_call)
+        api_encoding = merged.get("encoding", "linear16")
+        api_sample_rate = int(merged.get("sample_rate", 16000))
+        
+        # Transcode audio to match API expectations
+        api_audio = audio_pcm16
+        
+        # Resample if needed
+        if sample_rate_hz != api_sample_rate:
+            import audioop
+            api_audio, _ = audioop.ratecv(api_audio, 2, 1, sample_rate_hz, api_sample_rate, None)
+            logger.debug(
+                "STT resampled audio",
+                call_id=call_id,
+                from_rate=sample_rate_hz,
+                to_rate=api_sample_rate,
+                bytes=len(api_audio),
+            )
+        
+        # Encode if needed
+        if api_encoding in ("mulaw", "g711_ulaw", "mu-law"):
+            import audioop
+            api_audio = audioop.lin2ulaw(api_audio, 2)
+            logger.debug("STT encoded PCM16 → mulaw", call_id=call_id, bytes=len(api_audio))
+        elif api_encoding in ("alaw", "g711_alaw"):
+            import audioop
+            api_audio = audioop.lin2alaw(api_audio, 2)
+            logger.debug("STT encoded PCM16 → alaw", call_id=call_id, bytes=len(api_audio))
+        # "linear16", "pcm16" = no encoding needed
+
+        # Build query parameters
+        query_params = {
+            "model": merged.get("model"),
+            "language": merged.get("language"),
+            "smart_format": str(merged.get("smart_format", True)).lower(),
+        }
+        query_params = {k: v for k, v in query_params.items() if v}
+
+        # Build REST URL
+        base_url = _normalize_stt_url(merged.get("base_url"))
+        parsed = urlparse(base_url)
+        existing = dict(parse_qsl(parsed.query))
+        existing.update({k: str(v) for k, v in query_params.items()})
+        rest_url = urlunparse(parsed._replace(query=urlencode(existing)))
+
+        # Determine Content-Type based on encoding
+        if api_encoding in ("mulaw", "g711_ulaw", "mu-law"):
+            content_type = f"audio/mulaw; rate={api_sample_rate}"
+        elif api_encoding in ("alaw", "g711_alaw"):
+            content_type = f"audio/alaw; rate={api_sample_rate}"
+        elif api_encoding in ("linear16", "pcm16"):
+            content_type = f"audio/pcm; rate={api_sample_rate}"
+        else:
+            content_type = "audio/wav"
+
+        headers = {
+            "Authorization": f"Token {merged.get('api_key')}",
+            "Content-Type": content_type,
+            "User-Agent": "Asterisk-AI-Voice-Agent/1.0",
+        }
+
         logger.debug(
-            "Deepgram STT sending audio chunk",
+            "Deepgram STT sending audio chunk (REST)",
             call_id=call_id,
             request_id=request_id,
-            chunk_bytes=len(audio_pcm16),
-            sample_rate=sample_rate_hz,
+            chunk_bytes=len(api_audio),
+            api_encoding=api_encoding,
+            api_sample_rate=api_sample_rate,
+            url=rest_url,
         )
-
-        await session.websocket.send(audio_pcm16)
-        await session.websocket.send(json.dumps({"type": "flush"}))
 
         started_at = time.perf_counter()
         try:
-            while True:
-                message = await asyncio.wait_for(session.websocket.recv(), timeout=timeout)
-                transcript = self._extract_transcript(message)
-                if transcript is None:
-                    continue
+            async with session.http_session.post(
+                rest_url,
+                headers=headers,
+                data=api_audio,
+                timeout=aiohttp.ClientTimeout(total=timeout),
+            ) as response:
+                if response.status != 200:
+                    error_text = await response.text()
+                    raise RuntimeError(
+                        f"Deepgram API error {response.status}: {error_text}"
+                    )
+                
+                result = await response.json()
+                transcript = self._extract_transcript_from_rest(result)
+                
+                if not transcript:
+                    raise RuntimeError("No transcript in Deepgram response")
+                
                 latency_ms = (time.perf_counter() - started_at) * 1000.0
                 logger.info(
-                    "Deepgram STT transcript received",
+                    "Deepgram STT transcript received (REST)",
                     call_id=call_id,
                     request_id=request_id,
                     latency_ms=round(latency_ms, 2),
+                    transcript_preview=transcript[:50],
                 )
                 return transcript
-        except (asyncio.TimeoutError, websockets.ConnectionClosed) as exc:
+                
+        except asyncio.TimeoutError:
             logger.warning(
-                "Deepgram STT failed to deliver transcript",
+                "Deepgram STT request timeout",
+                call_id=call_id,
+                request_id=request_id,
+                timeout_sec=timeout,
+            )
+            raise
+        except Exception as exc:
+            logger.warning(
+                "Deepgram STT request failed",
                 call_id=call_id,
                 request_id=request_id,
                 error=str(exc),
@@ -236,23 +324,252 @@ class DeepgramSTTAdapter(STTComponent):
         return merged
 
     @staticmethod
-    def _extract_transcript(message: Any) -> Optional[str]:
-        if isinstance(message, bytes):
-            return None
+    def _extract_transcript_from_rest(result: Dict[str, Any]) -> Optional[str]:
+        """
+        Extract transcript from Deepgram pre-recorded API response.
+        Response format:
+        {
+          "results": {
+            "channels": [
+              {
+                "alternatives": [
+                  {"transcript": "...", "confidence": 0.95}
+                ]
+              }
+            ]
+          }
+        }
+        """
         try:
-            payload = json.loads(message)
-        except json.JSONDecodeError:
-            logger.debug("Deepgram STT received non-JSON message", message=message)
+            results = result.get("results", {})
+            channels = results.get("channels", [])
+            if not channels:
+                return None
+            
+            alternatives = channels[0].get("alternatives", [])
+            if not alternatives:
+                return None
+            
+            transcript = alternatives[0].get("transcript", "")
+            return transcript.strip() if transcript else None
+        except (KeyError, IndexError, AttributeError) as exc:
+            logger.debug("Failed to extract transcript from Deepgram response", error=str(exc))
             return None
 
-        if isinstance(payload, dict):
-            channel = payload.get("channel") or {}
-            alternatives = channel.get("alternatives") or []
-            for alt in alternatives:
-                transcript = alt.get("transcript")
-                is_final = payload.get("is_final", True)
-                if transcript and (is_final or alt.get("confidence") is not None):
-                    return transcript
+    # Streaming Methods (for streaming: true mode) --------------------------------
+
+    async def start_stream(self, call_id: str, options: Dict[str, Any]) -> None:
+        """Open WebSocket streaming connection to Deepgram."""
+        session = self._sessions.get(call_id)
+        if not session:
+            raise RuntimeError(f"Deepgram STT session not found for call {call_id}")
+
+        merged = _merge_dicts(session.options, options or {})
+        api_key = merged.get("api_key")
+        if not api_key:
+            raise RuntimeError("Deepgram STT streaming requires an API key")
+
+        # Build WebSocket URL
+        base_url = merged.get("base_url", "https://api.deepgram.com")
+        # Convert https:// to wss:// for WebSocket
+        if base_url.startswith("https://"):
+            ws_base = base_url.replace("https://", "wss://", 1)
+        elif base_url.startswith("http://"):
+            ws_base = base_url.replace("http://", "ws://", 1)
+        else:
+            ws_base = base_url
+
+        # Build v1/listen endpoint
+        parsed = urlparse(ws_base)
+        if not parsed.path or parsed.path == "/":
+            path = "/v1/listen"
+        elif "/v1/listen" in parsed.path:
+            path = parsed.path
+        else:
+            path = parsed.path.rstrip("/") + "/v1/listen"
+
+        # Build query parameters
+        query_params = {
+            "model": merged.get("model", "nova-2"),
+            "language": merged.get("language", "en-US"),
+            "encoding": merged.get("encoding", "linear16"),
+            "sample_rate": str(merged.get("sample_rate", 16000)),
+            "channels": "1",
+        }
+        existing = dict(parse_qsl(parsed.query))
+        existing.update(query_params)
+        ws_url = urlunparse(parsed._replace(path=path, query=urlencode(existing)))
+
+        logger.info(
+            "Deepgram STT opening streaming session",
+            call_id=call_id,
+            url=ws_url,
+            component=self.component_key,
+        )
+
+        headers = [
+            ("Authorization", f"Token {api_key}"),
+            ("User-Agent", "Asterisk-AI-Voice-Agent/1.0"),
+        ]
+
+        try:
+            websocket = await websockets.connect(
+                ws_url,
+                extra_headers=headers,
+                max_size=16 * 1024 * 1024,
+                ping_interval=20,
+                ping_timeout=10,
+            )
+        except Exception as exc:
+            logger.error(
+                "Failed to connect to Deepgram streaming",
+                call_id=call_id,
+                error=str(exc),
+                exc_info=True,
+            )
+            raise RuntimeError(f"Deepgram streaming connection failed: {exc}") from exc
+
+        # Update session with streaming resources
+        session.websocket = websocket
+        session.transcript_queue = asyncio.Queue(maxsize=8)
+        session.active = True
+
+        # Start async receiver task
+        session.receiver_task = asyncio.create_task(
+            self._receive_loop(call_id, session)
+        )
+
+        logger.info(
+            "Deepgram STT streaming session opened",
+            call_id=call_id,
+            model=merged.get("model"),
+        )
+
+    async def send_audio(
+        self,
+        call_id: str,
+        audio_pcm16: bytes,
+        fmt: str = "pcm16_16k",
+    ) -> None:
+        """Send audio chunk to Deepgram streaming WebSocket."""
+        session = self._sessions.get(call_id)
+        if not session or not session.websocket or not session.active:
+            return
+
+        try:
+            await session.websocket.send(audio_pcm16)
+        except (websockets.ConnectionClosed, websockets.WebSocketException) as exc:
+            logger.warning(
+                "Deepgram streaming websocket closed while sending audio",
+                call_id=call_id,
+                error=str(exc),
+            )
+            session.active = False
+        except Exception as exc:
+            logger.error(
+                "Error sending audio to Deepgram streaming",
+                call_id=call_id,
+                error=str(exc),
+                exc_info=True,
+            )
+
+    async def iter_results(self, call_id: str) -> AsyncIterator[str]:
+        """Yield transcripts as they arrive from Deepgram streaming."""
+        session = self._sessions.get(call_id)
+        if not session or not session.transcript_queue:
+            return
+
+        while True:
+            try:
+                transcript = await session.transcript_queue.get()
+                if transcript is None:
+                    break
+                yield transcript
+            except asyncio.CancelledError:
+                break
+
+    async def stop_stream(self, call_id: str) -> None:
+        """Stop streaming session (cleanup handled in close_call)."""
+        session = self._sessions.get(call_id)
+        if session and session.websocket:
+            logger.debug(
+                "Deepgram STT stop_stream (cleanup in close_call)",
+                call_id=call_id,
+            )
+
+    async def _receive_loop(self, call_id: str, session: _STTSessionState) -> None:
+        """Async receiver loop for Deepgram streaming results."""
+        try:
+            async for message in session.websocket:
+                if not session.active:
+                    break
+
+                try:
+                    data = json.loads(message) if isinstance(message, str) else message
+                except (json.JSONDecodeError, TypeError):
+                    continue
+
+                msg_type = data.get("type")
+
+                if msg_type == "Results":
+                    transcript = self._extract_transcript_from_streaming(data)
+                    if transcript:
+                        is_final = data.get("is_final", False)
+                        speech_final = data.get("speech_final", False)
+
+                        logger.debug(
+                            "Deepgram streaming transcript received",
+                            call_id=call_id,
+                            transcript_preview=transcript[:50],
+                            is_final=is_final,
+                            speech_final=speech_final,
+                        )
+
+                        # Only queue final transcripts
+                        if is_final and transcript.strip():
+                            try:
+                                session.transcript_queue.put_nowait(transcript)
+                            except asyncio.QueueFull:
+                                # Drop oldest transcript if queue full
+                                try:
+                                    session.transcript_queue.get_nowait()
+                                except asyncio.QueueEmpty:
+                                    pass
+                                await session.transcript_queue.put(transcript)
+
+        except websockets.ConnectionClosed:
+            logger.info(
+                "Deepgram streaming websocket closed",
+                call_id=call_id,
+            )
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:
+            logger.error(
+                "Deepgram streaming receive loop error",
+                call_id=call_id,
+                error=str(exc),
+                exc_info=True,
+            )
+        finally:
+            session.active = False
+            # Signal end to transcript queue
+            if session.transcript_queue:
+                try:
+                    session.transcript_queue.put_nowait(None)
+                except asyncio.QueueFull:
+                    pass
+
+    @staticmethod
+    def _extract_transcript_from_streaming(message: Dict[str, Any]) -> Optional[str]:
+        """Extract transcript from Deepgram streaming Results message."""
+        try:
+            channel = message.get("channel", {})
+            alternatives = channel.get("alternatives", [])
+            if alternatives:
+                return alternatives[0].get("transcript", "").strip()
+        except (KeyError, IndexError, AttributeError):
+            pass
         return None
 
 
@@ -307,7 +624,8 @@ class DeepgramTTSAdapter(TTSComponent):
         options: Dict[str, Any],
     ) -> AsyncIterator[bytes]:
         if not text:
-            return
+            return  # Exit early - yields nothing (async generator)
+            yield  # Unreachable but makes this an async generator
         await self._ensure_session()
 
         merged = self._compose_options(options)

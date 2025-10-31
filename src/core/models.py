@@ -6,8 +6,32 @@ in the original engine.py implementation.
 """
 
 from dataclasses import dataclass, field
-from typing import Optional, Set, Dict, Any
+from typing import Optional, Set, Dict, Any, TYPE_CHECKING
 import time
+
+if TYPE_CHECKING:
+    from .transport_orchestrator import TransportProfile as OrchestratorTransportProfile
+
+
+@dataclass
+class LegacyTransportProfile:
+    """Legacy transport characteristics (kept for backward compatibility)."""
+    format: str = "ulaw"
+    sample_rate: int = 8000
+    channels: int = 1
+    source: str = "config"  # config | dialplan | audiosocket | detected
+    last_updated: float = field(default_factory=time.time)
+
+    def update(self, *, format: Optional[str] = None, sample_rate: Optional[int] = None, channels: Optional[int] = None, source: Optional[str] = None) -> None:
+        if format:
+            self.format = format
+        if sample_rate:
+            self.sample_rate = sample_rate
+        if channels:
+            self.channels = channels
+        if source:
+            self.source = source
+        self.last_updated = time.time()
 
 
 @dataclass
@@ -31,6 +55,7 @@ class CallSession:
     local_channel_id: Optional[str] = None
     external_media_id: Optional[str] = None
     external_media_call_id: Optional[str] = None
+    external_media_port: Optional[int] = None
     audiosocket_channel_id: Optional[str] = None
     audiosocket_conn_id: Optional[str] = None
     audiosocket_uuid: Optional[str] = None
@@ -41,6 +66,7 @@ class CallSession:
     provider_name: str = "local"
     pipeline_name: Optional[str] = None
     pipeline_components: Dict[str, str] = field(default_factory=dict)
+    context_name: Optional[str] = None  # AI_CONTEXT from dialplan (for pipeline greeting/prompt resolution)
     conversation_state: str = "greeting"  # greeting | listening | processing
     status: str = "initializing"
     last_transcript: Optional[str] = None
@@ -57,10 +83,15 @@ class CallSession:
     # Barge-in detection accumulators
     barge_in_candidate_ms: int = 0
     last_barge_in_ts: float = 0.0
+    barge_start_ts: float = 0.0
     
     # VAD and audio processing state
     vad_state: Dict[str, Any] = field(default_factory=dict)
     fallback_state: Dict[str, Any] = field(default_factory=dict)
+    enhanced_vad_enabled: bool = False
+    enhanced_vad_frames: int = 0
+    enhanced_vad_speech_frames: int = 0
+    last_provider_audio_ts: float = 0.0
     
     # Cleanup and lifecycle
     cleanup_after_tts: bool = False
@@ -92,7 +123,13 @@ class CallSession:
     streaming_keepalive_sent: int = 0
     streaming_keepalive_timeouts: int = 0
     last_streaming_error: Optional[str] = None
-    
+    caller_audio_format: str = "ulaw"
+    caller_sample_rate: int = 8000
+    transport_profile: Optional[Any] = None  # OrchestratorTransportProfile from transport_orchestrator.py
+    codec_alignment_ok: bool = True
+    codec_alignment_message: Optional[str] = None
+    audio_diagnostics: Dict[str, Any] = field(default_factory=dict)
+
     def __post_init__(self):
         """Initialize default VAD and fallback state."""
         if not self.vad_state:
@@ -142,4 +179,4 @@ class TransportConfig:
     rtp_port: int = 18080
     codec: str = "ulaw"
     direction: str = "both"
-    jitter_buffer_ms: int = 20
+    # Note: jitter_buffer_ms removed - not used by RTP server

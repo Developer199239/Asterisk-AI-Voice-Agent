@@ -2,6 +2,32 @@
 
 This document explains every major option in `config/ai-agent.yaml`, the precedence model for greeting/persona, and the impact of fine‑tuning parameters across AudioSocket/ExternalMedia, VAD, Barge‑In, Streaming, and Providers.
 
+## Configuration Architecture (v4.0)
+
+v4.0 introduces a **modular pipeline architecture** alongside monolithic provider support:
+
+### Monolithic Providers
+- **Single provider** handles STT, LLM, and TTS internally
+- Examples: `openai_realtime`, `deepgram` Voice Agent
+- Configuration: Set `default_provider: "openai_realtime"` or `default_provider: "deepgram"`
+- **Best for**: Simplicity, fastest response times
+
+### Pipeline Configurations
+- **Separate providers** for STT, LLM, and TTS
+- Examples: Local Hybrid (Vosk STT + OpenAI LLM + Piper TTS)
+- Configuration: Define under `pipelines:` block and set `active_pipeline: "pipeline_name"`
+- **Best for**: Flexibility, privacy (local audio processing), cost control
+
+### Golden Baselines
+See the 3 validated configurations in `config/`:
+- `ai-agent.golden-openai.yaml` - OpenAI Realtime (monolithic, fastest)
+- `ai-agent.golden-deepgram.yaml` - Deepgram Voice Agent (monolithic, enterprise)
+- `ai-agent.golden-local-hybrid.yaml` - Local Hybrid (pipeline, privacy-focused)
+
+For comprehensive inline documentation, refer to the golden baseline YAML files directly.
+
+---
+
 ## Canonical persona and greeting
 
 - llm.initial_greeting: Text the agent speaks first (if provider supports explicit greeting or the engine plays via TTS).
@@ -14,11 +40,11 @@ This document explains every major option in `config/ai-agent.yaml`, the precede
 ## Transports
 
 - audio_transport: `audiosocket` | `externalmedia`
-  - audiosocket: Full‑duplex PCM over TCP; recommended for GA. Downstream can be streamed with pacing.
-  - externalmedia: RTP capture path; best for explicit RTP analysis or legacy setups.
+  - **audiosocket** (Modern - Recommended for Full Agents): TCP-based, low latency, streaming TTS support. Use with OpenAI Realtime and Deepgram Voice Agent.
+  - **externalmedia** (Legacy - For Hybrid Pipelines): RTP/UDP-based, battle-tested, file-based playback. Use with Local Hybrid and modular pipelines.
 - downstream_mode: `stream` | `file`
-  - stream: Sends 20 ms frames immediately; best UX, slightly more sensitive to jitter.
-  - file: Plays μ‑law files via the bridge; more tolerant but higher latency.
+  - **stream**: Real-time streaming (20ms frames). Best UX. Requires stable network. Works with full agents.
+  - **file**: File-based playback via bridge. More robust to jitter. Required for hybrid pipelines.
 
 ## AudioSocket
 
@@ -30,6 +56,7 @@ This document explains every major option in `config/ai-agent.yaml`, the precede
 
 - external_media.rtp_host: Bind address for RTP server.
 - external_media.rtp_port: Port for inbound RTP.
+- external_media.port_range: Optional range (`start:end`) for dynamic per-call RTP allocation; defaults to `rtp_port`.
 - external_media.codec: `ulaw` | `slin16` (8 kHz).
 - external_media.direction: `both` | `sendonly` | `recvonly`.
 - external_media.jitter_buffer_ms: Target frame size for RTP playout pacing.
@@ -46,6 +73,7 @@ Controls interruption of TTS playback when the caller speaks.
 - barge_in.post_tts_end_protection_ms: 250–500 ms. Short guard to avoid clipping the start of the next caller utterance.
 
 Tuning guidance:
+
 - Noisy lines: raise `energy_threshold` and `min_ms`.
 - Fast, chatty interactions: lower `min_ms` and `post_tts_end_protection_ms` cautiously.
 
@@ -63,6 +91,7 @@ Controls the pacing and robustness of streamed agent audio.
 - streaming.low_watermark_ms: Brief pause/guard band; increase if underruns occur.
 - streaming.provider_grace_ms: Absorb late provider chunks to avoid tail-chop artifacts.
 - streaming.logging_level: Verbosity for the streaming manager.
+- streaming.egress_force_mulaw: When true, converts outbound streaming audio to μ-law 8 kHz regardless of provider encoding.
 
 ## VAD (Voice Activity Detection)
 
@@ -79,6 +108,7 @@ Defines how inbound speech is segmented into utterances for STT.
 - vad.fallback_buffer_size: Bytes to accumulate at fallback thresholds.
 
 Common pitfalls:
+
 - Too-short utterances (e.g., 20 ms) cause empty STT transcripts → raise `min_utterance_duration_ms` and ensure `webrtc_end_silence_frames` is not too low.
 - Overly aggressive VAD (aggressiveness=2/3) may clip 8 kHz speech; prefer 0–1 for telephony.
 
@@ -92,29 +122,35 @@ Common pitfalls:
 ## Providers
 
 ### OpenAI Realtime (monolithic agent)
+
 - providers.openai_realtime.api_key: Bearer auth.
 - providers.openai_realtime.model, voice, base_url: Model and voice.
 - providers.openai_realtime.instructions: Persona override. Leave empty to inherit `llm.prompt`.
 - providers.openai_realtime.greeting: Explicit greeting. Leave empty to inherit `llm.initial_greeting`.
 - providers.openai_realtime.response_modalities: `audio`, `text`.
-- providers.openai_realtime.input_encoding/input_sample_rate_hz: Inbound format; use `slin16` at 8 kHz for AudioSocket.
+- providers.openai_realtime.input_encoding/input_sample_rate_hz: Inbound format; use `ulaw` at 8 kHz when AudioSocket() is invoked with `,ulaw` (engine converts to PCM before sending to OpenAI).
 - providers.openai_realtime.output_encoding/output_sample_rate_hz: Provider output; engine resamples to target.
 - providers.openai_realtime.target_encoding/target_sample_rate_hz: Downstream transport expectations (e.g., μ‑law at 8 kHz).
 - providers.openai_realtime.turn_detection: Server‑side VAD (type, silence_duration_ms, threshold, prefix_padding_ms); improves turn handling.
+- Metrics: `ai_agent_openai_assumed_output_sample_rate_hz`, `ai_agent_openai_provider_output_sample_rate_hz`, and `ai_agent_openai_measured_output_sample_rate_hz` expose handshake vs. measured output rates per call.
 
 ### Deepgram Voice Agent
+
 - providers.deepgram.api_key, model, tts_model.
 - providers.deepgram.greeting: Agent greeting. Leave empty to inherit `llm.initial_greeting`.
 - providers.deepgram.instructions: Persona override for the “think” stage; leave empty to inherit `llm.prompt`.
-- providers.deepgram.input_encoding/input_sample_rate_hz: Inbound format.
+- providers.deepgram.input_encoding/input_sample_rate_hz: Keep `input_encoding=ulaw` at 8 kHz when AudioSocket runs μ-law transport.
 - providers.deepgram.continuous_input: true to stream audio continuously.
+- Metrics: `ai_agent_deepgram_input_sample_rate_hz` and `ai_agent_deepgram_output_sample_rate_hz` confirm negotiated codec settings per call.
 
 ### Google (pipelines)
+
 - google_llm.system_instruction/system_prompt: Persona; if missing, adapter falls back to `llm.prompt`.
 - google_tts/tts fields: voice, language, audio encoding/sample rate, target format.
 - google_stt/stt fields: encoding, language, model, sampleRateHertz.
 
 ### Local provider (pipelines)
+
 - Local STT/LLM/TTS parameters live under pipeline `options`. The engine plays `llm.initial_greeting` first if configured.
 
 ## Precedence summary

@@ -86,6 +86,8 @@ class _LocalAdapterBase:
             await self.close_call(call_id)
         logger.debug("Local adapter stopped", component=self.component_key)
 
+    # validate_connectivity removed - uses smart generic base class implementation
+
     async def open_call(self, call_id: str, options: Dict[str, Any]) -> None:
         if self._closed:
             raise RuntimeError(f"Adapter {self.component_key} has been stopped")
@@ -677,7 +679,8 @@ class LocalTTSAdapter(_LocalAdapterBase, TTSComponent):
         options: Dict[str, Any],
     ) -> AsyncIterator[bytes]:
         if not text:
-            return
+            return  # Exit early - yields nothing (async generator)
+            yield  # Unreachable but makes this an async generator
         runtime_options = options or {}
         session = await self._ensure_session(call_id, runtime_options)
 

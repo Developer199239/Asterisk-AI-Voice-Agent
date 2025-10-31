@@ -8,7 +8,7 @@ This guide covers the deployment and testing of the ExternalMedia + RTP implemen
 
 - **Upstream**: Caller audio → ARI ExternalMedia → RTP → Engine → Provider
 - **Downstream**: Provider TTS → File-based playback → ARI → Caller
-- **Transport**: UDP RTP on port 18080 (configurable)
+- **Transport**: UDP RTP on the configured port or dynamic range (default `18080:18099`)
 - **Codec**: µ-law (8kHz) with automatic resampling to PCM16k (16kHz)
 
 ## Configuration
@@ -23,6 +23,7 @@ audio_transport: "externalmedia"
 external_media:
   rtp_host: "0.0.0.0"        # bind inside container
   rtp_port: 18080            # fixed port for simplicity
+  port_range: "18080:18099"  # optional range for per-call allocation
   codec: "ulaw"              # ulaw (8k) or slin16 (8k)
   direction: "both"          # sendrecv | sendonly | recvonly
   jitter_buffer_ms: 20       # target frame size
@@ -49,6 +50,7 @@ python3 scripts/validate_externalmedia_config.py
 ```
 
 Expected output:
+
 ```
 🎉 All validations passed! Ready for deployment.
 ```
@@ -74,10 +76,11 @@ make server-logs
 ```
 
 Expected logs:
+
 ```
 ✅ Successfully connected to ARI HTTP endpoint
 ✅ Successfully connected to ARI WebSocket
-✅ RTP server listening on udp://0.0.0.0:18080
+✅ RTP server ready for ExternalMedia transport (port range 18080-18099)
 ✅ Engine started and listening for calls
 ```
 
@@ -88,48 +91,58 @@ Expected logs:
 When placing a test call, monitor these logs:
 
 #### 1. Call Initiation
+
 - ✅ "StasisStart event received"
 - ✅ "Caller channel entered Stasis"
 - ✅ "Caller channel answered"
 
 #### 2. Bridge Creation
+
 - ✅ "Bridge created"
 - ✅ "Caller added to bridge"
 
 #### 3. ExternalMedia Channel
+
 - ✅ "Creating ExternalMedia channel"
 - ✅ "ExternalMedia channel created successfully"
 - ✅ "ExternalMedia channel added to bridge"
 
 #### 4. Provider Session
+
 - ✅ "Provider session started for ExternalMedia"
 - ✅ "Greeting playback started for ExternalMedia"
 
 #### 5. RTP Audio Capture
+
 - ✅ "RTP audio received" (when you speak)
 - ✅ "RTP audio sent to provider"
 
 #### 6. Provider Response
+
 - ✅ "Audio playback initiated successfully"
 
 ### Troubleshooting
 
 #### No RTP Received
-- **Check**: Asterisk can reach `127.0.0.1:18080`
+
+- **Check**: Asterisk can reach the configured RTP endpoint (default `127.0.0.1:18080`)
 - **Verify**: Host networking is enabled in docker-compose.yml
 - **Confirm**: RTP server is listening on the correct port
 
 #### Garbled Audio
+
 - **Check**: Codec consistency (`ulaw` vs `slin16`)
 - **Verify**: Only one resample step (8k→16k)
 - **Confirm**: Audio format matches between Asterisk and RTP server
 
 #### ExternalMedia Channel Creation Fails
+
 - **Check**: ARI credentials are correct
 - **Verify**: Asterisk has ExternalMedia support
 - **Confirm**: Network connectivity between containers
 
 #### No Voice Capture After Greeting
+
 - **Check**: `audio_capture_enabled` flag is set after greeting
 - **Verify**: RTP packets are being received
 - **Confirm**: Provider is processing audio correctly
@@ -161,7 +174,10 @@ Access RTP server statistics via the engine logs or health endpoint:
 {
   "running": true,
   "host": "0.0.0.0",
-  "port": 18080,
+  "port_range": [
+    18080,
+    18099
+  ],
   "codec": "ulaw",
   "total_sessions": 1,
   "active_sessions": 1,
@@ -175,6 +191,7 @@ Access RTP server statistics via the engine logs or health endpoint:
 ## Fallback Strategy
 
 If ExternalMedia fails, check the following:
+
 1. RTP server is listening on the configured port
 2. ExternalMedia channels are being created successfully
 3. Bridge operations are working correctly
@@ -218,7 +235,7 @@ For issues or questions:
 A successful deployment should show:
 
 1. ✅ Engine starts without errors
-2. ✅ RTP server listening on port 18080
+2. ✅ RTP server ready on the configured port range (default `18080:18099`)
 3. ✅ ExternalMedia channels created successfully
 4. ✅ Voice capture works after greeting
 5. ✅ Provider responses are heard clearly

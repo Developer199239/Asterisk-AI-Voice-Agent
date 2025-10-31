@@ -345,6 +345,8 @@ class OpenAILLMAdapter(LLMComponent):
             await self._session.close()
         self._session = None
 
+    # validate_connectivity removed - uses smart generic base class implementation
+
     async def generate(
         self,
         call_id: str,
@@ -595,7 +597,8 @@ class OpenAITTSAdapter(TTSComponent):
         options: Dict[str, Any],
     ) -> AsyncIterator[bytes]:
         if not text:
-            return
+            return  # Exit early - yields nothing (async generator)
+            yield  # Unreachable but makes this an async generator
         await self._ensure_session()
         assert self._session
 
