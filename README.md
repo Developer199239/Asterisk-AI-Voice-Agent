@@ -145,7 +145,7 @@ For detailed setup, see [docs/FreePBX-Integration-Guide.md](docs/FreePBX-Integra
 The installer handles everything automatically. To customize:
 
 **Change greeting or persona**:
-Edit `config/ai-agent.yaml`(config/ai-agent.yaml):
+Edit [`config/ai-agent.yaml`](config/ai-agent.yaml):
 ```yaml
 llm:
   initial_greeting: "Your custom greeting"
