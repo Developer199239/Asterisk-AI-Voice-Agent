@@ -11,7 +11,7 @@
       "gridPos": {"h": 2, "w": 24, "x": 0, "y": 0},
       "id": 1,
       "options": {
-        "content": "# 📞 Call Details - Per-Call Tracking\n\nDetailed table showing every call with caller information, pipeline selection, duration, and quality metrics.",
+        "content": "# 📞 Call Details - Per-Call Tracking\n\n**Note:** Full call metadata (caller info, demo agent/context, pipeline, provider) is only available for calls made after the latest deployment. Make a new test call to see all columns populate.\n\nShows: Call ID, Caller Name, Caller Number, Demo Agent (context), Pipeline, Provider, Duration, Barge-Ins, Quality Metrics.",
         "mode": "markdown"
       },
       "type": "text"
