@@ -4259,11 +4259,24 @@ class Engine:
                     pipeline_label = getattr(session, 'pipeline_name', None) or 'none'
                     provider_label = getattr(session, 'provider_name', None) or 'unknown'
                     t_start = self._last_transcript_ts.get(call_id)
+                    
+                    # Build context with system prompt from llm_options (injected from AI_CONTEXT)
+                    context_messages = []
+                    system_prompt = llm_options.get('system_prompt')
+                    if system_prompt:
+                        context_messages.append({"role": "system", "content": system_prompt})
+                        logger.debug(
+                            "Pipeline LLM context with system prompt",
+                            call_id=call_id,
+                            system_prompt_length=len(system_prompt),
+                        )
+                    context_messages.append({"role": "user", "content": transcript_text})
+                    
                     try:
                         response_text = await pipeline.llm_adapter.generate(
                             call_id,
                             transcript_text,
-                            {"messages": [{"role": "user", "content": transcript_text}]},
+                            {"messages": context_messages},  # Include system prompt in messages
                             llm_options,  # Use context-injected options
                         )
                     except Exception:
