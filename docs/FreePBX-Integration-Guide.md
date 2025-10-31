@@ -205,13 +205,26 @@ cat /mnt/asterisk_media/ai-generated/test.txt  # Should output: test
 
 You can customize agent behavior per-call using Asterisk channel variables:
 
-| Variable | Description | Example |
-|----------|-------------|---------|  
-| `AI_CONTEXT` | Custom context for conversation (e.g., department, call type) | `customer_support`, `sales`, `billing` |
-| `AI_GREETING` | Override the default greeting for this call | `"Hello! Welcome to our sales team."` |
-| `AI_PERSONA` | Override the AI persona/instructions for this call | `"You are a helpful billing assistant."` |
-| `CALLERID(name)` | Caller's name (automatically available to AI if set) | Useful for personalization |
-| `CALLERID(num)` | Caller's number (automatically available to AI) | Can be used for lookups |
+| Variable | Description | Example Values | Required? |
+|----------|-------------|----------------|-----------|
+| `AI_PROVIDER` | Override which provider/pipeline to use | `deepgram`, `openai_realtime`, `local_hybrid` | No (uses `default_provider` from config) |
+| `AI_CONTEXT` | Select custom greeting and system prompt | `demo_deepgram`, `demo_openai`, `sales`, `support` | No (uses `default` context) |
+| `AI_GREETING` | Override the greeting for this call | `"Hello! Welcome to our sales team."` | No (deprecated - use AI_CONTEXT instead) |
+| `AI_PERSONA` | Override the AI persona/instructions | `"You are a helpful billing assistant."` | No (deprecated - use AI_CONTEXT instead) |
+| `CALLERID(name)` | Caller's name (automatically available to AI) | Any string | No |
+| `CALLERID(num)` | Caller's number (automatically available to AI) | Phone number | No |
+
+**Priority Logic:**
+
+**Provider/Pipeline Selection:**
+1. `AI_PROVIDER` variable (highest priority)
+2. Context provider field (if AI_CONTEXT set and context has `provider:` in YAML)
+3. `default_provider` from `ai-agent.yaml` (lowest priority - currently: `local_hybrid`)
+
+**Greeting/Prompt Selection:**
+1. Context greeting/prompt (if AI_CONTEXT set)
+2. Provider/pipeline defaults
+3. Global `llm.prompt` from config
 
 **Note**: The AI engine reads these variables when the call enters Stasis. Set them **before** calling `Stasis()`.
 
@@ -230,9 +243,9 @@ Snapshot:
 
 ![Config Edit - extensions_custom.conf](freepbx/img/snapshot-1-config-edit.png)
 
-### 3.3 Basic Dialplan Context (Works for All Configurations)
+### 3.3 Minimum Required Dialplan (Recommended)
 
-This simple context works for all 3 golden baselines. The `ai-engine` automatically uses the active configuration from `config/ai-agent.yaml`:
+This simple 3-line context works for all configurations. Without any variables set, the system uses defaults from `config/ai-agent.yaml`:
 
 ```asterisk
 [from-ai-agent]
@@ -241,42 +254,79 @@ exten => s,1,NoOp(Asterisk AI Voice Agent v4.0)
  same => n,Hangup()
 ```
 
-**That's it!** The engine manages audio transport internally via ARI:
+**What happens:**
+- Uses `default_provider: local_hybrid` (privacy-focused pipeline)
+- Uses `default` context (generic assistant persona)
+- No variables required!
+
+**How it works:**
 - **Full agents** (OpenAI Realtime, Deepgram): Engine originates AudioSocket channel
-- **Hybrid pipelines** (Local Hybrid): Engine originates ExternalMedia RTP channel
+- **Pipelines** (Local Hybrid, Local Only): Engine originates ExternalMedia RTP channel
+- All audio transport is managed internally via ARI
 
 No `AudioSocket()` or `ExternalMedia()` needed in dialplan.
 
-### 3.4 Advanced: Context-Specific Routing
+### 3.3.1 Per-Call Provider Override
 
-For more control, you can set different contexts per department or call type:
+To use a specific provider/pipeline for a call, set `AI_PROVIDER`:
 
 ```asterisk
-; Customer Support context
-[from-ai-agent-support]
-exten => s,1,NoOp(AI Agent - Customer Support)
- same => n,Set(AI_CONTEXT=customer_support)
- same => n,Set(AI_PERSONA=You are a helpful customer support agent. Be empathetic and solution-focused.)
+; Deepgram Voice Agent
+[from-ai-agent-deepgram]
+exten => s,1,NoOp(AI Agent - Deepgram)
+ same => n,Set(AI_PROVIDER=deepgram)           ; Override to Deepgram provider
+ same => n,Set(AI_CONTEXT=demo_deepgram)       ; Optional: custom greeting/prompt
  same => n,Stasis(asterisk-ai-voice-agent)
  same => n,Hangup()
 
-; Sales context
+; OpenAI Realtime API
+[from-ai-agent-openai]
+exten => s,1,NoOp(AI Agent - OpenAI Realtime)
+ same => n,Set(AI_PROVIDER=openai_realtime)    ; Override to OpenAI provider
+ same => n,Set(AI_CONTEXT=demo_openai)         ; Optional: custom greeting/prompt
+ same => n,Stasis(asterisk-ai-voice-agent)
+ same => n,Hangup()
+
+; Local Hybrid Pipeline (explicit)
+[from-ai-agent-hybrid]
+exten => s,1,NoOp(AI Agent - Local Hybrid)
+ same => n,Set(AI_PROVIDER=local_hybrid)       ; Override to local_hybrid pipeline
+ same => n,Set(AI_CONTEXT=demo_hybrid)         ; Optional: custom greeting/prompt
+ same => n,Stasis(asterisk-ai-voice-agent)
+ same => n,Hangup()
+```
+
+### 3.4 Advanced: Context-Based Routing (No Provider Override)
+
+Use `AI_CONTEXT` alone to change greeting/prompt while keeping the default provider (`local_hybrid`):
+
+```asterisk
+; Sales context - uses default provider (local_hybrid)
 [from-ai-agent-sales]
 exten => s,1,NoOp(AI Agent - Sales)
- same => n,Set(AI_CONTEXT=sales)
- same => n,Set(AI_GREETING=Hello! Thanks for your interest. How can I help you today?)
+ same => n,Set(AI_CONTEXT=sales)               ; Select sales persona
+ ; AI_PROVIDER not set, uses default_provider from config
  same => n,Stasis(asterisk-ai-voice-agent)
  same => n,Hangup()
 
-; Billing context with caller lookup
-[from-ai-agent-billing]
-exten => s,1,NoOp(AI Agent - Billing for ${CALLERID(num)})
- same => n,Set(AI_CONTEXT=billing)
- same => n,Set(AI_PERSONA=You are a billing specialist. Be clear about charges and payment options.)
+; Support context - uses default provider (local_hybrid)
+[from-ai-agent-support]
+exten => s,1,NoOp(AI Agent - Support)
+ same => n,Set(AI_CONTEXT=support)             ; Select support persona
+ ; AI_PROVIDER not set, uses default_provider from config
+ same => n,Stasis(asterisk-ai-voice-agent)
+ same => n,Hangup()
+
+; Premium customer context - uses default provider (local_hybrid)
+[from-ai-agent-premium]
+exten => s,1,NoOp(AI Agent - Premium Customer)
+ same => n,Set(AI_CONTEXT=premium)             ; Select premium persona
  same => n,Set(CALLERID(name)=${ODBC_CUSTOMER_LOOKUP(${CALLERID(num)})})  ; Optional: CRM lookup
  same => n,Stasis(asterisk-ai-voice-agent)
  same => n,Hangup()
 ```
+
+**Note:** Define these contexts in `config/ai-agent.yaml` under `contexts:` section with custom `greeting:` and `prompt:` fields.
 
 ### 3.5 Advanced: After-Hours with Custom Greeting
 

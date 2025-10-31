@@ -1,3 +1,11 @@
+# Asterisk AI Voice Agent - Main Services
+#
+# This compose file includes only the core AI engine services.
+# For optional monitoring (Prometheus + Grafana), use:
+#   docker compose -f docker-compose.monitoring.yml up -d
+#
+# See monitoring/README.md for details.
+
 services:
   ai-engine:
     build:

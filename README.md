@@ -62,6 +62,18 @@ The most powerful, flexible open-source AI voice agent for Asterisk/FreePBX. Fea
 
 [![Watch the demo](https://img.youtube.com/vi/ZQVny8wfCeY/hqdefault.jpg)](https://youtu.be/ZQVny8wfCeY "Asterisk AI Voice Agent demo")
 
+### 📞 Try it Live! (US Only)
+
+Experience all three golden baseline configurations with a single phone call:
+
+**Dial: (925) 736-6718**
+
+- **Press 6** → Deepgram Voice Agent (Enterprise cloud with Think stage)
+- **Press 7** → OpenAI Realtime API (Modern cloud AI, most natural)
+- **Press 8** → Local Hybrid Pipeline (Privacy-focused, audio stays local)
+
+Each configuration uses the same Ava persona with full project knowledge. Compare response times, conversation quality, and naturalness!
+
 ## 🚀 Quick Start
 
 Get up and running in **5 minutes**:
@@ -96,11 +108,12 @@ Add this to your FreePBX (Config Edit → extensions_custom.conf):
 
 ```asterisk
 [from-ai-agent]
-exten => s,1,NoOp(Asterisk AI Voice Agent)
- same => n,Set(AI_PROVIDER=local_only)
+exten => s,1,NoOp(Asterisk AI Voice Agent v4.0)
  same => n,Stasis(asterisk-ai-voice-agent)
  same => n,Hangup()
 ```
+
+**That's it!** Without any variables, the system uses `local_hybrid` by default. For advanced configuration with per-call provider/context selection, see [Dialplan Configuration Guide](docs/DIALPLAN_CONFIGURATION.md).
 
 Then create a Custom Destination pointing to `from-ai-agent,s,1` and route calls to it.
 
@@ -154,6 +167,29 @@ ASTERISK_ARI_PASSWORD=your-password
 cp config/ai-agent.golden-deepgram.yaml config/ai-agent.yaml
 docker compose up -d --force-recreate ai-engine
 ```
+
+### Optional: Enterprise Monitoring
+
+If you enabled monitoring during installation, you have Prometheus + Grafana running:
+
+**Access Grafana:**
+```
+http://your-server-ip:3000
+Username: admin
+Password: admin (change after first login)
+```
+
+**If you didn't enable monitoring during install**, you can start it anytime:
+```bash
+docker compose -f docker-compose.monitoring.yml up -d
+```
+
+**Stop monitoring:**
+```bash
+docker compose -f docker-compose.monitoring.yml down
+```
+
+**Note:** Monitoring is completely optional. The AI agent works without it. See [monitoring/README.md](monitoring/README.md) for dashboards, alerts, and metrics.
 
 For advanced tuning, see:
 * [docs/Configuration-Reference.md](docs/Configuration-Reference.md) - Complete reference
