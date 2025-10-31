@@ -4834,14 +4834,36 @@ class Engine:
                 if context_config:
                     # Inject context greeting/prompt into provider config NOW (not later)
                     try:
+                        # Apply template substitution for personalized greetings
+                        greeting_to_apply = context_config.greeting
+                        if greeting_to_apply:
+                            try:
+                                caller_name = getattr(session, 'caller_name', None) or "there"
+                                caller_number = getattr(session, 'caller_number', None) or "unknown"
+                                greeting_to_apply = greeting_to_apply.format(
+                                    caller_name=caller_name,
+                                    caller_number=caller_number
+                                )
+                                logger.debug(
+                                    "Applied greeting template substitution for provider",
+                                    call_id=session.call_id,
+                                    caller_name=caller_name
+                                )
+                            except (KeyError, ValueError) as e:
+                                logger.warning(
+                                    "Greeting template substitution failed for provider",
+                                    call_id=session.call_id,
+                                    error=str(e)
+                                )
+                        
                         if isinstance(provider.config, dict):
-                            if context_config.greeting:
-                                provider.config['greeting'] = context_config.greeting
+                            if greeting_to_apply:
+                                provider.config['greeting'] = greeting_to_apply
                                 logger.info(
                                     "Applied context greeting to provider",
                                     call_id=session.call_id,
                                     context=transport.context,
-                                    greeting_preview=context_config.greeting[:50] + "...",
+                                    greeting_preview=greeting_to_apply[:50] + "...",
                                 )
                             if context_config.prompt:
                                 provider.config['prompt'] = context_config.prompt
@@ -4852,13 +4874,13 @@ class Engine:
                                     prompt_length=len(context_config.prompt),
                                 )
                         elif hasattr(provider.config, '__dict__'):
-                            if context_config.greeting and hasattr(provider.config, 'greeting'):
-                                setattr(provider.config, 'greeting', context_config.greeting)
+                            if greeting_to_apply and hasattr(provider.config, 'greeting'):
+                                setattr(provider.config, 'greeting', greeting_to_apply)
                                 logger.info(
                                     "Applied context greeting to provider",
                                     call_id=session.call_id,
                                     context=transport.context,
-                                    greeting_preview=context_config.greeting[:50] + "...",
+                                    greeting_preview=greeting_to_apply[:50] + "...",
                                 )
                             if context_config.prompt:
                                 # Try 'prompt' field first, then 'instructions' (OpenAI uses this)
