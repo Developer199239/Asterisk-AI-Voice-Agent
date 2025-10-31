@@ -3878,12 +3878,12 @@ class Engine:
             prompt_source = "pipeline_default"
             try:
                 # Priority 1: Check if context has a custom prompt
+                # Use session.context_name (persisted string) instead of transport_profile.context (object may not persist)
                 context_prompt_injected = False
-                if hasattr(session, 'transport_profile') and hasattr(session.transport_profile, 'context'):
-                    context_name = session.transport_profile.context
-                    if context_name:
-                        context_config = self.transport_orchestrator.get_context_config(context_name)
-                        if context_config and context_config.prompt:
+                context_name = getattr(session, 'context_name', None)
+                if context_name:
+                    context_config = self.transport_orchestrator.get_context_config(context_name)
+                    if context_config and context_config.prompt:
                             # Create a copy to avoid mutating the pipeline's original options
                             llm_options = dict(llm_options)
                             llm_options['system_prompt'] = context_config.prompt
@@ -3954,19 +3954,19 @@ class Engine:
             greeting_source = "none"
             try:
                 # Priority 1: Check if context has a custom greeting
-                if hasattr(session, 'transport_profile') and hasattr(session.transport_profile, 'context'):
-                    context_name = session.transport_profile.context
-                    if context_name:
-                        context_config = self.transport_orchestrator.get_context_config(context_name)
-                        if context_config and context_config.greeting:
-                            greeting = context_config.greeting.strip()
-                            greeting_source = "context_injection"
-                            logger.info(
-                                "Pipeline greeting resolved from context",
-                                call_id=call_id,
-                                context=context_name,
-                                greeting_length=len(greeting),
-                            )
+                # Use session.context_name (persisted string) instead of transport_profile.context
+                context_name = getattr(session, 'context_name', None)
+                if context_name:
+                    context_config = self.transport_orchestrator.get_context_config(context_name)
+                    if context_config and context_config.greeting:
+                        greeting = context_config.greeting.strip()
+                        greeting_source = "context_injection"
+                        logger.info(
+                            "Pipeline greeting resolved from context",
+                            call_id=call_id,
+                            context=context_name,
+                            greeting_length=len(greeting),
+                        )
                 
                 # Priority 2: Fall back to global config greeting
                 if not greeting:
@@ -4690,6 +4690,12 @@ class Engine:
             
             # Store transport in session (keep as object, not dict, for legacy code compatibility)
             session.transport_profile = transport
+            
+            # CRITICAL FIX: Store context_name separately for pipeline mode
+            # The transport_profile object doesn't always persist through session store,
+            # so we store context_name as a simple string field on CallSession
+            session.context_name = channel_vars.get('AI_CONTEXT')
+            
             await self._save_session(session)
             
             # Apply to streaming manager

@@ -8,9 +8,9 @@ audiosocket:
   port: 8090
 barge_in:
   enabled: true
-  energy_threshold: 1100
+  energy_threshold: 700
   initial_protection_ms: 100
-  min_ms: 250
+  min_ms: 150
   post_tts_end_protection_ms: 100
 config_version: 4
 contexts:
