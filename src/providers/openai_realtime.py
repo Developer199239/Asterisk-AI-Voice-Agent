@@ -462,6 +462,25 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         except Exception:
             logger.error("Failed to send audio to OpenAI Realtime", call_id=self._call_id, exc_info=True)
 
+    async def cancel_response(self):
+        """Cancel any in-progress response generation (for barge-in)."""
+        if not self.websocket or self.websocket.closed:
+            return
+        if not self._pending_response:
+            logger.debug("No pending response to cancel", call_id=self._call_id)
+            return
+        
+        try:
+            cancel_payload = {
+                "type": "response.cancel",
+                "event_id": f"cancel-{uuid.uuid4()}",
+            }
+            await self._send_json(cancel_payload)
+            logger.info("Sent response.cancel to OpenAI (barge-in)", call_id=self._call_id)
+            self._pending_response = False
+        except Exception:
+            logger.error("Failed to send response.cancel", call_id=self._call_id, exc_info=True)
+
     async def stop_session(self):
         if self._closing or self._closed:
             return

@@ -1,7 +1,12 @@
 import yaml
+import os
+
+# Determine config path (works both locally and on server)
+script_dir = os.path.dirname(os.path.abspath(__file__))
+config_path = os.path.join(script_dir, "config/ai-agent.yaml")
 
 # Load existing config
-with open("/root/Asterisk-AI-Voice-Agent/config/ai-agent.yaml") as f:
+with open(config_path) as f:
     config = yaml.safe_load(f)
 
 # Comprehensive project knowledge base (shared by all)
@@ -149,9 +154,9 @@ YOUR ROLE:
     "profile": "telephony_ulaw_8k"
 }
 
-# Save back
-with open("/root/Asterisk-AI-Voice-Agent/config/ai-agent.yaml", "w") as f:
-    yaml.dump(config, f, default_flow_style=False)
+# Write back the updated config
+with open(config_path, "w") as f:
+    yaml.dump(config, f, default_flow_style=False, sort_keys=False)
 
 print("✅ Updated all 3 demo contexts with comprehensive prompts")
 print("\nContexts updated:")

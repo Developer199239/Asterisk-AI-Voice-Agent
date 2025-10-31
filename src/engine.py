@@ -2290,14 +2290,22 @@ class Engine:
                 provider_name = getattr(session, 'provider_name', None)
                 if should_trigger and provider_name == 'openai_realtime':
                     logger.debug(
-                        "Skipping engine barge-in for OpenAI Realtime (handles internally)",
+                        "Local barge-in detected for OpenAI Realtime - sending cancellation to server",
                         call_id=caller_channel_id,
                         energy=energy,
                         criteria_met=criteria_met,
                     )
-                    # Reset candidate counter but don't trigger
+                    # Notify OpenAI to cancel any in-progress response generation
+                    try:
+                        provider = self.providers.get('openai_realtime')
+                        if provider and hasattr(provider, 'cancel_response'):
+                            await provider.cancel_response()
+                    except Exception:
+                        logger.debug("Failed to cancel OpenAI response", call_id=caller_channel_id, exc_info=True)
+                    
+                    # Reset candidate counter but don't trigger local playback stops
                     session.barge_in_candidate_ms = 0
-                    # Continue forwarding audio to provider (OpenAI will handle it)
+                    # Continue forwarding audio to provider (OpenAI will handle the rest)
                     should_trigger = False
 
                 if should_trigger:

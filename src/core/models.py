@@ -6,13 +6,16 @@ in the original engine.py implementation.
 """
 
 from dataclasses import dataclass, field
-from typing import Optional, Set, Dict, Any
+from typing import Optional, Set, Dict, Any, TYPE_CHECKING
 import time
+
+if TYPE_CHECKING:
+    from .transport_orchestrator import TransportProfile as OrchestratorTransportProfile
 
 
 @dataclass
-class TransportProfile:
-    """Canonical transport characteristics for a call."""
+class LegacyTransportProfile:
+    """Legacy transport characteristics (kept for backward compatibility)."""
     format: str = "ulaw"
     sample_rate: int = 8000
     channels: int = 1
@@ -121,7 +124,7 @@ class CallSession:
     last_streaming_error: Optional[str] = None
     caller_audio_format: str = "ulaw"
     caller_sample_rate: int = 8000
-    transport_profile: TransportProfile = field(default_factory=TransportProfile)
+    transport_profile: Optional[Any] = None  # OrchestratorTransportProfile from transport_orchestrator.py
     codec_alignment_ok: bool = True
     codec_alignment_message: Optional[str] = None
     audio_diagnostics: Dict[str, Any] = field(default_factory=dict)
