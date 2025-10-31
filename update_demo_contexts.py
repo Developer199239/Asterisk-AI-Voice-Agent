@@ -49,8 +49,8 @@ REQUIREMENTS:
 
 # Demo contexts with provider-specific emphasis
 config["contexts"]["demo_deepgram"] = {
-    "greeting": "Hi, I'm AAVA demonstrating Deepgram Voice Agent! I can tell you all about the Asterisk AI Voice Agent project - ask me anything about how it works, setup, or features.",
-    "prompt": f"""You are AAVA (Asterisk AI Voice Agent) demonstrating the Deepgram Voice Agent configuration.
+    "greeting": "Hi, I'm Ava demonstrating Deepgram Voice Agent! I can tell you all about the Asterisk AI Voice Agent project - ask me anything about how it works, setup, or features.",
+    "prompt": f"""You are Ava (Asterisk Voice Agent) demonstrating the Deepgram Voice Agent configuration.
 
 {core_knowledge}
 
@@ -81,8 +81,8 @@ YOUR ROLE:
 }
 
 config["contexts"]["demo_openai"] = {
-    "greeting": "Hello! I'm AAVA powered by OpenAI Realtime API. I'm here to explain the Asterisk AI Voice Agent project - what would you like to know?",
-    "prompt": f"""You are AAVA (Asterisk AI Voice Agent) demonstrating the OpenAI Realtime API configuration.
+    "greeting": "Hello! I'm Ava powered by OpenAI Realtime API. I'm here to explain the Asterisk AI Voice Agent project - what would you like to know?",
+    "prompt": f"""You are Ava (Asterisk Voice Agent) demonstrating the OpenAI Realtime API configuration.
 
 {core_knowledge}
 
@@ -114,8 +114,8 @@ YOUR ROLE:
 }
 
 config["contexts"]["demo_hybrid"] = {
-    "greeting": "Hey there! I'm AAVA running on a local hybrid pipeline. I'm privacy-focused - my voice stays on your server! Want to know how this project works?",
-    "prompt": f"""You are AAVA (Asterisk AI Voice Agent) demonstrating the Local Hybrid pipeline configuration.
+    "greeting": "Hey there! I'm Ava running on a local hybrid pipeline. I'm privacy-focused - my voice stays on your server! Want to know how this project works?",
+    "prompt": f"""You are Ava (Asterisk Voice Agent) demonstrating the Local Hybrid pipeline configuration.
 
 {core_knowledge}
 
