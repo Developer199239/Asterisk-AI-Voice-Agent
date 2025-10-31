@@ -138,6 +138,85 @@
           "options": {}
         },
         {
+          "id": "groupBy",
+          "options": {
+            "fields": {
+              "Call ID": {
+                "aggregations": ["lastNotNull"],
+                "operation": "groupby"
+              },
+              "Caller Name": {
+                "aggregations": ["lastNotNull"],
+                "operation": "aggregate"
+              },
+              "Caller Number": {
+                "aggregations": ["lastNotNull"],
+                "operation": "aggregate"
+              },
+              "Demo Agent": {
+                "aggregations": ["lastNotNull"],
+                "operation": "aggregate"
+              },
+              "Pipeline": {
+                "aggregations": ["lastNotNull"],
+                "operation": "aggregate"
+              },
+              "Provider": {
+                "aggregations": ["lastNotNull"],
+                "operation": "aggregate"
+              },
+              "Duration (s)": {
+                "aggregations": ["lastNotNull"],
+                "operation": "aggregate"
+              },
+              "Barge-Ins": {
+                "aggregations": ["lastNotNull"],
+                "operation": "aggregate"
+              },
+              "Underflows": {
+                "aggregations": ["lastNotNull"],
+                "operation": "aggregate"
+              },
+              "call_id": {
+                "aggregations": ["lastNotNull"],
+                "operation": "groupby"
+              },
+              "caller_name": {
+                "aggregations": ["lastNotNull"],
+                "operation": "aggregate"
+              },
+              "caller_number": {
+                "aggregations": ["lastNotNull"],
+                "operation": "aggregate"
+              },
+              "context": {
+                "aggregations": ["lastNotNull"],
+                "operation": "aggregate"
+              },
+              "pipeline": {
+                "aggregations": ["lastNotNull"],
+                "operation": "aggregate"
+              },
+              "provider": {
+                "aggregations": ["lastNotNull"],
+                "operation": "aggregate"
+              },
+              "Value #Duration": {
+                "aggregations": ["lastNotNull"],
+                "operation": "aggregate"
+              },
+              "Value #BargeIns": {
+                "aggregations": ["lastNotNull"],
+                "operation": "aggregate"
+              },
+              "Value #Underflows": {
+                "aggregations": ["lastNotNull"],
+                "operation": "aggregate"
+              }
+            }
+          }
+        },
+        {
           "id": "organize",
           "options": {
             "excludeByName": {
