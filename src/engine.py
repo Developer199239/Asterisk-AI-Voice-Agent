@@ -3864,9 +3864,13 @@ class Engine:
             if not pipeline:
                 logger.debug("Pipeline runner: no pipeline resolved", call_id=call_id)
                 return
-            # Inject context prompt into LLM options if available
+            # Inject context prompt into LLM options with fallback chain
+            # Fallback chain: AI_CONTEXT → pipeline default → global llm_config
             llm_options = pipeline.llm_options or {}
+            prompt_source = "pipeline_default"
             try:
+                # Priority 1: Check if context has a custom prompt
+                context_prompt_injected = False
                 if hasattr(session, 'transport_profile') and hasattr(session.transport_profile, 'context'):
                     context_name = session.transport_profile.context
                     if context_name:
@@ -3875,14 +3879,46 @@ class Engine:
                             # Create a copy to avoid mutating the pipeline's original options
                             llm_options = dict(llm_options)
                             llm_options['system_prompt'] = context_config.prompt
+                            prompt_source = "context_injection"
+                            context_prompt_injected = True
                             logger.info(
-                                "Using context prompt for pipeline LLM",
+                                "Pipeline LLM prompt resolved from context",
                                 call_id=call_id,
                                 context=context_name,
                                 prompt_length=len(context_config.prompt),
+                                prompt_preview=context_config.prompt[:80] + "..." if len(context_config.prompt) > 80 else context_config.prompt,
                             )
-            except Exception:
-                logger.debug("Failed to inject context prompt into pipeline LLM options", call_id=call_id, exc_info=True)
+                
+                # Priority 2: If no context prompt, check if pipeline has default or use global
+                if not context_prompt_injected:
+                    # Check if system_prompt already in llm_options (pipeline default)
+                    if llm_options.get('system_prompt'):
+                        prompt_source = "pipeline_default"
+                        logger.info(
+                            "Pipeline LLM prompt using pipeline default",
+                            call_id=call_id,
+                            prompt_length=len(llm_options['system_prompt']),
+                        )
+                    else:
+                        # Priority 3: Fall back to global llm_config
+                        global_prompt = getattr(self.config.llm, 'prompt', None)
+                        if global_prompt:
+                            llm_options = dict(llm_options)
+                            llm_options['system_prompt'] = global_prompt
+                            prompt_source = "global_llm_config"
+                            logger.info(
+                                "Pipeline LLM prompt resolved from global config",
+                                call_id=call_id,
+                                prompt_length=len(global_prompt),
+                            )
+            except Exception as exc:
+                logger.error(
+                    "Failed to inject context prompt into pipeline LLM options",
+                    call_id=call_id,
+                    error=str(exc),
+                    exc_info=True,
+                )
+                prompt_source = "error"
             
             # Open per-call state for adapters (best-effort)
             try:
@@ -3905,26 +3941,52 @@ class Engine:
                 logger.info("Pipeline TTS adapter session opened", call_id=call_id)
 
             # Pipeline-managed initial greeting (optional)
-            # Try context greeting first, then config
+            # Fallback chain: AI_CONTEXT → global llm_config → empty
             greeting = ""
+            greeting_source = "none"
             try:
-                # Check if context has a custom greeting
+                # Priority 1: Check if context has a custom greeting
                 if hasattr(session, 'transport_profile') and hasattr(session.transport_profile, 'context'):
                     context_name = session.transport_profile.context
                     if context_name:
                         context_config = self.transport_orchestrator.get_context_config(context_name)
                         if context_config and context_config.greeting:
                             greeting = context_config.greeting.strip()
+                            greeting_source = "context_injection"
                             logger.info(
-                                "Using context greeting for pipeline",
+                                "Pipeline greeting resolved from context",
                                 call_id=call_id,
                                 context=context_name,
+                                greeting_length=len(greeting),
                             )
-                # Fall back to config greeting
+                
+                # Priority 2: Fall back to global config greeting
                 if not greeting:
-                    greeting = (getattr(self.config.llm, "initial_greeting", None) or "").strip()
-            except Exception:
+                    global_greeting = (getattr(self.config.llm, "initial_greeting", None) or "").strip()
+                    if global_greeting:
+                        greeting = global_greeting
+                        greeting_source = "global_llm_config"
+                        logger.info(
+                            "Pipeline greeting resolved from global config",
+                            call_id=call_id,
+                            greeting_length=len(greeting),
+                        )
+                
+                # Log if no greeting found
+                if not greeting:
+                    logger.info(
+                        "Pipeline greeting not configured (no greeting will be played)",
+                        call_id=call_id,
+                    )
+            except Exception as exc:
+                logger.error(
+                    "Pipeline greeting resolution failed",
+                    call_id=call_id,
+                    error=str(exc),
+                    exc_info=True,
+                )
                 greeting = ""
+                greeting_source = "error"
             if greeting:
                 max_attempts = 2
                 for attempt in range(1, max_attempts + 1):

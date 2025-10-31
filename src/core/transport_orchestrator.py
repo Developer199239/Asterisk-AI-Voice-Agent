@@ -340,6 +340,7 @@ class TransportOrchestrator:
             internal_rate=profile.internal_rate_hz,
             chunk_ms=chunk_ms,
             idle_cutoff_ms=profile.idle_cutoff_ms,
+            context=context_name,  # Propagate context for greeting/prompt injection
         )
         
         logger.debug(

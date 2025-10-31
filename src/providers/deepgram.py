@@ -395,11 +395,29 @@ class DeepgramProvider(AIProviderInterface):
             output_sample_rate=self._dg_output_rate,
         )
         think_model = getattr(self.llm_config, 'model', None) or "gpt-4o"
-        # Try context-injected prompt first, then llm_config, then default
+        # Try context-injected prompt first (can be 'instructions' or 'prompt' key), then provider config, then llm_config, then default
         think_prompt = (
+            self._get_config_value('instructions', None) or  # Context injection uses 'instructions' for Deepgram
             self._get_config_value('prompt', None) or
             getattr(self.llm_config, 'prompt', None) or
             "You are a helpful assistant."
+        )
+        
+        # Log prompt source for debugging
+        prompt_source = "hardcoded_default"
+        if self._get_config_value('instructions', None):
+            prompt_source = "context_injection"
+        elif self._get_config_value('prompt', None):
+            prompt_source = "provider_config"
+        elif getattr(self.llm_config, 'prompt', None):
+            prompt_source = "global_llm_config"
+        
+        logger.info(
+            "Deepgram Think prompt resolved",
+            call_id=self.call_id,
+            prompt_source=prompt_source,
+            prompt_length=len(think_prompt),
+            prompt_preview=think_prompt[:80] + "..." if len(think_prompt) > 80 else think_prompt,
         )
 
         # Build settings with configured audio formats
