@@ -144,7 +144,11 @@
               "__name__": true,
               "Time": true,
               "instance": true,
-              "job": true
+              "job": true,
+              "component": true,
+              "service": true,
+              "transport": true,
+              "Value #Metadata": true
             },
             "indexByName": {
               "call_id": 0,
