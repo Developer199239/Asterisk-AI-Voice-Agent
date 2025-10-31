@@ -92,130 +92,11 @@
           "instant": true,
           "legendFormat": "__auto",
           "range": false,
-          "refId": "Metadata"
-        },
-        {
-          "datasource": {"type": "prometheus", "uid": "PBFA97CFB590B2093"},
-          "editorMode": "code",
-          "exemplar": false,
-          "expr": "ai_agent_call_duration_seconds_sum",
-          "format": "table",
-          "hide": false,
-          "instant": true,
-          "legendFormat": "__auto",
-          "range": false,
-          "refId": "Duration"
-        },
-        {
-          "datasource": {"type": "prometheus", "uid": "PBFA97CFB590B2093"},
-          "editorMode": "code",
-          "exemplar": false,
-          "expr": "ai_agent_barge_in_events_total",
-          "format": "table",
-          "hide": false,
-          "instant": true,
-          "legendFormat": "__auto",
-          "range": false,
-          "refId": "BargeIns"
-        },
-        {
-          "datasource": {"type": "prometheus", "uid": "PBFA97CFB590B2093"},
-          "editorMode": "code",
-          "exemplar": false,
-          "expr": "ai_agent_stream_underflow_events_total",
-          "format": "table",
-          "hide": false,
-          "instant": true,
-          "legendFormat": "__auto",
-          "range": false,
-          "refId": "Underflows"
+          "refId": "A"
         }
       ],
       "title": "Call Details Table",
       "transformations": [
-        {
-          "id": "merge",
-          "options": {}
-        },
-        {
-          "id": "groupBy",
-          "options": {
-            "fields": {
-              "Call ID": {
-                "aggregations": ["lastNotNull"],
-                "operation": "groupby"
-              },
-              "Caller Name": {
-                "aggregations": ["lastNotNull"],
-                "operation": "aggregate"
-              },
-              "Caller Number": {
-                "aggregations": ["lastNotNull"],
-                "operation": "aggregate"
-              },
-              "Demo Agent": {
-                "aggregations": ["lastNotNull"],
-                "operation": "aggregate"
-              },
-              "Pipeline": {
-                "aggregations": ["lastNotNull"],
-                "operation": "aggregate"
-              },
-              "Provider": {
-                "aggregations": ["lastNotNull"],
-                "operation": "aggregate"
-              },
-              "Duration (s)": {
-                "aggregations": ["lastNotNull"],
-                "operation": "aggregate"
-              },
-              "Barge-Ins": {
-                "aggregations": ["lastNotNull"],
-                "operation": "aggregate"
-              },
-              "Underflows": {
-                "aggregations": ["lastNotNull"],
-                "operation": "aggregate"
-              },
-              "call_id": {
-                "aggregations": ["lastNotNull"],
-                "operation": "groupby"
-              },
-              "caller_name": {
-                "aggregations": ["lastNotNull"],
-                "operation": "aggregate"
-              },
-              "caller_number": {
-                "aggregations": ["lastNotNull"],
-                "operation": "aggregate"
-              },
-              "context": {
-                "aggregations": ["lastNotNull"],
-                "operation": "aggregate"
-              },
-              "pipeline": {
-                "aggregations": ["lastNotNull"],
-                "operation": "aggregate"
-              },
-              "provider": {
-                "aggregations": ["lastNotNull"],
-                "operation": "aggregate"
-              },
-              "Value #Duration": {
-                "aggregations": ["lastNotNull"],
-                "operation": "aggregate"
-              },
-              "Value #BargeIns": {
-                "aggregations": ["lastNotNull"],
-                "operation": "aggregate"
-              },
-              "Value #Underflows": {
-                "aggregations": ["lastNotNull"],
-                "operation": "aggregate"
-              }
-            }
-          }
-        },
         {
           "id": "organize",
           "options": {
@@ -235,10 +116,7 @@
               "caller_number": 2,
               "context": 3,
               "pipeline": 4,
-              "provider": 5,
-              "Value #Duration": 6,
-              "Value #BargeIns": 7,
-              "Value #Underflows": 8
+              "provider": 5
             },
             "renameByName": {
               "call_id": "Call ID",
@@ -246,10 +124,7 @@
               "caller_number": "Caller Number",
               "context": "Demo Agent",
               "pipeline": "Pipeline",
-              "provider": "Provider",
-              "Value #Duration": "Duration (s)",
-              "Value #BargeIns": "Barge-Ins",
-              "Value #Underflows": "Underflows"
+              "provider": "Provider"
             }
           }
         }
