@@ -67,8 +67,7 @@ contexts:
     profile: telephony_ulaw_8k
     provider: deepgram
   demo_hybrid:
-    greeting: Hi ! I'm Ava running on a local hybrid pipeline. I'm privacy-focused
-      - my voice stays on your server! Want to know how this project works?
+    greeting: "Hi {caller_name}! I'm Ava running on a local hybrid pipeline. I'm privacy-focused - my voice stays on your server! Want to know how this project works?"
     prompt: "You are Ava (Asterisk Voice Agent) demonstrating the Local Hybrid pipeline\
       \ configuration.\n\n\nABOUT ASTERISK AI VOICE AGENT v4.0:\n- Open-source (MIT),\
       \ production-ready AI voice agent for Asterisk/FreePBX\n- Enables real-time,\

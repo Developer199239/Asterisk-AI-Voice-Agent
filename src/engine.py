@@ -964,6 +964,8 @@ class Engine:
             session = CallSession(
                 call_id=caller_channel_id,
                 caller_channel_id=caller_channel_id,
+                caller_name=caller_info.get('name'),
+                caller_number=caller_info.get('number'),
                 bridge_id=bridge_id,
                 provider_name=self.config.default_provider,
                 audio_capture_enabled=True,  # FIX #1: Start with capture enabled, only disable when TTS actually starts
@@ -3995,6 +3997,35 @@ class Engine:
                 )
                 greeting = ""
                 greeting_source = "error"
+            
+            # Apply template substitution for personalized greetings
+            if greeting:
+                try:
+                    caller_name = getattr(session, 'caller_name', None) or "there"
+                    caller_number = getattr(session, 'caller_number', None) or "unknown"
+                    greeting = greeting.format(
+                        caller_name=caller_name,
+                        caller_number=caller_number
+                    )
+                    logger.debug(
+                        "Applied greeting template substitution",
+                        call_id=call_id,
+                        caller_name=caller_name,
+                        greeting_length=len(greeting)
+                    )
+                except KeyError as e:
+                    logger.warning(
+                        "Greeting template has invalid placeholder",
+                        call_id=call_id,
+                        error=str(e)
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "Failed to apply greeting template substitution",
+                        call_id=call_id,
+                        error=str(e)
+                    )
+            
             if greeting:
                 max_attempts = 2
                 for attempt in range(1, max_attempts + 1):

@@ -52,6 +52,8 @@ class CallSession:
     # Core identifiers
     call_id: str              # canonical (caller_channel_id)
     caller_channel_id: str
+    caller_name: Optional[str] = None     # CALLERID(name) for personalized greetings
+    caller_number: Optional[str] = None   # CALLERID(num) for context
     local_channel_id: Optional[str] = None
     external_media_id: Optional[str] = None
     external_media_call_id: Optional[str] = None
