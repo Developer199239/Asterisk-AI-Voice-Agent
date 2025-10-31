@@ -5620,7 +5620,9 @@ class Engine:
             # Note: Context greeting/prompt injection now happens earlier in P1 _resolve_audio_profile()
             # to ensure config is set BEFORE provider session starts and reads it.
 
+            logger.info("DEBUG: About to call provider.start_session", call_id=call_id, provider=provider_name)
             await provider.start_session(call_id)
+            logger.info("DEBUG: provider.start_session completed", call_id=call_id, provider=provider_name)
             # If provider supports an explicit greeting (e.g., LocalProvider), trigger it now
             try:
                 if hasattr(provider, 'play_initial_greeting'):
