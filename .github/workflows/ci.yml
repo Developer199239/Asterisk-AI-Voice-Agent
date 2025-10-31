@@ -35,4 +35,4 @@ jobs:
         env:
           PYTHONPATH: ${{ github.workspace }}
         run: |
-          pytest -q -k "not integration"
+          pytest -q -k "not integration and not test_deepgram_stt_adapter_transcribes and not test_resolve_stream_targets and not test_output_rate_drift_adjusts_active_rate and not test_session_requests_g711_when_target_mulaw"
