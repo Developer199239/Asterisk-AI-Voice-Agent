@@ -590,6 +590,14 @@ class ARIClient:
             timestamp = int(time.time() * 1000)  # milliseconds
             filename = f"audio_{timestamp}_{len(pcm_data)}.wav"
             temp_file_path = f"/tmp/asterisk-audio/{filename}"
+            try:
+                os.makedirs("/tmp/asterisk-audio", mode=0o700, exist_ok=True)
+                try:
+                    os.chmod("/tmp/asterisk-audio", 0o700)
+                except Exception:
+                    pass
+            except Exception:
+                pass
             
             # Write WAV file
             with wave.open(temp_file_path, 'wb') as wav_file:
@@ -599,7 +607,7 @@ class ARIClient:
                 wav_file.writeframes(pcm_data)
             
             # Set proper permissions for Asterisk to read the file
-            os.chmod(temp_file_path, 0o644)  # rw-r--r--
+            os.chmod(temp_file_path, 0o600)  # rw-------
             
             # Force filesystem sync and verify file exists
             os.sync()  # Force filesystem sync

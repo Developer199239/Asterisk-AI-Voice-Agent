@@ -5697,10 +5697,17 @@ class Engine:
             app.router.add_get('/metrics', self._metrics_handler)
             runner = web.AppRunner(app)
             await runner.setup()
-            site = web.TCPSite(runner, '0.0.0.0', 15000)
+            # Host/port now configurable via environment with localhost defaults (AAVA-30)
+            try:
+                health_host = os.getenv('HEALTH_BIND_HOST', '127.0.0.1')
+                health_port = int(os.getenv('HEALTH_BIND_PORT', '15000'))
+            except Exception:
+                health_host = '127.0.0.1'
+                health_port = 15000
+            site = web.TCPSite(runner, health_host, health_port)
             await site.start()
             self._health_runner = runner
-            logger.info("Health endpoint started", host="0.0.0.0", port=15000)
+            logger.info("Health endpoint started", host=health_host, port=health_port)
         except Exception as exc:
             logger.error("Failed to start health endpoint", error=str(exc), exc_info=True)
 

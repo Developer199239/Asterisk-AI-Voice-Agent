@@ -26,7 +26,7 @@ class AsteriskConfig(BaseModel):
     app_name: str = Field(default="ai-voice-agent")
 
 class ExternalMediaConfig(BaseModel):
-    rtp_host: str = Field(default="0.0.0.0")
+    rtp_host: str = Field(default="127.0.0.1")
     rtp_port: int = Field(default=18080)
     port_range: Optional[str] = Field(default=None)
     codec: str = Field(default="ulaw")  # ulaw or slin16
@@ -36,7 +36,7 @@ class ExternalMediaConfig(BaseModel):
 
 
 class AudioSocketConfig(BaseModel):
-    host: str = Field(default="0.0.0.0")
+    host: str = Field(default="127.0.0.1")
     port: int = Field(default=8090)
     format: str = Field(default="ulaw")  # 'ulaw' or 'slin16'
 
@@ -424,7 +424,7 @@ def load_config(path: str = "config/ai-agent.yaml") -> AppConfig:
 
         # AudioSocket configuration defaults
         audiosocket_cfg = config_data.get('audiosocket', {}) or {}
-        audiosocket_cfg.setdefault('host', os.getenv('AUDIOSOCKET_HOST', '0.0.0.0'))
+        audiosocket_cfg.setdefault('host', os.getenv('AUDIOSOCKET_HOST', '127.0.0.1'))
         try:
             audiosocket_cfg.setdefault('port', int(os.getenv('AUDIOSOCKET_PORT', audiosocket_cfg.get('port', 8090))))
         except ValueError:
@@ -432,6 +432,11 @@ def load_config(path: str = "config/ai-agent.yaml") -> AppConfig:
         # AudioSocket payload format expected by Asterisk dialplan (matches third arg to AudioSocket(...))
         audiosocket_cfg.setdefault('format', os.getenv('AUDIOSOCKET_FORMAT', audiosocket_cfg.get('format', 'ulaw')))
         config_data['audiosocket'] = audiosocket_cfg
+
+        # ExternalMedia RTP configuration defaults (env override supported)
+        external_cfg = config_data.get('external_media', {}) or {}
+        external_cfg.setdefault('rtp_host', os.getenv('EXTERNAL_MEDIA_RTP_HOST', external_cfg.get('rtp_host', '127.0.0.1')))
+        config_data['external_media'] = external_cfg
 
         # Milestone7: Normalize pipelines for PipelineEntry schema while keeping legacy configs valid.
         _normalize_pipelines(config_data)
@@ -634,12 +639,23 @@ def validate_production_config(config: AppConfig) -> tuple[list[str], list[str]]
             elif jitter_buffer > 1000:
                 warnings.append(f"Jitter buffer very large: {jitter_buffer}ms (adds latency, consider reducing)")
         
+        # Binding exposure warnings
+        try:
+            if hasattr(config, 'audiosocket') and config.audiosocket:
+                if getattr(config.audiosocket, 'host', None) == '0.0.0.0':
+                    warnings.append("AudioSocket bound to 0.0.0.0; ensure firewall/segmentation is in place")
+            if hasattr(config, 'external_media') and config.external_media:
+                if getattr(config.external_media, 'rtp_host', None) == '0.0.0.0':
+                    warnings.append("ExternalMedia RTP bound to 0.0.0.0; ensure firewall/segmentation is in place")
+        except Exception:
+            pass
+
         # Check for deprecated/test settings
         if hasattr(config, 'streaming') and config.streaming:
             if hasattr(config.streaming, 'diag_enable_taps'):
                 if getattr(config.streaming, 'diag_enable_taps', False):
                     warnings.append("Diagnostic taps enabled (performance impact, disable in production)")
-        
+    
     except Exception as e:
         # Don't let validation errors crash startup
         logger.warning("Configuration validation encountered an error", error=str(e), exc_info=True)

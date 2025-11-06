@@ -281,7 +281,11 @@ class StreamingPlaybackManager:
             self.diag_out_dir = '/tmp/ai-engine-taps'
         if self.diag_enable_taps:
             try:
-                os.makedirs(self.diag_out_dir, exist_ok=True)
+                os.makedirs(self.diag_out_dir, mode=0o700, exist_ok=True)
+                try:
+                    os.chmod(self.diag_out_dir, 0o700)
+                except Exception:
+                    pass
             except Exception:
                 pass
         # μ-law fast-path sanity guard (enabled by default)
@@ -1363,6 +1367,10 @@ class StreamingPlaybackManager:
                                         wf.setsampwidth(2)
                                         wf.setframerate(rate)
                                         wf.writeframes(working_pcm)
+                                    try:
+                                        os.chmod(fn2, 0o600)
+                                    except Exception:
+                                        pass
                                     logger.info("Wrote post-compand PCM16 tap snapshot", call_id=call_id, stream_id=stream_id_first, path=fn2, bytes=len(working_pcm), rate=rate, snapshot="first")
                                 info['tap_first_snapshot_done'] = True
                         except Exception:
@@ -1408,6 +1416,10 @@ class StreamingPlaybackManager:
                                         wf.setsampwidth(2)
                                         wf.setframerate(win_rate)
                                         wf.writeframes(bytes(post_w[:win_bytes]))
+                                    try:
+                                        os.chmod(fnq200, 0o600)
+                                    except Exception:
+                                        pass
                                     logger.info("Wrote post-compand 200ms snapshot", call_id=call_id, stream_id=sid, path=fnq200, bytes=win_bytes, rate=win_rate, snapshot="first200ms")
                                 except Exception:
                                     logger.warning("Failed 200ms post snapshot (guarded)", call_id=call_id, stream_id=sid, rate=win_rate, exc_info=True)
@@ -1499,6 +1511,10 @@ class StreamingPlaybackManager:
                                                 wf.setsampwidth(2)
                                                 wf.setframerate(win_rate)
                                                 wf.writeframes(bytes(pre_w[:win_bytes]))
+                                            try:
+                                                os.chmod(fnp200, 0o600)
+                                            except Exception:
+                                                pass
                                             logger.info("Wrote pre-compand 200ms snapshot", call_id=call_id, stream_id=sid, path=fnp200, bytes=win_bytes, rate=win_rate, snapshot="first200ms")
                                         except Exception:
                                             logger.warning("Failed 200ms pre snapshot (mulaw->pcm fast)", call_id=call_id, stream_id=sid, rate=win_rate, exc_info=True)
@@ -1509,6 +1525,10 @@ class StreamingPlaybackManager:
                                                 wf.setsampwidth(2)
                                                 wf.setframerate(win_rate)
                                                 wf.writeframes(bytes(post_w[:win_bytes]))
+                                            try:
+                                                os.chmod(fnq200, 0o600)
+                                            except Exception:
+                                                pass
                                             logger.info("Wrote post-compand 200ms snapshot", call_id=call_id, stream_id=sid, path=fnq200, bytes=win_bytes, rate=win_rate, snapshot="first200ms")
                                         except Exception:
                                             logger.warning("Failed 200ms post snapshot (mulaw->pcm fast)", call_id=call_id, stream_id=sid, rate=win_rate, exc_info=True)
@@ -1733,6 +1753,10 @@ class StreamingPlaybackManager:
                                         wf.setsampwidth(2)
                                         wf.setframerate(int(rate) if isinstance(rate, int) else int(self.sample_rate))
                                         wf.writeframes(working)
+                                    try:
+                                        os.chmod(fn, 0o600)
+                                    except Exception:
+                                        pass
                                     logger.info("Wrote pre-compand PCM16 tap snapshot", call_id=call_id, stream_id=stream_id_first, path=fn, bytes=len(working), rate=rate, snapshot="first")
                                 except Exception:
                                     logger.warning("Failed to write pre-compand tap snapshot", call_id=call_id, stream_id=stream_id_first, path=fn, rate=rate, snapshot="first", exc_info=True)
@@ -1745,6 +1769,10 @@ class StreamingPlaybackManager:
                                         wf.setsampwidth(2)
                                         wf.setframerate(int(rate) if isinstance(rate, int) else int(self.sample_rate))
                                         wf.writeframes(back_pcm)
+                                    try:
+                                        os.chmod(fn2, 0o600)
+                                    except Exception:
+                                        pass
                                     logger.info("Wrote post-compand PCM16 tap snapshot", call_id=call_id, stream_id=stream_id_first, path=fn2, bytes=len(back_pcm), rate=rate, snapshot="first")
                                 except Exception:
                                     logger.warning("Failed to write post-compand tap snapshot", call_id=call_id, stream_id=stream_id_first, path=fn2, rate=rate, snapshot="first", exc_info=True)
@@ -1798,6 +1826,10 @@ class StreamingPlaybackManager:
                                             wf.setsampwidth(2)
                                             wf.setframerate(win_rate)
                                             wf.writeframes(bytes(pre_w[:win_bytes]))
+                                        try:
+                                            os.chmod(fnp200, 0o600)
+                                        except Exception:
+                                            pass
                                         logger.info("Wrote pre-compand 200ms snapshot", call_id=call_id, stream_id=sid, path=fnp200, bytes=win_bytes, rate=win_rate, snapshot="first200ms")
                                     except Exception:
                                         logger.warning("Failed 200ms pre snapshot", call_id=call_id, stream_id=sid, rate=win_rate, exc_info=True)
@@ -1808,6 +1840,10 @@ class StreamingPlaybackManager:
                                             wf.setsampwidth(2)
                                             wf.setframerate(win_rate)
                                             wf.writeframes(bytes(post_w[:win_bytes]))
+                                        try:
+                                            os.chmod(fnq200, 0o600)
+                                        except Exception:
+                                            pass
                                         logger.info("Wrote post-compand 200ms snapshot", call_id=call_id, stream_id=sid, path=fnq200, bytes=win_bytes, rate=win_rate, snapshot="first200ms")
                                     except Exception:
                                         logger.warning("Failed 200ms post snapshot", call_id=call_id, stream_id=sid, rate=win_rate, exc_info=True)
@@ -1852,6 +1888,10 @@ class StreamingPlaybackManager:
                                     wf.setsampwidth(2)
                                     wf.setframerate(int(rate) if isinstance(rate, int) else int(self.sample_rate))
                                     wf.writeframes(working)
+                                try:
+                                    os.chmod(fnp, 0o600)
+                                except Exception:
+                                    pass
                                 logger.info("Wrote pre-compand PCM16 tap snapshot", call_id=call_id, stream_id=stream_id_first, path=fnp, bytes=len(working), rate=rate, snapshot="first")
                             except Exception:
                                 logger.warning("Failed to write pre-compand tap snapshot", call_id=call_id, stream_id=stream_id_first, path=fnp, rate=rate, snapshot="first", exc_info=True)
@@ -1863,6 +1903,10 @@ class StreamingPlaybackManager:
                                     wf.setsampwidth(2)
                                     wf.setframerate(int(rate) if isinstance(rate, int) else int(self.sample_rate))
                                     wf.writeframes(out_pcm)
+                                try:
+                                    os.chmod(fnq, 0o600)
+                                except Exception:
+                                    pass
                                 logger.info("Wrote post-compand PCM16 tap snapshot", call_id=call_id, stream_id=stream_id_first, path=fnq, bytes=len(out_pcm), rate=rate, snapshot="first")
                             except Exception:
                                 logger.warning("Failed to write post-compand tap snapshot", call_id=call_id, stream_id=stream_id_first, path=fnq, rate=rate, snapshot="first", exc_info=True)
@@ -1922,6 +1966,10 @@ class StreamingPlaybackManager:
                                     wf.setsampwidth(2)
                                     wf.setframerate(win_rate)
                                     wf.writeframes(bytes(pre_w[:win_bytes]))
+                                try:
+                                    os.chmod(fnp200, 0o600)
+                                except Exception:
+                                    pass
                                 logger.info("Wrote pre-compand 200ms snapshot", call_id=call_id, stream_id=sid, path=fnp200, bytes=win_bytes, rate=win_rate, snapshot="first200ms")
                             except Exception:
                                 logger.warning("Failed 200ms pre snapshot", call_id=call_id, stream_id=sid, rate=win_rate, exc_info=True)
@@ -1932,6 +1980,10 @@ class StreamingPlaybackManager:
                                     wf.setsampwidth(2)
                                     wf.setframerate(win_rate)
                                     wf.writeframes(bytes(post_w[:win_bytes]))
+                                try:
+                                    os.chmod(fnq200, 0o600)
+                                except Exception:
+                                    pass
                                 logger.info("Wrote post-compand 200ms snapshot", call_id=call_id, stream_id=sid, path=fnq200, bytes=win_bytes, rate=win_rate, snapshot="first200ms")
                             except Exception:
                                 logger.warning("Failed 200ms post snapshot", call_id=call_id, stream_id=sid, rate=win_rate, exc_info=True)
@@ -2286,6 +2338,7 @@ class StreamingPlaybackManager:
                             rate = raw_rate if raw_rate > 0 else int(self.sample_rate)
                             pre = bytes(info.get('tap_pre_pcm16') or b"")
                             post = bytes(info.get('tap_post_pcm16') or b"")
+                            # Write snapshots opportunistically (errors non-fatal)
                             if pre:
                                 fn = os.path.join(self.diag_out_dir, f"pre_compand_pcm16_{call_id}_{stream_id}_first.wav")
                                 try:
@@ -2294,6 +2347,10 @@ class StreamingPlaybackManager:
                                         wf.setsampwidth(2)
                                         wf.setframerate(rate)
                                         wf.writeframes(pre)
+                                    try:
+                                        os.chmod(fn, 0o600)
+                                    except Exception:
+                                        pass
                                     logger.info("Wrote pre-compand PCM16 tap snapshot", call_id=call_id, stream_id=stream_id, path=fn, bytes=len(pre), rate=rate, snapshot="first")
                                 except Exception:
                                     logger.warning("Failed to write pre-compand tap snapshot", call_id=call_id, stream_id=stream_id, path=fn, rate=rate, snapshot="first", exc_info=True)
@@ -2305,12 +2362,15 @@ class StreamingPlaybackManager:
                                         wf.setsampwidth(2)
                                         wf.setframerate(rate)
                                         wf.writeframes(post)
+                                    try:
+                                        os.chmod(fn2, 0o600)
+                                    except Exception:
+                                        pass
                                     logger.info("Wrote post-compand PCM16 tap snapshot", call_id=call_id, stream_id=stream_id, path=fn2, bytes=len(post), rate=rate, snapshot="first")
                                 except Exception:
                                     logger.warning("Failed to write post-compand tap snapshot", call_id=call_id, stream_id=stream_id, path=fn2, rate=rate, snapshot="first", exc_info=True)
                     except Exception:
                         logger.debug("Per-segment tap snapshot failed", call_id=call_id, stream_id=stream_id, exc_info=True)
-                # Optional broadcast mode for diagnostics
                 if self.audiosocket_broadcast_debug:
                     conns = list(set(getattr(session, 'audiosocket_conns', []) or []))
                     sent = 0
