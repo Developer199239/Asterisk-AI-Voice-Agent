@@ -697,6 +697,19 @@ class StreamingPlaybackManager:
                        call_id=call_id,
                        stream_id=stream_id,
                        playback_type=playback_type)
+            # Explicit per-stream log for continuous streaming mode
+            try:
+                if bool(self.continuous_stream):
+                    logger.info(
+                        "⚡ CONTINUOUS STREAM - Enabled for stream",
+                        call_id=call_id,
+                        stream_id=stream_id,
+                        segments_played=int(self.active_streams[call_id].get('segments_played', 0)),
+                        min_start_chunks=int(self.active_streams[call_id].get('min_start_chunks', 0)),
+                        low_watermark_chunks=int(self.low_watermark_chunks),
+                    )
+            except Exception:
+                pass
 
             # Outbound setup probe
             try:
@@ -2967,8 +2980,8 @@ class StreamingPlaybackManager:
                 rate = int(self.sample_rate)
             total_attack_bytes = int(max(0, int(rate * (self.attack_ms / 1000.0)) * 2))
             info['attack_bytes_remaining'] = total_attack_bytes
-            logger.debug(
-                "Marked segment boundary; attack reset",
+            logger.info(
+                "⚡ CONTINUOUS STREAM - Segment boundary",
                 call_id=call_id,
                 segment_num=info['segments_played'],
                 attack_bytes=total_attack_bytes,
