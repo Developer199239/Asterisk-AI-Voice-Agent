@@ -1301,11 +1301,12 @@ class StreamingPlaybackManager:
                 except Exception:
                     guard_ok = True
 
-                # If guard passes, keep provider μ-law as-is (passthrough). If guard fails, decode/normalize/re-encode.
-                if guard_ok:
+                # If guard passes and normalizer is disabled, keep provider μ-law as-is (passthrough).
+                # If normalizer is enabled, override passthrough to allow deterministic gain normalization.
+                if guard_ok and not (self.normalizer_enabled and self.normalizer_target_rms > 0):
                     try:
                         logger.info(
-                            "μ-law PASSTHROUGH - Skipping all processing",
+                            "μ-law PASSTHROUGH - Skipping processing (normalizer disabled)",
                             call_id=call_id,
                             chunk_bytes=len(chunk),
                             source=src_encoding_raw,
@@ -1315,13 +1316,28 @@ class StreamingPlaybackManager:
                     except Exception:
                         pass
                     return chunk
+                else:
+                    try:
+                        info = self.active_streams.get(call_id, {}) if call_id in self.active_streams else {}
+                        if not info.get('normalizer_passthrough_override_logged'):
+                            logger.info(
+                                "μ-law PASSTHROUGH OVERRIDDEN - Normalizer enabled",
+                                call_id=call_id,
+                                target_rms=int(self.normalizer_target_rms),
+                                max_gain_db=float(self.normalizer_max_gain_db),
+                            )
+                            info['normalizer_passthrough_override_logged'] = True
+                            if call_id in self.active_streams:
+                                self.active_streams[call_id] = info
+                    except Exception:
+                        pass
                 # Guard failed: decode → normalize (bounded) → optional limit → re-encode back to μ-law
                 try:
                     logger.debug("MULAW DECODE ATTEMPT", call_id=call_id, chunk_size=len(chunk), chunk_type=type(chunk).__name__)
                     back_pcm = mulaw_to_pcm16le(chunk)
                     logger.debug("MULAW DECODE SUCCESS", call_id=call_id, pcm_size=len(back_pcm))
                 except Exception as e:
-                    logger.error("MULAW DECODE FAILED", call_id=call_id, error=str(e), error_type=type(e).__name__, chunk_size=len(chunk), exc_info=True)
+                    logger.error("MULAW DECODE FAILED", call_id=call_id, error=str(e), chunk_size=len(chunk), exc_info=True)
                     back_pcm = b""
 
                 working_pcm = back_pcm
@@ -1463,6 +1479,26 @@ class StreamingPlaybackManager:
                 # Simple decode: mulaw → PCM16
                 try:
                     pcm16_bytes = mulaw_to_pcm16le(chunk)
+                    # Deterministic normalization on fast-path when enabled
+                    try:
+                        if self.normalizer_enabled and self.normalizer_target_rms > 0 and pcm16_bytes:
+                            pcm16_bytes = self._apply_normalizer(pcm16_bytes, self.normalizer_target_rms, self.normalizer_max_gain_db)
+                            try:
+                                info = self.active_streams.get(call_id, {}) if call_id in self.active_streams else {}
+                                if not info.get('normalizer_applied_fastpath_logged'):
+                                    logger.info(
+                                        "Normalizer applied (mulaw→pcm fast path)",
+                                        call_id=call_id,
+                                        target_rms=int(self.normalizer_target_rms),
+                                        max_gain_db=float(self.normalizer_max_gain_db),
+                                    )
+                                    info['normalizer_applied_fastpath_logged'] = True
+                                    if call_id in self.active_streams:
+                                        self.active_streams[call_id] = info
+                            except Exception:
+                                pass
+                    except Exception:
+                        logger.debug("Normalizer failed in mulaw→pcm fast path", call_id=call_id, exc_info=True)
                     # Accumulate diagnostics taps and snapshots in fast path
                     try:
                         if getattr(self, 'diag_enable_taps', False) and call_id in self.active_streams and pcm16_bytes:
@@ -1721,6 +1757,20 @@ class StreamingPlaybackManager:
                     if self.normalizer_enabled and self.normalizer_target_rms > 0:
                         logger.debug("ENTERING NORMALIZER (pcm->ulaw)", call_id=call_id)
                         working = self._apply_normalizer(working, self.normalizer_target_rms, self.normalizer_max_gain_db)
+                        # One-time info log per stream to confirm normalizer activation in production
+                        try:
+                            sinfo = self.active_streams.get(call_id, {})
+                            if not sinfo.get('normalizer_applied_ulaw_logged'):
+                                logger.info(
+                                    "Normalizer applied (pcm->ulaw encode path)",
+                                    call_id=call_id,
+                                    target_rms=int(self.normalizer_target_rms),
+                                    max_gain_db=float(self.normalizer_max_gain_db),
+                                )
+                                sinfo['normalizer_applied_ulaw_logged'] = True
+                                self.active_streams[call_id] = sinfo
+                        except Exception:
+                            pass
                     else:
                         logger.warning(
                             "NORMALIZER SKIPPED - WHY? (pcm->ulaw)",
@@ -1877,8 +1927,19 @@ class StreamingPlaybackManager:
             except Exception:
                 pass
             out_pcm = working
-            # Apply soft limiter on PCM egress to prevent clipping (mirrors μ-law path behavior)
+            # Apply normalization and soft limiter on PCM egress to ensure consistent loudness
             try:
+                if self.normalizer_enabled and self.normalizer_target_rms > 0 and out_pcm:
+                    out_pcm = self._apply_normalizer(out_pcm, self.normalizer_target_rms, self.normalizer_max_gain_db)
+                    try:
+                        logger.info(
+                            "Normalizer applied (pcm egress)",
+                            call_id=call_id,
+                            target_rms=int(self.normalizer_target_rms),
+                            max_gain_db=float(self.normalizer_max_gain_db),
+                        )
+                    except Exception:
+                        pass
                 if self.limiter_enabled and out_pcm:
                     out_pcm = self._apply_soft_limiter(out_pcm, self.limiter_headroom_ratio)
             except Exception:
