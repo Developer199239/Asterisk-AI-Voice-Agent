@@ -298,6 +298,10 @@ class StreamingPlaybackManager:
             self.empty_backoff_ticks_max: int = int(self.streaming_config.get('empty_backoff_ticks_max', 5))
         except Exception:
             self.empty_backoff_ticks_max = 5
+        try:
+            self.max_filler_idle_ms: int = int(self.streaming_config.get('max_filler_idle_ms', 400))
+        except Exception:
+            self.max_filler_idle_ms = 400
         
         logger.info(
             "StreamingPlaybackManager initialized",
@@ -1029,6 +1033,15 @@ class StreamingPlaybackManager:
                 return "wait"
             # After short backoff streak, send one filler and reset the streak
             stream_info['empty_backoff_ticks'] = 0
+            # Suppress filler if prolonged idle since last real frame (prevents tail drift)
+            try:
+                lri = stream_info.get('last_real_emit_ts')
+                if lri is not None:
+                    elapsed_ms = (time.time() - float(lri)) * 1000.0
+                    if elapsed_ms >= float(getattr(self, 'max_filler_idle_ms', 400)):
+                        return "wait"
+            except Exception:
+                pass
             filler_byte = b"\xFF" if self._is_mulaw(target_fmt) else b"\x00"
             if pending:
                 pending_len = len(pending)
@@ -3188,7 +3201,8 @@ class StreamingPlaybackManager:
                         eff_seconds = 0.0
                     try:
                         start_ts = float(info.get('start_time', time.time()))
-                        wall_seconds = max(0.0, time.time() - start_ts)
+                        end_ts = float(info.get('last_real_emit_ts') or info.get('last_frame_ts') or time.time())
+                        wall_seconds = max(0.0, end_ts - start_ts)
                     except Exception:
                         wall_seconds = 0.0
                     try:
