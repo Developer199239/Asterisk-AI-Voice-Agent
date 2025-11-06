@@ -630,6 +630,13 @@ def validate_production_config(config: AppConfig) -> tuple[list[str], list[str]]
         log_level = os.getenv('LOG_LEVEL', 'info').lower()
         if log_level == 'debug':
             warnings.append("Debug logging enabled (security/performance risk in production)")
+        # Streaming logging verbosity warnings
+        try:
+            streaming_log_level = os.getenv('STREAMING_LOG_LEVEL', 'info').lower()
+            if streaming_log_level == 'debug':
+                warnings.append("Streaming log level is DEBUG (increases log volume; set STREAMING_LOG_LEVEL=info for production)")
+        except Exception:
+            pass
         
         # Streaming configuration warnings
         if hasattr(config, 'streaming') and config.streaming:
