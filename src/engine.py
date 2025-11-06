@@ -3559,6 +3559,11 @@ class Engine:
                         buf_ms = 0.0
                     logger.info("PROVIDER COALESCE BUFFER", call_id=call_id, buf_ms=buf_ms, bytes=len(buf))
                     if buf_ms < coalesce_min_ms:
+                        # Count provider bytes even while buffering prior to stream start
+                        try:
+                            self._provider_bytes[call_id] = int(self._provider_bytes.get(call_id, 0)) + (len(chunk) if isinstance(chunk, (bytes, bytearray)) else len(out_chunk))
+                        except Exception:
+                            pass
                         # Keep buffering until threshold
                         return
                     # Start streaming now with coalesced buffer
@@ -3636,17 +3641,17 @@ class Engine:
                         logger.info("COALESCE START", call_id=call_id, coalesced_ms=buf_ms, coalesced_bytes=len(buf))
                         try:
                             q.put_nowait(bytes(buf))
+                            # Account for the initial coalesced enqueue
+                            try:
+                                self._enqueued_bytes[call_id] = int(self._enqueued_bytes.get(call_id, 0)) + len(buf)
+                            except Exception:
+                                pass
                         except asyncio.QueueFull:
                             logger.debug("Coalesced enqueue dropped (queue full)", call_id=call_id)
                         self._provider_coalesce_buf.pop(call_id, None)
+                        return
                     except Exception:
-                        logger.error("Coalesced start_streaming_playback failed", call_id=call_id, exc_info=True)
-                        # Fallback: play coalesced buffer via file
-                        try:
-                            playback_id = await self.playback_manager.play_audio(call_id, bytes(buf), "streaming-response")
-                            logger.info("MICRO SEGMENT FILE FALLBACK (start)", call_id=call_id, buf_ms=buf_ms, playback_id=playback_id)
-                        except Exception:
-                            logger.error("File fallback failed after coalesce start error", call_id=call_id, exc_info=True)
+                        logger.error("File fallback failed after coalesce start error", call_id=call_id, exc_info=True)
                         self._provider_coalesce_buf.pop(call_id, None)
                         return
                 else:
@@ -3845,6 +3850,11 @@ class Engine:
                             logger.info("COALESCE START (end)", call_id=call_id, coalesced_ms=buf_ms, coalesced_bytes=len(buf))
                             try:
                                 q2.put_nowait(bytes(buf))
+                                # Account for the coalesced enqueue at segment end
+                                try:
+                                    self._enqueued_bytes[call_id] = int(self._enqueued_bytes.get(call_id, 0)) + len(buf)
+                                except Exception:
+                                    pass
                                 q2.put_nowait(None)
                             except asyncio.QueueFull:
                                 logger.debug("Coalesced enqueue dropped at end (queue full)", call_id=call_id)
