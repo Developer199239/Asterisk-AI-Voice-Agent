@@ -3066,6 +3066,10 @@ class StreamingPlaybackManager:
                                 wf.setsampwidth(2)
                                 wf.setframerate(rate)
                                 wf.writeframes(pre)
+                            try:
+                                os.chmod(fn, 0o600)
+                            except Exception:
+                                pass
                             logger.info("Wrote pre-compand PCM16 tap", call_id=call_id, path=fn, bytes=len(pre), rate=rate)
                         except Exception:
                             logger.warning("Failed to write pre-compand tap", call_id=call_id, path=fn, rate=rate, exc_info=True)
@@ -3077,6 +3081,10 @@ class StreamingPlaybackManager:
                                 wf.setsampwidth(2)
                                 wf.setframerate(rate)
                                 wf.writeframes(pre)
+                            try:
+                                os.chmod(fn_seg, 0o600)
+                            except Exception:
+                                pass
                             logger.info("Wrote pre-compand PCM16 tap snapshot", call_id=call_id, stream_id=stream_id, path=fn_seg, bytes=len(pre), rate=rate, snapshot="end")
                         except Exception:
                             logger.warning("Failed to write pre-compand tap snapshot", call_id=call_id, stream_id=stream_id, rate=rate, snapshot="end", exc_info=True)
@@ -3088,6 +3096,10 @@ class StreamingPlaybackManager:
                                 wf.setsampwidth(2)
                                 wf.setframerate(rate)
                                 wf.writeframes(post)
+                            try:
+                                os.chmod(fn2, 0o600)
+                            except Exception:
+                                pass
                             logger.info("Wrote post-compand PCM16 tap", call_id=call_id, path=fn2, bytes=len(post), rate=rate)
                         except Exception:
                             logger.warning("Failed to write post-compand tap", call_id=call_id, path=fn2, rate=rate, exc_info=True)
@@ -3099,6 +3111,10 @@ class StreamingPlaybackManager:
                                 wf.setsampwidth(2)
                                 wf.setframerate(rate)
                                 wf.writeframes(post)
+                            try:
+                                os.chmod(fn2_seg, 0o600)
+                            except Exception:
+                                pass
                             logger.info("Wrote post-compand PCM16 tap snapshot", call_id=call_id, stream_id=stream_id, path=fn2_seg, bytes=len(post), rate=rate, snapshot="end")
                         except Exception:
                             logger.warning("Failed to write post-compand tap snapshot", call_id=call_id, stream_id=stream_id, rate=rate, snapshot="end", exc_info=True)
@@ -3164,6 +3180,10 @@ class StreamingPlaybackManager:
                                     wf.setsampwidth(2)
                                     wf.setframerate(crate)
                                     wf.writeframes(cpre)
+                                try:
+                                    os.chmod(fnc, 0o600)
+                                except Exception:
+                                    pass
                                 logger.info("Wrote call-level pre-compand PCM16 tap", call_id=call_id, path=fnc, bytes=len(cpre), rate=crate)
                             except Exception:
                                 logger.warning("Failed to write call-level pre-compand tap", call_id=call_id, path=fnc, rate=crate, exc_info=True)
@@ -3175,9 +3195,28 @@ class StreamingPlaybackManager:
                                     wf.setsampwidth(2)
                                     wf.setframerate(crate)
                                     wf.writeframes(cpost)
+                                try:
+                                    os.chmod(fnc2, 0o600)
+                                except Exception:
+                                    pass
                                 logger.info("Wrote call-level post-compand PCM16 tap", call_id=call_id, path=fnc2, bytes=len(cpost), rate=crate)
                             except Exception:
                                 logger.warning("Failed to write call-level post-compand tap", call_id=call_id, path=fnc2, rate=crate, exc_info=True)
+                        # Cleanup: remove all per-call diagnostic tap files now that we've finished
+                        try:
+                            if os.path.isdir(self.diag_out_dir):
+                                prefix_pre = f"pre_compand_pcm16_{call_id}"
+                                prefix_post = f"post_compand_pcm16_{call_id}"
+                                for name in os.listdir(self.diag_out_dir):
+                                    if name.startswith(prefix_pre) or name.startswith(prefix_post):
+                                        fpath = os.path.join(self.diag_out_dir, name)
+                                        try:
+                                            if os.path.isfile(fpath):
+                                                os.remove(fpath)
+                                        except Exception:
+                                            pass
+                        except Exception:
+                            pass
                     except Exception:
                         logger.debug("Call-level tap write failed", call_id=call_id, exc_info=True)
             except Exception:
