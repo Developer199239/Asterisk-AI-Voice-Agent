@@ -434,6 +434,10 @@ streaming:
     target_rms: 1400
   provider_grace_ms: 500
   sample_rate: 8000
+  diag_enable_taps: true
+  diag_pre_secs: 1
+  diag_post_secs: 1
+  diag_out_dir: "/tmp/ai-engine-taps"
 vad:
   enhanced_enabled: true
   fallback_buffer_size: 128000
