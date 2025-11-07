@@ -1,0 +1,68 @@
+# Trivy Docker Image Security Scanning - AAVA-36
+# Scans Docker images for vulnerabilities in OS packages and dependencies
+# Results uploaded to GitHub Security tab
+
+name: "Trivy"
+
+on:
+  push:
+    branches: [ "main", "develop" ]
+    paths:
+      - 'Dockerfile'
+      - 'requirements.txt'
+      - '.github/workflows/trivy.yml'
+  pull_request:
+    branches: [ "main", "develop" ]
+    paths:
+      - 'Dockerfile'
+      - 'requirements.txt'
+  schedule:
+    # Run weekly on Monday at 7am UTC (after CodeQL)
+    - cron: '0 7 * * 1'
+
+jobs:
+  scan:
+    name: Scan Docker Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Build Docker image
+      run: |
+        docker build -t ai-engine:${{ github.sha }} .
+      
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: 'ai-engine:${{ github.sha }}'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+        severity: 'CRITICAL,HIGH,MEDIUM'
+        vuln-type: 'os,library'
+        # Scan both OS packages and application dependencies
+        scanners: 'vuln,secret,config'
+        # Exit with error if CRITICAL vulnerabilities found
+        exit-code: '1'
+        ignore-unfixed: false
+        timeout: '15m'
+
+    - name: Upload Trivy results to GitHub Security tab
+      uses: github/codeql-action/upload-sarif@v3
+      if: always()
+      with:
+        sarif_file: 'trivy-results.sarif'
+        category: 'trivy-docker'
+
+    - name: Upload Trivy results as artifact
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: trivy-results-${{ github.sha }}
+        path: trivy-results.sarif
+        retention-days: 30
