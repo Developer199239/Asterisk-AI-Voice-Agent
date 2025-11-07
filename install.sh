@@ -356,8 +356,15 @@ set_performance_params_for_llm() {
 
 wait_for_local_ai_health() {
     print_info "Waiting for local-ai-server to become healthy (port 8765)..."
+    echo ""
+    echo "⏳ First-run model download may take 15-20 minutes..."
+    echo "📋 Monitor progress in another terminal:"
+    echo "   $COMPOSE logs -f local-ai-server | head -200"
+    echo ""
+    
     # Ensure service started (build if needed)
     $COMPOSE up -d --build local-ai-server
+    
     # Up to ~20 minutes (120 * 10s)
     for i in $(seq 1 120); do
         status=$(docker inspect -f '{{.State.Health.Status}}' local_ai_server 2>/dev/null || echo "starting")
@@ -370,12 +377,31 @@ wait_for_local_ai_health() {
         fi
         sleep 10
     done
-    print_warning "local-ai-server did not report healthy within ~20 minutes; continuing. Use: $COMPOSE logs -f local-ai-server to monitor."
+    
+    # Timeout - provide helpful diagnostics
+    echo ""
+    print_warning "local-ai-server did not report healthy within ~20 minutes"
+    echo "❌ Health check timeout. Check logs for issues:"
+    echo "   $COMPOSE logs local-ai-server | grep -E 'model|error|ERROR'"
+    echo ""
+    echo "Common causes:"
+    echo "  • Large model still downloading (check logs for progress)"
+    echo "  • Insufficient RAM (requires 8GB+)"
+    echo "  • Missing model files (run: make model-setup)"
+    echo ""
     return 1
 }
 
 # --- Configuration ---
 configure_env() {
+    # Support non-interactive mode for CI/CD
+    if [ "${INSTALL_NONINTERACTIVE:-0}" = "1" ]; then
+        print_info "Running in non-interactive mode (INSTALL_NONINTERACTIVE=1)"
+        ensure_env_file
+        print_info "Using existing .env configuration or defaults"
+        return 0
+    fi
+    
     print_info "Starting interactive configuration (.env updates)..."
     ensure_env_file
 
@@ -618,9 +644,82 @@ prompt_required_api_keys() {
     fi
 }
 
+# Post-start validation (cross-platform compatible)
+validate_services() {
+    local validation_failed=0
+    
+    echo ""
+    print_info "Validating services..."
+    
+    # Check ai-engine container is running
+    if docker ps --filter "name=ai_engine" --filter "status=running" | grep -q "ai_engine"; then
+        print_success "✓ ai-engine container running"
+    else
+        print_warning "✗ ai-engine container not running"
+        validation_failed=1
+    fi
+    
+    # Check health endpoint (wait up to 10 seconds)
+    print_info "Checking health endpoint (may take a few seconds)..."
+    local health_available=0
+    for i in 1 2 3 4 5; do
+        if command -v curl >/dev/null 2>&1; then
+            if curl -s -f http://127.0.0.1:15000/health >/dev/null 2>&1; then
+                health_available=1
+                break
+            fi
+        elif command -v wget >/dev/null 2>&1; then
+            if wget -q -O- http://127.0.0.1:15000/health >/dev/null 2>&1; then
+                health_available=1
+                break
+            fi
+        else
+            # No curl/wget, skip health check
+            print_info "  (curl/wget not available, skipping HTTP check)"
+            break
+        fi
+        sleep 2
+    done
+    
+    if [ "$health_available" -eq 1 ]; then
+        print_success "✓ Health endpoint responding at :15000"
+    elif command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1; then
+        print_warning "✗ Health endpoint not yet responding (may still be starting)"
+        print_info "   Check: $COMPOSE logs ai-engine"
+    fi
+    
+    # For local-ai-server, check if it's in the profile
+    if [ "$PROFILE" = "golden-local-hybrid" ]; then
+        if docker ps --filter "name=local_ai_server" --filter "status=running" | grep -q "local_ai_server"; then
+            print_success "✓ local-ai-server container running"
+        else
+            print_warning "✗ local-ai-server container not running"
+            validation_failed=1
+        fi
+    fi
+    
+    echo ""
+    if [ "$validation_failed" -eq 0 ]; then
+        print_success "🎉 All validation checks passed!"
+    else
+        print_warning "⚠️  Some validation checks failed. Review logs:"
+        echo "   $COMPOSE logs ai-engine"
+        if [ "$PROFILE" = "golden-local-hybrid" ]; then
+            echo "   $COMPOSE logs local-ai-server"
+        fi
+    fi
+}
+
 start_services() {
     echo ""
-    read -p "Build and start services now? [Y/n]: " start_service
+    # Support non-interactive mode
+    if [ "${INSTALL_NONINTERACTIVE:-0}" = "1" ]; then
+        print_info "Non-interactive mode: starting services automatically"
+        start_service="y"
+    else
+        read -p "Build and start services now? [Y/n]: " start_service
+    fi
+    
     if [[ "$start_service" =~ ^[Yy]$|^$ ]]; then
         case "$PROFILE" in
             golden-local-hybrid)
@@ -644,13 +743,45 @@ start_services() {
                 ;;
         esac
         
+        # Post-start validation
+        validate_services
+        
+        # Show health & monitoring endpoints
         echo ""
-        print_success "✅ Services started successfully!"
+        echo "╔═══════════════════════════════════════════════════════════╗"
+        echo "║          📊 Health & Monitoring Endpoints                 ║"
+        echo "╚═══════════════════════════════════════════════════════════╝"
         echo ""
-        print_info "Next steps:"
-        print_info "  1. Check health:  curl http://127.0.0.1:15000/health"
-        print_info "  2. View logs:     $COMPOSE logs -f ai-engine"
-        print_info "  3. Configure Asterisk dialplan (see below)"
+        print_success "🎉 Installation complete!"
+        echo ""
+        
+        echo "🏥 Health Check:"
+        if command -v curl >/dev/null 2>&1; then
+            echo "   curl http://127.0.0.1:15000/health"
+        else
+            echo "   wget -qO- http://127.0.0.1:15000/health"
+        fi
+        echo ""
+        
+        echo "📋 View Logs:"
+        echo "   $COMPOSE logs -f ai-engine"
+        if [ "$PROFILE" = "golden-local-hybrid" ]; then
+            echo "   $COMPOSE logs -f local-ai-server"
+        fi
+        echo ""
+        
+        echo "🔧 Container Status:"
+        echo "   $COMPOSE ps"
+        echo "   docker stats --no-stream ai_engine"
+        echo ""
+        
+        if [ "$PROFILE" = "golden-local-hybrid" ]; then
+            echo "🤖 Local AI Models:"
+            echo "   $COMPOSE logs local-ai-server | grep -i 'model.*loaded'"
+            echo ""
+        fi
+        
+        print_info "Next step: Configure Asterisk dialplan (see below)"
     else
         echo ""
         print_info "Setup complete. Start services later with:"
