@@ -11,6 +11,22 @@ from pydantic import BaseModel, Field
 from typing import Dict, Any, Optional, List
 import structlog
 
+# Import configuration helpers (AAVA-40 refactor)
+from src.config.loaders import resolve_config_path, load_yaml_with_env_expansion
+from src.config.security import (
+    inject_asterisk_credentials,
+    inject_llm_config,
+    inject_provider_api_keys,
+)
+from src.config.defaults import (
+    apply_transport_defaults,
+    apply_audiosocket_defaults,
+    apply_externalmedia_defaults,
+    apply_diagnostic_defaults,
+    apply_barge_in_defaults,
+)
+from src.config.normalization import normalize_pipelines, normalize_profiles, normalize_local_provider_tokens
+
 logger = structlog.get_logger(__name__)
 
 # Determine the absolute path to the project root from this file's location
@@ -330,261 +346,47 @@ def _generate_default_pipeline(config_data: Dict[str, Any]) -> None:
 
 
 def load_config(path: str = "config/ai-agent.yaml") -> AppConfig:
-    # If the provided path is not absolute, resolve it relative to the project root.
-    if not os.path.isabs(path):
-        path = os.path.join(_PROJ_DIR, path)
-
-    try:
-        with open(path, 'r') as f:
-            config_str = f.read()
-
-        # Substitute environment variables
-        config_str_expanded = os.path.expandvars(config_str)
+    """
+    Load and validate configuration from YAML file.
+    
+    AAVA-40: Refactored to use dedicated helper functions for improved
+    testability and reduced complexity (was 250 lines, now <30).
+    
+    Args:
+        path: Path to YAML configuration file (absolute or relative to project root)
         
-        config_data = yaml.safe_load(config_str_expanded)
-
-        # Asterisk config from environment variables ONLY.
-        # SECURITY: Credentials must NEVER be in YAML files.
-        asterisk_yaml = (config_data.get('asterisk') or {}) if isinstance(config_data.get('asterisk'), dict) else {}
-        config_data['asterisk'] = {
-            "host": os.getenv("ASTERISK_HOST", "127.0.0.1"),
-            "username": os.getenv("ASTERISK_ARI_USERNAME") or os.getenv("ARI_USERNAME"),
-            "password": os.getenv("ASTERISK_ARI_PASSWORD") or os.getenv("ARI_PASSWORD"),
-            "app_name": asterisk_yaml.get("app_name", "asterisk-ai-voice-agent")
-        }
-
-        # Merge YAML LLM section with environment variables without clobbering YAML values.
-        # Precedence: YAML llm.* (if non-empty) > env vars > hardcoded defaults.
-        llm_yaml = (config_data.get('llm') or {}) if isinstance(config_data.get('llm'), dict) else {}
-
-        def _nonempty_string(val: Any) -> bool:
-            return isinstance(val, str) and val.strip() != ""
-
-        # Resolve initial_greeting
-        initial_greeting = llm_yaml.get('initial_greeting')
-        if not _nonempty_string(initial_greeting):
-            initial_greeting = os.getenv("GREETING", "Hello, how can I help you?")
-        # Resolve prompt/persona
-        prompt_val = llm_yaml.get('prompt')
-        if not _nonempty_string(prompt_val):
-            prompt_val = os.getenv("AI_ROLE", "You are a helpful assistant.")
-        # Resolve model and api_key
-        # SECURITY: API keys must ONLY come from environment variables
-        model_val = llm_yaml.get('model') or "gpt-4o"
-        api_key_val = os.getenv("OPENAI_API_KEY")  # ONLY from .env
-
-        # Apply environment variable interpolation to final strings to support ${VAR} placeholders
-        try:
-            initial_greeting = os.path.expandvars(initial_greeting or "")
-        except Exception:
-            pass
-        try:
-            prompt_val = os.path.expandvars(prompt_val or "")
-        except Exception:
-            pass
-
-        config_data['llm'] = {
-            "initial_greeting": initial_greeting,
-            "prompt": prompt_val,
-            "model": model_val,
-            "api_key": api_key_val,
-        }
-
-        # Config version 4
-        config_version = config_data.get('config_version', 4)
+    Returns:
+        Validated AppConfig instance
         
-        # Transport and mode defaults
-        config_data.setdefault('audio_transport', os.getenv('AUDIO_TRANSPORT', 'externalmedia'))
-        config_data.setdefault('downstream_mode', os.getenv('DOWNSTREAM_MODE', 'file'))
-        if 'streaming' not in config_data:
-            config_data['streaming'] = {}
+    Raises:
+        FileNotFoundError: If configuration file doesn't exist
+        yaml.YAMLError: If YAML parsing fails
         
-        # Diagnostic settings - read from environment variables only
-        streaming_cfg = config_data['streaming']
-        
-        # Egress swap mode (diagnostic only)
-        streaming_cfg['egress_swap_mode'] = os.getenv('DIAG_EGRESS_SWAP_MODE', 'none')
-        
-        # Egress force mulaw (diagnostic only)
-        env_force_mulaw = os.getenv('DIAG_EGRESS_FORCE_MULAW', 'false')
-        streaming_cfg['egress_force_mulaw'] = env_force_mulaw.lower() in ('true', '1', 'yes')
-        
-        # Attack ms (diagnostic only - disabled by default)
-        streaming_cfg['attack_ms'] = int(os.getenv('DIAG_ATTACK_MS', '0'))
-        
-        # Diagnostic audio taps (disabled by default)
-        env_taps = os.getenv('DIAG_ENABLE_TAPS', 'false')
-        streaming_cfg['diag_enable_taps'] = env_taps.lower() in ('true', '1', 'yes')
-        streaming_cfg['diag_pre_secs'] = int(os.getenv('DIAG_TAP_PRE_SECS', '1'))
-        streaming_cfg['diag_post_secs'] = int(os.getenv('DIAG_TAP_POST_SECS', '1'))
-        streaming_cfg['diag_out_dir'] = os.getenv('DIAG_TAP_OUTPUT_DIR', '/tmp/ai-engine-taps')
-        
-        # Streaming logger verbosity
-        streaming_cfg['logging_level'] = os.getenv('STREAMING_LOG_LEVEL', 'info')
-
-        # AudioSocket configuration defaults
-        audiosocket_cfg = config_data.get('audiosocket', {}) or {}
-        audiosocket_cfg.setdefault('host', os.getenv('AUDIOSOCKET_HOST', '127.0.0.1'))
-        try:
-            audiosocket_cfg.setdefault('port', int(os.getenv('AUDIOSOCKET_PORT', audiosocket_cfg.get('port', 8090))))
-        except ValueError:
-            audiosocket_cfg['port'] = 8090
-        # AudioSocket payload format expected by Asterisk dialplan (matches third arg to AudioSocket(...))
-        audiosocket_cfg.setdefault('format', os.getenv('AUDIOSOCKET_FORMAT', audiosocket_cfg.get('format', 'ulaw')))
-        config_data['audiosocket'] = audiosocket_cfg
-
-        # ExternalMedia RTP configuration defaults (env override supported)
-        external_cfg = config_data.get('external_media', {}) or {}
-        external_cfg.setdefault('rtp_host', os.getenv('EXTERNAL_MEDIA_RTP_HOST', external_cfg.get('rtp_host', '127.0.0.1')))
-        config_data['external_media'] = external_cfg
-
-        # Milestone7: Normalize pipelines for PipelineEntry schema while keeping legacy configs valid.
-        _normalize_pipelines(config_data)
-
-        # P1: Ensure profiles/contexts blocks exist with sane defaults
-        try:
-            profiles_block = (config_data.get('profiles') or {}) if isinstance(config_data.get('profiles'), dict) else {}
-        except Exception:
-            profiles_block = {}
-
-        # Inject default telephony profile if missing
-        if 'telephony_ulaw_8k' not in profiles_block:
-            profiles_block['telephony_ulaw_8k'] = {
-                'internal_rate_hz': 8000,
-                'transport_out': { 'encoding': 'ulaw', 'sample_rate_hz': 8000 },
-                'provider_pref': {
-                    'input': { 'encoding': 'mulaw', 'sample_rate_hz': 8000 },
-                    'output': { 'encoding': 'mulaw', 'sample_rate_hz': 8000 },
-                    'preferred_chunk_ms': 20,
-                },
-                'idle_cutoff_ms': 1200,
-            }
-        # Provide default selector if not present (string key under profiles)
-        try:
-            default_profile_name = profiles_block.get('default')
-        except Exception:
-            default_profile_name = None
-        if not default_profile_name:
-            profiles_block['default'] = 'telephony_ulaw_8k'
-
-        config_data['profiles'] = profiles_block
-
-        # Contexts mapping (optional). Keep empty by default.
-        try:
-            contexts_block = config_data.get('contexts')
-            if not isinstance(contexts_block, dict):
-                contexts_block = {}
-        except Exception:
-            contexts_block = {}
-        config_data['contexts'] = contexts_block
-
-        # Sanitize providers.local for Bash-style ${VAR:-default}/${VAR:=default} tokens.
-        # os.path.expandvars does not support these defaults and may leave tokens intact or empty.
-        # Extract and apply the default values so Pydantic receives valid scalars.
-        try:
-            providers_block = config_data.get('providers', {}) or {}
-            local_block = providers_block.get('local', {}) or {}
-
-            def _apply_default_token(val, *, default=None):
-                # If val is a token like "${NAME:-fallback}" or "${NAME:=fallback}", try to extract fallback.
-                if isinstance(val, str) and val.strip().startswith('${') and val.strip().endswith('}'):
-                    inner = val.strip()[2:-1]
-                    # Split on first ':' to isolate var name vs default part
-                    parts = inner.split(':', 1)
-                    if len(parts) == 2:
-                        default_part = parts[1]
-                        # Strip any leading '-', '=' used in Bash syntax
-                        default_part = default_part.lstrip('-=')
-                        return default_part
-                    return default
-                # If val is empty string after env expansion, use provided default
-                if val == '' and default is not None:
-                    return default
-                return val
-
-            # Apply defaults for known local provider keys
-            if isinstance(local_block, dict):
-                local_block['ws_url'] = _apply_default_token(local_block.get('ws_url'), default='ws://127.0.0.1:8765')
-                local_block['connect_timeout_sec'] = _apply_default_token(local_block.get('connect_timeout_sec'), default='5.0')
-                local_block['response_timeout_sec'] = _apply_default_token(local_block.get('response_timeout_sec'), default='5.0')
-                local_block['chunk_ms'] = _apply_default_token(local_block.get('chunk_ms'), default='200')
-
-                # Coerce numeric strings to proper types
-                try:
-                    if isinstance(local_block.get('connect_timeout_sec'), str):
-                        local_block['connect_timeout_sec'] = float(local_block['connect_timeout_sec'])
-                except Exception:
-                    local_block['connect_timeout_sec'] = 5.0
-                try:
-                    if isinstance(local_block.get('response_timeout_sec'), str):
-                        local_block['response_timeout_sec'] = float(local_block['response_timeout_sec'])
-                except Exception:
-                    local_block['response_timeout_sec'] = 5.0
-                try:
-                    if isinstance(local_block.get('chunk_ms'), str):
-                        local_block['chunk_ms'] = int(float(local_block['chunk_ms']))
-                except Exception:
-                    local_block['chunk_ms'] = 200
-
-                providers_block['local'] = local_block
-                config_data['providers'] = providers_block
-        except Exception:
-            # Non-fatal; Pydantic may still coerce correctly
-            pass
-
-        # SECURITY: Inject API keys into provider configs for pipeline adapters
-        # API keys must ONLY come from environment variables, never YAML
-        try:
-            providers_block = config_data.get('providers', {}) or {}
-            
-            # Inject OPENAI_API_KEY
-            openai_block = providers_block.get('openai', {}) or {}
-            if isinstance(openai_block, dict):
-                openai_block['api_key'] = os.getenv('OPENAI_API_KEY')
-                providers_block['openai'] = openai_block
-            
-            # Inject DEEPGRAM_API_KEY
-            deepgram_block = providers_block.get('deepgram', {}) or {}
-            if isinstance(deepgram_block, dict):
-                deepgram_block['api_key'] = os.getenv('DEEPGRAM_API_KEY')
-                providers_block['deepgram'] = deepgram_block
-            
-            # Inject GOOGLE_API_KEY
-            google_block = providers_block.get('google', {}) or {}
-            if isinstance(google_block, dict):
-                google_block['api_key'] = os.getenv('GOOGLE_API_KEY')
-                providers_block['google'] = google_block
-            
-            config_data['providers'] = providers_block
-        except Exception:
-            pass
-
-        # Barge-in configuration defaults + env overrides
-        barge_cfg = config_data.get('barge_in', {}) or {}
-        try:
-            if 'BARGE_IN_ENABLED' in os.environ:
-                barge_cfg['enabled'] = os.getenv('BARGE_IN_ENABLED', 'true').lower() in ('1','true','yes')
-            if 'BARGE_IN_INITIAL_PROTECTION_MS' in os.environ:
-                barge_cfg['initial_protection_ms'] = int(os.getenv('BARGE_IN_INITIAL_PROTECTION_MS', '200'))
-            if 'BARGE_IN_MIN_MS' in os.environ:
-                barge_cfg['min_ms'] = int(os.getenv('BARGE_IN_MIN_MS', '250'))
-            if 'BARGE_IN_ENERGY_THRESHOLD' in os.environ:
-                barge_cfg['energy_threshold'] = int(os.getenv('BARGE_IN_ENERGY_THRESHOLD', '1000'))
-            if 'BARGE_IN_COOLDOWN_MS' in os.environ:
-                barge_cfg['cooldown_ms'] = int(os.getenv('BARGE_IN_COOLDOWN_MS', '500'))
-            if 'BARGE_IN_POST_TTS_END_PROTECTION_MS' in os.environ:
-                barge_cfg['post_tts_end_protection_ms'] = int(os.getenv('BARGE_IN_POST_TTS_END_PROTECTION_MS', '250'))
-        except ValueError:
-            pass
-        config_data['barge_in'] = barge_cfg
-
-        return AppConfig(**config_data)
-    except FileNotFoundError:
-        # Re-raise with a more informative error message
-        raise FileNotFoundError(f"Configuration file not found at the resolved path: {path}")
-    except yaml.YAMLError as e:
-        # Re-raise with a more informative error message
-        raise yaml.YAMLError(f"Error parsing YAML configuration: {e}")
+    Complexity: 5 (down from ~20)
+    """
+    # Phase 1: Load YAML file with environment variable expansion
+    path = resolve_config_path(path)
+    config_data = load_yaml_with_env_expansion(path)
+    
+    # Phase 2: Security - Inject credentials from environment variables only
+    inject_asterisk_credentials(config_data)
+    inject_llm_config(config_data)
+    inject_provider_api_keys(config_data)
+    
+    # Phase 3: Apply default values
+    apply_transport_defaults(config_data)
+    apply_audiosocket_defaults(config_data)
+    apply_externalmedia_defaults(config_data)
+    apply_diagnostic_defaults(config_data)
+    apply_barge_in_defaults(config_data)
+    
+    # Phase 4: Normalize configuration
+    normalize_pipelines(config_data)
+    normalize_profiles(config_data)
+    normalize_local_provider_tokens(config_data)
+    
+    # Phase 5: Validate and return
+    return AppConfig(**config_data)
 
 def validate_production_config(config: AppConfig) -> tuple[list[str], list[str]]:
     """Validate configuration for production deployment (AAVA-21).
