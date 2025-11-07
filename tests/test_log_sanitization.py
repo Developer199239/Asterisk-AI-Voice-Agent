@@ -141,3 +141,29 @@ class TestLogSanitization:
         
         assert 'REDACTED' in result['client-secret']
         assert 'REDACTED' in result['api-key']
+    
+    def test_no_false_positive_on_passthrough(self):
+        """Should NOT redact passthrough_providers (false positive prevention)."""
+        event_dict = {
+            'message': 'Audio gating',
+            'passthrough_providers': ['deepgram', 'local', 'hybrid_support'],
+            'gated_providers': ['openai_realtime'],
+        }
+        result = sanitize_secrets(None, None, event_dict)
+        
+        # Should NOT be redacted (passthrough contains "pass" but shouldn't match)
+        assert result['passthrough_providers'] == ['deepgram', 'local', 'hybrid_support']
+        assert result['gated_providers'] == ['openai_realtime']
+    
+    def test_actual_password_field_still_redacted(self):
+        """Should still redact actual password fields."""
+        event_dict = {
+            'user_password': 'secret123',
+            'password': 'secret456',
+            'pass': 'secret789',
+        }
+        result = sanitize_secrets(None, None, event_dict)
+        
+        assert 'REDACTED' in result['user_password']
+        assert 'REDACTED' in result['password']
+        assert 'REDACTED' in result['pass']

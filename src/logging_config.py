@@ -108,10 +108,20 @@ def sanitize_secrets(logger, method_name, event_dict):
         
         sanitized = {}
         for key, value in d.items():
-            key_lower = str(key).lower().replace('_', '').replace('-', '')
-            # Check if key matches any sensitive pattern
-            if any(pattern.replace('_', '').replace('-', '') in key_lower 
-                   for pattern in SENSITIVE_KEYS):
+            # Normalize key for comparison (remove separators, lowercase)
+            key_normalized = str(key).lower().replace('_', '').replace('-', '')
+            
+            # Check if key matches any sensitive pattern (exact match only)
+            # This prevents false positives like "passthrough" matching "pass"
+            is_sensitive = False
+            for pattern in SENSITIVE_KEYS:
+                pattern_normalized = pattern.replace('_', '').replace('-', '')
+                # Match if pattern is the key itself, or ends with pattern (e.g., "user_password")
+                if key_normalized == pattern_normalized or key_normalized.endswith(pattern_normalized):
+                    is_sensitive = True
+                    break
+            
+            if is_sensitive:
                 sanitized[key] = redact_value(value)
             elif isinstance(value, dict):
                 sanitized[key] = sanitize_dict(value)
