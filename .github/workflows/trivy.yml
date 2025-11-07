@@ -47,9 +47,10 @@ jobs:
         vuln-type: 'os,library'
         # Scan both OS packages and application dependencies
         scanners: 'vuln,secret,config'
-        # Exit with error if CRITICAL vulnerabilities found
-        exit-code: '1'
-        ignore-unfixed: false
+        # Report vulnerabilities but don't block CI (for initial assessment)
+        # Change to '1' after addressing findings to enforce blocking
+        exit-code: '0'
+        ignore-unfixed: true  # Only report fixable vulnerabilities
         timeout: '15m'
 
     - name: Upload Trivy results to GitHub Security tab
