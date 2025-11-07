@@ -231,10 +231,18 @@ func (r *Runner) getRecentCalls(limit int) ([]Call, error) {
 	// First pass: identify AudioSocket channels (internal infrastructure)
 	audioSocketPattern := regexp.MustCompile(`"audiosocket_channel_id":\s*"([0-9]+\.[0-9]+)"`)
 	lines := strings.Split(string(output), "\n")
+	
+	if r.verbose {
+		fmt.Printf("[DEBUG] Read %d lines from Docker logs\n", len(lines))
+	}
+	
 	for _, line := range lines {
 		matches := audioSocketPattern.FindStringSubmatch(line)
 		if len(matches) > 1 {
 			audioSocketChannels[matches[1]] = true
+			if r.verbose {
+				fmt.Printf("[DEBUG] Found AudioSocket channel: %s\n", matches[1])
+			}
 		}
 	}
 	
@@ -245,13 +253,18 @@ func (r *Runner) getRecentCalls(limit int) ([]Call, error) {
 		regexp.MustCompile(`"caller_channel_id":\s*"([0-9]+\.[0-9]+)"`), // Explicit caller channel
 	}
 	
+	matchCount := 0
 	for _, line := range lines {
 		for _, pattern := range patterns {
 			matches := pattern.FindStringSubmatch(line)
 			if len(matches) > 1 {
+				matchCount++
 				callID := matches[1]
 				// Skip AudioSocket channels
 				if audioSocketChannels[callID] {
+					if r.verbose {
+						fmt.Printf("[DEBUG] Skipping AudioSocket channel: %s\n", callID)
+					}
 					continue
 				}
 				if _, exists := callMap[callID]; !exists {
@@ -259,10 +272,17 @@ func (r *Runner) getRecentCalls(limit int) ([]Call, error) {
 						ID:        callID,
 						Timestamp: time.Now(), // Will be refined from log timestamp
 					}
+					if r.verbose {
+						fmt.Printf("[DEBUG] Found call ID: %s\n", callID)
+					}
 				}
 				break // Found a match, no need to try other patterns
 			}
 		}
+	}
+	
+	if r.verbose {
+		fmt.Printf("[DEBUG] Total pattern matches: %d, Unique calls: %d\n", matchCount, len(callMap))
 	}
 
 	// Convert to slice and sort by ID (descending, newer first)
