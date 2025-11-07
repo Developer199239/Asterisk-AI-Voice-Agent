@@ -31,8 +31,30 @@ jobs:
         run: |
           python -m compileall -q .
 
-      - name: Run tests (unit)
+      - name: Run tests with coverage
         env:
           PYTHONPATH: ${{ github.workspace }}
         run: |
-          pytest -q -k "not integration and not test_deepgram_stt_adapter_transcribes and not test_resolve_stream_targets and not test_output_rate_drift_adjusts_active_rate and not test_session_requests_g711_when_target_mulaw"
+          pytest -q -k "not integration and not test_deepgram_stt_adapter_transcribes and not test_resolve_stream_targets and not test_output_rate_drift_adjusts_active_rate and not test_session_requests_g711_when_target_mulaw" \
+            --cov=src \
+            --cov-report=term-missing \
+            --cov-report=xml \
+            --cov-report=html \
+            --cov-fail-under=60
+
+      - name: Upload coverage reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-reports
+          path: |
+            coverage.xml
+            htmlcov/
+          retention-days: 30
+
+      - name: Coverage comment (PR only)
+        if: github.event_name == 'pull_request'
+        run: |
+          COVERAGE=$(python -c "import xml.etree.ElementTree as ET; tree = ET.parse('coverage.xml'); root = tree.getroot(); print(root.attrib['line-rate'])")
+          COVERAGE_PCT=$(python -c "print(f'{float($COVERAGE) * 100:.2f}%')")
+          echo "📊 Coverage: $COVERAGE_PCT" >> $GITHUB_STEP_SUMMARY
