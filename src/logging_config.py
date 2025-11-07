@@ -51,6 +51,80 @@ def add_service_context(logger, method_name, event_dict):
     event_dict['component'] = component
     return event_dict
 
+def sanitize_secrets(logger, method_name, event_dict):
+    """
+    Redact sensitive information from log events.
+    
+    SECURITY: Prevents API keys, passwords, tokens, and other secrets from
+    appearing in logs (files, stdout, monitoring systems).
+    
+    Redaction patterns:
+    - API keys: api_key, apikey, api-key
+    - Tokens: token, access_token, refresh_token, auth_token, bearer
+    - Passwords: password, passwd, pwd
+    - Authorization headers: authorization, auth
+    - Credentials: credential, secret, private_key
+    
+    Values are replaced with '***REDACTED***' while preserving log context.
+    """
+    # List of keys that should be redacted (case-insensitive)
+    SENSITIVE_KEYS = {
+        'api_key', 'apikey', 'api-key', 'api_keys',
+        'token', 'access_token', 'refresh_token', 'auth_token', 'bearer',
+        'password', 'passwd', 'pwd', 'pass',
+        'authorization', 'auth',
+        'credential', 'credentials', 'secret', 'secrets',
+        'private_key', 'private-key', 'privatekey',
+        'client_secret', 'client-secret', 'clientsecret',
+    }
+    
+    def redact_value(value):
+        """Redact a sensitive value, preserving structure for debugging."""
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            return value  # Don't redact booleans
+        # Preserve type hints but redact content
+        if isinstance(value, str):
+            if not value:  # Empty string
+                return ''
+            # Show first 2 chars for debugging (e.g., "sk" for OpenAI keys)
+            if len(value) > 4:
+                return f"{value[:2]}***REDACTED***"
+            return "***REDACTED***"
+        if isinstance(value, (int, float)):
+            return "***REDACTED***"
+        if isinstance(value, (list, tuple)):
+            return [redact_value(v) for v in value]
+        if isinstance(value, dict):
+            return {k: redact_value(v) if k.lower() in SENSITIVE_KEYS else v 
+                    for k, v in value.items()}
+        return "***REDACTED***"
+    
+    def sanitize_dict(d):
+        """Recursively sanitize dictionary keys."""
+        if not isinstance(d, dict):
+            return d
+        
+        sanitized = {}
+        for key, value in d.items():
+            key_lower = str(key).lower().replace('_', '').replace('-', '')
+            # Check if key matches any sensitive pattern
+            if any(pattern.replace('_', '').replace('-', '') in key_lower 
+                   for pattern in SENSITIVE_KEYS):
+                sanitized[key] = redact_value(value)
+            elif isinstance(value, dict):
+                sanitized[key] = sanitize_dict(value)
+            elif isinstance(value, (list, tuple)):
+                sanitized[key] = [sanitize_dict(v) if isinstance(v, dict) else v 
+                                 for v in value]
+            else:
+                sanitized[key] = value
+        return sanitized
+    
+    # Sanitize the entire event_dict
+    return sanitize_dict(event_dict)
+
 def configure_logging(log_level="INFO", log_to_file=False, log_file_path="service.log", service_name="ai-engine"):
     """
     Set up structured logging with enhanced context for troubleshooting.
@@ -106,6 +180,7 @@ def configure_logging(log_level="INFO", log_to_file=False, log_file_path="servic
             structlog.processors.TimeStamper(fmt="iso"),
             add_service_context,
             add_correlation_id,
+            sanitize_secrets,  # AAVA-37: Redact sensitive information
             suppress_exc_info_if_disabled,
             structlog.processors.format_exc_info,
             structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
