@@ -314,8 +314,9 @@ class AppConfig(BaseModel):
         try:
             if isinstance(data, dict):
                 _normalize_pipelines(data)
-        except Exception:
+        except Exception as e:
             # Non-fatal: if normalization fails, Pydantic will raise a more specific error later
+            logger.debug("Pipeline normalization failed (will be caught by Pydantic)", error=str(e))
             pass
         return data
 
@@ -437,7 +438,8 @@ def validate_production_config(config: AppConfig) -> tuple[list[str], list[str]]
             streaming_log_level = os.getenv('STREAMING_LOG_LEVEL', 'info').lower()
             if streaming_log_level == 'debug':
                 warnings.append("Streaming log level is DEBUG (increases log volume; set STREAMING_LOG_LEVEL=info for production)")
-        except Exception:
+        except Exception as e:
+            logger.debug("Failed to check streaming log level", error=str(e))
             pass
         
         # Streaming configuration warnings
@@ -456,7 +458,8 @@ def validate_production_config(config: AppConfig) -> tuple[list[str], list[str]]
             if hasattr(config, 'external_media') and config.external_media:
                 if getattr(config.external_media, 'rtp_host', None) == '0.0.0.0':
                     warnings.append("ExternalMedia RTP bound to 0.0.0.0; ensure firewall/segmentation is in place")
-        except Exception:
+        except Exception as e:
+            logger.debug("Failed to check bind addresses", error=str(e))
             pass
 
         # Check for deprecated/test settings
