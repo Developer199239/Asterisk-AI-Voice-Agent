@@ -116,11 +116,22 @@ agent troubleshoot --last
 ```
 
 Automatically analyzes your most recent call with:
-- Log collection and parsing
+- Log collection and parsing (from Docker logs)
 - Metrics extraction
 - Format alignment check
 - Baseline comparison
 - AI-powered diagnosis
+
+**How it works:**
+- Reads logs directly from Docker: `docker logs ai_engine`
+- Analyzes calls from last 24 hours
+- No file logging required (LOG_TO_FILE not needed)
+- Requires `ai_engine` container to be running
+
+**List recent calls:**
+```bash
+agent troubleshoot --list
+```
 
 ---
 
