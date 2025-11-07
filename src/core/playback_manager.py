@@ -49,15 +49,26 @@ class PlaybackManager:
         # Ensure media directory exists
         try:
             os.makedirs(media_dir, exist_ok=True)
+            try:
+                os.chmod(media_dir, 0o755)
+            except Exception:
+                pass
+            try:
+                os.chown(media_dir, 995, 995)
+            except Exception:
+                pass
         except (PermissionError, OSError):
             # Fallback to a writable temp directory on CI/containers (handles read-only FS too)
             fallback = os.getenv("AST_MEDIA_DIR", "/tmp/asterisk_media/ai-generated")
             try:
                 os.makedirs(fallback, exist_ok=True)
-            except Exception:
-                # Last resort within /tmp
-                fallback = "/tmp/ai-generated"
-                os.makedirs(fallback, exist_ok=True)
+            except (PermissionError, OSError):
+                try:
+                    # Last resort within /tmp
+                    fallback = "/tmp/ai-generated"
+                    os.makedirs(fallback, exist_ok=True)
+                except Exception:
+                    pass
             logger.warning(
                 "PlaybackManager media_dir fallback due to permission/ROFS",
                 requested=media_dir,
@@ -235,14 +246,24 @@ class PlaybackManager:
                 f.write(audio_bytes)
             
             # Set file ownership for Asterisk readability (UID:GID 995:995)
+            chowned = False
             try:
                 os.chown(file_path, 995, 995)
+                chowned = True
                 logger.debug("Audio file ownership set for Asterisk",
                             file_path=file_path)
             except OSError as e:
                 logger.warning("Failed to set file ownership for Asterisk",
                               file_path=file_path,
                               error=str(e))
+            # Apply guarded permissions: prefer 0600 when owned by asterisk, else keep readable for availability
+            try:
+                if chowned:
+                    os.chmod(file_path, 0o600)
+                else:
+                    os.chmod(file_path, 0o644)
+            except Exception:
+                pass
             
             logger.debug("Audio file created",
                         file_path=file_path,
