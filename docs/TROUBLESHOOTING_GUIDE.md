@@ -160,31 +160,43 @@ agent troubleshoot --last --symptom no-audio
 
 **Common Causes:**
 
-#### AudioSocket Not Connected
+#### Transport Configuration Issue
 ```bash
-# Check if AudioSocket is listening
-docker exec ai_engine netstat -tuln | grep 8090
+# Check transport mode
+grep audio_transport config/ai-agent.yaml
 
-# Check container logs
-docker logs ai_engine | grep -i "audiosocket"
+# Check container logs for transport startup
+docker logs ai_engine | grep -iE "transport|audiosocket|externalmedia"
 ```
 
-**Fix:** Verify `config/ai-agent.yaml`:
+**Fix:** Verify your transport matches your provider:
 ```yaml
+# For full agents (Deepgram, OpenAI Realtime)
+audio_transport: audiosocket
 audiosocket:
   host: "0.0.0.0"
   port: 8090
-  format: "slin"  # MUST match Asterisk dialplan
+  format: "slin"
+
+# For pipelines (hybrid, local_only)
+audio_transport: externalmedia
+external_media:
+  host: "0.0.0.0"
+  base_port: 18000
 ```
 
-#### Asterisk Dialplan Mismatch
+#### Dialplan Not Passing to Stasis
 **Check** your dialplan in `/etc/asterisk/extensions_custom.conf`:
 ```
-exten => s,1,Answer()
- same => n,AudioSocket(8090,c(slin))  ; ← Must specify slin format
+[from-ai-agent]
+exten => s,1,NoOp(AI Voice Agent)
+ same => n,Answer()
+ same => n,Stasis(asterisk-ai-voice-agent)  ; ← Must pass to Stasis app
+ same => n,Hangup()
 ```
 
-**Fix:** Add `,c(slin)` to AudioSocket() application.
+**Fix:** Ensure you're calling `Stasis(asterisk-ai-voice-agent)`, not `AudioSocket()`.  
+The ai-engine creates AudioSocket/RTP channels automatically via ARI.
 
 #### Container Not Running
 ```bash
@@ -209,26 +221,22 @@ agent troubleshoot --last --symptom garbled
 
 **Common Causes:**
 
-#### Format Mismatch (CRITICAL)
-AudioSocket format must match Asterisk dialplan.
+#### Audio Format Configuration
+Check your transport format configuration.
 
 **Check logs:**
 ```bash
-docker logs ai_engine | grep -i "format\|audiosocket_format"
+docker logs ai_engine | grep -i "format\|transport"
 ```
 
-**Expected:** `audiosocket_format=slin`, `frame_size_bytes=320`
-
-**Fix:** Update `config/ai-agent.yaml`:
+**For AudioSocket transport (full agents):**
 ```yaml
 audiosocket:
-  format: "slin"  # NOT ulaw!
+  format: "slin"  # PCM16 format
 ```
 
-**AND** update Asterisk dialplan:
-```
-same => n,AudioSocket(8090,c(slin))
-```
+**For ExternalMedia RTP (pipelines):**  
+Format is automatically managed based on provider configuration.
 
 #### Jitter Buffer Underflows
 **Symptoms:** Choppy, stuttering audio.
@@ -1071,9 +1079,8 @@ streaming:
 
 ### Essential Asterisk Dialplan
 
-The project supports two audio transport modes. Choose based on your deployment:
+**The dialplan is the same regardless of transport mode.** Just pass the call to the Stasis application:
 
-**Option 1: ExternalMedia RTP (Recommended - v4.0+)**
 ```
 [from-ai-agent]
 exten => s,1,NoOp(AI Voice Agent v4.0)
@@ -1083,21 +1090,16 @@ exten => s,1,NoOp(AI Voice Agent v4.0)
  same => n,Hangup()
 ```
 
-**Option 2: AudioSocket (Legacy/Alternative)**
-```
-[from-ai-agent-legacy]
-exten => s,1,NoOp(AI Voice Agent - AudioSocket)
- same => n,Answer()
- same => n,Set(AI_CONTEXT=demo_openai)  ; Optional: select context
- same => n,AudioSocket(8090,c(slin))  ; Must specify slin format
- same => n,Hangup()
-```
+**Transport is controlled in config, not dialplan:**
+- Set `audio_transport: externalmedia` for **pipelines** (hybrid, local_only)
+- Set `audio_transport: audiosocket` for **full agents** (Deepgram, OpenAI Realtime)
 
-**Configuration:**
-- Set `audio_transport: externalmedia` in `config/ai-agent.yaml` for Option 1
-- Set `audio_transport: audiosocket` in `config/ai-agent.yaml` for Option 2
+The ai-engine automatically creates the AudioSocket server or RTP endpoint based on your config. You don't need to add `AudioSocket()` to the dialplan.
 
-See [docs/Transport-Mode-Compatibility.md](Transport-Mode-Compatibility.md) for details.
+**Context Selection:**
+Use `AI_CONTEXT` to select different agent personalities/configurations from `config/ai-agent.yaml`.
+
+See [docs/Transport-Mode-Compatibility.md](Transport-Mode-Compatibility.md) for transport mode details.
 
 ---
 
