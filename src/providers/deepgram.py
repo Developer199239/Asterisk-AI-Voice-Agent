@@ -692,13 +692,14 @@ class DeepgramProvider(AIProviderInterface):
                                 self._rms_log_started = True
                             self._low_rms_streak = 0
                         # Quick integrity check on PCM (zeros ratio)
+                        # Note: High zero ratio during silence is normal in conversations
                         try:
                             if pcm_for_rms:
                                 zc = pcm_for_rms.count(b"\x00")
                                 zr = float(zc) / float(len(pcm_for_rms))
                                 if gate and zr > 0.5:
-                                    logger.warning(
-                                        "Deepgram upstream PCM integrity suspect",
+                                    logger.debug(
+                                        "Deepgram upstream PCM mostly silent",
                                         zero_ratio=round(zr, 3),
                                         bytes=len(pcm_for_rms),
                                     )
