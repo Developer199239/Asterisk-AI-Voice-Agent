@@ -84,7 +84,9 @@ def normalize_pipelines(config_data: Dict[str, Any]) -> None:
         
     Complexity: 9
     """
-    default_provider = config_data.get("default_provider", "openai_realtime")
+    # Set default_provider if not present (for AppConfig validation)
+    config_data.setdefault("default_provider", "openai_realtime")
+    default_provider = config_data.get("default_provider")
     pipelines_cfg = config_data.get("pipelines")
     
     if not pipelines_cfg:
