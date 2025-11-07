@@ -4,6 +4,7 @@ Complete guide to diagnosing and fixing issues with Asterisk AI Voice Agent.
 
 ## Table of Contents
 
+- [Installation](#installation)
 - [Quick Diagnostics](#quick-diagnostics)
 - [Common Issues](#common-issues)
 - [Troubleshooting Tools](#troubleshooting-tools)
@@ -13,6 +14,77 @@ Complete guide to diagnosing and fixing issues with Asterisk AI Voice Agent.
 - [Performance Issues](#performance-issues)
 - [Network Issues](#network-issues)
 - [Getting Help](#getting-help)
+
+---
+
+## Installation
+
+The `agent` CLI tools are available as pre-built binaries for easy installation (v4.1+).
+
+### Quick Install (Linux/macOS)
+
+```bash
+curl -sSL https://raw.githubusercontent.com/hkjarral/Asterisk-AI-Voice-Agent/main/scripts/install-cli.sh | bash
+```
+
+This will:
+- Auto-detect your platform
+- Download the latest binary
+- Verify checksums
+- Install to `/usr/local/bin`
+
+### Manual Installation
+
+Download the appropriate binary for your platform from [GitHub Releases](https://github.com/hkjarral/Asterisk-AI-Voice-Agent/releases/latest):
+
+**Linux:**
+```bash
+# Most servers (x86_64)
+curl -L -o agent https://github.com/hkjarral/Asterisk-AI-Voice-Agent/releases/latest/download/agent-linux-amd64
+chmod +x agent
+sudo mv agent /usr/local/bin/
+
+# ARM64 (Raspberry Pi, AWS Graviton)
+curl -L -o agent https://github.com/hkjarral/Asterisk-AI-Voice-Agent/releases/latest/download/agent-linux-arm64
+chmod +x agent
+sudo mv agent /usr/local/bin/
+```
+
+**macOS:**
+```bash
+# Intel Macs
+curl -L -o agent https://github.com/hkjarral/Asterisk-AI-Voice-Agent/releases/latest/download/agent-darwin-amd64
+
+# Apple Silicon (M1/M2/M3)
+curl -L -o agent https://github.com/hkjarral/Asterisk-AI-Voice-Agent/releases/latest/download/agent-darwin-arm64
+
+chmod +x agent
+sudo mv agent /usr/local/bin/
+```
+
+**Windows:**
+Download `agent-windows-amd64.exe` from [releases](https://github.com/hkjarral/Asterisk-AI-Voice-Agent/releases/latest) and add to your PATH.
+
+### Verify Installation
+
+```bash
+agent version
+```
+
+You should see:
+```
+Asterisk AI Voice Agent CLI
+Version:    v4.1.0
+Built:      2025-11-07T19:00:00Z
+Repository: https://github.com/hkjarral/Asterisk-AI-Voice-Agent
+```
+
+### Available Tools
+
+- **`agent doctor`** - System health check and diagnostics
+- **`agent troubleshoot`** - Post-call analysis and RCA
+- **`agent demo`** - Audio pipeline validation
+- **`agent init`** - Interactive setup wizard
 
 ---
 
