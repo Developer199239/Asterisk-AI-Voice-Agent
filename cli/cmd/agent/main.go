@@ -8,8 +8,9 @@ import (
 )
 
 var (
-	version = "1.0.0-p2-dev"
-	verbose bool
+	version   = "4.1.0-dev"  // Overridden at build time via -ldflags
+	buildTime = "unknown"     // Overridden at build time via -ldflags
+	verbose   bool
 )
 
 func main() {

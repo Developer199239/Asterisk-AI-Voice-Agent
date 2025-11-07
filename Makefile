@@ -426,6 +426,80 @@ check-python:
 	fi
 
 # ==============================================================================
+# CLI TOOLS (v4.1)
+# ==============================================================================
+
+# Version management (uses git tags or fallback)
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "4.1.0-dev")
+BUILD_TIME := $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
+LDFLAGS := -s -w -X main.version=$(VERSION) -X main.buildTime=$(BUILD_TIME)
+
+## cli-build: Build agent CLI for current platform
+cli-build:
+	@echo "Building agent CLI (version: $(VERSION))..."
+	@mkdir -p bin
+	@cd cli && go build -ldflags="$(LDFLAGS)" -o ../bin/agent ./cmd/agent
+	@echo "✅ Binary created: bin/agent"
+	@./bin/agent version
+
+## cli-build-all: Build agent CLI for all platforms
+cli-build-all:
+	@echo "Building agent CLI for all platforms (version: $(VERSION))..."
+	@mkdir -p bin
+	@echo "Building Linux AMD64..."
+	@cd cli && GOOS=linux GOARCH=amd64 go build -ldflags="$(LDFLAGS)" -o ../bin/agent-linux-amd64 ./cmd/agent
+	@echo "Building Linux ARM64..."
+	@cd cli && GOOS=linux GOARCH=arm64 go build -ldflags="$(LDFLAGS)" -o ../bin/agent-linux-arm64 ./cmd/agent
+	@echo "Building macOS AMD64 (Intel)..."
+	@cd cli && GOOS=darwin GOARCH=amd64 go build -ldflags="$(LDFLAGS)" -o ../bin/agent-darwin-amd64 ./cmd/agent
+	@echo "Building macOS ARM64 (Apple Silicon)..."
+	@cd cli && GOOS=darwin GOARCH=arm64 go build -ldflags="$(LDFLAGS)" -o ../bin/agent-darwin-arm64 ./cmd/agent
+	@echo "Building Windows AMD64..."
+	@cd cli && GOOS=windows GOARCH=amd64 go build -ldflags="$(LDFLAGS)" -o ../bin/agent-windows-amd64.exe ./cmd/agent
+	@echo ""
+	@echo "✅ All binaries built:"
+	@ls -lh bin/agent-*
+
+## cli-checksums: Generate SHA256 checksums for binaries
+cli-checksums:
+	@echo "Generating checksums..."
+	@cd bin && sha256sum agent-* > SHA256SUMS 2>/dev/null || shasum -a 256 agent-* > SHA256SUMS
+	@echo "✅ Checksums saved to bin/SHA256SUMS"
+	@cat bin/SHA256SUMS
+
+## cli-test: Test built binaries
+cli-test:
+	@echo "Testing agent CLI..."
+	@./bin/agent version
+	@./bin/agent --help
+	@echo "✅ CLI tests passed"
+
+## cli-install: Install agent CLI to /usr/local/bin
+cli-install: cli-build
+	@echo "Installing agent CLI to /usr/local/bin/agent..."
+	@sudo install -m 755 bin/agent /usr/local/bin/agent
+	@echo "✅ Installed. Run 'agent version' to verify"
+
+## cli-clean: Remove built binaries
+cli-clean:
+	@echo "Cleaning CLI binaries..."
+	@rm -rf bin/agent*
+	@echo "✅ Cleaned"
+
+## cli-release: Build all binaries and create checksums (for releases)
+cli-release: cli-build-all cli-checksums
+	@echo ""
+	@echo "🎉 Release build complete (version: $(VERSION))"
+	@echo ""
+	@echo "Upload these files to GitHub Releases:"
+	@echo "  - bin/agent-linux-amd64"
+	@echo "  - bin/agent-linux-arm64"
+	@echo "  - bin/agent-darwin-amd64"
+	@echo "  - bin/agent-darwin-arm64"
+	@echo "  - bin/agent-windows-amd64.exe"
+	@echo "  - bin/SHA256SUMS"
+
+# ==============================================================================
 # UTILITIES & HELP
 # ==============================================================================
 
@@ -436,4 +510,4 @@ help:
 	@echo "Targets:"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
-.PHONY: build up down logs logs-all ps deploy deploy-safe deploy-force deploy-full deploy-no-cache server-logs server-logs-snapshot server-status server-clear-logs server-health test-local test-integration test-ari test-externalmedia verify-deployment verify-remote-sync verify-server-commit verify-config monitor-externalmedia monitor-externalmedia-once monitor-up monitor-down monitor-logs monitor-status help
+.PHONY: build up down logs logs-all ps deploy deploy-safe deploy-force deploy-full deploy-no-cache server-logs server-logs-snapshot server-status server-clear-logs server-health test-local test-integration test-ari test-externalmedia verify-deployment verify-remote-sync verify-server-commit verify-config monitor-externalmedia monitor-externalmedia-once monitor-up monitor-down monitor-logs monitor-status cli-build cli-build-all cli-checksums cli-test cli-install cli-clean cli-release help

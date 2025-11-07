@@ -6,7 +6,7 @@ Go-based command-line interface for Asterisk AI Voice Agent operations.
 
 The `agent` CLI provides a comprehensive set of tools for setup, diagnostics, and troubleshooting. All commands are built as a single Go binary for easy distribution.
 
-**Current Status**: Source code available in Go, binary builds planned for v4.1
+**Current Status**: ✅ Binary builds available for v4.1+
 
 ## Available Commands
 
@@ -16,32 +16,90 @@ The `agent` CLI provides a comprehensive set of tools for setup, diagnostics, an
 - **`agent troubleshoot`** - Post-call analysis and RCA
 - **`agent version`** - Show version information
 
+## Installation
+
+### Quick Install (Recommended)
+
+**Linux/macOS:**
+```bash
+curl -sSL https://raw.githubusercontent.com/hkjarral/Asterisk-AI-Voice-Agent/main/scripts/install-cli.sh | bash
+```
+
+This will:
+- Detect your platform automatically
+- Download the latest binary
+- Verify checksums
+- Install to `/usr/local/bin`
+- Test the installation
+
+### Manual Download
+
+Download pre-built binaries from [GitHub Releases](https://github.com/hkjarral/Asterisk-AI-Voice-Agent/releases):
+
+**Linux:**
+```bash
+# AMD64 (most Linux servers)
+curl -L -o agent https://github.com/hkjarral/Asterisk-AI-Voice-Agent/releases/latest/download/agent-linux-amd64
+chmod +x agent
+sudo mv agent /usr/local/bin/
+
+# ARM64 (Raspberry Pi, AWS Graviton)
+curl -L -o agent https://github.com/hkjarral/Asterisk-AI-Voice-Agent/releases/latest/download/agent-linux-arm64
+chmod +x agent
+sudo mv agent /usr/local/bin/
+```
+
+**macOS:**
+```bash
+# Intel Macs
+curl -L -o agent https://github.com/hkjarral/Asterisk-AI-Voice-Agent/releases/latest/download/agent-darwin-amd64
+chmod +x agent
+sudo mv agent /usr/local/bin/
+
+# Apple Silicon (M1/M2/M3)
+curl -L -o agent https://github.com/hkjarral/Asterisk-AI-Voice-Agent/releases/latest/download/agent-darwin-arm64
+chmod +x agent
+sudo mv agent /usr/local/bin/
+```
+
+**Windows:**
+Download `agent-windows-amd64.exe` from releases and add to your PATH.
+
+### Verify Installation
+
+```bash
+agent version
+```
+
 ## Building from Source
 
 ### Prerequisites
 
 - Go 1.21 or newer
-- Linux/macOS (Windows support planned)
+- Linux/macOS/Windows
 
 ### Build Instructions
 
 ```bash
 # From project root
+make cli-build
+
+# Or build manually
 cd cli
 go build -o ../bin/agent ./cmd/agent
-
-# Or use the Makefile (from project root)
-make cli-build
 ```
 
-### Install System-Wide (Optional)
+### Build for All Platforms
 
 ```bash
-# Copy to system path
-sudo cp bin/agent /usr/local/bin/
+# Creates binaries for Linux, macOS, Windows (AMD64 & ARM64)
+make cli-build-all
 
-# Verify installation
-agent version
+# Generate checksums
+make cli-checksums
+
+# Complete release build
+make cli-release
 ```
 
 ## Quick Start
