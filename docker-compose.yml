@@ -1,6 +1,14 @@
 # Asterisk AI Voice Agent - Main Services
 #
-# This compose file includes only the core AI engine services.
+# DEFAULT NETWORK MODE: Bridge (Recommended)
+# - Better security with network isolation
+# - Explicit port mappings
+# - Works with firewall rules
+# - See docs/PRODUCTION_DEPLOYMENT.md section 3.1
+#
+# For host network mode (high-performance), use:
+#   docker compose -f docker-compose.yml -f docker-compose.host.yml up -d
+#
 # For optional monitoring (Prometheus + Grafana), use:
 #   docker compose -f docker-compose.monitoring.yml up -d
 #
@@ -25,11 +33,18 @@ services:
     environment:
       - PYTHONPATH=/app
       - PYTHONUNBUFFERED=1
+    ports:
+      # AudioSocket - for Asterisk audio streaming
+      - "8090:8090"
+      # ExternalMedia RTP - for alternative transport
+      - "18080:18080/udp"
+      # Health endpoint - for monitoring
+      - "15000:15000"
+    networks:
+      - ai-network
     tty: true
     stdin_open: true
     restart: unless-stopped
-    network_mode: "host"
-
 
   local-ai-server:
     build:
@@ -55,13 +70,22 @@ services:
       - LOCAL_STT_MODEL_PATH=${LOCAL_STT_MODEL_PATH:-/app/models/stt/vosk-model-en-us-0.22}
       - LOCAL_TTS_MODEL_PATH=${LOCAL_TTS_MODEL_PATH:-/app/models/tts/en_US-lessac-medium.onnx}
       - LOCAL_LLM_USE_MLOCK=${LOCAL_LLM_USE_MLOCK:-0}
+    ports:
+      # Local AI WebSocket server
+      - "8765:8765"
+    networks:
+      - ai-network
     tty: true
     stdin_open: true
     restart: unless-stopped
-    network_mode: "host"
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import asyncio; import websockets; async def check(): async with websockets.connect('ws://127.0.0.1:8765', ping_interval=None) as ws: await ws.close(); asyncio.run(check())\""]
       interval: 60s
       timeout: 5s
       retries: 180
       start_period: 120s
+
+networks:
+  ai-network:
+    driver: bridge
+    name: asterisk-ai-network
