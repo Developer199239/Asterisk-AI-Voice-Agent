@@ -50,7 +50,7 @@ The most powerful, flexible open-source AI voice agent for Asterisk/FreePBX. Fea
 ### Technical Features
 
 * **Modular Pipeline System**: Independent STT, LLM, and TTS provider selection
-* **Dual Transport Support**: AudioSocket (legacy) and ExternalMedia RTP (modern)
+* **Dual Transport Support**: AudioSocket (full agents) and ExternalMedia RTP (pipelines)
 * **High-Performance Architecture**: Separate `ai-engine` and `local-ai-server` containers
 * **Enterprise Monitoring**: Prometheus + Grafana with 5 dashboards and 50+ metrics
 * **State Management**: SessionStore for centralized, typed call state
