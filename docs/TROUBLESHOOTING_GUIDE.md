@@ -1071,13 +1071,33 @@ streaming:
 
 ### Essential Asterisk Dialplan
 
+The project supports two audio transport modes. Choose based on your deployment:
+
+**Option 1: ExternalMedia RTP (Recommended - v4.0+)**
 ```
 [from-ai-agent]
-exten => s,1,NoOp(AI Voice Agent)
+exten => s,1,NoOp(AI Voice Agent v4.0)
  same => n,Answer()
- same => n,AudioSocket(8090,c(slin))  ; ← MUST specify slin
+ same => n,Set(AI_CONTEXT=demo_openai)  ; Optional: select context
+ same => n,Stasis(asterisk-ai-voice-agent)
  same => n,Hangup()
 ```
+
+**Option 2: AudioSocket (Legacy/Alternative)**
+```
+[from-ai-agent-legacy]
+exten => s,1,NoOp(AI Voice Agent - AudioSocket)
+ same => n,Answer()
+ same => n,Set(AI_CONTEXT=demo_openai)  ; Optional: select context
+ same => n,AudioSocket(8090,c(slin))  ; Must specify slin format
+ same => n,Hangup()
+```
+
+**Configuration:**
+- Set `audio_transport: externalmedia` in `config/ai-agent.yaml` for Option 1
+- Set `audio_transport: audiosocket` in `config/ai-agent.yaml` for Option 2
+
+See [docs/Transport-Mode-Compatibility.md](Transport-Mode-Compatibility.md) for details.
 
 ---
 
