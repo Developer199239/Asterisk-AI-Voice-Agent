@@ -260,6 +260,162 @@ ASTERISK_ARI_URL=https://asterisk-host:8089
 
 ---
 
+### 3.1. Docker Networking Modes
+
+**Understanding Network Modes**
+
+Docker offers two primary networking modes with different security and performance trade-offs:
+
+| Mode | Security | Performance | Use Case |
+|------|----------|-------------|----------|
+| **Bridge** (Recommended) | ✅ Higher | Good | Production with port isolation |
+| **Host** | ⚠️ Lower | Best | High-performance or testing |
+
+**Default Configuration: Bridge Network** (Secure)
+
+The default `docker-compose.yml` uses bridge networking with localhost binds:
+
+```yaml
+# docker-compose.yml (default)
+services:
+  ai-engine:
+    networks:
+      - ai-network
+    environment:
+      EXTERNAL_MEDIA_RTP_HOST: 127.0.0.1
+      HEALTH_BIND_HOST: 127.0.0.1
+
+networks:
+  ai-network:
+    driver: bridge
+```
+
+**Benefits**:
+- Services isolated from host network
+- Port mapping explicit and controlled
+- Better security posture
+- Works with firewall rules
+
+**Trade-offs**:
+- Requires port mappings
+- Asterisk and AI engine must communicate via mapped ports
+- Slightly more network overhead
+
+---
+
+**Host Network Mode** (Opt-In Only)
+
+For high-performance scenarios or when bridge networking isn't suitable:
+
+```yaml
+# docker-compose.host.yml (opt-in)
+services:
+  ai-engine:
+    network_mode: host
+    environment:
+      EXTERNAL_MEDIA_RTP_HOST: 127.0.0.1
+      HEALTH_BIND_HOST: 127.0.0.1
+```
+
+**When to Use**:
+- Very high call volume (>100 concurrent)
+- Minimizing RTP latency
+- Development/testing environments
+- Same-host Asterisk deployment
+
+**Security Considerations**:
+- ⚠️ Container shares host network stack
+- ⚠️ All host ports accessible to container
+- ⚠️ Requires strict firewall rules
+- ⚠️ Not recommended for multi-tenant environments
+
+**If Using Host Mode**:
+```bash
+# CRITICAL: Firewall rules required
+sudo ufw default deny incoming
+sudo ufw allow from 127.0.0.1  # Localhost only
+sudo ufw allow from <asterisk-ip> to any port 8090
+sudo ufw allow from <asterisk-ip> to any port 18080
+```
+
+---
+
+**Binding to 0.0.0.0** (Explicit Network Access)
+
+To allow remote Asterisk servers:
+
+```bash
+# .env file
+EXTERNAL_MEDIA_RTP_HOST=0.0.0.0
+HEALTH_BIND_HOST=0.0.0.0
+```
+
+**Port Mapping** (Bridge mode):
+```yaml
+# docker-compose.yml
+services:
+  ai-engine:
+    ports:
+      - "8090:8090"    # AudioSocket
+      - "18080:18080"  # RTP
+      - "15000:15000"  # Health
+```
+
+**Security Checklist for 0.0.0.0**:
+- [ ] Firewall configured (allow only Asterisk IP)
+- [ ] Network segmentation in place
+- [ ] Monitoring enabled for port access
+- [ ] Regular security audits
+
+---
+
+**Recommended Deployment Patterns**
+
+**Pattern 1: Same Host (Simple)**
+```
+┌─────────────────────────────┐
+│  Single Server              │
+│  ┌────────┐   ┌──────────┐ │
+│  │Asterisk├───┤ai-engine │ │
+│  │        │   │(bridge)  │ │
+│  └────────┘   └──────────┘ │
+│  Via: 127.0.0.1             │
+└─────────────────────────────┘
+```
+- **Network**: Bridge (default)
+- **Binds**: 127.0.0.1 (default)
+- **Security**: Excellent
+
+**Pattern 2: Separate Hosts (Secure)**
+```
+┌──────────────┐    Network    ┌──────────────┐
+│ Asterisk     │◄─────────────►│  AI Engine   │
+│ Server       │   Firewall    │  Server      │
+│              │               │  (bridge)    │
+└──────────────┘               └──────────────┘
+```
+- **Network**: Bridge
+- **Binds**: 0.0.0.0 (explicit)
+- **Ports**: Mapped (8090, 18080)
+- **Firewall**: Required
+
+**Pattern 3: High Performance (Advanced)**
+```
+┌─────────────────────────────┐
+│  High-Performance Server    │
+│  ┌────────┐   ┌──────────┐ │
+│  │Asterisk├───┤ai-engine │ │
+│  │        │   │ (host)   │ │
+│  └────────┘   └──────────┘ │
+│  Network: host mode         │
+└─────────────────────────────┘
+```
+- **Network**: Host (opt-in)
+- **Binds**: 127.0.0.1 (critical!)
+- **Security**: Requires strict firewall
+
+---
+
 ### 4. Container Security
 
 **Run as non-root user**:
@@ -300,26 +456,42 @@ services:
 
 ### 5. Secrets Management
 
-**Use Docker Secrets** (Swarm mode):
-```yaml
-version: '3.8'
-services:
-  ai-engine:
-    environment:
-      OPENAI_API_KEY: /run/secrets/openai_api_key
-    secrets:
-      - openai_api_key
+**Recommended Approach: .env File** (Simple & Effective)
 
-secrets:
-  openai_api_key:
-    external: true
+All secrets are managed through the `.env` file for simplicity and ease of adoption:
+
+```bash
+# .env file (gitignored by default)
+ASTERISK_HOST=127.0.0.1
+ASTERISK_ARI_USERNAME=AIAgent
+ASTERISK_ARI_PASSWORD=your_secure_random_password_here
+
+OPENAI_API_KEY=sk-proj-...
+DEEPGRAM_API_KEY=...
+
+LOG_LEVEL=info
+HEALTH_BIND_HOST=127.0.0.1
 ```
 
-**Or use a secrets manager**:
+**Security Best Practices for .env**:
+
+1. **Never commit to git**: Already in `.gitignore`
+2. **File permissions**: `chmod 600 .env` (owner read/write only)
+3. **Separate per environment**: `.env.dev`, `.env.staging`, `.env.prod`
+4. **Rotate regularly**: API keys every 90 days
+5. **Use strong passwords**: Minimum 16 characters, random
+6. **Backup securely**: Encrypted backup location
+
+**Advanced Options** (For future consideration):
+
+If you need enterprise-grade secrets management:
+- **Docker Secrets** (Swarm mode): For orchestrated deployments
 - **Hashicorp Vault**: Enterprise-grade secrets management
 - **AWS Secrets Manager**: For AWS deployments
 - **Azure Key Vault**: For Azure deployments
 - **Google Secret Manager**: For GCP deployments
+
+*Note: External secrets managers can be integrated in the future if requirements evolve. The .env approach provides a solid foundation for most deployments.*
 
 ---
 
