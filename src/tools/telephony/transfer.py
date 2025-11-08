@@ -359,27 +359,17 @@ class TransferCallTool(Tool):
         # Format: Local/{extension}@{context}
         local_endpoint = f"Local/{extension}@{context_name}"
         
-        # Create a unique channel ID for tracking
-        channel_id = f"transfer-{extension}-{int(asyncio.get_event_loop().time())}"
-        
         logger.info(f"Originating via dialplan: {local_endpoint}", extension=extension, context=context_name)
         
         try:
-            # Originate to a dummy extension - NO Stasis app!
-            # This keeps the Local channel in dialplan until we manually add it to bridge
+            # Originate Local channel - let it route naturally through dialplan
+            # No channelId, no extension/context params - Asterisk creates and names it
             result = await ari_client.send_command(
                 method="POST",
                 resource="channels",
                 data={
                     "endpoint": local_endpoint,
-                    "channelId": channel_id,
                     "timeout": timeout
-                },
-                params={
-                    # Send to a minimal extension that just waits
-                    "extension": "wait",
-                    "context": "from-internal",  # Use existing context
-                    "priority": "1"
                 }
             )
             
@@ -392,6 +382,11 @@ class TransferCallTool(Tool):
             elif result and 'id' in result:
                 # Success case - result IS the channel data
                 channel_data = result
+                
+                # IMPORTANT: Use the actual channel ID that Asterisk created
+                # For Local channels, Asterisk creates its own ID like "Local/2765@from-internal-00000123;1"
+                channel_id = channel_data['id']
+                logger.info(f"Local channel created: {channel_id}")
                 
                 # Wait for channel to be answered (with timeout)
                 answered = await self._wait_for_answer(channel_id, timeout, ari_client)
