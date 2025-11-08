@@ -4042,7 +4042,7 @@ class Engine:
                 
                 # Check if hangup was requested after TTS completion
                 try:
-                    session = await self.session_store.get_call(call_id)
+                    session = await self.session_store.get_by_call_id(call_id)
                     if session and getattr(session, 'cleanup_after_tts', False):
                         logger.info("🔚 Cleanup after TTS requested - hanging up call", call_id=call_id)
                         # Give a small delay for audio to finish playing
