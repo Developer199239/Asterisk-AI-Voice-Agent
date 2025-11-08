@@ -21,6 +21,7 @@ services:
       dockerfile: Dockerfile
     container_name: ai_engine
     user: "appuser"
+    network_mode: "host"
     volumes:
       - ./src:/app/src
       - ./main.py:/app/main.py
@@ -33,15 +34,6 @@ services:
     environment:
       - PYTHONPATH=/app
       - PYTHONUNBUFFERED=1
-    ports:
-      # AudioSocket - for Asterisk audio streaming
-      - "8090:8090"
-      # ExternalMedia RTP - for alternative transport
-      - "18080:18080/udp"
-      # Health endpoint - for monitoring
-      - "15000:15000"
-    networks:
-      - ai-network
     tty: true
     stdin_open: true
     restart: unless-stopped
@@ -51,6 +43,7 @@ services:
       context: ./local_ai_server
       dockerfile: Dockerfile
     container_name: local_ai_server
+    network_mode: "host"
     env_file:
       - .env
     volumes:
@@ -70,11 +63,6 @@ services:
       - LOCAL_STT_MODEL_PATH=${LOCAL_STT_MODEL_PATH:-/app/models/stt/vosk-model-en-us-0.22}
       - LOCAL_TTS_MODEL_PATH=${LOCAL_TTS_MODEL_PATH:-/app/models/tts/en_US-lessac-medium.onnx}
       - LOCAL_LLM_USE_MLOCK=${LOCAL_LLM_USE_MLOCK:-0}
-    ports:
-      # Local AI WebSocket server
-      - "8765:8765"
-    networks:
-      - ai-network
     tty: true
     stdin_open: true
     restart: unless-stopped
@@ -84,8 +72,3 @@ services:
       timeout: 5s
       retries: 180
       start_period: 120s
-
-networks:
-  ai-network:
-    driver: bridge
-    name: asterisk-ai-network
