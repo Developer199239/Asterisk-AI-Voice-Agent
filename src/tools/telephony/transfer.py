@@ -196,7 +196,7 @@ class TransferCallTool(Tool):
         context: ToolExecutionContext
     ) -> Dict[str, Any]:
         """
-        Execute warm transfer (AI stays on bridge until confirmed).
+        Execute warm transfer.
         
         Args:
             extension: Target extension number
@@ -217,10 +217,11 @@ class TransferCallTool(Tool):
         logger.debug(f"Starting hold music on {caller_channel_id}")
         await self._start_moh(caller_channel_id, context)
         
-        # 2. Originate call to target (via dialplan)
+        # 2. Originate call to target and auto-bridge (via dialplan)
         target_channel = await self._originate_call(
             dial_string=dial_string,
             context_name=extension_info['context'],
+            bridge_id=bridge_id,  # Auto-add to bridge when answered
             timeout=30,
             ari_client=context.ari_client
         )
@@ -235,16 +236,12 @@ class TransferCallTool(Tool):
             }
         
         target_channel_id = target_channel['id']
-        logger.info(f"Target answered: {target_channel_id}")
+        logger.info(f"Target answered and bridged: {target_channel_id}")
         
-        # 3. Add target to bridge
-        logger.debug(f"Adding {target_channel_id} to bridge {bridge_id}")
-        await context.ari_client.add_channel_to_bridge(bridge_id, target_channel_id)
-        
-        # 4. Stop hold music
+        # 3. Stop hold music
         await self._stop_moh(caller_channel_id, context)
         
-        # 5. Update session to track transfer
+        # 4. Update session to track transfer
         await context.update_session(
             transfer_active=True,
             transfer_target=extension,
@@ -257,7 +254,7 @@ class TransferCallTool(Tool):
         # AI will now announce transfer and can exit gracefully
         return {
             "status": "success",
-            "message": f"I've connected you to {extension_info['name']}. I'll step aside now.",
+            "message": f"Connecting you to {extension_info['name']} now.",
             "extension": extension,
             "transfer_mode": "warm",
             "target_name": extension_info['name']
@@ -339,6 +336,7 @@ class TransferCallTool(Tool):
         self,
         dial_string: str,
         context_name: str,
+        bridge_id: str,
         timeout: int,
         ari_client: Any
     ) -> Optional[Dict[str, Any]]:
@@ -367,15 +365,21 @@ class TransferCallTool(Tool):
         logger.info(f"Originating via dialplan: {local_endpoint}", extension=extension, context=context_name)
         
         try:
+            # Originate to a dummy extension - NO Stasis app!
+            # This keeps the Local channel in dialplan until we manually add it to bridge
             result = await ari_client.send_command(
                 method="POST",
                 resource="channels",
                 data={
                     "endpoint": local_endpoint,
-                    "app": ari_client.app_name,
-                    "appArgs": "transfer",
                     "channelId": channel_id,
                     "timeout": timeout
+                },
+                params={
+                    # Send to a minimal extension that just waits
+                    "extension": "wait",
+                    "context": "from-internal",  # Use existing context
+                    "priority": "1"
                 }
             )
             
@@ -393,6 +397,9 @@ class TransferCallTool(Tool):
                 answered = await self._wait_for_answer(channel_id, timeout, ari_client)
                 
                 if answered:
+                    # Add to bridge now that it's answered
+                    logger.info(f"Adding answered channel {channel_id} to bridge {bridge_id}")
+                    await ari_client.add_channel_to_bridge(bridge_id, channel_id)
                     return channel_data
                 else:
                     logger.warning(f"Target channel {channel_id} did not answer within {timeout}s")
