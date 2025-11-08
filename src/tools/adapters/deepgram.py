@@ -7,10 +7,10 @@ Handles translation between unified tool format and Deepgram's function calling 
 from typing import Dict, Any, List
 from src.tools.registry import ToolRegistry
 from src.tools.context import ToolExecutionContext
-from src.utils.logger import get_logger
+import structlog
 import json
 
-logger = get_logger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 class DeepgramToolAdapter:
