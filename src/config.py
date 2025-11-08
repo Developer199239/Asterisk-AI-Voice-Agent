@@ -303,6 +303,8 @@ class AppConfig(BaseModel):
     # P1: profiles/contexts for transport orchestration
     profiles: Dict[str, Any] = Field(default_factory=dict)
     contexts: Dict[str, Any] = Field(default_factory=dict)
+    # Tool calling configuration (v4.1)
+    tools: Dict[str, Any] = Field(default_factory=dict)
 
     # Ensure tests that construct AppConfig(**dict) directly still get normalized pipelines
     # similar to load_config(), which calls _normalize_pipelines().
