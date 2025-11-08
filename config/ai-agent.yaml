@@ -450,3 +450,24 @@ vad:
   webrtc_aggressiveness: 1
   webrtc_end_silence_frames: 50
   webrtc_start_frames: 3
+
+# Tool calling configuration (v4.1)
+tools:
+  enabled: true
+  
+  # Extension directory - internal extensions for transfers
+  extensions:
+    internal:
+      "2765":
+        name: "Live Agent"
+        description: "Live customer service representative"
+        aliases: ["agent", "representative", "human", "real person", "live person", "someone"]
+        transfer: true
+        dial_string: "PJSIP/2765"
+        context: "from-internal"
+  
+  # Transfer call tool settings
+  transfer_call:
+    mode: "warm"  # warm = AI stays on bridge; blind = immediate redirect
+    timeout: 30   # Origination timeout in seconds
+    hold_music_class: "default"  # Music on hold class name

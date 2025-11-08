@@ -430,6 +430,14 @@ class Engine:
         """Connect to ARI and start the engine."""
         # 1) Load providers first (low risk)
         await self._load_providers()
+        
+        # Initialize tool calling system
+        try:
+            from src.tools.registry import tool_registry
+            tool_registry.initialize_default_tools()
+            logger.info("✅ Tool calling system initialized", tool_count=len(tool_registry.list_tools()))
+        except Exception as e:
+            logger.warning(f"Failed to initialize tool calling system: {e}", exc_info=True)
 
         # Milestone7: Start pipeline orchestrator to prepare per-call component lookups.
         try:
@@ -5629,6 +5637,22 @@ class Engine:
 
             # Note: Context greeting/prompt injection now happens earlier in P1 _resolve_audio_profile()
             # to ensure config is set BEFORE provider session starts and reads it.
+            
+            # Inject tool execution context into provider if it supports tools (Deepgram)
+            if hasattr(provider, 'tool_adapter'):
+                try:
+                    provider._caller_channel_id = session.caller_channel_id
+                    provider._bridge_id = session.bridge_id
+                    provider._session_store = self.session_store
+                    provider._ari_client = self.ari_client
+                    provider._full_config = self.config
+                    logger.debug(
+                        "Injected tool execution context into provider",
+                        call_id=call_id,
+                        provider=provider_name
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to inject tool context: {e}", call_id=call_id)
 
             logger.info("DEBUG: About to call provider.start_session", call_id=call_id, provider=provider_name)
             await provider.start_session(call_id)

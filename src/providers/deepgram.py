@@ -18,6 +18,10 @@ from ..audio.resampler import (
 from ..config import LLMConfig
 from .base import AIProviderInterface, ProviderCapabilities
 
+# Tool calling support
+from src.tools.registry import tool_registry
+from src.tools.adapters.deepgram import DeepgramToolAdapter
+
 logger = get_logger(__name__)
 
 _DEEPGRAM_INPUT_RATE = Gauge(
@@ -140,6 +144,10 @@ class DeepgramProvider(AIProviderInterface):
         self.request_id: Optional[str] = None
         self.session_id: Optional[str] = None
         self.call_id: Optional[str] = None
+        
+        # Tool calling support
+        self.tool_adapter = DeepgramToolAdapter(tool_registry)
+        logger.info("🛠️ Deepgram provider initialized with tool support")
         self._in_audio_burst: bool = False
         self._first_output_chunk_logged: bool = False
         self._closing: bool = False
@@ -449,6 +457,31 @@ class DeepgramProvider(AIProviderInterface):
                 "greeting": greeting_val
             }
         }
+        
+        # Add tools if enabled in configuration
+        try:
+            from src.config import load_config
+            full_config = load_config()
+            tools_config = full_config.get('tools', {})
+            
+            if tools_config.get('enabled', False):
+                # Get tools from adapter
+                tools_schemas = self.tool_adapter.get_tools_config()
+                
+                if tools_schemas:
+                    settings["agent"]["tools"] = tools_schemas
+                    logger.info(
+                        "✅ Deepgram tools configured",
+                        call_id=self.call_id,
+                        tool_count=len(tools_schemas),
+                        tools=[t.get('name') for t in tools_schemas]
+                    )
+                else:
+                    logger.warning("Tools enabled but no tools registered", call_id=self.call_id)
+            else:
+                logger.debug("Tools disabled in configuration", call_id=self.call_id)
+        except Exception as e:
+            logger.warning(f"Failed to configure tools: {e}", call_id=self.call_id, exc_info=True)
         # Build and store a minimal Settings payload for fallback retry on UNPARSABLE error
         try:
             self._last_settings_minimal = {
@@ -763,6 +796,52 @@ class DeepgramProvider(AIProviderInterface):
                 logger.debug("Could not send audio packet: Connection closed.", code=e.code, reason=e.reason)
             except Exception:
                 logger.error("An unexpected error occurred while sending audio chunk", exc_info=True)
+    
+    async def _handle_function_call(self, event_data: Dict[str, Any]):
+        """
+        Handle function call request from Deepgram.
+        
+        Routes the function call to the appropriate tool via the tool adapter.
+        """
+        try:
+            # Build context for tool execution
+            # These will be injected by the engine when it sets up the provider
+            context = {
+                'call_id': self.call_id,
+                'caller_channel_id': getattr(self, '_caller_channel_id', None),
+                'bridge_id': getattr(self, '_bridge_id', None),
+                'session_store': getattr(self, '_session_store', None),
+                'ari_client': getattr(self, '_ari_client', None),
+                'config': getattr(self, '_full_config', None),
+                'websocket': self.websocket
+            }
+            
+            # Execute tool via adapter
+            result = await self.tool_adapter.handle_tool_call_event(event_data, context)
+            
+            # Send result back to Deepgram
+            await self.tool_adapter.send_tool_result(result, context)
+            
+        except Exception as e:
+            logger.error(
+                "Function call handling failed",
+                call_id=self.call_id,
+                function_name=event_data.get('function_name'),
+                error=str(e),
+                exc_info=True
+            )
+            # Send error response to Deepgram
+            try:
+                error_response = {
+                    "type": "FunctionCallResponse",
+                    "status": "error",
+                    "output": f"Tool execution failed: {str(e)}",
+                    "data": {"error": str(e)}
+                }
+                if self.websocket and not self.websocket.closed:
+                    await self.websocket.send(json.dumps(error_response))
+            except Exception as send_error:
+                logger.error(f"Failed to send error response: {send_error}")
 
     async def stop_session(self):
         # Prevent duplicate disconnect logs/ops
@@ -1050,6 +1129,8 @@ class DeepgramProvider(AIProviderInterface):
                                     function_name=event_data.get("function_name"),
                                     request_id=getattr(self, "request_id", None),
                                 )
+                                # Handle function call via tool adapter
+                                asyncio.create_task(self._handle_function_call(event_data))
                             elif et == "ConnectionClosed":
                                 logger.info(
                                     "🔌 Deepgram ConnectionClosed",
