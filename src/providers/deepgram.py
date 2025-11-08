@@ -1134,9 +1134,9 @@ class DeepgramProvider(AIProviderInterface):
                                     call_id=self.call_id,
                                     request_id=getattr(self, "request_id", None),
                                 )
-                            elif et == "function_call":
+                            elif et == "FunctionCallRequest":
                                 logger.info(
-                                    "📞 Deepgram function_call",
+                                    "📞 Deepgram FunctionCallRequest",
                                     call_id=self.call_id,
                                     function_call_id=event_data.get("id"),
                                     function_name=event_data.get("function_call", {}).get("name"),
