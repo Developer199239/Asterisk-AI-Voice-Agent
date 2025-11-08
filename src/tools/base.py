@@ -31,15 +31,21 @@ class ToolParameter:
     enum: Optional[List[str]] = None
     default: Optional[Any] = None
     
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for schema generation."""
+    def to_dict(self, include_default: bool = True) -> Dict[str, Any]:
+        """
+        Convert to dictionary for schema generation.
+        
+        Args:
+            include_default: Whether to include the default field (some providers don't support it)
+        """
         result = {
             "type": self.type,
             "description": self.description
         }
         if self.enum:
             result["enum"] = self.enum
-        if self.default is not None:
+        # Only include default if requested (Deepgram doesn't support it)
+        if include_default and self.default is not None:
             result["default"] = self.default
         return result
 
@@ -72,6 +78,9 @@ class ToolDefinition:
                 "required": [...]
             }
         }
+        
+        Note: Deepgram doesn't support 'default' field in parameters,
+        so we exclude it with include_default=False.
         """
         return {
             "name": self.name,
@@ -79,7 +88,7 @@ class ToolDefinition:
             "parameters": {
                 "type": "object",
                 "properties": {
-                    p.name: p.to_dict()
+                    p.name: p.to_dict(include_default=False)
                     for p in self.parameters
                 },
                 "required": [p.name for p in self.parameters if p.required]
