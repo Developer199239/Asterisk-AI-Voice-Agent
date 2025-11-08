@@ -217,8 +217,7 @@ class TransferCallTool(Tool):
         logger.debug(f"Starting hold music on {caller_channel_id}")
         await self._start_moh(caller_channel_id, context)
         
-        # 2. Originate call to target
-        logger.info(f"Originating call to {dial_string}")
+        # 2. Originate call to target (via dialplan)
         target_channel = await self._originate_call(
             dial_string=dial_string,
             context_name=extension_info['context'],
@@ -355,15 +354,24 @@ class TransferCallTool(Tool):
         Returns:
             Channel dict if successful, None if failed/timeout
         """
+        # Extract extension number from dial_string (e.g., "PJSIP/2765" -> "2765")
+        extension = dial_string.split('/')[-1] if '/' in dial_string else dial_string
+        
+        # Use Local channel to route through dialplan (gets voicemail, forwarding, etc.)
+        # Format: Local/{extension}@{context}
+        local_endpoint = f"Local/{extension}@{context_name}"
+        
         # Create a unique channel ID for tracking
-        channel_id = f"transfer-{dial_string.replace('/', '-')}-{asyncio.get_event_loop().time()}"
+        channel_id = f"transfer-{extension}-{int(asyncio.get_event_loop().time())}"
+        
+        logger.info(f"Originating via dialplan: {local_endpoint}", extension=extension, context=context_name)
         
         try:
             result = await ari_client.send_command(
                 method="POST",
                 resource="channels",
                 data={
-                    "endpoint": dial_string,
+                    "endpoint": local_endpoint,
                     "app": ari_client.app_name,
                     "appArgs": "transfer",
                     "channelId": channel_id,
