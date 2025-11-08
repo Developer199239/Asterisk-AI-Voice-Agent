@@ -37,7 +37,7 @@ class ToolExecutionContext:
     detected_intent: Optional[str] = None
     confidence: Optional[float] = None
     
-    def get_session(self):
+    async def get_session(self):
         """
         Get current call session from session store.
         
@@ -50,13 +50,13 @@ class ToolExecutionContext:
         if not self.session_store:
             raise RuntimeError("SessionStore not available in context")
         
-        session = self.session_store.get(self.call_id)
+        session = await self.session_store.get_by_call_id(self.call_id)
         if not session:
             raise RuntimeError(f"Session not found for call_id: {self.call_id}")
         
         return session
     
-    def update_session(self, **kwargs):
+    async def update_session(self, **kwargs):
         """
         Update call session with new attributes.
         
@@ -64,7 +64,7 @@ class ToolExecutionContext:
             **kwargs: Attributes to update on session
         
         Example:
-            context.update_session(
+            await context.update_session(
                 transfer_active=True,
                 transfer_target="2765"
             )
@@ -72,12 +72,12 @@ class ToolExecutionContext:
         if not self.session_store:
             raise RuntimeError("SessionStore not available in context")
         
-        session = self.get_session()
+        session = await self.get_session()
         
         for key, value in kwargs.items():
             setattr(session, key, value)
         
-        self.session_store.update(session)
+        await self.session_store.upsert_call(session)
         logger.debug(f"Updated session {self.call_id}: {kwargs}")
     
     def get_config_value(self, key: str, default: Any = None) -> Any:

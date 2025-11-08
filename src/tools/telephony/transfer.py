@@ -209,7 +209,7 @@ class TransferCallTool(Tool):
         """
         logger.info(f"Starting warm transfer to {extension}", call_id=context.call_id)
         
-        session = context.get_session()
+        session = await context.get_session()
         caller_channel_id = context.caller_channel_id
         bridge_id = context.bridge_id
         
@@ -246,7 +246,7 @@ class TransferCallTool(Tool):
         await self._stop_moh(caller_channel_id, context)
         
         # 5. Update session to track transfer
-        context.update_session(
+        await context.update_session(
             transfer_active=True,
             transfer_target=extension,
             transfer_channel_id=target_channel_id,

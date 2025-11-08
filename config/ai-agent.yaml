@@ -461,7 +461,7 @@ tools:
       "2765":
         name: "Live Agent"
         description: "Live customer service representative"
-        aliases: ["agent", "representative", "human", "real person", "live person", "someone"]
+        aliases: ["agent", "representative", "human", "real person", "live person", "someone", "support", "sales", "operator", "help desk"]
         transfer: true
         dial_string: "PJSIP/2765"
         context: "from-internal"
