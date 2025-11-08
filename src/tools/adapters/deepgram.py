@@ -134,14 +134,16 @@ class DeepgramToolAdapter:
         # Execute tool
         try:
             result = await tool.execute(parameters, exec_context)
-            logger.info(f"✅ Tool {function_name} executed: {result.get('status')}")
+            logger.info(f"✅ Tool {function_name} executed: {result.get('status')}", function_call_id=function_call_id)
             result['function_call_id'] = function_call_id
+            result['function_name'] = function_name  # Pass function name for response
             return result
         except Exception as e:
             error_msg = f"Tool execution failed: {str(e)}"
             logger.error(error_msg, exc_info=True)
             return {
                 "function_call_id": function_call_id,
+                "function_name": function_name,  # Include function name in error too
                 "status": "error",
                 "message": error_msg,
                 "error": str(e)
@@ -155,17 +157,16 @@ class DeepgramToolAdapter:
         """
         Send tool execution result back to Deepgram.
         
-        Per Deepgram docs, format must be:
+        Actual Deepgram format (per official docs):
         {
-            "type": "function_call_result",
-            "id": "call_123456",  // The function_call_id from the request
-            "function_call_result": {
-                // Tool's result data
-            }
+            "type": "FunctionCallResponse",
+            "id": "call_123456",
+            "name": "transfer_call",
+            "content": "{\"status\": \"success\"}"  // Stringified JSON!
         }
         
         Args:
-            result: Tool execution result (must include function_call_id)
+            result: Tool execution result (must include function_call_id and function_name)
             context: Context dict with websocket connection
         """
         websocket = context.get('websocket')
@@ -173,17 +174,24 @@ class DeepgramToolAdapter:
             logger.error("No websocket in context, cannot send tool result")
             return
         
-        # Extract function_call_id from result
+        # Extract function_call_id and function_name from result
         function_call_id = result.pop('function_call_id', None)
+        function_name = result.pop('function_name', None)
+        
         if not function_call_id:
             logger.error("No function_call_id in result, cannot send response")
             return
         
-        # Build response per Deepgram spec
+        if not function_name:
+            logger.error("No function_name in result, cannot send response")
+            return
+        
+        # Build response per actual Deepgram spec
         response = {
-            "type": "function_call_result",
+            "type": "FunctionCallResponse",
             "id": function_call_id,
-            "function_call_result": result  # Send the entire result as function output
+            "name": function_name,
+            "content": json.dumps(result)  # Stringify the result JSON
         }
         
         try:

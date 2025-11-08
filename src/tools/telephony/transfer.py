@@ -7,10 +7,10 @@ Supports warm and blind transfer modes.
 from typing import Dict, Any, Optional
 from src.tools.base import Tool, ToolDefinition, ToolParameter, ToolCategory
 from src.tools.context import ToolExecutionContext
-import logging
+import structlog
 import asyncio
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 class TransferCallTool(Tool):
