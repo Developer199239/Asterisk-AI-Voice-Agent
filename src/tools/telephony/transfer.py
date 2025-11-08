@@ -406,10 +406,16 @@ class TransferCallTool(Tool):
         """
         local_endpoint = f"Local/{target}@{context_name}"
         
+        # Get AI identity from config for CallerID (prevents "anonymous" calls)
+        ai_name = context.get_config_value('tools.ai_identity.name', 'AI Agent')
+        ai_number = context.get_config_value('tools.ai_identity.number', '6789')
+        caller_id = f'"{ai_name}" <{ai_number}>'
+        
         logger.info(f"Originating via {context_name}",
                    endpoint=local_endpoint,
                    action_type=action_type,
-                   target=target)
+                   target=target,
+                   caller_id=caller_id)
         
         try:
             result = await context.ari_client.send_command(
@@ -417,6 +423,7 @@ class TransferCallTool(Tool):
                 resource="channels",
                 data={
                     "endpoint": local_endpoint,
+                    "callerId": caller_id,  # Set CallerID to AI Agent identity
                     "timeout": timeout,
                     "variables": {
                         "AGENT_ACTION": action_type,

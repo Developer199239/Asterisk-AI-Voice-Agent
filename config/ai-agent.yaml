@@ -455,6 +455,11 @@ vad:
 tools:
   enabled: true
   
+  # AI system identity - used as CallerID when initiating transfers
+  ai_identity:
+    name: "AI Agent"          # Name shown on transfers
+    number: "6789"            # Virtual extension number for AI system
+  
   # Default settings for agent actions
   default_action_context: "agent-outbound"
   default_action_timeout: 30
