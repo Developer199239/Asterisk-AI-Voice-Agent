@@ -362,14 +362,20 @@ class TransferCallTool(Tool):
         logger.info(f"Originating via dialplan: {local_endpoint}", extension=extension, context=context_name)
         
         try:
-            # Originate Local channel - let it route naturally through dialplan
-            # No channelId, no extension/context params - Asterisk creates and names it
+            # Originate Local channel through dialplan
+            # ARI requires either 'app' OR 'extension/context/priority'
+            # We use extension='s' (standard start extension) to avoid entering Stasis
             result = await ari_client.send_command(
                 method="POST",
                 resource="channels",
                 data={
                     "endpoint": local_endpoint,
                     "timeout": timeout
+                },
+                params={
+                    "extension": "s",  # Standard start extension (exists in most contexts)
+                    "context": context_name,
+                    "priority": "1"
                 }
             )
             
