@@ -4039,6 +4039,21 @@ class Engine:
                                 logger.debug("Coalesced enqueue dropped at end (queue full)", call_id=call_id)
                         except Exception:
                             logger.error("Coalesced streaming failed at segment end", call_id=call_id, exc_info=True)
+                
+                # Check if hangup was requested after TTS completion
+                try:
+                    session = await self.session_store.get_call(call_id)
+                    if session and getattr(session, 'cleanup_after_tts', False):
+                        logger.info("🔚 Cleanup after TTS requested - hanging up call", call_id=call_id)
+                        # Give a small delay for audio to finish playing
+                        await asyncio.sleep(0.5)
+                        try:
+                            await self.ari_client.hangup_channel(session.caller_channel_id)
+                            logger.info("✅ Call hung up successfully", call_id=call_id, channel_id=session.caller_channel_id)
+                        except Exception as e:
+                            logger.error("Failed to hang up call", call_id=call_id, error=str(e), exc_info=True)
+                except Exception as e:
+                    logger.debug("Error checking cleanup_after_tts flag", call_id=call_id, error=str(e))
             else:
                 # Log control/JSON events at debug for now
                 logger.debug("Provider control event", provider_event=event)

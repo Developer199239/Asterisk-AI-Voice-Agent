@@ -264,7 +264,7 @@ class TransferCallTool(Tool):
             session=session,
             transfer_context=transfer_context,
             timeout=extension_info.get('timeout', 30),
-            ari_client=context.ari_client
+            context=context
         )
         
         if not result:
@@ -382,7 +382,7 @@ class TransferCallTool(Tool):
         session,
         transfer_context: Dict[str, Any],
         timeout: int,
-        ari_client
+        context: ToolExecutionContext
     ) -> Optional[Dict[str, Any]]:
         """
         Originate call via generic agent-outbound context.
@@ -412,7 +412,7 @@ class TransferCallTool(Tool):
                    target=target)
         
         try:
-            result = await ari_client.send_command(
+            result = await context.ari_client.send_command(
                 method="POST",
                 resource="channels",
                 data={
@@ -446,7 +446,7 @@ class TransferCallTool(Tool):
                 # Update session with channel ID
                 if session.current_action:
                     session.current_action['channel_id'] = channel_id
-                    await ari_client.session_store.upsert_call(session)
+                    await context.session_store.upsert_call(session)
                 
                 return result
             
