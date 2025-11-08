@@ -5645,7 +5645,7 @@ class Engine:
                     provider._bridge_id = session.bridge_id
                     provider._session_store = self.session_store
                     provider._ari_client = self.ari_client
-                    provider._full_config = self.config
+                    provider._full_config = self.config.model_dump()  # Convert Pydantic model to dict
                     logger.debug(
                         "Injected tool execution context into provider",
                         call_id=call_id,
