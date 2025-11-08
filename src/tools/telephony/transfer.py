@@ -379,8 +379,15 @@ class TransferCallTool(Tool):
                 }
             )
             
-            if result and result.get('status') == 200:
-                channel_data = result.get('body', {})
+            # On success, send_command returns channel data directly (no status wrapper)
+            # On error, it returns {"status": xxx, "reason": "..."}
+            if result and 'status' in result:
+                # Error case
+                logger.error(f"Failed to originate call: {result}")
+                return None
+            elif result and 'id' in result:
+                # Success case - result IS the channel data
+                channel_data = result
                 
                 # Wait for channel to be answered (with timeout)
                 answered = await self._wait_for_answer(channel_id, timeout, ari_client)
@@ -393,7 +400,7 @@ class TransferCallTool(Tool):
                     await ari_client.hangup_channel(channel_id)
                     return None
             else:
-                logger.error(f"Failed to originate call: {result}")
+                logger.error(f"Unexpected result from originate: {result}")
                 return None
                 
         except Exception as e:
@@ -427,16 +434,23 @@ class TransferCallTool(Tool):
                     resource=f"channels/{channel_id}"
                 )
                 
-                if result and result.get('status') == 200:
-                    channel_data = result.get('body', {})
-                    state = channel_data.get('state')
+                # On success, result IS the channel data (no status wrapper)
+                # On error, result has 'status' key
+                if result and 'status' in result:
+                    # Error case (404 = channel gone, etc.)
+                    logger.debug(f"Channel {channel_id} query failed: {result}")
+                    return False
+                elif result and 'state' in result:
+                    # Success case - result IS the channel data
+                    state = result.get('state')
                     
                     if state == 'Up':
                         logger.info(f"Channel {channel_id} answered")
                         return True
-                    elif state in ['Down', 'Busy', 'Invalid']:
+                    elif state in ['Busy', 'Invalid']:
                         logger.info(f"Channel {channel_id} failed: {state}")
                         return False
+                    # If state is 'Ring' or 'Down', keep waiting
                 
                 # Wait a bit before checking again
                 await asyncio.sleep(0.5)
