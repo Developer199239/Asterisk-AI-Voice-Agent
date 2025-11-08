@@ -427,6 +427,11 @@ class TransferCallTool(Tool):
                         "CALLER_NUMBER": transfer_context.get('caller_number', ''),
                         "CALL_PURPOSE": transfer_context.get('call_purpose', '')
                     }
+                },
+                params={
+                    "extension": target,
+                    "context": context_name,
+                    "priority": "1"
                 }
             )
             
