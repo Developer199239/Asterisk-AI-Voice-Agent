@@ -472,15 +472,16 @@ class DeepgramProvider(AIProviderInterface):
                 tools_schemas = self.tool_adapter.get_tools_config()
                 
                 if tools_schemas:
-                    # CRITICAL: Deepgram requires tools in agent.think.tools array
-                    # Per Deepgram docs: tools are placed directly in array, NOT wrapped with {type: "function", function: {...}}
+                    # CRITICAL: Deepgram requires functions in agent.think.functions array
+                    # Per official docs: https://developers.deepgram.com/docs/voice-agents-function-calling
+                    # Functions are placed directly in array, NOT wrapped with {type: "function", function: {...}}
                     # That wrapping is OpenAI's format. Deepgram wants: [{ name, description, parameters }, ...]
-                    settings["agent"]["think"]["tools"] = tools_schemas
+                    settings["agent"]["think"]["functions"] = tools_schemas
                     logger.info(
-                        "✅ Deepgram tools configured",
+                        "✅ Deepgram functions configured",
                         call_id=self.call_id,
-                        tool_count=len(tools_schemas),
-                        tools=[t["name"] for t in tools_schemas]
+                        function_count=len(tools_schemas),
+                        functions=[t["name"] for t in tools_schemas]
                     )
                 else:
                     logger.warning("Tools enabled but no tools registered", call_id=self.call_id)
