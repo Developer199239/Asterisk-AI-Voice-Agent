@@ -412,21 +412,19 @@ class TransferCallTool(Tool):
         Returns:
             Channel dict if originated, None if failed
         """
-        # Use /n flag to prevent both legs from executing dialplan
-        # Only ;2 leg executes dialplan and dials the target
-        # ;1 leg enters Stasis for ARI control (warm transfer announcements)
-        local_endpoint = f"Local/{target}@{context_name}/n"
+        # DIRECT SIP ENDPOINT ORIGINATION (no Local channels)
+        # Use dial_string directly (e.g., "SIP/6000") for clean audio path
+        # When answered, SIP channel enters Stasis directly with warm-transfer args
         
         # Get AI identity from config for CallerID (prevents "anonymous" calls)
         ai_name = context.get_config_value('tools.ai_identity.name', 'AI Agent')
         ai_number = context.get_config_value('tools.ai_identity.number', '6789')
         caller_id = f'"{ai_name}" <{ai_number}>'
         
-        logger.info(f"Originating via {context_name}",
-                   endpoint=local_endpoint,
+        logger.info(f"🔀 Direct SIP origination for warm transfer",
+                   endpoint=dial_string,
                    action_type=action_type,
                    target=target,
-                   dial_string=dial_string,
                    caller_id=caller_id)
         
         try:
@@ -434,7 +432,7 @@ class TransferCallTool(Tool):
                 method="POST",
                 resource="channels",
                 data={
-                    "endpoint": local_endpoint,
+                    "endpoint": dial_string,  # Direct SIP endpoint (e.g., "SIP/6000")
                     "callerId": caller_id,  # Set CallerID to AI Agent identity
                     "timeout": timeout,
                     "variables": {
@@ -442,15 +440,13 @@ class TransferCallTool(Tool):
                         "AGENT_CALL_ID": session.call_id,
                         "AGENT_BRIDGE_ID": session.bridge_id,
                         "AGENT_TARGET": target,
-                        "AGENT_DIAL_STRING": dial_string,  # Pass dial_string from YAML to dialplan
                         "CALLER_NAME": transfer_context.get('caller_name', ''),
                         "CALLER_NUMBER": transfer_context.get('caller_number', ''),
                         "CALL_PURPOSE": transfer_context.get('call_purpose', '')
                     }
                 },
                 params={
-                    # Send ;1 leg to Stasis app for warm transfer control
-                    # Don't specify extension/context/priority to avoid duplicate dialplan execution
+                    # SIP channel enters Stasis on answer with these args
                     "app": "asterisk-ai-voice-agent",
                     "appArgs": f"warm-transfer,{session.call_id},{target}"
                 }

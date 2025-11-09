@@ -1404,34 +1404,23 @@ class Engine:
     async def _handle_transfer_answered(self, channel_id: str, args: list):
         """
         Handle successful transfer (target answered).
-        Args: ['transfer' or 'warm-transfer', caller_id, target_extension]
+        Args: ['warm-transfer', caller_id, target_extension]
         
-        For warm transfers:
-        - ;1 leg enters with 'warm-transfer' - not bridged (reserved for announcements)
-        - ;2 leg enters with 'transfer' - bridged to caller (has agent attached)
+        With direct SIP origination:
+        - SIP channel (e.g., SIP/6000) enters Stasis directly on answer
+        - We remove AI (UnicastRTP), stop provider, then bridge SIP to caller
+        - Creates direct audio path: Caller ↔ SIP/Agent
         """
         action_type = args[0]
         caller_id = args[1]
         target = args[2] if len(args) > 2 else 'unknown'
         
-        logger.info("🔀 TRANSFER ANSWERED",
+        logger.info("🔀 TRANSFER ANSWERED - Direct SIP channel",
                    action_type=action_type,
                    channel_id=channel_id,
                    caller_id=caller_id,
                    target=target)
         
-        # For warm-transfer, ;1 leg enters first - don't bridge yet
-        # This leg is reserved for playing announcements to the agent
-        if action_type == 'warm-transfer':
-            logger.info("🔀 WARM TRANSFER - ;1 leg ready, waiting for ;2 leg to complete bridge",
-                       channel_id=channel_id,
-                       caller_id=caller_id,
-                       target=target)
-            # Future: play announcement to agent here
-            # For now, just wait - ;2 leg will handle the actual bridging
-            return
-        
-        # For 'transfer', ;2 leg enters with agent attached - bridge it
         # Find session
         session = await self.session_store.get_by_call_id(caller_id)
         if not session:
@@ -1440,30 +1429,45 @@ class Engine:
             await self.ari_client.hangup_channel(channel_id)
             return
         
-        # Stop MOH on caller
-        try:
-            await self.ari_client.send_command(
-                method="DELETE",
-                resource=f"channels/{session.caller_channel_id}/moh"
-            )
-            logger.info("🔀 TRANSFER - MOH stopped")
-        except Exception as e:
-            logger.warning(f"Failed to stop MOH: {e}")
+        # Step 1: Remove UnicastRTP/ExternalMedia from bridge
+        if session.external_media_id:
+            try:
+                await self.ari_client.remove_channel_from_bridge(
+                    session.bridge_id,
+                    session.external_media_id
+                )
+                logger.info("✅ UnicastRTP removed from bridge",
+                           external_media_id=session.external_media_id)
+            except Exception as e:
+                logger.warning(f"Failed to remove UnicastRTP: {e}")
         
-        # Bridge transfer channel with caller
+        # Step 2: Stop AI provider session
+        provider = self.providers.get(session.provider_name)
+        if provider:
+            try:
+                # Stop the provider's session for this call
+                if hasattr(provider, 'stop_session'):
+                    await provider.stop_session()
+                    logger.info("✅ AI provider session stopped",
+                               provider=session.provider_name)
+            except Exception as e:
+                logger.warning(f"Failed to stop provider: {e}")
+        
+        # Step 3: Bridge SIP channel directly to caller
         try:
             await self.ari_client.add_channel_to_bridge(
                 session.bridge_id,
-                channel_id
+                channel_id  # This is SIP/6000 directly
             )
-            logger.info("✅ TRANSFER COMPLETE - Channel bridged",
+            logger.info("✅ TRANSFER COMPLETE - Direct SIP channel bridged",
                        channel_id=channel_id,
                        bridge_id=session.bridge_id,
                        target=target)
             
-            # Clear current action
+            # Step 4: Update session state
             if session.current_action:
                 session.current_action['answered'] = True
+                session.current_action['channel_id'] = channel_id
             await self.session_store.upsert_call(session)
             
         except Exception as e:
