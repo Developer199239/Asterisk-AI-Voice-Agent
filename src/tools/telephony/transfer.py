@@ -406,7 +406,10 @@ class TransferCallTool(Tool):
         Returns:
             Channel dict if originated, None if failed
         """
-        local_endpoint = f"Local/{target}@{context_name}"
+        # Use /n flag to prevent both legs from executing dialplan
+        # Only ;2 leg executes dialplan and dials the target
+        # ;1 leg enters Stasis for ARI control (warm transfer announcements)
+        local_endpoint = f"Local/{target}@{context_name}/n"
         
         # Get AI identity from config for CallerID (prevents "anonymous" calls)
         ai_name = context.get_config_value('tools.ai_identity.name', 'AI Agent')
@@ -440,9 +443,10 @@ class TransferCallTool(Tool):
                     }
                 },
                 params={
-                    "extension": target,
-                    "context": context_name,
-                    "priority": "1"
+                    # Send ;1 leg to Stasis app for warm transfer control
+                    # Don't specify extension/context/priority to avoid duplicate dialplan execution
+                    "app": "asterisk-ai-voice-agent",
+                    "appArgs": f"warm-transfer,{session.call_id},{target}"
                 }
             )
             
