@@ -1386,6 +1386,7 @@ class Engine:
         # Route to specific handler based on action type
         handlers = {
             'transfer': self._handle_transfer_answered,
+            'warm-transfer': self._handle_transfer_answered,  # Warm transfer uses same handler
             'transfer-failed': self._handle_transfer_failed,
             'voicemail-complete': self._handle_voicemail_complete,
             'queue-answered': self._handle_queue_answered,
