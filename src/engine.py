@@ -1404,16 +1404,34 @@ class Engine:
     async def _handle_transfer_answered(self, channel_id: str, args: list):
         """
         Handle successful transfer (target answered).
-        Args: ['transfer', caller_id, target_extension]
+        Args: ['transfer' or 'warm-transfer', caller_id, target_extension]
+        
+        For warm transfers:
+        - ;1 leg enters with 'warm-transfer' - not bridged (reserved for announcements)
+        - ;2 leg enters with 'transfer' - bridged to caller (has agent attached)
         """
+        action_type = args[0]
         caller_id = args[1]
         target = args[2] if len(args) > 2 else 'unknown'
         
         logger.info("🔀 TRANSFER ANSWERED",
+                   action_type=action_type,
                    channel_id=channel_id,
                    caller_id=caller_id,
                    target=target)
         
+        # For warm-transfer, ;1 leg enters first - don't bridge yet
+        # This leg is reserved for playing announcements to the agent
+        if action_type == 'warm-transfer':
+            logger.info("🔀 WARM TRANSFER - ;1 leg ready, waiting for ;2 leg to complete bridge",
+                       channel_id=channel_id,
+                       caller_id=caller_id,
+                       target=target)
+            # Future: play announcement to agent here
+            # For now, just wait - ;2 leg will handle the actual bridging
+            return
+        
+        # For 'transfer', ;2 leg enters with agent attached - bridge it
         # Find session
         session = await self.session_store.get_by_call_id(caller_id)
         if not session:
