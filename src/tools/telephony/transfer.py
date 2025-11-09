@@ -234,9 +234,12 @@ class TransferCallTool(Tool):
                 "message": "Session not found"
             }
         
-        # 1. Start hold music on caller
-        logger.debug(f"Starting hold music on {context.caller_channel_id}")
-        await self._start_moh(context.caller_channel_id, context)
+        # 1. For warm transfers, DON'T start MOH - let AI talk to caller
+        # Starting MOH causes bridge to break when ;1 leg enters Stasis
+        # because Asterisk auto-stops MOH on answer, removing channels from bridge
+        logger.info(f"⏳ Warm transfer: AI continues conversation, no MOH",
+                   call_id=context.call_id,
+                   target=extension)
         
         # 2. Build transfer context to pass to target
         transfer_context = self._build_transfer_context(session, extension_info, context)
@@ -295,10 +298,10 @@ class TransferCallTool(Tool):
         logger.info(f"✅ Warm transfer initiated to {extension}", call_id=context.call_id)
         
         # Dialplan will handle answer detection and Stasis entry
-        # Engine will stop MOH and bridge when channel enters Stasis
+        # No MOH - AI continues conversation while connecting
         return {
             "status": "success",
-            "message": f"Connecting you to {extension_info['name']} now. Please hold.",
+            "message": f"I'm connecting you to {extension_info['name']} right now. They'll be with you in just a moment.",
             "extension": extension,
             "transfer_mode": "warm",
             "target_name": extension_info['name']
