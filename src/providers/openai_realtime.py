@@ -700,6 +700,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             output_audio_format=session.get("output_audio_format"),
             input_audio_format=session.get("input_audio_format"),
             modalities=session.get("modalities"),
+            input_audio_transcription=session.get("input_audio_transcription"),
         )
 
         await self._send_json(payload)
