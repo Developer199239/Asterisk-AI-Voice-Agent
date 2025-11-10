@@ -165,7 +165,7 @@ class SendEmailSummaryTool(Tool):
                 }
             
             # Get session data
-            session = context.get_session()
+            session = await context.get_session()
             if not session:
                 logger.error("No session found", call_id=call_id)
                 return {
