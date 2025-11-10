@@ -467,12 +467,12 @@ tools:
   # Extension directory - internal extensions for transfers
   extensions:
     internal:
-      "2765":
+      "6000":
         name: "Live Agent"
         description: "Live customer service representative"
         aliases: ["agent", "representative", "human", "real person", "live person", "someone", "support", "sales", "operator", "help desk"]
         transfer: true
-        dial_string: "PJSIP/2765"
+        dial_string: "SIP/6000"
         context: "agent-outbound"      # Generic agent-outbound context
         action_type: "transfer"         # Warm transfer to human
         mode: "warm"                    # Announce caller info first
