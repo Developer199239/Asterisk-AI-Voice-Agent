@@ -10,6 +10,7 @@ import uuid
 import audioop
 import base64
 from collections import deque
+from datetime import datetime
 from typing import Dict, Any, Optional, List, Set, Tuple
 
 # Simple audio capture system removed - not used in production
@@ -1004,7 +1005,8 @@ class Engine:
                 bridge_id=bridge_id,
                 provider_name=self.config.default_provider,
                 audio_capture_enabled=True,  # FIX #1: Start with capture enabled, only disable when TTS actually starts
-                status="connected"
+                status="connected",
+                start_time=datetime.now()  # Track call start time for email tools
             )
             session.enhanced_vad_enabled = bool(self.vad_manager)
             await self._save_session(session, new=True)

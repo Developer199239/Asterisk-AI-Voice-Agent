@@ -43,6 +43,10 @@ EMAIL_TEMPLATE = """
       border-top: none;
       border-radius: 0 0 5px 5px;
     }
+    .greeting {
+      font-size: 16px;
+      margin-bottom: 20px;
+    }
     .metadata {
       background: #F3F4F6;
       padding: 15px;
@@ -75,11 +79,21 @@ EMAIL_TEMPLATE = """
     <h2>📞 Call Summary</h2>
   </div>
   <div class="content">
+    <div class="greeting">
+      {% if caller_name %}
+      <p>Hello {{ caller_name }},</p>
+      {% else %}
+      <p>Hello,</p>
+      {% endif %}
+      <p>This is a summary of your recent call with our AI Voice Agent.</p>
+    </div>
+    
     <div class="metadata">
       <p><strong>Date:</strong> {{ call_date }}</p>
       <p><strong>Duration:</strong> {{ duration }}</p>
-      <p><strong>Caller ID:</strong> {{ caller_id }}</p>
-      <p><strong>Call ID:</strong> {{ call_id }}</p>
+      {% if caller_number %}
+      <p><strong>Caller:</strong> {{ caller_number }}</p>
+      {% endif %}
       {% if outcome %}
       <p><strong>Outcome:</strong> {{ outcome }}</p>
       {% endif %}
@@ -198,22 +212,21 @@ class SendEmailSummaryTool(Tool):
         """Prepare email data from session and config."""
         
         # Extract metadata
-        caller_id = getattr(session, "caller_id", "Unknown")
-        start_time = getattr(session, "start_time", datetime.now())
+        caller_name = getattr(session, "caller_name", None)
+        caller_number = getattr(session, "caller_number", "Unknown")
+        start_time = getattr(session, "start_time", None) or datetime.now()
         end_time = datetime.now()
         
         # Calculate duration
-        if hasattr(session, "start_time"):
+        if hasattr(session, "start_time") and session.start_time:
             duration_seconds = int((end_time - session.start_time).total_seconds())
             duration_str = self._format_duration(duration_seconds)
         else:
             duration_str = "Unknown"
         
-        # Get transcript
+        # Get transcript from conversation_history
         transcript = ""
-        if hasattr(session, "transcript_entries") and session.transcript_entries:
-            transcript = self._format_transcript(session.transcript_entries)
-        elif hasattr(session, "conversation_history"):
+        if hasattr(session, "conversation_history") and session.conversation_history:
             transcript = self._format_conversation(session.conversation_history)
         
         # Get outcome/status
@@ -223,8 +236,8 @@ class SendEmailSummaryTool(Tool):
         html_content = self._template.render(
             call_date=start_time.strftime("%Y-%m-%d %H:%M:%S"),
             duration=duration_str,
-            caller_id=caller_id,
-            call_id=call_id,
+            caller_name=caller_name,
+            caller_number=caller_number,
             outcome=outcome,
             include_transcript=config.get("include_transcript", True),
             transcript=transcript

@@ -1187,13 +1187,35 @@ class DeepgramProvider(AIProviderInterface):
                                     continue
                             if isinstance(event_data, dict) and et == "ConversationText":
                                 try:
+                                    role = event_data.get("role")
+                                    text = event_data.get("text") or event_data.get("content")
                                     logger.info(
                                         "Deepgram conversation text",
                                         call_id=self.call_id,
-                                        role=event_data.get("role"),
-                                        text=event_data.get("text") or event_data.get("content"),
+                                        role=role,
+                                        text=text,
                                         segments=event_data.get("segments"),
                                     )
+                                    
+                                    # Track conversation for email tools
+                                    if self.call_id and text and hasattr(self, '_session_store') and self._session_store:
+                                        try:
+                                            session = await self._session_store.get_by_call_id(self.call_id)
+                                            if session:
+                                                # Add to conversation history
+                                                session.conversation_history.append({
+                                                    "role": role,  # "user" or "assistant"
+                                                    "content": text,
+                                                    "timestamp": time.time()
+                                                })
+                                                # Update session
+                                                await self._session_store.upsert_call(session)
+                                        except Exception as e:
+                                            logger.debug(
+                                                "Failed to track conversation",
+                                                call_id=self.call_id,
+                                                error=str(e)
+                                            )
                                 except Exception:
                                     logger.debug("Deepgram conversation text logging failed", exc_info=True)
                             if et in ("Error", "Warning"):

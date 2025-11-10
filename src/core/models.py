@@ -6,8 +6,9 @@ in the original engine.py implementation.
 """
 
 from dataclasses import dataclass, field
-from typing import Optional, Set, Dict, Any, TYPE_CHECKING
+from typing import Optional, Set, Dict, Any, List, TYPE_CHECKING
 import time
+from datetime import datetime
 
 if TYPE_CHECKING:
     from .transport_orchestrator import TransportProfile as OrchestratorTransportProfile
@@ -73,6 +74,10 @@ class CallSession:
     status: str = "initializing"
     last_transcript: Optional[str] = None
     last_agent_response: Optional[str] = None
+    
+    # Conversation tracking for email tools
+    conversation_history: List[Dict[str, Any]] = field(default_factory=list)
+    start_time: Optional[datetime] = None
     
     # Audio capture and TTS gating
     audio_capture_enabled: bool = False
