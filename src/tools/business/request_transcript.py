@@ -126,15 +126,23 @@ class RequestTranscriptTool(Tool):
         super().__init__()
         self._template = Template(TRANSCRIPT_EMAIL_TEMPLATE)
         self._validator = EmailValidator()
+        # Track sent emails per call to prevent duplicates
+        # Note: Dict grows with calls, but cleared on container restart
+        # For high-volume production, implement periodic cleanup
+        self._sent_emails = {}  # {call_id: set(emails)}
     
     @property
     def definition(self) -> ToolDefinition:
         return ToolDefinition(
             name="request_transcript",
             description=(
-                "Capture caller's email address from speech and send call transcript. "
-                "AI should ask for email, validate it, read it back for confirmation, "
-                "and then send the transcript to the caller's email."
+                "Send call transcript to caller's email address. "
+                "IMPORTANT: Before calling this tool, you MUST: "
+                "1. Ask caller for their email address, "
+                "2. Read back the captured email clearly (e.g., 'I have h-a-i-d-e-r-k-h-a-l-i-l at hotmail dot com'), "
+                "3. Ask 'Is that correct?' and wait for confirmation, "
+                "4. Only call this tool AFTER caller confirms the email is correct. "
+                "Do NOT call this tool multiple times for the same request."
             ),
             category=ToolCategory.BUSINESS,
             parameters=[
@@ -246,6 +254,22 @@ class RequestTranscriptTool(Tool):
                         "ai_should_speak": True
                     }
             
+            # Check for duplicate email (deduplication)
+            if call_id not in self._sent_emails:
+                self._sent_emails[call_id] = set()
+            
+            if parsed_email.lower() in self._sent_emails[call_id]:
+                logger.info(
+                    "Duplicate transcript request detected, skipping",
+                    call_id=call_id,
+                    email=parsed_email
+                )
+                return {
+                    "status": "success",
+                    "message": f"I already sent the transcript to {parsed_email}. Please check your inbox.",
+                    "ai_should_speak": True
+                }
+            
             # Get session data
             session = await context.get_session()
             if not session:
@@ -269,6 +293,9 @@ class RequestTranscriptTool(Tool):
             
             # Send email asynchronously
             asyncio.create_task(self._send_transcript_async(email_data, call_id))
+            
+            # Mark email as sent to prevent duplicates
+            self._sent_emails[call_id].add(parsed_email.lower())
             
             logger.info(
                 "Transcript email scheduled",
