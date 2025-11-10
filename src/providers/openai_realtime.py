@@ -1079,26 +1079,20 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             return
 
         if event_type in ("response.completed", "response.error", "response.cancelled", "response.done"):
+            # Track if audio was emitted during this response
+            had_audio_burst = self._in_audio_burst
+            
             await self._emit_audio_done()
             
-            # Always emit audio_done on response completion for cleanup_after_tts check
-            # This is needed for hangup tool to work properly
-            if event_type in ("response.completed", "response.done"):
-                try:
-                    await self.on_event(
-                        {
-                            "type": "AgentAudioDone",
-                            "streaming_done": True,
-                            "call_id": self._call_id,
-                        }
-                    )
-                    logger.debug(
-                        "Emitted AgentAudioDone for response completion",
-                        call_id=self._call_id,
-                        event_type=event_type
-                    )
-                except Exception:
-                    logger.error("Failed to emit final AgentAudioDone", call_id=self._call_id, exc_info=True)
+            # Only emit additional audio_done if this response actually had audio output
+            # This prevents premature hangup when tool responses complete (no audio yet)
+            # The farewell response will emit audio_done when IT completes with audio
+            if event_type in ("response.completed", "response.done") and not had_audio_burst:
+                logger.debug(
+                    "Response completed without audio output - no AgentAudioDone",
+                    call_id=self._call_id,
+                    event_type=event_type
+                )
             
             if event_type == "response.error":
                 logger.error("OpenAI Realtime response error", call_id=self._call_id, error=event.get("error"))
