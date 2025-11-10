@@ -235,3 +235,7 @@ archived/
 bin/agent
 bin/agent-*
 bin/SHA256SUMS
+
+# Documentation files (keep local until explicitly requested to commit)
+COMPLETE_*.conf
+COMPLETE_*.md
