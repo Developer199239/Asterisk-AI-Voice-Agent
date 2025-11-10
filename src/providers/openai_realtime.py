@@ -710,6 +710,27 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         if not greeting or not self.websocket or self.websocket.closed:
             return
 
+        # OFFICIAL OPENAI SOLUTION: Disable turn_detection during greeting
+        # This prevents server-side VAD from committing user speech while greeting generates
+        # Reference: https://platform.openai.com/docs/guides/realtime-vad
+        logger.info(
+            "🔇 Disabling turn_detection for greeting playback",
+            call_id=self._call_id
+        )
+        
+        # Send session.update to disable VAD temporarily
+        disable_vad_payload: Dict[str, Any] = {
+            "type": "session.update",
+            "event_id": f"sess-disable-vad-{uuid.uuid4()}",
+            "session": {
+                "turn_detection": None  # Disable automatic VAD
+            }
+        }
+        await self._send_json(disable_vad_payload)
+        
+        # Give a small delay for session update to take effect
+        await asyncio.sleep(0.05)
+
         # Map config modalities to output_modalities
         output_modalities = [m for m in (self.config.response_modalities or []) if m in ("audio", "text")] or ["audio"]
 
@@ -732,8 +753,50 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         
         # Mark that we've sent a greeting - next response.created will be protected
         logger.info(
-            "🛡️  Greeting sent - will protect from barge-in",
+            "🛡️  Greeting sent with VAD disabled - will re-enable after completion",
             call_id=self._call_id
+        )
+
+    async def _re_enable_vad(self):
+        """Re-enable turn_detection after greeting completes."""
+        if not self.websocket or self.websocket.closed:
+            return
+        
+        # Build turn_detection config from YAML or use OpenAI defaults
+        turn_detection_config = None
+        if getattr(self.config, "turn_detection", None):
+            try:
+                td = self.config.turn_detection
+                turn_detection_config = {
+                    "type": td.type,
+                    "silence_duration_ms": td.silence_duration_ms,
+                    "threshold": td.threshold,
+                    "prefix_padding_ms": td.prefix_padding_ms,
+                }
+            except Exception:
+                logger.debug("Failed to build turn_detection config, using OpenAI defaults", 
+                           call_id=self._call_id, exc_info=True)
+        
+        # If no config in YAML, let OpenAI use its defaults by not setting the field
+        # This is better than hardcoding default values
+        session_update = {}
+        if turn_detection_config:
+            session_update["turn_detection"] = turn_detection_config
+        else:
+            # Use OpenAI's default server_vad configuration
+            session_update["turn_detection"] = {"type": "server_vad"}
+        
+        enable_vad_payload: Dict[str, Any] = {
+            "type": "session.update",
+            "event_id": f"sess-enable-vad-{uuid.uuid4()}",
+            "session": session_update
+        }
+        
+        await self._send_json(enable_vad_payload)
+        logger.info(
+            "🔊 Turn_detection re-enabled after greeting",
+            call_id=self._call_id,
+            config=turn_detection_config if turn_detection_config else "OpenAI defaults"
         )
 
     async def _ensure_response_request(self):
@@ -1103,9 +1166,11 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             if self._current_response_id == self._greeting_response_id and event_type in ("response.completed", "response.done"):
                 self._greeting_completed = True
                 logger.info(
-                    "✅ Greeting completed - barge-in protection lifted",
+                    "✅ Greeting completed - re-enabling turn_detection",
                     call_id=self._call_id
                 )
+                # Re-enable turn_detection now that greeting is done
+                await self._re_enable_vad()
             
             self._pending_response = False
             self._current_response_id = None  # Clear response ID after completion
