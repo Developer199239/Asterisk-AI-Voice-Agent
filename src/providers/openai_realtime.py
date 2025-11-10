@@ -1080,6 +1080,26 @@ class OpenAIRealtimeProvider(AIProviderInterface):
 
         if event_type in ("response.completed", "response.error", "response.cancelled", "response.done"):
             await self._emit_audio_done()
+            
+            # Always emit audio_done on response completion for cleanup_after_tts check
+            # This is needed for hangup tool to work properly
+            if event_type in ("response.completed", "response.done"):
+                try:
+                    await self.on_event(
+                        {
+                            "type": "AgentAudioDone",
+                            "streaming_done": True,
+                            "call_id": self._call_id,
+                        }
+                    )
+                    logger.debug(
+                        "Emitted AgentAudioDone for response completion",
+                        call_id=self._call_id,
+                        event_type=event_type
+                    )
+                except Exception:
+                    logger.error("Failed to emit final AgentAudioDone", call_id=self._call_id, exc_info=True)
+            
             if event_type == "response.error":
                 logger.error("OpenAI Realtime response error", call_id=self._call_id, error=event.get("error"))
             elif event_type == "response.cancelled":
