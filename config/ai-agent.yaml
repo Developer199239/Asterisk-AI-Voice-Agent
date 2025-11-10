@@ -413,6 +413,7 @@ providers:
     provider_input_sample_rate_hz: 24000
     response_modalities:
     - audio
+    - text
     target_encoding: mulaw
     target_sample_rate_hz: 8000
     turn_detection:
