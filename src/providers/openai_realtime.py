@@ -1209,9 +1209,22 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             elif event_type == "response.cancelled":
                 logger.info("OpenAI response cancelled (barge-in)", call_id=self._call_id, response_id=self._current_response_id)
             
-            # Greeting VAD re-enable now handled in response.audio.done (after audio completes)
-            # This was the bug - we were re-enabling VAD when response generation completed,
-            # but audio hadn't started playing yet, causing greeting to be interrupted
+            # FALLBACK: Re-enable VAD on response.done if greeting hasn't completed yet
+            # This handles race condition where response.done arrives before audio deltas
+            # Primary path is still response.audio.done (preferred), but this ensures
+            # VAD gets re-enabled even if audio arrives late or never arrives
+            if (self._current_response_id == self._greeting_response_id and 
+                not self._greeting_completed and 
+                event_type in ("response.completed", "response.done")):
+                self._greeting_completed = True
+                logger.info(
+                    "✅ Greeting completed (fallback) - re-enabling turn_detection",
+                    call_id=self._call_id,
+                    had_audio_burst=had_audio_burst,
+                    note="response.done arrived before/without audio.done"
+                )
+                # Re-enable turn_detection as fallback
+                await self._re_enable_vad()
             
             # Check if this was the farewell response
             # CRITICAL: Check farewell_response_id is not None to prevent None == None false positive
