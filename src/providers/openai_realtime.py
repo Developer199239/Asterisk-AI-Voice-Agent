@@ -521,19 +521,15 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             function_name = item.get("name")
             if function_name == "hangup_call" and result:
                 # Check if tool result indicates hangup will occur
-                try:
-                    result_data = result.get("result", {})
-                    if isinstance(result_data, str):
-                        result_data = json.loads(result_data)
-                    if result_data.get("will_hangup"):
-                        self._hangup_after_response = True
-                        logger.info(
-                            "🔚 Hangup tool executed - next response will trigger hangup",
-                            call_id=self._call_id,
-                            function_name=function_name
-                        )
-                except Exception:
-                    logger.debug("Could not parse hangup tool result", call_id=self._call_id)
+                # Tool adapter returns result directly in top-level dict
+                if result.get("will_hangup"):
+                    self._hangup_after_response = True
+                    logger.info(
+                        "🔚 Hangup tool executed - next response will trigger hangup",
+                        call_id=self._call_id,
+                        function_name=function_name,
+                        farewell=result.get("message")
+                    )
             
             # Send result back to OpenAI
             await self.tool_adapter.send_tool_result(result, context)
