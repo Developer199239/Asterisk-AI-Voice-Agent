@@ -28,7 +28,16 @@ class HangupCallTool(Tool):
     def definition(self) -> ToolDefinition:
         return ToolDefinition(
             name="hangup_call",
-            description="End the current call. Use when the caller says goodbye, thank you, or indicates they're done.",
+            description=(
+                "End the current call with a farewell message. Use this tool when:\n"
+                "- User says goodbye, bye, see you, talk to you later, take care, etc.\n"
+                "- User says 'that's all', 'nothing else', 'I'm good', 'I'm done', 'all set'\n"
+                "- User thanks you after receiving help: 'thanks', 'thank you', 'appreciate it'\n"
+                "- Conversation naturally concludes after completing user's request\n"
+                "- User explicitly requests to end the call\n"
+                "IMPORTANT: Always politely confirm the user is ready to end before using this tool. "
+                "Ask 'Is there anything else I can help with?' if uncertain."
+            ),
             category=ToolCategory.TELEPHONY,
             requires_channel=True,
             max_execution_time=5,
@@ -36,7 +45,7 @@ class HangupCallTool(Tool):
                 ToolParameter(
                     name="farewell_message",
                     type="string",
-                    description="Optional farewell message to speak before hanging up",
+                    description="Farewell message to speak before hanging up. Should be warm and professional.",
                     required=False
                 )
             ]

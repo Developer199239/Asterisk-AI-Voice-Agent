@@ -1210,7 +1210,10 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                 await self._re_enable_vad()
             
             # Check if this was the farewell response - trigger hangup regardless of audio
-            if self._current_response_id == self._farewell_response_id and event_type in ("response.completed", "response.done"):
+            # CRITICAL: Check farewell_response_id is not None to prevent None == None false positive
+            if (self._farewell_response_id is not None and 
+                self._current_response_id == self._farewell_response_id and 
+                event_type in ("response.completed", "response.done")):
                 logger.info(
                     "🔚 Farewell response completed - triggering hangup",
                     call_id=self._call_id,
@@ -1572,6 +1575,20 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                     role=role,
                     text_preview=text[:50] + "..." if len(text) > 50 else text
                 )
+                
+                # Fallback detection: Warn if AI naturally ends conversation without using hangup_call
+                if role == "assistant" and not self._hangup_after_response:
+                    text_lower = text.lower()
+                    ending_phrases = [
+                        "goodbye", "bye", "see you", "talk to you later", "take care",
+                        "have a great day", "have a good day", "have a nice day"
+                    ]
+                    if any(phrase in text_lower for phrase in ending_phrases):
+                        logger.warning(
+                            "⚠️  AI used farewell phrase without invoking hangup_call tool",
+                            call_id=self._call_id,
+                            text_preview=text[:100]
+                        )
             else:
                 logger.warning(
                     "⚠️ Session not found for conversation tracking",
