@@ -251,7 +251,7 @@ class SendEmailSummaryTool(Tool):
         return {
             "to": admin_email,
             "from": f"{from_name} <{from_email}>",
-            "subject": f"Call Summary - {caller_id} - {call_id}",
+            "subject": f"Call Summary - {caller_number if caller_number != 'Unknown' else 'Call'} - {start_time.strftime('%Y-%m-%d %H:%M')}",
             "html": html_content
         }
     

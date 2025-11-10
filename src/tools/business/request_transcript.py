@@ -350,7 +350,7 @@ class RequestTranscriptTool(Tool):
         email_data = {
             "to": caller_email,
             "from": f"{from_name} <{from_email}>",
-            "subject": f"Your Call Transcript - {call_id}",
+            "subject": f"Your Call Transcript - {start_time.strftime('%Y-%m-%d %H:%M')}",
             "html": html_content
         }
         
