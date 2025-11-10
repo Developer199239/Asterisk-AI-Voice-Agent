@@ -92,6 +92,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
 
         self._call_id: Optional[str] = None
         self._pending_response: bool = False
+        self._current_response_id: Optional[str] = None  # Track active response for cancellation
         self._in_audio_burst: bool = False
         self._first_output_chunk_logged: bool = False
         self._closing: bool = False
@@ -643,6 +644,10 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             "input_audio_format": in_fmt,
             "output_audio_format": out_fmt,
             "voice": self.config.voice,
+            # Enable input transcription for conversation tracking (email tools)
+            "input_audio_transcription": {
+                "model": "whisper-1"
+            },
         }
         # CRITICAL FIX #2: Let OpenAI handle VAD with its optimized defaults
         # Only override if explicitly configured in YAML
@@ -756,6 +761,39 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         message = json.dumps(payload)
         async with self._send_lock:
             await self.websocket.send(message)
+    
+    async def _cancel_response(self, response_id: str):
+        """
+        Cancel an in-progress response when user interrupts (barge-in).
+        
+        This implements the OpenAI Realtime API's response.cancel event,
+        which stops audio generation and discards remaining chunks when
+        the user starts speaking during an AI response.
+        
+        See: https://platform.openai.com/docs/api-reference/realtime-client-events/response/cancel
+        """
+        if not self.websocket or self.websocket.closed:
+            return
+        
+        try:
+            cancel_payload = {
+                "type": "response.cancel",
+                "event_id": f"cancel-{uuid.uuid4()}",
+                "response_id": response_id
+            }
+            await self._send_json(cancel_payload)
+            logger.debug(
+                "Sent response.cancel to OpenAI",
+                call_id=self._call_id,
+                response_id=response_id
+            )
+        except Exception:
+            logger.error(
+                "Failed to cancel OpenAI response",
+                call_id=self._call_id,
+                response_id=response_id,
+                exc_info=True
+            )
     
     async def _send_audio_to_openai(self, pcm16: bytes):
         """Helper method to send PCM16 audio to OpenAI (extracted for gating logic).
@@ -940,7 +978,12 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             return
 
         if event_type == "response.created":
-            logger.debug("OpenAI response created", call_id=self._call_id)
+            # Track response ID for potential cancellation on barge-in
+            response = event.get("response", {})
+            response_id = response.get("id")
+            if response_id:
+                self._current_response_id = response_id
+                logger.debug("OpenAI response created", call_id=self._call_id, response_id=response_id)
             return
 
         if event_type == "response.delta":
@@ -1022,7 +1065,10 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             await self._emit_audio_done()
             if event_type == "response.error":
                 logger.error("OpenAI Realtime response error", call_id=self._call_id, error=event.get("error"))
+            elif event_type == "response.cancelled":
+                logger.info("OpenAI response cancelled (barge-in)", call_id=self._call_id, response_id=self._current_response_id)
             self._pending_response = False
+            self._current_response_id = None  # Clear response ID after completion
             if self._transcript_buffer:
                 await self._emit_transcript("", is_final=True)
             return
@@ -1044,7 +1090,16 @@ class OpenAIRealtimeProvider(AIProviderInterface):
 
         # Optional acks/telemetry for audio buffer operations
         if event_type and event_type.startswith("input_audio_buffer"):
-            logger.info("OpenAI input_audio_buffer ack", call_id=self._call_id, event_type=event_type)
+            # Handle barge-in: cancel ongoing response when user starts speaking
+            if event_type == "input_audio_buffer.speech_started" and self._current_response_id:
+                logger.info(
+                    "🎤 User interruption detected, cancelling response",
+                    call_id=self._call_id,
+                    response_id=self._current_response_id
+                )
+                await self._cancel_response(self._current_response_id)
+            else:
+                logger.info("OpenAI input_audio_buffer ack", call_id=self._call_id, event_type=event_type)
             return
 
         # Additional transcript variants per guide
