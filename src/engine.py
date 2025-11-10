@@ -4106,6 +4106,43 @@ class Engine:
                                 logger.error("Failed to hang up call", call_id=call_id, error=str(e), exc_info=True)
                     except Exception as e:
                         logger.debug("Error checking cleanup_after_tts flag", call_id=call_id, error=str(e))
+            
+            elif etype == "HangupReady":
+                # Hangup triggered by farewell response completion (Option C implementation)
+                # This ensures hangup happens even if farewell response produces no audio
+                call_id = event.get("call_id")
+                reason = event.get("reason", "unknown")
+                had_audio = event.get("had_audio", False)
+                
+                logger.info(
+                    "🔚 HangupReady event received - executing hangup",
+                    call_id=call_id,
+                    reason=reason,
+                    had_audio=had_audio
+                )
+                
+                # Small delay to let any pending audio finish playing
+                await asyncio.sleep(0.5)
+                
+                try:
+                    session = await self.session_store.get_by_call_id(call_id)
+                    if session:
+                        await self.ari_client.hangup_channel(session.caller_channel_id)
+                        logger.info(
+                            "✅ Call hung up successfully (farewell completed)",
+                            call_id=call_id,
+                            channel_id=session.caller_channel_id
+                        )
+                    else:
+                        logger.warning("No session found for HangupReady", call_id=call_id)
+                except Exception as e:
+                    logger.error(
+                        "Failed to hangup after farewell",
+                        call_id=call_id,
+                        error=str(e),
+                        exc_info=True
+                    )
+            
             else:
                 # Log control/JSON events at debug for now
                 logger.debug("Provider control event", provider_event=event)

@@ -95,6 +95,8 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         self._current_response_id: Optional[str] = None  # Track active response for cancellation
         self._greeting_response_id: Optional[str] = None  # Track greeting to protect from barge-in
         self._greeting_completed: bool = False  # Track if greeting has finished
+        self._farewell_response_id: Optional[str] = None  # Track farewell response for hangup
+        self._hangup_after_response: bool = False  # Flag to trigger hangup after next response
         self._in_audio_burst: bool = False
         self._first_output_chunk_logged: bool = False
         self._closing: bool = False
@@ -513,6 +515,25 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             
             # Execute tool via adapter
             result = await self.tool_adapter.handle_tool_call_event(event_data, context)
+            
+            # Check if this is a hangup_call tool that will trigger hangup
+            item = event_data.get("item", {})
+            function_name = item.get("name")
+            if function_name == "hangup_call" and result:
+                # Check if tool result indicates hangup will occur
+                try:
+                    result_data = result.get("result", {})
+                    if isinstance(result_data, str):
+                        result_data = json.loads(result_data)
+                    if result_data.get("will_hangup"):
+                        self._hangup_after_response = True
+                        logger.info(
+                            "🔚 Hangup tool executed - next response will trigger hangup",
+                            call_id=self._call_id,
+                            function_name=function_name
+                        )
+                except Exception:
+                    logger.debug("Could not parse hangup tool result", call_id=self._call_id)
             
             # Send result back to OpenAI
             await self.tool_adapter.send_tool_result(result, context)
@@ -1043,7 +1064,19 @@ class OpenAIRealtimeProvider(AIProviderInterface):
 
         # Log top-level error events with full payload to diagnose API contract issues
         if event_type == "error":
-            # Use 'error_event' key to avoid structlog 'event' argument conflict
+            error_code = event.get("error", {}).get("code")
+            
+            # Handle expected errors gracefully
+            if error_code == "response_cancel_not_active":
+                # Not an error - response already completed before cancellation
+                logger.debug(
+                    "Response already completed (cannot cancel)",
+                    call_id=self._call_id,
+                    response_id=self._current_response_id
+                )
+                return
+            
+            # Log other errors
             logger.error("OpenAI Realtime error event", call_id=self._call_id, error_event=event)
             return
 
@@ -1059,6 +1092,14 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                     self._greeting_response_id = response_id
                     logger.info(
                         "🛡️  Greeting response created - protected from barge-in",
+                        call_id=self._call_id,
+                        response_id=response_id
+                    )
+                # Mark response as farewell if hangup was requested
+                elif self._hangup_after_response:
+                    self._farewell_response_id = response_id
+                    logger.info(
+                        "🔚 Farewell response created - will trigger hangup on completion",
                         call_id=self._call_id,
                         response_id=response_id
                     )
@@ -1171,6 +1212,30 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                 )
                 # Re-enable turn_detection now that greeting is done
                 await self._re_enable_vad()
+            
+            # Check if this was the farewell response - trigger hangup regardless of audio
+            if self._current_response_id == self._farewell_response_id and event_type in ("response.completed", "response.done"):
+                logger.info(
+                    "🔚 Farewell response completed - triggering hangup",
+                    call_id=self._call_id,
+                    response_id=self._current_response_id,
+                    had_audio=had_audio_burst
+                )
+                # Emit HangupReady event to trigger hangup in engine
+                try:
+                    if self.on_event:
+                        await self.on_event({
+                            "type": "HangupReady",
+                            "call_id": self._call_id,
+                            "reason": "farewell_completed",
+                            "had_audio": had_audio_burst
+                        })
+                except Exception as e:
+                    logger.error("Failed to emit HangupReady event", call_id=self._call_id, error=str(e))
+                
+                # Reset farewell tracking
+                self._farewell_response_id = None
+                self._hangup_after_response = False
             
             self._pending_response = False
             self._current_response_id = None  # Clear response ID after completion
