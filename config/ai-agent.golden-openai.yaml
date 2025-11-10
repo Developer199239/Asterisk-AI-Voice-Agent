@@ -40,7 +40,7 @@ downstream_mode: "stream"
 audiosocket:
   host: "0.0.0.0"              # Bind to all interfaces
   port: 8090                    # Standard AudioSocket port
-  format: "ulaw"                # Audio format: ulaw (8kHz telephony standard)
+  format: "slin"                # Audio format: ulaw (8kHz telephony standard)
 
 # Barge-In (Interrupt Handling)
 # Controls when user speech can interrupt AI responses
