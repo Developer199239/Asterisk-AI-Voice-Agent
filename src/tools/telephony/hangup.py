@@ -91,13 +91,12 @@ class HangupCallTool(Tool):
                     "message": "Session not found"
                 }
             
-            # Mark session for cleanup after farewell TTS
-            session.cleanup_after_tts = True
-            await context.session_store.upsert_call(session)
-            
             logger.info("✅ Call will hangup after farewell", call_id=context.call_id)
             
-            # Return farewell message - AI will speak it, then engine will hangup
+            # Return farewell message with will_hangup flag
+            # This triggers Option C: provider marks next response as farewell,
+            # emits HangupReady when farewell completes, engine hangs up
+            # NO cleanup_after_tts - prevents race condition with old mechanism
             return {
                 "status": "success",
                 "message": farewell,
