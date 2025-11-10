@@ -644,10 +644,9 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             "input_audio_format": in_fmt,
             "output_audio_format": out_fmt,
             "voice": self.config.voice,
-            # Enable input transcription for conversation tracking (email tools)
-            "input_audio_transcription": {
-                "model": "whisper-1"
-            },
+            # Note: input_audio_transcription is NOT compatible with server_vad
+            # When turn_detection is enabled, OpenAI does not send transcription events
+            # This is an API limitation - email summaries will only include AI responses
         }
         # CRITICAL FIX #2: Let OpenAI handle VAD with its optimized defaults
         # Only override if explicitly configured in YAML
@@ -700,7 +699,6 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             output_audio_format=session.get("output_audio_format"),
             input_audio_format=session.get("input_audio_format"),
             modalities=session.get("modalities"),
-            input_audio_transcription=session.get("input_audio_transcription"),
         )
 
         await self._send_json(payload)
@@ -1075,48 +1073,13 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             return
 
         if event_type == "input_transcription.completed":
+            # Note: This event is NOT sent when server_vad is enabled
+            # OpenAI API limitation: transcription incompatible with turn_detection
             transcript = event.get("transcript")
             if transcript:
                 await self._emit_transcript(transcript, is_final=True)
                 # Track user conversation for email tools
                 await self._track_conversation("user", transcript)
-            return
-        
-        # Handle conversation.item.created for user messages (works with server_vad)
-        # This event is sent even when input_audio_transcription is disabled/incompatible
-        if event_type == "conversation.item.created":
-            item = event.get("item", {})
-            item_type = item.get("type")
-            role = item.get("role")
-            
-            # Track user input from conversation items
-            if role == "user" and item_type == "message":
-                # Extract text content from the message
-                content = item.get("content", [])
-                user_text_parts = []
-                
-                for content_item in content:
-                    if isinstance(content_item, dict):
-                        content_type = content_item.get("type")
-                        if content_type == "input_text":
-                            text = content_item.get("text", "")
-                            if text:
-                                user_text_parts.append(text)
-                        elif content_type == "text":
-                            text = content_item.get("text", "")
-                            if text:
-                                user_text_parts.append(text)
-                
-                # Combine all text parts
-                if user_text_parts:
-                    full_text = " ".join(user_text_parts)
-                    logger.debug(
-                        "📝 User message from conversation.item.created",
-                        call_id=self._call_id,
-                        text_preview=full_text[:50] + "..." if len(full_text) > 50 else full_text
-                    )
-                    # Track user conversation for email tools
-                    await self._track_conversation("user", full_text)
             return
 
         if event_type == "response.output_text.delta":

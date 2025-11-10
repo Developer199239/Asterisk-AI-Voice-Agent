@@ -102,6 +102,11 @@ EMAIL_TEMPLATE = """
     {% if include_transcript and transcript %}
     <h3>Conversation Transcript</h3>
     <div class="transcript">{{ transcript }}</div>
+    {% if transcript_note %}
+    <p style="color: #6b7280; font-size: 12px; margin-top: 10px;">
+      <em>{{ transcript_note }}</em>
+    </p>
+    {% endif %}
     {% endif %}
     
     <div class="footer">
@@ -226,8 +231,14 @@ class SendEmailSummaryTool(Tool):
         
         # Get transcript from conversation_history
         transcript = ""
+        transcript_note = None
         if hasattr(session, "conversation_history") and session.conversation_history:
             transcript = self._format_conversation(session.conversation_history)
+            
+            # Check if we only have AI responses (OpenAI Realtime limitation)
+            roles = [msg.get("role") for msg in session.conversation_history if isinstance(msg, dict)]
+            if roles and all(role == "assistant" for role in roles):
+                transcript_note = "Note: Caller messages are not captured when using OpenAI Realtime with server-side voice activity detection. Only AI responses are included above."
         
         # Get outcome/status
         outcome = getattr(session, "call_outcome", "Completed")
@@ -240,7 +251,8 @@ class SendEmailSummaryTool(Tool):
             caller_number=caller_number,
             outcome=outcome,
             include_transcript=config.get("include_transcript", True),
-            transcript=transcript
+            transcript=transcript,
+            transcript_note=transcript_note
         )
         
         # Build email data
