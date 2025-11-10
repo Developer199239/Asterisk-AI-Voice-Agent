@@ -20,7 +20,7 @@ We take security vulnerabilities seriously. If you discover a security issue, pl
 ### Reporting Process
 
 1. **DO NOT** open a public GitHub issue for security vulnerabilities
-2. **Email** security reports to: [Your security contact email]
+2. **Email** security reports to: support@jugaar.llc
 3. **Include** the following in your report:
    - Description of the vulnerability
    - Steps to reproduce the issue

@@ -164,11 +164,22 @@ class ToolRegistry:
         except ImportError as e:
             logger.warning(f"Could not import HangupCallTool: {e}")
         
+        # Business tools
+        try:
+            from src.tools.business.email_summary import SendEmailSummaryTool
+            self.register(SendEmailSummaryTool)
+        except ImportError as e:
+            logger.warning(f"Could not import SendEmailSummaryTool: {e}")
+        
+        try:
+            from src.tools.business.request_transcript import RequestTranscriptTool
+            self.register(RequestTranscriptTool)
+        except ImportError as e:
+            logger.warning(f"Could not import RequestTranscriptTool: {e}")
+        
         # Future tools will be registered here:
         # from src.tools.telephony.voicemail import SendToVoicemailTool
-        # from src.tools.business.email import SendEmailSummaryTool
         # self.register(SendToVoicemailTool)
-        # self.register(SendEmailSummaryTool)
         
         self._initialized = True
         logger.info(f"🛠️  Initialized {len(self._tools)} tools")
