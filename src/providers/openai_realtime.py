@@ -1102,14 +1102,15 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                 )
             return
 
-        # Handle function calls from conversation.item.created events
-        if event_type == "conversation.item.created":
+        # Handle function calls from response.output_item.done events
+        # This is the correct event per OpenAI Realtime API spec
+        if event_type == "response.output_item.done":
             item = event.get("item", {})
             if item.get("type") == "function_call":
                 call_id_field = item.get("call_id")
                 function_name = item.get("name")
                 logger.info(
-                    "📞 OpenAI function call",
+                    "📞 OpenAI function call detected",
                     call_id=self._call_id,
                     function_call_id=call_id_field,
                     function_name=function_name,

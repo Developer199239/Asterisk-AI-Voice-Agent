@@ -62,9 +62,11 @@ class OpenAIToolAdapter:
         """
         Handle function_call event from OpenAI Realtime API.
         
-        OpenAI format (from conversation.item.created event):
+        OpenAI format (from response.output_item.done event):
         {
-            "type": "conversation.item.created",
+            "type": "response.output_item.done",
+            "response_id": "resp_123",
+            "output_index": 0,
             "item": {
                 "id": "item_123",
                 "type": "function_call",
