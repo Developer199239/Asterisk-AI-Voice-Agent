@@ -1013,6 +1013,8 @@ class OpenAIRealtimeProvider(AIProviderInterface):
 
         if event_type == "response.audio_transcript.done":
             if self._transcript_buffer:
+                # Track assistant conversation for email tools
+                await self._track_conversation("assistant", self._transcript_buffer)
                 await self._emit_transcript("", is_final=True)
             return
 
@@ -1029,6 +1031,8 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             transcript = event.get("transcript")
             if transcript:
                 await self._emit_transcript(transcript, is_final=True)
+                # Track user conversation for email tools
+                await self._track_conversation("user", transcript)
             return
 
         if event_type == "response.output_text.delta":
@@ -1057,6 +1061,8 @@ class OpenAIRealtimeProvider(AIProviderInterface):
 
         if event_type == "response.output_audio_transcript.done":
             if self._transcript_buffer:
+                # Track assistant conversation for email tools
+                await self._track_conversation("assistant", self._transcript_buffer)
                 await self._emit_transcript("", is_final=True)
             return
 
@@ -1302,6 +1308,51 @@ class OpenAIRealtimeProvider(AIProviderInterface):
 
         if is_final:
             self._transcript_buffer = ""
+
+    async def _track_conversation(self, role: str, text: str):
+        """Track conversation turns for email tools (similar to Deepgram implementation)."""
+        import time
+        
+        if not self._call_id or not text:
+            return
+        
+        if not hasattr(self, '_session_store') or not self._session_store:
+            logger.debug(
+                "⚠️ Session store not available for conversation tracking",
+                call_id=self._call_id,
+                role=role
+            )
+            return
+        
+        try:
+            session = await self._session_store.get_by_call_id(self._call_id)
+            if session:
+                # Add to conversation history
+                session.conversation_history.append({
+                    "role": role,  # "user" or "assistant"
+                    "content": text,
+                    "timestamp": time.time()
+                })
+                # Update session
+                await self._session_store.upsert_call(session)
+                logger.debug(
+                    "✅ Tracked conversation message",
+                    call_id=self._call_id,
+                    role=role,
+                    text_preview=text[:50] + "..." if len(text) > 50 else text
+                )
+            else:
+                logger.warning(
+                    "⚠️ Session not found for conversation tracking",
+                    call_id=self._call_id
+                )
+        except Exception as e:
+            logger.error(
+                "❌ Failed to track conversation",
+                call_id=self._call_id,
+                error=str(e),
+                exc_info=True
+            )
 
     async def _keepalive_loop(self):
         try:
