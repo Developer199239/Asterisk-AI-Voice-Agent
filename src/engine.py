@@ -1820,11 +1820,12 @@ class Engine:
                             ari_client=self.ari_client,
                             config=self.config.model_dump()
                         )
-                        # Execute async without blocking cleanup
-                        asyncio.create_task(email_tool.execute({}, context))
+                        # Execute synchronously to ensure session is available
+                        # Email sending itself is still async (non-blocking)
+                        await email_tool.execute({}, context)
                         logger.info("📧 Auto-triggered email summary", call_id=call_id)
             except Exception as e:
-                logger.warning("Failed to auto-trigger email summary", call_id=call_id, error=str(e))
+                logger.warning("Failed to auto-trigger email summary", call_id=call_id, error=str(e), exc_info=True)
 
             # Finally remove the session.
             await self.session_store.remove_call(call_id)
