@@ -1156,15 +1156,9 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             if self._in_audio_burst:
                 self._in_audio_burst = False
             
-            # Re-enable VAD AFTER greeting audio completes (not after response generation)
-            if self._current_response_id == self._greeting_response_id and not self._greeting_completed:
-                self._greeting_completed = True
-                logger.info(
-                    "✅ Greeting audio completed - re-enabling turn_detection",
-                    call_id=self._call_id
-                )
-                # Re-enable turn_detection now that greeting audio is done
-                await self._re_enable_vad()
+            # NOTE: response.audio.done fires after EACH audio segment, not at end of response
+            # Do NOT re-enable VAD here - it will trigger too early!
+            # VAD re-enable handled in response.done event
             
             await self._emit_audio_done()
             return
@@ -1209,21 +1203,19 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             elif event_type == "response.cancelled":
                 logger.info("OpenAI response cancelled (barge-in)", call_id=self._call_id, response_id=self._current_response_id)
             
-            # FALLBACK: Re-enable VAD on response.done if greeting hasn't completed yet
-            # This handles race condition where response.done arrives before audio deltas
-            # Primary path is still response.audio.done (preferred), but this ensures
-            # VAD gets re-enabled even if audio arrives late or never arrives
+            # Re-enable VAD when greeting response completes
+            # response.done fires when entire response is generated (not per-segment)
+            # This is the correct event to wait for, not response.audio.done (which fires per-segment)
             if (self._current_response_id == self._greeting_response_id and 
                 not self._greeting_completed and 
                 event_type in ("response.completed", "response.done")):
                 self._greeting_completed = True
                 logger.info(
-                    "✅ Greeting completed (fallback) - re-enabling turn_detection",
+                    "✅ Greeting response completed - re-enabling turn_detection",
                     call_id=self._call_id,
-                    had_audio_burst=had_audio_burst,
-                    note="response.done arrived before/without audio.done"
+                    had_audio=had_audio_burst
                 )
-                # Re-enable turn_detection as fallback
+                # Re-enable turn_detection now that greeting is fully generated
                 await self._re_enable_vad()
             
             # Check if this was the farewell response
