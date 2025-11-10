@@ -93,6 +93,8 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         self._call_id: Optional[str] = None
         self._pending_response: bool = False
         self._current_response_id: Optional[str] = None  # Track active response for cancellation
+        self._greeting_response_id: Optional[str] = None  # Track greeting to protect from barge-in
+        self._greeting_completed: bool = False  # Track if greeting has finished
         self._in_audio_burst: bool = False
         self._first_output_chunk_logged: bool = False
         self._closing: bool = False
@@ -727,6 +729,12 @@ class OpenAIRealtimeProvider(AIProviderInterface):
 
         await self._send_json(response_payload)
         self._pending_response = True
+        
+        # Mark that we've sent a greeting - next response.created will be protected
+        logger.info(
+            "🛡️  Greeting sent - will protect from barge-in",
+            call_id=self._call_id
+        )
 
     async def _ensure_response_request(self):
         if self._pending_response or not self.websocket or self.websocket.closed:
@@ -982,7 +990,17 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             response_id = response.get("id")
             if response_id:
                 self._current_response_id = response_id
-                logger.debug("OpenAI response created", call_id=self._call_id, response_id=response_id)
+                
+                # Mark first response as greeting response (protected from barge-in)
+                if not self._greeting_completed and self._greeting_response_id is None:
+                    self._greeting_response_id = response_id
+                    logger.info(
+                        "🛡️  Greeting response created - protected from barge-in",
+                        call_id=self._call_id,
+                        response_id=response_id
+                    )
+                else:
+                    logger.debug("OpenAI response created", call_id=self._call_id, response_id=response_id)
             return
 
         if event_type == "response.delta":
@@ -1066,6 +1084,15 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                 logger.error("OpenAI Realtime response error", call_id=self._call_id, error=event.get("error"))
             elif event_type == "response.cancelled":
                 logger.info("OpenAI response cancelled (barge-in)", call_id=self._call_id, response_id=self._current_response_id)
+            
+            # Mark greeting as completed if this was the greeting response
+            if self._current_response_id == self._greeting_response_id and event_type in ("response.completed", "response.done"):
+                self._greeting_completed = True
+                logger.info(
+                    "✅ Greeting completed - barge-in protection lifted",
+                    call_id=self._call_id
+                )
+            
             self._pending_response = False
             self._current_response_id = None  # Clear response ID after completion
             if self._transcript_buffer:
@@ -1093,12 +1120,20 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         if event_type and event_type.startswith("input_audio_buffer"):
             # Handle barge-in: cancel ongoing response when user starts speaking
             if event_type == "input_audio_buffer.speech_started" and self._current_response_id:
-                logger.info(
-                    "🎤 User interruption detected, cancelling response",
-                    call_id=self._call_id,
-                    response_id=self._current_response_id
-                )
-                await self._cancel_response(self._current_response_id)
+                # Protect greeting response from barge-in cancellation
+                if self._current_response_id == self._greeting_response_id and not self._greeting_completed:
+                    logger.info(
+                        "🛡️  Barge-in blocked - protecting greeting response",
+                        call_id=self._call_id,
+                        response_id=self._current_response_id
+                    )
+                else:
+                    logger.info(
+                        "🎤 User interruption detected, cancelling response",
+                        call_id=self._call_id,
+                        response_id=self._current_response_id
+                    )
+                    await self._cancel_response(self._current_response_id)
             else:
                 logger.info("OpenAI input_audio_buffer ack", call_id=self._call_id, event_type=event_type)
             return
