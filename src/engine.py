@@ -5378,6 +5378,17 @@ class Engine:
         """Persist transport profile updates and sync preferences."""
         profile = session.transport_profile
         
+        # Guard: Check if transport profile is initialized
+        if profile is None:
+            logger.warning(
+                "Transport profile not initialized yet, skipping update",
+                call_id=session.call_id,
+                source=source,
+                fmt=fmt,
+                sample_rate=sample_rate
+            )
+            return
+        
         # P1: Check if this is new TransportProfile (has wire_encoding) vs legacy (has format)
         if hasattr(profile, 'wire_encoding'):
             # New P1 TransportProfile - don't update, it's immutable per call

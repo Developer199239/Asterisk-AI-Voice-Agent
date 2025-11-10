@@ -1081,6 +1081,43 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                 # Track user conversation for email tools
                 await self._track_conversation("user", transcript)
             return
+        
+        # Handle conversation.item.created for user messages (works with server_vad)
+        # This event is sent even when input_audio_transcription is disabled/incompatible
+        if event_type == "conversation.item.created":
+            item = event.get("item", {})
+            item_type = item.get("type")
+            role = item.get("role")
+            
+            # Track user input from conversation items
+            if role == "user" and item_type == "message":
+                # Extract text content from the message
+                content = item.get("content", [])
+                user_text_parts = []
+                
+                for content_item in content:
+                    if isinstance(content_item, dict):
+                        content_type = content_item.get("type")
+                        if content_type == "input_text":
+                            text = content_item.get("text", "")
+                            if text:
+                                user_text_parts.append(text)
+                        elif content_type == "text":
+                            text = content_item.get("text", "")
+                            if text:
+                                user_text_parts.append(text)
+                
+                # Combine all text parts
+                if user_text_parts:
+                    full_text = " ".join(user_text_parts)
+                    logger.debug(
+                        "📝 User message from conversation.item.created",
+                        call_id=self._call_id,
+                        text_preview=full_text[:50] + "..." if len(full_text) > 50 else full_text
+                    )
+                    # Track user conversation for email tools
+                    await self._track_conversation("user", full_text)
+            return
 
         if event_type == "response.output_text.delta":
             delta = event.get("delta") or {}
