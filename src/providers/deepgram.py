@@ -1210,11 +1210,18 @@ class DeepgramProvider(AIProviderInterface):
                                                 })
                                                 # Update session
                                                 await self._session_store.upsert_call(session)
+                                                logger.debug(
+                                                    "✅ Tracked conversation message",
+                                                    call_id=self.call_id,
+                                                    role=role,
+                                                    text_preview=text[:50] + "..." if len(text) > 50 else text
+                                                )
                                         except Exception as e:
-                                            logger.debug(
-                                                "Failed to track conversation",
+                                            logger.error(
+                                                "❌ Failed to track conversation",
                                                 call_id=self.call_id,
-                                                error=str(e)
+                                                error=str(e),
+                                                exc_info=True
                                             )
                                 except Exception:
                                     logger.debug("Deepgram conversation text logging failed", exc_info=True)
