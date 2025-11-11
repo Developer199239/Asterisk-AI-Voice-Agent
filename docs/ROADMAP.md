@@ -291,48 +291,118 @@ Keep this roadmap updated after each milestone to help any collaborator—or fut
 
 ---
 
-### v4.1 Feature Backlog
+### v4.2 Planning (Q1 2026)
 
-**CLI Enhancements**:
+**Testing & Quality**:
 
-- `agent` binary builds (Makefile automation)
-- `agent config validate` - Pre-flight config validation
-- `agent test` - Automated test call execution
+- Unit tests for tool adapters and email tools
+- Integration tests for transfer workflows  
+- Restore CI coverage threshold to 40%+
+- Automated regression test suite
+
+**Additional Tool Categories**:
+
+- Queue management tools (add to queue, remove from queue)
+- Voicemail tools (leave message, retrieve messages)
+- Conference bridge tools (create, manage participants)
+- SMS/MMS tools (send text messages to caller)
 
 **Additional Providers**:
 
-- Anthropic Claude integration
-- Google Gemini integration  
-- Azure Speech Services
+- Anthropic Claude integration for LLM
+- Google Gemini integration for LLM
+- Azure Speech Services for STT/TTS
 
 **Advanced Features**:
 
-- Call transfer and multi-leg support
-- WebRTC SIP client integration
-- High availability / clustering
-- Real-time dashboard (active calls)
-
-**Config Cleanup**:
-
-- Remove deprecated v3.0 settings
-- Automated config migration tool
-- Schema validation on startup
+- WebRTC SIP client integration for browser-based calls
+- High availability / clustering for multi-server deployments
+- Real-time dashboard for active call monitoring
+- Call recording with consent management
 
 **Performance**:
 
 - GPU acceleration for local-ai-server
-- Streaming latency optimizations
-- Memory usage profiling
+- Streaming latency optimizations (<500ms target)
+- Memory usage profiling and optimization
+- Parallel tool execution
 
 **Documentation**:
 
-- Video tutorials
-- Architecture deep-dives
+- Video tutorials for setup and configuration
+- Architecture deep-dives with diagrams
 - Case studies from production deployments
+- Tool calling best practices guide
 
 ---
 
 ## Release History
+
+### v4.1.0 (November 2025) - Tool Calling & Agent Actions
+
+**Release Date**: November 10, 2025  
+**Focus**: Unified tool calling architecture enabling AI agents to perform real-world actions
+
+**Tool Calling System**:
+
+- **Unified Architecture**: Write tools once, use with any provider (Deepgram, OpenAI, custom pipelines)
+- **Provider Adapters**: Automatic translation between provider formats (202 lines Deepgram, 215 lines OpenAI)
+- **Base Framework**: `Tool`, `ToolDefinition`, `ToolRegistry` classes (537 lines total)
+- **Execution Context**: Session-aware context with ARI access for real-time call control
+
+**Telephony Tools** (5 tools shipped):
+
+- **`transfer_call`**: Warm/blind transfers with direct SIP origination (504 lines)
+  - Department name resolution ("support" → 6000)
+  - Perfect bidirectional audio (eliminated Local channel issues)
+  - <150ms execution time validated in production
+- **`cancel_transfer`**: Cancel in-progress transfer before agent answers
+- **`hangup_call`**: Graceful call termination with farewell message
+  - Deepgram/OpenAI integration with HangupReady event
+  - Prevents race conditions with farewell audio
+
+**Business Tools** (2 tools shipped):
+
+- **`request_transcript`**: Caller-initiated transcript delivery (475 lines)
+  - Email parsing from speech ("john dot smith at gmail")
+  - DNS MX validation and confirmation flow
+  - Deduplication and admin BCC
+- **`send_email_summary`**: Auto-send call summaries (347 lines)
+  - Full conversation transcript with timestamps
+  - Professional HTML formatting
+
+**Agent CLI Tools**:
+
+- **Binary Distribution**: Pre-built binaries for 5 platforms (Linux AMD64/ARM64, macOS Intel/Apple Silicon, Windows)
+- **One-Line Installer**: `curl -sSL ... | bash` with platform auto-detection
+- **GitHub Actions CI**: Automated builds and releases
+- **5 CLI Commands**: `doctor`, `troubleshoot`, `demo`, `init`, `version`
+
+**Conversation Tracking**:
+
+- Real-time turn tracking in both Deepgram and OpenAI providers
+- `conversation_history` field in `CallSession` model
+- Enables email tools with full transcript context
+
+**Critical Fixes**:
+
+- **Direct SIP Origination**: Eliminated Local channels for perfect audio (AAVA-57, AAVA-58)
+- **OpenAI VAD Timing**: Fixed greeting protection with `response.done` event (AAVA-62)
+- **Email Tool Race Conditions**: Fixed 5 async bugs (AAVA-52)
+- **Deepgram Hangup**: Added HangupReady event emission after farewell audio
+
+**Documentation**:
+
+- **New**: `docs/TOOL_CALLING_GUIDE.md` - Comprehensive 600+ line guide
+- **Updated**: FreePBX Integration Guide, CLI Tools Guide, README, Architecture.md
+
+**Production Validation**:
+
+- Call IDs: 1762731796.4233 (Deepgram), 1762734947.4251 (OpenAI)
+- Transfer execution: <150ms for 4-step cleanup sequence
+- Email delivery: 100% success rate with MX validation
+
+---
 
 ### v4.0.0 (October 2025) - Production-Ready GA Release
 
@@ -385,5 +455,5 @@ For detailed implementation plans and specifications:
 
 ---
 
-**Last Updated**: October 31, 2025  
-**Roadmap Version**: 2.0 (Merged from ROADMAP.md + ROADMAPv4.md)
+**Last Updated**: November 11, 2025  
+**Roadmap Version**: 2.1 (Added v4.1.0 Tool Calling Release)
