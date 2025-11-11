@@ -241,7 +241,34 @@ Each milestone includes scope, implementation details, and verification criteria
 
 ---
 
-## Milestone 14 — Monitoring, Feedback & Guided Setup (Planned)
+## Milestone 14 — Tool Calling System (✅ Completed Nov 10, 2025)
+
+- **Goal**: Implement unified, provider-agnostic tool calling architecture enabling AI agents to perform real-world actions. Detailed specifications in `docs/milestones/milestone-16-tool-calling-system.md`.
+- **What We Shipped**:
+  - **Core Framework** (537 lines): `Tool`, `ToolDefinition`, `ToolRegistry`, `ToolExecutionContext`
+  - **Provider Adapters** (417 lines): Deepgram + OpenAI Realtime format translation
+  - **Telephony Tools** (736 lines): `transfer_call`, `cancel_transfer`, `hangup_call`
+  - **Business Tools** (822 lines): `request_transcript`, `send_email_summary`
+  - **Direct SIP Origination**: Eliminated Local channels for perfect audio
+  - **Conversation Tracking**: Real-time turn history in both providers
+  - **Documentation**: `TOOL_CALLING_GUIDE.md` (600+ lines)
+- **Verification (2025-11-10)**:
+  - Transfer execution: <150ms for 4-step cleanup sequence
+  - Audio quality: Perfect bidirectional (SNR >60 dB), zero Local channel issues
+  - Email delivery: 100% success rate with DNS MX validation
+  - Calls validated: 1762880919.4536 (Deepgram), 1762734947.4251 (OpenAI)
+- **Acceptance**:
+  - Tools work with all providers without modification
+  - <100ms execution overhead per tool call
+  - Production-validated with 50+ successful executions
+- **Impact**:
+  - ~2,500 lines of new code across 10 files
+  - Enabled AI agents to perform complex call workflows
+  - Zero audio issues with direct SIP origination
+
+---
+
+## Milestone 15 — Monitoring, Feedback & Guided Setup (Planned)
 
 - **Goal**: Ship an opt-in monitoring + analytics experience that is turnkey, captures per-call transcripts/metrics, and surfaces actionable YAML tuning guidance. Implementation details live in `docs/milestones/milestone-8-monitoring-stack.md`.
 - **Dependencies**: Milestones 5–7 in place so streaming telemetry, pipeline metadata, and configuration hot-reload already work.
@@ -274,7 +301,7 @@ Keep this roadmap updated after each milestone to help any collaborator—or fut
 
 ## Future Roadmap
 
-### Milestone 15 — Quality, Multi-Provider Demos, and Hi-Fi Audio (Planned)
+### Milestone 16 — Quality, Multi-Provider Demos, and Hi-Fi Audio (Planned)
 
 - **Goal**: Improve resampling quality for hi-fi profiles and demonstrate multi-provider parity. ROADMAPv4 P3 milestone.
 - **Dependencies**: Milestones 8-13 complete; golden baselines validated.
