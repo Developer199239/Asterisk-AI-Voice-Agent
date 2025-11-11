@@ -176,6 +176,9 @@ class DeepgramProvider(AIProviderInterface):
         # User transcript counters
         self._user_txn_count: int = 0
         self._user_last_ts: float = 0.0
+        # Hangup tracking (for farewell + HangupReady event)
+        self._hangup_pending: bool = False
+        self._farewell_message: Optional[str] = None
         # Cache declared Deepgram input settings
         try:
             self._dg_input_rate = int(self._get_config_value('input_sample_rate_hz', 8000) or 8000)
@@ -826,6 +829,16 @@ class DeepgramProvider(AIProviderInterface):
             # Execute tool via adapter
             result = await self.tool_adapter.handle_tool_call_event(event_data, context)
             
+            # Check if this was a hangup request
+            if result.get('function_name') == 'hangup_call' and result.get('status') == 'success':
+                self._hangup_pending = True
+                self._farewell_message = result.get('farewell_message', '')
+                logger.info(
+                    "🔚 Hangup tool executed - will trigger after farewell audio completes",
+                    call_id=self.call_id,
+                    farewell=self._farewell_message
+                )
+            
             # Send result back to Deepgram
             await self.tool_adapter.send_tool_result(result, context)
             
@@ -1281,6 +1294,27 @@ class DeepgramProvider(AIProviderInterface):
                                 'call_id': self.call_id
                             })
                             self._in_audio_burst = False
+                            
+                            # Check if farewell audio completed after hangup request
+                            if self._hangup_pending:
+                                logger.info(
+                                    "🔚 Farewell audio completed - emitting HangupReady",
+                                    call_id=self.call_id,
+                                    had_audio=True
+                                )
+                                try:
+                                    await self.on_event({
+                                        'type': 'HangupReady',
+                                        'call_id': self.call_id,
+                                        'reason': 'farewell_completed',
+                                        'had_audio': True
+                                    })
+                                except Exception as e:
+                                    logger.error("Failed to emit HangupReady event", call_id=self.call_id, error=str(e))
+                                
+                                # Reset hangup tracking
+                                self._hangup_pending = False
+                                self._farewell_message = None
 
                         if self.on_event:
                             await self.on_event(event_data)
@@ -1411,6 +1445,27 @@ class DeepgramProvider(AIProviderInterface):
                         'streaming_done': True,
                         'call_id': self.call_id
                     })
+                    
+                    # Check if farewell audio completed after hangup request (socket closing)
+                    if self._hangup_pending:
+                        logger.info(
+                            "🔚 Farewell audio completed (socket closing) - emitting HangupReady",
+                            call_id=self.call_id,
+                            had_audio=True
+                        )
+                        try:
+                            await self.on_event({
+                                'type': 'HangupReady',
+                                'call_id': self.call_id,
+                                'reason': 'farewell_completed',
+                                'had_audio': True
+                            })
+                        except Exception as e:
+                            logger.error("Failed to emit HangupReady event", call_id=self.call_id, error=str(e))
+                        
+                        # Reset hangup tracking
+                        self._hangup_pending = False
+                        self._farewell_message = None
                 except Exception:
                     pass
             self._in_audio_burst = False
