@@ -521,6 +521,11 @@ configure_env() {
     R_ESC=$(printf '%s' "$AI_ROLE" | sed 's/"/\\"/g')
     upsert_env GREETING "\"$G_ESC\""
     upsert_env AI_ROLE "\"$R_ESC\""
+    
+    # Set proper default logging levels
+    upsert_env LOG_LEVEL "info"
+    upsert_env STREAMING_LOG_LEVEL "info"
+    upsert_env LOG_FORMAT "json"
 
     # Clean sed backup if created
     [ -f .env.bak ] && rm -f .env.bak || true
@@ -535,54 +540,53 @@ select_config_template() {
     echo "║   Asterisk AI Voice Agent v4.1 - Configuration Setup     ║"
     echo "╚═══════════════════════════════════════════════════════════╝"
     echo ""
-    echo "Select your STARTING AI voice agent configuration:"
+    echo "✨ ALL 3 AI voice pipelines will be enabled:"
+    echo ""
+    echo "  [1] OpenAI Realtime (Cloud)"
+    echo "  [2] Deepgram Voice Agent (Cloud)"
+    echo "  [3] Local Hybrid (Privacy-Focused)"
+    echo ""
+    echo "Select which pipeline should be ACTIVE by default:"
     echo ""
     echo "  [1] OpenAI Realtime (Recommended)"
-    echo "      • Cloud-based, modern AI with natural conversations"
-    echo "      • Requires: OPENAI_API_KEY"
-    echo "      • Best for: Quick setup, enterprise deployments"
+    echo "      • Fastest setup, natural conversations"
+    echo "      • Uses: OPENAI_API_KEY"
     echo ""
     echo "  [2] Deepgram Voice Agent"
-    echo "      • Enterprise-grade cloud AI with Think stage"
-    echo "      • Requires: DEEPGRAM_API_KEY + OPENAI_API_KEY (for Think)"
-    echo "      • Best for: Deepgram ecosystem, advanced features"
+    echo "      • Enterprise-grade with Think stage"
+    echo "      • Uses: DEEPGRAM_API_KEY + OPENAI_API_KEY"
     echo ""
-    echo "  [3] Local Hybrid (Privacy-Focused)"
-    echo "      • Local voice processing + cloud intelligence"
-    echo "      • Requires: OPENAI_API_KEY, 8GB+ RAM, local AI server"
-    echo "      • Best for: Audio privacy, cost control"
+    echo "  [3] Local Hybrid"
+    echo "      • Audio privacy, cost control"
+    echo "      • Uses: OPENAI_API_KEY + local AI server"
     echo ""
-    echo "ℹ️  Note: All 3 configurations will be included in ai-agent.yaml"
-    echo "   You can switch between them later by editing the file."
+    echo "💡 You can switch pipelines anytime by editing ai-agent.yaml"
     echo ""
-    read -p "Enter your choice [1]: " cfg_choice
+    read -p "Enter your default pipeline [1]: " cfg_choice
     
     # Map choices to profiles and config files
     CFG_DST="config/ai-agent.yaml"
-    NEEDS_OPENAI=0
-    NEEDS_DEEPGRAM=0
+    # Always prompt for both cloud API keys since all pipelines are enabled
+    NEEDS_OPENAI=1
+    NEEDS_DEEPGRAM=1
     NEEDS_LOCAL=0
     
     case "$cfg_choice" in
         1|"")
             PROFILE="openai_realtime"
             ACTIVE_PROVIDER="openai_realtime"
-            NEEDS_OPENAI=1
-            print_info "Selected: OpenAI Realtime"
+            print_info "Default pipeline: OpenAI Realtime"
             ;;
         2)
             PROFILE="deepgram"
             ACTIVE_PROVIDER="deepgram"
-            NEEDS_DEEPGRAM=1
-            NEEDS_OPENAI=1  # For Think stage
-            print_info "Selected: Deepgram Voice Agent"
+            print_info "Default pipeline: Deepgram Voice Agent"
             ;;
         3)
             PROFILE="local_hybrid"
             ACTIVE_PROVIDER="local_hybrid"
-            NEEDS_OPENAI=1  # For LLM
-            NEEDS_LOCAL=1   # For STT/TTS
-            print_info "Selected: Local Hybrid"
+            NEEDS_LOCAL=1  # Need local AI server setup
+            print_info "Default pipeline: Local Hybrid"
             ;;
         *)
             print_error "Invalid choice. Please run ./install.sh again."
@@ -603,7 +607,7 @@ select_config_template() {
         print_info "Backed up existing config to ${CFG_DST}.backup.*"
     fi
     
-    print_success "Using full configuration with all 3 provider baselines"
+    print_success "✅ All 3 pipelines enabled in ai-agent.yaml (default: $ACTIVE_PROVIDER)"
     
     # Smart API key prompting based on profile needs
     prompt_required_api_keys
@@ -621,8 +625,11 @@ select_config_template() {
 prompt_required_api_keys() {
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "API Key Configuration"
+    echo "API Key Configuration (All Pipelines)"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    print_info "Collecting API keys for all 3 enabled pipelines..."
+    print_info "You can skip any key now and add it to .env later."
     
     # Check for OpenAI API key if needed
     if [ "$NEEDS_OPENAI" -eq 1 ]; then
@@ -1031,9 +1038,43 @@ EOF
     echo "For detailed integration steps, see:"
     echo "  docs/FreePBX-Integration-Guide.md"
     echo ""
+    
+    # Monitoring and Email Setup Instructions
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "📊 OPTIONAL: Monitoring & Email Summary Setup"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    echo "To enable email summaries and enhanced monitoring:"
+    echo ""
+    echo "1. Get a Resend API key:"
+    echo "   • Sign up at https://resend.com"
+    echo "   • Create an API key in your dashboard"
+    echo ""
+    echo "2. Add to .env file:"
+    echo "   RESEND_API_KEY=re_your_actual_key_here"
+    echo ""
+    echo "3. Configure email settings in config/ai-agent.yaml:"
+    echo "   monitoring:"
+    echo "     email:"
+    echo "       enabled: true"
+    echo "       from: 'ai-agent@yourdomain.com'"
+    echo "       to: 'admin@yourdomain.com'"
+    echo "       summary_interval: daily  # or hourly, weekly"
+    echo ""
+    echo "4. Restart ai-engine to apply:"
+    echo "   docker-compose restart ai-engine"
+    echo ""
+    echo "For Grafana/Prometheus integration, see:"
+    echo "  docs/MONITORING_GUIDE.md"
+    echo ""
+    
     print_success "Installation complete! 🎉"
     echo ""
-    print_info "Make a test call to verify everything works."
+    print_info "🔍 Next steps:"
+    print_info "  1. Make a test call to verify everything works"
+    print_info "  2. Check logs: docker-compose logs -f ai-engine"
+    print_info "  3. Switch pipelines: Edit config/ai-agent.yaml (change default_provider)"
+    print_info "  4. Optional: Set up monitoring (see instructions above)"
 }
 
 # --- Main ---
