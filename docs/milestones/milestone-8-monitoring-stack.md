@@ -22,7 +22,7 @@ Verification quick check: run the helper script, place a single call, confirm da
 - Prometheus metrics already exposed at `/metrics` on `ai-engine` and `local-ai-server` (labels may need extension).
 - Follow-on documentation updates required in:
   - `docs/Architecture.md`
-  - `docs/plan/ROADMAP.md`
+  - `docs/ROADMAP.md`
   - `Agents.md`, `.cursor/rules/asterisk_ai_voice_agent.mdc`, `.windsurf/rules/asterisk_ai_voice_agent.md`, `Gemini.md`
 - Coordinate secrets handling: `.env` must include Grafana admin password when stack is enabled (document defaults and overrides).
 
@@ -107,7 +107,7 @@ Verification quick check: run the helper script, place a single call, confirm da
 2. **Documentation updates**
    - Expand `docs/Architecture.md` monitoring section (ports, expectations, data retention).
    - Add quick-start section describing helper script workflow + manual commands.
-   - Update `docs/plan/ROADMAP.md` (done as part of this milestone) and mention new capabilities in `docs/plan/Asterisk AI Voice Agent_ Your Comprehensive Open Source Launch Strategy.md` if referenced.
+   - Update `docs/ROADMAP.md` (done as part of this milestone).
    - Sync IDE rule files (`Agents.md`, `.cursor`, `.windsurf`, `Gemini.md`).
 3. **Training content**
    - Provide short “interpreting recommendations” table mapping Grafana panels → YAML fields → effect on call quality.

@@ -239,3 +239,6 @@ bin/SHA256SUMS
 # Documentation files (keep local until explicitly requested to commit)
 COMPLETE_*.conf
 COMPLETE_*.md
+
+# Dialplan test/debug files (keep in archived/, never commit)
+dialplan_*.conf
