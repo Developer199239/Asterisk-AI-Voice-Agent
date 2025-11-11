@@ -222,7 +222,8 @@ class AudioSocketServer:
                     if self._on_dtmf and payload:
                         try:
                             digit = payload.decode("ascii", errors="ignore")
-                        except Exception:
+                        except Exception as e:
+                            logger.debug("Failed to decode DTMF digit", conn_id=conn_id, error=str(e), payload_len=len(payload))
                             digit = ""
                         if digit:
                             await self._on_dtmf(conn_id, digit[0])
@@ -293,8 +294,12 @@ class AudioSocketServer:
         try:
             writer.write(frame)
             await writer.drain()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(
+                "Failed to send error frame to AudioSocket client (connection likely closed)",
+                error=str(e),
+                message=message.decode('utf-8', errors='replace')[:50]
+            )
 
     @staticmethod
     def _decode_uuid(payload: bytes) -> Optional[str]:
@@ -307,7 +312,8 @@ class AudioSocketServer:
             text = payload.decode("ascii").strip()
             uuid_obj = uuid.UUID(text)
             return str(uuid_obj)
-        except Exception:
+        except Exception as e:
+            logger.debug("Failed to decode UUID from payload", error=str(e), payload_len=len(payload))
             return None
 
 

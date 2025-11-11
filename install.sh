@@ -209,11 +209,15 @@ update_yaml_llm() {
         GREETING="${GREETING}"
         AI_ROLE="${AI_ROLE}"
         export GREETING AI_ROLE
-        if yq -i '.llm.initial_greeting = env(GREETING) | .llm.prompt = env(AI_ROLE) | (.llm.model //= "gpt-4o")' "$CFG_DST"; then
+        
+        # Update fields separately for better error handling
+        if yq -i '.llm.initial_greeting = env(GREETING)' "$CFG_DST" 2>/dev/null && \
+           yq -i '.llm.prompt = env(AI_ROLE)' "$CFG_DST" 2>/dev/null && \
+           yq -i '.llm.model //= "gpt-4o"' "$CFG_DST" 2>/dev/null; then
             print_success "Updated llm.* in $CFG_DST via yq."
             return 0
         else
-            print_warning "yq update failed; falling back to append llm block."
+            print_warning "yq update failed (check yq version >= 4.x). Using fallback method..."
         fi
     fi
     # Fallback: append an llm block at end (last key wins in PyYAML)
@@ -355,33 +359,129 @@ set_performance_params_for_llm() {
 }
 
 wait_for_local_ai_health() {
-    print_info "Waiting for local-ai-server to become healthy (port 8765)..."
+    print_info "Waiting for local-ai-server to become ready (port 8765)..."
+    echo ""
+    echo "⏳ First-run model download may take 5-10 minutes..."
+    echo "📋 Monitor progress in another terminal:"
+    echo "   $COMPOSE logs -f local-ai-server | grep -E 'model|Server started'"
+    echo ""
+    
     # Ensure service started (build if needed)
+    print_info "Starting local-ai-server container..."
     $COMPOSE up -d --build local-ai-server
-    # Up to ~20 minutes (120 * 10s)
-    for i in $(seq 1 120); do
-        status=$(docker inspect -f '{{.State.Health.Status}}' local_ai_server 2>/dev/null || echo "starting")
-        if [ "$status" = "healthy" ]; then
-            print_success "local-ai-server is healthy."
+    echo ""
+    
+    # Wait up to 10 minutes (60 iterations * 10s)
+    # We actively check if WebSocket is responding, not just Docker health status
+    local max_wait=60
+    local check_interval=10
+    
+    print_info "🔍 Checking local AI server status..."
+    echo ""
+    
+    for i in $(seq 1 $max_wait); do
+        # Check 1: Is container running?
+        if ! docker ps --filter "name=local_ai_server" --filter "status=running" | grep -q "local_ai_server"; then
+            if (( i > 12 )); then  # Give it 2 minutes to start
+                print_error "Container local_ai_server not running after 2 minutes"
+                echo "Check logs: $COMPOSE logs local-ai-server"
+                return 1
+            fi
+            echo -n "⏳ Waiting for container to start... (${i}0s)"
+            echo -ne "\r"
+            sleep $check_interval
+            continue
+        fi
+        
+        # Check 2: Are models loaded? (check logs for success message)
+        if docker logs local_ai_server 2>&1 | grep -q "Enhanced Local AI Server started on ws://"; then
+            echo ""  # Clear the progress line
+            print_success "✅ local-ai-server is ready and listening on port 8765"
+            print_info "Models loaded successfully (verified from logs)"
             return 0
         fi
-        if (( i % 6 == 0 )); then
-            print_info "Still waiting for local models to load (elapsed ~$((i/6*1)) min). This can take 15–20 minutes on first start..."
+        
+        # Check 3: Fallback to Docker health status (in case log format changed)
+        local status=$(docker inspect -f '{{.State.Health.Status}}' local_ai_server 2>/dev/null || echo "starting")
+        if [ "$status" = "healthy" ]; then
+            echo ""  # Clear the progress line
+            print_success "✅ local-ai-server is healthy (Docker health check passed)"
+            return 0
         fi
-        sleep 10
+        
+        # Show progress every iteration (every 10s) with live log hints
+        local elapsed=$((i * check_interval))
+        local last_log=$(docker logs local_ai_server 2>&1 | tail -1 | cut -c1-80)
+        
+        if docker logs local_ai_server 2>&1 | tail -3 | grep -qi "loading\|model"; then
+            echo -n "📥 Loading models... (${elapsed}s) - $(echo "$last_log" | grep -o "model\|STT\|LLM\|TTS" | head -1)"
+        elif docker logs local_ai_server 2>&1 | tail -3 | grep -qi "error"; then
+            echo -n "⚠️  Checking status... (${elapsed}s) - check logs for errors"
+        else
+            echo -n "⏳ Waiting for models to load... (${elapsed}s)"
+        fi
+        echo -ne "\r"
+        
+        # Detailed progress every minute
+        if (( i % 6 == 0 )); then
+            echo ""  # New line for cleaner output
+            local elapsed_min=$((elapsed / 60))
+            print_info "Still waiting (${elapsed_min} min elapsed)..."
+            
+            # Show last few log lines for context
+            echo "   Recent activity:"
+            docker logs local_ai_server 2>&1 | tail -3 | sed 's/^/   /' | cut -c1-100
+            echo ""
+        fi
+        
+        sleep $check_interval
     done
-    print_warning "local-ai-server did not report healthy within ~20 minutes; continuing. Use: $COMPOSE logs -f local-ai-server to monitor."
+    
+    # Timeout after 10 minutes
+    echo ""
+    print_warning "⚠️  local-ai-server did not become ready within 10 minutes"
+    echo ""
+    echo "Last 20 log lines:"
+    docker logs local_ai_server 2>&1 | tail -20
+    echo ""
+    echo "Common issues:"
+    echo "  • Models still downloading (first run: check models/ directory size)"
+    echo "  • Insufficient RAM (requires 8GB+, 16GB recommended)"
+    echo "  • Model files corrupted (rm -rf models/; re-run install.sh)"
+    echo ""
+    echo "Debug commands:"
+    echo "  $COMPOSE logs local-ai-server | grep -E 'model|error|ERROR'"
+    echo "  docker stats local_ai_server --no-stream"
+    echo "  du -sh models/*"
+    echo ""
+    
+    read -p "Continue anyway? [y/N]: " continue_anyway
+    if [[ "$continue_anyway" =~ ^[Yy]$ ]]; then
+        print_warning "Continuing without confirmed local-ai-server health..."
+        return 0
+    fi
+    
     return 1
 }
 
 # --- Configuration ---
 configure_env() {
+    # Support non-interactive mode for CI/CD
+    if [ "${INSTALL_NONINTERACTIVE:-0}" = "1" ]; then
+        print_info "Running in non-interactive mode (INSTALL_NONINTERACTIVE=1)"
+        ensure_env_file
+        print_info "Using existing .env configuration or defaults"
+        return 0
+    fi
+    
     print_info "Starting interactive configuration (.env updates)..."
     ensure_env_file
 
     # Prefill from existing .env if present
     local ASTERISK_HOST_DEFAULT="" ASTERISK_ARI_USERNAME_DEFAULT="" ASTERISK_ARI_PASSWORD_DEFAULT=""
-    local OPENAI_API_KEY_DEFAULT="" DEEPGRAM_API_KEY_DEFAULT=""
+    # API key defaults need to be GLOBAL so prompt_required_api_keys() can access them
+    OPENAI_API_KEY_DEFAULT=""
+    DEEPGRAM_API_KEY_DEFAULT=""
     if [ -f .env ]; then
         ASTERISK_HOST_DEFAULT=$(grep -E '^[# ]*ASTERISK_HOST=' .env | tail -n1 | sed -E 's/^[# ]*ASTERISK_HOST=//')
         ASTERISK_ARI_USERNAME_DEFAULT=$(grep -E '^[# ]*ASTERISK_ARI_USERNAME=' .env | tail -n1 | sed -E 's/^[# ]*ASTERISK_ARI_USERNAME=//')
@@ -414,15 +514,13 @@ configure_env() {
         ASTERISK_ARI_PASSWORD="$ASTERISK_ARI_PASSWORD_DEFAULT"
     fi
 
-    # API Keys (optional; blank keeps existing)
-    read -p "Enter your OpenAI API Key (leave blank to keep existing): " OPENAI_API_KEY_INPUT
-    read -p "Enter your Deepgram API Key (leave blank to keep existing): " DEEPGRAM_API_KEY_INPUT
-
+    # API Keys are now handled by prompt_required_api_keys() based on chosen provider
+    # This avoids duplicate prompts and only asks for what's needed
+    
     upsert_env ASTERISK_HOST "$ASTERISK_HOST"
     upsert_env ASTERISK_ARI_USERNAME "$ASTERISK_ARI_USERNAME"
     upsert_env ASTERISK_ARI_PASSWORD "$ASTERISK_ARI_PASSWORD"
-    if [ -n "$OPENAI_API_KEY_INPUT" ]; then upsert_env OPENAI_API_KEY "$OPENAI_API_KEY_INPUT"; fi
-    if [ -n "$DEEPGRAM_API_KEY_INPUT" ]; then upsert_env DEEPGRAM_API_KEY "$DEEPGRAM_API_KEY_INPUT"; fi
+    # API keys are now set by prompt_required_api_keys() after provider selection
 
     # Greeting and AI Role prompts (idempotent; prefill from .env if present)
     local GREETING_DEFAULT AI_ROLE_DEFAULT
@@ -444,6 +542,12 @@ configure_env() {
     R_ESC=$(printf '%s' "$AI_ROLE" | sed 's/"/\\"/g')
     upsert_env GREETING "\"$G_ESC\""
     upsert_env AI_ROLE "\"$R_ESC\""
+    
+    # Set proper default logging levels (console with colors for better out-of-box UX)
+    upsert_env LOG_LEVEL "info"
+    upsert_env STREAMING_LOG_LEVEL "info"
+    upsert_env LOG_FORMAT "console"
+    upsert_env LOG_COLOR "1"
 
     # Clean sed backup if created
     [ -f .env.bak ] && rm -f .env.bak || true
@@ -455,64 +559,56 @@ configure_env() {
 select_config_template() {
     echo ""
     echo "╔═══════════════════════════════════════════════════════════╗"
-    echo "║   Asterisk AI Voice Agent v4.0 - Configuration Setup     ║"
+    echo "║   Asterisk AI Voice Agent v4.1 - Configuration Setup     ║"
     echo "╚═══════════════════════════════════════════════════════════╝"
     echo ""
-    echo "Select your AI voice agent configuration:"
+    echo "✨ ALL 3 AI voice pipelines will be enabled:"
+    echo ""
+    echo "  [1] OpenAI Realtime (Cloud)"
+    echo "  [2] Deepgram Voice Agent (Cloud)"
+    echo "  [3] Local Hybrid (Privacy-Focused)"
+    echo ""
+    echo "Select which pipeline should be ACTIVE by default:"
     echo ""
     echo "  [1] OpenAI Realtime (Recommended)"
-    echo "      • Cloud-based, modern AI with natural conversations"
-    echo "      • Requires: OPENAI_API_KEY"
-    echo "      • Best for: Quick setup, enterprise deployments"
+    echo "      • Fastest setup, natural conversations"
+    echo "      • Uses: OPENAI_API_KEY"
     echo ""
     echo "  [2] Deepgram Voice Agent"
-    echo "      • Enterprise-grade cloud AI with Think stage"
-    echo "      • Requires: DEEPGRAM_API_KEY + OPENAI_API_KEY (for Think)"
-    echo "      • Best for: Deepgram ecosystem, advanced features"
+    echo "      • Enterprise-grade with Think stage"
+    echo "      • Uses: DEEPGRAM_API_KEY + OPENAI_API_KEY"
     echo ""
-    echo "  [3] Local Hybrid (Privacy-Focused)"
-    echo "      • Local voice processing + cloud intelligence"
-    echo "      • Requires: OPENAI_API_KEY, 8GB+ RAM"
-    echo "      • Best for: Audio privacy, cost control"
-    echo "      • Note: First start downloads ~200MB models (5-10 min)"
+    echo "  [3] Local Hybrid"
+    echo "      • Audio privacy, cost control"
+    echo "      • Uses: OPENAI_API_KEY + local AI server"
     echo ""
-    echo "  [A] Advanced: Custom configuration"
-    echo "      (Expert users only)"
+    echo "💡 You can switch pipelines anytime by editing ai-agent.yaml"
     echo ""
-    read -p "Enter your choice [1]: " cfg_choice
+    read -p "Enter your default pipeline [1]: " cfg_choice
     
     # Map choices to profiles and config files
     CFG_DST="config/ai-agent.yaml"
-    NEEDS_OPENAI=0
-    NEEDS_DEEPGRAM=0
+    # Always prompt for both cloud API keys since all pipelines are enabled
+    NEEDS_OPENAI=1
+    NEEDS_DEEPGRAM=1
     NEEDS_LOCAL=0
     
     case "$cfg_choice" in
         1|"")
-            PROFILE="golden-openai"
-            CFG_SRC="config/ai-agent.golden-openai.yaml"
-            NEEDS_OPENAI=1
-            print_info "Selected: OpenAI Realtime"
+            PROFILE="openai_realtime"
+            ACTIVE_PROVIDER="openai_realtime"
+            print_info "Default pipeline: OpenAI Realtime"
             ;;
         2)
-            PROFILE="golden-deepgram"
-            CFG_SRC="config/ai-agent.golden-deepgram.yaml"
-            NEEDS_DEEPGRAM=1
-            NEEDS_OPENAI=1  # For Think stage
-            print_info "Selected: Deepgram Voice Agent"
+            PROFILE="deepgram"
+            ACTIVE_PROVIDER="deepgram"
+            print_info "Default pipeline: Deepgram Voice Agent"
             ;;
         3)
-            PROFILE="golden-local-hybrid"
-            CFG_SRC="config/ai-agent.golden-local-hybrid.yaml"
-            NEEDS_OPENAI=1  # For LLM
-            NEEDS_LOCAL=1   # For STT/TTS
-            print_info "Selected: Local Hybrid"
-            ;;
-        [Aa])
-            PROFILE="custom"
-            CFG_SRC="config/ai-agent.example.yaml"
-            print_info "Selected: Advanced (Custom configuration)"
-            print_warning "You will need to manually configure providers and API keys."
+            PROFILE="local_hybrid"
+            ACTIVE_PROVIDER="local_hybrid"
+            NEEDS_LOCAL=1  # Need local AI server setup
+            print_info "Default pipeline: Local Hybrid"
             ;;
         *)
             print_error "Invalid choice. Please run ./install.sh again."
@@ -520,71 +616,61 @@ select_config_template() {
             ;;
     esac
     
-    # Verify template exists
-    if [ ! -f "$CFG_SRC" ]; then
-        print_error "Template not found: $CFG_SRC"
-        print_error "This may indicate a corrupted installation. Please re-clone the repository."
+    # Get full config from main branch baseline
+    if [ ! -f "config/ai-agent.yaml" ]; then
+        print_error "config/ai-agent.yaml not found. This indicates a corrupted installation."
+        print_error "Please re-clone the repository."
         exit 1
     fi
     
-    # Copy golden baseline to active config
+    # Backup existing config if present
     if [ -f "$CFG_DST" ]; then
-        print_info "Overwriting existing config/ai-agent.yaml"
+        cp "$CFG_DST" "${CFG_DST}.backup.$(date +%s)"
+        print_info "Backed up existing config to ${CFG_DST}.backup.*"
     fi
-    cp "$CFG_SRC" "$CFG_DST"
-    print_success "Configuration copied from: $(basename $CFG_SRC)"
+    
+    print_success "✅ All 3 pipelines enabled in ai-agent.yaml (default: $ACTIVE_PROVIDER)"
     
     # Smart API key prompting based on profile needs
     prompt_required_api_keys
     
-    # Ensure yq is available and update llm.* from the values captured earlier
+    # Ensure yq is available and configure the chosen provider
     ensure_yq || true
     update_yaml_llm || true
+    enable_chosen_provider
     
-    # Handle local model setup for Local Hybrid
-    if [ "$NEEDS_LOCAL" -eq 1 ]; then
-        echo ""
-        print_info "Local Hybrid mode requires local AI models (~200MB)"
-        print_info "Models: Vosk STT + Piper TTS"
-        read -p "Download and setup local models now? [Y/n]: " do_models
-        if [[ "$do_models" =~ ^[Yy]$|^$ ]]; then
-            if command -v bash >/dev/null 2>&1 && [ -f scripts/model_setup.sh ]; then
-                print_info "Running model setup..."
-                bash scripts/model_setup.sh --assume-yes || print_warning "Model setup encountered issues. Check logs."
-            elif command -v python3 >/dev/null 2>&1 && [ -f scripts/model_setup.py ]; then
-                print_info "Running model setup with Python..."
-                python3 scripts/model_setup.py --assume-yes || print_warning "Model setup encountered issues."
-            else
-                print_warning "Model setup scripts not found. Models will be downloaded on first container start."
-            fi
-            
-            # Auto-detect and set model paths in .env
-            autodetect_local_models
-        else
-            print_info "Skipping model setup. Models will be downloaded on first container start (~5-10 min)."
-        fi
-    fi
+    # Handle local AI server setup (always ask, regardless of choice)
+    prompt_local_ai_setup
 }
 
 # Smart API key prompting based on profile requirements
 prompt_required_api_keys() {
-    local missing_keys=0
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "API Key Configuration (All Pipelines)"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    print_info "Collecting API keys for all 3 enabled pipelines..."
+    print_info "You can skip any key now and add it to .env later."
     
     # Check for OpenAI API key if needed
     if [ "$NEEDS_OPENAI" -eq 1 ]; then
         if [ -z "$OPENAI_API_KEY_DEFAULT" ] || [ "$OPENAI_API_KEY_DEFAULT" = "your-openai-api-key-here" ]; then
             echo ""
-            print_warning "⚠️  This configuration requires an OpenAI API key"
-            if [ "$PROFILE" = "golden-local-hybrid" ]; then
+            print_warning "⚠️  OpenAI API Key Required"
+            if [ "$PROFILE" = "local_hybrid" ]; then
                 print_info "   (Used for LLM only - STT/TTS are local)"
             fi
-            read -p "Enter your OpenAI API Key: " OPENAI_API_KEY_INPUT
-            if [ -z "$OPENAI_API_KEY_INPUT" ]; then
-                print_error "OpenAI API key is required for this profile"
-                exit 1
+            print_info "   Get your key at: https://platform.openai.com/api-keys"
+            read -p "Enter your OpenAI API Key (or leave blank to skip): " OPENAI_API_KEY_INPUT
+            if [ -n "$OPENAI_API_KEY_INPUT" ]; then
+                upsert_env OPENAI_API_KEY "$OPENAI_API_KEY_INPUT"
+                OPENAI_API_KEY_DEFAULT="$OPENAI_API_KEY_INPUT"  # Update in-memory variable
+                print_success "✓ OpenAI API key configured"
+            else
+                print_warning "⚠️  Skipped. Add OPENAI_API_KEY to .env file later"
+                print_warning "   Without it, $PROFILE will not work"
             fi
-            upsert_env OPENAI_API_KEY "$OPENAI_API_KEY_INPUT"
-            print_success "OpenAI API key configured"
         else
             print_info "✓ Using existing OpenAI API key from .env"
         fi
@@ -594,15 +680,17 @@ prompt_required_api_keys() {
     if [ "$NEEDS_DEEPGRAM" -eq 1 ]; then
         if [ -z "$DEEPGRAM_API_KEY_DEFAULT" ] || [ "$DEEPGRAM_API_KEY_DEFAULT" = "your-deepgram-api-key-here" ]; then
             echo ""
-            print_warning "⚠️  This configuration requires a Deepgram API key"
-            print_info "   Get your API key at: https://console.deepgram.com/"
-            read -p "Enter your Deepgram API Key: " DEEPGRAM_API_KEY_INPUT
-            if [ -z "$DEEPGRAM_API_KEY_INPUT" ]; then
-                print_error "Deepgram API key is required for this profile"
-                exit 1
+            print_warning "⚠️  Deepgram API Key Required"
+            print_info "   Get your key at: https://console.deepgram.com/"
+            read -p "Enter your Deepgram API Key (or leave blank to skip): " DEEPGRAM_API_KEY_INPUT
+            if [ -n "$DEEPGRAM_API_KEY_INPUT" ]; then
+                upsert_env DEEPGRAM_API_KEY "$DEEPGRAM_API_KEY_INPUT"
+                DEEPGRAM_API_KEY_DEFAULT="$DEEPGRAM_API_KEY_INPUT"  # Update in-memory variable
+                print_success "✓ Deepgram API key configured"
+            else
+                print_warning "⚠️  Skipped. Add DEEPGRAM_API_KEY to .env file later"
+                print_warning "   Without it, Deepgram provider will not work"
             fi
-            upsert_env DEEPGRAM_API_KEY "$DEEPGRAM_API_KEY_INPUT"
-            print_success "Deepgram API key configured"
         else
             print_info "✓ Using existing Deepgram API key from .env"
         fi
@@ -618,39 +706,292 @@ prompt_required_api_keys() {
     fi
 }
 
+# Enable the chosen provider and disable others in YAML
+enable_chosen_provider() {
+    local cfg="config/ai-agent.yaml"
+    
+    if ! command -v yq >/dev/null 2>&1; then
+        print_warning "yq not available - skipping provider enable/disable"
+        print_info "You can manually edit $cfg to enable your chosen provider"
+        return 0
+    fi
+    
+    echo ""
+    print_info "Configuring $ACTIVE_PROVIDER as active provider..."
+    
+    # Set default_provider based on choice
+    case "$ACTIVE_PROVIDER" in
+        openai_realtime)
+            yq -i '.default_provider = "openai_realtime"' "$cfg"
+            yq -i '.providers.openai_realtime.enabled = true' "$cfg"
+            yq -i '.providers.deepgram.enabled = false' "$cfg"
+            # local provider state depends on local AI setup choice
+            print_success "✓ OpenAI Realtime enabled"
+            ;;
+        deepgram)
+            yq -i '.default_provider = "deepgram"' "$cfg"
+            yq -i '.providers.deepgram.enabled = true' "$cfg"
+            yq -i '.providers.openai_realtime.enabled = false' "$cfg"
+            # local provider state depends on local AI setup choice
+            print_success "✓ Deepgram Voice Agent enabled"
+            ;;
+        local_hybrid)
+            yq -i '.active_pipeline = "local_hybrid"' "$cfg"
+            yq -i '.default_provider = "local_hybrid"' "$cfg"
+            yq -i '.providers.openai_realtime.enabled = false' "$cfg"
+            yq -i '.providers.deepgram.enabled = false' "$cfg"
+            yq -i '.providers.local.enabled = true' "$cfg"
+            print_success "✓ Local Hybrid pipeline enabled"
+            ;;
+    esac
+    
+    echo ""
+    print_info "ℹ️  Other providers are configured but disabled in ai-agent.yaml"
+    print_info "   To switch providers later:"
+    print_info "   1. Edit config/ai-agent.yaml"
+    print_info "   2. Set providers.<provider>.enabled: true"
+    print_info "   3. Ensure API keys are in .env file"
+    print_info "   4. Run: docker compose restart ai-engine"
+}
+
+# Prompt for local AI server setup
+prompt_local_ai_setup() {
+    echo ""
+    echo "╔═══════════════════════════════════════════════════════════╗"
+    echo "║          Local AI Server Setup (Optional)                ║"
+    echo "╚═══════════════════════════════════════════════════════════╝"
+    echo ""
+    echo "The Local AI Server provides:"
+    echo "  • Vosk STT (speech-to-text) - Privacy-focused transcription"
+    echo "  • Piper TTS (text-to-speech) - Natural voice synthesis"
+    echo "  • Phi-3 LLM (language model) - Local intelligence (optional)"
+    echo ""
+    echo "Required for:"
+    echo "  • local_hybrid pipeline (Vosk + OpenAI + Piper)"
+    echo "  • local_only pipeline (fully offline)"
+    echo ""
+    echo "System Requirements:"
+    echo "  • 8GB+ RAM (16GB recommended)"
+    echo "  • First startup: ~5-10 minutes for model download (~200MB)"
+    echo ""
+    
+    if [ "$NEEDS_LOCAL" -eq 1 ]; then
+        print_warning "⚠️  Your chosen configuration (${PROFILE}) REQUIRES local AI server"
+    else
+        print_info "ℹ️  Your chosen configuration (${PROFILE}) doesn't require this,"
+        print_info "   but setting it up now enables local_hybrid pipeline later"
+    fi
+    
+    echo ""
+    read -p "Set up local AI server now? [Y/n]: " setup_local
+    
+    if [[ "$setup_local" =~ ^[Yy]$|^$ ]]; then
+        LOCAL_AI_SETUP=1
+        print_info "Will set up local AI server..."
+        
+        # Download models if script exists
+        if [ -f scripts/model_setup.sh ]; then
+            echo ""
+            print_info "Downloading AI models (~200MB)..."
+            print_info "This may take 5-10 minutes depending on your connection"
+            if bash scripts/model_setup.sh --assume-yes; then
+                print_success "✓ Models downloaded successfully"
+                autodetect_local_models
+            else
+                print_warning "⚠️  Model download had issues. Models will be downloaded on first container start."
+            fi
+        else
+            print_warning "Model setup script not found. Models will download on first start."
+        fi
+        
+        # Enable local provider in YAML
+        if command -v yq >/dev/null 2>&1; then
+            yq -i '.providers.local.enabled = true' "config/ai-agent.yaml"
+            print_success "✓ Local provider enabled in configuration"
+        fi
+    else
+        LOCAL_AI_SETUP=0
+        echo ""
+        print_warning "⚠️  Skipped local AI server setup"
+        echo ""
+        echo "To set up later, run these commands:"
+        echo "  1. Download models:"
+        echo "     bash scripts/model_setup.sh"
+        echo ""
+        echo "  2. Start local AI server:"
+        echo "     docker compose up -d local-ai-server"
+        echo ""
+        echo "  3. Enable in config/ai-agent.yaml:"
+        echo "     providers:"
+        echo "       local:"
+        echo "         enabled: true"
+        echo ""
+        
+        if [ "$NEEDS_LOCAL" -eq 1 ]; then
+            print_error "⚠️  WARNING: ${PROFILE} pipeline will NOT work without local AI server!"
+            print_error "   You must set it up before using this configuration."
+        else
+            print_info "ℹ️  local_hybrid and local_only pipelines won't be available"
+            print_info "   until you complete the setup steps above."
+        fi
+        
+        # Disable local provider in YAML if skipped
+        if command -v yq >/dev/null 2>&1; then
+            yq -i '.providers.local.enabled = false' "config/ai-agent.yaml"
+        fi
+    fi
+}
+
+# Post-start validation (cross-platform compatible)
+validate_services() {
+    local validation_failed=0
+    
+    echo ""
+    print_info "Validating services..."
+    
+    # Check ai-engine container is running
+    if docker ps --filter "name=ai_engine" --filter "status=running" | grep -q "ai_engine"; then
+        print_success "✓ ai-engine container running"
+    else
+        print_warning "✗ ai-engine container not running"
+        validation_failed=1
+    fi
+    
+    # Check health endpoint (wait up to 10 seconds)
+    print_info "Checking health endpoint (may take a few seconds)..."
+    local health_available=0
+    for i in 1 2 3 4 5; do
+        if command -v curl >/dev/null 2>&1; then
+            if curl -s -f http://127.0.0.1:15000/health >/dev/null 2>&1; then
+                health_available=1
+                break
+            fi
+        elif command -v wget >/dev/null 2>&1; then
+            if wget -q -O- http://127.0.0.1:15000/health >/dev/null 2>&1; then
+                health_available=1
+                break
+            fi
+        else
+            # No curl/wget, skip health check
+            print_info "  (curl/wget not available, skipping HTTP check)"
+            break
+        fi
+        sleep 2
+    done
+    
+    if [ "$health_available" -eq 1 ]; then
+        print_success "✓ Health endpoint responding at :15000"
+    elif command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1; then
+        print_warning "✗ Health endpoint not yet responding (may still be starting)"
+        print_info "   Check: $COMPOSE logs ai-engine"
+    fi
+    
+    # For local-ai-server, check if user set it up
+    if [ "${LOCAL_AI_SETUP:-0}" -eq 1 ]; then
+        if docker ps --filter "name=local_ai_server" --filter "status=running" | grep -q "local_ai_server"; then
+            print_success "✓ local-ai-server container running"
+        else
+            print_warning "✗ local-ai-server container not running"
+            validation_failed=1
+        fi
+    fi
+    
+    echo ""
+    if [ "$validation_failed" -eq 0 ]; then
+        print_success "🎉 All validation checks passed!"
+    else
+        print_warning "⚠️  Some validation checks failed. Review logs:"
+        echo "   $COMPOSE logs ai-engine"
+        if [ "${LOCAL_AI_SETUP:-0}" -eq 1 ]; then
+            echo "   $COMPOSE logs local-ai-server"
+        fi
+    fi
+}
+
 start_services() {
     echo ""
-    read -p "Build and start services now? [Y/n]: " start_service
+    echo "╔═══════════════════════════════════════════════════════════╗"
+    echo "║              Starting Services                            ║"
+    echo "╚═══════════════════════════════════════════════════════════╝"
+    echo ""
+    
+    # Support non-interactive mode
+    if [ "${INSTALL_NONINTERACTIVE:-0}" = "1" ]; then
+        print_info "Non-interactive mode: starting services automatically"
+        start_service="y"
+    else
+        read -p "Build and start services now? [Y/n]: " start_service
+    fi
+    
     if [[ "$start_service" =~ ^[Yy]$|^$ ]]; then
-        case "$PROFILE" in
-            golden-local-hybrid)
-                # Local Hybrid: needs local-ai-server + ai-engine
-                print_info "Starting local-ai-server (STT/TTS)..."
-                print_info "Note: First startup may take 5-10 minutes to load models"
-                print_info "Monitor progress: $COMPOSE logs -f local-ai-server"
-                wait_for_local_ai_health
-                print_info "Starting ai-engine (orchestrator)..."
-                $COMPOSE up -d --build ai-engine
-                ;;
-            golden-openai|golden-deepgram)
-                # Cloud-only: just ai-engine
-                print_info "Starting ai-engine (cloud mode - no local models)..."
-                $COMPOSE up --build -d ai-engine
-                ;;
-            custom)
-                # Advanced: start everything, let user decide
-                print_info "Starting all services (advanced mode)..."
-                $COMPOSE up --build -d
-                ;;
-        esac
+        # Start local-ai-server if user opted in
+        if [ "${LOCAL_AI_SETUP:-0}" -eq 1 ]; then
+            print_info "Starting local-ai-server (STT/TTS)..."
+            print_info "Note: First startup may take 5-10 minutes to load models"
+            print_info "Monitor progress: $COMPOSE logs -f local-ai-server"
+            echo ""
+            wait_for_local_ai_health
+        fi
         
+        # Always start ai-engine
+        print_info "Starting ai-engine (orchestrator)..."
         echo ""
-        print_success "✅ Services started successfully!"
+        $COMPOSE up -d --build ai-engine
+        
+        # Post-start validation
+        validate_services
+        
+        # Show health & monitoring endpoints
         echo ""
-        print_info "Next steps:"
-        print_info "  1. Check health:  curl http://127.0.0.1:15000/health"
-        print_info "  2. View logs:     $COMPOSE logs -f ai-engine"
-        print_info "  3. Configure Asterisk dialplan (see below)"
+        echo "╔═══════════════════════════════════════════════════════════╗"
+        echo "║          📊 Health & Monitoring Endpoints                 ║"
+        echo "╚═══════════════════════════════════════════════════════════╝"
+        echo ""
+        print_success "🎉 Installation complete!"
+        echo ""
+        
+        echo "🏥 Health Check:"
+        if command -v curl >/dev/null 2>&1; then
+            echo "   curl http://127.0.0.1:15000/health"
+        else
+            echo "   wget -qO- http://127.0.0.1:15000/health"
+        fi
+        echo ""
+        
+        echo "📊 Active Configuration:"
+        echo "   Provider: $ACTIVE_PROVIDER"
+        if [ "${LOCAL_AI_SETUP:-0}" -eq 1 ]; then
+            echo "   Local AI: Enabled"
+        else
+            echo "   Local AI: Not configured"
+        fi
+        echo ""
+        
+        echo "📋 View Logs:"
+        echo "   $COMPOSE logs -f ai-engine"
+        if [ "${LOCAL_AI_SETUP:-0}" -eq 1 ]; then
+            echo "   $COMPOSE logs -f local-ai-server"
+        fi
+        echo ""
+        
+        echo "🔧 Container Status:"
+        echo "   $COMPOSE ps"
+        echo "   docker stats --no-stream ai_engine"
+        echo ""
+        
+        if [ "${LOCAL_AI_SETUP:-0}" -eq 1 ]; then
+            echo "🤖 Local AI Models:"
+            echo "   $COMPOSE logs local-ai-server | grep -i 'model.*loaded'"
+            echo ""
+        fi
+        
+        echo "🔄 Switching Providers:"
+        echo "   All 3 providers are configured in config/ai-agent.yaml"
+        echo "   To switch: Edit the file, set providers.<name>.enabled: true"
+        echo "   Then: docker compose restart ai-engine"
+        echo ""
+        
+        print_info "Next step: Configure Asterisk dialplan (see below)"
     else
         echo ""
         print_info "Setup complete. Start services later with:"
@@ -673,21 +1014,17 @@ print_asterisk_dialplan_snippet() {
     
     # Determine configuration based on profile
     case "$PROFILE" in
-        golden-openai)
+        openai_realtime)
             DISPLAY_NAME="OpenAI Realtime"
             TRANSPORT="AudioSocket or ExternalMedia RTP"
             ;;
-        golden-deepgram)
+        deepgram)
             DISPLAY_NAME="Deepgram Voice Agent"
             TRANSPORT="AudioSocket or ExternalMedia RTP"
             ;;
-        golden-local-hybrid)
+        local_hybrid)
             DISPLAY_NAME="Local Hybrid Pipeline"
             TRANSPORT="ExternalMedia RTP (recommended)"
-            ;;
-        custom)
-            DISPLAY_NAME="Custom Configuration"
-            TRANSPORT="See your config"
             ;;
         *)
             DISPLAY_NAME="AI Voice Agent"
@@ -695,8 +1032,11 @@ print_asterisk_dialplan_snippet() {
             ;;
     esac
 
-    echo "Configuration: $DISPLAY_NAME"
+    echo "Active Configuration: $DISPLAY_NAME"
     echo "Transport: $TRANSPORT"
+    echo ""
+    echo "ℹ️  All 3 provider configurations are available in config/ai-agent.yaml"
+    echo "   Switch by editing the file and restarting: docker compose restart ai-engine"
     echo ""
     echo "Add this to extensions_custom.conf (or via FreePBX GUI):"
     echo ""
@@ -720,9 +1060,43 @@ EOF
     echo "For detailed integration steps, see:"
     echo "  docs/FreePBX-Integration-Guide.md"
     echo ""
+    
+    # Monitoring and Email Setup Instructions
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "📊 OPTIONAL: Monitoring & Email Summary Setup"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    echo "To enable email summaries and enhanced monitoring:"
+    echo ""
+    echo "1. Get a Resend API key:"
+    echo "   • Sign up at https://resend.com"
+    echo "   • Create an API key in your dashboard"
+    echo ""
+    echo "2. Add to .env file:"
+    echo "   RESEND_API_KEY=re_your_actual_key_here"
+    echo ""
+    echo "3. Configure email settings in config/ai-agent.yaml:"
+    echo "   monitoring:"
+    echo "     email:"
+    echo "       enabled: true"
+    echo "       from: 'ai-agent@yourdomain.com'"
+    echo "       to: 'admin@yourdomain.com'"
+    echo "       summary_interval: daily  # or hourly, weekly"
+    echo ""
+    echo "4. Restart ai-engine to apply:"
+    echo "   docker-compose restart ai-engine"
+    echo ""
+    echo "For Grafana/Prometheus integration, see:"
+    echo "  docs/MONITORING_GUIDE.md"
+    echo ""
+    
     print_success "Installation complete! 🎉"
     echo ""
-    print_info "Make a test call to verify everything works."
+    print_info "🔍 Next steps:"
+    print_info "  1. Make a test call to verify everything works"
+    print_info "  2. Check logs: docker-compose logs -f ai-engine"
+    print_info "  3. Switch pipelines: Edit config/ai-agent.yaml (change default_provider)"
+    print_info "  4. Optional: Set up monitoring (see instructions above)"
 }
 
 # --- Main ---

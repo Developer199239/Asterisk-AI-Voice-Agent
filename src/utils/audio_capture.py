@@ -14,14 +14,31 @@ class AudioCaptureManager:
         self._lock = threading.Lock()
         # key -> (wave.Wave_write, sample_rate)
         self._handles: Dict[Tuple[str, str], Tuple[wave.Wave_write, int]] = {}
+        try:
+            os.makedirs(self.base_dir, mode=0o700, exist_ok=True)
+            try:
+                os.chmod(self.base_dir, 0o700)
+            except Exception:
+                pass
+        except Exception:
+            pass
 
     def _open_handle(self, call_id: str, stream_name: str, sample_rate: int) -> wave.Wave_write:
         path = os.path.join(self.base_dir, call_id, f"{stream_name}.wav")
-        os.makedirs(os.path.dirname(path), exist_ok=True)
+        dir_path = os.path.dirname(path)
+        os.makedirs(dir_path, mode=0o700, exist_ok=True)
+        try:
+            os.chmod(dir_path, 0o700)
+        except Exception:
+            pass
         wf = wave.open(path, "wb")
         wf.setnchannels(1)
         wf.setsampwidth(2)  # PCM16
         wf.setframerate(sample_rate)
+        try:
+            os.chmod(path, 0o600)
+        except Exception:
+            pass
         return wf
 
     def append_pcm16(self, call_id: str, stream_name: str, pcm16: bytes, sample_rate: int) -> None:
@@ -93,4 +110,21 @@ class AudioCaptureManager:
                     keys_to_close.append(key)
             for key in keys_to_close:
                 self._handles.pop(key, None)
+        # After closing wave handles, remove captured files and call directory
+        try:
+            call_dir = os.path.join(self.base_dir, call_id)
+            if os.path.isdir(call_dir):
+                try:
+                    for name in os.listdir(call_dir):
+                        fpath = os.path.join(call_dir, name)
+                        try:
+                            if os.path.isfile(fpath):
+                                os.remove(fpath)
+                        except Exception:
+                            pass
+                    os.rmdir(call_dir)
+                except Exception:
+                    pass
+        except Exception:
+            pass
 

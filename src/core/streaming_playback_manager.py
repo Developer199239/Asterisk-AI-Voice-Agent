@@ -281,7 +281,11 @@ class StreamingPlaybackManager:
             self.diag_out_dir = '/tmp/ai-engine-taps'
         if self.diag_enable_taps:
             try:
-                os.makedirs(self.diag_out_dir, exist_ok=True)
+                os.makedirs(self.diag_out_dir, mode=0o700, exist_ok=True)
+                try:
+                    os.chmod(self.diag_out_dir, 0o700)
+                except Exception:
+                    pass
             except Exception:
                 pass
         # μ-law fast-path sanity guard (enabled by default)
@@ -294,6 +298,10 @@ class StreamingPlaybackManager:
             self.empty_backoff_ticks_max: int = int(self.streaming_config.get('empty_backoff_ticks_max', 5))
         except Exception:
             self.empty_backoff_ticks_max = 5
+        try:
+            self.max_filler_idle_ms: int = int(self.streaming_config.get('max_filler_idle_ms', 400))
+        except Exception:
+            self.max_filler_idle_ms = 400
         
         logger.info(
             "StreamingPlaybackManager initialized",
@@ -689,6 +697,19 @@ class StreamingPlaybackManager:
                        call_id=call_id,
                        stream_id=stream_id,
                        playback_type=playback_type)
+            # Explicit per-stream log for continuous streaming mode
+            try:
+                if bool(self.continuous_stream):
+                    logger.info(
+                        "⚡ CONTINUOUS STREAM - Enabled for stream",
+                        call_id=call_id,
+                        stream_id=stream_id,
+                        segments_played=int(self.active_streams[call_id].get('segments_played', 0)),
+                        min_start_chunks=int(self.active_streams[call_id].get('min_start_chunks', 0)),
+                        low_watermark_chunks=int(self.low_watermark_chunks),
+                    )
+            except Exception:
+                pass
 
             # Outbound setup probe
             try:
@@ -1025,6 +1046,15 @@ class StreamingPlaybackManager:
                 return "wait"
             # After short backoff streak, send one filler and reset the streak
             stream_info['empty_backoff_ticks'] = 0
+            # Suppress filler if prolonged idle since last real frame (prevents tail drift)
+            try:
+                lri = stream_info.get('last_real_emit_ts')
+                if lri is not None:
+                    elapsed_ms = (time.time() - float(lri)) * 1000.0
+                    if elapsed_ms >= float(getattr(self, 'max_filler_idle_ms', 400)):
+                        return "wait"
+            except Exception:
+                pass
             filler_byte = b"\xFF" if self._is_mulaw(target_fmt) else b"\x00"
             if pending:
                 pending_len = len(pending)
@@ -1284,11 +1314,12 @@ class StreamingPlaybackManager:
                 except Exception:
                     guard_ok = True
 
-                # If guard passes, keep provider μ-law as-is (passthrough). If guard fails, decode/normalize/re-encode.
-                if guard_ok:
+                # If guard passes and normalizer is disabled, keep provider μ-law as-is (passthrough).
+                # If normalizer is enabled, override passthrough to allow deterministic gain normalization.
+                if guard_ok and not (self.normalizer_enabled and self.normalizer_target_rms > 0):
                     try:
                         logger.info(
-                            "μ-law PASSTHROUGH - Skipping all processing",
+                            "μ-law PASSTHROUGH - Skipping processing (normalizer disabled)",
                             call_id=call_id,
                             chunk_bytes=len(chunk),
                             source=src_encoding_raw,
@@ -1298,13 +1329,28 @@ class StreamingPlaybackManager:
                     except Exception:
                         pass
                     return chunk
+                else:
+                    try:
+                        info = self.active_streams.get(call_id, {}) if call_id in self.active_streams else {}
+                        if not info.get('normalizer_passthrough_override_logged'):
+                            logger.info(
+                                "μ-law PASSTHROUGH OVERRIDDEN - Normalizer enabled",
+                                call_id=call_id,
+                                target_rms=int(self.normalizer_target_rms),
+                                max_gain_db=float(self.normalizer_max_gain_db),
+                            )
+                            info['normalizer_passthrough_override_logged'] = True
+                            if call_id in self.active_streams:
+                                self.active_streams[call_id] = info
+                    except Exception:
+                        pass
                 # Guard failed: decode → normalize (bounded) → optional limit → re-encode back to μ-law
                 try:
                     logger.debug("MULAW DECODE ATTEMPT", call_id=call_id, chunk_size=len(chunk), chunk_type=type(chunk).__name__)
                     back_pcm = mulaw_to_pcm16le(chunk)
                     logger.debug("MULAW DECODE SUCCESS", call_id=call_id, pcm_size=len(back_pcm))
                 except Exception as e:
-                    logger.error("MULAW DECODE FAILED", call_id=call_id, error=str(e), error_type=type(e).__name__, chunk_size=len(chunk), exc_info=True)
+                    logger.error("MULAW DECODE FAILED", call_id=call_id, error=str(e), chunk_size=len(chunk), exc_info=True)
                     back_pcm = b""
 
                 working_pcm = back_pcm
@@ -1363,6 +1409,10 @@ class StreamingPlaybackManager:
                                         wf.setsampwidth(2)
                                         wf.setframerate(rate)
                                         wf.writeframes(working_pcm)
+                                    try:
+                                        os.chmod(fn2, 0o600)
+                                    except Exception:
+                                        pass
                                     logger.info("Wrote post-compand PCM16 tap snapshot", call_id=call_id, stream_id=stream_id_first, path=fn2, bytes=len(working_pcm), rate=rate, snapshot="first")
                                 info['tap_first_snapshot_done'] = True
                         except Exception:
@@ -1408,6 +1458,10 @@ class StreamingPlaybackManager:
                                         wf.setsampwidth(2)
                                         wf.setframerate(win_rate)
                                         wf.writeframes(bytes(post_w[:win_bytes]))
+                                    try:
+                                        os.chmod(fnq200, 0o600)
+                                    except Exception:
+                                        pass
                                     logger.info("Wrote post-compand 200ms snapshot", call_id=call_id, stream_id=sid, path=fnq200, bytes=win_bytes, rate=win_rate, snapshot="first200ms")
                                 except Exception:
                                     logger.warning("Failed 200ms post snapshot (guarded)", call_id=call_id, stream_id=sid, rate=win_rate, exc_info=True)
@@ -1438,6 +1492,26 @@ class StreamingPlaybackManager:
                 # Simple decode: mulaw → PCM16
                 try:
                     pcm16_bytes = mulaw_to_pcm16le(chunk)
+                    # Deterministic normalization on fast-path when enabled
+                    try:
+                        if self.normalizer_enabled and self.normalizer_target_rms > 0 and pcm16_bytes:
+                            pcm16_bytes = self._apply_normalizer(pcm16_bytes, self.normalizer_target_rms, self.normalizer_max_gain_db)
+                            try:
+                                info = self.active_streams.get(call_id, {}) if call_id in self.active_streams else {}
+                                if not info.get('normalizer_applied_fastpath_logged'):
+                                    logger.info(
+                                        "Normalizer applied (mulaw→pcm fast path)",
+                                        call_id=call_id,
+                                        target_rms=int(self.normalizer_target_rms),
+                                        max_gain_db=float(self.normalizer_max_gain_db),
+                                    )
+                                    info['normalizer_applied_fastpath_logged'] = True
+                                    if call_id in self.active_streams:
+                                        self.active_streams[call_id] = info
+                            except Exception:
+                                pass
+                    except Exception:
+                        logger.debug("Normalizer failed in mulaw→pcm fast path", call_id=call_id, exc_info=True)
                     # Accumulate diagnostics taps and snapshots in fast path
                     try:
                         if getattr(self, 'diag_enable_taps', False) and call_id in self.active_streams and pcm16_bytes:
@@ -1499,6 +1573,10 @@ class StreamingPlaybackManager:
                                                 wf.setsampwidth(2)
                                                 wf.setframerate(win_rate)
                                                 wf.writeframes(bytes(pre_w[:win_bytes]))
+                                            try:
+                                                os.chmod(fnp200, 0o600)
+                                            except Exception:
+                                                pass
                                             logger.info("Wrote pre-compand 200ms snapshot", call_id=call_id, stream_id=sid, path=fnp200, bytes=win_bytes, rate=win_rate, snapshot="first200ms")
                                         except Exception:
                                             logger.warning("Failed 200ms pre snapshot (mulaw->pcm fast)", call_id=call_id, stream_id=sid, rate=win_rate, exc_info=True)
@@ -1509,6 +1587,10 @@ class StreamingPlaybackManager:
                                                 wf.setsampwidth(2)
                                                 wf.setframerate(win_rate)
                                                 wf.writeframes(bytes(post_w[:win_bytes]))
+                                            try:
+                                                os.chmod(fnq200, 0o600)
+                                            except Exception:
+                                                pass
                                             logger.info("Wrote post-compand 200ms snapshot", call_id=call_id, stream_id=sid, path=fnq200, bytes=win_bytes, rate=win_rate, snapshot="first200ms")
                                         except Exception:
                                             logger.warning("Failed 200ms post snapshot (mulaw->pcm fast)", call_id=call_id, stream_id=sid, rate=win_rate, exc_info=True)
@@ -1688,6 +1770,20 @@ class StreamingPlaybackManager:
                     if self.normalizer_enabled and self.normalizer_target_rms > 0:
                         logger.debug("ENTERING NORMALIZER (pcm->ulaw)", call_id=call_id)
                         working = self._apply_normalizer(working, self.normalizer_target_rms, self.normalizer_max_gain_db)
+                        # One-time info log per stream to confirm normalizer activation in production
+                        try:
+                            sinfo = self.active_streams.get(call_id, {})
+                            if not sinfo.get('normalizer_applied_ulaw_logged'):
+                                logger.info(
+                                    "Normalizer applied (pcm->ulaw encode path)",
+                                    call_id=call_id,
+                                    target_rms=int(self.normalizer_target_rms),
+                                    max_gain_db=float(self.normalizer_max_gain_db),
+                                )
+                                sinfo['normalizer_applied_ulaw_logged'] = True
+                                self.active_streams[call_id] = sinfo
+                        except Exception:
+                            pass
                     else:
                         logger.warning(
                             "NORMALIZER SKIPPED - WHY? (pcm->ulaw)",
@@ -1733,6 +1829,10 @@ class StreamingPlaybackManager:
                                         wf.setsampwidth(2)
                                         wf.setframerate(int(rate) if isinstance(rate, int) else int(self.sample_rate))
                                         wf.writeframes(working)
+                                    try:
+                                        os.chmod(fn, 0o600)
+                                    except Exception:
+                                        pass
                                     logger.info("Wrote pre-compand PCM16 tap snapshot", call_id=call_id, stream_id=stream_id_first, path=fn, bytes=len(working), rate=rate, snapshot="first")
                                 except Exception:
                                     logger.warning("Failed to write pre-compand tap snapshot", call_id=call_id, stream_id=stream_id_first, path=fn, rate=rate, snapshot="first", exc_info=True)
@@ -1745,6 +1845,10 @@ class StreamingPlaybackManager:
                                         wf.setsampwidth(2)
                                         wf.setframerate(int(rate) if isinstance(rate, int) else int(self.sample_rate))
                                         wf.writeframes(back_pcm)
+                                    try:
+                                        os.chmod(fn2, 0o600)
+                                    except Exception:
+                                        pass
                                     logger.info("Wrote post-compand PCM16 tap snapshot", call_id=call_id, stream_id=stream_id_first, path=fn2, bytes=len(back_pcm), rate=rate, snapshot="first")
                                 except Exception:
                                     logger.warning("Failed to write post-compand tap snapshot", call_id=call_id, stream_id=stream_id_first, path=fn2, rate=rate, snapshot="first", exc_info=True)
@@ -1798,6 +1902,10 @@ class StreamingPlaybackManager:
                                             wf.setsampwidth(2)
                                             wf.setframerate(win_rate)
                                             wf.writeframes(bytes(pre_w[:win_bytes]))
+                                        try:
+                                            os.chmod(fnp200, 0o600)
+                                        except Exception:
+                                            pass
                                         logger.info("Wrote pre-compand 200ms snapshot", call_id=call_id, stream_id=sid, path=fnp200, bytes=win_bytes, rate=win_rate, snapshot="first200ms")
                                     except Exception:
                                         logger.warning("Failed 200ms pre snapshot", call_id=call_id, stream_id=sid, rate=win_rate, exc_info=True)
@@ -1808,6 +1916,10 @@ class StreamingPlaybackManager:
                                             wf.setsampwidth(2)
                                             wf.setframerate(win_rate)
                                             wf.writeframes(bytes(post_w[:win_bytes]))
+                                        try:
+                                            os.chmod(fnq200, 0o600)
+                                        except Exception:
+                                            pass
                                         logger.info("Wrote post-compand 200ms snapshot", call_id=call_id, stream_id=sid, path=fnq200, bytes=win_bytes, rate=win_rate, snapshot="first200ms")
                                     except Exception:
                                         logger.warning("Failed 200ms post snapshot", call_id=call_id, stream_id=sid, rate=win_rate, exc_info=True)
@@ -1828,8 +1940,19 @@ class StreamingPlaybackManager:
             except Exception:
                 pass
             out_pcm = working
-            # Apply soft limiter on PCM egress to prevent clipping (mirrors μ-law path behavior)
+            # Apply normalization and soft limiter on PCM egress to ensure consistent loudness
             try:
+                if self.normalizer_enabled and self.normalizer_target_rms > 0 and out_pcm:
+                    out_pcm = self._apply_normalizer(out_pcm, self.normalizer_target_rms, self.normalizer_max_gain_db)
+                    try:
+                        logger.info(
+                            "Normalizer applied (pcm egress)",
+                            call_id=call_id,
+                            target_rms=int(self.normalizer_target_rms),
+                            max_gain_db=float(self.normalizer_max_gain_db),
+                        )
+                    except Exception:
+                        pass
                 if self.limiter_enabled and out_pcm:
                     out_pcm = self._apply_soft_limiter(out_pcm, self.limiter_headroom_ratio)
             except Exception:
@@ -1852,6 +1975,10 @@ class StreamingPlaybackManager:
                                     wf.setsampwidth(2)
                                     wf.setframerate(int(rate) if isinstance(rate, int) else int(self.sample_rate))
                                     wf.writeframes(working)
+                                try:
+                                    os.chmod(fnp, 0o600)
+                                except Exception:
+                                    pass
                                 logger.info("Wrote pre-compand PCM16 tap snapshot", call_id=call_id, stream_id=stream_id_first, path=fnp, bytes=len(working), rate=rate, snapshot="first")
                             except Exception:
                                 logger.warning("Failed to write pre-compand tap snapshot", call_id=call_id, stream_id=stream_id_first, path=fnp, rate=rate, snapshot="first", exc_info=True)
@@ -1863,6 +1990,10 @@ class StreamingPlaybackManager:
                                     wf.setsampwidth(2)
                                     wf.setframerate(int(rate) if isinstance(rate, int) else int(self.sample_rate))
                                     wf.writeframes(out_pcm)
+                                try:
+                                    os.chmod(fnq, 0o600)
+                                except Exception:
+                                    pass
                                 logger.info("Wrote post-compand PCM16 tap snapshot", call_id=call_id, stream_id=stream_id_first, path=fnq, bytes=len(out_pcm), rate=rate, snapshot="first")
                             except Exception:
                                 logger.warning("Failed to write post-compand tap snapshot", call_id=call_id, stream_id=stream_id_first, path=fnq, rate=rate, snapshot="first", exc_info=True)
@@ -1922,6 +2053,10 @@ class StreamingPlaybackManager:
                                     wf.setsampwidth(2)
                                     wf.setframerate(win_rate)
                                     wf.writeframes(bytes(pre_w[:win_bytes]))
+                                try:
+                                    os.chmod(fnp200, 0o600)
+                                except Exception:
+                                    pass
                                 logger.info("Wrote pre-compand 200ms snapshot", call_id=call_id, stream_id=sid, path=fnp200, bytes=win_bytes, rate=win_rate, snapshot="first200ms")
                             except Exception:
                                 logger.warning("Failed 200ms pre snapshot", call_id=call_id, stream_id=sid, rate=win_rate, exc_info=True)
@@ -1932,6 +2067,10 @@ class StreamingPlaybackManager:
                                     wf.setsampwidth(2)
                                     wf.setframerate(win_rate)
                                     wf.writeframes(bytes(post_w[:win_bytes]))
+                                try:
+                                    os.chmod(fnq200, 0o600)
+                                except Exception:
+                                    pass
                                 logger.info("Wrote post-compand 200ms snapshot", call_id=call_id, stream_id=sid, path=fnq200, bytes=win_bytes, rate=win_rate, snapshot="first200ms")
                             except Exception:
                                 logger.warning("Failed 200ms post snapshot", call_id=call_id, stream_id=sid, rate=win_rate, exc_info=True)
@@ -2286,6 +2425,7 @@ class StreamingPlaybackManager:
                             rate = raw_rate if raw_rate > 0 else int(self.sample_rate)
                             pre = bytes(info.get('tap_pre_pcm16') or b"")
                             post = bytes(info.get('tap_post_pcm16') or b"")
+                            # Write snapshots opportunistically (errors non-fatal)
                             if pre:
                                 fn = os.path.join(self.diag_out_dir, f"pre_compand_pcm16_{call_id}_{stream_id}_first.wav")
                                 try:
@@ -2294,6 +2434,10 @@ class StreamingPlaybackManager:
                                         wf.setsampwidth(2)
                                         wf.setframerate(rate)
                                         wf.writeframes(pre)
+                                    try:
+                                        os.chmod(fn, 0o600)
+                                    except Exception:
+                                        pass
                                     logger.info("Wrote pre-compand PCM16 tap snapshot", call_id=call_id, stream_id=stream_id, path=fn, bytes=len(pre), rate=rate, snapshot="first")
                                 except Exception:
                                     logger.warning("Failed to write pre-compand tap snapshot", call_id=call_id, stream_id=stream_id, path=fn, rate=rate, snapshot="first", exc_info=True)
@@ -2305,12 +2449,15 @@ class StreamingPlaybackManager:
                                         wf.setsampwidth(2)
                                         wf.setframerate(rate)
                                         wf.writeframes(post)
+                                    try:
+                                        os.chmod(fn2, 0o600)
+                                    except Exception:
+                                        pass
                                     logger.info("Wrote post-compand PCM16 tap snapshot", call_id=call_id, stream_id=stream_id, path=fn2, bytes=len(post), rate=rate, snapshot="first")
                                 except Exception:
                                     logger.warning("Failed to write post-compand tap snapshot", call_id=call_id, stream_id=stream_id, path=fn2, rate=rate, snapshot="first", exc_info=True)
                     except Exception:
                         logger.debug("Per-segment tap snapshot failed", call_id=call_id, stream_id=stream_id, exc_info=True)
-                # Optional broadcast mode for diagnostics
                 if self.audiosocket_broadcast_debug:
                     conns = list(set(getattr(session, 'audiosocket_conns', []) or []))
                     sent = 0
@@ -2833,8 +2980,8 @@ class StreamingPlaybackManager:
                 rate = int(self.sample_rate)
             total_attack_bytes = int(max(0, int(rate * (self.attack_ms / 1000.0)) * 2))
             info['attack_bytes_remaining'] = total_attack_bytes
-            logger.debug(
-                "Marked segment boundary; attack reset",
+            logger.info(
+                "⚡ CONTINUOUS STREAM - Segment boundary",
                 call_id=call_id,
                 segment_num=info['segments_played'],
                 attack_bytes=total_attack_bytes,
@@ -2919,6 +3066,10 @@ class StreamingPlaybackManager:
                                 wf.setsampwidth(2)
                                 wf.setframerate(rate)
                                 wf.writeframes(pre)
+                            try:
+                                os.chmod(fn, 0o600)
+                            except Exception:
+                                pass
                             logger.info("Wrote pre-compand PCM16 tap", call_id=call_id, path=fn, bytes=len(pre), rate=rate)
                         except Exception:
                             logger.warning("Failed to write pre-compand tap", call_id=call_id, path=fn, rate=rate, exc_info=True)
@@ -2930,6 +3081,10 @@ class StreamingPlaybackManager:
                                 wf.setsampwidth(2)
                                 wf.setframerate(rate)
                                 wf.writeframes(pre)
+                            try:
+                                os.chmod(fn_seg, 0o600)
+                            except Exception:
+                                pass
                             logger.info("Wrote pre-compand PCM16 tap snapshot", call_id=call_id, stream_id=stream_id, path=fn_seg, bytes=len(pre), rate=rate, snapshot="end")
                         except Exception:
                             logger.warning("Failed to write pre-compand tap snapshot", call_id=call_id, stream_id=stream_id, rate=rate, snapshot="end", exc_info=True)
@@ -2941,6 +3096,10 @@ class StreamingPlaybackManager:
                                 wf.setsampwidth(2)
                                 wf.setframerate(rate)
                                 wf.writeframes(post)
+                            try:
+                                os.chmod(fn2, 0o600)
+                            except Exception:
+                                pass
                             logger.info("Wrote post-compand PCM16 tap", call_id=call_id, path=fn2, bytes=len(post), rate=rate)
                         except Exception:
                             logger.warning("Failed to write post-compand tap", call_id=call_id, path=fn2, rate=rate, exc_info=True)
@@ -2952,6 +3111,10 @@ class StreamingPlaybackManager:
                                 wf.setsampwidth(2)
                                 wf.setframerate(rate)
                                 wf.writeframes(post)
+                            try:
+                                os.chmod(fn2_seg, 0o600)
+                            except Exception:
+                                pass
                             logger.info("Wrote post-compand PCM16 tap snapshot", call_id=call_id, stream_id=stream_id, path=fn2_seg, bytes=len(post), rate=rate, snapshot="end")
                         except Exception:
                             logger.warning("Failed to write post-compand tap snapshot", call_id=call_id, stream_id=stream_id, rate=rate, snapshot="end", exc_info=True)
@@ -3017,6 +3180,10 @@ class StreamingPlaybackManager:
                                     wf.setsampwidth(2)
                                     wf.setframerate(crate)
                                     wf.writeframes(cpre)
+                                try:
+                                    os.chmod(fnc, 0o600)
+                                except Exception:
+                                    pass
                                 logger.info("Wrote call-level pre-compand PCM16 tap", call_id=call_id, path=fnc, bytes=len(cpre), rate=crate)
                             except Exception:
                                 logger.warning("Failed to write call-level pre-compand tap", call_id=call_id, path=fnc, rate=crate, exc_info=True)
@@ -3028,9 +3195,28 @@ class StreamingPlaybackManager:
                                     wf.setsampwidth(2)
                                     wf.setframerate(crate)
                                     wf.writeframes(cpost)
+                                try:
+                                    os.chmod(fnc2, 0o600)
+                                except Exception:
+                                    pass
                                 logger.info("Wrote call-level post-compand PCM16 tap", call_id=call_id, path=fnc2, bytes=len(cpost), rate=crate)
                             except Exception:
                                 logger.warning("Failed to write call-level post-compand tap", call_id=call_id, path=fnc2, rate=crate, exc_info=True)
+                        # Cleanup: remove all per-call diagnostic tap files now that we've finished
+                        try:
+                            if os.path.isdir(self.diag_out_dir):
+                                prefix_pre = f"pre_compand_pcm16_{call_id}"
+                                prefix_post = f"post_compand_pcm16_{call_id}"
+                                for name in os.listdir(self.diag_out_dir):
+                                    if name.startswith(prefix_pre) or name.startswith(prefix_post):
+                                        fpath = os.path.join(self.diag_out_dir, name)
+                                        try:
+                                            if os.path.isfile(fpath):
+                                                os.remove(fpath)
+                                        except Exception:
+                                            pass
+                        except Exception:
+                            pass
                     except Exception:
                         logger.debug("Call-level tap write failed", call_id=call_id, exc_info=True)
             except Exception:
@@ -3128,7 +3314,8 @@ class StreamingPlaybackManager:
                         eff_seconds = 0.0
                     try:
                         start_ts = float(info.get('start_time', time.time()))
-                        wall_seconds = max(0.0, time.time() - start_ts)
+                        end_ts = float(info.get('last_real_emit_ts') or info.get('last_frame_ts') or time.time())
+                        wall_seconds = max(0.0, end_ts - start_ts)
                     except Exception:
                         wall_seconds = 0.0
                     try:

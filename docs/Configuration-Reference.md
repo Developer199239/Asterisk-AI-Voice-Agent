@@ -40,11 +40,12 @@ For comprehensive inline documentation, refer to the golden baseline YAML files 
 ## Transports
 
 - audio_transport: `audiosocket` | `externalmedia`
-  - **audiosocket** (Modern - Recommended for Full Agents): TCP-based, low latency, streaming TTS support. Use with OpenAI Realtime and Deepgram Voice Agent.
-  - **externalmedia** (Legacy - For Hybrid Pipelines): RTP/UDP-based, battle-tested, file-based playback. Use with Local Hybrid and modular pipelines.
+  - **audiosocket** (For Full Agents): TCP-based streaming transport. Use with OpenAI Realtime and Deepgram Voice Agent monolithic providers.
+  - **externalmedia** (For Pipelines): RTP/UDP-based transport. Use with Local Hybrid and modular pipelines (separate STT/LLM/TTS).
+  - **Selection**: Based on provider architecture, not deployment preference. Full agents require AudioSocket, pipelines require ExternalMedia.
 - downstream_mode: `stream` | `file`
-  - **stream**: Real-time streaming (20ms frames). Best UX. Requires stable network. Works with full agents.
-  - **file**: File-based playback via bridge. More robust to jitter. Required for hybrid pipelines.
+  - **stream**: Real-time streaming (20ms frames). Best UX. Works with full agents.
+  - **file**: File-based playback via bridge. More robust to jitter. Automatically used by pipelines.
 
 ## AudioSocket
 

@@ -6,8 +6,9 @@ in the original engine.py implementation.
 """
 
 from dataclasses import dataclass, field
-from typing import Optional, Set, Dict, Any, TYPE_CHECKING
+from typing import Optional, Set, Dict, Any, List, TYPE_CHECKING
 import time
+from datetime import datetime
 
 if TYPE_CHECKING:
     from .transport_orchestrator import TransportProfile as OrchestratorTransportProfile
@@ -74,6 +75,10 @@ class CallSession:
     last_transcript: Optional[str] = None
     last_agent_response: Optional[str] = None
     
+    # Conversation tracking for email tools
+    conversation_history: List[Dict[str, Any]] = field(default_factory=list)
+    start_time: Optional[datetime] = None
+    
     # Audio capture and TTS gating
     audio_capture_enabled: bool = False
     tts_playing: bool = False
@@ -131,6 +136,11 @@ class CallSession:
     codec_alignment_ok: bool = True
     codec_alignment_message: Optional[str] = None
     audio_diagnostics: Dict[str, Any] = field(default_factory=dict)
+    
+    # Agent action tracking (transfers, hangup, etc.)
+    pending_actions: list = field(default_factory=list)  # Queue of pending actions
+    current_action: Optional[Dict[str, Any]] = None      # Currently executing action
+    transfer_context: Optional[Dict[str, Any]] = None    # Context to pass to transfer target
 
     def __post_init__(self):
         """Initialize default VAD and fallback state."""

@@ -18,6 +18,10 @@ from ..audio.resampler import (
 from ..config import LLMConfig
 from .base import AIProviderInterface, ProviderCapabilities
 
+# Tool calling support
+from src.tools.registry import tool_registry
+from src.tools.adapters.deepgram import DeepgramToolAdapter
+
 logger = get_logger(__name__)
 
 _DEEPGRAM_INPUT_RATE = Gauge(
@@ -140,6 +144,10 @@ class DeepgramProvider(AIProviderInterface):
         self.request_id: Optional[str] = None
         self.session_id: Optional[str] = None
         self.call_id: Optional[str] = None
+        
+        # Tool calling support
+        self.tool_adapter = DeepgramToolAdapter(tool_registry)
+        logger.info("🛠️ Deepgram provider initialized with tool support")
         self._in_audio_burst: bool = False
         self._first_output_chunk_logged: bool = False
         self._closing: bool = False
@@ -168,6 +176,9 @@ class DeepgramProvider(AIProviderInterface):
         # User transcript counters
         self._user_txn_count: int = 0
         self._user_last_ts: float = 0.0
+        # Hangup tracking (for farewell + HangupReady event)
+        self._hangup_pending: bool = False
+        self._farewell_message: Optional[str] = None
         # Cache declared Deepgram input settings
         try:
             self._dg_input_rate = int(self._get_config_value('input_sample_rate_hz', 8000) or 8000)
@@ -449,6 +460,38 @@ class DeepgramProvider(AIProviderInterface):
                 "greeting": greeting_val
             }
         }
+        
+        # Add tools if enabled in configuration
+        # Per Deepgram docs: tools go in agent.think.tools, NOT agent.tools
+        try:
+            import yaml
+            with open('/app/config/ai-agent.yaml', 'r') as f:
+                config_dict = yaml.safe_load(f)
+            
+            tools_config = config_dict.get('tools', {}) if config_dict else {}
+            
+            if tools_config.get('enabled', False):
+                # Get tools from adapter
+                tools_schemas = self.tool_adapter.get_tools_config()
+                
+                if tools_schemas:
+                    # CRITICAL: Deepgram requires functions in agent.think.functions array
+                    # Per official docs: https://developers.deepgram.com/docs/voice-agents-function-calling
+                    # Functions are placed directly in array, NOT wrapped with {type: "function", function: {...}}
+                    # That wrapping is OpenAI's format. Deepgram wants: [{ name, description, parameters }, ...]
+                    settings["agent"]["think"]["functions"] = tools_schemas
+                    logger.info(
+                        "✅ Deepgram functions configured",
+                        call_id=self.call_id,
+                        function_count=len(tools_schemas),
+                        functions=[t["name"] for t in tools_schemas]
+                    )
+                else:
+                    logger.warning("Tools enabled but no tools registered", call_id=self.call_id)
+            else:
+                logger.debug("Tools disabled in configuration", call_id=self.call_id)
+        except Exception as e:
+            logger.warning(f"Failed to configure tools: {e}", call_id=self.call_id, exc_info=True)
         # Build and store a minimal Settings payload for fallback retry on UNPARSABLE error
         try:
             self._last_settings_minimal = {
@@ -692,13 +735,14 @@ class DeepgramProvider(AIProviderInterface):
                                 self._rms_log_started = True
                             self._low_rms_streak = 0
                         # Quick integrity check on PCM (zeros ratio)
+                        # Note: High zero ratio during silence is normal in conversations
                         try:
                             if pcm_for_rms:
                                 zc = pcm_for_rms.count(b"\x00")
                                 zr = float(zc) / float(len(pcm_for_rms))
                                 if gate and zr > 0.5:
-                                    logger.warning(
-                                        "Deepgram upstream PCM integrity suspect",
+                                    logger.debug(
+                                        "Deepgram upstream PCM mostly silent",
                                         zero_ratio=round(zr, 3),
                                         bytes=len(pcm_for_rms),
                                     )
@@ -762,6 +806,68 @@ class DeepgramProvider(AIProviderInterface):
                 logger.debug("Could not send audio packet: Connection closed.", code=e.code, reason=e.reason)
             except Exception:
                 logger.error("An unexpected error occurred while sending audio chunk", exc_info=True)
+    
+    async def _handle_function_call(self, event_data: Dict[str, Any]):
+        """
+        Handle function call request from Deepgram.
+        
+        Routes the function call to the appropriate tool via the tool adapter.
+        """
+        try:
+            # Build context for tool execution
+            # These will be injected by the engine when it sets up the provider
+            context = {
+                'call_id': self.call_id,
+                'caller_channel_id': getattr(self, '_caller_channel_id', None),
+                'bridge_id': getattr(self, '_bridge_id', None),
+                'session_store': getattr(self, '_session_store', None),
+                'ari_client': getattr(self, '_ari_client', None),
+                'config': getattr(self, '_full_config', None),
+                'websocket': self.websocket
+            }
+            
+            # Execute tool via adapter
+            result = await self.tool_adapter.handle_tool_call_event(event_data, context)
+            
+            # Check if this was a hangup request
+            if result.get('function_name') == 'hangup_call' and result.get('status') == 'success':
+                self._hangup_pending = True
+                self._farewell_message = result.get('farewell_message', '')
+                logger.info(
+                    "🔚 Hangup tool executed - will trigger after farewell audio completes",
+                    call_id=self.call_id,
+                    farewell=self._farewell_message
+                )
+            
+            # Send result back to Deepgram
+            await self.tool_adapter.send_tool_result(result, context)
+            
+        except Exception as e:
+            logger.error(
+                "Function call handling failed",
+                call_id=self.call_id,
+                function_name=event_data.get('function_name'),
+                error=str(e),
+                exc_info=True
+            )
+            # Send error response to Deepgram in correct format
+            try:
+                function_call_id = event_data.get("id")
+                if function_call_id:
+                    error_response = {
+                        "type": "function_call_result",
+                        "id": function_call_id,
+                        "function_call_result": {
+                            "status": "error",
+                            "message": f"Tool execution failed: {str(e)}",
+                            "error": str(e)
+                        }
+                    }
+                    if self.websocket and not self.websocket.closed:
+                        await self.websocket.send(json.dumps(error_response))
+                        logger.info("Sent error response to Deepgram", function_call_id=function_call_id)
+            except Exception as send_error:
+                logger.error(f"Failed to send error response: {send_error}")
 
     async def stop_session(self):
         # Prevent duplicate disconnect logs/ops
@@ -1042,13 +1148,20 @@ class DeepgramProvider(AIProviderInterface):
                                     request_id=getattr(self, "request_id", None),
                                 )
                             elif et == "FunctionCallRequest":
+                                # Extract function details for logging (actual Deepgram format)
+                                functions = event_data.get("functions", [])
+                                func_id = functions[0].get("id") if functions else None
+                                func_name = functions[0].get("name") if functions else None
                                 logger.info(
                                     "📞 Deepgram FunctionCallRequest",
                                     call_id=self.call_id,
-                                    function_call_id=event_data.get("function_call_id"),
-                                    function_name=event_data.get("function_name"),
+                                    function_call_id=func_id,
+                                    function_name=func_name,
+                                    function_count=len(functions),
                                     request_id=getattr(self, "request_id", None),
                                 )
+                                # Handle function call via tool adapter
+                                asyncio.create_task(self._handle_function_call(event_data))
                             elif et == "ConnectionClosed":
                                 logger.info(
                                     "🔌 Deepgram ConnectionClosed",
@@ -1087,13 +1200,63 @@ class DeepgramProvider(AIProviderInterface):
                                     continue
                             if isinstance(event_data, dict) and et == "ConversationText":
                                 try:
+                                    role = event_data.get("role")
+                                    text = event_data.get("text") or event_data.get("content")
                                     logger.info(
                                         "Deepgram conversation text",
                                         call_id=self.call_id,
-                                        role=event_data.get("role"),
-                                        text=event_data.get("text") or event_data.get("content"),
+                                        role=role,
+                                        text=text,
                                         segments=event_data.get("segments"),
                                     )
+                                    
+                                    # Track conversation for email tools
+                                    # Debug: Check conditions
+                                    has_call_id = bool(self.call_id)
+                                    has_text = bool(text)
+                                    has_attr = hasattr(self, '_session_store')
+                                    has_store = bool(getattr(self, '_session_store', None))
+                                    
+                                    logger.debug(
+                                        "🔍 Conversation tracking check",
+                                        call_id=self.call_id,
+                                        has_call_id=has_call_id,
+                                        has_text=has_text,
+                                        has_attr=has_attr,
+                                        has_store=has_store,
+                                        role=role
+                                    )
+                                    
+                                    if self.call_id and text and hasattr(self, '_session_store') and self._session_store:
+                                        try:
+                                            session = await self._session_store.get_by_call_id(self.call_id)
+                                            if session:
+                                                # Add to conversation history
+                                                session.conversation_history.append({
+                                                    "role": role,  # "user" or "assistant"
+                                                    "content": text,
+                                                    "timestamp": time.time()
+                                                })
+                                                # Update session
+                                                await self._session_store.upsert_call(session)
+                                                logger.debug(
+                                                    "✅ Tracked conversation message",
+                                                    call_id=self.call_id,
+                                                    role=role,
+                                                    text_preview=text[:50] + "..." if len(text) > 50 else text
+                                                )
+                                            else:
+                                                logger.warning(
+                                                    "⚠️ Session not found for conversation tracking",
+                                                    call_id=self.call_id
+                                                )
+                                        except Exception as e:
+                                            logger.error(
+                                                "❌ Failed to track conversation",
+                                                call_id=self.call_id,
+                                                error=str(e),
+                                                exc_info=True
+                                            )
                                 except Exception:
                                     logger.debug("Deepgram conversation text logging failed", exc_info=True)
                             if et in ("Error", "Warning"):
@@ -1131,6 +1294,27 @@ class DeepgramProvider(AIProviderInterface):
                                 'call_id': self.call_id
                             })
                             self._in_audio_burst = False
+                            
+                            # Check if farewell audio completed after hangup request
+                            if self._hangup_pending:
+                                logger.info(
+                                    "🔚 Farewell audio completed - emitting HangupReady",
+                                    call_id=self.call_id,
+                                    had_audio=True
+                                )
+                                try:
+                                    await self.on_event({
+                                        'type': 'HangupReady',
+                                        'call_id': self.call_id,
+                                        'reason': 'farewell_completed',
+                                        'had_audio': True
+                                    })
+                                except Exception as e:
+                                    logger.error("Failed to emit HangupReady event", call_id=self.call_id, error=str(e))
+                                
+                                # Reset hangup tracking
+                                self._hangup_pending = False
+                                self._farewell_message = None
 
                         if self.on_event:
                             await self.on_event(event_data)
@@ -1261,6 +1445,27 @@ class DeepgramProvider(AIProviderInterface):
                         'streaming_done': True,
                         'call_id': self.call_id
                     })
+                    
+                    # Check if farewell audio completed after hangup request (socket closing)
+                    if self._hangup_pending:
+                        logger.info(
+                            "🔚 Farewell audio completed (socket closing) - emitting HangupReady",
+                            call_id=self.call_id,
+                            had_audio=True
+                        )
+                        try:
+                            await self.on_event({
+                                'type': 'HangupReady',
+                                'call_id': self.call_id,
+                                'reason': 'farewell_completed',
+                                'had_audio': True
+                            })
+                        except Exception as e:
+                            logger.error("Failed to emit HangupReady event", call_id=self.call_id, error=str(e))
+                        
+                        # Reset hangup tracking
+                        self._hangup_pending = False
+                        self._farewell_message = None
                 except Exception:
                     pass
             self._in_audio_burst = False

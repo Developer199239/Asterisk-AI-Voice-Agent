@@ -33,8 +33,13 @@ Symptoms:
   interruption    Self-interruption loop
   one-way         Only one direction works
 
+Requirements:
+  - Docker container 'ai_engine' must be running
+  - Reads logs from Docker (last 24 hours)
+  - No file logging required (uses 'docker logs ai_engine')
+  
 Features:
-  - Automatic log collection
+  - Automatic log collection from Docker
   - Pattern detection and analysis
   - LLM-powered diagnosis
   - Actionable recommendations`,

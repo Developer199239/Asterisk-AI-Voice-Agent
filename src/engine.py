@@ -10,6 +10,7 @@ import uuid
 import audioop
 import base64
 from collections import deque
+from datetime import datetime
 from typing import Dict, Any, Optional, List, Set, Tuple
 
 # Simple audio capture system removed - not used in production
@@ -430,6 +431,14 @@ class Engine:
         """Connect to ARI and start the engine."""
         # 1) Load providers first (low risk)
         await self._load_providers()
+        
+        # Initialize tool calling system
+        try:
+            from src.tools.registry import tool_registry
+            tool_registry.initialize_default_tools()
+            logger.info("✅ Tool calling system initialized", tool_count=len(tool_registry.list_tools()))
+        except Exception as e:
+            logger.warning(f"Failed to initialize tool calling system: {e}", exc_info=True)
 
         # Milestone7: Start pipeline orchestrator to prepare per-call component lookups.
         try:
@@ -762,12 +771,24 @@ class Engine:
         channel = event.get('channel', {})
         channel_id = channel.get('id')
         channel_name = channel.get('name', '')
+        args = event.get('args', [])
         
         logger.info("🎯 HYBRID ARI - Channel analysis", 
                    channel_id=channel_id,
                    channel_name=channel_name,
+                   args=args,
                    is_caller=self._is_caller_channel(channel),
                    is_local=self._is_local_channel(channel))
+        
+        # Check if this is an agent action (transfer, voicemail, queue, etc.)
+        if args and len(args) > 0:
+            action_type = args[0]
+            logger.info(f"🔀 AGENT ACTION - Stasis entry with action: {action_type}",
+                       channel_id=channel_id,
+                       action_type=action_type,
+                       args=args)
+            await self._handle_agent_action_stasis(channel_id, channel, args)
+            return
         
         if self._is_caller_channel(channel):
             # This is the caller channel entering Stasis - MAIN FLOW
@@ -984,7 +1005,8 @@ class Engine:
                 bridge_id=bridge_id,
                 provider_name=self.config.default_provider,
                 audio_capture_enabled=True,  # FIX #1: Start with capture enabled, only disable when TTS actually starts
-                status="connected"
+                status="connected",
+                start_time=datetime.now()  # Track call start time for email tools
             )
             session.enhanced_vad_enabled = bool(self.vad_manager)
             await self._save_session(session, new=True)
@@ -1340,6 +1362,188 @@ class Engine:
             )
             await self.ari_client.hangup_channel(audiosocket_channel_id)
 
+    async def _handle_agent_action_stasis(self, channel_id: str, channel: dict, args: list):
+        """
+        Handle agent action channels entering Stasis (from agent-outbound dialplan).
+        
+        Args:
+            channel_id: Channel that entered Stasis
+            channel: Channel dict
+            args: Stasis args [action_type, caller_id, target, ...]
+        """
+        if len(args) < 2:
+            logger.error("🔀 AGENT ACTION - Insufficient args", 
+                        channel_id=channel_id, args=args)
+            await self.ari_client.hangup_channel(channel_id)
+            return
+        
+        action_type = args[0]
+        caller_id = args[1]
+        
+        logger.info("🔀 AGENT ACTION - Processing action",
+                   action_type=action_type,
+                   caller_id=caller_id,
+                   channel_id=channel_id)
+        
+        # Route to specific handler based on action type
+        handlers = {
+            'transfer': self._handle_transfer_answered,
+            'warm-transfer': self._handle_transfer_answered,  # Warm transfer uses same handler
+            'transfer-failed': self._handle_transfer_failed,
+            'voicemail-complete': self._handle_voicemail_complete,
+            'queue-answered': self._handle_queue_answered,
+            'queue-failed': self._handle_queue_failed,
+        }
+        
+        handler = handlers.get(action_type)
+        if handler:
+            await handler(channel_id, args)
+        else:
+            logger.warning(f"🔀 AGENT ACTION - Unknown action type: {action_type}",
+                          channel_id=channel_id, args=args)
+            await self.ari_client.hangup_channel(channel_id)
+    
+    async def _handle_transfer_answered(self, channel_id: str, args: list):
+        """
+        Handle successful transfer (target answered).
+        Args: ['warm-transfer', caller_id, target_extension]
+        
+        With direct SIP origination:
+        - SIP channel (e.g., SIP/6000) enters Stasis directly on answer
+        - We remove AI (UnicastRTP), stop provider, then bridge SIP to caller
+        - Creates direct audio path: Caller ↔ SIP/Agent
+        """
+        action_type = args[0]
+        caller_id = args[1]
+        target = args[2] if len(args) > 2 else 'unknown'
+        
+        logger.info("🔀 TRANSFER ANSWERED - Direct SIP channel",
+                   action_type=action_type,
+                   channel_id=channel_id,
+                   caller_id=caller_id,
+                   target=target)
+        
+        # Find session
+        session = await self.session_store.get_by_call_id(caller_id)
+        if not session:
+            logger.error("🔀 TRANSFER - Session not found",
+                        caller_id=caller_id)
+            await self.ari_client.hangup_channel(channel_id)
+            return
+        
+        # Step 1: Remove UnicastRTP/ExternalMedia from bridge
+        if session.external_media_id:
+            try:
+                await self.ari_client.remove_channel_from_bridge(
+                    session.bridge_id,
+                    session.external_media_id
+                )
+                logger.info("✅ UnicastRTP removed from bridge",
+                           external_media_id=session.external_media_id)
+            except Exception as e:
+                logger.warning(f"Failed to remove UnicastRTP: {e}")
+        
+        # Step 2: Stop AI provider session
+        provider = self.providers.get(session.provider_name)
+        if provider:
+            try:
+                # Stop the provider's session for this call
+                if hasattr(provider, 'stop_session'):
+                    await provider.stop_session()
+                    logger.info("✅ AI provider session stopped",
+                               provider=session.provider_name)
+            except Exception as e:
+                logger.warning(f"Failed to stop provider: {e}")
+        
+        # Step 3: Bridge SIP channel directly to caller
+        try:
+            await self.ari_client.add_channel_to_bridge(
+                session.bridge_id,
+                channel_id  # This is SIP/6000 directly
+            )
+            logger.info("✅ TRANSFER COMPLETE - Direct SIP channel bridged",
+                       channel_id=channel_id,
+                       bridge_id=session.bridge_id,
+                       target=target)
+            
+            # Step 4: Update session state
+            if session.current_action:
+                session.current_action['answered'] = True
+                session.current_action['channel_id'] = channel_id
+            await self.session_store.upsert_call(session)
+            
+        except Exception as e:
+            logger.error(f"🔀 TRANSFER - Failed to bridge: {e}",
+                        channel_id=channel_id)
+            await self.ari_client.hangup_channel(channel_id)
+    
+    async def _handle_transfer_failed(self, channel_id: str, args: list):
+        """
+        Handle failed transfer (target didn't answer).
+        Args: ['transfer-failed', caller_id, target, dial_status]
+        """
+        caller_id = args[1]
+        target = args[2] if len(args) > 2 else 'unknown'
+        status = args[3] if len(args) > 3 else 'UNKNOWN'
+        
+        logger.info("🔀 TRANSFER FAILED",
+                   channel_id=channel_id,
+                   caller_id=caller_id,
+                   target=target,
+                   status=status)
+        
+        # Find session and stop MOH
+        session = await self.session_store.get_by_call_id(caller_id)
+        if session:
+            try:
+                await self.ari_client.send_command(
+                    method="DELETE",
+                    resource=f"channels/{session.caller_channel_id}/moh"
+                )
+            except:
+                pass
+            
+            # Clear current action
+            session.current_action = None
+            await self.session_store.upsert_call(session)
+        
+        # Hangup the Local channel
+        await self.ari_client.hangup_channel(channel_id)
+    
+    async def _handle_voicemail_complete(self, channel_id: str, args: list):
+        """Handle voicemail completion."""
+        caller_id = args[1]
+        vmbox = args[2] if len(args) > 2 else 'unknown'
+        
+        logger.info("📧 VOICEMAIL COMPLETE", vmbox=vmbox)
+        await self.ari_client.hangup_channel(channel_id)
+    
+    async def _handle_queue_answered(self, channel_id: str, args: list):
+        """Handle queue agent answered."""
+        caller_id = args[1]
+        queue_name = args[2] if len(args) > 2 else 'unknown'
+        
+        logger.info("📞 QUEUE ANSWERED", queue=queue_name)
+        
+        # Similar to transfer_answered - bridge the channel
+        session = await self.session_store.get_by_call_id(caller_id)
+        if session:
+            try:
+                await self.ari_client.add_channel_to_bridge(
+                    session.bridge_id,
+                    channel_id
+                )
+                logger.info("✅ QUEUE AGENT BRIDGED")
+            except Exception as e:
+                logger.error(f"Failed to bridge queue agent: {e}")
+                await self.ari_client.hangup_channel(channel_id)
+    
+    async def _handle_queue_failed(self, channel_id: str, args: list):
+        """Handle queue failure."""
+        caller_id = args[1]
+        logger.info("📞 QUEUE FAILED")
+        await self.ari_client.hangup_channel(channel_id)
+
     async def _originate_audiosocket_channel_hybrid(self, caller_channel_id: str):
         """Originate an AudioSocket channel using the native channel interface."""
         if not self.config.audiosocket:
@@ -1598,6 +1802,30 @@ class Engine:
                     await self.pipeline_orchestrator.release_pipeline(call_id)
                 except Exception:
                     logger.debug("Milestone7 pipeline release failed during cleanup", call_id=call_id, exc_info=True)
+
+            # Auto-send email summary if enabled (before session is removed)
+            try:
+                from src.tools.registry import tool_registry
+                email_tool_config = self.config.tools.get('send_email_summary', {})
+                if email_tool_config.get('enabled', False):
+                    email_tool = tool_registry.get('send_email_summary')
+                    if email_tool:
+                        # Build execution context
+                        from src.tools.context import ToolExecutionContext
+                        context = ToolExecutionContext(
+                            call_id=call_id,
+                            caller_channel_id=session.caller_channel_id,
+                            bridge_id=session.bridge_id,
+                            session_store=self.session_store,
+                            ari_client=self.ari_client,
+                            config=self.config.model_dump()
+                        )
+                        # Execute synchronously to ensure session is available
+                        # Email sending itself is still async (non-blocking)
+                        await email_tool.execute({}, context)
+                        logger.info("📧 Auto-triggered email summary", call_id=call_id)
+            except Exception as e:
+                logger.warning("Failed to auto-trigger email summary", call_id=call_id, error=str(e), exc_info=True)
 
             # Finally remove the session.
             await self.session_store.remove_call(call_id)
@@ -3559,6 +3787,11 @@ class Engine:
                         buf_ms = 0.0
                     logger.info("PROVIDER COALESCE BUFFER", call_id=call_id, buf_ms=buf_ms, bytes=len(buf))
                     if buf_ms < coalesce_min_ms:
+                        # Count provider bytes even while buffering prior to stream start
+                        try:
+                            self._provider_bytes[call_id] = int(self._provider_bytes.get(call_id, 0)) + (len(chunk) if isinstance(chunk, (bytes, bytearray)) else len(out_chunk))
+                        except Exception:
+                            pass
                         # Keep buffering until threshold
                         return
                     # Start streaming now with coalesced buffer
@@ -3636,17 +3869,17 @@ class Engine:
                         logger.info("COALESCE START", call_id=call_id, coalesced_ms=buf_ms, coalesced_bytes=len(buf))
                         try:
                             q.put_nowait(bytes(buf))
+                            # Account for the initial coalesced enqueue
+                            try:
+                                self._enqueued_bytes[call_id] = int(self._enqueued_bytes.get(call_id, 0)) + len(buf)
+                            except Exception:
+                                pass
                         except asyncio.QueueFull:
                             logger.debug("Coalesced enqueue dropped (queue full)", call_id=call_id)
                         self._provider_coalesce_buf.pop(call_id, None)
+                        return
                     except Exception:
-                        logger.error("Coalesced start_streaming_playback failed", call_id=call_id, exc_info=True)
-                        # Fallback: play coalesced buffer via file
-                        try:
-                            playback_id = await self.playback_manager.play_audio(call_id, bytes(buf), "streaming-response")
-                            logger.info("MICRO SEGMENT FILE FALLBACK (start)", call_id=call_id, buf_ms=buf_ms, playback_id=playback_id)
-                        except Exception:
-                            logger.error("File fallback failed after coalesce start error", call_id=call_id, exc_info=True)
+                        logger.error("File fallback failed after coalesce start error", call_id=call_id, exc_info=True)
                         self._provider_coalesce_buf.pop(call_id, None)
                         return
                 else:
@@ -3845,11 +4078,72 @@ class Engine:
                             logger.info("COALESCE START (end)", call_id=call_id, coalesced_ms=buf_ms, coalesced_bytes=len(buf))
                             try:
                                 q2.put_nowait(bytes(buf))
+                                # Account for the coalesced enqueue at segment end
+                                try:
+                                    self._enqueued_bytes[call_id] = int(self._enqueued_bytes.get(call_id, 0)) + len(buf)
+                                except Exception:
+                                    pass
                                 q2.put_nowait(None)
                             except asyncio.QueueFull:
                                 logger.debug("Coalesced enqueue dropped at end (queue full)", call_id=call_id)
                         except Exception:
                             logger.error("Coalesced streaming failed at segment end", call_id=call_id, exc_info=True)
+                
+                # Check if hangup was requested after TTS completion
+                # Only check when streaming_done is True (complete response ended, not just segment boundary)
+                streaming_done = event.get("streaming_done", False)
+                if streaming_done:
+                    try:
+                        session = await self.session_store.get_by_call_id(call_id)
+                        if session and getattr(session, 'cleanup_after_tts', False):
+                            logger.info("🔚 Cleanup after TTS requested - hanging up call", call_id=call_id)
+                            # Give a small delay for audio to finish playing
+                            await asyncio.sleep(0.5)
+                            try:
+                                await self.ari_client.hangup_channel(session.caller_channel_id)
+                                logger.info("✅ Call hung up successfully", call_id=call_id, channel_id=session.caller_channel_id)
+                            except Exception as e:
+                                logger.error("Failed to hang up call", call_id=call_id, error=str(e), exc_info=True)
+                    except Exception as e:
+                        logger.debug("Error checking cleanup_after_tts flag", call_id=call_id, error=str(e))
+            
+            elif etype == "HangupReady":
+                # Hangup triggered by farewell response completion (Option C implementation)
+                # This ensures hangup happens even if farewell response produces no audio
+                call_id = event.get("call_id")
+                reason = event.get("reason", "unknown")
+                had_audio = event.get("had_audio", False)
+                
+                logger.info(
+                    "🔚 HangupReady event received - executing hangup",
+                    call_id=call_id,
+                    reason=reason,
+                    had_audio=had_audio
+                )
+                
+                # Delay to ensure audio completes through RTP pipeline
+                # Accounts for: RTP transmission, jitter buffer, and playback
+                await asyncio.sleep(1.0)
+                
+                try:
+                    session = await self.session_store.get_by_call_id(call_id)
+                    if session:
+                        await self.ari_client.hangup_channel(session.caller_channel_id)
+                        logger.info(
+                            "✅ Call hung up successfully (farewell completed)",
+                            call_id=call_id,
+                            channel_id=session.caller_channel_id
+                        )
+                    else:
+                        logger.warning("No session found for HangupReady", call_id=call_id)
+                except Exception as e:
+                    logger.error(
+                        "Failed to hangup after farewell",
+                        call_id=call_id,
+                        error=str(e),
+                        exc_info=True
+                    )
+            
             else:
                 # Log control/JSON events at debug for now
                 logger.debug("Provider control event", provider_event=event)
@@ -5125,6 +5419,17 @@ class Engine:
         """Persist transport profile updates and sync preferences."""
         profile = session.transport_profile
         
+        # Guard: Check if transport profile is initialized
+        if profile is None:
+            logger.warning(
+                "Transport profile not initialized yet, skipping update",
+                call_id=session.call_id,
+                source=source,
+                fmt=fmt,
+                sample_rate=sample_rate
+            )
+            return
+        
         # P1: Check if this is new TransportProfile (has wire_encoding) vs legacy (has format)
         if hasattr(profile, 'wire_encoding'):
             # New P1 TransportProfile - don't update, it's immutable per call
@@ -5619,6 +5924,22 @@ class Engine:
 
             # Note: Context greeting/prompt injection now happens earlier in P1 _resolve_audio_profile()
             # to ensure config is set BEFORE provider session starts and reads it.
+            
+            # Inject tool execution context into provider if it supports tools (Deepgram)
+            if hasattr(provider, 'tool_adapter'):
+                try:
+                    provider._caller_channel_id = session.caller_channel_id
+                    provider._bridge_id = session.bridge_id
+                    provider._session_store = self.session_store
+                    provider._ari_client = self.ari_client
+                    provider._full_config = self.config.model_dump()  # Convert Pydantic model to dict
+                    logger.debug(
+                        "Injected tool execution context into provider",
+                        call_id=call_id,
+                        provider=provider_name
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to inject tool context: {e}", call_id=call_id)
 
             logger.info("DEBUG: About to call provider.start_session", call_id=call_id, provider=provider_name)
             await provider.start_session(call_id)
@@ -5697,10 +6018,17 @@ class Engine:
             app.router.add_get('/metrics', self._metrics_handler)
             runner = web.AppRunner(app)
             await runner.setup()
-            site = web.TCPSite(runner, '0.0.0.0', 15000)
+            # Host/port now configurable via environment with localhost defaults (AAVA-30)
+            try:
+                health_host = os.getenv('HEALTH_BIND_HOST', '127.0.0.1')
+                health_port = int(os.getenv('HEALTH_BIND_PORT', '15000'))
+            except Exception:
+                health_host = '127.0.0.1'
+                health_port = 15000
+            site = web.TCPSite(runner, health_host, health_port)
             await site.start()
             self._health_runner = runner
-            logger.info("Health endpoint started", host="0.0.0.0", port=15000)
+            logger.info("Health endpoint started", host=health_host, port=health_port)
         except Exception as exc:
             logger.error("Failed to start health endpoint", error=str(exc), exc_info=True)
 

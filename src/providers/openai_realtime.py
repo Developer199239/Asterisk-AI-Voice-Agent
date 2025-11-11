@@ -33,6 +33,10 @@ from ..audio import (
 )
 from ..config import OpenAIRealtimeProviderConfig
 
+# Tool calling support
+from src.tools.registry import tool_registry
+from src.tools.adapters.openai import OpenAIToolAdapter
+
 logger = get_logger(__name__)
 
 _COMMIT_INTERVAL_SEC = 0.2
@@ -88,6 +92,11 @@ class OpenAIRealtimeProvider(AIProviderInterface):
 
         self._call_id: Optional[str] = None
         self._pending_response: bool = False
+        self._current_response_id: Optional[str] = None  # Track active response for cancellation
+        self._greeting_response_id: Optional[str] = None  # Track greeting to protect from barge-in
+        self._greeting_completed: bool = False  # Track if greeting has finished
+        self._farewell_response_id: Optional[str] = None  # Track farewell response for hangup
+        self._hangup_after_response: bool = False  # Flag to trigger hangup after next response
         self._in_audio_burst: bool = False
         self._first_output_chunk_logged: bool = False
         self._closing: bool = False
@@ -139,6 +148,10 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         self._pacer_lock: asyncio.Lock = asyncio.Lock()
         self._fallback_pcm24k_done: bool = False
         self._reconnect_task: Optional[asyncio.Task] = None
+
+        # Tool calling support
+        self.tool_adapter = OpenAIToolAdapter(tool_registry)
+        logger.info("🛠️  OpenAI Realtime provider initialized with tool support")
 
         try:
             if self.config.input_encoding:
@@ -481,6 +494,76 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         except Exception:
             logger.error("Failed to send response.cancel", call_id=self._call_id, exc_info=True)
 
+    async def _handle_function_call(self, event_data: Dict[str, Any]):
+        """
+        Handle function call request from OpenAI Realtime API.
+        
+        Routes the function call to the appropriate tool via the tool adapter.
+        """
+        try:
+            # Build context for tool execution
+            # These will be injected by the engine when it sets up the provider
+            context = {
+                'call_id': self._call_id,
+                'caller_channel_id': getattr(self, '_caller_channel_id', None),
+                'bridge_id': getattr(self, '_bridge_id', None),
+                'session_store': getattr(self, '_session_store', None),
+                'ari_client': getattr(self, '_ari_client', None),
+                'config': getattr(self, '_full_config', None),
+                'websocket': self.websocket
+            }
+            
+            # Execute tool via adapter
+            result = await self.tool_adapter.handle_tool_call_event(event_data, context)
+            
+            # Check if this is a hangup_call tool that will trigger hangup
+            item = event_data.get("item", {})
+            function_name = item.get("name")
+            if function_name == "hangup_call" and result:
+                # Check if tool result indicates hangup will occur
+                # Tool adapter returns result directly in top-level dict
+                if result.get("will_hangup"):
+                    self._hangup_after_response = True
+                    logger.info(
+                        "🔚 Hangup tool executed - next response will trigger hangup",
+                        call_id=self._call_id,
+                        function_name=function_name,
+                        farewell=result.get("message")
+                    )
+            
+            # Send result back to OpenAI
+            await self.tool_adapter.send_tool_result(result, context)
+            
+        except Exception as e:
+            logger.error(
+                "Function call handling failed",
+                call_id=self._call_id,
+                error=str(e),
+                exc_info=True
+            )
+            # Send error response to OpenAI in correct format
+            try:
+                item = event_data.get("item", {})
+                call_id_field = item.get("call_id")
+                if call_id_field:
+                    error_response = {
+                        "type": "conversation.item.create",
+                        "item": {
+                            "type": "function_call_output",
+                            "call_id": call_id_field,
+                            "output": json.dumps({
+                                "status": "error",
+                                "message": f"Tool execution failed: {str(e)}",
+                                "error": str(e)
+                            })
+                        }
+                    }
+                    if self.websocket and not self.websocket.closed:
+                        await self._send_json(error_response)
+                        logger.info("Sent error response to OpenAI", call_id=call_id_field)
+            except Exception as send_error:
+                logger.error(f"Failed to send error response: {send_error}")
+
     async def stop_session(self):
         if self._closing or self._closed:
             return
@@ -580,6 +663,9 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             "input_audio_format": in_fmt,
             "output_audio_format": out_fmt,
             "voice": self.config.voice,
+            # Note: input_audio_transcription is NOT compatible with server_vad
+            # When turn_detection is enabled, OpenAI does not send transcription events
+            # This is an API limitation - email summaries will only include AI responses
         }
         # CRITICAL FIX #2: Let OpenAI handle VAD with its optimized defaults
         # Only override if explicitly configured in YAML
@@ -607,6 +693,18 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         if self.config.instructions:
             session["instructions"] = self.config.instructions
 
+        # Add tool calling configuration
+        try:
+            tools = self.tool_adapter.get_tools_config()
+            if tools:
+                session["tools"] = tools
+                session["tool_choice"] = "auto"  # Let OpenAI decide when to call tools
+                logger.info(f"🛠️  OpenAI session configured with {len(tools)} tools", 
+                           call_id=self._call_id)
+        except Exception as e:
+            logger.warning(f"Failed to add tools to OpenAI session: {e}", 
+                          call_id=self._call_id, exc_info=True)
+
         payload: Dict[str, Any] = {
             "type": "session.update",
             "event_id": f"sess-{uuid.uuid4()}",
@@ -629,6 +727,27 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         if not greeting or not self.websocket or self.websocket.closed:
             return
 
+        # OFFICIAL OPENAI SOLUTION: Disable turn_detection during greeting
+        # This prevents server-side VAD from committing user speech while greeting generates
+        # Reference: https://platform.openai.com/docs/guides/realtime-vad
+        logger.info(
+            "🔇 Disabling turn_detection for greeting playback",
+            call_id=self._call_id
+        )
+        
+        # Send session.update to disable VAD temporarily
+        disable_vad_payload: Dict[str, Any] = {
+            "type": "session.update",
+            "event_id": f"sess-disable-vad-{uuid.uuid4()}",
+            "session": {
+                "turn_detection": None  # Disable automatic VAD
+            }
+        }
+        await self._send_json(disable_vad_payload)
+        
+        # Give a small delay for session update to take effect
+        await asyncio.sleep(0.05)
+
         # Map config modalities to output_modalities
         output_modalities = [m for m in (self.config.response_modalities or []) if m in ("audio", "text")] or ["audio"]
 
@@ -648,6 +767,54 @@ class OpenAIRealtimeProvider(AIProviderInterface):
 
         await self._send_json(response_payload)
         self._pending_response = True
+        
+        # Mark that we've sent a greeting - next response.created will be protected
+        logger.info(
+            "🛡️  Greeting sent with VAD disabled - will re-enable after completion",
+            call_id=self._call_id
+        )
+
+    async def _re_enable_vad(self):
+        """Re-enable turn_detection after greeting completes."""
+        if not self.websocket or self.websocket.closed:
+            return
+        
+        # Build turn_detection config from YAML or use OpenAI defaults
+        turn_detection_config = None
+        if getattr(self.config, "turn_detection", None):
+            try:
+                td = self.config.turn_detection
+                turn_detection_config = {
+                    "type": td.type,
+                    "silence_duration_ms": td.silence_duration_ms,
+                    "threshold": td.threshold,
+                    "prefix_padding_ms": td.prefix_padding_ms,
+                }
+            except Exception:
+                logger.debug("Failed to build turn_detection config, using OpenAI defaults", 
+                           call_id=self._call_id, exc_info=True)
+        
+        # If no config in YAML, let OpenAI use its defaults by not setting the field
+        # This is better than hardcoding default values
+        session_update = {}
+        if turn_detection_config:
+            session_update["turn_detection"] = turn_detection_config
+        else:
+            # Use OpenAI's default server_vad configuration
+            session_update["turn_detection"] = {"type": "server_vad"}
+        
+        enable_vad_payload: Dict[str, Any] = {
+            "type": "session.update",
+            "event_id": f"sess-enable-vad-{uuid.uuid4()}",
+            "session": session_update
+        }
+        
+        await self._send_json(enable_vad_payload)
+        logger.info(
+            "🔊 Turn_detection re-enabled after greeting",
+            call_id=self._call_id,
+            config=turn_detection_config if turn_detection_config else "OpenAI defaults"
+        )
 
     async def _ensure_response_request(self):
         if self._pending_response or not self.websocket or self.websocket.closed:
@@ -681,6 +848,39 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         message = json.dumps(payload)
         async with self._send_lock:
             await self.websocket.send(message)
+    
+    async def _cancel_response(self, response_id: str):
+        """
+        Cancel an in-progress response when user interrupts (barge-in).
+        
+        This implements the OpenAI Realtime API's response.cancel event,
+        which stops audio generation and discards remaining chunks when
+        the user starts speaking during an AI response.
+        
+        See: https://platform.openai.com/docs/api-reference/realtime-client-events/response/cancel
+        """
+        if not self.websocket or self.websocket.closed:
+            return
+        
+        try:
+            cancel_payload = {
+                "type": "response.cancel",
+                "event_id": f"cancel-{uuid.uuid4()}",
+                "response_id": response_id
+            }
+            await self._send_json(cancel_payload)
+            logger.debug(
+                "Sent response.cancel to OpenAI",
+                call_id=self._call_id,
+                response_id=response_id
+            )
+        except Exception:
+            logger.error(
+                "Failed to cancel OpenAI response",
+                call_id=self._call_id,
+                response_id=response_id,
+                exc_info=True
+            )
     
     async def _send_audio_to_openai(self, pcm16: bytes):
         """Helper method to send PCM16 audio to OpenAI (extracted for gating logic).
@@ -860,12 +1060,47 @@ class OpenAIRealtimeProvider(AIProviderInterface):
 
         # Log top-level error events with full payload to diagnose API contract issues
         if event_type == "error":
-            # Use 'error_event' key to avoid structlog 'event' argument conflict
+            error_code = event.get("error", {}).get("code")
+            
+            # Handle expected errors gracefully
+            if error_code == "response_cancel_not_active":
+                # Not an error - response already completed before cancellation
+                logger.debug(
+                    "Response already completed (cannot cancel)",
+                    call_id=self._call_id,
+                    response_id=self._current_response_id
+                )
+                return
+            
+            # Log other errors
             logger.error("OpenAI Realtime error event", call_id=self._call_id, error_event=event)
             return
 
         if event_type == "response.created":
-            logger.debug("OpenAI response created", call_id=self._call_id)
+            # Track response ID for potential cancellation on barge-in
+            response = event.get("response", {})
+            response_id = response.get("id")
+            if response_id:
+                self._current_response_id = response_id
+                
+                # Mark first response as greeting response (protected from barge-in)
+                if not self._greeting_completed and self._greeting_response_id is None:
+                    self._greeting_response_id = response_id
+                    logger.info(
+                        "🛡️  Greeting response created - protected from barge-in",
+                        call_id=self._call_id,
+                        response_id=response_id
+                    )
+                # Mark response as farewell if hangup was requested
+                elif self._hangup_after_response:
+                    self._farewell_response_id = response_id
+                    logger.info(
+                        "🔚 Farewell response created - will trigger hangup on completion",
+                        call_id=self._call_id,
+                        response_id=response_id
+                    )
+                else:
+                    logger.debug("OpenAI response created", call_id=self._call_id, response_id=response_id)
             return
 
         if event_type == "response.delta":
@@ -921,6 +1156,10 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             if self._in_audio_burst:
                 self._in_audio_burst = False
             
+            # NOTE: response.audio.done fires after EACH audio segment, not at end of response
+            # Do NOT re-enable VAD here - it will trigger too early!
+            # VAD re-enable handled in response.done event
+            
             await self._emit_audio_done()
             return
 
@@ -938,22 +1177,98 @@ class OpenAIRealtimeProvider(AIProviderInterface):
 
         if event_type == "response.audio_transcript.done":
             if self._transcript_buffer:
+                # Track assistant conversation for email tools
+                await self._track_conversation("assistant", self._transcript_buffer)
                 await self._emit_transcript("", is_final=True)
             return
 
         if event_type in ("response.completed", "response.error", "response.cancelled", "response.done"):
+            # Track if audio was emitted during this response
+            had_audio_burst = self._in_audio_burst
+            
             await self._emit_audio_done()
+            
+            # Only emit additional audio_done if this response actually had audio output
+            # This prevents premature hangup when tool responses complete (no audio yet)
+            # The farewell response will emit audio_done when IT completes with audio
+            if event_type in ("response.completed", "response.done") and not had_audio_burst:
+                logger.debug(
+                    "Response completed without audio output - no AgentAudioDone",
+                    call_id=self._call_id,
+                    event_type=event_type
+                )
+            
             if event_type == "response.error":
                 logger.error("OpenAI Realtime response error", call_id=self._call_id, error=event.get("error"))
+            elif event_type == "response.cancelled":
+                logger.info("OpenAI response cancelled (barge-in)", call_id=self._call_id, response_id=self._current_response_id)
+            
+            # Re-enable VAD when greeting response completes
+            # response.done fires when entire response is generated (not per-segment)
+            # This is the correct event to wait for, not response.audio.done (which fires per-segment)
+            if (self._current_response_id == self._greeting_response_id and 
+                not self._greeting_completed and 
+                event_type in ("response.completed", "response.done")):
+                self._greeting_completed = True
+                logger.info(
+                    "✅ Greeting response completed - re-enabling turn_detection",
+                    call_id=self._call_id,
+                    had_audio=had_audio_burst
+                )
+                # Re-enable turn_detection now that greeting is fully generated
+                await self._re_enable_vad()
+            
+            # Check if this was the farewell response
+            # CRITICAL: Check farewell_response_id is not None to prevent None == None false positive
+            if (self._farewell_response_id is not None and 
+                self._current_response_id == self._farewell_response_id and 
+                event_type in ("response.completed", "response.done")):
+                
+                # If farewell has no audio, warn but still proceed with hangup
+                if not had_audio_burst:
+                    logger.warning(
+                        "⚠️  Farewell response completed WITHOUT audio - OpenAI did not generate speech",
+                        call_id=self._call_id,
+                        response_id=self._current_response_id
+                    )
+                else:
+                    logger.info(
+                        "🔚 Farewell response completed with audio - triggering hangup",
+                        call_id=self._call_id,
+                        response_id=self._current_response_id
+                    )
+                
+                # Emit HangupReady event to trigger hangup in engine
+                # Engine will wait 1.0s to ensure any audio completes playing
+                try:
+                    if self.on_event:
+                        await self.on_event({
+                            "type": "HangupReady",
+                            "call_id": self._call_id,
+                            "reason": "farewell_completed",
+                            "had_audio": had_audio_burst
+                        })
+                except Exception as e:
+                    logger.error("Failed to emit HangupReady event", call_id=self._call_id, error=str(e))
+                
+                # Reset farewell tracking
+                self._farewell_response_id = None
+                self._hangup_after_response = False
+            
             self._pending_response = False
+            self._current_response_id = None  # Clear response ID after completion
             if self._transcript_buffer:
                 await self._emit_transcript("", is_final=True)
             return
 
         if event_type == "input_transcription.completed":
+            # Note: This event is NOT sent when server_vad is enabled
+            # OpenAI API limitation: transcription incompatible with turn_detection
             transcript = event.get("transcript")
             if transcript:
                 await self._emit_transcript(transcript, is_final=True)
+                # Track user conversation for email tools
+                await self._track_conversation("user", transcript)
             return
 
         if event_type == "response.output_text.delta":
@@ -965,7 +1280,24 @@ class OpenAIRealtimeProvider(AIProviderInterface):
 
         # Optional acks/telemetry for audio buffer operations
         if event_type and event_type.startswith("input_audio_buffer"):
-            logger.info("OpenAI input_audio_buffer ack", call_id=self._call_id, event_type=event_type)
+            # Handle barge-in: cancel ongoing response when user starts speaking
+            if event_type == "input_audio_buffer.speech_started" and self._current_response_id:
+                # Protect greeting response from barge-in cancellation
+                if self._current_response_id == self._greeting_response_id and not self._greeting_completed:
+                    logger.info(
+                        "🛡️  Barge-in blocked - protecting greeting response",
+                        call_id=self._call_id,
+                        response_id=self._current_response_id
+                    )
+                else:
+                    logger.info(
+                        "🎤 User interruption detected, cancelling response",
+                        call_id=self._call_id,
+                        response_id=self._current_response_id
+                    )
+                    await self._cancel_response(self._current_response_id)
+            else:
+                logger.info("OpenAI input_audio_buffer ack", call_id=self._call_id, event_type=event_type)
             return
 
         # Additional transcript variants per guide
@@ -982,6 +1314,8 @@ class OpenAIRealtimeProvider(AIProviderInterface):
 
         if event_type == "response.output_audio_transcript.done":
             if self._transcript_buffer:
+                # Track assistant conversation for email tools
+                await self._track_conversation("assistant", self._transcript_buffer)
                 await self._emit_transcript("", is_final=True)
             return
 
@@ -1025,6 +1359,23 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                     error=str(exc),
                     exc_info=True
                 )
+            return
+
+        # Handle function calls from response.output_item.done events
+        # This is the correct event per OpenAI Realtime API spec
+        if event_type == "response.output_item.done":
+            item = event.get("item", {})
+            if item.get("type") == "function_call":
+                call_id_field = item.get("call_id")
+                function_name = item.get("name")
+                logger.info(
+                    "📞 OpenAI function call detected",
+                    call_id=self._call_id,
+                    function_call_id=call_id_field,
+                    function_name=function_name,
+                )
+                # Handle function call via tool adapter
+                asyncio.create_task(self._handle_function_call(event))
             return
 
         logger.debug("Unhandled OpenAI Realtime event", event_type=event_type)
@@ -1210,6 +1561,65 @@ class OpenAIRealtimeProvider(AIProviderInterface):
 
         if is_final:
             self._transcript_buffer = ""
+
+    async def _track_conversation(self, role: str, text: str):
+        """Track conversation turns for email tools (similar to Deepgram implementation)."""
+        import time
+        
+        if not self._call_id or not text:
+            return
+        
+        if not hasattr(self, '_session_store') or not self._session_store:
+            logger.debug(
+                "⚠️ Session store not available for conversation tracking",
+                call_id=self._call_id,
+                role=role
+            )
+            return
+        
+        try:
+            session = await self._session_store.get_by_call_id(self._call_id)
+            if session:
+                # Add to conversation history
+                session.conversation_history.append({
+                    "role": role,  # "user" or "assistant"
+                    "content": text,
+                    "timestamp": time.time()
+                })
+                # Update session
+                await self._session_store.upsert_call(session)
+                logger.debug(
+                    "✅ Tracked conversation message",
+                    call_id=self._call_id,
+                    role=role,
+                    text_preview=text[:50] + "..." if len(text) > 50 else text
+                )
+                
+                # Fallback detection: Warn if AI naturally ends conversation without using hangup_call
+                if role == "assistant" and not self._hangup_after_response:
+                    text_lower = text.lower()
+                    ending_phrases = [
+                        "goodbye", "bye", "see you", "talk to you later", "take care",
+                        "have a great day", "have a good day", "have a nice day"
+                    ]
+                    if any(phrase in text_lower for phrase in ending_phrases):
+                        logger.warning(
+                            "⚠️  AI used farewell phrase without invoking hangup_call tool",
+                            call_id=self._call_id,
+                            text_preview=text[:100]
+                        )
+            else:
+                logger.warning(
+                    "⚠️ Session not found for conversation tracking",
+                    call_id=self._call_id
+                )
+        except Exception as e:
+            logger.error(
+                "❌ Failed to track conversation",
+                call_id=self._call_id,
+                error=str(e),
+                exc_info=True
+            )
 
     async def _keepalive_loop(self):
         try:
