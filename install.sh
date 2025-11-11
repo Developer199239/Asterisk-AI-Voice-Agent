@@ -359,40 +359,87 @@ set_performance_params_for_llm() {
 }
 
 wait_for_local_ai_health() {
-    print_info "Waiting for local-ai-server to become healthy (port 8765)..."
+    print_info "Waiting for local-ai-server to become ready (port 8765)..."
     echo ""
-    echo "⏳ First-run model download may take 15-20 minutes..."
+    echo "⏳ First-run model download may take 5-10 minutes..."
     echo "📋 Monitor progress in another terminal:"
-    echo "   $COMPOSE logs -f local-ai-server | head -200"
+    echo "   $COMPOSE logs -f local-ai-server | grep -E 'model|Server started'"
     echo ""
     
     # Ensure service started (build if needed)
     $COMPOSE up -d --build local-ai-server
     
-    # Up to ~20 minutes (120 * 10s)
-    for i in $(seq 1 120); do
-        status=$(docker inspect -f '{{.State.Health.Status}}' local_ai_server 2>/dev/null || echo "starting")
-        if [ "$status" = "healthy" ]; then
-            print_success "local-ai-server is healthy."
+    # Wait up to 10 minutes (60 iterations * 10s)
+    # We actively check if WebSocket is responding, not just Docker health status
+    local max_wait=60
+    local check_interval=10
+    
+    for i in $(seq 1 $max_wait); do
+        # Check 1: Is container running?
+        if ! docker ps --filter "name=local_ai_server" --filter "status=running" | grep -q "local_ai_server"; then
+            if (( i > 12 )); then  # Give it 2 minutes to start
+                print_error "Container local_ai_server not running after 2 minutes"
+                echo "Check logs: $COMPOSE logs local-ai-server"
+                return 1
+            fi
+            sleep $check_interval
+            continue
+        fi
+        
+        # Check 2: Are models loaded? (check logs for success message)
+        if docker logs local_ai_server 2>&1 | grep -q "Enhanced Local AI Server started on ws://"; then
+            print_success "✅ local-ai-server is ready and listening on port 8765"
+            print_info "Models loaded successfully (verified from logs)"
             return 0
         fi
-        if (( i % 6 == 0 )); then
-            print_info "Still waiting for local models to load (elapsed ~$((i/6*1)) min). This can take 15–20 minutes on first start..."
+        
+        # Check 3: Fallback to Docker health status (in case log format changed)
+        local status=$(docker inspect -f '{{.State.Health.Status}}' local_ai_server 2>/dev/null || echo "starting")
+        if [ "$status" = "healthy" ]; then
+            print_success "✅ local-ai-server is healthy (Docker health check passed)"
+            return 0
         fi
-        sleep 10
+        
+        # Progress indicator every minute
+        if (( i % 6 == 0 )); then
+            local elapsed=$((i * check_interval / 60))
+            print_info "Still waiting for models to load (elapsed ~${elapsed} min)..."
+            
+            # Show helpful hint about what's happening
+            if docker logs local_ai_server 2>&1 | tail -5 | grep -qi "loading"; then
+                print_info "   📥 Models are loading (check logs for progress)"
+            elif docker logs local_ai_server 2>&1 | tail -5 | grep -qi "error"; then
+                print_warning "   ⚠️  Possible error detected - check logs"
+            fi
+        fi
+        
+        sleep $check_interval
     done
     
-    # Timeout - provide helpful diagnostics
+    # Timeout after 10 minutes
     echo ""
-    print_warning "local-ai-server did not report healthy within ~20 minutes"
-    echo "❌ Health check timeout. Check logs for issues:"
-    echo "   $COMPOSE logs local-ai-server | grep -E 'model|error|ERROR'"
+    print_warning "⚠️  local-ai-server did not become ready within 10 minutes"
     echo ""
-    echo "Common causes:"
-    echo "  • Large model still downloading (check logs for progress)"
-    echo "  • Insufficient RAM (requires 8GB+)"
-    echo "  • Missing model files (run: make model-setup)"
+    echo "Last 20 log lines:"
+    docker logs local_ai_server 2>&1 | tail -20
     echo ""
+    echo "Common issues:"
+    echo "  • Models still downloading (first run: check models/ directory size)"
+    echo "  • Insufficient RAM (requires 8GB+, 16GB recommended)"
+    echo "  • Model files corrupted (rm -rf models/; re-run install.sh)"
+    echo ""
+    echo "Debug commands:"
+    echo "  $COMPOSE logs local-ai-server | grep -E 'model|error|ERROR'"
+    echo "  docker stats local_ai_server --no-stream"
+    echo "  du -sh models/*"
+    echo ""
+    
+    read -p "Continue anyway? [y/N]: " continue_anyway
+    if [[ "$continue_anyway" =~ ^[Yy]$ ]]; then
+        print_warning "Continuing without confirmed local-ai-server health..."
+        return 0
+    fi
+    
     return 1
 }
 
