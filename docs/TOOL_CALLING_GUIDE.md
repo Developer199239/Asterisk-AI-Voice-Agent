@@ -246,9 +246,40 @@ RESEND_API_KEY=re_xxxxxxxxxxxx
 
 For tools to work, you need proper FreePBX/Asterisk configuration.
 
-### 1. Create Virtual Extensions
+### 1. Create AI Agent Virtual Extension
 
-Tools like `transfer_call` need extensions to transfer to:
+**IMPORTANT**: The AI needs its own extension for CallerID when making transfers.
+
+**In FreePBX**:
+1. Navigate: **Applications → Extensions → Add Extension**
+2. Extension Type: **Virtual Extension** (no physical device needed)
+3. Configure:
+   - Extension Number: **6789** (or customize in `ai-agent.yaml`)
+   - Display Name: **AI Agent**
+   - User Extension: **No**
+   - Voicemail: **Disabled**
+
+**Why is this needed?**
+- When the AI transfers calls, it originates a new channel with this CallerID
+- Without a valid CallerID, transfers may show as "Anonymous" and get rejected
+- Agents see "AI Agent <6789>" on their phone display, identifying the transfer source
+
+**Customize in `config/ai-agent.yaml`**:
+```yaml
+tools:
+  ai_identity:
+    name: "AI Agent"    # Change display name
+    number: "6789"      # Change extension number (must match FreePBX)
+```
+
+**Verify in Asterisk**:
+```bash
+asterisk -rx "dialplan show 6789@from-internal"
+```
+
+### 2. Create Transfer Destination Extensions
+
+Tools like `transfer_call` need extensions to transfer **TO**:
 
 **In FreePBX**:
 1. Navigate: Applications → Extensions → Add Extension
@@ -268,7 +299,7 @@ Tools like `transfer_call` need extensions to transfer to:
 asterisk -rx "dialplan show 6000@from-internal"
 ```
 
-### 2. Basic Dialplan (No Tools)
+### 3. Basic Dialplan (No Tools)
 
 ```asterisk
 [from-ai-agent]
@@ -277,7 +308,7 @@ exten => s,1,NoOp(AI Agent - Basic)
  same => n,Hangup()
 ```
 
-### 3. Dialplan with Context Selection
+### 4. Dialplan with Context Selection
 
 ```asterisk
 [from-ai-agent-support]
@@ -294,7 +325,7 @@ exten => s,1,NoOp(AI Agent - Sales Line)
  same => n,Hangup()
 ```
 
-### 4. Channel Variables
+### 5. Channel Variables
 
 | Variable | Description | Example |
 |----------|-------------|---------|
