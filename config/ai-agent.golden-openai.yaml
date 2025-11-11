@@ -21,114 +21,168 @@
 # For detailed parameter explanations, see: docs/Configuration-Reference.md
 # ═══════════════════════════════════════════════════════════════════════════
 
-# Provider Selection
-# The monolithic provider to use for this configuration
-default_provider: "openai_realtime"
+# Active Configuration
+config_version: 4
+active_pipeline: local_hybrid  # Don't change - uses provider override via contexts
+default_provider: openai_realtime
 
-# Audio Transport
-# "audiosocket" = TCP-based full-duplex audio (recommended for OpenAI)
-# "externalmedia" = RTP-based audio transport (also works)
-audio_transport: "audiosocket"
+# Audio Transport - AudioSocket for OpenAI Realtime
+audio_transport: audiosocket
+audiosocket:
+  format: slin
+  host: 0.0.0.0
+  port: 8090
 
 # Playback Mode
-# "stream" = Real-time streaming playback (low latency, best UX)
-# "file" = File-based playback (higher latency, more robust for debugging)
-downstream_mode: "stream"
+downstream_mode: stream
 
-# AudioSocket Configuration
-# TCP listener for bidirectional audio from Asterisk
-audiosocket:
-  host: "0.0.0.0"              # Bind to all interfaces
-  port: 8090                    # Standard AudioSocket port
-  format: "ulaw"                # Audio format: ulaw (8kHz telephony standard)
+# Contexts - Use demo_openai context to activate OpenAI Realtime
+contexts:
+  default:
+    greeting: Hello, I am a Voice Assistant. How can I help you today?
+    profile: openai_realtime_24k
+    prompt: You are a concise voice assistant. Respond clearly and keep answers under 20 words unless more detail is requested.
+    provider: openai_realtime
+  demo_openai:
+    greeting: "Hi! I'm Ava running on OpenAI Realtime API. I'm fast and natural-sounding. What would you like to know about this project?"
+    prompt: "You are Ava (Asterisk Voice Agent) demonstrating OpenAI Realtime. Be helpful, conversational, and explain features clearly in 5-10 sentences."
+    profile: openai_realtime_24k
+    provider: openai_realtime
 
-# Barge-In (Interrupt Handling)
-# Controls when user speech can interrupt AI responses
+# Barge-In - Enable for natural interruption
 barge_in:
-  enabled: true                             # Enable interruption detection
-  initial_protection_ms: 200                # Protect first 200ms of greeting from echo
-                                            # Range: 100-600ms. Higher = less echo sensitivity
-  min_ms: 250                               # Minimum sustained speech to trigger interrupt
-                                            # Range: 200-500ms. Lower = more responsive, more false triggers
-  energy_threshold: 1200                    # RMS energy threshold for speech detection
-                                            # Range: 800-2500. Lower = more sensitive, more false positives
-  cooldown_ms: 500                          # Ignore new interrupts for this duration after one triggers
-                                            # Range: 300-1500ms. Prevents rapid re-triggering
-  post_tts_end_protection_ms: 100           # Guard time after AI finishes speaking
-                                            # Range: 50-300ms. Prevents clipping start of user's response
+  enabled: true
+  energy_threshold: 700
+  initial_protection_ms: 100
+  min_ms: 150
+  post_tts_end_protection_ms: 100
+
+# VAD Configuration
+vad:
+  enhanced_enabled: true
+  fallback_buffer_size: 128000
+  fallback_enabled: true
+  fallback_interval_ms: 4000
+  max_utterance_duration_ms: 10000
+  min_utterance_duration_ms: 600
+  use_provider_vad: false
+  utterance_padding_ms: 200
+  webrtc_aggressiveness: 1
+  webrtc_end_silence_frames: 50
+  webrtc_start_frames: 3
 
 # Streaming Configuration
-# Controls real-time audio streaming behavior (downstream_mode: "stream")
 streaming:
-  sample_rate: 8000                         # Output sample rate (8kHz = telephony standard)
-  jitter_buffer_ms: 100                     # Buffer size for network jitter tolerance
-                                            # Range: 60-200ms. Higher = more robust, slightly higher latency
-  keepalive_interval_ms: 5000               # TCP keepalive interval
-  connection_timeout_ms: 10000              # Max time to wait for connection
-  fallback_timeout_ms: 8000                 # No audio for this long = fallback to file playback
-  chunk_size_ms: 20                         # Audio chunk duration (20ms = telephony standard)
-  min_start_ms: 300                         # Warm-up buffer before first audio frame
-                                            # Range: 200-500ms. Higher = fewer underruns, slightly higher latency
-  low_watermark_ms: 200                     # Minimum buffer level before refilling
-                                            # Range: 100-300ms. Higher = more robust to jitter
-  provider_grace_ms: 500                    # Tolerance for late provider chunks
-  logging_level: "info"                     # Logging verbosity: debug, info, warning, error
+  chunk_size_ms: 20
+  connection_timeout_ms: 120000
+  continuous_stream: true
+  empty_backoff_ticks_max: 5
+  fallback_timeout_ms: 8000
+  greeting_min_start_ms: 40
+  jitter_buffer_ms: 950
+  keepalive_interval_ms: 5000
+  low_watermark_ms: 80
+  min_start_ms: 120
+  normalizer:
+    enabled: true
+    max_gain_db: 18.0
+    target_rms: 1400
+  provider_grace_ms: 500
+  sample_rate: 8000
 
-# Provider Configuration
-# OpenAI Realtime API settings
+# Audio Profiles - openai_realtime_24k for native 24kHz audio
+profiles:
+  default: telephony_responsive
+  openai_realtime_24k:
+    chunk_ms: 20
+    idle_cutoff_ms: 0
+    internal_rate_hz: 24000
+    provider_pref:
+      input_encoding: pcm16
+      input_sample_rate_hz: 24000
+      output_encoding: pcm16
+      output_sample_rate_hz: 24000
+    transport_out:
+      encoding: slin
+      sample_rate_hz: 8000
+  telephony_responsive:
+    chunk_ms: auto
+    idle_cutoff_ms: 600
+    internal_rate_hz: 8000
+    provider_pref:
+      input_encoding: mulaw
+      input_sample_rate_hz: 8000
+      output_encoding: mulaw
+      output_sample_rate_hz: 8000
+    transport_out:
+      encoding: slin
+      sample_rate_hz: 8000
+
+# Provider Configuration - OpenAI Realtime
 providers:
   openai_realtime:
-    enabled: true                                                  # Enable this provider
-    api_key: "${OPENAI_API_KEY}"                                   # API key from .env (NEVER hardcode!)
-    model: "gpt-4o-realtime-preview-2024-12-17"                   # OpenAI Realtime model
-                                                                   # Options: gpt-4o-realtime-preview-*
-    voice: "alloy"                                                 # Voice personality
-                                                                   # Options: alloy, echo, fable, onyx, nova, shimmer
-    base_url: "wss://api.openai.com/v1/realtime"                  # API endpoint (don't change)
-    instructions: "You are a concise voice assistant. Respond clearly and keep answers under 20 words unless more detail is requested."
-                                                                   # AI persona/behavior instructions
-                                                                   # Override: Set AI_PERSONA channel variable in dialplan
-    organization: ""                                               # OpenAI organization ID (optional)
-    
-    # Audio Format Configuration
-    input_encoding: "ulaw"                                         # Format from Asterisk (ulaw = telephony standard)
-    input_sample_rate_hz: 8000                                     # Sample rate from Asterisk
-    provider_input_sample_rate_hz: 16000                           # What OpenAI expects (engine resamples)
-    output_encoding: "linear16"                                    # OpenAI's output format (PCM16)
-    output_sample_rate_hz: 24000                                   # OpenAI's output rate (high quality)
-    target_encoding: "ulaw"                                        # Format to Asterisk (engine resamples)
-    target_sample_rate_hz: 8000                                    # Sample rate to Asterisk
-    
-    # Response Configuration
-    response_modalities:                                           # What OpenAI should return
-      - "audio"                                                    # Voice responses (required)
-      - "text"                                                     # Text transcripts (optional, for logging)
-    
-    greeting: "${OPENAI_GREETING:-Hello, I am a Voice Assistant. How can I help you today?}"
-                                                                   # Initial greeting
-                                                                   # Can override with OPENAI_GREETING env var
-                                                                   # Can override per-call with AI_GREETING channel variable
-    
-    # Turn Detection (OpenAI Server-Side VAD)
-    # CRITICAL: OpenAI has built-in VAD that works better than local VAD for this provider
+    base_url: wss://api.openai.com/v1/realtime
+    egress_pacer_enabled: true
+    egress_pacer_warmup_ms: 320
+    enabled: true
+    greeting: ${OPENAI_GREETING:-Hello, how can I help you today?}
+    input_encoding: ulaw
+    input_sample_rate_hz: 8000
+    instructions: You are a concise voice assistant. Respond clearly and keep answers under 20 words unless more detail is requested.
+    model: gpt-4o-realtime-preview-2024-12-17
+    organization: ''
+    output_encoding: linear16
+    output_sample_rate_hz: 24000
+    provider_input_encoding: linear16
+    provider_input_sample_rate_hz: 24000
+    response_modalities:
+    - audio
+    - text
+    target_encoding: mulaw
+    target_sample_rate_hz: 8000
     turn_detection:
-      type: "server_vad"                                           # Use OpenAI's server-side VAD (recommended)
-      silence_duration_ms: 300                                     # How long silence = end of turn
-                                                                   # Range: 200-800ms. Lower = more responsive
-      threshold: 0.5                                               # Speech detection sensitivity
-                                                                   # Range: 0.0-1.0. Lower = more sensitive
-      prefix_padding_ms: 200                                       # Include audio before detected speech
-                                                                   # Range: 100-500ms. Prevents word clipping
+      create_response: true
+      prefix_padding_ms: 200
+      silence_duration_ms: 200
+      threshold: 0.5
+      type: server_vad
+    voice: alloy
 
-  # Local AI Server (not used in this configuration)
-  local:
-    enabled: false                                                 # Disabled for cloud-only OpenAI config
-
-# LLM Configuration (Fallback/Default)
-# These settings are used when providers don't specify their own
+# LLM Fallback Configuration
 llm:
-  initial_greeting: "Hello I am an AI assistant for Jugaar LLC, How can I help you today?"
-                                                                   # Default greeting (overridden by provider.greeting)
-  prompt: "You are a concise and helpful voice assistant.Keep your answers under 20 words or less."
-                                                                   # Default persona (overridden by provider.instructions)
-  model: "gpt-4o"                                                  # Default model (not used by OpenAI Realtime)
+  initial_greeting: Hello, how can I help you today?
+  prompt: Voice assistant. Answer in 5-8 words. Be direct. Expand only if asked.
+
+# Pipelines - Required but not used by monolithic OpenAI provider
+pipelines:
+  local_hybrid:
+    llm: openai_llm
+    options:
+      llm:
+        base_url: https://api.openai.com/v1
+        max_tokens: 150
+        model: gpt-4o-mini
+        temperature: 0.7
+      stt:
+        chunk_ms: 160
+        mode: stt
+        stream_format: pcm16_16k
+        streaming: true
+      tts:
+        format:
+          encoding: mulaw
+          sample_rate: 8000
+    stt: local_stt
+    tts: local_tts
+
+# Asterisk Configuration
+asterisk:
+  app_name: asterisk-ai-voice-agent
+
+# ExternalMedia (not used by AudioSocket, but required by config schema)
+external_media:
+  codec: ulaw
+  direction: both
+  port_range: 18080:18099
+  rtp_host: 0.0.0.0
+  rtp_port: 18080
