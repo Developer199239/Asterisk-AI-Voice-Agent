@@ -209,11 +209,15 @@ update_yaml_llm() {
         GREETING="${GREETING}"
         AI_ROLE="${AI_ROLE}"
         export GREETING AI_ROLE
-        if yq -i '.llm.initial_greeting = env(GREETING) | .llm.prompt = env(AI_ROLE) | (.llm.model //= "gpt-4o")' "$CFG_DST"; then
+        
+        # Update fields separately for better error handling
+        if yq -i '.llm.initial_greeting = env(GREETING)' "$CFG_DST" 2>/dev/null && \
+           yq -i '.llm.prompt = env(AI_ROLE)' "$CFG_DST" 2>/dev/null && \
+           yq -i '.llm.model //= "gpt-4o"' "$CFG_DST" 2>/dev/null; then
             print_success "Updated llm.* in $CFG_DST via yq."
             return 0
         else
-            print_warning "yq update failed; falling back to append llm block."
+            print_warning "yq update failed (check yq version >= 4.x). Using fallback method..."
         fi
     fi
     # Fallback: append an llm block at end (last key wins in PyYAML)
@@ -440,15 +444,13 @@ configure_env() {
         ASTERISK_ARI_PASSWORD="$ASTERISK_ARI_PASSWORD_DEFAULT"
     fi
 
-    # API Keys (optional; blank keeps existing)
-    read -p "Enter your OpenAI API Key (leave blank to keep existing): " OPENAI_API_KEY_INPUT
-    read -p "Enter your Deepgram API Key (leave blank to keep existing): " DEEPGRAM_API_KEY_INPUT
-
+    # API Keys are now handled by prompt_required_api_keys() based on chosen provider
+    # This avoids duplicate prompts and only asks for what's needed
+    
     upsert_env ASTERISK_HOST "$ASTERISK_HOST"
     upsert_env ASTERISK_ARI_USERNAME "$ASTERISK_ARI_USERNAME"
     upsert_env ASTERISK_ARI_PASSWORD "$ASTERISK_ARI_PASSWORD"
-    if [ -n "$OPENAI_API_KEY_INPUT" ]; then upsert_env OPENAI_API_KEY "$OPENAI_API_KEY_INPUT"; fi
-    if [ -n "$DEEPGRAM_API_KEY_INPUT" ]; then upsert_env DEEPGRAM_API_KEY "$DEEPGRAM_API_KEY_INPUT"; fi
+    # API keys are now set by prompt_required_api_keys() after provider selection
 
     # Greeting and AI Role prompts (idempotent; prefill from .env if present)
     local GREETING_DEFAULT AI_ROLE_DEFAULT
