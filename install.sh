@@ -367,12 +367,17 @@ wait_for_local_ai_health() {
     echo ""
     
     # Ensure service started (build if needed)
+    print_info "Starting local-ai-server container..."
     $COMPOSE up -d --build local-ai-server
+    echo ""
     
     # Wait up to 10 minutes (60 iterations * 10s)
     # We actively check if WebSocket is responding, not just Docker health status
     local max_wait=60
     local check_interval=10
+    
+    print_info "🔍 Checking local AI server status..."
+    echo ""
     
     for i in $(seq 1 $max_wait); do
         # Check 1: Is container running?
@@ -382,12 +387,15 @@ wait_for_local_ai_health() {
                 echo "Check logs: $COMPOSE logs local-ai-server"
                 return 1
             fi
+            echo -n "⏳ Waiting for container to start... (${i}0s)"
+            echo -ne "\r"
             sleep $check_interval
             continue
         fi
         
         # Check 2: Are models loaded? (check logs for success message)
         if docker logs local_ai_server 2>&1 | grep -q "Enhanced Local AI Server started on ws://"; then
+            echo ""  # Clear the progress line
             print_success "✅ local-ai-server is ready and listening on port 8765"
             print_info "Models loaded successfully (verified from logs)"
             return 0
@@ -396,21 +404,34 @@ wait_for_local_ai_health() {
         # Check 3: Fallback to Docker health status (in case log format changed)
         local status=$(docker inspect -f '{{.State.Health.Status}}' local_ai_server 2>/dev/null || echo "starting")
         if [ "$status" = "healthy" ]; then
+            echo ""  # Clear the progress line
             print_success "✅ local-ai-server is healthy (Docker health check passed)"
             return 0
         fi
         
-        # Progress indicator every minute
+        # Show progress every iteration (every 10s) with live log hints
+        local elapsed=$((i * check_interval))
+        local last_log=$(docker logs local_ai_server 2>&1 | tail -1 | cut -c1-80)
+        
+        if docker logs local_ai_server 2>&1 | tail -3 | grep -qi "loading\|model"; then
+            echo -n "📥 Loading models... (${elapsed}s) - $(echo "$last_log" | grep -o "model\|STT\|LLM\|TTS" | head -1)"
+        elif docker logs local_ai_server 2>&1 | tail -3 | grep -qi "error"; then
+            echo -n "⚠️  Checking status... (${elapsed}s) - check logs for errors"
+        else
+            echo -n "⏳ Waiting for models to load... (${elapsed}s)"
+        fi
+        echo -ne "\r"
+        
+        # Detailed progress every minute
         if (( i % 6 == 0 )); then
-            local elapsed=$((i * check_interval / 60))
-            print_info "Still waiting for models to load (elapsed ~${elapsed} min)..."
+            echo ""  # New line for cleaner output
+            local elapsed_min=$((elapsed / 60))
+            print_info "Still waiting (${elapsed_min} min elapsed)..."
             
-            # Show helpful hint about what's happening
-            if docker logs local_ai_server 2>&1 | tail -5 | grep -qi "loading"; then
-                print_info "   📥 Models are loading (check logs for progress)"
-            elif docker logs local_ai_server 2>&1 | tail -5 | grep -qi "error"; then
-                print_warning "   ⚠️  Possible error detected - check logs"
-            fi
+            # Show last few log lines for context
+            echo "   Recent activity:"
+            docker logs local_ai_server 2>&1 | tail -3 | sed 's/^/   /' | cut -c1-100
+            echo ""
         fi
         
         sleep $check_interval
@@ -522,10 +543,11 @@ configure_env() {
     upsert_env GREETING "\"$G_ESC\""
     upsert_env AI_ROLE "\"$R_ESC\""
     
-    # Set proper default logging levels
+    # Set proper default logging levels (console with colors for better out-of-box UX)
     upsert_env LOG_LEVEL "info"
     upsert_env STREAMING_LOG_LEVEL "info"
-    upsert_env LOG_FORMAT "json"
+    upsert_env LOG_FORMAT "console"
+    upsert_env LOG_COLOR "1"
 
     # Clean sed backup if created
     [ -f .env.bak ] && rm -f .env.bak || true
