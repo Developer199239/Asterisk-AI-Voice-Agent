@@ -467,7 +467,6 @@ tools:
     number: "6789"            # Virtual extension number for AI system
   
   # Default settings for agent actions
-  default_action_context: "agent-outbound"
   default_action_timeout: 30
   
   # Extension directory - internal extensions for transfers
@@ -479,7 +478,6 @@ tools:
         aliases: ["agent", "representative", "human", "real person", "live person", "someone", "support", "sales", "operator", "help desk"]
         transfer: true
         dial_string: "SIP/6000"
-        context: "agent-outbound"      # Generic agent-outbound context
         action_type: "transfer"         # Warm transfer to human
         mode: "warm"                    # Announce caller info first
         timeout: 30

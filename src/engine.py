@@ -1364,7 +1364,10 @@ class Engine:
 
     async def _handle_agent_action_stasis(self, channel_id: str, channel: dict, args: list):
         """
-        Handle agent action channels entering Stasis (from agent-outbound dialplan).
+        Handle agent action channels entering Stasis (direct SIP origination via ARI).
+        
+        Channels enter Stasis directly when originated by tool execution (e.g., transfer_call).
+        NO dialplan context is used - channels are originated with app="asterisk-ai-voice-agent".
         
         Args:
             channel_id: Channel that entered Stasis

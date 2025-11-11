@@ -160,7 +160,6 @@ class TransferCallTool(Tool):
                 'extension': target,
                 'name': ext_config.get('name', target),
                 'dial_string': ext_config.get('dial_string', f"PJSIP/{target}"),
-                'context': ext_config.get('context', 'agent-outbound'),
                 'action_type': ext_config.get('action_type', 'transfer'),
                 'mode': ext_config.get('mode', 'warm'),
                 'timeout': ext_config.get('timeout', 30),
@@ -178,7 +177,6 @@ class TransferCallTool(Tool):
                     'extension': ext_num,
                     'name': ext_config.get('name', ext_num),
                     'dial_string': ext_config.get('dial_string', f"PJSIP/{ext_num}"),
-                    'context': ext_config.get('context', 'agent-outbound'),
                     'action_type': ext_config.get('action_type', 'transfer'),
                     'mode': ext_config.get('mode', 'warm'),
                     'timeout': ext_config.get('timeout', 30),
@@ -194,7 +192,6 @@ class TransferCallTool(Tool):
                     'extension': ext_num,
                     'name': ext_config.get('name', ext_num),
                     'dial_string': ext_config.get('dial_string', f"PJSIP/{ext_num}"),
-                    'context': ext_config.get('context', 'agent-outbound'),
                     'action_type': ext_config.get('action_type', 'transfer'),
                     'mode': ext_config.get('mode', 'warm'),
                     'timeout': ext_config.get('timeout', 30),
@@ -214,11 +211,21 @@ class TransferCallTool(Tool):
         context: ToolExecutionContext
     ) -> Dict[str, Any]:
         """
-        Execute warm transfer using generic agent-outbound context.
+        Execute warm transfer using direct SIP origination via ARI.
+        
+        Workflow:
+        1. Resolve target to extension
+        2. Validate target is allowed
+        3. Start hold music for caller
+        4. Originate call to target
+        5. Wait for target to answer
+        6. Add target to bridge
+        7. Stop hold music
+        8. Return success (AI will announce)
         
         Args:
             extension: Target extension number
-            dial_string: Full dial string (e.g., "PJSIP/2765")
+            dial_string: Full dial string
             extension_info: Extension configuration
             context: Execution context
         
@@ -252,7 +259,6 @@ class TransferCallTool(Tool):
             'target_name': extension_info['name'],
             'dial_string': dial_string,
             'action_type': extension_info.get('action_type', 'transfer'),
-            'context': extension_info.get('context', 'agent-outbound'),
             'timeout': extension_info.get('timeout', 30),
             'started_at': time.time(),
             'channel_id': None  # Will be filled when channel is originated
@@ -262,12 +268,12 @@ class TransferCallTool(Tool):
         session.transfer_context = transfer_context
         await context.session_store.upsert_call(session)
         
-        # 4. Originate via generic agent-outbound context
+        # 4. Originate via direct SIP (no dialplan context)
         result = await self._originate_to_agent_outbound(
             target=extension,
             dial_string=dial_string,
             action_type=extension_info.get('action_type', 'transfer'),
-            context_name=extension_info.get('context', 'agent-outbound'),
+            context_name=None,  # Not used - direct SIP origination
             session=session,
             transfer_context=transfer_context,
             timeout=extension_info.get('timeout', 30),
@@ -386,19 +392,19 @@ class TransferCallTool(Tool):
         target: str,
         dial_string: str,
         action_type: str,
-        context_name: str,
+        context_name: str,  # Kept for signature compatibility but not used
         session,
         transfer_context: Dict[str, Any],
         timeout: int,
         context: ToolExecutionContext
     ) -> Optional[Dict[str, Any]]:
         """
-        Originate call via generic agent-outbound context.
+        Originate call via direct SIP endpoint (ARI-based, no dialplan).
         
-        The dialplan will:
-        1. Dial the target
-        2. On answer, enter Stasis with action type
-        3. Engine handles bridging
+        Process:
+        1. ARI originates direct SIP channel (e.g., SIP/6000)
+        2. On answer, channel enters Stasis with app args
+        3. Engine receives StasisStart event and handles bridging
         
         Args:
             target: Extension to dial
@@ -500,4 +506,4 @@ class TransferCallTool(Tool):
             logger.warning(f"Failed to stop MOH: {e}")
     
     # Note: Old _originate_call and _wait_for_answer methods removed
-    # New approach uses generic agent-outbound context with event-driven answer detection
+    # New approach uses direct SIP origination via ARI with event-driven answer detection
