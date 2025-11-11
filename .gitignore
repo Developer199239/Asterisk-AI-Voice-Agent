@@ -242,3 +242,4 @@ COMPLETE_*.md
 
 # Dialplan test/debug files (keep in archived/, never commit)
 dialplan_*.conf
+PRE_MERGE_CHECKLIST.md
