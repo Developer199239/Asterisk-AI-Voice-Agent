@@ -25,6 +25,12 @@ jobs:
         with:
           go-version: '1.21'
       
+      - name: Download Go dependencies
+        run: |
+          cd cli
+          go mod download
+          go mod verify
+      
       - name: Get version from tag
         id: get_version
         run: |
