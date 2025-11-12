@@ -62,12 +62,10 @@ python3 scripts/test_externalmedia_deployment.py
 
 Test coverage is enforced via GitHub Actions (`.github/workflows/ci.yml`):
 
-- **Current Coverage**: 27% (telephony tests only)
-- **Enforced Threshold**: 27% (until email tool mocks fixed)
-- **Target Coverage**: 40%+ (with all tool tests)
+- **Current Coverage**: ~30% (telephony + email tool tests)
+- **Enforced Threshold**: 30%
+- **Target Coverage**: 40%+
 - **Coverage Reports**: HTML, XML, and JSON reports uploaded as GitHub Actions artifacts
-
-**Note**: Email tool tests (`test_request_transcript_tool.py`) are currently excluded from CI due to mock configuration issues. They are included in the repository for future use once mocks are corrected.
 
 ## Coverage Targets
 
@@ -79,7 +77,7 @@ Test coverage is enforced via GitHub Actions (`.github/workflows/ci.yml`):
 | `src/engine.py` | ~15% | 30% | 🟢 |
 | `src/providers/` | ~20% | 35% | 🟢 |
 
-**Overall**: 27% enforced (telephony only), 40%+ target (all tools)
+**Overall**: 30%+ enforced, 40%+ target
 
 ## Test Quality Standards
 

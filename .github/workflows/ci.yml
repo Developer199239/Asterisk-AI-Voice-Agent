@@ -36,16 +36,15 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}
         run: |
           pytest -v \
-            -k "not integration and not test_deepgram_stt_adapter_transcribes and not test_resolve_stream_targets and not test_output_rate_drift_adjusts_active_rate and not test_session_requests_g711_when_target_mulaw and not test_request_transcript" \
+            -k "not integration and not test_deepgram_stt_adapter_transcribes and not test_resolve_stream_targets and not test_output_rate_drift_adjusts_active_rate and not test_session_requests_g711_when_target_mulaw" \
             --cov=src \
             --cov-report=term-missing \
             --cov-report=xml \
             --cov-report=html \
             --cov-report=json \
-            --cov-fail-under=27 \
+            --cov-fail-under=30 \
             --maxfail=10 \
             --tb=short
-          # TODO: Fix email tool mocks and raise threshold to 40%
 
       - name: Upload coverage reports
         uses: actions/upload-artifact@v4
@@ -63,9 +62,9 @@ jobs:
           if [ -f coverage.json ]; then
             COVERAGE=$(python3 -c "import json; print(f\"{json.load(open('coverage.json'))['totals']['percent_covered']:.2f}\")")
             echo "📊 **Test Coverage: ${COVERAGE}%**" >> $GITHUB_STEP_SUMMARY
-            echo "⚠️ Threshold: 27% (telephony tests only)" >> $GITHUB_STEP_SUMMARY
-            echo "🎯 Target: 40% (after email tool mocks fixed)" >> $GITHUB_STEP_SUMMARY
-            if (( $(echo "$COVERAGE >= 27" | bc -l) )); then
+            echo "✅ Threshold: 30% minimum" >> $GITHUB_STEP_SUMMARY
+            echo "🎯 Target: 40%" >> $GITHUB_STEP_SUMMARY
+            if (( $(echo "$COVERAGE >= 30" | bc -l) )); then
               echo "✓ Coverage meets threshold" >> $GITHUB_STEP_SUMMARY
             else
               echo "✗ Coverage below threshold" >> $GITHUB_STEP_SUMMARY
