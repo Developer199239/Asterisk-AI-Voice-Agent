@@ -11,7 +11,7 @@ This document explains the test layout and how to run tests locally and on a ser
   - `tests/test_session_store.py`
   - `tests/tools/` - Tool system tests (NEW - v4.1)
     - `tests/tools/telephony/` - Transfer, hangup, cancel transfer (58 tests)
-    - `tests/tools/business/` - Email transcript, summary (28+ tests)
+    - `tests/tools/business/` - Email transcript + summary (53 tests)
 - `scripts/test_externalmedia_call.py`: Health-driven end-to-end call flow check
 - `scripts/test_externalmedia_deployment.py`: ARI + RTP deployment sanity
 - `local_ai_server/test_local_ai_server.py`: Local AI server smoke test (optional)
@@ -62,7 +62,7 @@ python3 scripts/test_externalmedia_deployment.py
 
 Test coverage is enforced via GitHub Actions (`.github/workflows/ci.yml`):
 
-- **Current Coverage**: 27.18% (86 tool tests passing)
+- **Current Coverage**: ~28-29% (111 tool tests)
 - **Enforced Threshold**: 27% (current baseline)
 - **Next Target**: 30% (need more tests)
 - **Ultimate Target**: 40%+
@@ -71,8 +71,10 @@ Test coverage is enforced via GitHub Actions (`.github/workflows/ci.yml`):
 **Test Stats**:
 
 - 58 telephony tool tests ✅
-- 28 email tool tests ✅
-- Total: 86 tests, 251 overall tests passing
+- 28 email transcript tool tests ✅
+- 25 email summary tool tests ✅
+- **Total Tool Tests: 111**
+- **Overall Tests Passing: ~276**
 
 ## Coverage Targets
 
