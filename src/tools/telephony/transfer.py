@@ -317,6 +317,7 @@ class TransferCallTool(Tool):
         self,
         extension: str,
         dial_string: str,
+        extension_info: Dict[str, Any],
         context: ToolExecutionContext
     ) -> Dict[str, Any]:
         """
@@ -325,6 +326,7 @@ class TransferCallTool(Tool):
         Args:
             extension: Target extension number
             dial_string: Full dial string
+            extension_info: Extension configuration
             context: Execution context
         
         Returns:
@@ -350,7 +352,8 @@ class TransferCallTool(Tool):
                 "status": "success",
                 "message": f"Transferring you now.",
                 "extension": extension,
-                "transfer_mode": "blind"
+                "transfer_mode": "blind",
+                "target_name": extension_info['name']
             }
         else:
             logger.error(f"Blind transfer failed: {result}")

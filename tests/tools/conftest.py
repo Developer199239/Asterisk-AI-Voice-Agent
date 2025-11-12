@@ -25,12 +25,21 @@ def mock_ari_client():
     client = AsyncMock()
     
     # Channel origination (returns channel dict)
-    client.send_command = AsyncMock(return_value={
-        "id": "SIP/6000-00000001",
-        "state": "Ring",
-        "caller": {"number": "6789", "name": "AI Agent"},
-        "connected": {"number": "6000"}
-    })
+    # Also handles blind transfer redirect (returns status 204)
+    async def send_command_mock(method, resource, data=None, params=None):
+        if method == "POST" and "redirect" in resource:
+            # Blind transfer redirect
+            return {"status": 204}
+        else:
+            # Channel origination
+            return {
+                "id": "SIP/6000-00000001",
+                "state": "Ring",
+                "caller": {"number": "6789", "name": "AI Agent"},
+                "connected": {"number": "6000"}
+            }
+    
+    client.send_command = AsyncMock(side_effect=send_command_mock)
     
     # Channel hangup
     client.hangup_channel = AsyncMock()
@@ -124,6 +133,14 @@ def tool_config():
                         "dial_string": "SIP/6000",
                         "action_type": "transfer",
                         "mode": "warm",
+                        "timeout": 30
+                    },
+                    "7000": {
+                        "name": "Blind Transfer Test",
+                        "aliases": ["blind"],
+                        "dial_string": "SIP/7000",
+                        "action_type": "transfer",
+                        "mode": "blind",
                         "timeout": 30
                     },
                     "6001": {
