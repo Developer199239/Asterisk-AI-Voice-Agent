@@ -268,7 +268,49 @@ Each milestone includes scope, implementation details, and verification criteria
 
 ---
 
-## Milestone 15 — Monitoring, Feedback & Guided Setup (Planned)
+## Milestone 16 — Tool Testing & Quality Assurance (✅ Completed Nov 12, 2025)
+
+- **Goal**: Establish comprehensive test coverage for tool calling system with automated CI/CD enforcement to protect critical features and enable confident iteration.
+- **What We Shipped**:
+  - **Test Suite** (2,400 lines across 5 files):
+    - 58 telephony tool tests (transfer, hangup, cancel_transfer)
+    - 53 business tool tests (request_transcript, send_email_summary)
+    - Total: 111 tool-specific tests
+  - **Test Infrastructure**:
+    - Shared pytest fixtures in `tests/tools/conftest.py`
+    - Mock ARI client, SessionStore, Resend, DNS resolver
+    - Async test patterns for background email sending
+  - **CI/CD Integration**:
+    - GitHub Actions enforcing 27% coverage threshold
+    - Automated test runs on every push (~27 seconds)
+    - Coverage reports (HTML, XML, JSON) uploaded as artifacts
+  - **Bug Discovery**: Found and fixed blind transfer parameter bug during test development
+  - **Coverage Impact**: 20% → 28-29% (+8.5% increase)
+- **Test Coverage by Tool**:
+  - `TransferCallTool`: 23 tests (warm/blind modes, extension resolution, error handling)
+  - `HangupCallTool`: 17 tests (farewell messages, session cleanup)
+  - `CancelTransferTool`: 18 tests (in-progress cancellation, state validation)
+  - `RequestTranscriptTool`: 28 tests (email parsing, DNS validation, async sending)
+  - `SendEmailSummaryTool`: 25 tests (auto-triggered, duration formatting, HTML templates)
+- **Verification (2025-11-12)**:
+  - All 276 tests passing in CI
+  - Coverage: 27.18% (meets 27% threshold)
+  - Test execution time: ~27 seconds
+  - Email async behavior validated and documented
+- **Acceptance**:
+  - All tool execution paths tested in isolation
+  - Error handling validated for edge cases
+  - Mock configurations working correctly
+  - CI prevents regressions on every commit
+- **Impact**:
+  - Protected mission-critical features (call control, email delivery)
+  - Enabled confident iteration on tool system
+  - Established testing patterns for future tools
+  - Discovered 1 production bug before deployment
+
+---
+
+## Milestone 17 — Monitoring, Feedback & Guided Setup (Planned)
 
 - **Goal**: Ship an opt-in monitoring + analytics experience that is turnkey, captures per-call transcripts/metrics, and surfaces actionable YAML tuning guidance. Implementation details live in `docs/milestones/milestone-8-monitoring-stack.md`.
 - **Dependencies**: Milestones 5–7 in place so streaming telemetry, pipeline metadata, and configuration hot-reload already work.
@@ -301,7 +343,7 @@ Keep this roadmap updated after each milestone to help any collaborator—or fut
 
 ## Future Roadmap
 
-### Milestone 16 — Quality, Multi-Provider Demos, and Hi-Fi Audio (Planned)
+### Milestone 18 — Quality, Multi-Provider Demos, and Hi-Fi Audio (Planned)
 
 - **Goal**: Improve resampling quality for hi-fi profiles and demonstrate multi-provider parity. ROADMAPv4 P3 milestone.
 - **Dependencies**: Milestones 8-13 complete; golden baselines validated.
@@ -322,10 +364,10 @@ Keep this roadmap updated after each milestone to help any collaborator—or fut
 
 **Testing & Quality**:
 
-- Unit tests for tool adapters and email tools
-- Integration tests for transfer workflows  
-- Restore CI coverage threshold to 40%+
-- Automated regression test suite
+- ✅ Unit tests for tool adapters and email tools (111 tests, 27-29% coverage - Milestone 16)
+- ⏳ Integration tests for transfer workflows (unit tests complete, full workflow pending)
+- 🎯 Increase CI coverage threshold to 30% then 40% (currently 27%)
+- ⏳ Automated regression test suite (foundation in place)
 
 **Additional Tool Categories**:
 
@@ -482,5 +524,5 @@ For detailed implementation plans and specifications:
 
 ---
 
-**Last Updated**: November 11, 2025  
-**Roadmap Version**: 2.1 (Added v4.1.0 Tool Calling Release)
+**Last Updated**: November 12, 2025  
+**Roadmap Version**: 2.2 (Added Milestone 16 - Tool Testing & QA)
