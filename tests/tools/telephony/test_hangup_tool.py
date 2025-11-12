@@ -62,7 +62,7 @@ class TestHangupCallTool:
         
         assert result["status"] == "success"
         assert result["will_hangup"] is True
-        assert result["farewell_message"] == "Thank you for calling!"
+        assert result["message"] == "Thank you for calling!"
     
     @pytest.mark.asyncio
     async def test_hangup_with_default_farewell(
@@ -76,11 +76,11 @@ class TestHangupCallTool:
         
         assert result["status"] == "success"
         assert result["will_hangup"] is True
-        assert "farewell_message" in result
-        assert len(result["farewell_message"]) > 0
+        assert "message" in result
+        assert len(result["message"]) > 0
         
         # Default should be polite
-        farewell = result["farewell_message"].lower()
+        farewell = result["message"].lower()
         assert any(word in farewell for word in ["goodbye", "bye", "thank"])
     
     @pytest.mark.asyncio
@@ -96,7 +96,7 @@ class TestHangupCallTool:
         )
         
         assert result["status"] == "success"
-        assert result["farewell_message"] == long_farewell
+        assert result["message"] == long_farewell
     
     @pytest.mark.asyncio
     async def test_hangup_with_empty_farewell(
@@ -110,7 +110,7 @@ class TestHangupCallTool:
         
         assert result["status"] == "success"
         # Should either use default or accept empty
-        assert "farewell_message" in result
+        assert "message" in result
     
     # ==================== will_hangup Flag Tests ====================
     
@@ -139,7 +139,7 @@ class TestHangupCallTool:
         
         # Result should contain info for provider to handle hangup
         assert "will_hangup" in result
-        assert "farewell_message" in result
+        assert "message" in result
         assert result["will_hangup"] is True
     
     # ==================== Session State Tests ====================
@@ -269,7 +269,7 @@ class TestHangupCallTool:
             )
             
             assert result["status"] == "success"
-            assert result["farewell_message"] == farewell
+            assert result["message"] == farewell
     
     @pytest.mark.asyncio
     async def test_farewell_with_special_characters(
@@ -284,7 +284,7 @@ class TestHangupCallTool:
         )
         
         assert result["status"] == "success"
-        assert result["farewell_message"] == farewell
+        assert result["message"] == farewell
     
     # ==================== Parameter Validation Tests ====================
     
@@ -302,7 +302,7 @@ class TestHangupCallTool:
         )
         
         assert result["status"] == "success"
-        assert result["farewell_message"] == "Goodbye!"
+        assert result["message"] == "Goodbye!"
     
     @pytest.mark.asyncio
     async def test_farewell_message_none_value(
@@ -316,4 +316,4 @@ class TestHangupCallTool:
         
         assert result["status"] == "success"
         # Should handle None gracefully (use default or empty)
-        assert "farewell_message" in result
+        assert "message" in result
