@@ -9,6 +9,9 @@ This document explains the test layout and how to run tests locally and on a ser
   - `tests/test_pipeline_*.py` (adapters and runner lifecycle)
   - `tests/test_playback_manager.py`
   - `tests/test_session_store.py`
+  - `tests/tools/` - Tool system tests (NEW - v4.1)
+    - `tests/tools/telephony/` - Transfer, hangup, cancel transfer (58 tests)
+    - `tests/tools/business/` - Email transcript, summary (28+ tests)
 - `scripts/test_externalmedia_call.py`: Health-driven end-to-end call flow check
 - `scripts/test_externalmedia_deployment.py`: ARI + RTP deployment sanity
 - `local_ai_server/test_local_ai_server.py`: Local AI server smoke test (optional)
@@ -55,7 +58,31 @@ python3 scripts/test_externalmedia_deployment.py
 - Clear logs between runs to improve signal: `make server-clear-logs` (localhost-aware)
 - Validate configuration: `python3 scripts/validate_externalmedia_config.py`
 
-## CI Suggestions (Optional)
+## CI/CD Integration
 
-- Add a GitHub Action to run `pytest -q` on PRs
-- Publish captured logs as artifacts when E2E tests fail
+Test coverage is enforced via GitHub Actions (`.github/workflows/ci.yml`):
+
+- **Minimum Coverage**: 40%
+- **Target Coverage by Module**: `src/tools/` 80%+, `src/core/` 60%+, `src/providers/` 35%+
+- **Coverage Reports**: HTML, XML, and JSON reports uploaded as GitHub Actions artifacts
+
+## Coverage Targets
+
+| Module | Current | Target | Status |
+|--------|---------|--------|--------|
+| `src/tools/` | 80%+ | 80%+ | ✅ |
+| `src/core/session_store.py` | ~60% | 80% | 🟡 |
+| `src/core/models.py` | ~40% | 60% | 🟡 |
+| `src/engine.py` | ~15% | 30% | 🟢 |
+| `src/providers/` | ~20% | 35% | 🟢 |
+
+**Overall Target**: 40%+ (enforced in CI)
+
+## Test Quality Standards
+
+New code must meet these standards:
+- **Unit tests**: >80% coverage for new functions/classes
+- **Integration tests**: For multi-component workflows
+- **Mocking**: Use fixtures from `conftest.py`
+- **Assertions**: Clear, specific, testing one thing
+- **Documentation**: Docstrings explaining what's tested

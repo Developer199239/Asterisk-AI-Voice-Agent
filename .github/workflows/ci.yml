@@ -35,12 +35,16 @@ jobs:
         env:
           PYTHONPATH: ${{ github.workspace }}
         run: |
-          pytest -q -k "not integration and not test_deepgram_stt_adapter_transcribes and not test_resolve_stream_targets and not test_output_rate_drift_adjusts_active_rate and not test_session_requests_g711_when_target_mulaw" \
+          pytest -v \
+            -k "not integration and not test_deepgram_stt_adapter_transcribes and not test_resolve_stream_targets and not test_output_rate_drift_adjusts_active_rate and not test_session_requests_g711_when_target_mulaw" \
             --cov=src \
             --cov-report=term-missing \
             --cov-report=xml \
             --cov-report=html \
-            --cov-fail-under=20
+            --cov-report=json \
+            --cov-fail-under=40 \
+            --maxfail=10 \
+            --tb=short
 
       - name: Upload coverage reports
         uses: actions/upload-artifact@v4
@@ -52,9 +56,16 @@ jobs:
             htmlcov/
           retention-days: 30
 
-      - name: Coverage comment (PR only)
-        if: github.event_name == 'pull_request'
+      - name: Coverage summary
+        if: always()
         run: |
-          COVERAGE=$(python -c "import xml.etree.ElementTree as ET; tree = ET.parse('coverage.xml'); root = tree.getroot(); print(root.attrib['line-rate'])")
-          COVERAGE_PCT=$(python -c "print(f'{float($COVERAGE) * 100:.2f}%')")
-          echo "📊 Coverage: $COVERAGE_PCT" >> $GITHUB_STEP_SUMMARY
+          if [ -f coverage.json ]; then
+            COVERAGE=$(python3 -c "import json; print(f\"{json.load(open('coverage.json'))['totals']['percent_covered']:.2f}\")")
+            echo "📊 **Test Coverage: ${COVERAGE}%**" >> $GITHUB_STEP_SUMMARY
+            echo "✅ Threshold: 40% minimum" >> $GITHUB_STEP_SUMMARY
+            if (( $(echo "$COVERAGE >= 40" | bc -l) )); then
+              echo "✓ Coverage meets threshold" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "✗ Coverage below threshold" >> $GITHUB_STEP_SUMMARY
+            fi
+          fi
