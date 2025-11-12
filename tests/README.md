@@ -62,10 +62,17 @@ python3 scripts/test_externalmedia_deployment.py
 
 Test coverage is enforced via GitHub Actions (`.github/workflows/ci.yml`):
 
-- **Current Coverage**: ~30% (telephony + email tool tests)
-- **Enforced Threshold**: 30%
-- **Target Coverage**: 40%+
+- **Current Coverage**: 27.18% (86 tool tests passing)
+- **Enforced Threshold**: 27% (current baseline)
+- **Next Target**: 30% (need more tests)
+- **Ultimate Target**: 40%+
 - **Coverage Reports**: HTML, XML, and JSON reports uploaded as GitHub Actions artifacts
+
+**Test Stats**:
+
+- 58 telephony tool tests ✅
+- 28 email tool tests ✅
+- Total: 86 tests, 251 overall tests passing
 
 ## Coverage Targets
 
@@ -77,7 +84,7 @@ Test coverage is enforced via GitHub Actions (`.github/workflows/ci.yml`):
 | `src/engine.py` | ~15% | 30% | 🟢 |
 | `src/providers/` | ~20% | 35% | 🟢 |
 
-**Overall**: 30%+ enforced, 40%+ target
+**Overall**: 27% baseline → 30% next → 40% ultimate target
 
 ## Test Quality Standards
 
