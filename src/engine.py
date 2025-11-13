@@ -1747,16 +1747,7 @@ class Engine:
                 getattr(session, 'queue_extension', None)
             )
             
-            # Tear down bridge.
-            bridge_id = session.bridge_id
-            if bridge_id:
-                try:
-                    await self.ari_client.destroy_bridge(bridge_id)
-                    logger.info("Bridge destroyed", call_id=call_id, bridge_id=bridge_id)
-                except Exception:
-                    logger.debug("Bridge destroy failed", call_id=call_id, bridge_id=bridge_id, exc_info=True)
-
-            # Execute pending queue transfer OR hang up associated channels.
+            # Execute queue transfer BEFORE destroying bridge (if pending)
             if pending_queue_transfer:
                 # Transfer caller to queue instead of hanging up
                 try:
@@ -1775,22 +1766,31 @@ class Engine:
                         queue=session.queue_extension,
                         context=session.queue_context
                     )
-                    # Hang up other channels (not caller)
+                    # Hang up RTP/supporting channels only (caller continues in dialplan)
                     for channel_id in filter(None, [session.local_channel_id, session.external_media_id, session.audiosocket_channel_id]):
                         try:
                             await self.ari_client.hangup_channel(channel_id)
                         except Exception:
                             logger.debug("Hangup failed during cleanup", call_id=call_id, channel_id=channel_id, exc_info=True)
+                    # Skip bridge destruction - caller channel left Stasis via continue()
+                    logger.info("Skipping bridge destruction - caller transferred to dialplan", call_id=call_id)
                 except Exception as e:
                     logger.error("Queue transfer failed during cleanup", call_id=call_id, error=str(e))
-                    # Fallback: hang up all channels including caller
-                    for channel_id in filter(None, [session.caller_channel_id, session.local_channel_id, session.external_media_id, session.audiosocket_channel_id]):
-                        try:
-                            await self.ari_client.hangup_channel(channel_id)
-                        except Exception:
-                            logger.debug("Hangup failed during cleanup", call_id=call_id, channel_id=channel_id, exc_info=True)
-            else:
-                # Normal cleanup: hang up all channels
+                    # Fallback: normal cleanup path
+                    pending_queue_transfer = False
+            
+            # Normal cleanup path (no queue transfer OR transfer failed)
+            if not pending_queue_transfer:
+                # Tear down bridge
+                bridge_id = session.bridge_id
+                if bridge_id:
+                    try:
+                        await self.ari_client.destroy_bridge(bridge_id)
+                        logger.info("Bridge destroyed", call_id=call_id, bridge_id=bridge_id)
+                    except Exception:
+                        logger.debug("Bridge destroy failed", call_id=call_id, bridge_id=bridge_id, exc_info=True)
+                
+                # Hang up all channels
                 for channel_id in filter(None, [session.caller_channel_id, session.local_channel_id, session.external_media_id, session.audiosocket_channel_id]):
                     try:
                         await self.ari_client.hangup_channel(channel_id)
