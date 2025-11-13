@@ -268,8 +268,8 @@ pipelines:
     llm: google_llm
     options:
       llm:
-        base_url: https://generativelanguage.googleapis.com/v1
-        model: models/gemini-1.5-pro-latest
+        base_url: https://generativelanguage.googleapis.com/v1beta
+        model: gemini-2.5-flash
       stt:
         base_url: https://api.deepgram.com
         language: en-US
@@ -390,8 +390,8 @@ pipelines:
         timeout_sec: 10.0
         chunk_ms: 1000  # 1-second chunks for better transcription accuracy
       llm:
-        base_url: https://generativelanguage.googleapis.com/v1
-        model: "gemini-1.5-flash"  # Fast, cost-effective model (v1 API compatible)
+        base_url: https://generativelanguage.googleapis.com/v1beta
+        model: "gemini-2.5-flash"  # Latest stable model (per ai.google.dev/gemini-api/docs/models)
         temperature: 0.7
         max_output_tokens: 150
         top_p: 0.95
@@ -419,8 +419,8 @@ pipelines:
         timeout_sec: 10.0
         chunk_ms: 1000  # 1-second chunks for better transcription accuracy
       llm:
-        base_url: https://generativelanguage.googleapis.com/v1
-        model: "gemini-1.5-flash"  # Lower cost alternative
+        base_url: https://generativelanguage.googleapis.com/v1beta
+        model: "gemini-2.5-flash"  # Latest stable model
         temperature: 0.7
         max_output_tokens: 100  # Reduced for cost
         top_p: 0.95
