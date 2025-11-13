@@ -208,9 +208,207 @@ If using service account authentication, grant these roles:
 - **Cloud Speech-to-Text User** (`roles/speech.user`)
 - **Cloud Text-to-Speech User** (`roles/texttospeech.user`)
 - **Generative AI User** (`roles/aiplatform.user`)
+- **Gemini Live API User** (`roles/generativelanguage.liveapi.user`) - for Google Live
+
+---
+
+# Google Gemini Live API (Real-Time Agent)
+
+## Overview
+
+**Google Live** (`AI_PROVIDER=google_live`) is a **real-time bidirectional streaming** voice agent similar to OpenAI Realtime. It provides:
+
+- ✅ **Native audio processing** (no separate STT/TTS)
+- ✅ **Built-in Voice Activity Detection (VAD)**
+- ✅ **True barge-in support** (interrupt naturally)
+- ✅ **Ultra-low latency** (<1s)
+- ✅ **Function calling in streaming mode**
+- ✅ **Session management for context**
+
+### When to Use Google Live vs Pipeline Mode
+
+| Feature | Google Live | Pipeline Mode |
+|---------|------------|---------------|
+| **Architecture** | Native audio end-to-end | Sequential STT→LLM→TTS |
+| **Latency** | <1s | 1.5-2.5s |
+| **Barge-in** | ✅ Yes (automatic) | ❌ No |
+| **Turn-taking** | Duplex (simultaneous) | Sequential (wait for TTS) |
+| **Best for** | Conversations, support | Debugging, batch processing |
+
+## Setup
+
+### 1. Enable Gemini Live API
+
+Enable the **Gemini Live API** in Google Cloud Console:
+https://console.cloud.google.com/apis/library/generativelanguage.googleapis.com
+
+### 2. Configure API Key
+
+Use the same `GOOGLE_API_KEY` from pipeline setup:
+
+```bash
+GOOGLE_API_KEY=your_api_key_here
+```
+
+### 3. Update Dialplan
+
+```asterisk
+[from-ai-agent]
+exten => s,1,NoOp(Google Live API Demo)
+same => n,Set(AI_CONTEXT=demo_google_live)
+same => n,Set(AI_PROVIDER=google_live)  ; Use real-time agent
+same => n,Stasis(asterisk-ai-voice-agent)
+same => n,Hangup()
+```
+
+### 4. Test the Agent
+
+Call your extension and:
+- **Say something** → Agent responds in real-time
+- **Interrupt the agent mid-sentence** → It stops and listens
+- **Have a natural conversation** → Context is maintained
+
+## Architecture
+
+### Audio Flow
+
+```
+Asterisk (8kHz µ-law) 
+    ↓ Transcode to 16kHz PCM
+    ↓ Stream to Gemini Live API (WebSocket)
+    ↓ Receive 24kHz PCM audio
+    ↓ Resample to 8kHz µ-law
+    ↓ Back to Asterisk
+```
+
+### Key Components
+
+1. **GoogleLiveProvider** (`src/providers/google_live.py`)
+   - WebSocket management
+   - Audio transcoding (µ-law ↔ PCM, 8kHz ↔ 16kHz/24kHz)
+   - Session setup and lifecycle
+
+2. **GoogleToolAdapter** (`src/tools/adapters/google.py`)
+   - Function calling support
+   - Tool execution integration
+
+3. **Audio Resampling**
+   - Input: 8kHz µ-law → 16kHz PCM (Gemini input)
+   - Output: 24kHz PCM → 8kHz µ-law (Asterisk output)
+
+## Configuration
+
+Google Live uses the Google provider config:
+
+```yaml
+google:
+  api_key: ${GOOGLE_API_KEY}
+  llm_model: "gemini-2.5-flash"  # Model with Live API support
+  tts_voice_name: "en-US-Neural2-A"
+  initial_greeting: "Hi! I'm powered by Google Gemini Live API."
+```
+
+## Features
+
+### 1. Barge-In (Interruption)
+
+**Automatic** - No configuration needed:
+- User speaks → Gemini detects via built-in VAD
+- Agent stops talking immediately
+- User's speech is processed
+
+### 2. Function Calling
+
+Tools work seamlessly in streaming mode:
+
+```python
+# Example: Transfer tool
+"What's your name?" → User responds
+Agent calls transfer_tool(extension="6000")
+"Transferring you now..."
+```
+
+### 3. Session Management
+
+Conversation context is maintained automatically:
+- History tracked per WebSocket session
+- Context carries across turns
+- No need to re-introduce agent
+
+## Limitations (AAVA-75 Findings)
+
+### Google Pipeline Mode Limitations
+
+| Issue | Impact | Workaround |
+|-------|--------|-----------|
+| **No barge-in** | Must wait for TTS to finish | Use `google_live` instead |
+| **Sequential turns** | Higher latency (1.5-2.5s) | Use `google_live` for <1s |
+| **System prompt repetition** | Fixed in v4.0 | Update to latest version |
+| **Thinking tokens** | Need 256+ max_output_tokens | Config already updated |
+
+### Google Live API Considerations
+
+| Consideration | Details |
+|---------------|---------|
+| **Audio format** | Requires 16kHz PCM input (resampling needed for 8kHz) |
+| **WebSocket** | Persistent connection (manage reconnection) |
+| **API availability** | Preview/beta (check quota limits) |
+| **Latency** | Network-dependent (test in your environment) |
+
+## Cost Comparison
+
+| Mode | Cost per Minute | Components |
+|------|----------------|------------|
+| **Pipeline** | ~$0.0024 | STT + LLM + TTS separate |
+| **Live API** | ~$0.003* | All-in-one native audio |
+
+*Estimated based on preview pricing
+
+## Troubleshooting
+
+### Issue: WebSocket Connection Fails
+
+**Symptoms**: `Failed to start Google Live session`
+
+**Solutions**:
+1. Verify API key: `echo $GOOGLE_API_KEY`
+2. Check API enabled: https://console.cloud.google.com/apis/library/generativelanguage.googleapis.com
+3. Check quota limits in Cloud Console
+
+### Issue: No Audio Received
+
+**Symptoms**: Agent doesn't respond, silence
+
+**Solutions**:
+1. Check logs for `Google Live audio output` messages
+2. Verify audio transcoding: `grep "resample" logs/ai-engine.log`
+3. Test with pipeline mode first to isolate issue
+
+### Issue: Barge-In Not Working
+
+**Note**: Barge-in is **automatic** with Google Live. If not working:
+1. Confirm using `AI_PROVIDER=google_live` (not pipeline)
+2. Check VAD is active: `grep "VAD" logs/ai-engine.log`
+3. Verify WebSocket messages: `grep "inputTranscription" logs/ai-engine.log`
+
+## Migration from Pipeline to Live
+
+### Before (Pipeline Mode)
+```asterisk
+Set(AI_CONTEXT=demo_google)
+; AI_PROVIDER defaults to google_cloud_full
+Stasis(asterisk-ai-voice-agent)
+```
+
+### After (Live API Mode)
+```asterisk
+Set(AI_CONTEXT=demo_google_live)
+Set(AI_PROVIDER=google_live)  ; Enable real-time agent
+Stasis(asterisk-ai-voice-agent)
+```
 
 ## Support
 
 - **Issues**: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/issues
 - **Docs**: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/tree/main/docs
-- **Linear**: Task AAVA-75 (Google Cloud Integration)
+- **Linear**: Task AAVA-75 (Google Cloud Integration - CLOSED with findings)
