@@ -587,7 +587,6 @@ class GoogleLiveProvider(AIProviderInterface):
             output_audio = convert_pcm16le_to_target_format(
                 pcm16_8k,
                 target_format="mulaw",  # Default to µ-law for telephony
-                sample_rate=8000,
             )
 
             # Emit audio event (matching OpenAI Realtime pattern)
