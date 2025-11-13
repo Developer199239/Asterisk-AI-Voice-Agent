@@ -230,14 +230,15 @@ class GoogleLiveProvider(AIProviderInterface):
         if context:
             system_prompt = context.get("system_prompt") or context.get("prompt")
 
-        # Build generation config (per official Gemini API GenerationConfig)
-        # https://ai.google.dev/api/generate-content#generationconfig
+        # Build generation config (per REAL working wire examples)
+        # https://gist.github.com/quartzjer/9636066e96b4f904162df706210770e4
+        # NOTE: responseModalities is a STRING not array, lowercase not uppercase
         generation_config = {
-            "responseModalities": ["AUDIO", "TEXT"],  # camelCase, UPPERCASE values
-            "speechConfig": {  # NOT audio_config - this was Perplexity error!
+            "responseModalities": "audio",  # STRING (lowercase), not ["AUDIO", "TEXT"]
+            "speechConfig": {
                 "voiceConfig": {
                     "prebuiltVoiceConfig": {
-                        "voiceName": self.config.tts_voice_name or "Kore"
+                        "voiceName": self.config.tts_voice_name or "Aoede"
                     }
                 }
             },
