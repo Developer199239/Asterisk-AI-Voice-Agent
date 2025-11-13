@@ -128,10 +128,10 @@ class TransferToQueueTool(Tool):
             )
             
             # 5. Update session state
-            session = await context.get_session()
-            session.transfer_state = "in_queue"
-            session.transfer_target = queue_name
-            await context.update_session(session)
+            await context.update_session(
+                transfer_state="in_queue",
+                transfer_target=queue_name
+            )
             
             # 6. Format response message
             message = self._format_queue_message(
