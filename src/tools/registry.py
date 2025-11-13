@@ -147,10 +147,10 @@ class ToolRegistry:
         
         # Import and register telephony tools
         try:
-            from src.tools.telephony.transfer import TransferCallTool
-            self.register(TransferCallTool)
+            from src.tools.telephony.unified_transfer import UnifiedTransferTool
+            self.register(UnifiedTransferTool)
         except ImportError as e:
-            logger.warning(f"Could not import TransferCallTool: {e}")
+            logger.warning(f"Could not import UnifiedTransferTool: {e}")
         
         try:
             from src.tools.telephony.cancel_transfer import CancelTransferTool

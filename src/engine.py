@@ -1740,6 +1740,10 @@ class Engine:
             except Exception:
                 logger.debug("Provider stop_session failed during cleanup", call_id=call_id, exc_info=True)
 
+            # Check if call was transferred to dialplan (e.g., queue transfer)
+            # If so, skip hanging up the caller channel
+            transfer_active = getattr(session, 'transfer_active', False)
+            
             # Tear down bridge.
             bridge_id = session.bridge_id
             if bridge_id:
@@ -1749,12 +1753,21 @@ class Engine:
                 except Exception:
                     logger.debug("Bridge destroy failed", call_id=call_id, bridge_id=bridge_id, exc_info=True)
 
-            # Hang up associated channels.
-            for channel_id in filter(None, [session.caller_channel_id, session.local_channel_id, session.external_media_id, session.audiosocket_channel_id]):
+            # Hang up RTP and supporting channels (always)
+            for channel_id in filter(None, [session.local_channel_id, session.external_media_id, session.audiosocket_channel_id]):
                 try:
                     await self.ari_client.hangup_channel(channel_id)
                 except Exception:
                     logger.debug("Hangup failed during cleanup", call_id=call_id, channel_id=channel_id, exc_info=True)
+            
+            # Hang up caller channel ONLY if not transferred
+            if not transfer_active:
+                try:
+                    await self.ari_client.hangup_channel(session.caller_channel_id)
+                except Exception:
+                    logger.debug("Hangup failed during cleanup", call_id=call_id, channel_id=session.caller_channel_id, exc_info=True)
+            else:
+                logger.info("Skipping caller hangup - transferred to dialplan", call_id=call_id, transfer_target=getattr(session, 'transfer_target', 'unknown'))
 
             if getattr(self, 'rtp_server', None):
                 try:
