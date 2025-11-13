@@ -120,15 +120,15 @@ class GoogleLiveProvider(AIProviderInterface):
         self._session_start_time: Optional[float] = None
 
     @staticmethod
-    def get_capabilities() -> ProviderCapabilities:
-        """Return capabilities of Google Live provider."""
+    def get_capabilities() -> Optional[ProviderCapabilities]:
+        """Return capabilities of Google Live provider for transport orchestration."""
         return ProviderCapabilities(
-            supports_streaming=True,
-            supports_interruption=True,  # Barge-in supported
-            supports_vad=True,  # Built-in VAD
-            supports_audio_input=True,
-            supports_audio_output=True,
-            supports_function_calling=True,
+            input_encodings=["ulaw", "pcm16"],  # μ-law or PCM16
+            input_sample_rates_hz=[8000, 16000],  # Telephony or wideband
+            output_encodings=["ulaw", "pcm16"],  # Output resampled to telephony
+            output_sample_rates_hz=[8000, 16000, 24000],  # Gemini native is 24kHz
+            preferred_chunk_ms=20,  # 20ms chunks for smooth streaming
+            can_negotiate=True,  # Can adapt to different formats
         )
     
     @property
