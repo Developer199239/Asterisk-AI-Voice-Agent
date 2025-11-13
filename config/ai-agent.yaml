@@ -499,10 +499,6 @@ pipelines:
     llm_model: gemini-2.5-flash
     llm_temperature: 0.7
     tts_voice_name: en-US-Neural2-A
-    tts:
-      audio_encoding: MULAW
-      sample_rate_hz: 8000
-      speaking_rate: 1.0
 
 profiles:
   default: telephony_responsive
