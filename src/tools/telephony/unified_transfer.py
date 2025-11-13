@@ -8,13 +8,13 @@ with a single unified interface for all transfer types.
 from typing import Dict, Any, Optional
 import structlog
 
-from ..base import BaseTool
+from ..base import Tool, ToolDefinition, ToolParameter, ToolCategory
 from ..context import ToolExecutionContext
 
 logger = structlog.get_logger(__name__)
 
 
-class UnifiedTransferTool(BaseTool):
+class UnifiedTransferTool(Tool):
     """
     Unified tool for transferring calls to various destinations:
     - Extensions: Direct SIP/PJSIP endpoints
@@ -22,75 +22,65 @@ class UnifiedTransferTool(BaseTool):
     - Ring Groups: Ring groups via FreePBX ext-group context
     """
     
-    def __init__(self, config: Dict[str, Any]):
-        """
-        Initialize the unified transfer tool.
-        
-        Args:
-            config: Tool configuration with destinations
-        """
-        super().__init__()
-        self.destinations = config.get('destinations', {})
-        
-        # Validate configuration
-        if not self.destinations:
-            raise ValueError("No destinations configured for unified transfer tool")
-        
-        logger.info("Unified transfer tool initialized", 
-                   destination_count=len(self.destinations))
-    
     @property
-    def name(self) -> str:
-        return "transfer"
-    
-    @property
-    def description(self) -> str:
-        # Build dynamic description based on available destinations
-        dest_list = ", ".join(self.destinations.keys())
-        return f"Transfer the caller to another destination. Available: {dest_list}"
-    
-    @property
-    def parameters(self) -> Dict[str, Any]:
-        # Build enum from configured destinations
-        destination_names = list(self.destinations.keys())
+    def definition(self) -> ToolDefinition:
+        """Return tool definition dynamically based on config."""
+        # Get destinations from config
+        config = self.context_config or {}
+        destinations = config.get('destinations', {})
         
-        return {
-            "type": "object",
-            "properties": {
-                "destination": {
-                    "type": "string",
-                    "enum": destination_names,
-                    "description": f"Destination to transfer to: {', '.join(destination_names)}"
-                }
-            },
-            "required": ["destination"]
-        }
+        # Build destination enum for parameter
+        destination_names = list(destinations.keys())
+        dest_descriptions = [f"{name} ({dest.get('description', '')})" for name, dest in destinations.items()]
+        
+        return ToolDefinition(
+            name="transfer",
+            description=f"Transfer the caller to another destination. Available: {', '.join(dest_descriptions)}",
+            category=ToolCategory.TELEPHONY,
+            requires_channel=True,
+            max_execution_time=30,
+            parameters=[
+                ToolParameter(
+                    name="destination",
+                    type="string",
+                    description=f"Destination to transfer to. Options: {', '.join(destination_names)}",
+                    required=True,
+                    enum=destination_names if destination_names else None
+                )
+            ]
+        )
     
     async def execute(
         self,
-        context: ToolExecutionContext,
-        destination: str
+        parameters: Dict[str, Any],
+        context: ToolExecutionContext
     ) -> Dict[str, Any]:
         """
         Execute transfer to the specified destination.
         
         Args:
+            parameters: {destination: str}
             context: Tool execution context
-            destination: Destination name from config
         
         Returns:
             Dict with status and message
         """
+        destination = parameters.get('destination')
+        
+        # Get destinations from config
+        config = self.context_config or {}
+        destinations = config.get('destinations', {})
+        
         # Validate destination exists
-        if destination not in self.destinations:
+        if destination not in destinations:
             logger.error("Invalid destination", destination=destination, 
-                        available=list(self.destinations.keys()))
+                        available=list(destinations.keys()))
             return {
                 "status": "failed",
                 "message": f"Unknown destination: {destination}"
             }
         
-        dest_config = self.destinations[destination]
+        dest_config = destinations[destination]
         transfer_type = dest_config.get('type')
         target = dest_config.get('target')
         description = dest_config.get('description', destination)
