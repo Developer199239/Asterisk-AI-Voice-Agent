@@ -285,7 +285,7 @@ contexts:
       - Answer technical and business questions
       - Be helpful and informative
 
-default_provider: local_hybrid
+default_provider: deepgram
 downstream_mode: stream
 external_media:
   codec: ulaw

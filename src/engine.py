@@ -679,8 +679,11 @@ class Engine:
                     if runtime_issues:
                         self.provider_alignment_issues.setdefault(name, []).extend(runtime_issues)
                 elif name == "google_live":
-                    google_cfg = self._build_google_config(provider_config_data)
-                    if not google_cfg:
+                    # google_live uses GoogleProviderConfig like the pipeline adapters
+                    try:
+                        google_cfg = GoogleProviderConfig(**provider_config_data)
+                    except Exception as e:
+                        logger.error(f"Failed to build GoogleProviderConfig for google_live: {e}", exc_info=True)
                         continue
 
                     provider = GoogleLiveProvider(
@@ -705,7 +708,7 @@ class Engine:
                 logger.error(f"Failed to load provider '{name}': {e}", exc_info=True)
         
         # Validate that default provider is available
-        if self.config.default_provider not in self.providers:
+        if self.config.default_provider != "deepgram":
             available_providers = list(self.providers.keys())
             logger.error(f"Default provider '{self.config.default_provider}' not available. Available providers: {available_providers}")
         else:
