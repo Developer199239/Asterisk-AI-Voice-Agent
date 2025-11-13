@@ -242,6 +242,17 @@ class GoogleLiveProvider(AIProviderInterface):
             },
         }
 
+        # Detailed debug logging for speech configuration
+        speech_cfg = generation_config.get("speech_config", {})
+        voice_cfg = speech_cfg.get("voice_config", {}).get("prebuilt_voice_config", {})
+        logger.debug(
+            "Google Live speech configuration",
+            call_id=self._call_id,
+            voice_name=voice_cfg.get("voice_name"),
+            speech_config_keys=list(speech_cfg.keys()),
+            voice_config_keys=list(voice_cfg.keys()),
+        )
+
         # Build tools config if tools are available
         tools = []
         if context and context.get("tools"):
@@ -272,6 +283,7 @@ class GoogleLiveProvider(AIProviderInterface):
             model=setup_msg.get("setup", {}).get("model"),
             has_system_instruction=bool(system_prompt),
             tools_count=len(tools),
+            generation_config=generation_config,
         )
 
         await self._send_message(setup_msg)
