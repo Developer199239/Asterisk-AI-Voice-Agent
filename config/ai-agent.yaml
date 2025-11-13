@@ -484,16 +484,42 @@ tools:
         pass_caller_info: true          # Pass caller name/number/purpose
         # queue: "support_queue"        # Optional: fallback queue if busy
   
-  # Transfer call tool settings
-  transfer_call:
+  # Unified Transfer Tool - handles extensions, queues, and ring groups
+  transfer:
     enabled: true
-    default_mode: "warm"                # warm | blind
-    hold_music_class: "default"
-    announce_caller: true
-    caller_context_fields:
-      - "caller_name"
-      - "caller_number"
-      - "call_purpose"
+    destinations:
+      # Direct extension transfers (using redirect - stays in Stasis)
+      sales_agent:
+        type: extension
+        target: "2765"
+        description: "Sales agent"
+      
+      support_agent:
+        type: extension
+        target: "6000"
+        description: "Support agent"
+      
+      # Queue transfers (using continue to ext-queues)
+      sales_queue:
+        type: queue
+        target: "300"
+        description: "Sales team queue"
+      
+      support_queue:
+        type: queue
+        target: "301"
+        description: "Technical support queue"
+      
+      # Ring group transfers (using continue to ext-group)
+      sales_team:
+        type: ringgroup
+        target: "600"
+        description: "Sales team ring group"
+      
+      support_team:
+        type: ringgroup
+        target: "601"
+        description: "Support team ring group"
   
   # Cancel transfer settings
   cancel_transfer:
@@ -506,26 +532,6 @@ tools:
     enabled: true
     require_confirmation: false
     farewell_message: "Thank you for calling. Goodbye!"
-  
-  # Queue transfer tool - transfer to ACD queues
-  transfer_to_queue:
-    enabled: true
-    queues:
-      sales:
-        asterisk_queue: "sales-queue"
-        description: "Sales team"
-        max_wait_time: 300
-        announce_position: true
-      support:
-        asterisk_queue: "tech-support-queue"
-        description: "Technical support"
-        max_wait_time: 600
-        announce_position: true
-      billing:
-        asterisk_queue: "billing-queue"
-        description: "Billing department"
-        max_wait_time: 180
-        announce_position: false
   
   # Email summary tool - auto-send call summaries to admin
   send_email_summary:
