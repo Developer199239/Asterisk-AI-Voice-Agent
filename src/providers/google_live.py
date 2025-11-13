@@ -519,12 +519,12 @@ class GoogleLiveProvider(AIProviderInterface):
         # Check if model turn is complete
         turn_complete = content.get("turnComplete", False)
         
-        # Extract parts
-        for part in content.get("model_turn", {}).get("parts", []):
+        # Extract parts (using camelCase keys from actual API)
+        for part in content.get("modelTurn", {}).get("parts", []):
             # Handle audio output
-            if "inline_data" in part:
-                inline_data = part["inline_data"]
-                if inline_data.get("mime_type") == "audio/pcm":
+            if "inlineData" in part:
+                inline_data = part["inlineData"]
+                if inline_data.get("mimeType", "").startswith("audio/pcm"):
                     await self._handle_audio_output(inline_data["data"])
             
             # Handle text output (for debugging/logging)
