@@ -105,25 +105,13 @@ class TransferToQueueTool(Tool):
             # 2. Check queue status (if available)
             queue_status = await self._get_queue_status(asterisk_queue, context)
             
-            # 3. Set channel variable for dialplan
+            # 3. Redirect channel directly to queue via ARI
+            # Format: Queue:queuename - this redirects to the Queue app directly
             await context.ari_client.send_command(
                 method="POST",
-                resource=f"channels/{context.caller_channel_id}/variable",
-                params={
-                    "variable": "QUEUE_NAME",
-                    "value": asterisk_queue
-                }
-            )
-            
-            # 4. Continue to queue handling in dialplan
-            # This will execute the Asterisk dialplan queue logic
-            await context.ari_client.send_command(
-                method="POST",
-                resource=f"channels/{context.caller_channel_id}/continue",
-                params={
-                    "context": "agent-queue",  # Dialplan context for queues
-                    "extension": "s",
-                    "priority": 1
+                resource=f"channels/{context.caller_channel_id}/redirect",
+                data={
+                    "endpoint": f"Queue:{asterisk_queue}"
                 }
             )
             
