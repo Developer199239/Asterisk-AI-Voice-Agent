@@ -118,6 +118,8 @@ class GoogleProviderConfig(BaseModel):
     tts_audio_encoding: str = Field(default="MULAW")
     tts_sample_rate_hz: int = Field(default=8000)
     llm_model: str = Field(default="models/gemini-1.5-pro-latest")
+    greeting: Optional[str] = None  # For Google Live API initial greeting
+    enabled: bool = Field(default=True)  # Provider enabled flag
 
 
 class OpenAIRealtimeProviderConfig(BaseModel):

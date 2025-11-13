@@ -331,7 +331,7 @@ class GoogleLiveProvider(AIProviderInterface):
                 pcm16_8k = audio_chunk
 
             # Resample from 8kHz to 16kHz
-            pcm16_16k = resample_audio(
+            pcm16_16k, _ = resample_audio(
                 pcm16_8k,
                 source_rate=sample_rate,
                 target_rate=_GEMINI_INPUT_RATE,
@@ -554,7 +554,7 @@ class GoogleLiveProvider(AIProviderInterface):
             _GOOGLE_LIVE_AUDIO_RECEIVED.labels(call_id=self._call_id).inc(len(pcm16_24k))
 
             # Resample from 24kHz to 8kHz for AudioSocket
-            pcm16_8k = resample_audio(
+            pcm16_8k, _ = resample_audio(
                 pcm16_24k,
                 source_rate=_GEMINI_OUTPUT_RATE,
                 target_rate=8000,
