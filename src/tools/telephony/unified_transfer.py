@@ -24,18 +24,10 @@ class UnifiedTransferTool(Tool):
     
     @property
     def definition(self) -> ToolDefinition:
-        """Return tool definition dynamically based on config."""
-        # Get destinations from config
-        config = self.context_config or {}
-        destinations = config.get('destinations', {})
-        
-        # Build destination enum for parameter
-        destination_names = list(destinations.keys())
-        dest_descriptions = [f"{name} ({dest.get('description', '')})" for name, dest in destinations.items()]
-        
+        """Return tool definition."""
         return ToolDefinition(
             name="transfer",
-            description=f"Transfer the caller to another destination. Available: {', '.join(dest_descriptions)}",
+            description="Transfer the caller to another destination (extension, queue, or ring group)",
             category=ToolCategory.TELEPHONY,
             requires_channel=True,
             max_execution_time=30,
@@ -43,9 +35,8 @@ class UnifiedTransferTool(Tool):
                 ToolParameter(
                     name="destination",
                     type="string",
-                    description=f"Destination to transfer to. Options: {', '.join(destination_names)}",
-                    required=True,
-                    enum=destination_names if destination_names else None
+                    description="Destination name to transfer to (e.g., 'sales_agent', 'sales_queue', 'sales_team')",
+                    required=True
                 )
             ]
         )
@@ -67,8 +58,15 @@ class UnifiedTransferTool(Tool):
         """
         destination = parameters.get('destination')
         
-        # Get destinations from config
-        config = self.context_config or {}
+        # Get destinations from config via context
+        config = context.get_config_value("tools.transfer")
+        if not config or not config.get("enabled"):
+            logger.warning("Unified transfer tool not configured", call_id=context.call_id)
+            return {
+                "status": "failed",
+                "message": "Transfer service is not available"
+            }
+        
         destinations = config.get('destinations', {})
         
         # Validate destination exists
