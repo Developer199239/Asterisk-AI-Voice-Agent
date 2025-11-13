@@ -230,27 +230,23 @@ class GoogleLiveProvider(AIProviderInterface):
         if context:
             system_prompt = context.get("system_prompt") or context.get("prompt")
 
-        # Build generation config
+        # Build generation config (per official Gemini Live API docs)
+        # https://ai.google.dev/api/live
         generation_config = {
-            "response_modalities": ["audio", "text"],
-            "speech_config": {
-                "voice_config": {
-                    "prebuilt_voice_config": {
-                        "voice_name": self.config.tts_voice_name or "en-US-Neural2-A"
-                    }
-                }
+            "response_modalities": ["AUDIO", "TEXT"],  # UPPERCASE required
+            "audio_config": {  # NOT speech_config
+                "voice_name": self.config.tts_voice_name or "Kore"  # Direct, no nesting
             },
         }
 
-        # Detailed debug logging for speech configuration
-        speech_cfg = generation_config.get("speech_config", {})
-        voice_cfg = speech_cfg.get("voice_config", {}).get("prebuilt_voice_config", {})
+        # Detailed debug logging for audio configuration
+        audio_cfg = generation_config.get("audio_config", {})
         logger.debug(
-            "Google Live speech configuration",
+            "Google Live audio configuration",
             call_id=self._call_id,
-            voice_name=voice_cfg.get("voice_name"),
-            speech_config_keys=list(speech_cfg.keys()),
-            voice_config_keys=list(voice_cfg.keys()),
+            voice_name=audio_cfg.get("voice_name"),
+            audio_config_keys=list(audio_cfg.keys()),
+            response_modalities=generation_config.get("response_modalities"),
         )
 
         # Build tools config if tools are available
