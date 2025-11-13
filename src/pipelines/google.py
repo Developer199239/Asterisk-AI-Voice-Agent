@@ -351,12 +351,22 @@ class GoogleLLMAdapter(LLMComponent):
                 response.raise_for_status()
             data = json.loads(body)
 
+        # Log raw response for debugging empty responses
         text = _extract_candidate_text(data)
+        if not text:
+            logger.warning(
+                "Google LLM returned empty response",
+                call_id=call_id,
+                request_id=request_id,
+                response_keys=list(data.keys()),
+                candidates_count=len(data.get("candidates", [])),
+                raw_response=body[:500] if len(body) <= 500 else body[:500] + "...",
+            )
         logger.info(
             "Google LLM response received",
             call_id=call_id,
             request_id=request_id,
-            preview=text[:80],
+            preview=text[:80] if text else "(empty)",
         )
         return text
 
