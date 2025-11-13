@@ -492,14 +492,6 @@ pipelines:
         sample_rate_hz: 8000
         speaking_rate: 1.0
 
-  google_live:
-    api_key: ${GOOGLE_API_KEY}
-    enabled: true
-    initial_greeting: ${GOOGLE_LIVE_GREETING:-Hi! I'm powered by Google Gemini Live API. Try interrupting me!}
-    llm_model: gemini-2.5-flash
-    llm_temperature: 0.7
-    tts_voice_name: en-US-Neural2-A
-
 profiles:
   default: telephony_responsive
   openai_realtime_24k:
@@ -621,6 +613,13 @@ providers:
       threshold: 0.6
       type: server_vad
     voice: alloy
+  google_live:
+    api_key: ${GOOGLE_API_KEY}
+    enabled: true
+    greeting: ${GOOGLE_LIVE_GREETING:-Hi! I'm powered by Google Gemini Live API. Try interrupting me!}
+    llm_model: gemini-2.5-flash
+    llm_temperature: 0.7
+    tts_voice_name: en-US-Neural2-A
 streaming:
   chunk_size_ms: 20
   connection_timeout_ms: 120000

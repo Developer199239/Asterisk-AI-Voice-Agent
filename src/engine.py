@@ -34,6 +34,7 @@ from .config import (
     load_config,
     LocalProviderConfig,
     DeepgramProviderConfig,
+    GoogleProviderConfig,
     OpenAIRealtimeProviderConfig,
 )
 from .pipelines import PipelineOrchestrator, PipelineOrchestratorError, PipelineResolution
