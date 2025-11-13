@@ -567,27 +567,18 @@ class GoogleLiveProvider(AIProviderInterface):
                 sample_rate=8000,
             )
 
-            # Emit audio event
+            # Emit audio event (matching OpenAI Realtime pattern)
             if not self._in_audio_burst:
                 self._in_audio_burst = True
-                self._emit_event(
-                    "agent_audio_start",
+            
+            if self.on_event:
+                await self.on_event(
                     {
+                        "type": "AgentAudio",
+                        "data": output_audio,
                         "call_id": self._call_id,
-                        "format": "mulaw",
-                        "sample_rate": 8000,
-                    },
+                    }
                 )
-
-            self._emit_event(
-                "agent_audio",
-                {
-                    "call_id": self._call_id,
-                    "audio": output_audio,
-                    "format": "mulaw",
-                    "sample_rate": 8000,
-                },
-            )
 
         except Exception as e:
             logger.error(
@@ -601,12 +592,14 @@ class GoogleLiveProvider(AIProviderInterface):
         """Handle turn completion."""
         if self._in_audio_burst:
             self._in_audio_burst = False
-            self._emit_event(
-                "agent_audio_done",
-                {
-                    "call_id": self._call_id,
-                },
-            )
+            if self.on_event:
+                await self.on_event(
+                    {
+                        "type": "AgentAudioDone",
+                        "call_id": self._call_id,
+                        "streaming_done": True,
+                    }
+                )
 
         # Mark greeting as complete after first turn
         if not self._greeting_completed:
@@ -689,10 +682,11 @@ class GoogleLiveProvider(AIProviderInterface):
             )
             
             # Emit transcript event for monitoring
-            self._emit_event(
-                "transcript",
-                {
-                    "call_id": self._call_id,
+            if self.on_event:
+                await self.on_event(
+                    {
+                        "type": "Transcript",
+                        "call_id": self._call_id,
                     "text": transcription,
                     "is_final": True,
                     "source": "user",
