@@ -130,6 +130,11 @@ class GoogleLiveProvider(AIProviderInterface):
             supports_audio_output=True,
             supports_function_calling=True,
         )
+    
+    @property
+    def supported_codecs(self) -> List[str]:
+        """Return list of supported audio codecs (μ-law for telephony)."""
+        return ["ulaw"]
 
     async def start_session(
         self,
