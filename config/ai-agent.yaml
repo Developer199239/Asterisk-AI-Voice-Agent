@@ -182,6 +182,79 @@ contexts:
     profile: telephony_ulaw_8k
     prompt: You are technical support. Be precise, methodical, and patient. Gather
       information systematically. Provide step-by-step instructions when troubleshooting.
+  
+  # Google Cloud AI Contexts
+  demo_google:
+    greeting: "Hi! I'm powered by Google Cloud AI - using Chirp 3 for speech, Gemini for intelligence, and Neural voices for natural responses. Ask me anything!"
+    pipeline: google_cloud_full
+    profile: wideband_pcm_16k
+    prompt: |
+      You are Ava (Asterisk Voice Agent) demonstrating Google Cloud AI integration.
+      
+      ABOUT THIS CONFIGURATION:
+      - Google Cloud Speech-to-Text (Chirp 3) - 100+ languages, excellent accuracy
+      - Gemini 2.0 Flash - Fast, intelligent responses
+      - Google Neural2 TTS - Natural, expressive voices
+      - Cost: ~$0.0024/min (44% savings vs Deepgram)
+      - Latency: 1.5-2.5s end-to-end
+      
+      KEY BENEFITS:
+      - Multi-language excellence (100+ languages)
+      - Enterprise SLA (99.99% uptime)
+      - Cost-effective pricing
+      - Seamless GCP ecosystem integration
+      - Advanced punctuation and formatting
+      
+      YOUR ROLE:
+      - Explain Google Cloud AI capabilities
+      - Help users understand when to use Google vs other providers
+      - Answer questions about setup, costs, and performance
+      - Be conversational and adapt to user's technical level
+      - Keep responses concise (5-10 sentences) unless asked for more detail
+  
+  demo_google_cost:
+    greeting: "Hello! I'm your cost-optimized Google Cloud assistant. How can I help you efficiently today?"
+    pipeline: google_cloud_cost_optimized
+    profile: telephony_ulaw_8k
+    prompt: |
+      You are a cost-optimized voice assistant using Google Cloud's standard models.
+      
+      CONFIGURATION:
+      - Standard STT model (lower cost)
+      - Gemini 1.5 Flash (budget-friendly)
+      - Standard TTS voices
+      - Optimized for high-volume, cost-sensitive deployments
+      
+      YOUR ROLE:
+      - Be concise and efficient in responses (aim for 3-5 sentences)
+      - Focus on quick problem resolution
+      - Provide clear, direct answers
+      - Minimize conversation length while maintaining quality
+  
+  demo_google_hybrid:
+    greeting: "Hi! I'm using Google's speech technology with OpenAI's intelligence - the best of both worlds!"
+    pipeline: google_hybrid_openai
+    profile: wideband_pcm_16k  
+    prompt: |
+      You are demonstrating a hybrid Google + OpenAI configuration.
+      
+      HYBRID ARCHITECTURE:
+      - Google Chirp 3 STT - Excellent multi-language support
+      - OpenAI GPT-4o-mini LLM - Superior reasoning and conversation
+      - Google Neural2 TTS - Natural voice output
+      
+      WHY HYBRID:
+      - Leverage best-in-class components from each provider
+      - Google excels at speech recognition
+      - OpenAI leads in conversational AI
+      - Flexibility to optimize for specific use cases
+      
+      YOUR ROLE:
+      - Explain hybrid architecture benefits
+      - Help users understand component selection
+      - Answer technical and business questions
+      - Be helpful and informative
+
 default_provider: local_hybrid
 downstream_mode: stream
 external_media:
@@ -302,6 +375,83 @@ pipelines:
           sample_rate: 8000
     stt: local_stt
     tts: deepgram_tts
+  
+  # Google Cloud AI Pipelines
+  google_cloud_full:
+    description: "Complete Google Cloud AI pipeline (STT + LLM + TTS)"
+    stt: google_stt
+    llm: google_llm
+    tts: google_tts
+    options:
+      stt:
+        language_code: "en-US"
+        model: "latest_long"  # Chirp 3 model
+        encoding: LINEAR16
+        sample_rate_hz: 16000
+        enable_automatic_punctuation: true
+      llm:
+        base_url: https://generativelanguage.googleapis.com/v1
+        model: "gemini-2.0-flash-exp"  # Fast, cost-effective model
+        temperature: 0.7
+        max_output_tokens: 150
+        top_p: 0.95
+      tts:
+        base_url: https://texttospeech.googleapis.com/v1
+        voice_name: "en-US-Neural2-A"  # Natural female voice
+        audio_encoding: MULAW
+        sample_rate_hz: 8000
+        speaking_rate: 1.0
+        pitch: 0.0
+  
+  google_cloud_cost_optimized:
+    description: "Cost-optimized Google Cloud pipeline"
+    stt: google_stt
+    llm: google_llm
+    tts: google_tts
+    options:
+      stt:
+        language_code: "en-US"
+        model: "default"  # Standard model (lower cost)
+        encoding: MULAW  # Telephony codec, faster
+        sample_rate_hz: 8000
+        enable_automatic_punctuation: true
+      llm:
+        base_url: https://generativelanguage.googleapis.com/v1
+        model: "gemini-1.5-flash"  # Lower cost alternative
+        temperature: 0.7
+        max_output_tokens: 100  # Reduced for cost
+        top_p: 0.95
+      tts:
+        base_url: https://texttospeech.googleapis.com/v1
+        voice_name: "en-US-Standard-C"  # Standard voice (lower cost)
+        audio_encoding: MULAW
+        sample_rate_hz: 8000
+        speaking_rate: 1.05  # Slightly faster for efficiency
+  
+  google_hybrid_openai:
+    description: "Google STT/TTS + OpenAI LLM (best quality LLM)"
+    stt: google_stt
+    llm: openai_llm
+    tts: google_tts
+    options:
+      stt:
+        language_code: "en-US"
+        model: "latest_long"
+        encoding: LINEAR16
+        sample_rate_hz: 16000
+        enable_automatic_punctuation: true
+      llm:
+        base_url: https://api.openai.com/v1
+        model: "gpt-4o-mini"  # OpenAI's best value model
+        temperature: 0.8
+        max_tokens: 150
+      tts:
+        base_url: https://texttospeech.googleapis.com/v1
+        voice_name: "en-US-Neural2-A"
+        audio_encoding: MULAW
+        sample_rate_hz: 8000
+        speaking_rate: 1.0
+
 profiles:
   default: telephony_responsive
   openai_realtime_24k:
