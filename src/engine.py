@@ -44,6 +44,7 @@ from .providers.base import AIProviderInterface
 from .providers.deepgram import DeepgramProvider
 from .providers.local import LocalProvider
 from .providers.openai_realtime import OpenAIRealtimeProvider
+from .providers.google_live import GoogleLiveProvider
 from .core import SessionStore, PlaybackManager, ConversationCoordinator
 from .core.vad_manager import EnhancedVADManager, VADResult
 from .core.streaming_playback_manager import StreamingPlaybackManager
@@ -677,6 +678,25 @@ class Engine:
                     runtime_issues = self._describe_provider_alignment(name, provider)
                     if runtime_issues:
                         self.provider_alignment_issues.setdefault(name, []).extend(runtime_issues)
+                elif name == "google_live":
+                    google_cfg = self._build_google_config(provider_config_data)
+                    if not google_cfg:
+                        continue
+
+                    provider = GoogleLiveProvider(
+                        google_cfg,
+                        self.on_provider_event,
+                        gating_manager=self.audio_gating_manager
+                    )
+                    self.providers[name] = provider
+                    logger.info(
+                        "Provider 'google_live' loaded successfully",
+                        audio_gating_enabled=self.audio_gating_manager is not None
+                    )
+
+                    runtime_issues = self._describe_provider_alignment(name, provider)
+                    if runtime_issues:
+                        self.provider_alignment_issues.setdefault(name, []).extend(runtime_issues)
                 else:
                     logger.warning(f"Unknown provider type: {name}")
                     continue
@@ -1066,6 +1086,7 @@ class Engine:
             provider_aliases = {
                 "openai": "openai_realtime",
                 "deepgram_agent": "deepgram",
+                "google": "google_live",
             }
             resolved_provider = (
                 provider_aliases.get(ai_provider_value, ai_provider_value)
@@ -2421,8 +2442,9 @@ class Engine:
                     # CRITICAL: Providers requiring continuous audio flow during TTS
                     # - deepgram: Traditional continuous STT throughout conversation
                     # - openai_realtime: Full agent mode with server-side VAD managing turn-taking
+                    # - google_live: Bidirectional streaming with built-in VAD
                     # NOTE: Does NOT apply to pipeline mode (handled above)
-                    if provider_name in ("deepgram", "openai_realtime"):
+                    if provider_name in ("deepgram", "openai_realtime", "google_live"):
                         continuous_input = True
                     else:
                         pcfg = getattr(provider, 'config', None)
@@ -3126,7 +3148,7 @@ class Engine:
             provider = self.providers.get(provider_name)
             continuous_input = False
             try:
-                if provider_name in ("deepgram", "openai_realtime"):
+                if provider_name in ("deepgram", "openai_realtime", "google_live"):
                     continuous_input = True
                 else:
                     pcfg = getattr(provider, 'config', None)
