@@ -108,8 +108,18 @@ class TransferToQueueTool(Tool):
             # 3. Format brief announcement message
             message = f"Transferring you to {description} now."
             
-            # 4. Execute transfer immediately to FreePBX ext-queues context
+            # 4. Mark session as transferred BEFORE continue() executes
+            # This prevents cleanup from hanging up the caller channel
+            # Since continue() causes StasisEnd which triggers cleanup immediately
+            await context.update_session(
+                transfer_active=True,
+                transfer_state="in_queue",
+                transfer_target=queue_name
+            )
+            
+            # 5. Execute transfer immediately to FreePBX ext-queues context
             # Must happen while channel is still in Stasis
+            # Channel will leave Stasis and continue in dialplan
             await context.ari_client.send_command(
                 method="POST",
                 resource=f"channels/{context.caller_channel_id}/continue",
