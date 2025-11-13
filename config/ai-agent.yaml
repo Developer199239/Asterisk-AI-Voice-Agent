@@ -391,7 +391,7 @@ pipelines:
         chunk_ms: 1000  # 1-second chunks for better transcription accuracy
       llm:
         base_url: https://generativelanguage.googleapis.com/v1
-        model: "gemini-2.0-flash-exp"  # Fast, cost-effective model
+        model: "gemini-1.5-flash"  # Fast, cost-effective model (v1 API compatible)
         temperature: 0.7
         max_output_tokens: 150
         top_p: 0.95
