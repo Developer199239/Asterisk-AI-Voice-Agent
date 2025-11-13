@@ -120,6 +120,16 @@ class GoogleProviderConfig(BaseModel):
     llm_model: str = Field(default="models/gemini-1.5-pro-latest")
     greeting: Optional[str] = None  # For Google Live API initial greeting
     enabled: bool = Field(default=True)  # Provider enabled flag
+    
+    # Google Live audio format configuration (aligns with OpenAI Realtime pattern)
+    input_encoding: str = Field(default="ulaw")  # Wire format from AudioSocket/RTP (ulaw/slin16)
+    input_sample_rate_hz: int = Field(default=8000)  # Wire sample rate
+    provider_input_encoding: str = Field(default="linear16")  # Gemini Live expects PCM16
+    provider_input_sample_rate_hz: int = Field(default=16000)  # Gemini Live input rate
+    output_encoding: str = Field(default="linear16")  # Gemini Live outputs PCM16
+    output_sample_rate_hz: int = Field(default=24000)  # Gemini Live native output rate
+    target_encoding: str = Field(default="ulaw")  # Target wire format for playback
+    target_sample_rate_hz: int = Field(default=8000)  # Target wire sample rate
 
 
 class OpenAIRealtimeProviderConfig(BaseModel):

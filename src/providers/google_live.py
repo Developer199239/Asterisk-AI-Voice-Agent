@@ -329,37 +329,45 @@ class GoogleLiveProvider(AIProviderInterface):
                     error=str(e),
                 )
 
-    async def send_audio(self, audio_chunk: bytes, sample_rate: int = 8000) -> None:
+    async def send_audio(self, audio_chunk: bytes, sample_rate: int = 8000, encoding: str = "ulaw") -> None:
         """
         Send audio chunk to Gemini Live API.
 
         Args:
             audio_chunk: Raw audio bytes (µ-law or PCM16)
-            sample_rate: Sample rate of input audio (default 8000 Hz)
+            sample_rate: Sample rate of input audio (default from config)
+            encoding: Audio encoding (ulaw/linear16/pcm16)
         """
         if not self.websocket or not self._setup_complete:
             return
 
         try:
-            # Convert µ-law to PCM16 if needed
-            if sample_rate == 8000 and len(audio_chunk) > 0:
-                # Assume µ-law for 8kHz
-                pcm16_8k = mulaw_to_pcm16le(audio_chunk)
+            # Infer format from chunk size if not specified
+            if encoding == "ulaw" or (sample_rate == 8000 and len(audio_chunk) == 160):
+                # μ-law to PCM16
+                pcm16_src = mulaw_to_pcm16le(audio_chunk)
+                src_rate = sample_rate
             else:
-                pcm16_8k = audio_chunk
+                # Already PCM16
+                pcm16_src = audio_chunk
+                src_rate = sample_rate
 
-            # Resample from 8kHz to 16kHz
-            pcm16_16k, _ = resample_audio(
-                pcm16_8k,
-                source_rate=sample_rate,
-                target_rate=_GEMINI_INPUT_RATE,
-            )
+            # Resample to provider's input rate (16kHz for Gemini Live)
+            provider_rate = self.config.provider_input_sample_rate_hz
+            if src_rate != provider_rate:
+                pcm16_provider, _ = resample_audio(
+                    pcm16_src,
+                    source_rate=src_rate,
+                    target_rate=provider_rate,
+                )
+            else:
+                pcm16_provider = pcm16_src
 
             # Add to buffer
-            self._input_buffer.extend(pcm16_16k)
+            self._input_buffer.extend(pcm16_provider)
 
-            # Send in chunks (20ms at 16kHz = 640 bytes)
-            chunk_size = int(_GEMINI_INPUT_RATE * 2 * _COMMIT_INTERVAL_SEC)  # 2 bytes per sample
+            # Send in chunks (20ms at provider rate)
+            chunk_size = int(provider_rate * 2 * _COMMIT_INTERVAL_SEC)  # 2 bytes per sample
             
             while len(self._input_buffer) >= chunk_size:
                 chunk_to_send = bytes(self._input_buffer[:chunk_size])
@@ -373,7 +381,7 @@ class GoogleLiveProvider(AIProviderInterface):
                     "realtimeInput": {  # camelCase not snake_case
                         "mediaChunks": [  # camelCase
                             {
-                                "mimeType": f"audio/pcm;rate={_GEMINI_INPUT_RATE}",  # camelCase + rate
+                                "mimeType": f"audio/pcm;rate={provider_rate}",  # camelCase + rate from config
                                 "data": audio_b64,
                             }
                         ]
@@ -568,26 +576,34 @@ class GoogleLiveProvider(AIProviderInterface):
         Handle audio output from Gemini.
 
         Args:
-            audio_b64: Base64-encoded PCM16 audio at 24kHz
+            audio_b64: Base64-encoded PCM16 audio (at output_sample_rate_hz from config)
         """
         try:
             # Decode base64
-            pcm16_24k = base64.b64decode(audio_b64)
+            pcm16_provider = base64.b64decode(audio_b64)
             
-            _GOOGLE_LIVE_AUDIO_RECEIVED.labels(call_id=self._call_id).inc(len(pcm16_24k))
+            _GOOGLE_LIVE_AUDIO_RECEIVED.labels(call_id=self._call_id).inc(len(pcm16_provider))
 
-            # Resample from 24kHz to 8kHz for AudioSocket
-            pcm16_8k, _ = resample_audio(
-                pcm16_24k,
-                source_rate=_GEMINI_OUTPUT_RATE,
-                target_rate=8000,
-            )
+            # Resample from provider output rate to target wire rate (from config)
+            provider_output_rate = self.config.output_sample_rate_hz
+            target_rate = self.config.target_sample_rate_hz
+            
+            if provider_output_rate != target_rate:
+                pcm16_target, _ = resample_audio(
+                    pcm16_provider,
+                    source_rate=provider_output_rate,
+                    target_rate=target_rate,
+                )
+            else:
+                pcm16_target = pcm16_provider
 
-            # Convert to target format (µ-law or PCM16)
-            output_audio = convert_pcm16le_to_target_format(
-                pcm16_8k,
-                target_format="mulaw",  # Default to µ-law for telephony
-            )
+            # Convert to target format (from config: ulaw/linear16/pcm16)
+            target_encoding = self.config.target_encoding.lower()
+            if target_encoding in ("ulaw", "mulaw", "g711_ulaw"):
+                output_audio = convert_pcm16le_to_target_format(pcm16_target, "mulaw")
+            else:
+                # PCM16/linear16 - no conversion needed
+                output_audio = pcm16_target
 
             # Emit audio event (matching OpenAI Realtime pattern)
             if not self._in_audio_burst:
@@ -599,6 +615,8 @@ class GoogleLiveProvider(AIProviderInterface):
                         "type": "AgentAudio",
                         "data": output_audio,
                         "call_id": self._call_id,
+                        "encoding": target_encoding,  # Tell engine what format we're sending
+                        "sample_rate": target_rate,  # Tell engine what rate we're sending
                     }
                 )
 
