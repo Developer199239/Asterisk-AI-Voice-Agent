@@ -58,7 +58,7 @@ asterisk -rx "dialplan reload"
 **Best quality and features**
 
 - **STT**: Google Chirp 3 (latest_long model, 16kHz)
-- **LLM**: Gemini 2.0 Flash (fast, intelligent)
+- **LLM**: Gemini 1.5 Flash (fast, intelligent)
 - **TTS**: Neural2-A (natural female voice)
 - **Cost**: ~$0.0024/min
 - **Use Cases**: Customer service, demos, quality-focused deployments
@@ -109,7 +109,7 @@ exten => s,n,Set(AI_PROVIDER=google_hybrid_openai)
 
 | Pipeline | STT | LLM | TTS | Est. Cost/min |
 |----------|-----|-----|-----|---------------|
-| google_cloud_full | Chirp 3 | Gemini 2.0 | Neural2 | $0.0024 |
+| google_cloud_full | Chirp 3 | Gemini 1.5 | Neural2 | $0.0024 |
 | google_cloud_cost_optimized | Standard | Gemini 1.5 | Standard | $0.0015 |
 | google_hybrid_openai | Chirp 3 | GPT-4o-mini | Neural2 | $0.003 |
 | deepgram (reference) | Nova-2 | GPT-4o-mini | Aura | $0.0043 |
