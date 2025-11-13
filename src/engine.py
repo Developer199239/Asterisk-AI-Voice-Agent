@@ -1740,6 +1740,13 @@ class Engine:
             except Exception:
                 logger.debug("Provider stop_session failed during cleanup", call_id=call_id, exc_info=True)
 
+            # Check for pending queue transfer BEFORE tearing down
+            pending_queue_transfer = (
+                getattr(session, 'transfer_state', None) == 'pending_queue' and
+                getattr(session, 'queue_context', None) and
+                getattr(session, 'queue_extension', None)
+            )
+            
             # Tear down bridge.
             bridge_id = session.bridge_id
             if bridge_id:
@@ -1749,12 +1756,46 @@ class Engine:
                 except Exception:
                     logger.debug("Bridge destroy failed", call_id=call_id, bridge_id=bridge_id, exc_info=True)
 
-            # Hang up associated channels.
-            for channel_id in filter(None, [session.caller_channel_id, session.local_channel_id, session.external_media_id, session.audiosocket_channel_id]):
+            # Execute pending queue transfer OR hang up associated channels.
+            if pending_queue_transfer:
+                # Transfer caller to queue instead of hanging up
                 try:
-                    await self.ari_client.hangup_channel(channel_id)
-                except Exception:
-                    logger.debug("Hangup failed during cleanup", call_id=call_id, channel_id=channel_id, exc_info=True)
+                    await self.ari_client.send_command(
+                        method="POST",
+                        resource=f"channels/{session.caller_channel_id}/continue",
+                        params={
+                            "context": session.queue_context,
+                            "extension": session.queue_extension,
+                            "priority": getattr(session, 'queue_priority', 1)
+                        }
+                    )
+                    logger.info(
+                        "✅ Queue transfer executed during cleanup",
+                        call_id=call_id,
+                        queue=session.queue_extension,
+                        context=session.queue_context
+                    )
+                    # Hang up other channels (not caller)
+                    for channel_id in filter(None, [session.local_channel_id, session.external_media_id, session.audiosocket_channel_id]):
+                        try:
+                            await self.ari_client.hangup_channel(channel_id)
+                        except Exception:
+                            logger.debug("Hangup failed during cleanup", call_id=call_id, channel_id=channel_id, exc_info=True)
+                except Exception as e:
+                    logger.error("Queue transfer failed during cleanup", call_id=call_id, error=str(e))
+                    # Fallback: hang up all channels including caller
+                    for channel_id in filter(None, [session.caller_channel_id, session.local_channel_id, session.external_media_id, session.audiosocket_channel_id]):
+                        try:
+                            await self.ari_client.hangup_channel(channel_id)
+                        except Exception:
+                            logger.debug("Hangup failed during cleanup", call_id=call_id, channel_id=channel_id, exc_info=True)
+            else:
+                # Normal cleanup: hang up all channels
+                for channel_id in filter(None, [session.caller_channel_id, session.local_channel_id, session.external_media_id, session.audiosocket_channel_id]):
+                    try:
+                        await self.ari_client.hangup_channel(channel_id)
+                    except Exception:
+                        logger.debug("Hangup failed during cleanup", call_id=call_id, channel_id=channel_id, exc_info=True)
 
             if getattr(self, 'rtp_server', None):
                 try:

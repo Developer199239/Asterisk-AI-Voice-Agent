@@ -105,23 +105,15 @@ class TransferToQueueTool(Tool):
             # 2. Check queue status (if available)
             queue_status = await self._get_queue_status(asterisk_queue, context)
             
-            # 3. Continue to FreePBX ext-queues context
-            # This uses the same path as IVR queue transfers
-            # FreePBX handles all queue setup, macros, and member routing
-            await context.ari_client.send_command(
-                method="POST",
-                resource=f"channels/{context.caller_channel_id}/continue",
-                params={
-                    "context": "ext-queues",
-                    "extension": asterisk_queue,  # Queue number as extension
-                    "priority": 1
-                }
-            )
-            
-            # 5. Update session state
+            # 3. Store queue transfer details in session for deferred execution
+            # The transfer will happen AFTER the AI finishes speaking
+            # This prevents the bridge from collapsing prematurely
             await context.update_session(
-                transfer_state="in_queue",
-                transfer_target=queue_name
+                transfer_state="pending_queue",
+                transfer_target=queue_name,
+                queue_context="ext-queues",
+                queue_extension=asterisk_queue,
+                queue_priority=1
             )
             
             # 6. Format response message
