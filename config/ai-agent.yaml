@@ -384,11 +384,13 @@ pipelines:
     tts: google_tts
     options:
       stt:
+        base_url: https://speech.googleapis.com/v1
         language_code: "en-US"
         model: "latest_long"  # Chirp 3 model
         encoding: LINEAR16
         sample_rate_hz: 16000
         enable_automatic_punctuation: true
+        timeout_sec: 10.0
       llm:
         base_url: https://generativelanguage.googleapis.com/v1
         model: "gemini-2.0-flash-exp"  # Fast, cost-effective model
@@ -410,11 +412,13 @@ pipelines:
     tts: google_tts
     options:
       stt:
+        base_url: https://speech.googleapis.com/v1
         language_code: "en-US"
         model: "default"  # Standard model (lower cost)
         encoding: MULAW  # Telephony codec, faster
         sample_rate_hz: 8000
         enable_automatic_punctuation: true
+        timeout_sec: 10.0
       llm:
         base_url: https://generativelanguage.googleapis.com/v1
         model: "gemini-1.5-flash"  # Lower cost alternative
@@ -435,11 +439,13 @@ pipelines:
     tts: google_tts
     options:
       stt:
+        base_url: https://speech.googleapis.com/v1
         language_code: "en-US"
         model: "latest_long"
         encoding: LINEAR16
         sample_rate_hz: 16000
         enable_automatic_punctuation: true
+        timeout_sec: 10.0
       llm:
         base_url: https://api.openai.com/v1
         model: "gpt-4o-mini"  # OpenAI's best value model
