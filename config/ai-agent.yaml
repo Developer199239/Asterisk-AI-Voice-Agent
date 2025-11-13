@@ -533,6 +533,11 @@ tools:
     require_confirmation: false
     farewell_message: "Thank you for calling. Goodbye!"
   
+  # Leave voicemail - route caller to voicemail
+  leave_voicemail:
+    enabled: true
+    extension: "2765"  # Extension number for voicemail box
+  
   # Email summary tool - auto-send call summaries to admin
   send_email_summary:
     enabled: true                          # Set to true to enable auto-send after calls
