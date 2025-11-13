@@ -162,6 +162,23 @@ class GoogleLiveProvider(AIProviderInterface):
 
         # Build WebSocket URL with API key
         api_key = self.config.api_key or ""
+        
+        # Debug: Check API key
+        if not api_key:
+            logger.error(
+                "GOOGLE_API_KEY not found! Cannot connect to Google Live API.",
+                call_id=call_id,
+            )
+            raise ValueError("GOOGLE_API_KEY is required for Google Live provider")
+        
+        api_key_preview = f"{api_key[:8]}...{api_key[-4:]}" if len(api_key) > 12 else "<too_short>"
+        logger.debug(
+            "Connecting to Google Live API",
+            call_id=call_id,
+            endpoint=_WEBSOCKET_ENDPOINT,
+            api_key_preview=api_key_preview,
+        )
+        
         ws_url = f"{_WEBSOCKET_ENDPOINT}?key={api_key}"
 
         try:
@@ -246,6 +263,16 @@ class GoogleLiveProvider(AIProviderInterface):
 
         if tools:
             setup_msg["setup"]["tools"] = tools
+
+        # Debug: Log setup message structure
+        logger.debug(
+            "Sending Google Live setup message",
+            call_id=self._call_id,
+            setup_keys=list(setup_msg.get("setup", {}).keys()),
+            model=setup_msg.get("setup", {}).get("model"),
+            has_system_instruction=bool(system_prompt),
+            tools_count=len(tools),
+        )
 
         await self._send_message(setup_msg)
         
@@ -358,11 +385,40 @@ class GoogleLiveProvider(AIProviderInterface):
                         exc_info=True,
                     )
         except (ConnectionClosedError, ConnectionClosedOK) as e:
-            logger.info(
+            # Enhanced logging for WebSocket close
+            close_reason = e.reason if hasattr(e, 'reason') else "No reason provided"
+            close_code = e.code if hasattr(e, 'code') else None
+            
+            # Decode close code meaning
+            close_code_meanings = {
+                1000: "Normal closure",
+                1001: "Going away",
+                1002: "Protocol error",
+                1003: "Unsupported data",
+                1006: "Abnormal closure (no close frame)",
+                1007: "Invalid frame payload data",
+                1008: "Policy violation (likely auth/permission issue)",
+                1009: "Message too big",
+                1010: "Mandatory extension missing",
+                1011: "Internal server error",
+            }
+            close_meaning = close_code_meanings.get(close_code, "Unknown")
+            
+            logger.warning(
                 "Google Live WebSocket closed",
                 call_id=self._call_id,
-                code=e.code if hasattr(e, 'code') else None,
+                code=close_code,
+                meaning=close_meaning,
+                reason=close_reason,
             )
+            
+            # Specific guidance for common errors
+            if close_code == 1008:
+                logger.error(
+                    "Policy violation (1008) - Check API key permissions and Gemini Live API access",
+                    call_id=self._call_id,
+                    hint="Verify: 1) GOOGLE_API_KEY is correct 2) Gemini API is enabled 3) API key has generativelanguage.liveapi.user role",
+                )
         except Exception as e:
             logger.error(
                 "Google Live receive loop error",
