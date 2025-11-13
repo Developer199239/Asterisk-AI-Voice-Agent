@@ -105,6 +105,7 @@ class GoogleLiveProvider(AIProviderInterface):
         self._setup_complete: bool = False
         self._greeting_completed: bool = False
         self._in_audio_burst: bool = False
+        self._setup_ack_event: Optional[asyncio.Event] = None  # ACK gate like Deepgram
         
         # Audio buffering for resampling
         self._input_buffer = bytearray()
@@ -196,14 +197,31 @@ class GoogleLiveProvider(AIProviderInterface):
                 call_id=call_id,
             )
 
-            # Send setup message to configure session
-            await self._send_setup(context)
-
-            # Start background tasks
+            # Create ACK event BEFORE sending setup (like Deepgram pattern)
+            self._setup_ack_event = asyncio.Event()
+            
+            # Start receive loop FIRST (so it can catch setupComplete)
             self._receive_task = asyncio.create_task(
                 self._receive_loop(),
                 name=f"google-live-receive-{call_id}",
             )
+            
+            # Send setup message to configure session
+            await self._send_setup(context)
+            
+            # Wait for setupComplete ACK (like Deepgram waits for SettingsApplied)
+            try:
+                await asyncio.wait_for(self._setup_ack_event.wait(), timeout=5.0)
+                logger.info(
+                    "Google Live setup acknowledged",
+                    call_id=call_id,
+                )
+            except asyncio.TimeoutError:
+                logger.error(
+                    "Timeout waiting for setupComplete from Google Live API",
+                    call_id=call_id,
+                )
+                raise
             self._keepalive_task = asyncio.create_task(
                 self._keepalive_loop(),
                 name=f"google-live-keepalive-{call_id}",
@@ -350,12 +368,12 @@ class GoogleLiveProvider(AIProviderInterface):
                 # Encode as base64
                 audio_b64 = base64.b64encode(chunk_to_send).decode("utf-8")
 
-                # Send realtime input
+                # Send realtime input (using camelCase keys per actual API)
                 message = {
-                    "realtime_input": {
-                        "media_chunks": [
+                    "realtimeInput": {  # camelCase not snake_case
+                        "mediaChunks": [  # camelCase
                             {
-                                "mime_type": "audio/pcm",
+                                "mimeType": f"audio/pcm;rate={_GEMINI_INPUT_RATE}",  # camelCase + rate
                                 "data": audio_b64,
                             }
                         ]
@@ -483,6 +501,11 @@ class GoogleLiveProvider(AIProviderInterface):
     async def _handle_setup_complete(self, data: Dict[str, Any]) -> None:
         """Handle setupComplete message."""
         self._setup_complete = True
+        
+        # Unblock audio streaming (ACK pattern like Deepgram)
+        if self._setup_ack_event:
+            self._setup_ack_event.set()
+        
         logger.info(
             "Google Live setup complete",
             call_id=self._call_id,
@@ -495,14 +518,14 @@ class GoogleLiveProvider(AIProviderInterface):
     async def _send_greeting(self) -> None:
         """Send greeting message to start conversation."""
         greeting_msg = {
-            "client_content": {
+            "clientContent": {  # camelCase
                 "turns": [
                     {
                         "role": "user",
                         "parts": [{"text": "Start conversation"}]
                     }
                 ],
-                "turn_complete": True,
+                "turnComplete": True,  # camelCase
             }
         }
         await self._send_message(greeting_msg)
@@ -717,9 +740,9 @@ class GoogleLiveProvider(AIProviderInterface):
         while self.websocket and not self.websocket.closed:
             try:
                 await asyncio.sleep(_KEEPALIVE_INTERVAL_SEC)
-                # Send empty realtime input as keepalive
+                # Send empty realtime input as keepalive (camelCase)
                 if self._setup_complete:
-                    await self._send_message({"realtime_input": {}})
+                    await self._send_message({"realtimeInput": {}})
             except asyncio.CancelledError:
                 break
             except Exception as e:
