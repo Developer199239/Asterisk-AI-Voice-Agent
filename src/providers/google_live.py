@@ -230,23 +230,27 @@ class GoogleLiveProvider(AIProviderInterface):
         if context:
             system_prompt = context.get("system_prompt") or context.get("prompt")
 
-        # Build generation config (per official Gemini Live API docs)
-        # https://ai.google.dev/api/live
+        # Build generation config (per official Gemini API GenerationConfig)
+        # https://ai.google.dev/api/generate-content#generationconfig
         generation_config = {
-            "response_modalities": ["AUDIO", "TEXT"],  # UPPERCASE required
-            "audio_config": {  # NOT speech_config
-                "voice_name": self.config.tts_voice_name or "Kore"  # Direct, no nesting
+            "responseModalities": ["AUDIO", "TEXT"],  # camelCase, UPPERCASE values
+            "speechConfig": {  # NOT audio_config - this was Perplexity error!
+                "voiceConfig": {
+                    "prebuiltVoiceConfig": {
+                        "voiceName": self.config.tts_voice_name or "Kore"
+                    }
+                }
             },
         }
 
-        # Detailed debug logging for audio configuration
-        audio_cfg = generation_config.get("audio_config", {})
+        # Detailed debug logging for speech configuration
+        speech_cfg = generation_config.get("speechConfig", {})
+        voice_cfg = speech_cfg.get("voiceConfig", {}).get("prebuiltVoiceConfig", {})
         logger.debug(
-            "Google Live audio configuration",
+            "Google Live speech configuration",
             call_id=self._call_id,
-            voice_name=audio_cfg.get("voice_name"),
-            audio_config_keys=list(audio_cfg.keys()),
-            response_modalities=generation_config.get("response_modalities"),
+            voice_name=voice_cfg.get("voiceName"),
+            response_modalities=generation_config.get("responseModalities"),
         )
 
         # Build tools config if tools are available
