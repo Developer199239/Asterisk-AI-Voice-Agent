@@ -574,19 +574,24 @@ class GoogleLiveProvider(AIProviderInterface):
         
         # Handle input transcription (user speech) - per official API docs
         # Per Gemini Live API spec: inputTranscription sends streaming partial updates
-        # We accumulate them and only save when turnComplete=true for clean final transcription
+        # API DOCS SAY: Each update contains FULL cumulative transcript, not fragments
+        # BUT: Testing shows we may get fragments - need to verify actual behavior
         input_transcription = content.get("inputTranscription")
         if input_transcription:
             text = input_transcription.get("text", "")
             if text:
-                # Always update buffer with latest transcription
-                # The last one before turnComplete will be the final, clean version
-                self._input_transcription_buffer = text
-                logger.debug(
-                    "Google Live input transcription (partial)",
+                # Log full inputTranscription object to debug API behavior
+                logger.info(
+                    "Google Live inputTranscription DEBUG",
                     call_id=self._call_id,
-                    text_preview=text[:100],
+                    full_object=input_transcription,
+                    text_length=len(text),
+                    buffer_length=len(self._input_transcription_buffer),
                 )
+                
+                # Per API docs: each update should be cumulative (full transcript so far)
+                # So we just replace with latest
+                self._input_transcription_buffer = text
         
         # Handle output transcription (AI speech) - per official API docs
         # outputTranscription is a field within serverContent, not a separate message type
