@@ -2336,13 +2336,34 @@ class Engine:
             except Exception:
                 swap_needed_flag = False
             try:
-                profile_fmt = session.transport_profile.format or ""
-                if not profile_fmt:
-                    profile_fmt = getattr(self.config.audiosocket, "format", "ulaw") if getattr(self.config, "audiosocket", None) else "ulaw"
-                profile_rate = session.transport_profile.sample_rate or getattr(self.config.streaming, "sample_rate", 8000)
+                # CRITICAL: AudioSocket format is authoritative for AudioSocket transport
+                # For RTP, use transport profile (negotiated codec)
+                if self.config.audio_transport == "audiosocket":
+                    # Use AudioSocket's actual format (from YAML)
+                    profile_fmt = getattr(self.config.audiosocket, "format", "slin16")
+                    # Get sample rate from AudioSocket config or infer from format
+                    profile_rate = getattr(self.config.audiosocket, "sample_rate", None)
+                    if not profile_rate:
+                        # Infer rate from format: slin=8kHz, slin16=16kHz
+                        canonical_fmt = self._canonicalize_encoding(profile_fmt)
+                        if canonical_fmt == "slin":
+                            profile_rate = 8000
+                        elif canonical_fmt == "slin16":
+                            profile_rate = 16000
+                        else:
+                            profile_rate = getattr(self.config.streaming, "sample_rate", 8000)
+                else:
+                    # For RTP: use transport profile (negotiated codec)
+                    profile_fmt = session.transport_profile.format or "ulaw"
+                    profile_rate = session.transport_profile.sample_rate or 8000
             except Exception:
-                profile_fmt = "ulaw"
-                profile_rate = 8000
+                # Safe fallback based on transport type
+                if self.config.audio_transport == "audiosocket":
+                    profile_fmt = "slin16"
+                    profile_rate = 16000
+                else:
+                    profile_fmt = "ulaw"
+                    profile_rate = 8000
             pcm_bytes, pcm_rate = self._wire_to_pcm16(audio_bytes, profile_fmt, swap_needed_flag, profile_rate)
             # Remove DC bias and apply a light DC-block filter to stabilize ASR input
             try:
