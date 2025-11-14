@@ -120,6 +120,10 @@ class GoogleLiveProvider(AIProviderInterface):
         # Conversation state
         self._conversation_history: List[Dict[str, Any]] = []
         
+        # Transcription buffering (to avoid word-by-word fragmentation)
+        self._input_transcription_buffer: str = ""
+        self._last_input_transcription_time: float = 0
+        
         # Metrics tracking
         self._session_start_time: Optional[float] = None
 
@@ -563,43 +567,51 @@ class GoogleLiveProvider(AIProviderInterface):
         if self.config.greeting:
             await self._send_greeting()
 
-    async def _send_greeting(self) -> None:
-        """Send greeting message to start conversation."""
-        greeting_msg = {
-            "clientContent": {  # camelCase
-                "turns": [
-                    {
-                        "role": "user",
-                        "parts": [{"text": "Start conversation"}]
-                    }
-                ],
-                "turnComplete": True,  # camelCase
-            }
-        }
-        await self._send_message(greeting_msg)
-        
-        logger.info(
-            "Sent greeting prompt to Google Live",
-            call_id=self._call_id,
-        )
-
     async def _handle_server_content(self, data: Dict[str, Any]) -> None:
         """Handle serverContent message (audio, text, etc.)."""
         content = data.get("serverContent", {})
         
         # Handle input transcription (user speech) - per official API docs
         # inputTranscription is a field within serverContent, not a separate message type
+        # Note: Google sends streaming transcriptions word-by-word, so we buffer them
         input_transcription = content.get("inputTranscription")
         if input_transcription:
             text = input_transcription.get("text", "")
             if text:
-                logger.info(
-                    "Google Live input transcription (user speech)",
-                    call_id=self._call_id,
-                    text_preview=text[:100],
-                )
-                # Track user speech for conversation history
-                await self._track_conversation_message("user", text)
+                import time
+                current_time = time.time()
+                
+                # Buffer partial transcriptions to avoid word-by-word fragmentation
+                # Only save complete utterances (ends with punctuation or after pause)
+                if self._input_transcription_buffer:
+                    # Check if this is a continuation (< 1.5s gap)
+                    if current_time - self._last_input_transcription_time < 1.5:
+                        self._input_transcription_buffer += " " + text
+                    else:
+                        # Timeout - save previous buffer and start new
+                        await self._track_conversation_message("user", self._input_transcription_buffer)
+                        self._input_transcription_buffer = text
+                else:
+                    # Start new buffer
+                    self._input_transcription_buffer = text
+                
+                self._last_input_transcription_time = current_time
+                
+                # Check if this looks like end of utterance (ends with punctuation)
+                if text.strip() and text.strip()[-1] in '.!?':
+                    logger.info(
+                        "Google Live complete user utterance",
+                        call_id=self._call_id,
+                        text=self._input_transcription_buffer[:100],
+                    )
+                    await self._track_conversation_message("user", self._input_transcription_buffer)
+                    self._input_transcription_buffer = ""
+                else:
+                    logger.debug(
+                        "Google Live buffering transcription",
+                        call_id=self._call_id,
+                        buffer=self._input_transcription_buffer[:50],
+                    )
         
         # Handle output transcription (AI speech) - per official API docs
         # outputTranscription is a field within serverContent, not a separate message type
@@ -702,6 +714,16 @@ class GoogleLiveProvider(AIProviderInterface):
     async def _handle_turn_complete(self) -> None:
         """Handle turn completion."""
         had_audio = self._in_audio_burst
+        
+        # Flush any buffered transcription on turn complete
+        if self._input_transcription_buffer:
+            logger.info(
+                "Flushing buffered transcription on turn complete",
+                call_id=self._call_id,
+                text=self._input_transcription_buffer[:100],
+            )
+            await self._track_conversation_message("user", self._input_transcription_buffer)
+            self._input_transcription_buffer = ""
         
         if self._in_audio_burst:
             self._in_audio_burst = False
