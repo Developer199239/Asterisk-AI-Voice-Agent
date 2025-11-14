@@ -1,8 +1,13 @@
-# Google Cloud AI Integration Guide
+# Google Provider Setup Guide
 
 ## Overview
 
-Google Cloud AI integration provides enterprise-grade speech recognition (Chirp 3), natural language understanding (Gemini), and text-to-speech (Neural2 voices) for the Asterisk AI Voice Agent.
+Google AI integration provides two modes for the Asterisk AI Voice Agent:
+
+1. **Google Live (Recommended)** - Real-time bidirectional streaming with Gemini 2.5 Flash, native audio processing, ultra-low latency (<1s), and true duplex communication
+2. **Google Cloud Pipeline** - Traditional pipeline with separate STT (Chirp 3), LLM (Gemini), and TTS (Neural2) components
+
+This guide covers setup for both modes.
 
 ## Quick Start
 
@@ -31,20 +36,31 @@ GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account-key.json
 
 ### 3. Configure Asterisk Dialplan
 
-Add to your dialplan (e.g., `extensions.conf`):
+**For Google Live (Recommended):**
 
 ```ini
 [from-ai-agent]
-exten => s,1,NoOp(Incoming AI Voice Agent Call)
+exten => s,1,NoOp(AI Voice Agent - Google Live)
+exten => s,n,Set(AI_CONTEXT=demo_google_live)
+exten => s,n,Set(AI_PROVIDER=google_live)
+exten => s,n,Stasis(asterisk-ai-voice-agent)
+exten => s,n,Hangup()
+```
+
+**For Google Cloud Pipeline:**
+
+```ini
+[from-ai-agent]
+exten => s,1,NoOp(AI Voice Agent - Google Cloud Pipeline)
 exten => s,n,Set(AI_CONTEXT=demo_google)
-exten => s,n,Set(AI_PROVIDER=google_cloud_full)  ; REQUIRED for pipeline selection
+exten => s,n,Set(AI_PROVIDER=google_cloud_full)
 exten => s,n,Stasis(asterisk-ai-voice-agent)
 exten => s,n,Hangup()
 ```
 
 **CRITICAL**: Both `AI_CONTEXT` and `AI_PROVIDER` must be set:
 - `AI_CONTEXT` - Selects the context (greeting, prompt, profile)
-- `AI_PROVIDER` - Selects the pipeline (google_cloud_full, google_cloud_cost_optimized, etc.)
+- `AI_PROVIDER` - Selects the provider (google_live, google_cloud_full, etc.)
 
 ### 4. Restart Asterisk
 

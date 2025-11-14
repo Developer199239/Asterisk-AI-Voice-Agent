@@ -36,6 +36,116 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Breaking**: Removed `transfer_call` and `transfer_to_queue` tools in favor of unified `transfer` tool
 - **Configuration Migration**: Update from separate tool configs to unified `transfer.destinations` structure
 
+## [4.2.0] - 2025-11-14
+
+### 🚀 Major Feature: Google Live Provider (Real-Time Agent)
+
+Version 4.2 introduces the **Google Live provider** - a real-time bidirectional streaming agent powered by Gemini 2.5 Flash with native audio capabilities. This provider delivers ultra-low latency (<1 second) and true duplex communication, making it the fastest option in the Asterisk AI Voice Agent.
+
+### Added
+
+#### Google Live Provider (AAVA-75)
+- **Real-Time Bidirectional Streaming**: Full-duplex communication with Gemini 2.5 Flash
+  - Native audio processing (no separate STT/TTS pipeline)
+  - Ultra-low latency: <1 second response time
+  - True duplex: Natural interruptions and barge-in
+  - WebSocket-based streaming communication
+- **Provider Implementation**: `src/providers/google_live.py`
+  - WebSocket connection to Gemini Live API
+  - Bidirectional audio streaming with automatic resampling
+  - Native tool execution via Google function declarations
+  - Session management with context retention
+- **Tool Adapter**: `src/tools/adapters/google.py`
+  - Converts tools to Google function declaration format
+  - Handles async tool execution in streaming mode
+  - Sends tool responses back to Gemini
+- **Audio Processing**: Automatic resampling for telephony compatibility
+  - Input: 8kHz μ-law → 16kHz PCM16 → Gemini
+  - Output: 24kHz PCM16 from Gemini → 8kHz μ-law → Asterisk
+- **Configurable Parameters**: Full YAML configuration support
+  - LLM generation parameters (temperature, max_output_tokens, top_p, top_k)
+  - Response modalities (audio, text, audio_text)
+  - Transcription toggles (enable_input_transcription, enable_output_transcription)
+  - Voice selection (Aoede, Kore, Leda, Puck, Charon, etc.)
+- **Golden Baseline**: Validated production-ready configuration
+  - See `docs/GOOGLE_LIVE_GOLDEN_BASELINE.md` for complete reference
+  - Call quality: Excellent, clean two-way conversation
+  - Response latency: <1 second (fastest available)
+  - All features validated: duplex, barge-in, tools, transcriptions
+
+#### Transcription System (AAVA-75)
+- **Dual Transcription Support**: User and AI speech transcription
+  - `inputTranscription`: Captures user speech
+  - `outputTranscription`: Captures AI speech
+  - Turn-complete based: Saves only final utterances
+  - Incremental fragment concatenation for complete transcripts
+- **Email Summary Integration**: Complete conversation history in emails
+  - Auto-triggered email summaries at call end
+  - Manual transcript requests via `request_transcript` tool
+  - Transcripts include both user and AI speech
+- **Conversation History**: Full conversation tracking
+  - Stored in session for context retention
+  - Available for email summaries and transcript requests
+  - Proper turn management with `turnComplete` flag
+
+### Fixed
+
+#### Transcript Email Timing (CRITICAL)
+- **Issue**: `request_transcript` tool sent email immediately (mid-call), missing final conversation
+- **Fix**: Defer transcript sending until call end
+  - Store email address in session during call
+  - Send complete transcript at call cleanup with full conversation history
+  - Prevents incomplete transcripts missing final exchanges
+- **Impact**: Transcripts now include complete conversation including goodbye
+
+#### Call Ending Protocol
+- **Issue**: AI didn't hang up calls after completing tasks, leaving silence
+- **Fix**: Explicit call ending protocol in system prompts
+  - Step-by-step protocol for detecting conversation end
+  - "Is there anything else?" prompt after completing tasks
+  - Immediate `hangup_call` tool execution on confirmation
+  - Never leave calls hanging in silence
+- **Impact**: Professional call termination, no manual hangup needed
+
+#### Greeting Implementation
+- **Issue**: Cannot pre-fill model responses in Gemini Live API
+- **Fix**: Send user turn requesting AI to speak greeting
+  - Changed from pre-filled model response to user request
+  - AI generates and speaks personalized greeting naturally
+  - Properly uses caller name in greeting
+- **Impact**: Greetings now work correctly with caller personalization
+
+#### Incremental Transcription Handling
+- **Issue**: API sends word-by-word fragments, not cumulative text
+- **Fix**: Concatenate fragments instead of replacing buffer
+  - Buffer accumulates fragments until `turnComplete`
+  - Prevents fragmented/incomplete transcriptions
+  - Matches actual API behavior (differs from documentation)
+- **Impact**: Complete, clean transcriptions of all speech
+
+### Changed
+- **Documentation**: Renamed `docs/GOOGLE_CLOUD_SETUP.md` → `docs/GOOGLE_PROVIDER_SETUP.md`
+  - Updated to cover both Google Live and Cloud Pipeline modes
+  - Added comprehensive setup instructions for both
+  - Separate dialplan examples for each mode
+- **Configuration Examples**: Updated `config/ai-agent.yaml`
+  - Added `demo_google_live` context with full configuration
+  - Includes all new configurable parameters with inline docs
+  - Clear call ending protocol in system prompts
+
+### Performance
+- **Latency**: <1 second response time (fastest provider)
+- **Audio Quality**: Excellent, natural conversation flow
+- **Duplex Communication**: True full-duplex with seamless interruptions
+- **Reliability**: Production-tested with clean call termination
+
+### Lessons Learned
+- Trust API turn completion signals over custom heuristics
+- API behavior may differ from documentation - always validate with testing
+- Defer email sending until call end for complete transcripts
+- Be explicit about call ending protocols in system prompts
+- Provide maximum user flexibility via YAML configuration
+
 ## [4.0.0] - 2025-10-29
 
 ### 🎉 Major Release: Modular Pipeline Architecture
