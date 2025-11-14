@@ -308,12 +308,9 @@ class GoogleLiveProvider(AIProviderInterface):
         # Enable transcriptions for conversation history tracking
         # This allows us to populate email summaries and transcripts
         # Note: Using camelCase per Google Live API format
-        setup_msg["setup"]["inputAudioTranscription"] = {
-            "model": "default"  # Use default transcription model
-        }
-        setup_msg["setup"]["outputAudioTranscription"] = {
-            "model": "default"  # Use default transcription model
-        }
+        # Use empty object {} to enable with default settings (no "model" field - API doesn't support it)
+        setup_msg["setup"]["inputAudioTranscription"] = {}
+        setup_msg["setup"]["outputAudioTranscription"] = {}
 
         # Debug: Log setup message structure
         logger.debug(
