@@ -3959,7 +3959,7 @@ class Engine:
                             self._runtime_alignment_logged.add(call_id)
                         target_encoding, target_sample_rate, remediation = self._resolve_stream_targets(session, session.provider_name)
                         if target_sample_rate <= 0:
-                            target_sample_rate = session.transport_profile.sample_rate
+                            target_sample_rate = session.transport_profile.wire_sample_rate
                         if remediation:
                             session.audio_diagnostics["codec_remediation"] = remediation
                         
@@ -4050,7 +4050,7 @@ class Engine:
                                 self._runtime_alignment_logged.add(call_id)
                             target_encoding, target_sample_rate, remediation = self._resolve_stream_targets(session, session.provider_name)
                             if target_sample_rate <= 0:
-                                target_sample_rate = session.transport_profile.sample_rate
+                                target_sample_rate = session.transport_profile.wire_sample_rate
                             if remediation:
                                 session.audio_diagnostics["codec_remediation"] = remediation
                             src_encoding = fmt_info.get("encoding") or encoding
@@ -4208,7 +4208,7 @@ class Engine:
                             fmt_info = self._provider_stream_formats.get(call_id, {})
                             target_encoding, target_sample_rate, remediation = self._resolve_stream_targets(session, session.provider_name)
                             if target_sample_rate <= 0:
-                                target_sample_rate = session.transport_profile.sample_rate
+                                target_sample_rate = session.transport_profile.wire_sample_rate
                             await self.streaming_playback_manager.start_streaming_playback(
                                 call_id,
                                 q2,
