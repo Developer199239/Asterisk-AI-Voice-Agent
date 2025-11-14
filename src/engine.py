@@ -1886,6 +1886,55 @@ class Engine:
             except Exception as e:
                 logger.warning("Failed to auto-trigger email summary", call_id=call_id, error=str(e), exc_info=True)
 
+            # Send transcript emails if requested during call (complete conversation)
+            try:
+                if hasattr(session, 'transcript_emails') and session.transcript_emails:
+                    transcript_tool_config = self.config.tools.get('request_transcript', {})
+                    if transcript_tool_config.get('enabled', False):
+                        from src.tools.registry import tool_registry
+                        transcript_tool = tool_registry.get('request_transcript')
+                        if transcript_tool:
+                            # Send transcript to each requested email
+                            for email_address in session.transcript_emails:
+                                try:
+                                    # Build execution context
+                                    from src.tools.context import ToolExecutionContext
+                                    context = ToolExecutionContext(
+                                        call_id=call_id,
+                                        caller_channel_id=session.caller_channel_id,
+                                        bridge_id=session.bridge_id,
+                                        session_store=self.session_store,
+                                        ari_client=self.ari_client,
+                                        config=self.config.model_dump()
+                                    )
+                                    
+                                    # Get fresh session data with complete conversation
+                                    current_session = await self.session_store.get_by_call_id(call_id)
+                                    if current_session:
+                                        # Prepare and send transcript email
+                                        email_data = transcript_tool._prepare_email_data(
+                                            email_address,
+                                            current_session,
+                                            transcript_tool_config,
+                                            call_id
+                                        )
+                                        # Send asynchronously (don't block cleanup)
+                                        asyncio.create_task(transcript_tool._send_transcript_async(email_data, call_id))
+                                        logger.info(
+                                            "📧 Sent end-of-call transcript",
+                                            call_id=call_id,
+                                            email=email_address
+                                        )
+                                except Exception as e:
+                                    logger.warning(
+                                        "Failed to send transcript to email",
+                                        call_id=call_id,
+                                        email=email_address,
+                                        error=str(e)
+                                    )
+            except Exception as e:
+                logger.warning("Failed to process transcript emails", call_id=call_id, error=str(e), exc_info=True)
+
             # Finally remove the session.
             await self.session_store.remove_call(call_id)
 

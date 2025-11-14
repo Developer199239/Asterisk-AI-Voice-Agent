@@ -283,22 +283,21 @@ class RequestTranscriptTool(Tool):
             # Format email for speech readback
             email_for_speech = self._validator.format_for_speech(parsed_email)
             
-            # Prepare email data
-            email_data = self._prepare_email_data(
-                parsed_email,
-                session,
-                config,
-                call_id
-            )
+            # IMPORTANT: Store email address in session for end-of-call transcript sending
+            # Do NOT send immediately - conversation isn't complete yet!
+            # Engine will check for this attribute in cleanup and send complete transcript
+            if not hasattr(session, 'transcript_emails'):
+                session.transcript_emails = set()
+            session.transcript_emails.add(parsed_email.lower())
             
-            # Send email asynchronously
-            asyncio.create_task(self._send_transcript_async(email_data, call_id))
+            # Save session with transcript email
+            await context.session_store.upsert_call(session)
             
-            # Mark email as sent to prevent duplicates
+            # Mark as requested to prevent duplicates during call
             self._sent_emails[call_id].add(parsed_email.lower())
             
             logger.info(
-                "Transcript email scheduled",
+                "Transcript email saved for end-of-call sending",
                 call_id=call_id,
                 caller_email=parsed_email,
                 admin_bcc=config.get("admin_email")
@@ -307,8 +306,8 @@ class RequestTranscriptTool(Tool):
             return {
                 "status": "success",
                 "message": (
-                    f"I'll send the transcript to {email_for_speech}. "
-                    "Please check your email in a few moments."
+                    f"Perfect! I'll send the complete transcript to {email_for_speech} "
+                    "when our call ends."
                 ),
                 "ai_should_speak": True,
                 "caller_email": parsed_email,
