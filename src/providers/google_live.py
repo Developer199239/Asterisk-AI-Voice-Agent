@@ -304,6 +304,16 @@ class GoogleLiveProvider(AIProviderInterface):
 
         if tools:
             setup_msg["setup"]["tools"] = tools
+        
+        # Enable transcriptions for conversation history tracking
+        # This allows us to populate email summaries and transcripts
+        # Note: Using camelCase per Google Live API format
+        setup_msg["setup"]["inputAudioTranscription"] = {
+            "model": "default"  # Use default transcription model
+        }
+        setup_msg["setup"]["outputAudioTranscription"] = {
+            "model": "default"  # Use default transcription model
+        }
 
         # Debug: Log setup message structure
         logger.debug(
@@ -569,7 +579,7 @@ class GoogleLiveProvider(AIProviderInterface):
                 if inline_data.get("mimeType", "").startswith("audio/pcm"):
                     await self._handle_audio_output(inline_data["data"])
             
-            # Handle text output (for debugging/logging)
+            # Handle text output (for debugging/logging and conversation history)
             if "text" in part:
                 text = part["text"]
                 logger.debug(
@@ -577,6 +587,9 @@ class GoogleLiveProvider(AIProviderInterface):
                     call_id=self._call_id,
                     text_preview=text[:100],
                 )
+                
+                # Save agent response to conversation history
+                await self._track_conversation_message("assistant", text)
 
         # Handle turn completion
         if turn_complete:
@@ -782,6 +795,9 @@ class GoogleLiveProvider(AIProviderInterface):
                 transcription=transcription[:100],
             )
             
+            # Save to conversation history (like OpenAI Realtime)
+            await self._track_conversation_message("user", transcription)
+            
             # Emit transcript event for monitoring
             if self.on_event:
                 await self.on_event(
@@ -803,6 +819,55 @@ class GoogleLiveProvider(AIProviderInterface):
                 "Google Live output transcription",
                 call_id=self._call_id,
                 transcription=transcription[:100],
+            )
+    
+    async def _track_conversation_message(self, role: str, text: str) -> None:
+        """
+        Track conversation message to session history for transcripts.
+        
+        Similar to OpenAI Realtime pattern - saves messages to session.conversation_history
+        for email summary/transcript tools.
+        
+        Args:
+            role: "user" or "assistant"
+            text: Message content
+        """
+        if not text or not text.strip():
+            return
+        
+        # Get session_store from provider context (injected by engine)
+        session_store = getattr(self, '_session_store', None)
+        if not session_store:
+            logger.debug(
+                "No session_store available for conversation tracking",
+                call_id=self._call_id,
+                role=role
+            )
+            return
+        
+        try:
+            session = await session_store.get_by_call_id(self._call_id)
+            if session:
+                # Add to conversation history
+                session.conversation_history.append({
+                    "role": role,  # "user" or "assistant"
+                    "content": text,
+                    "timestamp": time.time()
+                })
+                # Update session
+                await session_store.upsert_call(session)
+                logger.debug(
+                    "✅ Tracked conversation message",
+                    call_id=self._call_id,
+                    role=role,
+                    text_preview=text[:50] + "..." if len(text) > 50 else text
+                )
+        except Exception as e:
+            logger.warning(
+                f"Failed to track conversation message: {e}",
+                call_id=self._call_id,
+                role=role,
+                exc_info=True
             )
 
     async def _handle_go_away(self, data: Dict[str, Any]) -> None:
