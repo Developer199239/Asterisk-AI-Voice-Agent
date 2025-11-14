@@ -73,7 +73,7 @@ class GoogleToolAdapter:
         logger.debug(f"Formatted {len(function_declarations)} tools for Google Live")
         
         return [{
-            "function_declarations": function_declarations
+            "functionDeclarations": function_declarations  # camelCase per official API
         }] if function_declarations else []
     
     async def execute_tool(

@@ -660,8 +660,8 @@ class GoogleLiveProvider(AIProviderInterface):
             return
 
         try:
-            # Extract function call details
-            function_calls = tool_call.get("function_calls", [])
+            # Extract function call details (camelCase per official API)
+            function_calls = tool_call.get("functionCalls", [])
             
             for func_call in function_calls:
                 func_name = func_call.get("name")
@@ -694,10 +694,10 @@ class GoogleLiveProvider(AIProviderInterface):
                     tool_context,
                 )
 
-                # Send tool response
+                # Send tool response (camelCase per official API)
                 tool_response = {
-                    "tool_response": {
-                        "function_responses": [
+                    "toolResponse": {
+                        "functionResponses": [
                             {
                                 "id": call_id,
                                 "name": func_name,
