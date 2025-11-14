@@ -107,6 +107,8 @@ class GoogleLiveProvider(AIProviderInterface):
         self._greeting_completed: bool = False
         self._in_audio_burst: bool = False
         self._setup_ack_event: Optional[asyncio.Event] = None  # ACK gate like Deepgram
+        self._hangup_after_response: bool = False  # Flag to trigger hangup after next response
+        self._farewell_in_progress: bool = False  # Track if farewell is being spoken
         
         # Audio buffering for resampling
         self._input_buffer = bytearray()
@@ -630,6 +632,8 @@ class GoogleLiveProvider(AIProviderInterface):
 
     async def _handle_turn_complete(self) -> None:
         """Handle turn completion."""
+        had_audio = self._in_audio_burst
+        
         if self._in_audio_burst:
             self._in_audio_burst = False
             if self.on_event:
@@ -648,6 +652,32 @@ class GoogleLiveProvider(AIProviderInterface):
                 "Google Live greeting completed",
                 call_id=self._call_id,
             )
+        
+        # Handle hangup if requested after this turn
+        if self._hangup_after_response:
+            logger.info(
+                "🔚 Farewell response completed - triggering hangup",
+                call_id=self._call_id,
+            )
+            
+            # Emit HangupReady event to trigger hangup in engine
+            try:
+                if self.on_event:
+                    await self.on_event({
+                        "type": "HangupReady",
+                        "call_id": self._call_id,
+                        "reason": "farewell_completed",
+                        "had_audio": had_audio
+                    })
+            except Exception as e:
+                logger.error(
+                    "Failed to emit HangupReady event",
+                    call_id=self._call_id,
+                    error=str(e)
+                )
+            
+            # Reset hangup flag
+            self._hangup_after_response = False
 
     async def _handle_tool_call(self, data: Dict[str, Any]) -> None:
         """Handle toolCall message."""
@@ -694,6 +724,15 @@ class GoogleLiveProvider(AIProviderInterface):
                     func_args,
                     tool_context,
                 )
+
+                # Check for hangup intent (like OpenAI Realtime pattern)
+                if func_name == "hangup_call" and result:
+                    if result.get("will_hangup"):
+                        self._hangup_after_response = True
+                        logger.info(
+                            "🔚 Hangup tool executed - next response will trigger hangup",
+                            call_id=self._call_id
+                        )
 
                 # Send tool response (camelCase per official API)
                 tool_response = {
