@@ -120,9 +120,8 @@ class GoogleLiveProvider(AIProviderInterface):
         # Conversation state
         self._conversation_history: List[Dict[str, Any]] = []
         
-        # Transcription buffering (to avoid word-by-word fragmentation)
+        # Transcription buffering - hold latest partial until turnComplete
         self._input_transcription_buffer: str = ""
-        self._last_input_transcription_time: float = 0
         
         # Metrics tracking
         self._session_start_time: Optional[float] = None
@@ -574,46 +573,20 @@ class GoogleLiveProvider(AIProviderInterface):
         content = data.get("serverContent", {})
         
         # Handle input transcription (user speech) - per official API docs
-        # inputTranscription is a field within serverContent, not a separate message type
-        # Note: Google sends streaming transcriptions word-by-word, so we buffer them
+        # Per Gemini Live API spec: inputTranscription sends streaming partial updates
+        # We accumulate them and only save when turnComplete=true for clean final transcription
         input_transcription = content.get("inputTranscription")
         if input_transcription:
             text = input_transcription.get("text", "")
             if text:
-                import time
-                current_time = time.time()
-                
-                # Buffer partial transcriptions to avoid word-by-word fragmentation
-                # Only save complete utterances (ends with punctuation or after pause)
-                if self._input_transcription_buffer:
-                    # Check if this is a continuation (< 1.5s gap)
-                    if current_time - self._last_input_transcription_time < 1.5:
-                        self._input_transcription_buffer += " " + text
-                    else:
-                        # Timeout - save previous buffer and start new
-                        await self._track_conversation_message("user", self._input_transcription_buffer)
-                        self._input_transcription_buffer = text
-                else:
-                    # Start new buffer
-                    self._input_transcription_buffer = text
-                
-                self._last_input_transcription_time = current_time
-                
-                # Check if this looks like end of utterance (ends with punctuation)
-                if text.strip() and text.strip()[-1] in '.!?':
-                    logger.info(
-                        "Google Live complete user utterance",
-                        call_id=self._call_id,
-                        text=self._input_transcription_buffer[:100],
-                    )
-                    await self._track_conversation_message("user", self._input_transcription_buffer)
-                    self._input_transcription_buffer = ""
-                else:
-                    logger.debug(
-                        "Google Live buffering transcription",
-                        call_id=self._call_id,
-                        buffer=self._input_transcription_buffer[:50],
-                    )
+                # Always update buffer with latest transcription
+                # The last one before turnComplete will be the final, clean version
+                self._input_transcription_buffer = text
+                logger.debug(
+                    "Google Live input transcription (partial)",
+                    call_id=self._call_id,
+                    text_preview=text[:100],
+                )
         
         # Handle output transcription (AI speech) - per official API docs
         # outputTranscription is a field within serverContent, not a separate message type
@@ -629,8 +602,18 @@ class GoogleLiveProvider(AIProviderInterface):
                 # Note: We already track from modelTurn.parts[], so this is redundant
                 # but confirms the transcription is working
         
-        # Check if model turn is complete
+        # Check if model turn is complete - THIS is when we save the final transcription
         turn_complete = content.get("turnComplete", False)
+        
+        # Save final transcription when turn completes (per API recommendation)
+        if turn_complete and self._input_transcription_buffer:
+            logger.info(
+                "Google Live final user transcription (turnComplete)",
+                call_id=self._call_id,
+                text=self._input_transcription_buffer[:150],
+            )
+            await self._track_conversation_message("user", self._input_transcription_buffer)
+            self._input_transcription_buffer = ""
         
         # Extract parts (using camelCase keys from actual API)
         for part in content.get("modelTurn", {}).get("parts", []):
@@ -717,15 +700,8 @@ class GoogleLiveProvider(AIProviderInterface):
         """Handle turn completion."""
         had_audio = self._in_audio_burst
         
-        # Flush any buffered transcription on turn complete
-        if self._input_transcription_buffer:
-            logger.info(
-                "Flushing buffered transcription on turn complete",
-                call_id=self._call_id,
-                text=self._input_transcription_buffer[:100],
-            )
-            await self._track_conversation_message("user", self._input_transcription_buffer)
-            self._input_transcription_buffer = ""
+        # Note: Transcription is now saved in _handle_server_content when turnComplete=true
+        # No need to flush here - it's already been handled
         
         if self._in_audio_burst:
             self._in_audio_burst = False
