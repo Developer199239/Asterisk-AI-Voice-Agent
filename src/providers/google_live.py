@@ -212,19 +212,15 @@ class GoogleLiveProvider(AIProviderInterface):
             # Send setup message to configure session
             await self._send_setup(context)
             
-            # Wait for setupComplete ACK (like Deepgram waits for SettingsApplied)
-            try:
-                await asyncio.wait_for(self._setup_ack_event.wait(), timeout=5.0)
-                logger.info(
-                    "Google Live setup acknowledged",
-                    call_id=call_id,
-                )
-            except asyncio.TimeoutError:
-                logger.error(
-                    "Timeout waiting for setupComplete from Google Live API",
-                    call_id=call_id,
-                )
-                raise
+            # Wait for setup acknowledgment
+            logger.debug("Waiting for Google Live setupComplete...", call_id=self._call_id)
+            await asyncio.wait_for(self._setup_ack_event.wait(), timeout=5.0)
+            logger.info("Google Live setup complete", call_id=self._call_id)
+        
+            # Send greeting if configured (after setup is complete)
+            if self.config.greeting and self.config.greeting.strip():
+                await self._send_greeting()
+            
             self._keepalive_task = asyncio.create_task(
                 self._keepalive_loop(),
                 name=f"google-live-keepalive-{call_id}",
@@ -333,8 +329,9 @@ class GoogleLiveProvider(AIProviderInterface):
         )
 
     async def _send_message(self, message: Dict[str, Any]) -> None:
-        """Send a message to Gemini Live API."""
+        """Send a message to Google Live API."""
         if not self.websocket:
+            logger.warning("No websocket connection", call_id=self._call_id)
             return
 
         async with self._send_lock:
@@ -346,6 +343,33 @@ class GoogleLiveProvider(AIProviderInterface):
                     call_id=self._call_id,
                     error=str(e),
                 )
+
+    async def _send_greeting(self) -> None:
+        """Send greeting by injecting it as a user request for the model to respond to."""
+        greeting = (self.config.greeting or "").strip()
+        if not greeting:
+            return
+        
+        logger.info("Sending greeting to Google Live", call_id=self._call_id, greeting_preview=greeting[:50])
+        
+        # Send a clientContent message requesting the greeting as the first turn
+        # This tells Gemini to speak the greeting
+        greeting_msg = {
+            "clientContent": {
+                "turns": [
+                    {
+                        "role": "user",
+                        "parts": [{"text": "(System: Please speak this greeting to the caller)"}]
+                    },
+                    {
+                        "role": "model",
+                        "parts": [{"text": greeting}]
+                    }
+                ],
+                "turnComplete": True
+            }
+        }
+        await self._send_message(greeting_msg)
 
     async def send_audio(self, audio_chunk: bytes, sample_rate: int = 8000, encoding: str = "ulaw") -> None:
         """
