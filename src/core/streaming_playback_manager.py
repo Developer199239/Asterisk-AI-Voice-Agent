@@ -607,10 +607,12 @@ class StreamingPlaybackManager:
                 resolved_target_rate = 8000
             elif pcm_transport in {"slin16", "linear16", "pcm16"}:
                 resolved_target_format = "slin16"
-                # For slin16 RTP, always use 8kHz (telephony standard)
-                resolved_target_rate = 8000
+                # CRITICAL FIX: slin16 means 16kHz PCM16, NOT 8kHz!
+                # Asterisk codec naming: slin=8k, slin16=16k, slin48=48k
+                # The "16" suffix indicates sample rate (16kHz), not just bit depth
+                resolved_target_rate = 16000  # ✅ Correct for slin16
                 logger.debug(
-                    "RTP slin16 format locked to 8kHz",
+                    "Using slin16 at native 16kHz",
                     call_id=call_id,
                     provider_rate=src_rate,
                     target_rate=resolved_target_rate
