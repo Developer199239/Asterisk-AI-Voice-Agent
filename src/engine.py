@@ -2571,7 +2571,14 @@ class Engine:
                             )
                         except Exception:
                             logger.debug("Provider input capture failed (continuous-input)", call_id=session.call_id, exc_info=True)
-                        await provider.send_audio(prov_payload)
+                        # CRITICAL: Pass encoding and sample_rate to provider
+                        # Google Live needs these to correctly interpret audio format
+                        # Other providers with single-param signature will ignore extras
+                        try:
+                            await provider.send_audio(prov_payload, prov_rate, prov_enc)
+                        except TypeError:
+                            # Fallback for providers with old signature (audio_chunk only)
+                            await provider.send_audio(prov_payload)
                     except Exception:
                         logger.debug("Provider continuous-input forward error", call_id=caller_channel_id, exc_info=True)
                     return

@@ -434,7 +434,17 @@ class OpenAIRealtimeProvider(AIProviderInterface):
 
         logger.info("OpenAI Realtime session established", call_id=call_id)
 
-    async def send_audio(self, audio_chunk: bytes):
+    async def send_audio(self, audio_chunk: bytes, sample_rate: int = None, encoding: str = None):
+        """Send audio to OpenAI Realtime API.
+        
+        Args:
+            audio_chunk: Audio data bytes
+            sample_rate: Source sample rate (if provided by engine)
+            encoding: Source encoding format (if provided by engine)
+        
+        Engine provides explicit encoding/sample_rate when available.
+        Falls back to config-based conversion for backward compatibility.
+        """
         if not audio_chunk:
             return
         if not self.websocket or self.websocket.closed:
@@ -451,6 +461,8 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                         input_encoding=self.config.input_encoding,
                         input_sample_rate_hz=self.config.input_sample_rate_hz,
                         provider_input_sample_rate_hz=self.config.provider_input_sample_rate_hz,
+                        engine_provided_encoding=encoding,
+                        engine_provided_sample_rate=sample_rate,
                     )
                     self._input_info_logged = True
                 except Exception:
