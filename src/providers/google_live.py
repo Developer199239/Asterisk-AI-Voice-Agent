@@ -250,11 +250,10 @@ class GoogleLiveProvider(AIProviderInterface):
         # Use instructions from config (like OpenAI Realtime pattern)
         system_prompt = self.config.instructions
         
-        # Build generation config (per REAL working wire examples)
+        # Build generation config from configurable parameters
         # https://gist.github.com/quartzjer/9636066e96b4f904162df706210770e4
-        # NOTE: responseModalities is a STRING not array, lowercase not uppercase
         generation_config = {
-            "responseModalities": "audio",  # STRING (lowercase), not ["AUDIO", "TEXT"]
+            "responseModalities": self.config.response_modalities,  # Configurable: "audio", "text", or "audio_text"
             "speechConfig": {
                 "voiceConfig": {
                     "prebuiltVoiceConfig": {
@@ -262,6 +261,11 @@ class GoogleLiveProvider(AIProviderInterface):
                     }
                 }
             },
+            # LLM generation parameters (all configurable via YAML)
+            "temperature": self.config.llm_temperature,
+            "maxOutputTokens": self.config.llm_max_output_tokens,
+            "topP": self.config.llm_top_p,
+            "topK": self.config.llm_top_k,
         }
 
         # Detailed debug logging for speech configuration
@@ -305,12 +309,15 @@ class GoogleLiveProvider(AIProviderInterface):
         if tools:
             setup_msg["setup"]["tools"] = tools
         
-        # Enable transcriptions for conversation history tracking
+        # Enable transcriptions for conversation history tracking (configurable)
         # This allows us to populate email summaries and transcripts
         # Note: Using camelCase per Google Live API format
         # Use empty object {} to enable with default settings (no "model" field - API doesn't support it)
-        setup_msg["setup"]["inputAudioTranscription"] = {}
-        setup_msg["setup"]["outputAudioTranscription"] = {}
+        if self.config.enable_input_transcription:
+            setup_msg["setup"]["inputAudioTranscription"] = {}
+        
+        if self.config.enable_output_transcription:
+            setup_msg["setup"]["outputAudioTranscription"] = {}
 
         # Debug: Log setup message structure
         logger.debug(

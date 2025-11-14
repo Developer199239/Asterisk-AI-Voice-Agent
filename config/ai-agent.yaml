@@ -674,9 +674,23 @@ providers:
     api_key: ${GOOGLE_API_KEY}
     enabled: true
     greeting: ${GOOGLE_LIVE_GREETING:-Hi! I'm powered by Google Gemini Live API. Try interrupting me!}
+    
+    # LLM Configuration
     llm_model: gemini-2.5-flash-native-audio-preview-09-2025
-    llm_temperature: 0.7
-    tts_voice_name: Aoede  # Gemini Live API voice - Female (Aoede/Kore/Leda) or Male (Puck/Charon/Fenrir/Orus/Zephyr)
+    llm_temperature: 0.7              # Response creativity (0.0-2.0, default: 0.7)
+    llm_max_output_tokens: 8192       # Max response length (1-8192, default: 8192)
+    llm_top_p: 0.95                   # Nucleus sampling (0.0-1.0, default: 0.95)
+    llm_top_k: 40                     # Top-k sampling (1-100, default: 40)
+    
+    # Voice Configuration
+    tts_voice_name: Aoede             # Female: Aoede/Kore/Leda | Male: Puck/Charon/Fenrir/Orus/Zephyr
+    
+    # Response Modalities
+    response_modalities: audio        # Options: "audio" (voice only), "text" (text only), "audio_text" (both)
+    
+    # Transcription Configuration (for email summaries and conversation history)
+    enable_input_transcription: true  # Enable user speech transcription
+    enable_output_transcription: true # Enable AI speech transcription
 streaming:
   chunk_size_ms: 20
   connection_timeout_ms: 120000

@@ -122,6 +122,19 @@ class GoogleProviderConfig(BaseModel):
     instructions: Optional[str] = None  # System prompt/instructions for Google Live API
     enabled: bool = Field(default=True)  # Provider enabled flag
     
+    # Google Live LLM generation configuration
+    llm_temperature: float = Field(default=0.7, ge=0.0, le=2.0)  # Temperature for response generation
+    llm_max_output_tokens: int = Field(default=8192, ge=1, le=8192)  # Max output tokens (Gemini supports up to 8192)
+    llm_top_p: float = Field(default=0.95, ge=0.0, le=1.0)  # Nucleus sampling parameter
+    llm_top_k: int = Field(default=40, ge=1, le=100)  # Top-k sampling parameter
+    
+    # Google Live response configuration
+    response_modalities: str = Field(default="audio")  # "audio", "text", or "audio_text"
+    
+    # Google Live transcription configuration (for email summaries/conversation history)
+    enable_input_transcription: bool = Field(default=True)  # Enable user speech transcription
+    enable_output_transcription: bool = Field(default=True)  # Enable AI speech transcription
+    
     # Google Live audio format configuration (aligns with OpenAI Realtime pattern)
     input_encoding: str = Field(default="ulaw")  # Wire format from AudioSocket/RTP (ulaw/slin16)
     input_sample_rate_hz: int = Field(default=8000)  # Wire sample rate
