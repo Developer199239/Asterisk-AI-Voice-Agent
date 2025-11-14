@@ -1846,25 +1846,42 @@ class Engine:
 
             # Auto-send email summary if enabled (before session is removed)
             try:
-                from src.tools.registry import tool_registry
+                # Auto-trigger email summary if configured and session has conversation history
                 email_tool_config = self.config.tools.get('send_email_summary', {})
                 if email_tool_config.get('enabled', False):
                     email_tool = tool_registry.get('send_email_summary')
                     if email_tool:
-                        # Build execution context
-                        from src.tools.context import ToolExecutionContext
-                        context = ToolExecutionContext(
-                            call_id=call_id,
-                            caller_channel_id=session.caller_channel_id,
-                            bridge_id=session.bridge_id,
-                            session_store=self.session_store,
-                            ari_client=self.ari_client,
-                            config=self.config.model_dump()
-                        )
-                        # Execute synchronously to ensure session is available
-                        # Email sending itself is still async (non-blocking)
-                        await email_tool.execute({}, context)
-                        logger.info("📧 Auto-triggered email summary", call_id=call_id)
+                        # Verify session still exists (race condition with multiple cleanup calls)
+                        check_session = await self.session_store.get_by_call_id(call_id)
+                        if not check_session:
+                            logger.debug(
+                                "Skipping email summary - session already removed by concurrent cleanup",
+                                call_id=call_id
+                            )
+                        else:
+                            # Build execution context
+                            from src.tools.context import ToolExecutionContext
+                            context = ToolExecutionContext(
+                                call_id=call_id,
+                                caller_channel_id=session.caller_channel_id,
+                                bridge_id=session.bridge_id,
+                                session_store=self.session_store,
+                                ari_client=self.ari_client,
+                                config=self.config.model_dump()
+                            )
+                            # Execute synchronously to ensure session is available
+                            # Email sending itself is still async (non-blocking)
+                            await email_tool.execute({}, context)
+                            logger.info("📧 Auto-triggered email summary", call_id=call_id)
+            except RuntimeError as e:
+                # Session not found is expected in concurrent cleanup scenarios
+                if "Session not found" in str(e):
+                    logger.debug(
+                        "Email summary skipped - session already cleaned up",
+                        call_id=call_id
+                    )
+                else:
+                    logger.warning("Failed to auto-trigger email summary", call_id=call_id, error=str(e))
             except Exception as e:
                 logger.warning("Failed to auto-trigger email summary", call_id=call_id, error=str(e), exc_info=True)
 
