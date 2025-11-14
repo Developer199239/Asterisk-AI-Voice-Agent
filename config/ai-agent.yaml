@@ -619,7 +619,7 @@ providers:
     greeting: ${GOOGLE_LIVE_GREETING:-Hi! I'm powered by Google Gemini Live API. Try interrupting me!}
     llm_model: gemini-2.5-flash-native-audio-preview-09-2025
     llm_temperature: 0.7
-    tts_voice_name: en-US-Neural2-A
+    tts_voice_name: Puck  # Gemini Live API voice (Puck/Aoede/Kore/Charon/Fenrir/Leda/Orus/Zephyr)
 streaming:
   chunk_size_ms: 20
   connection_timeout_ms: 120000
