@@ -5227,10 +5227,13 @@ class Engine:
         
         # Resolve transport profile
         try:
+            # Pass provider config so orchestrator can read actual provider requirements
+            provider_cfg = getattr(provider, "config", None) if provider else None
             transport = self.transport_orchestrator.resolve_transport(
                 provider_name=provider_name,
                 provider_caps=provider_caps,
                 channel_vars=channel_vars,
+                provider_config=provider_cfg,
             )
             
             # Store transport in session (keep as object, not dict, for legacy code compatibility)
@@ -5844,28 +5847,48 @@ class Engine:
         }
 
         provider = self.providers.get(provider_name)
-        provider_target = None
-        provider_rate = None
+        
+        # CRITICAL FIX: Read provider INPUT format (what provider receives)
+        # NOT target format (what provider outputs)
+        # TransportCard should show: provider receives X, wire expects Y
+        provider_input_enc = None
+        provider_input_rate = None
+        provider_target_enc = None
+        provider_target_rate = None
         try:
             provider_cfg = getattr(provider, "config", None)
-            provider_target = self._canonicalize_encoding(getattr(provider_cfg, "target_encoding", None))
-            raw_rate = getattr(provider_cfg, "target_sample_rate_hz", None)
-            provider_rate = int(raw_rate) if raw_rate else None
+            if provider_cfg:
+                # Modern providers: read provider_input_* for what they receive
+                provider_input_enc = self._canonicalize_encoding(
+                    getattr(provider_cfg, "provider_input_encoding", None) or
+                    getattr(provider_cfg, "input_encoding", None)
+                )
+                raw_input_rate = (
+                    getattr(provider_cfg, "provider_input_sample_rate_hz", None) or
+                    getattr(provider_cfg, "input_sample_rate_hz", None)
+                )
+                provider_input_rate = int(raw_input_rate) if raw_input_rate else None
+                
+                # Also read target for alignment validation
+                provider_target_enc = self._canonicalize_encoding(getattr(provider_cfg, "target_encoding", None))
+                raw_target_rate = getattr(provider_cfg, "target_sample_rate_hz", None)
+                provider_target_rate = int(raw_target_rate) if raw_target_rate else None
         except Exception:
             provider_cfg = None
 
+        # Validate outbound alignment (provider output vs wire expectations)
         remediation: Optional[str] = None
         aligned = True
-        if provider_target and provider_target != transport_fmt:
+        if provider_target_enc and provider_target_enc != transport_fmt:
             aligned = False
             remediation = (
-                f"Provider target_encoding={provider_target} but transport format={transport_fmt}. "
+                f"Provider target_encoding={provider_target_enc} but transport format={transport_fmt}. "
                 f"Update providers.{provider_name}.target_encoding to '{transport_fmt}' in config/ai-agent.yaml."
             )
-        if provider_rate and provider_rate != transport_rate:
+        if provider_target_rate and provider_target_rate != transport_rate:
             aligned = False
             extra = (
-                f"Provider target_sample_rate_hz={provider_rate} but transport sample_rate={transport_rate}. "
+                f"Provider target_sample_rate_hz={provider_target_rate} but transport sample_rate={transport_rate}. "
                 f"Update providers.{provider_name}.target_sample_rate_hz to {transport_rate}."
             )
             remediation = f"{remediation} {extra}".strip() if remediation else extra
@@ -5885,13 +5908,14 @@ class Engine:
                 remediation=remediation,
             )
 
+        # CRITICAL FIX: TransportCard should show INBOUND encoding (what provider receives)
         self._emit_transport_card(
             session.call_id,
             session,
-            source_encoding=provider_target,
-            source_sample_rate=provider_rate,
-            target_encoding=transport_fmt,
-            target_sample_rate=transport_rate,
+            source_encoding=provider_input_enc,    # ✅ What provider RECEIVES
+            source_sample_rate=provider_input_rate, # ✅ What provider RECEIVES
+            target_encoding=transport_fmt,          # ✅ What wire EXPECTS
+            target_sample_rate=transport_rate,      # ✅ What wire EXPECTS
         )
 
         return transport_fmt, transport_rate, remediation

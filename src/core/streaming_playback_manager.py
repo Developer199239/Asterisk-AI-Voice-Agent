@@ -2667,11 +2667,21 @@ class StreamingPlaybackManager:
                 or fmt
             )
             try:
-                sr = int(info.get('target_sample_rate', sample_rate))
+                sr = int(info.get('target_sample_rate', 0) or 0)
             except Exception:
-                sr = sample_rate
+                sr = 0
             if sr > 0:
                 sample_rate = sr
+            elif call_id:
+                # CRITICAL: target_sample_rate missing from active_streams!
+                # This causes wrong frame sizes (e.g., 320 bytes @ 8kHz instead of 640 bytes @ 16kHz)
+                # which leads to chipmunk audio
+                logger.warning(
+                    "⚠️  target_sample_rate missing in active_streams - using fallback",
+                    call_id=call_id,
+                    fallback_sample_rate=sample_rate,
+                    stream_info_keys=list(info.keys()) if info else [],
+                )
         bytes_per_sample = 1 if self._is_mulaw(fmt) else 2
         frame_size = int(sample_rate * (self.chunk_size_ms / 1000.0) * bytes_per_sample)
         if frame_size <= 0:
