@@ -468,7 +468,29 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                 except Exception:
                     pass
 
-            pcm16 = self._convert_inbound_audio(audio_chunk)
+            # CRITICAL: Use engine-provided encoding/sample_rate if available
+            # This avoids double conversion and respects the engine's format negotiation
+            if encoding and sample_rate:
+                # Engine already converted to correct format via _encode_for_provider
+                # Trust the engine's conversion
+                if encoding.lower().strip() in ("linear16", "pcm16", "slin16"):
+                    pcm16 = audio_chunk
+                    provider_rate = sample_rate
+                else:
+                    # Unexpected format - fall back to conversion
+                    logger.warning(
+                        "OpenAI Realtime: unexpected encoding from engine, converting",
+                        call_id=self._call_id,
+                        encoding=encoding,
+                        sample_rate=sample_rate
+                    )
+                    pcm16 = self._convert_inbound_audio(audio_chunk)
+                    provider_rate = int(getattr(self.config, "provider_input_sample_rate_hz", 0) or 24000)
+            else:
+                # Fallback: No parameters from engine - do own conversion (backward compat)
+                pcm16 = self._convert_inbound_audio(audio_chunk)
+                provider_rate = int(getattr(self.config, "provider_input_sample_rate_hz", 0) or 24000)
+            
             if not pcm16:
                 return
             

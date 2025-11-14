@@ -5523,8 +5523,15 @@ class Engine:
         try:
             provider_cfg = getattr(provider, "config", None)
             if provider_cfg is not None:
-                expected_enc = self._canonicalize_encoding(getattr(provider_cfg, "input_encoding", None))
-                expected_rate = int(getattr(provider_cfg, "input_sample_rate_hz", pcm_rate) or pcm_rate)
+                # CRITICAL: Read provider-specific fields first (for real-time providers like Google Live, OpenAI)
+                # Fall back to wire-format fields for backward compatibility (Deepgram Voice Agent)
+                provider_enc = getattr(provider_cfg, "provider_input_encoding", None)
+                wire_enc = getattr(provider_cfg, "input_encoding", None)
+                expected_enc = self._canonicalize_encoding(provider_enc or wire_enc)
+                
+                provider_rate = getattr(provider_cfg, "provider_input_sample_rate_hz", None)
+                wire_rate = getattr(provider_cfg, "input_sample_rate_hz", None)
+                expected_rate = int(provider_rate or wire_rate or pcm_rate)
         except Exception:
             expected_enc = ""
             expected_rate = pcm_rate
