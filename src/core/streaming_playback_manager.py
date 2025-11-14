@@ -25,6 +25,12 @@ from src.audio.resampler import (
 )
 from src.core.session_store import SessionStore
 from src.core.models import CallSession, PlaybackRef
+from .adaptive_streaming import (
+    StreamCharacterizer,
+    AdaptiveBufferController,
+    calculate_optimal_buffer,
+    get_pattern_cache,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from src.core.conversation_coordinator import ConversationCoordinator
@@ -420,7 +426,50 @@ class StreamingPlaybackManager:
             # Generate stream ID
             stream_id = self._generate_stream_id(call_id, playback_type)
             
-            # Initialize jitter buffer sized from config
+            # 🧠 ADAPTIVE STREAMING: Get wire format and provider rate for intelligent buffering
+            provider_name = getattr(session, 'provider_name', None) or getattr(session, 'provider', 'unknown')
+            wire_sample_rate = 8000  # Default
+            provider_sample_rate = 16000  # Default
+            
+            # Get wire sample rate from transport profile
+            if hasattr(session, 'transport_profile'):
+                try:
+                    if hasattr(session.transport_profile, 'wire_sample_rate'):
+                        wire_sample_rate = int(session.transport_profile.wire_sample_rate)
+                    if hasattr(session.transport_profile, 'provider_output_sample_rate'):
+                        provider_sample_rate = int(session.transport_profile.provider_output_sample_rate)
+                except Exception:
+                    pass
+            
+            # Override with source_sample_rate if provided
+            if source_sample_rate and source_sample_rate > 0:
+                provider_sample_rate = int(source_sample_rate)
+            
+            # 🧠 Check for cached provider pattern
+            pattern_cache = get_pattern_cache()
+            cached_pattern = pattern_cache.get_hint(provider_name, wire_sample_rate)
+            
+            # 🧠 Calculate intelligent buffer size
+            base_config_ms = max(1, int(self.greeting_min_start_ms if playback_type == "greeting" else self.min_start_ms))
+            intelligent_buffer_ms = calculate_optimal_buffer(
+                stream_pattern=cached_pattern,
+                wire_sample_rate=wire_sample_rate,
+                provider_sample_rate=provider_sample_rate,
+                base_config_ms=base_config_ms
+            )
+            
+            logger.info(
+                "🧠 Intelligent buffer calculated",
+                call_id=call_id,
+                provider=provider_name,
+                wire_rate=wire_sample_rate,
+                provider_rate=provider_sample_rate,
+                base_config_ms=base_config_ms,
+                intelligent_buffer_ms=intelligent_buffer_ms,
+                cached_pattern=cached_pattern.type if cached_pattern else "none"
+            )
+            
+            # Initialize jitter buffer sized from intelligent calculation
             try:
                 chunk_ms = max(1, int(self.chunk_size_ms))
                 jb_ms = max(0, int(self.jitter_buffer_ms))
@@ -429,55 +478,30 @@ class StreamingPlaybackManager:
                 jb_chunks = 10
             jitter_buffer = asyncio.Queue(maxsize=jb_chunks)
             self.jitter_buffers[call_id] = jitter_buffer
-            # Derive adaptive per-stream warm-up thresholds so we never demand more
-            # buffered chunks than the queue can hold.
-            # Adapt based on time since the last segment ended: shorter for back-to-back,
-            # longer when resuming after silence.
-            now_ts = time.time()
-            last_end_ts = float(self._last_segment_end_ts.get(call_id, 0.0) or 0.0)
-            gap_ms = int(max(0.0, (now_ts - last_end_ts) * 1000.0)) if last_end_ts > 0 else 999999
-            # Heuristics (can be made configurable later):
-            # - Back-to-back threshold: 500 ms
-            # - Back-to-back warm-up: ~50% of configured min_start_ms (>= 40 ms)
-            # - Cold resume warm-up: max(configured min_start_ms, 320 ms)
-            base_min_ms = max(1, int(self.min_start_ms))
-            if playback_type == "greeting":
-                adaptive_min_ms = base_min_ms  # keep greeting behavior predictable
-            else:
-                if gap_ms <= int(self.provider_grace_ms or 500):
-                    adaptive_min_ms = max(80, int(base_min_ms * 0.5))
-                else:
-                    adaptive_min_ms = max(base_min_ms, 400)
-            adaptive_min_chunks = max(1, int(math.ceil(adaptive_min_ms / chunk_ms)))
-            # Resume floor: ensure back-to-back resumes have a minimum budget (160–200ms)
-            try:
-                pg_ms = int(self.provider_grace_ms or 500)
-            except Exception:
-                pg_ms = 500
-            if playback_type == "greeting":
-                resume_floor_ms = base_min_ms
-            else:
-                if gap_ms <= pg_ms:
-                    resume_floor_ms = max(160, min(200, adaptive_min_ms))
-                else:
-                    resume_floor_ms = adaptive_min_ms
-            resume_floor_chunks = max(1, int(math.ceil(resume_floor_ms / chunk_ms)))
-            configured_min_start = (
-                self.greeting_min_start_chunks if playback_type == "greeting" else adaptive_min_chunks
-            )
-            # Always leave at least one spare slot so playback does not immediately
-            # fall below the watermark on the first frame.
+            
+            # 🧠 Initialize adaptive streaming components
+            stream_characterizer = StreamCharacterizer()
+            adaptive_controller = AdaptiveBufferController(intelligent_buffer_ms)
+            
+            # Store adaptive components for this stream
+            if not hasattr(self, 'adaptive_controllers'):
+                self.adaptive_controllers = {}
+            if not hasattr(self, 'stream_characterizers'):
+                self.stream_characterizers = {}
+            
+            self.adaptive_controllers[call_id] = adaptive_controller
+            self.stream_characterizers[call_id] = stream_characterizer
+            # 🧠 Use intelligent buffer instead of legacy heuristics
+            # Convert intelligent_buffer_ms to chunks
+            min_start_chunks = max(1, int(math.ceil(intelligent_buffer_ms / chunk_ms)))
+            
+            # Ensure we don't exceed jitter buffer capacity
             max_startable = max(1, jb_chunks - 1)
-            min_start_chunks = max(1, min(configured_min_start, max_startable))
-            if configured_min_start > min_start_chunks:
-                logger.debug(
-                    "Streaming min_start clamped",
-                    call_id=call_id,
-                    playback_type=playback_type,
-                    configured_chunks=configured_min_start,
-                    jitter_chunks=jb_chunks,
-                    applied_chunks=min_start_chunks,
-                )
+            min_start_chunks = max(1, min(min_start_chunks, max_startable))
+            
+            # Resume floor matches intelligent buffer
+            resume_floor_ms = intelligent_buffer_ms
+            resume_floor_chunks = min_start_chunks
             # Scale low watermark proportionally to the adaptive warm-up
             # Use ~2/3 of min_start by default, but do not go BELOW configured low_watermark (treat as floor).
             try:
@@ -801,6 +825,37 @@ class StreamingPlaybackManager:
 
                     # Enqueue provider chunk for downstream processing
                     await jitter_buffer.put(chunk)
+                    
+                    # 🧠 ADAPTIVE STREAMING: Characterize stream pattern during first 500ms
+                    if call_id in self.stream_characterizers:
+                        characterizer = self.stream_characterizers[call_id]
+                        if not characterizer.characterization_done:
+                            characterizer.add_chunk(len(chunk))
+                            
+                            # Check if we should analyze now
+                            if characterizer.should_analyze():
+                                pattern = characterizer.analyze()
+                                
+                                if pattern and call_id in self.adaptive_controllers:
+                                    # Get session info for provider name and rates
+                                    sess = await self.session_store.get_by_call_id(call_id)
+                                    if sess:
+                                        provider_name = getattr(sess, 'provider_name', None) or getattr(sess, 'provider', 'unknown')
+                                        wire_rate = 8000
+                                        if hasattr(sess, 'transport_profile') and hasattr(sess.transport_profile, 'wire_sample_rate'):
+                                            wire_rate = int(sess.transport_profile.wire_sample_rate)
+                                        
+                                        # Cache this pattern for future calls
+                                        pattern_cache = get_pattern_cache()
+                                        pattern_cache.update_pattern(provider_name, wire_rate, pattern)
+                                        
+                                        logger.info(
+                                            "🧠 Stream characterized and pattern cached",
+                                            call_id=call_id,
+                                            provider=provider_name,
+                                            pattern_type=pattern.type,
+                                            optimal_buffer_ms=pattern.optimal_buffer_ms
+                                        )
 
                     # Normalize buffered_bytes accounting to target (egress) bytes so warm-up gating matches wire frame size
                     try:
