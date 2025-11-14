@@ -127,6 +127,7 @@ class TransportOrchestrator:
                     greeting=context_dict.get('greeting'),
                     profile=context_dict.get('profile'),
                     provider=context_dict.get('provider'),
+                    tools=context_dict.get('tools'),  # Extract tools for function calling
                 )
                 logger.debug("Loaded context mapping", name=name, context=contexts[name])
             except Exception as exc:
