@@ -5971,6 +5971,14 @@ class Engine:
             try:
                 if session.context_name:
                     context_config = self.transport_orchestrator.get_context_config(session.context_name)
+                    logger.debug(
+                        "DEBUG: Building provider context",
+                        call_id=call_id,
+                        context_name=session.context_name,
+                        has_context_config=bool(context_config),
+                        config_type=type(context_config).__name__ if context_config else None,
+                        has_tools_attr=hasattr(context_config, 'tools') if context_config else False,
+                    )
                     if context_config:
                         # Include tools if defined in context
                         if hasattr(context_config, 'tools') and context_config.tools:
@@ -5980,11 +5988,18 @@ class Engine:
                                 call_id=call_id,
                                 tools=context_config.tools,
                             )
+                        else:
+                            logger.debug(
+                                "DEBUG: No tools found in context config",
+                                call_id=call_id,
+                                has_tools_attr=hasattr(context_config, 'tools'),
+                                tools_value=getattr(context_config, 'tools', 'NO_ATTR'),
+                            )
                         # Include prompt for reference (though config.instructions should already be set)
                         if hasattr(context_config, 'prompt') and context_config.prompt:
                             provider_context['prompt'] = context_config.prompt
             except Exception as e:
-                logger.warning(f"Failed to build provider context: {e}", call_id=call_id)
+                logger.warning(f"Failed to build provider context: {e}", call_id=call_id, exc_info=True)
             
             # Inject tool execution context into provider if it supports tools (Deepgram, Google Live)
             if hasattr(provider, 'tool_adapter') or hasattr(provider, '_tool_adapter'):
