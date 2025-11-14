@@ -2574,9 +2574,23 @@ class Engine:
                         # CRITICAL: Pass encoding and sample_rate to provider
                         # Google Live needs these to correctly interpret audio format
                         # Other providers with single-param signature will ignore extras
+                        logger.debug(
+                            "Sending audio to provider",
+                            call_id=session.call_id,
+                            provider=provider_name,
+                            encoding=prov_enc,
+                            sample_rate=prov_rate,
+                            payload_bytes=len(prov_payload),
+                        )
                         try:
                             await provider.send_audio(prov_payload, prov_rate, prov_enc)
-                        except TypeError:
+                        except TypeError as e:
+                            logger.warning(
+                                "Provider send_audio TypeError - falling back to old signature",
+                                call_id=session.call_id,
+                                provider=provider_name,
+                                error=str(e),
+                            )
                             # Fallback for providers with old signature (audio_chunk only)
                             await provider.send_audio(prov_payload)
                     except Exception:
@@ -5800,9 +5814,17 @@ class Engine:
     ) -> Tuple[str, int, Optional[str]]:
         provider_name = provider_name or getattr(session, "provider_name", None) or self.config.default_provider
 
-        transport_fmt = self._canonicalize_encoding(getattr(session.transport_profile, "format", None)) or "ulaw"
+        # CRITICAL: Use wire_encoding and wire_sample_rate from TransportProfile
+        # TransportProfile (P1) uses wire_encoding/wire_sample_rate, not format/sample_rate
+        transport_fmt = self._canonicalize_encoding(
+            getattr(session.transport_profile, "wire_encoding", None) or 
+            getattr(session.transport_profile, "format", None)
+        ) or "ulaw"
         try:
-            transport_rate = int(getattr(session.transport_profile, "sample_rate", 0) or 0)
+            transport_rate = int(
+                getattr(session.transport_profile, "wire_sample_rate", 0) or 
+                getattr(session.transport_profile, "sample_rate", 0) or 0
+            )
         except Exception:
             transport_rate = 0
         if transport_rate <= 0:
