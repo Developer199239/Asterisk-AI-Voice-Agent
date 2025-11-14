@@ -274,11 +274,20 @@ class GoogleLiveProvider(AIProviderInterface):
             response_modalities=generation_config.get("responseModalities"),
         )
 
-        # Build tools config if tools are available
+        # Build tools config (aligned with Deepgram/OpenAI pattern)
+        # Always initialize tool adapter and get all registered tools
         tools = []
-        if context and context.get("tools"):
+        try:
             self._tool_adapter = GoogleToolAdapter(tool_registry)
-            tools = self._tool_adapter.format_tools(context["tools"])
+            tools = self._tool_adapter.get_tools_config()
+            if tools:
+                logger.debug(
+                    "Google Live tools configured",
+                    call_id=self._call_id,
+                    tool_count=len(tools[0].get("functionDeclarations", [])) if tools else 0
+                )
+        except Exception as e:
+            logger.warning(f"Failed to configure tools: {e}", call_id=self._call_id, exc_info=True)
 
         # Setup message
         setup_msg = {

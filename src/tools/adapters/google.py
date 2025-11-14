@@ -29,13 +29,16 @@ class GoogleToolAdapter:
         """
         self.registry = registry
     
-    def format_tools(self, tool_names: List[str]) -> List[Dict[str, Any]]:
+    def get_tools_config(self) -> List[Dict[str, Any]]:
         """
-        Format tools for Google Gemini Live API.
+        Get ALL tools configuration in Google Live API format.
+        
+        This method follows the same pattern as Deepgram and OpenAI adapters,
+        returning all registered tools automatically.
         
         Google format:
-        {
-            "function_declarations": [
+        [{
+            "functionDeclarations": [
                 {
                     "name": "transfer_call",
                     "description": "Transfer the call to another extension",
@@ -46,7 +49,46 @@ class GoogleToolAdapter:
                     }
                 }
             ]
-        }
+        }]
+        
+        Returns:
+            List of tool declarations in Google format (all registered tools)
+        """
+        function_declarations = []
+        
+        # Iterate through all registered tools
+        for tool_name, tool in self.registry._tools.items():
+            try:
+                definition = tool.definition
+                declaration = {
+                    "name": tool_name,
+                    "description": definition.description,
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            p.name: p.to_dict()
+                            for p in definition.parameters
+                        },
+                        "required": [p.name for p in definition.parameters if p.required]
+                    }
+                }
+                function_declarations.append(declaration)
+            except Exception as e:
+                logger.warning(f"Failed to format tool {tool_name}: {e}")
+                continue
+        
+        logger.debug(f"Formatted {len(function_declarations)} tools for Google Live")
+        
+        return [{
+            "functionDeclarations": function_declarations  # camelCase per official API
+        }] if function_declarations else []
+    
+    def format_tools(self, tool_names: List[str]) -> List[Dict[str, Any]]:
+        """
+        Format SPECIFIC tools for Google Gemini Live API.
+        
+        DEPRECATED: Use get_tools_config() instead for consistency with other providers.
+        This method is kept for backwards compatibility.
         
         Args:
             tool_names: List of tool names to include
