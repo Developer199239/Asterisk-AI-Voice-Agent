@@ -122,6 +122,7 @@ class GoogleLiveProvider(AIProviderInterface):
         
         # Transcription buffering - hold latest partial until turnComplete
         self._input_transcription_buffer: str = ""
+        self._output_transcription_buffer: str = ""
         
         # Metrics tracking
         self._session_start_time: Optional[float] = None
@@ -591,31 +592,44 @@ class GoogleLiveProvider(AIProviderInterface):
                 )
         
         # Handle output transcription (AI speech) - per official API docs
-        # outputTranscription is a field within serverContent, not a separate message type
+        # Like inputTranscription, API sends incremental fragments that must be concatenated
         output_transcription = content.get("outputTranscription")
         if output_transcription:
             text = output_transcription.get("text", "")
             if text:
+                # Concatenate AI speech fragments
+                self._output_transcription_buffer += text
                 logger.debug(
-                    "Google Live output transcription (AI speech)",
+                    "Google Live output transcription fragment",
                     call_id=self._call_id,
-                    text_preview=text[:100],
+                    fragment=text,
+                    buffer_length=len(self._output_transcription_buffer),
                 )
-                # Note: We already track from modelTurn.parts[], so this is redundant
-                # but confirms the transcription is working
         
         # Check if model turn is complete - THIS is when we save the final transcription
         turn_complete = content.get("turnComplete", False)
         
-        # Save final transcription when turn completes (per API recommendation)
-        if turn_complete and self._input_transcription_buffer:
-            logger.info(
-                "Google Live final user transcription (turnComplete)",
-                call_id=self._call_id,
-                text=self._input_transcription_buffer[:150],
-            )
-            await self._track_conversation_message("user", self._input_transcription_buffer)
-            self._input_transcription_buffer = ""
+        # Save final transcriptions when turn completes (per API recommendation)
+        if turn_complete:
+            # Save user speech if buffered
+            if self._input_transcription_buffer:
+                logger.info(
+                    "Google Live final user transcription (turnComplete)",
+                    call_id=self._call_id,
+                    text=self._input_transcription_buffer[:150],
+                )
+                await self._track_conversation_message("user", self._input_transcription_buffer)
+                self._input_transcription_buffer = ""
+            
+            # Save AI speech if buffered
+            if self._output_transcription_buffer:
+                logger.info(
+                    "Google Live final AI transcription (turnComplete)",
+                    call_id=self._call_id,
+                    text=self._output_transcription_buffer[:150],
+                )
+                await self._track_conversation_message("assistant", self._output_transcription_buffer)
+                self._output_transcription_buffer = ""
         
         # Extract parts (using camelCase keys from actual API)
         for part in content.get("modelTurn", {}).get("parts", []):
@@ -625,17 +639,15 @@ class GoogleLiveProvider(AIProviderInterface):
                 if inline_data.get("mimeType", "").startswith("audio/pcm"):
                     await self._handle_audio_output(inline_data["data"])
             
-            # Handle text output (for debugging/logging and conversation history)
+            # Handle text output (for debugging/logging only)
+            # Note: We now get cleaner AI transcriptions from outputTranscription field
             if "text" in part:
                 text = part["text"]
                 logger.debug(
-                    "Google Live text response from modelTurn",
+                    "Google Live text response from modelTurn (not saved - using outputTranscription instead)",
                     call_id=self._call_id,
                     text_preview=text[:100],
                 )
-                
-                # Save agent response to conversation history
-                await self._track_conversation_message("assistant", text)
 
         # Handle turn completion
         if turn_complete:
