@@ -329,7 +329,7 @@ class DeepgramProvider(AIProviderInterface):
         except Exception:
             return pcm_bytes
 
-    async def start_session(self, call_id: str):
+    async def start_session(self, call_id: str, context: Optional[Dict[str, Any]] = None):
         ws_url = f"wss://agent.deepgram.com/v1/agent/converse"
         headers = {'Authorization': f'Token {self.config.api_key}'}
 

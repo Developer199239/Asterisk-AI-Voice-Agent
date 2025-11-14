@@ -304,7 +304,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             )
             return None
 
-    async def start_session(self, call_id: str):
+    async def start_session(self, call_id: str, context: Optional[Dict[str, Any]] = None):
         if not self.config.api_key:
             raise ValueError("OpenAI Realtime provider requires OPENAI_API_KEY")
 
