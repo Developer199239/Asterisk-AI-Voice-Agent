@@ -44,6 +44,7 @@ class ContextConfig:
     greeting: Optional[str] = None
     profile: Optional[str] = None
     provider: Optional[str] = None
+    tools: Optional[list] = None  # Tool names for function calling
 
 
 @dataclass
