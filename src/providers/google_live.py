@@ -349,31 +349,33 @@ class GoogleLiveProvider(AIProviderInterface):
                 )
 
     async def _send_greeting(self) -> None:
-        """Send greeting by injecting it as a user request for the model to respond to."""
+        """Send greeting by asking Gemini to speak it (similar to OpenAI Realtime pattern)."""
         greeting = (self.config.greeting or "").strip()
         if not greeting:
             return
         
-        logger.info("Sending greeting to Google Live", call_id=self._call_id, greeting_preview=greeting[:50])
+        logger.info("Sending greeting request to Google Live", call_id=self._call_id, greeting_preview=greeting[:50])
         
-        # Send a clientContent message requesting the greeting as the first turn
-        # This tells Gemini to speak the greeting
+        # Per Gemini Live API docs: Cannot pre-fill model responses
+        # Instead, send a user turn instructing the model to speak the greeting
+        # This follows the same pattern as OpenAI Realtime's response.create with instructions
         greeting_msg = {
             "clientContent": {
                 "turns": [
                     {
                         "role": "user",
-                        "parts": [{"text": "(System: Please speak this greeting to the caller)"}]
-                    },
-                    {
-                        "role": "model",
-                        "parts": [{"text": greeting}]
+                        "parts": [{"text": f"Please greet the caller with the following message: {greeting}"}]
                     }
                 ],
                 "turnComplete": True
             }
         }
         await self._send_message(greeting_msg)
+        
+        logger.info(
+            "✅ Greeting request sent to Gemini",
+            call_id=self._call_id,
+        )
 
     async def send_audio(self, audio_chunk: bytes, sample_rate: int = 8000, encoding: str = "ulaw") -> None:
         """
