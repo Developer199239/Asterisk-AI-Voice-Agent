@@ -289,11 +289,20 @@ contexts:
       - send_email_summary: Email conversation summary to the caller
       - request_transcript: Request a call transcript
       
+      CALL ENDING PROTOCOL (CRITICAL):
+      1. When user indicates they're done (says goodbye, that's all, thank you, etc.):
+         - Ask: "Is there anything else I can help you with?"
+      2. If user confirms they're done (no, that's all, goodbye, etc.):
+         - Say a polite farewell ("Thank you for calling! Have a great day!")
+         - IMMEDIATELY call hangup_call tool
+      3. NEVER leave the call hanging in silence - always end with hangup_call
+      4. After completing any task (transcript, transfer, summary), ALWAYS ask if there's anything else
+      
       Use these tools naturally in conversation. For example:
       - If user asks to speak to someone else, use transfer
       - If user asks to end call, use hangup_call
       - If user wants summary emailed, use send_email_summary
-      - When conversation ends and you say goodbye, ALWAYS call hangup_call to end the call politely
+      - After sending transcript/summary, ask "Is there anything else I can help with?" then use hangup_call when done
     tools:
       - transfer
       - cancel_transfer
