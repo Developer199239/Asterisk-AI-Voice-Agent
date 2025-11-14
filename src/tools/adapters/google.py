@@ -63,10 +63,19 @@ class GoogleToolAdapter:
                 continue
             
             # Convert tool schema to Google format
+            # Use the tool's definition to get description and parameters
+            definition = tool.definition
             declaration = {
                 "name": tool_name,
-                "description": tool.description,
-                "parameters": tool.parameters  # Already in JSON Schema format
+                "description": definition.description,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        p.name: p.to_dict()
+                        for p in definition.parameters
+                    },
+                    "required": [p.name for p in definition.parameters if p.required]
+                }
             }
             function_declarations.append(declaration)
         
