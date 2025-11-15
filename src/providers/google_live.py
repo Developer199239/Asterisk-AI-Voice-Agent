@@ -324,6 +324,15 @@ class GoogleLiveProvider(AIProviderInterface):
         
         if self.config.enable_output_transcription:
             setup_msg["setup"]["outputAudioTranscription"] = {}
+        
+        # CRITICAL: Enable automatic Voice Activity Detection
+        # This is required for Google Live to detect when user is speaking
+        # Without this, VAD may not work correctly with AudioSocket transport
+        setup_msg["setup"]["realtimeInputConfig"] = {
+            "automaticActivityDetection": {
+                "disabled": False  # Explicitly enable VAD
+            }
+        }
 
         # Debug: Log setup message structure
         logger.debug(
@@ -449,6 +458,15 @@ class GoogleLiveProvider(AIProviderInterface):
                     }
                 }
 
+                # Debug logging for audio transmission (AudioSocket troubleshooting)
+                logger.debug(
+                    "🎤 Google Live: Sending audio chunk",
+                    call_id=self._call_id,
+                    chunk_bytes=len(chunk_to_send),
+                    provider_rate=provider_rate,
+                    mime_type=f"audio/pcm;rate={provider_rate}",
+                    base64_length=len(audio_b64),
+                )
                 await self._send_message(message)
                 
                 _GOOGLE_LIVE_AUDIO_SENT.labels(call_id=self._call_id).inc(len(chunk_to_send))
