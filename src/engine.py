@@ -5634,7 +5634,27 @@ class Engine:
                 provider_rate = getattr(provider_cfg, "provider_input_sample_rate_hz", None)
                 wire_rate = getattr(provider_cfg, "input_sample_rate_hz", None)
                 expected_rate = int(provider_rate or wire_rate or pcm_rate)
-        except Exception:
+                
+                logger.info(
+                    "🔧 ENCODE CONFIG - Reading provider config",
+                    call_id=call_id,
+                    provider=provider_name,
+                    provider_enc=provider_enc,
+                    wire_enc=wire_enc,
+                    provider_rate=provider_rate,
+                    wire_rate=wire_rate,
+                    expected_enc=expected_enc,
+                    expected_rate=expected_rate,
+                    pcm_rate=pcm_rate,
+                )
+        except Exception as e:
+            logger.error(
+                "🔧 ENCODE CONFIG - Exception reading config",
+                call_id=call_id,
+                provider=provider_name,
+                error=str(e),
+                exc_info=True,
+            )
             expected_enc = ""
             expected_rate = pcm_rate
 
@@ -5645,13 +5665,42 @@ class Engine:
             if expected_rate <= 0:
                 expected_rate = pcm_rate
             if pcm_rate != expected_rate and pcm_bytes:
+                logger.info(
+                    "🔧 ENCODE RESAMPLE - Resampling needed",
+                    call_id=call_id,
+                    provider=provider_name,
+                    pcm_rate=pcm_rate,
+                    expected_rate=expected_rate,
+                    pcm_bytes=len(pcm_bytes),
+                )
                 try:
                     state = prov_states.get(state_key)
                     pcm_bytes, state = audioop.ratecv(pcm_bytes, 2, 1, pcm_rate, expected_rate, state)
                     prov_states[state_key] = state
                     pcm_rate = expected_rate
-                except Exception:
-                    pass
+                    logger.info(
+                        "🔧 ENCODE RESAMPLE - Resampling completed",
+                        call_id=call_id,
+                        provider=provider_name,
+                        new_rate=pcm_rate,
+                        new_bytes=len(pcm_bytes),
+                    )
+                except Exception as e:
+                    logger.error(
+                        "🔧 ENCODE RESAMPLE - Resampling failed",
+                        call_id=call_id,
+                        provider=provider_name,
+                        error=str(e),
+                        exc_info=True,
+                    )
+            else:
+                logger.info(
+                    "🔧 ENCODE RESAMPLE - No resampling needed",
+                    call_id=call_id,
+                    provider=provider_name,
+                    pcm_rate=pcm_rate,
+                    expected_rate=expected_rate,
+                )
             
             # CRITICAL FIX: Apply gain normalization to provider input audio
             # Problem: Audio from AudioSocket @ 8kHz (RMS~18000) gets resampled to 16kHz
