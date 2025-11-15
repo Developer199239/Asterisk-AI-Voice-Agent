@@ -5676,12 +5676,14 @@ class Engine:
                     pcm_bytes=len(pcm_bytes),
                 )
                 try:
-                    state = prov_states.get(state_key)
-                    pcm_bytes, state = audioop.ratecv(pcm_bytes, 2, 1, pcm_rate, expected_rate, state)
-                    prov_states[state_key] = state
+                    # CRITICAL FIX: Use stateless resampling for consistent chunk sizes
+                    # Stateful resampling produces variable output (638 vs 640 bytes)
+                    # which corrupts audio alignment for streaming APIs like Google Live
+                    # Trade-off: Slightly lower quality but consistent frame sizes
+                    pcm_bytes, _ = audioop.ratecv(pcm_bytes, 2, 1, pcm_rate, expected_rate, None)
                     pcm_rate = expected_rate
                     logger.info(
-                        "🔧 ENCODE RESAMPLE - Resampling completed",
+                        "🔧 ENCODE RESAMPLE - Resampling completed (stateless)",
                         call_id=call_id,
                         provider=provider_name,
                         new_rate=pcm_rate,

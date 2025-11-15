@@ -98,7 +98,7 @@ else
   fi
   run_server_cmd "rm -f /tmp/ai-engine.all.log" || true
 fi
-CID=$(grep -oE 'call_id=[0-9]+\.[0-9]+' "$BASE/logs/ai-engine.log" | head -1 | cut -d= -f2 || true)
+CID=$(grep -oE '17[0-9]{8}\.[0-9]{4}' "$BASE/logs/ai-engine.log" | sort -u | head -1 || true)
 echo -n "$CID" > "$BASE/call_id.txt"
 echo "[RCA] Active Call ID: ${CID:-unknown}"
 if [ -n "$CID" ]; then
