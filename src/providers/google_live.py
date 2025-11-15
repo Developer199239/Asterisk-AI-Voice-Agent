@@ -225,11 +225,10 @@ class GoogleLiveProvider(AIProviderInterface):
             # Wait for setup acknowledgment
             logger.debug("Waiting for Google Live setupComplete...", call_id=self._call_id)
             await asyncio.wait_for(self._setup_ack_event.wait(), timeout=5.0)
-            logger.info("Google Live setup complete", call_id=self._call_id)
+            logger.info("Google Live setup complete (ACK received)", call_id=self._call_id)
         
-            # Send greeting if configured (after setup is complete)
-            if self.config.greeting and self.config.greeting.strip():
-                await self._send_greeting()
+            # Note: Greeting is sent by _handle_setup_complete() to avoid race condition
+            # Do NOT send greeting here as it would duplicate the greeting
             
             self._keepalive_task = asyncio.create_task(
                 self._keepalive_loop(),
