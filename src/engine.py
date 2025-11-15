@@ -5676,18 +5676,52 @@ class Engine:
                     pcm_bytes=len(pcm_bytes),
                 )
                 try:
-                    # CRITICAL FIX: Use stateless resampling for consistent chunk sizes
-                    # Stateful resampling produces variable output (638 vs 640 bytes)
-                    # which corrupts audio alignment for streaming APIs like Google Live
-                    # Trade-off: Slightly lower quality but consistent frame sizes
+                    # CRITICAL FIX: audioop.ratecv() produces incorrect output sizes
+                    # Example: 320 bytes @ 8kHz → 638 bytes @ 16kHz (should be 640)
+                    # This 2-byte misalignment corrupts streaming for Google Live
+                    input_bytes = len(pcm_bytes)
                     pcm_bytes, _ = audioop.ratecv(pcm_bytes, 2, 1, pcm_rate, expected_rate, None)
+                    
+                    # Calculate expected output size based on sample rate ratio
+                    # input_samples = input_bytes // 2 (2 bytes per sample)
+                    # output_samples = input_samples * (expected_rate / pcm_rate)
+                    # output_bytes = output_samples * 2
+                    expected_bytes = int((input_bytes // 2) * (expected_rate / pcm_rate) * 2)
+                    
+                    # Force exact size by padding or trimming
+                    if len(pcm_bytes) < expected_bytes:
+                        # Pad with zeros (silence)
+                        padding = expected_bytes - len(pcm_bytes)
+                        pcm_bytes += b'\x00' * padding
+                        logger.debug(
+                            "🔧 ENCODE RESAMPLE - Padded to exact size",
+                            call_id=call_id,
+                            provider=provider_name,
+                            before=len(pcm_bytes) - padding,
+                            after=len(pcm_bytes),
+                            padding_bytes=padding,
+                        )
+                    elif len(pcm_bytes) > expected_bytes:
+                        # Trim excess
+                        excess = len(pcm_bytes) - expected_bytes
+                        pcm_bytes = pcm_bytes[:expected_bytes]
+                        logger.debug(
+                            "🔧 ENCODE RESAMPLE - Trimmed to exact size",
+                            call_id=call_id,
+                            provider=provider_name,
+                            before=len(pcm_bytes) + excess,
+                            after=len(pcm_bytes),
+                            trimmed_bytes=excess,
+                        )
+                    
                     pcm_rate = expected_rate
                     logger.info(
-                        "🔧 ENCODE RESAMPLE - Resampling completed (stateless)",
+                        "🔧 ENCODE RESAMPLE - Resampling completed (corrected)",
                         call_id=call_id,
                         provider=provider_name,
                         new_rate=pcm_rate,
                         new_bytes=len(pcm_bytes),
+                        expected_bytes=expected_bytes,
                     )
                 except Exception as e:
                     logger.error(
