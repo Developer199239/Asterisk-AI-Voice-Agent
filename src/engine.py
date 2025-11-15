@@ -226,8 +226,9 @@ class Engine:
             streaming_config['audiosocket_broadcast_debug'] = False
 
         # Initialize audio capture with diagnostic tap settings
-        tap_dir = streaming_config.get('diag_out_dir', '/tmp/ai-engine-taps')
-        keep_taps = streaming_config.get('diag_enable_taps', False)
+        # Use environment variables directly since streaming_config may not be fully populated yet
+        tap_dir = os.getenv('DIAG_TAP_OUTPUT_DIR', '/tmp/ai-engine-taps')
+        keep_taps = os.getenv('DIAG_ENABLE_TAPS', 'false').lower() in ('true', '1', 'yes')
         self.audio_capture = AudioCaptureManager(base_dir=tap_dir, keep_files=keep_taps)
         logger.info(
             "Audio capture initialized",
