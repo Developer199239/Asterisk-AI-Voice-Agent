@@ -371,22 +371,25 @@ class GoogleLiveProvider(AIProviderInterface):
                 )
 
     async def _send_greeting(self) -> None:
-        """Send greeting by asking Gemini to speak it (similar to OpenAI Realtime pattern)."""
+        """Send greeting by pre-filling it as a model turn (not user instruction)."""
         greeting = (self.config.greeting or "").strip()
         if not greeting:
             return
         
-        logger.info("Sending greeting request to Google Live", call_id=self._call_id, greeting_preview=greeting[:50])
+        logger.info("Sending greeting to Google Live", call_id=self._call_id, greeting_preview=greeting[:50])
         
-        # Per Gemini Live API docs: Cannot pre-fill model responses
-        # Instead, send a user turn instructing the model to speak the greeting
-        # This follows the same pattern as OpenAI Realtime's response.create with instructions
+        # CRITICAL FIX: Send greeting as MODEL turn, not user turn
+        # Previous approach sent: user: "Please greet with X" → model: "X"
+        # This polluted conversation history, causing model to repeat greeting
+        # 
+        # New approach: Directly inject model's greeting turn into conversation
+        # This establishes proper conversation context for subsequent user input
         greeting_msg = {
             "clientContent": {
                 "turns": [
                     {
-                        "role": "user",
-                        "parts": [{"text": f"Please greet the caller with the following message: {greeting}"}]
+                        "role": "model",  # ← Changed from "user"
+                        "parts": [{"text": greeting}]  # ← Direct greeting text
                     }
                 ],
                 "turnComplete": True
@@ -395,7 +398,7 @@ class GoogleLiveProvider(AIProviderInterface):
         await self._send_message(greeting_msg)
         
         logger.info(
-            "✅ Greeting request sent to Gemini",
+            "✅ Greeting sent as model turn",
             call_id=self._call_id,
         )
 
