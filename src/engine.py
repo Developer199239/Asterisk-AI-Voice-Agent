@@ -225,7 +225,15 @@ class Engine:
         except Exception:
             streaming_config['audiosocket_broadcast_debug'] = False
 
-        self.audio_capture = AudioCaptureManager()
+        # Initialize audio capture with diagnostic tap settings
+        tap_dir = streaming_config.get('diag_out_dir', '/tmp/ai-engine-taps')
+        keep_taps = streaming_config.get('diag_enable_taps', False)
+        self.audio_capture = AudioCaptureManager(base_dir=tap_dir, keep_files=keep_taps)
+        logger.info(
+            "Audio capture initialized",
+            base_dir=tap_dir,
+            keep_files=keep_taps,
+        )
         self.streaming_playback_manager = StreamingPlaybackManager(
             self.session_store,
             self.ari_client,
