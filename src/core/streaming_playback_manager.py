@@ -2001,21 +2001,40 @@ class StreamingPlaybackManager:
             out_pcm = working
             # Apply normalization and soft limiter on PCM egress to ensure consistent loudness
             try:
+                logger.debug(
+                    "🔊 PCM EGRESS: Normalizer check",
+                    call_id=call_id,
+                    normalizer_enabled=bool(self.normalizer_enabled),
+                    target_rms=int(self.normalizer_target_rms),
+                    has_pcm=bool(out_pcm),
+                    pcm_size=len(out_pcm) if out_pcm else 0,
+                )
                 if self.normalizer_enabled and self.normalizer_target_rms > 0 and out_pcm:
+                    logger.debug("🔊 PCM EGRESS: Applying normalizer", call_id=call_id)
                     out_pcm = self._apply_normalizer(out_pcm, self.normalizer_target_rms, self.normalizer_max_gain_db)
-                    try:
-                        logger.info(
-                            "Normalizer applied (pcm egress)",
-                            call_id=call_id,
-                            target_rms=int(self.normalizer_target_rms),
-                            max_gain_db=float(self.normalizer_max_gain_db),
-                        )
-                    except Exception:
-                        pass
+                    logger.info(
+                        "🔊 Normalizer applied (pcm egress)",
+                        call_id=call_id,
+                        target_rms=int(self.normalizer_target_rms),
+                        max_gain_db=float(self.normalizer_max_gain_db),
+                    )
+                else:
+                    logger.warning(
+                        "🔊 PCM EGRESS: Normalizer SKIPPED",
+                        call_id=call_id,
+                        normalizer_enabled=bool(self.normalizer_enabled),
+                        target_rms=int(self.normalizer_target_rms),
+                        has_pcm=bool(out_pcm),
+                    )
                 if self.limiter_enabled and out_pcm:
                     out_pcm = self._apply_soft_limiter(out_pcm, self.limiter_headroom_ratio)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.error(
+                    "🔊 PCM EGRESS: Normalizer exception",
+                    call_id=call_id,
+                    error=str(e),
+                    exc_info=True,
+                )
             if getattr(self, 'diag_enable_taps', False) and call_id in self.active_streams:
                 info = self.active_streams.get(call_id, {})
                 try:
