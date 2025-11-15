@@ -5580,7 +5580,7 @@ class Engine:
                     import audioop
                     current_rms = audioop.rms(pcm_bytes, 2)
                     target_rms = 1400  # Match normalizer target
-                    max_gain_db = 18.0  # Match normalizer max
+                    max_gain_db = 36.0  # Increased from 18dB - allow much higher gain
                     
                     if current_rms > 10:  # Only apply if audio has some energy
                         gain_needed = target_rms / current_rms
@@ -5589,16 +5589,18 @@ class Engine:
                         
                         if gain > 1.05:  # Apply if gain needed is >5%
                             pcm_bytes = audioop.mul(pcm_bytes, 2, gain)
-                            logger.debug(
+                            actual_rms = audioop.rms(pcm_bytes, 2)
+                            logger.info(
                                 "🔊 Provider input: Gain applied",
                                 call_id=call_id,
                                 provider=provider_name,
                                 rms_before=current_rms,
+                                rms_after=actual_rms,
                                 rms_target=target_rms,
                                 gain=f"{gain:.2f}",
                             )
                 except Exception as e:
-                    logger.debug(f"Provider input normalization failed: {e}", call_id=call_id)
+                    logger.error(f"Provider input normalization failed: {e}", call_id=call_id, exc_info=True)
             
             return pcm_bytes, "slin16", pcm_rate
 
