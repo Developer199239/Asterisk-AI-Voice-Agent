@@ -5570,6 +5570,36 @@ class Engine:
                     pcm_rate = expected_rate
                 except Exception:
                     pass
+            
+            # CRITICAL FIX: Apply gain normalization to provider input audio
+            # Problem: Audio from AudioSocket @ 8kHz (RMS~18000) gets resampled to 16kHz
+            #          and RMS drops to ~30-50 (way too quiet for provider VAD detection)
+            # Solution: Apply normalization to boost to target RMS before sending to provider
+            if pcm_bytes:
+                try:
+                    import audioop
+                    current_rms = audioop.rms(pcm_bytes, 2)
+                    target_rms = 1400  # Match normalizer target
+                    max_gain_db = 18.0  # Match normalizer max
+                    
+                    if current_rms > 10:  # Only apply if audio has some energy
+                        gain_needed = target_rms / current_rms
+                        max_gain = 10 ** (max_gain_db / 20.0)
+                        gain = min(gain_needed, max_gain)
+                        
+                        if gain > 1.05:  # Apply if gain needed is >5%
+                            pcm_bytes = audioop.mul(pcm_bytes, 2, gain)
+                            logger.debug(
+                                "🔊 Provider input: Gain applied",
+                                call_id=call_id,
+                                provider=provider_name,
+                                rms_before=current_rms,
+                                rms_target=target_rms,
+                                gain=f"{gain:.2f}",
+                            )
+                except Exception as e:
+                    logger.debug(f"Provider input normalization failed: {e}", call_id=call_id)
+            
             return pcm_bytes, "slin16", pcm_rate
 
         if expected_enc in ("ulaw", "mulaw", "g711_ulaw", "mu-law"):
