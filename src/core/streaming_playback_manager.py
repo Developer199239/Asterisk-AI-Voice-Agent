@@ -526,6 +526,8 @@ class StreamingPlaybackManager:
                         min_start_chunks=min_start_chunks,
                     )
             # Decide initial startup readiness based on recent gap (reuse buffer for back-to-back)
+            # Get gap from cached pattern if available, otherwise assume cold start
+            gap_ms = cached_pattern.max_gap_ms if cached_pattern else 999999
             try:
                 initial_startup_ready = bool(gap_ms <= int(self.provider_grace_ms or 500))
             except Exception:
