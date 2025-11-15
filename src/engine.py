@@ -5683,11 +5683,13 @@ class Engine:
                     expected_rate=expected_rate,
                 )
             
-            # CRITICAL FIX: Apply gain normalization to provider input audio
-            # Problem: Audio from AudioSocket @ 8kHz (RMS~18000) gets resampled to 16kHz
-            #          and RMS drops to ~30-50 (way too quiet for provider VAD detection)
-            # Solution: Apply normalization to boost to target RMS before sending to provider
-            if pcm_bytes:
+            # TEMPORARILY DISABLED: Gain normalization may be causing audio distortion
+            # Testing hypothesis that Google Live can't understand audio due to:
+            # - Clipping from high gain (audioop.mul can clip at ±32767)
+            # - Quality degradation from aggressive boosting
+            # - Potential interaction with resampling artifacts
+            # TODO: Re-enable with proper clipping prevention if audio too quiet
+            if False and pcm_bytes:
                 try:
                     # audioop already imported at module level - don't re-import here!
                     current_rms = audioop.rms(pcm_bytes, 2)
