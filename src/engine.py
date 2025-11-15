@@ -2443,9 +2443,18 @@ class Engine:
                 provider = None
             continuous_input = False
             try:
-                if provider_name == "deepgram":
+                # Use provider capabilities instead of hardcoded names
+                capabilities = None
+                if provider and hasattr(provider, 'get_capabilities'):
+                    try:
+                        capabilities = provider.get_capabilities()
+                    except Exception:
+                        pass
+                
+                if capabilities and capabilities.requires_continuous_audio:
                     continuous_input = True
                 else:
+                    # Fallback for legacy providers without capabilities
                     pcfg = getattr(provider, 'config', None)
                     if isinstance(pcfg, dict):
                         continuous_input = bool(pcfg.get('continuous_input', False))
@@ -5283,12 +5292,20 @@ class Engine:
             try:
                 provider = self.providers.get(provider_name)
                 if provider and hasattr(provider, 'config'):
-                    # Check if this is a continuous_input provider (P1)
+                    # Check if this is a continuous_input provider using capabilities
                     is_continuous_input = False
                     try:
-                        if provider_name in ("deepgram", "openai_realtime"):
+                        capabilities = None
+                        if hasattr(provider, 'get_capabilities'):
+                            try:
+                                capabilities = provider.get_capabilities()
+                            except Exception:
+                                pass
+                        
+                        if capabilities and capabilities.requires_continuous_audio:
                             is_continuous_input = True
                         else:
+                            # Fallback for legacy providers
                             pcfg = getattr(provider, 'config', None)
                             if isinstance(pcfg, dict):
                                 is_continuous_input = bool(pcfg.get('continuous_input', False))

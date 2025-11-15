@@ -371,25 +371,26 @@ class GoogleLiveProvider(AIProviderInterface):
                 )
 
     async def _send_greeting(self) -> None:
-        """Send greeting by pre-filling it as a model turn (not user instruction)."""
+        """Send greeting by asking Gemini to speak it (validated pattern from Golden Baseline)."""
         greeting = (self.config.greeting or "").strip()
         if not greeting:
             return
         
-        logger.info("Sending greeting to Google Live", call_id=self._call_id, greeting_preview=greeting[:50])
+        logger.info("Sending greeting request to Google Live", call_id=self._call_id, greeting_preview=greeting[:50])
         
-        # CRITICAL FIX: Send greeting as MODEL turn, not user turn
-        # Previous approach sent: user: "Please greet with X" → model: "X"
-        # This polluted conversation history, causing model to repeat greeting
+        # Per Golden Baseline (docs/case-studies/Google-Live-Golden-Baseline.md):
+        # Validated approach for ExternalMedia RTP - send user turn requesting greeting
+        # This worked successfully in production testing (Nov 14, 2025 - Call 1763092342.5132)
         # 
-        # New approach: Directly inject model's greeting turn into conversation
-        # This establishes proper conversation context for subsequent user input
+        # NOTE: This is the VALIDATED pattern, but current AudioSocket implementation
+        # is experiencing greeting repetition issue that ExternalMedia RTP did not have.
+        # Need to investigate AudioSocket-specific difference.
         greeting_msg = {
             "clientContent": {
                 "turns": [
                     {
-                        "role": "model",  # ← Changed from "user"
-                        "parts": [{"text": greeting}]  # ← Direct greeting text
+                        "role": "user",
+                        "parts": [{"text": f"Please greet the caller with the following message: {greeting}"}]
                     }
                 ],
                 "turnComplete": True
@@ -398,7 +399,7 @@ class GoogleLiveProvider(AIProviderInterface):
         await self._send_message(greeting_msg)
         
         logger.info(
-            "✅ Greeting sent as model turn",
+            "✅ Greeting request sent to Gemini (Golden Baseline pattern)",
             call_id=self._call_id,
         )
 
