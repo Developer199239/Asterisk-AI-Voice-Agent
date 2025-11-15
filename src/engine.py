@@ -5708,7 +5708,7 @@ class Engine:
             # Solution: Apply normalization to boost to target RMS before sending to provider
             if pcm_bytes:
                 try:
-                    import audioop
+                    # audioop already imported at module level - don't re-import here!
                     current_rms = audioop.rms(pcm_bytes, 2)
                     target_rms = 1400  # Match normalizer target
                     max_gain_db = 36.0  # Increased from 18dB - allow much higher gain
