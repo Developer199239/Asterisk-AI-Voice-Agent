@@ -98,33 +98,49 @@ else
   fi
   run_server_cmd "rm -f /tmp/ai-engine.all.log" || true
 fi
-CID=$(grep -o '"call_id": "[^"]*"' "$BASE/logs/ai-engine.log" | awk -F '"' '{print $4}' | tail -n 1 || true)
+CID=$(grep -oE 'call_id=[0-9]+\.[0-9]+' "$BASE/logs/ai-engine.log" | head -1 | cut -d= -f2 || true)
 echo -n "$CID" > "$BASE/call_id.txt"
 echo "[RCA] Active Call ID: ${CID:-unknown}"
 if [ -n "$CID" ]; then
-  run_server_cmd "docker exec ai_engine sh -lc 'cd /tmp/ai-engine-taps 2>/dev/null || exit 0; tar czf /tmp/ai_taps_${CID}.tgz *${CID}*.wav 2>/dev/null || true'" || true
-  if [ "$SERVER_MODE" = "local" ]; then
-    if run_server_cmd "docker cp ai_engine:/tmp/ai_taps_${CID}.tgz '$BASE/ai_taps_${CID}.tgz' 2>/dev/null"; then
-      run_server_cmd "docker exec ai_engine rm -f /tmp/ai_taps_${CID}.tgz" || true
+  # Check if taps exist and list them
+  TAP_COUNT=$(run_server_cmd "docker exec ai_engine sh -c 'ls -1 /tmp/ai-engine-taps/*${CID}*.wav 2>/dev/null | wc -l' 2>/dev/null" || echo "0")
+  echo "[RCA] Found ${TAP_COUNT} tap files for call ${CID}"
+  
+  if [ "${TAP_COUNT}" -gt 0 ]; then
+    # Create tar archive of tap files
+    run_server_cmd "docker exec ai_engine sh -c 'cd /tmp/ai-engine-taps && tar czf /tmp/ai_taps_${CID}.tgz *${CID}*.wav 2>/dev/null'" || true
+    
+    if [ "$SERVER_MODE" = "local" ]; then
+      if run_server_cmd "docker cp ai_engine:/tmp/ai_taps_${CID}.tgz '$BASE/ai_taps_${CID}.tgz' 2>/dev/null"; then
+        echo "[RCA] Tap bundle fetched successfully"
+        run_server_cmd "docker exec ai_engine rm -f /tmp/ai_taps_${CID}.tgz" || true
+      else
+        echo "[WARN] Failed to copy tap bundle from container"
+      fi
     else
-      echo "[WARN] No tap bundle fetched"
-      run_server_cmd "docker exec ai_engine rm -f /tmp/ai_taps_${CID}.tgz" || true
+      run_server_cmd "docker cp ai_engine:/tmp/ai_taps_${CID}.tgz /tmp/ai_taps_${CID}.tgz" 2>/dev/null || true
+      if fetch_file "/tmp/ai_taps_${CID}.tgz" "$BASE/ai_taps_${CID}.tgz"; then
+        echo "[RCA] Tap bundle fetched successfully"
+        run_server_cmd "rm -f /tmp/ai_taps_${CID}.tgz" || true
+        run_server_cmd "docker exec ai_engine rm -f /tmp/ai_taps_${CID}.tgz" || true
+      else
+        echo "[WARN] Failed to fetch tap bundle"
+        run_server_cmd "rm -f /tmp/ai_taps_${CID}.tgz" || true
+      fi
     fi
   else
-    run_server_cmd "docker cp ai_engine:/tmp/ai_taps_${CID}.tgz /tmp/ai_taps_${CID}.tgz" 2>/dev/null || true
-    if fetch_file "/tmp/ai_taps_${CID}.tgz" "$BASE/ai_taps_${CID}.tgz"; then
-      run_server_cmd "rm -f /tmp/ai_taps_${CID}.tgz" || true
-      run_server_cmd "docker exec ai_engine rm -f /tmp/ai_taps_${CID}.tgz" || true
-    else
-      echo "[WARN] No tap bundle fetched"
-      run_server_cmd "rm -f /tmp/ai_taps_${CID}.tgz" || true
-      run_server_cmd "docker exec ai_engine rm -f /tmp/ai_taps_${CID}.tgz" || true
-    fi
+    echo "[WARN] No tap files found for call ${CID}"
   fi
 else
-  echo "[WARN] No call ID. Skipping tap bundle retrieval"
+  echo "[WARN] No call ID detected. Skipping tap bundle retrieval"
 fi
-if [ -f "$BASE/ai_taps_${CID}.tgz" ]; then tar xzf "$BASE/ai_taps_${CID}.tgz" -C "$BASE/taps"; fi
+
+# Extract tap bundle if it exists
+if [ -f "$BASE/ai_taps_${CID}.tgz" ]; then 
+  echo "[RCA] Extracting tap files..."
+  tar xzf "$BASE/ai_taps_${CID}.tgz" -C "$BASE/taps" && rm "$BASE/ai_taps_${CID}.tgz"
+  echo "[RCA] Extracted $(ls -1 "$BASE/taps"/*.wav 2>/dev/null | wc -l) tap files"
+fi
 REC_LIST=$(run_server_cmd "find /var/spool/asterisk/monitor -type f -name '*${CID}*.wav' -printf '%p\\n' 2>/dev/null | head -n 10") || true
 if [ -n "$REC_LIST" ]; then
   while IFS= read -r f; do
@@ -192,12 +208,13 @@ fi
 if ! fetch_file "$PROJECT_PATH/config/ai-agent.yaml" "$BASE/config/ai-agent.yaml"; then
   echo "[WARN] Failed to fetch ai-agent.yaml"
 fi
-if ! fetch_file "/etc/asterisk/extensions_custom.conf" "$BASE/config/extensions_custom.conf"; then
-  echo "[WARN] Failed to fetch extensions_custom.conf"
-fi
-if ! fetch_file "/var/log/asterisk/full" "$BASE/logs/asterisk-full.log"; then
-  echo "[WARN] Failed to fetch asterisk full log"
-fi
+# Asterisk log collection disabled for faster RCA
+# if ! fetch_file "/etc/asterisk/extensions_custom.conf" "$BASE/config/extensions_custom.conf"; then
+#   echo "[WARN] Failed to fetch extensions_custom.conf"
+# fi
+# if ! fetch_file "/var/log/asterisk/full" "$BASE/logs/asterisk-full.log"; then
+#   echo "[WARN] Failed to fetch asterisk full log"
+# fi
 
 # Copy container log files from /app/logs when available
 CONTAINER_LOG_TMP="/tmp/ai-engine-logs-${CID:-latest}"
