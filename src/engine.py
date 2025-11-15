@@ -2383,7 +2383,7 @@ class Engine:
                     profile_fmt = "ulaw"
                     profile_rate = 8000
             pcm_bytes, pcm_rate = self._wire_to_pcm16(audio_bytes, profile_fmt, swap_needed_flag, profile_rate)
-            # Remove DC bias and apply a light DC-block filter to stabilize ASR input
+            # Remove DC bias ONLY (disable IIR DC-block filter - causes audio degradation)
             try:
                 if pcm_bytes:
                     try:
@@ -2395,29 +2395,10 @@ class Engine:
                             pcm_bytes = audioop.bias(pcm_bytes, 2, -mean)
                         except Exception:
                             pass
-                    # Per-call DC-block state
-                    if not hasattr(self, "_dc_block_state_inbound"):
-                        self._dc_block_state_inbound = {}
-                    prev_x, prev_y = self._dc_block_state_inbound.get(caller_channel_id, (0.0, 0.0))
-                    try:
-                        import array
-                        r = 0.995
-                        buf = array.array('h')
-                        buf.frombytes(pcm_bytes)
-                        if buf.itemsize == 2:
-                            for i, s in enumerate(buf):
-                                x = float(int(s))
-                                y = x - prev_x + r * prev_y
-                                prev_x, prev_y = x, y
-                                if y > 32767.0:
-                                    y = 32767.0
-                                elif y < -32768.0:
-                                    y = -32768.0
-                                buf[i] = int(y)
-                            pcm_bytes = buf.tobytes()
-                            self._dc_block_state_inbound[caller_channel_id] = (prev_x, prev_y)
-                    except Exception:
-                        pass
+                    # DC-block IIR filter DISABLED - was causing progressive audio level collapse
+                    # Symptoms: Audio started strong (RMS 4000) but degraded to near-silence (RMS 16)
+                    # Root cause: Stateful filter accumulated error, over-attenuated speech
+                    # Keep simple DC offset removal (audioop.bias) above, skip IIR filter
             except Exception:
                 logger.debug("Inbound DC conditioning failed", call_id=caller_channel_id, exc_info=True)
             try:
