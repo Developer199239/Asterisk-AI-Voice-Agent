@@ -5704,13 +5704,11 @@ class Engine:
                     expected_rate=expected_rate,
                 )
             
-            # TEMPORARILY DISABLED: Gain normalization may be causing audio distortion
-            # Testing hypothesis that Google Live can't understand audio due to:
-            # - Clipping from high gain (audioop.mul can clip at ±32767)
-            # - Quality degradation from aggressive boosting
-            # - Potential interaction with resampling artifacts
-            # TODO: Re-enable with proper clipping prevention if audio too quiet
-            if False and pcm_bytes:
+            # Re-enabled: Gain normalization required for low-volume audio
+            # Root cause identified: Incoming audio had RMS=23 (needs ~1400)
+            # Without normalization, Google Live cannot understand quiet audio
+            # Silence frames during gating prevent echo while maintaining stream continuity
+            if pcm_bytes:
                 try:
                     # audioop already imported at module level - don't re-import here!
                     current_rms = audioop.rms(pcm_bytes, 2)
