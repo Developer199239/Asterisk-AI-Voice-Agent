@@ -5614,6 +5614,20 @@ class Engine:
                         if gain > 1.05:  # Apply if gain needed is >5%
                             pcm_bytes = audioop.mul(pcm_bytes, 2, gain)
                             actual_rms = audioop.rms(pcm_bytes, 2)
+                            
+                            # CRITICAL: Warn about excessive gain (indicates audio quality issues)
+                            # High gain on low-quality audio causes distortion and speech recognition failures
+                            if gain > 10.0:
+                                logger.warning(
+                                    "⚠️ AUDIO QUALITY ISSUE: Excessive gain required!",
+                                    call_id=call_id,
+                                    provider=provider_name,
+                                    gain_multiplier=f"{gain:.1f}x",
+                                    rms_before=current_rms,
+                                    rms_target=target_rms,
+                                    recommendation="Check SIP trunk rxgain configuration - incoming audio too quiet",
+                                )
+                            
                             logger.info(
                                 "🔊 Provider input: Gain applied",
                                 call_id=call_id,

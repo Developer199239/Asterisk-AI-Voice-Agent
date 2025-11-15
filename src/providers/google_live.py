@@ -330,7 +330,11 @@ class GoogleLiveProvider(AIProviderInterface):
         setup_msg["setup"]["realtimeInputConfig"] = {
             "automaticActivityDetection": {
                 "disabled": False  # Explicitly enable VAD
-            }
+            },
+            # CRITICAL: Language hints prevent misrecognition of distorted audio
+            # Without hints, poor audio quality causes Google to detect random languages
+            # (Arabic, Korean, Japanese) instead of intended English
+            "languageHints": ["en-US"]  # Expect English audio
         }
 
         # Debug: Log setup message structure
