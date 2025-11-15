@@ -2486,7 +2486,14 @@ class Engine:
                         )
                     except Exception:
                         logger.debug("Provider input capture failed (unconditional)", call_id=session.call_id, exc_info=True)
-                    await provider.send_audio(prov_payload)
+                    
+                    # CRITICAL: Pass sample_rate and encoding to prevent double resampling
+                    # Google Live needs to know audio is already at provider_rate to skip resampling
+                    try:
+                        await provider.send_audio(prov_payload, prov_rate, prov_enc)
+                    except TypeError:
+                        # Fallback for providers with old signature (audio_chunk only)
+                        await provider.send_audio(prov_payload)
                 except Exception:
                     logger.debug("Provider continuous-input forward error (unconditional)", call_id=caller_channel_id, exc_info=True)
                 return
