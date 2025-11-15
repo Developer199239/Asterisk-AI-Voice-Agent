@@ -419,6 +419,46 @@ class GoogleLiveProvider(AIProviderInterface):
             return
 
         try:
+            # DIAGNOSTIC: Track frame reception for fragmentation analysis
+            if not hasattr(self, '_audio_frame_count'):
+                self._audio_frame_count = 0
+                self._audio_bytes_received = 0
+                self._last_frame_time = time.time()
+                self._frame_gaps = []
+            
+            self._audio_frame_count += 1
+            self._audio_bytes_received += len(audio_chunk)
+            
+            # Measure inter-frame timing
+            current_time = time.time()
+            if self._last_frame_time:
+                gap_ms = (current_time - self._last_frame_time) * 1000
+                self._frame_gaps.append(gap_ms)
+                
+                # Log irregular gaps (should be ~20ms for continuous audio)
+                if gap_ms > 50 or gap_ms < 10:
+                    logger.warning(
+                        "⚠️ IRREGULAR FRAME GAP",
+                        call_id=self._call_id,
+                        gap_ms=f"{gap_ms:.1f}",
+                        expected="~20ms",
+                        frame_num=self._audio_frame_count,
+                    )
+            self._last_frame_time = current_time
+            
+            # Periodic frame stats
+            if self._audio_frame_count % 50 == 0:
+                avg_gap = sum(self._frame_gaps[-50:]) / min(50, len(self._frame_gaps)) if self._frame_gaps else 0
+                logger.info(
+                    "📊 AUDIO FRAME STATS",
+                    call_id=self._call_id,
+                    frames_received=self._audio_frame_count,
+                    total_bytes=self._audio_bytes_received,
+                    avg_gap_ms=f"{avg_gap:.1f}",
+                    sample_rate_in=sample_rate,
+                    encoding_in=encoding,
+                )
+            
             # Infer format from chunk size if not specified
             if encoding == "ulaw" or (sample_rate == 8000 and len(audio_chunk) == 160):
                 # μ-law to PCM16
@@ -446,22 +486,57 @@ class GoogleLiveProvider(AIProviderInterface):
             # Send in chunks (20ms at provider rate)
             chunk_size = int(provider_rate * 2 * _COMMIT_INTERVAL_SEC)  # 2 bytes per sample
             
+            # DIAGNOSTIC: Track buffer health
+            if not hasattr(self, '_buffer_stats'):
+                self._buffer_stats = {'underflows': 0, 'max_size': 0, 'chunks_sent': 0}
+            
+            current_buffer_size = len(self._input_buffer)
+            if current_buffer_size > self._buffer_stats['max_size']:
+                self._buffer_stats['max_size'] = current_buffer_size
+            
+            if current_buffer_size < chunk_size:
+                self._buffer_stats['underflows'] += 1
+            
             while len(self._input_buffer) >= chunk_size:
                 chunk_to_send = bytes(self._input_buffer[:chunk_size])
                 self._input_buffer = self._input_buffer[chunk_size:]
+                self._buffer_stats['chunks_sent'] += 1
 
-                # CRITICAL DEBUG: Measure RMS of actual audio being sent to Google
+                # CRITICAL DEBUG: Measure RMS and audio quality of actual audio being sent to Google
                 try:
                     import audioop
                     chunk_rms = audioop.rms(chunk_to_send, 2)
+                    
+                    # Check for clipping (samples at max value)
+                    import array
+                    samples = array.array('h', chunk_to_send)
+                    max_sample = max(abs(s) for s in samples)
+                    clipping = max_sample >= 32760  # Near max for 16-bit
+                    
+                    # Check for DC offset
+                    avg_sample = sum(samples) / len(samples)
+                    dc_offset = abs(avg_sample)
+                    
                     if chunk_rms > 100:  # Only log non-silence
                         logger.info(
-                            "🔊 Google Live: Audio RMS check",
+                            "🔊 AUDIO QUALITY CHECK",
                             call_id=self._call_id,
                             rms=chunk_rms,
+                            max_sample=max_sample,
+                            clipping=clipping,
+                            dc_offset=int(dc_offset),
                             chunk_bytes=len(chunk_to_send),
                             provider_rate=provider_rate,
+                            buffer_size=len(self._input_buffer),
                         )
+                        
+                        if clipping:
+                            logger.warning(
+                                "⚠️ AUDIO CLIPPING DETECTED",
+                                call_id=self._call_id,
+                                max_sample=max_sample,
+                                recommendation="Audio may be distorted - check gain settings",
+                            )
                 except Exception as e:
                     logger.debug(f"RMS check failed: {e}", call_id=self._call_id)
 
