@@ -95,9 +95,20 @@ class AudioCaptureManager:
                 pcm16 = payload
                 rate = sample_rate or 16000
             self.append_pcm16(call_id, stream_name, pcm16, rate)
-        except Exception:
-            # Ignore capture failures; they should not break call flow.
-            pass
+        except Exception as e:
+            # Log capture failures for debugging but don't break call flow
+            import structlog
+            logger = structlog.get_logger(__name__)
+            logger.warning(
+                "Audio capture failed",
+                call_id=call_id,
+                stream_name=stream_name,
+                encoding=encoding,
+                sample_rate=sample_rate,
+                payload_len=len(payload) if payload else 0,
+                error=str(e),
+                exc_info=True,
+            )
 
     def close_call(self, call_id: str) -> None:
         keys_to_close = []

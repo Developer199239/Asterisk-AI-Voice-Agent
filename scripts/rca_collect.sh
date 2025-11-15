@@ -141,8 +141,23 @@ if [ -f "$BASE/ai_taps_${CID}.tgz" ]; then
   tar xzf "$BASE/ai_taps_${CID}.tgz" -C "$BASE/taps" && rm "$BASE/ai_taps_${CID}.tgz"
   echo "[RCA] Extracted $(ls -1 "$BASE/taps"/*.wav 2>/dev/null | wc -l) tap files"
 fi
-REC_LIST=$(run_server_cmd "find /var/spool/asterisk/monitor -type f -name '*${CID}*.wav' -printf '%p\\n' 2>/dev/null | head -n 10") || true
+# Search for recordings in multiple locations (monitor dir and dated subdirs)
+REC_LIST=$(run_server_cmd "find /var/spool/asterisk/monitor -type f -name '*${CID}*.wav' 2>/dev/null | head -n 10") || true
+
+# If not found, try dated directory structure (YYYY/MM/DD)
+if [ -z "$REC_LIST" ]; then
+  TODAY=$(date +%Y/%m/%d)
+  YESTERDAY=$(date -d "yesterday" +%Y/%m/%d 2>/dev/null || date -v-1d +%Y/%m/%d 2>/dev/null || echo "")
+  
+  REC_LIST=$(run_server_cmd "find /var/spool/asterisk/monitor/$TODAY -type f -name '*.wav' 2>/dev/null | tail -n 5") || true
+  
+  if [ -z "$REC_LIST" ] && [ -n "$YESTERDAY" ]; then
+    REC_LIST=$(run_server_cmd "find /var/spool/asterisk/monitor/$YESTERDAY -type f -name '*.wav' 2>/dev/null | tail -n 5") || true
+  fi
+fi
+
 if [ -n "$REC_LIST" ]; then
+  echo "[RCA] Found $(echo "$REC_LIST" | wc -l | tr -d ' ') recording file(s)"
   while IFS= read -r f; do
     [ -z "$f" ] && continue
     if ! fetch_file "$f" "$BASE/recordings/$(basename "$f")"; then
@@ -150,7 +165,7 @@ if [ -n "$REC_LIST" ]; then
     fi
   done <<< "$REC_LIST"
 else
-  echo "[WARN] No recordings detected for CID $CID"
+  echo "[WARN] No recordings detected for CID $CID or in recent dated directories"
 fi
 # Fetch ARI channel recordings by parsing rec name from engine logs (name field)
 REC_NAME=$(grep -o '"name": "out-[^"]*"' "$BASE/logs/ai-engine.log" | awk -F '"' '{print $4}' | tail -n 1 || true)
@@ -161,10 +176,10 @@ fi
 TAPS=$(ls "$BASE"/taps/*.wav 2>/dev/null || true)
 RECS=$(ls "$BASE"/recordings/*.wav 2>/dev/null || true)
 if [ -n "$TAPS" ]; then
-  python3 scripts/wav_quality_analyzer.py "$BASE"/taps/*.wav --json "$BASE/metrics/wav_report_taps.json" --frame-ms "$FRAME_MS" || echo "[WARN] Tap analysis failed"
+  python3 archived/dev-scripts/wav_quality_analyzer.py "$BASE"/taps/*.wav --json "$BASE/metrics/wav_report_taps.json" --frame-ms "$FRAME_MS" || echo "[WARN] Tap analysis failed"
 fi
 if [ -n "$RECS" ]; then
-  python3 scripts/wav_quality_analyzer.py "$BASE"/recordings/*.wav --json "$BASE/metrics/wav_report_rec.json" --frame-ms "$FRAME_MS" || echo "[WARN] Recording analysis failed"
+  python3 archived/dev-scripts/wav_quality_analyzer.py "$BASE"/recordings/*.wav --json "$BASE/metrics/wav_report_rec.json" --frame-ms "$FRAME_MS" || echo "[WARN] Recording analysis failed"
 fi
 # Build call timeline with key events for the captured call
 if [ -n "$CID" ]; then
@@ -174,12 +189,12 @@ fi
 # Offline transcription of outbound audio when available
 OUT_WAVS=$(ls "$BASE"/recordings/out-*.wav 2>/dev/null | head -n 1 || true)
 if [ -n "$OUT_WAVS" ]; then
-  python3 scripts/transcribe_call.py "$BASE"/recordings/out-*.wav --json "$BASE/transcripts/out.json" || echo "[WARN] Outbound transcription failed"
+  python3 archived/dev-scripts/transcribe_call.py "$BASE"/recordings/out-*.wav --json "$BASE/transcripts/out.json" || echo "[WARN] Outbound transcription failed"
 fi
 
 IN_WAVS=$(ls "$BASE"/recordings/in-*.wav 2>/dev/null | head -n 1 || true)
 if [ -n "$IN_WAVS" ]; then
-  python3 scripts/transcribe_call.py "$BASE"/recordings/in-*.wav --json "$BASE/transcripts/in.json" || echo "[WARN] Inbound transcription failed"
+  python3 archived/dev-scripts/transcribe_call.py "$BASE"/recordings/in-*.wav --json "$BASE/transcripts/in.json" || echo "[WARN] Inbound transcription failed"
 fi
 
 if [ -n "$CID" ]; then

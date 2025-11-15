@@ -114,6 +114,15 @@ class GoogleLiveProvider(AIProviderInterface):
         self._input_buffer = bytearray()
         self._output_buffer = bytearray()
         
+        # VAD-based burst accumulation for better recognition
+        self._speech_buffer = bytearray()  # Accumulate during speech
+        self._is_speech_active = False
+        self._silence_frames = 0
+        self._silence_threshold = 10  # 10 frames (~200ms) of silence = end of utterance
+        self._speech_threshold_rms = 300  # RMS threshold for speech detection
+        self._min_speech_frames = 3  # Minimum frames to consider as speech
+        self._speech_frames = 0
+        
         # Tool adapter
         self._tool_adapter: Optional[GoogleToolAdapter] = None
         
@@ -480,93 +489,79 @@ class GoogleLiveProvider(AIProviderInterface):
             else:
                 pcm16_provider = pcm16_src
 
-            # Add to buffer
-            self._input_buffer.extend(pcm16_provider)
-
-            # Send in chunks (20ms at provider rate)
-            chunk_size = int(provider_rate * 2 * _COMMIT_INTERVAL_SEC)  # 2 bytes per sample
+            # VAD-based burst accumulation: Detect speech and send as bursts
+            # This matches Google Live's output pattern and improves recognition
+            import audioop
+            chunk_rms = audioop.rms(pcm16_provider, 2)
+            is_speech = chunk_rms > self._speech_threshold_rms
             
-            # DIAGNOSTIC: Track buffer health
-            if not hasattr(self, '_buffer_stats'):
-                self._buffer_stats = {'underflows': 0, 'max_size': 0, 'chunks_sent': 0}
-            
-            current_buffer_size = len(self._input_buffer)
-            if current_buffer_size > self._buffer_stats['max_size']:
-                self._buffer_stats['max_size'] = current_buffer_size
-            
-            if current_buffer_size < chunk_size:
-                self._buffer_stats['underflows'] += 1
-            
-            while len(self._input_buffer) >= chunk_size:
-                chunk_to_send = bytes(self._input_buffer[:chunk_size])
-                self._input_buffer = self._input_buffer[chunk_size:]
-                self._buffer_stats['chunks_sent'] += 1
-
-                # CRITICAL DEBUG: Measure RMS and audio quality of actual audio being sent to Google
-                try:
-                    import audioop
-                    chunk_rms = audioop.rms(chunk_to_send, 2)
-                    
-                    # Check for clipping (samples at max value)
-                    import array
-                    samples = array.array('h', chunk_to_send)
-                    max_sample = max(abs(s) for s in samples)
-                    clipping = max_sample >= 32760  # Near max for 16-bit
-                    
-                    # Check for DC offset
-                    avg_sample = sum(samples) / len(samples)
-                    dc_offset = abs(avg_sample)
-                    
-                    if chunk_rms > 100:  # Only log non-silence
-                        logger.info(
-                            "🔊 AUDIO QUALITY CHECK",
-                            call_id=self._call_id,
-                            rms=chunk_rms,
-                            max_sample=max_sample,
-                            clipping=clipping,
-                            dc_offset=int(dc_offset),
-                            chunk_bytes=len(chunk_to_send),
-                            provider_rate=provider_rate,
-                            buffer_size=len(self._input_buffer),
-                        )
-                        
-                        if clipping:
-                            logger.warning(
-                                "⚠️ AUDIO CLIPPING DETECTED",
-                                call_id=self._call_id,
-                                max_sample=max_sample,
-                                recommendation="Audio may be distorted - check gain settings",
-                            )
-                except Exception as e:
-                    logger.debug(f"RMS check failed: {e}", call_id=self._call_id)
-
-                # Encode as base64
-                audio_b64 = base64.b64encode(chunk_to_send).decode("utf-8")
-
-                # Send realtime input (using camelCase keys per actual API)
-                message = {
-                    "realtimeInput": {  # camelCase not snake_case
-                        "mediaChunks": [  # camelCase
-                            {
-                                "mimeType": f"audio/pcm;rate={provider_rate}",  # camelCase + rate from config
-                                "data": audio_b64,
-                            }
-                        ]
-                    }
-                }
-
-                # Debug logging for audio transmission (AudioSocket troubleshooting)
-                logger.debug(
-                    "🎤 Google Live: Sending audio chunk",
-                    call_id=self._call_id,
-                    chunk_bytes=len(chunk_to_send),
-                    provider_rate=provider_rate,
-                    mime_type=f"audio/pcm;rate={provider_rate}",
-                    base64_length=len(audio_b64),
-                )
-                await self._send_message(message)
+            if is_speech:
+                # Speech detected - accumulate
+                self._speech_buffer.extend(pcm16_provider)
+                self._speech_frames += 1
+                self._silence_frames = 0
                 
-                _GOOGLE_LIVE_AUDIO_SENT.labels(call_id=self._call_id).inc(len(chunk_to_send))
+                if not self._is_speech_active and self._speech_frames >= self._min_speech_frames:
+                    # Speech session started
+                    self._is_speech_active = True
+                    logger.info(
+                        "🎤 SPEECH START - Beginning burst accumulation",
+                        call_id=self._call_id,
+                        rms=chunk_rms,
+                        buffer_size=len(self._speech_buffer),
+                    )
+            else:
+                # Silence detected
+                if self._is_speech_active:
+                    self._silence_frames += 1
+                    
+                    # Include trailing silence in burst (natural speech boundary)
+                    if self._silence_frames < self._silence_threshold:
+                        self._speech_buffer.extend(pcm16_provider)
+                    
+                    # End of utterance detected
+                    if self._silence_frames >= self._silence_threshold:
+                        if len(self._speech_buffer) > 0:
+                            # Send accumulated speech as single burst
+                            burst_to_send = bytes(self._speech_buffer)
+                            burst_rms = audioop.rms(burst_to_send, 2)
+                            
+                            logger.info(
+                                "📤 SPEECH BURST - Sending accumulated audio",
+                                call_id=self._call_id,
+                                burst_bytes=len(burst_to_send),
+                                burst_duration_ms=int(len(burst_to_send) / (provider_rate * 2) * 1000),
+                                burst_rms=burst_rms,
+                                frames_accumulated=self._speech_frames,
+                            )
+                            
+                            # Encode entire burst as base64
+                            audio_b64 = base64.b64encode(burst_to_send).decode("utf-8")
+                            
+                            # Send realtime input burst
+                            message = {
+                                "realtimeInput": {
+                                    "mediaChunks": [
+                                        {
+                                            "mimeType": f"audio/pcm;rate={provider_rate}",
+                                            "data": audio_b64,
+                                        }
+                                    ]
+                                }
+                            }
+                            
+                            await self._send_message(message)
+                            _GOOGLE_LIVE_AUDIO_SENT.labels(call_id=self._call_id).inc(len(burst_to_send))
+                            
+                            # Reset for next utterance
+                            self._speech_buffer.clear()
+                        
+                        self._is_speech_active = False
+                        self._speech_frames = 0
+                        self._silence_frames = 0
+                else:
+                    # Pure silence - don't accumulate
+                    self._speech_frames = 0
 
         except Exception as e:
             logger.error(
