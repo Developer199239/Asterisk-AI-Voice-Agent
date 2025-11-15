@@ -2470,13 +2470,16 @@ class Engine:
                 needs_gating = provider_name == "google_live"
                 
                 if needs_gating and not session.audio_capture_enabled:
-                    # During TTS playback for Google Live - skip forwarding to prevent echo
+                    # CRITICAL: Google Live requires continuous audio stream (like WebRTC)
+                    # Send SILENCE frames instead of blocking to maintain stream continuity
+                    # This prevents echo while keeping VAD healthy
                     logger.debug(
-                        "🔇 GATING ACTIVE - Skipping frame for Google Live (TTS playing)",
+                        "🔇 GATING ACTIVE - Sending silence frame for Google Live (TTS playing)",
                         call_id=caller_channel_id,
                         audio_capture_enabled=session.audio_capture_enabled,
                     )
-                    return
+                    # Replace audio with silence (zero-filled PCM16)
+                    pcm_bytes = b'\x00' * len(pcm_bytes)
                 
                 # Forward to provider
                 logger.info(
@@ -2486,6 +2489,7 @@ class Engine:
                     frame_bytes=len(audio_bytes),
                     pcm_bytes=len(pcm_bytes),
                     gating_active=needs_gating and not session.audio_capture_enabled,
+                    is_silence=needs_gating and not session.audio_capture_enabled,
                 )
                 try:
                     self._update_audio_diagnostics(session, "provider_in", pcm_bytes, "slin16", pcm_rate)
