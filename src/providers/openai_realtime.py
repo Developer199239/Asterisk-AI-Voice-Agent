@@ -241,6 +241,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
     # P1: Static capability hints for Transport Orchestrator
     def get_capabilities(self) -> ProviderCapabilities:
         return ProviderCapabilities(
+            # Audio format capabilities
             input_encodings=["ulaw", "linear16"],
             input_sample_rates_hz=[8000, 16000],
             # Output depends on session.update and downstream target; we advertise both
@@ -248,6 +249,11 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             output_sample_rates_hz=[8000, 24000],
             preferred_chunk_ms=20,
             can_negotiate=False,  # Uses static session.update config, not runtime ACK
+            # Provider type and audio processing capabilities
+            is_full_agent=True,  # Full bidirectional agent (not pipeline component)
+            has_native_vad=True,  # OpenAI Realtime has server-side VAD (turn detection)
+            has_native_barge_in=True,  # Handles interruptions via cancel_response
+            requires_continuous_audio=True,  # Needs continuous audio for server-side VAD
         )
     
     def parse_ack(self, event_data: Dict[str, Any]) -> Optional[ProviderCapabilities]:

@@ -207,12 +207,18 @@ class DeepgramProvider(AIProviderInterface):
     # P1: Static capability hints for orchestrator
     def get_capabilities(self) -> ProviderCapabilities:
         return ProviderCapabilities(
+            # Audio format capabilities
             input_encodings=["mulaw", "linear16"],
             input_sample_rates_hz=[8000, 16000],
             output_encodings=["mulaw"],
             output_sample_rates_hz=[8000],
             preferred_chunk_ms=20,
             can_negotiate=True,  # Uses SettingsApplied ACK for runtime negotiation
+            # Provider type and audio processing capabilities
+            is_full_agent=True,  # Full voice agent (STT + LLM + TTS integrated)
+            has_native_vad=True,  # Deepgram Voice Agent has built-in VAD
+            has_native_barge_in=True,  # Handles interruptions internally
+            requires_continuous_audio=True,  # Needs continuous audio for VAD
         )
     
     def parse_ack(self, event_data: Dict[str, Any]) -> Optional[ProviderCapabilities]:

@@ -131,12 +131,18 @@ class GoogleLiveProvider(AIProviderInterface):
     def get_capabilities() -> Optional[ProviderCapabilities]:
         """Return capabilities of Google Live provider for transport orchestration."""
         return ProviderCapabilities(
+            # Audio format capabilities
             input_encodings=["ulaw", "pcm16"],  # μ-law or PCM16
             input_sample_rates_hz=[8000, 16000],  # Telephony or wideband
             output_encodings=["ulaw", "pcm16"],  # Output resampled to telephony
             output_sample_rates_hz=[8000, 16000, 24000],  # Gemini native is 24kHz
             preferred_chunk_ms=20,  # 20ms chunks for smooth streaming
             can_negotiate=True,  # Can adapt to different formats
+            # Provider type and audio processing capabilities
+            is_full_agent=True,  # Full bidirectional agent (not pipeline component)
+            has_native_vad=True,  # Gemini Live has built-in Voice Activity Detection
+            has_native_barge_in=True,  # Handles interruptions automatically
+            requires_continuous_audio=True,  # Needs continuous audio stream for VAD
         )
     
     @property

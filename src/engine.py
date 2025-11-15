@@ -2531,14 +2531,21 @@ class Engine:
                     provider = None
                 continuous_input = False
                 try:
-                    # CRITICAL: Providers requiring continuous audio flow during TTS
-                    # - deepgram: Traditional continuous STT throughout conversation
-                    # - openai_realtime: Full agent mode with server-side VAD managing turn-taking
-                    # - google_live: Bidirectional streaming with built-in VAD
-                    # NOTE: Does NOT apply to pipeline mode (handled above)
-                    if provider_name in ("deepgram", "openai_realtime", "google_live"):
+                    # CRITICAL: Use provider capabilities to determine continuous audio requirement
+                    # Providers with native VAD (full agents) need continuous audio stream
+                    # Pipeline providers use engine-side VAD (gated audio)
+                    capabilities = None
+                    if provider and hasattr(provider, 'get_capabilities'):
+                        try:
+                            capabilities = provider.get_capabilities()
+                        except Exception:
+                            pass
+                    
+                    if capabilities and capabilities.requires_continuous_audio:
+                        # Provider declares it needs continuous audio (e.g., for native VAD)
                         continuous_input = True
                     else:
+                        # Fallback: check config for legacy providers
                         pcfg = getattr(provider, 'config', None)
                         if isinstance(pcfg, dict):
                             continuous_input = bool(pcfg.get('continuous_input', False))
@@ -3255,13 +3262,20 @@ class Engine:
                 else:
                     logger.warning("Pipeline mode active but no queue found (RTP)", call_id=caller_channel_id)
 
-            # Check if provider requires continuous audio input (P1 providers: Deepgram, OpenAI Realtime)
-            # These providers handle turn-taking internally and need uninterrupted audio flow
+            # Check if provider requires continuous audio input using capabilities
+            # Full agents with native VAD need uninterrupted audio flow for turn-taking
             provider_name = getattr(session, 'provider_name', None) or self.config.default_provider
             provider = self.providers.get(provider_name)
             continuous_input = False
             try:
-                if provider_name in ("deepgram", "openai_realtime", "google_live"):
+                capabilities = None
+                if provider and hasattr(provider, 'get_capabilities'):
+                    try:
+                        capabilities = provider.get_capabilities()
+                    except Exception:
+                        pass
+                
+                if capabilities and capabilities.requires_continuous_audio:
                     continuous_input = True
                 else:
                     pcfg = getattr(provider, 'config', None)

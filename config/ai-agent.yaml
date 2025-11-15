@@ -684,6 +684,16 @@ providers:
     enabled: true
     greeting: ${GOOGLE_LIVE_GREETING:-Hi! I'm powered by Google Gemini Live API. Try interrupting me!}
     
+    # Audio format configuration (aligns engine with provider API)
+    input_encoding: slin                     # Wire format from AudioSocket
+    input_sample_rate_hz: 8000               # Wire sample rate
+    provider_input_encoding: linear16        # Gemini Live expects PCM16
+    provider_input_sample_rate_hz: 16000     # Gemini Live input rate (16kHz)
+    output_encoding: linear16                # Gemini Live outputs PCM16
+    output_sample_rate_hz: 24000             # Gemini Live native output rate
+    target_encoding: slin                    # Target wire format for playback
+    target_sample_rate_hz: 8000              # Target wire sample rate
+    
     # LLM Configuration
     llm_model: gemini-2.5-flash-native-audio-preview-09-2025
     llm_temperature: 0.7              # Response creativity (0.0-2.0, default: 0.7)
