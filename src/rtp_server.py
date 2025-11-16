@@ -396,15 +396,22 @@ class RTPServer:
         session.last_sequence = sequence
 
         try:
-            pcm_8k = self._decode_payload(payload)
-            pcm_16k, state = audioop.ratecv(pcm_8k, 2, 1, self.SAMPLE_RATE, 16000, session.resample_state)
-            session.resample_state = state
+            pcm_decoded = self._decode_payload(payload)
+            # Use configured sample_rate instead of hardcoded constant
+            # CRITICAL: Must match what engine expects based on config
+            if self.sample_rate != self.SAMPLE_RATE:
+                # Resample from codec rate to configured engine rate
+                pcm_resampled, state = audioop.ratecv(pcm_decoded, 2, 1, self.SAMPLE_RATE, self.sample_rate, session.resample_state)
+                session.resample_state = state
+            else:
+                # No resampling needed
+                pcm_resampled = pcm_decoded
         except Exception as exc:
             logger.error("RTP payload decode failed", call_id=call_id, error=str(exc))
             return
 
         try:
-            await self.engine_callback(ssrc, pcm_16k)
+            await self.engine_callback(ssrc, pcm_resampled)
         except Exception as exc:
             logger.error("Engine callback failed", call_id=call_id, error=str(exc))
         else:
