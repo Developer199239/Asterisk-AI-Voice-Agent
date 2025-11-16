@@ -3419,8 +3419,21 @@ class Engine:
                     return
                 
                 # CRITICAL: Check if audio capture is disabled (TTS playing)
-                # Even for continuous-input providers, we must gate during TTS to prevent echo
-                if not session.audio_capture_enabled:
+                # For Google Live: Send silence frames to maintain stream continuity (like AudioSocket)
+                # For OpenAI/Deepgram: Can drop audio (they handle gaps gracefully)
+                needs_gating = provider_name == "google_live"
+                
+                if needs_gating and not session.audio_capture_enabled:
+                    # Send SILENCE instead of dropping to maintain Google Live's stream
+                    logger.debug(
+                        "🔇 GATING ACTIVE - Sending silence frame for Google Live (TTS playing)",
+                        call_id=caller_channel_id,
+                        provider=provider_name,
+                    )
+                    # Replace audio with silence (zero-filled PCM16)
+                    pcm_16k = b'\x00' * len(pcm_16k)
+                elif not needs_gating and not session.audio_capture_enabled:
+                    # For other providers, can safely drop audio during TTS
                     logger.debug(
                         "Dropping RTP audio for continuous provider during TTS playback",
                         call_id=caller_channel_id,
