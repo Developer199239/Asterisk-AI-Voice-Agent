@@ -309,6 +309,34 @@ CALL ENDING PROTOCOL (CRITICAL):
 
 **Learning**: Provide maximum user flexibility via configuration without code changes.
 
+### 7. Google Live realtimeInputConfig (CRITICAL, 2025-11-16 RCA)
+
+**Context**: After this baseline was established (commit `d4affe8`), later experiments introduced an explicit `realtimeInputConfig` block in `GoogleLiveProvider._send_setup`:
+
+```json
+"realtimeInputConfig": {
+  "automaticActivityDetection": {
+    "disabled": false
+  }
+}
+```
+
+On clean telephony audio (8 kHz µ-law → 16 kHz PCM, SNR ~60–70 dB) this change caused **severe multilingual mis-recognition** in Gemini Live input transcriptions:
+
+- User speaking clear English was intermittently transcribed as Arabic/Thai/Vietnamese tokens.
+- Diagnostics confirmed that `caller_to_provider.wav` contained intelligible English with high offline STT confidence.
+
+**Finding**:
+
+- The **Golden Baseline setup did not send any `realtimeInputConfig` field** (commit `d4affe8`).
+- Removing `realtimeInputConfig` and reverting to the baseline payload (commit `2597f63`) immediately restored correct, stable English recognition on new calls (e.g. call `1763333755.5693`).
+
+**Lesson**:
+
+- For this telephony ExternalMedia RTP configuration, **do not set `realtimeInputConfig` for Google Live**.
+- Rely on Gemini Live's default activity detection and use the **system prompt** (context `demo_google_live`) to constrain language to English.
+- If multilingual drift appears on otherwise clean audio, first check for any non-baseline `realtimeInputConfig` fields in the setup payload.
+
 ## Performance Comparison
 
 | Provider | Latency | Duplex | Barge-in | Complexity | Cost |
@@ -468,7 +496,7 @@ The Google Live provider represents the **fastest and most natural conversationa
 
 ---
 
-**Document Version**: 1.0  
-**Last Updated**: November 14, 2025  
-**Validated By**: Production testing with real call data  
+**Document Version**: 1.1  
+**Last Updated**: November 16, 2025  
+**Validated By**: Production testing with real call data (including RCA on 2025-11-16, commit `2597f63`)  
 **Next Review**: December 2025 or after significant provider updates

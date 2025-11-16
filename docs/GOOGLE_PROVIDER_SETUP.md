@@ -400,6 +400,29 @@ Conversation context is maintained automatically:
 2. Verify audio transcoding: `grep "resample" logs/ai-engine.log`
 3. Test with pipeline mode first to isolate issue
 
+### Issue: Google Live mis-hears English as other languages (CRITICAL)
+
+**Context**:
+
+- Golden Baseline commit `d4affe8` used the default Gemini Live setup payload (no `realtimeInputConfig`).
+- A later change added an explicit `realtimeInputConfig.automaticActivityDetection.disabled=false` block to the Google Live setup message.
+
+**Symptoms**:
+
+- Caller speaks clear English over telephony (8 kHz µ-law) but input transcriptions from Google Live show Arabic/Thai/Vietnamese tokens.
+- RCA captures (`caller_to_provider.wav`) show clean English audio with high offline STT confidence.
+
+**Root Cause & Fix**:
+
+- For the ExternalMedia RTP telephony profile, explicitly sending `realtimeInputConfig` caused Gemini Live to mis-classify language on otherwise clean audio.
+- Removing `realtimeInputConfig` and reverting to the Golden Baseline setup (commit `2597f63`) restores stable English recognition.
+
+**Guidance**:
+
+- **Do NOT set `realtimeInputConfig` for `google_live`** in this configuration.
+- Rely on Gemini Live's default activity detection and constrain language via the system prompt in `demo_google_live`.
+- If multilingual drift appears again, compare the setup payload against commit `d4affe8` and ensure `realtimeInputConfig` has not been reintroduced.
+
 ### Issue: Barge-In Not Working
 
 **Note**: Barge-in is **automatic** with Google Live. If not working:
