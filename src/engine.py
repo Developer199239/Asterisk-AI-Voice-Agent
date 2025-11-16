@@ -3462,7 +3462,9 @@ class Engine:
                         )
                     except Exception:
                         logger.debug("Provider input capture failed (continuous-input RTP)", call_id=session.call_id, exc_info=True)
-                    await provider.send_audio(prov_payload)
+                    # CRITICAL: Pass sample_rate and encoding to provider
+                    # Google Live needs these to avoid double resampling
+                    await provider.send_audio(prov_payload, sample_rate=prov_rate, encoding=prov_enc)
                 except Exception as exc:
                     logger.debug("Continuous-input RTP forward error", call_id=caller_channel_id, error=str(exc))
                 return
