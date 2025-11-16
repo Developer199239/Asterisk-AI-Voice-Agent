@@ -319,15 +319,13 @@ class GoogleLiveProvider(AIProviderInterface):
         # This allows us to populate email summaries and transcripts
         # Note: Using camelCase per Google Live API format
         # Use empty object {} to enable with default settings (no "model" field - API doesn't support it)
+        # CRITICAL: languageCode is NOT supported by transcription config (API rejects it with code 1007)
+        # Language must be controlled via system prompt instead
         if self.config.enable_input_transcription:
-            setup_msg["setup"]["inputAudioTranscription"] = {
-                "languageCode": "en-US"  # Force English-US language detection
-            }
+            setup_msg["setup"]["inputAudioTranscription"] = {}
         
         if self.config.enable_output_transcription:
-            setup_msg["setup"]["outputAudioTranscription"] = {
-                "languageCode": "en-US"  # Force English-US language detection
-            }
+            setup_msg["setup"]["outputAudioTranscription"] = {}
         
         # CRITICAL: Enable automatic Voice Activity Detection
         # This is required for Google Live to detect when user is speaking
