@@ -225,15 +225,17 @@ class Engine:
         except Exception:
             streaming_config['audiosocket_broadcast_debug'] = False
 
-        # Initialize audio capture with diagnostic tap settings
-        # Use environment variables directly since streaming_config may not be fully populated yet
-        tap_dir = os.getenv('DIAG_TAP_OUTPUT_DIR', '/tmp/ai-engine-taps')
-        keep_taps = os.getenv('DIAG_ENABLE_TAPS', 'false').lower() in ('true', '1', 'yes')
-        self.audio_capture = AudioCaptureManager(base_dir=tap_dir, keep_files=keep_taps)
+        # Initialize per-call audio capture used for diagnostics/RCA.
+        # Captures are written under /tmp/ai-engine-captures/<call_id>/stream_name.wav,
+        # which is what scripts/rca_collect.sh expects when building the "captures" bundle.
+        capture_dir = "/tmp/ai-engine-captures"
+        # Use DIAG_ENABLE_TAPS as a generic switch for keeping capture files after calls complete.
+        keep_captures = os.getenv("DIAG_ENABLE_TAPS", "false").lower() in ("true", "1", "yes")
+        self.audio_capture = AudioCaptureManager(base_dir=capture_dir, keep_files=keep_captures)
         logger.info(
             "Audio capture initialized",
-            base_dir=tap_dir,
-            keep_files=keep_taps,
+            base_dir=capture_dir,
+            keep_files=keep_captures,
         )
         self.streaming_playback_manager = StreamingPlaybackManager(
             self.session_store,
@@ -286,7 +288,6 @@ class Engine:
         self.audio_socket_server: Optional[AudioSocketServer] = None
         self.audiosocket_conn_to_ssrc: Dict[str, int] = {}
         self.audiosocket_resample_state: Dict[str, Optional[tuple]] = {}
-        self.audio_capture = AudioCaptureManager()
         # Stateful resampling: maintain per-call/per-provider ratecv states to avoid drift
         # Provider input (caller -> provider) resample state
         self._resample_state_provider_in: Dict[str, Dict[str, Optional[tuple]]] = {}

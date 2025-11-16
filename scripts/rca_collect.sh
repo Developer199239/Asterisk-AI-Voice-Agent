@@ -102,14 +102,14 @@ CID=$(grep -oE '17[0-9]{8}\.[0-9]{4}' "$BASE/logs/ai-engine.log" | sort -u | hea
 echo -n "$CID" > "$BASE/call_id.txt"
 echo "[RCA] Active Call ID: ${CID:-unknown}"
 if [ -n "$CID" ]; then
-  # Check if taps exist and list them (check both flat and subdirectory structure)
-  TAP_COUNT=$(run_server_cmd "docker exec ai_engine sh -c 'ls -1 /tmp/ai-engine-taps/${CID}/*.wav 2>/dev/null | wc -l' 2>/dev/null" || echo "0")
+  # Check for tap files using flat layout: pre/post_compand_pcm16_<CID>* under /tmp/ai-engine-taps
+  TAP_COUNT=$(run_server_cmd "docker exec ai_engine sh -c 'ls -1 /tmp/ai-engine-taps/pre_compand_pcm16_${CID}*.wav /tmp/ai-engine-taps/post_compand_pcm16_${CID}*.wav 2>/dev/null | wc -l' 2>/dev/null" || echo "0")
   echo "[RCA] Found ${TAP_COUNT} tap files for call ${CID}"
-  
+
   if [ "${TAP_COUNT}" -gt 0 ]; then
-    # Create tar archive of tap files from subdirectory
-    run_server_cmd "docker exec ai_engine sh -c 'cd /tmp/ai-engine-taps && tar czf /tmp/ai_taps_${CID}.tgz ${CID}/*.wav 2>/dev/null'" || true
-    
+    # Create tar archive of all matching tap files for this call id
+    run_server_cmd "docker exec ai_engine sh -c 'cd /tmp/ai-engine-taps && tar czf /tmp/ai_taps_${CID}.tgz pre_compand_pcm16_${CID}*.wav post_compand_pcm16_${CID}*.wav 2>/dev/null'" || true
+
     if [ "$SERVER_MODE" = "local" ]; then
       if run_server_cmd "docker cp ai_engine:/tmp/ai_taps_${CID}.tgz '$BASE/ai_taps_${CID}.tgz' 2>/dev/null"; then
         echo "[RCA] Tap bundle fetched successfully"

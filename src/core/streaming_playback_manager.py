@@ -3290,21 +3290,21 @@ class StreamingPlaybackManager:
                                 logger.info("Wrote call-level post-compand PCM16 tap", call_id=call_id, path=fnc2, bytes=len(cpost), rate=crate)
                             except Exception:
                                 logger.warning("Failed to write call-level post-compand tap", call_id=call_id, path=fnc2, rate=crate, exc_info=True)
-                        # Cleanup: remove all per-call diagnostic tap files now that we've finished
-                        try:
-                            if os.path.isdir(self.diag_out_dir):
-                                prefix_pre = f"pre_compand_pcm16_{call_id}"
-                                prefix_post = f"post_compand_pcm16_{call_id}"
-                                for name in os.listdir(self.diag_out_dir):
-                                    if name.startswith(prefix_pre) or name.startswith(prefix_post):
-                                        fpath = os.path.join(self.diag_out_dir, name)
-                                        try:
-                                            if os.path.isfile(fpath):
-                                                os.remove(fpath)
-                                        except Exception:
-                                            pass
-                        except Exception:
-                            pass
+                        if not getattr(self, "diag_enable_taps", False):
+                            try:
+                                if os.path.isdir(self.diag_out_dir):
+                                    prefix_pre = f"pre_compand_pcm16_{call_id}"
+                                    prefix_post = f"post_compand_pcm16_{call_id}"
+                                    for name in os.listdir(self.diag_out_dir):
+                                        if name.startswith(prefix_pre) or name.startswith(prefix_post):
+                                            fpath = os.path.join(self.diag_out_dir, name)
+                                            try:
+                                                if os.path.isfile(fpath):
+                                                    os.remove(fpath)
+                                            except Exception:
+                                                pass
+                            except Exception:
+                                pass
                     except Exception:
                         logger.debug("Call-level tap write failed", call_id=call_id, exc_info=True)
             except Exception:
