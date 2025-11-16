@@ -109,29 +109,21 @@ class GoogleLiveProvider(AIProviderInterface):
         self._setup_ack_event: Optional[asyncio.Event] = None  # ACK gate like Deepgram
         self._hangup_after_response: bool = False  # Flag to trigger hangup after next response
         self._farewell_in_progress: bool = False  # Track if farewell is being spoken
-        
-        # Audio buffering for resampling
-        self._input_buffer = bytearray()
-        self._output_buffer = bytearray()
-        
-        # VAD-based burst accumulation for better recognition
-        self._speech_buffer = bytearray()  # Accumulate during speech
-        self._is_speech_active = False
-        self._silence_frames = 0
-        self._silence_threshold = 10  # 10 frames (~200ms) of silence = end of utterance
-        self._speech_threshold_rms = 300  # RMS threshold for speech detection
-        self._min_speech_frames = 3  # Minimum frames to consider as speech
-        self._speech_frames = 0
-        
-        # Tool adapter
-        self._tool_adapter: Optional[GoogleToolAdapter] = None
-        
         # Conversation state
         self._conversation_history: List[Dict[str, Any]] = []
         
         # Transcription buffering - hold latest partial until turnComplete
         self._input_transcription_buffer: str = ""
         self._output_transcription_buffer: str = ""
+        
+        # VAD burst accumulation state (for improved speech recognition)
+        self._speech_buffer = bytearray()
+        self._is_speech_active = False
+        self._silence_frames = 0
+        self._silence_threshold = 10  # frames (~200ms @ 20ms/frame)
+        self._speech_threshold_rms = 100  # RMS threshold for speech detection (lowered for telephony)
+        self._min_speech_frames = 3  # Minimum frames to start accumulation (~60ms)
+        self._speech_frames = 0
         
         # Metrics tracking
         self._session_start_time: Optional[float] = None
@@ -494,6 +486,18 @@ class GoogleLiveProvider(AIProviderInterface):
             import audioop
             chunk_rms = audioop.rms(pcm16_provider, 2)
             is_speech = chunk_rms > self._speech_threshold_rms
+            
+            # Log VAD analysis for debugging
+            logger.debug(
+                "VAD frame analysis",
+                call_id=self._call_id,
+                chunk_rms=chunk_rms,
+                threshold=self._speech_threshold_rms,
+                is_speech=is_speech,
+                speech_active=self._is_speech_active,
+                buffer_frames=len(self._speech_buffer) // 640,
+                silence_frames=self._silence_frames,
+            )
             
             if is_speech:
                 # Speech detected - accumulate
