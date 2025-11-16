@@ -522,8 +522,20 @@ class Engine:
                     raise ValueError("ExternalMedia configuration not found")
                 
                 rtp_host = self.config.external_media.rtp_host
-                rtp_port = self.config.external_media.rtp_port
-                codec = self.config.external_media.codec
+                rtp_port = int(getattr(self.config.external_media, "rtp_port", 0) or 18080)
+                codec = getattr(self.config.external_media, "codec", "ulaw")
+                format = getattr(self.config.external_media, "format", "slin16")
+                sample_rate = getattr(self.config.external_media, "sample_rate", None)
+                
+                # Infer sample_rate from format if not explicitly set
+                if not sample_rate:
+                    if format in ("slin16", "linear16", "pcm16"):
+                        sample_rate = 16000
+                    elif format in ("slin", "linear"):
+                        sample_rate = 8000
+                    else:  # ulaw, alaw
+                        sample_rate = 8000
+                
                 port_range = self._parse_port_range(getattr(self.config.external_media, "port_range", None), rtp_port)
                 
                 # Create RTP server with callback to route audio to providers
@@ -532,20 +544,43 @@ class Engine:
                     port=rtp_port,
                     engine_callback=self._on_rtp_audio,
                     codec=codec,
+                    format=format,
+                    sample_rate=sample_rate,
                     port_range=port_range,
                 )
                 
                 # Start RTP server
                 await self.rtp_server.start()
                 logger.info("RTP server started for ExternalMedia transport", 
-                           host=rtp_host, port=rtp_port, codec=codec)
+                           host=rtp_host, port=rtp_port, codec=codec, format=format, sample_rate=sample_rate)
                 self.streaming_playback_manager.set_transport(
                     rtp_server=self.rtp_server,
                     audio_transport=self.config.audio_transport,
                 )
+                
+                # Validate provider format alignment with ExternalMedia transport
+                try:
+                    for prov_name, provider in self.providers.items():
+                        if hasattr(provider, 'config'):
+                            cfg = provider.config
+                            # Check provider input sample rate
+                            provider_input_rate = getattr(cfg, 'provider_input_sample_rate_hz', None) or getattr(cfg, 'input_sample_rate_hz', None)
+                            if provider_input_rate and provider_input_rate != sample_rate:
+                                logger.warning(
+                                    "⚠️  TRANSPORT/PROVIDER MISMATCH",
+                                    provider=prov_name,
+                                    transport="ExternalMedia",
+                                    transport_rate=sample_rate,
+                                    provider_rate=provider_input_rate,
+                                    impact="Extra resampling step - slight quality loss",
+                                    suggestion=f"Consider updating providers.{prov_name}.input_sample_rate_hz to {sample_rate} for optimal quality"
+                                )
+                except Exception:
+                    logger.debug("Provider format validation failed", exc_info=True)
+                
                 # Pre-call transport summary and alignment audit
                 try:
-                    self._audit_transport_alignment()
+                    await self._describe_provider_alignment()
                 except Exception:
                     logger.debug("Transport alignment audit failed", exc_info=True)
             except Exception as exc:
@@ -3379,12 +3414,15 @@ class Engine:
                     return
                 # Encode audio for provider (same as AudioSocket path)
                 try:
+                    # Get RTP server's configured sample rate (no longer hardcoded)
+                    rtp_rate = getattr(self.rtp_server, 'sample_rate', 16000) if self.rtp_server else 16000
+                    
                     prov_payload, prov_enc, prov_rate = self._encode_for_provider(
                         session.call_id,
                         provider_name,
                         provider,
                         pcm_16k,
-                        16000,  # Input is PCM16 16kHz from RTP
+                        rtp_rate,  # Use configured rate from RTP server
                     )
                     try:
                         self.audio_capture.append_encoded(

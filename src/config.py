@@ -42,11 +42,20 @@ class AsteriskConfig(BaseModel):
     app_name: str = Field(default="ai-voice-agent")
 
 class ExternalMediaConfig(BaseModel):
+    # Network configuration
     rtp_host: str = Field(default="127.0.0.1")
     rtp_port: int = Field(default=18080)
     port_range: Optional[str] = Field(default=None)
-    codec: str = Field(default="ulaw")  # ulaw or slin16
-    direction: str = Field(default="both")  # both, sendonly, recvonly
+    
+    # Asterisk-side configuration (RTP payload)
+    codec: str = Field(default="ulaw")  # Asterisk channel codec: ulaw, alaw, slin, slin16
+    direction: str = Field(default="both")  # RTP direction: both, sendonly, recvonly
+    
+    # Engine-side configuration (internal processing)
+    # Defines how RTP server delivers audio to engine/providers
+    format: str = Field(default="slin16")  # Engine internal format: slin (8kHz), slin16 (16kHz), ulaw (8kHz)
+    sample_rate: Optional[int] = Field(default=None)  # Optional: inferred from format if not set (8000 or 16000)
+    
     # Note: jitter_buffer_ms removed - RTP has built-in buffering, not configurable
     # streaming.jitter_buffer_ms controls StreamingPlaybackManager buffering instead
 
