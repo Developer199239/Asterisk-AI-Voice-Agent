@@ -3406,11 +3406,22 @@ class Engine:
             except Exception:
                 continuous_input = False
 
-            # For continuous-input providers, forward audio immediately and skip all gating/barge-in logic
-            # This matches the AudioSocket behavior for Deepgram/OpenAI Realtime (lines 2304-2342)
+            # For continuous-input providers, forward audio (but respect gating during TTS playback)
+            # OpenAI Realtime has server-side echo cancellation, but we still need to gate during TTS
+            # to prevent the provider from hearing its own audio as "user speech"
             if continuous_input:
                 if not provider or not hasattr(provider, 'send_audio'):
                     logger.debug("Provider unavailable for continuous RTP audio", provider=provider_name)
+                    return
+                
+                # CRITICAL: Check if audio capture is disabled (TTS playing)
+                # Even for continuous-input providers, we must gate during TTS to prevent echo
+                if not session.audio_capture_enabled:
+                    logger.debug(
+                        "Dropping RTP audio for continuous provider during TTS playback",
+                        call_id=caller_channel_id,
+                        provider=provider_name,
+                    )
                     return
                 # Encode audio for provider (same as AudioSocket path)
                 try:
