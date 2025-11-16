@@ -116,14 +116,8 @@ class GoogleLiveProvider(AIProviderInterface):
         self._input_transcription_buffer: str = ""
         self._output_transcription_buffer: str = ""
         
-        # VAD burst accumulation state (for improved speech recognition)
-        self._speech_buffer = bytearray()
-        self._is_speech_active = False
-        self._silence_frames = 0
-        self._silence_threshold = 10  # frames (~200ms @ 20ms/frame)
-        self._speech_threshold_rms = 1200  # RMS threshold for speech detection (tuned for 8kHz ulaw telephony)
-        self._min_speech_frames = 3  # Minimum frames to start accumulation (~60ms)
-        self._speech_frames = 0
+        # Golden Baseline: Simple input buffer for 20ms chunking
+        self._input_buffer = bytearray()
         
         # Metrics tracking
         self._session_start_time: Optional[float] = None
@@ -422,46 +416,6 @@ class GoogleLiveProvider(AIProviderInterface):
             return
 
         try:
-            # DIAGNOSTIC: Track frame reception for fragmentation analysis
-            if not hasattr(self, '_audio_frame_count'):
-                self._audio_frame_count = 0
-                self._audio_bytes_received = 0
-                self._last_frame_time = time.time()
-                self._frame_gaps = []
-            
-            self._audio_frame_count += 1
-            self._audio_bytes_received += len(audio_chunk)
-            
-            # Measure inter-frame timing
-            current_time = time.time()
-            if self._last_frame_time:
-                gap_ms = (current_time - self._last_frame_time) * 1000
-                self._frame_gaps.append(gap_ms)
-                
-                # Log irregular gaps (should be ~20ms for continuous audio)
-                if gap_ms > 50 or gap_ms < 10:
-                    logger.warning(
-                        "⚠️ IRREGULAR FRAME GAP",
-                        call_id=self._call_id,
-                        gap_ms=f"{gap_ms:.1f}",
-                        expected="~20ms",
-                        frame_num=self._audio_frame_count,
-                    )
-            self._last_frame_time = current_time
-            
-            # Periodic frame stats
-            if self._audio_frame_count % 50 == 0:
-                avg_gap = sum(self._frame_gaps[-50:]) / min(50, len(self._frame_gaps)) if self._frame_gaps else 0
-                logger.info(
-                    "📊 AUDIO FRAME STATS",
-                    call_id=self._call_id,
-                    frames_received=self._audio_frame_count,
-                    total_bytes=self._audio_bytes_received,
-                    avg_gap_ms=f"{avg_gap:.1f}",
-                    sample_rate_in=sample_rate,
-                    encoding_in=encoding,
-                )
-            
             # Infer format from chunk size if not specified
             if encoding == "ulaw" or (sample_rate == 8000 and len(audio_chunk) == 160):
                 # μ-law to PCM16
@@ -483,27 +437,35 @@ class GoogleLiveProvider(AIProviderInterface):
             else:
                 pcm16_provider = pcm16_src
 
-            # CONTINUOUS STREAMING MODE (bypass VAD burst accumulation)
-            # Google Live has built-in server-side VAD, so we send audio continuously
-            # This avoids issues with silence gating and resampling artifacts
+            # GOLDEN BASELINE APPROACH: Buffer and send in 20ms chunks
+            # This matches the validated implementation from Nov 14, 2025
+            # Add to buffer
+            self._input_buffer.extend(pcm16_provider)
             
-            # Encode audio chunk as base64
-            audio_b64 = base64.b64encode(pcm16_provider).decode("utf-8")
+            # Send in chunks (20ms at provider rate)
+            chunk_size = int(provider_rate * 2 * _COMMIT_INTERVAL_SEC)  # 2 bytes per sample
             
-            # Send realtime input continuously (no buffering/bursting)
-            message = {
-                "realtimeInput": {
-                    "mediaChunks": [
-                        {
-                            "mimeType": f"audio/pcm;rate={provider_rate}",
-                            "data": audio_b64,
-                        }
-                    ]
+            while len(self._input_buffer) >= chunk_size:
+                chunk_to_send = bytes(self._input_buffer[:chunk_size])
+                self._input_buffer = self._input_buffer[chunk_size:]
+                
+                # Encode as base64
+                audio_b64 = base64.b64encode(chunk_to_send).decode("utf-8")
+                
+                # Send realtime input (using camelCase keys per actual API)
+                message = {
+                    "realtimeInput": {  # camelCase not snake_case
+                        "mediaChunks": [  # camelCase
+                            {
+                                "mimeType": f"audio/pcm;rate={provider_rate}",  # camelCase + rate from config
+                                "data": audio_b64,
+                            }
+                        ]
+                    }
                 }
-            }
-            
-            await self._send_message(message)
-            _GOOGLE_LIVE_AUDIO_SENT.labels(call_id=self._call_id).inc(len(pcm16_provider))
+                
+                await self._send_message(message)
+                _GOOGLE_LIVE_AUDIO_SENT.labels(call_id=self._call_id).inc(len(chunk_to_send))
 
         except Exception as e:
             logger.error(
@@ -1027,7 +989,7 @@ class GoogleLiveProvider(AIProviderInterface):
         self._call_id = None
         self._session_id = None
         self._setup_complete = False
-        self._speech_buffer.clear()  # Clear VAD burst buffer
+        self._input_buffer.clear()  # Clear audio buffer
         self._conversation_history.clear()
 
         if self._session_start_time:
