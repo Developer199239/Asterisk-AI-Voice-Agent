@@ -320,19 +320,6 @@ class GoogleLiveProvider(AIProviderInterface):
         
         if self.config.enable_output_transcription:
             setup_msg["setup"]["outputAudioTranscription"] = {}
-        
-        # CRITICAL: Enable automatic Voice Activity Detection
-        # This is required for Google Live to detect when user is speaking
-        # Without this, VAD may not work correctly with AudioSocket transport
-        setup_msg["setup"]["realtimeInputConfig"] = {
-            "automaticActivityDetection": {
-                "disabled": False  # Explicitly enable VAD
-            }
-            # NOTE: languageHints is NOT supported by Google Live API
-            # Attempted to add for speech recognition quality but API rejects it
-            # Error: "Unknown name 'languageHints' at 'setup.realtime_input_config'"
-            # Language detection must be handled via system prompt instead
-        }
 
         # Debug: Log setup message structure
         logger.debug(
