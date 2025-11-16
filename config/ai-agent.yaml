@@ -210,7 +210,7 @@ contexts:
   
   demo_google_live:
     greeting: "Hi {caller_name}, I'm Ava. Ask me anything about the Asterisk AI Voice Agent!"
-    profile: telephony_ulaw_8k  # Use telephony profile (mulaw@8kHz) matching RTP codec negotiation
+    profile: wideband_pcm_16k  # Use wideband profile (slin16@16kHz) matching ExternalMedia
     prompt: |
       You are Ava (Asterisk Voice Agent) demonstrating Google Gemini Live API.
       
