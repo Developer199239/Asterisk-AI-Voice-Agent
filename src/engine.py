@@ -580,7 +580,11 @@ class Engine:
                 
                 # Pre-call transport summary and alignment audit
                 try:
-                    await self._describe_provider_alignment()
+                    for prov_name, prov in self.providers.items():
+                        issues = self._describe_provider_alignment(prov_name, prov)
+                        if issues:
+                            for issue in issues:
+                                logger.info("Provider alignment info", provider=prov_name, issue=issue)
                 except Exception:
                     logger.debug("Transport alignment audit failed", exc_info=True)
             except Exception as exc:
