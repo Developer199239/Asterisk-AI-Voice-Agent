@@ -121,7 +121,7 @@ class GoogleLiveProvider(AIProviderInterface):
         self._is_speech_active = False
         self._silence_frames = 0
         self._silence_threshold = 10  # frames (~200ms @ 20ms/frame)
-        self._speech_threshold_rms = 100  # RMS threshold for speech detection (lowered for telephony)
+        self._speech_threshold_rms = 1200  # RMS threshold for speech detection (tuned for 8kHz ulaw telephony)
         self._min_speech_frames = 3  # Minimum frames to start accumulation (~60ms)
         self._speech_frames = 0
         
