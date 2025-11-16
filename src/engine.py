@@ -5817,6 +5817,9 @@ class Engine:
                     expected_rate=expected_rate,
                 )
             
+            if provider_name == "google_live":
+                return pcm_bytes, "slin16", pcm_rate
+            
             # Re-enabled: Gain normalization required for low-volume audio
             # Root cause identified: Incoming audio had RMS=23 (needs ~1400)
             # Without normalization, Google Live cannot understand quiet audio
