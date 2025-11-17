@@ -387,7 +387,21 @@ class LocalSTTAdapter(_LocalAdapterBase, STTComponent):
         fmt: str = "pcm16_16k",
     ) -> None:
         if not audio:
+            logger.debug(
+                "send_audio called with empty audio",
+                component=self.component_key,
+                call_id=call_id,
+            )
             return
+        
+        logger.debug(
+            "🎤 STT send_audio called",
+            component=self.component_key,
+            call_id=call_id,
+            input_bytes=len(audio),
+            format=fmt,
+        )
+        
         session = self._sessions.get(call_id)
         if not session or session.send_lock is None:
             raise RuntimeError(
@@ -395,7 +409,22 @@ class LocalSTTAdapter(_LocalAdapterBase, STTComponent):
             )
         pcm16 = self._to_pcm16_16k(audio, fmt)
         if not pcm16:
+            logger.warning(
+                "send_audio: conversion to PCM16 16kHz produced empty result",
+                component=self.component_key,
+                call_id=call_id,
+                input_bytes=len(audio),
+            )
             return
+        
+        logger.debug(
+            "🎤 STT audio converted and sending to server",
+            component=self.component_key,
+            call_id=call_id,
+            pcm16_bytes=len(pcm16),
+            base64_size=len(base64.b64encode(pcm16).decode("ascii")),
+        )
+        
         payload = {
             "type": "audio",
             "mode": "stt",
@@ -406,6 +435,13 @@ class LocalSTTAdapter(_LocalAdapterBase, STTComponent):
         }
         async with session.send_lock:
             await self._send_json(session, payload)
+        
+        logger.debug(
+            "🎤 STT audio sent to local-ai-server",
+            component=self.component_key,
+            call_id=call_id,
+            pcm16_bytes=len(pcm16),
+        )
 
     async def iter_results(self, call_id: str) -> AsyncIterator[str]:
         session = self._sessions.get(call_id)

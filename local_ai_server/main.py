@@ -689,9 +689,36 @@ class LocalAIServer:
             session.last_audio_at = asyncio.get_running_loop().time()
         except RuntimeError:
             session.last_audio_at = 0.0
+        
+        # Calculate RMS to detect silent audio
+        try:
+            import struct
+            import math
+            samples = struct.unpack(f"{len(audio_bytes)//2}h", audio_bytes)
+            squared_sum = sum(s*s for s in samples)
+            rms = math.sqrt(squared_sum / len(samples)) if samples else 0
+            logging.info(
+                "🎤 FEEDING VOSK call_id=%s bytes=%d samples=%d rms=%.2f",
+                session.call_id or "unknown",
+                len(audio_bytes),
+                len(samples),
+                rms,
+            )
+        except Exception as rms_exc:
+            logging.debug("RMS calculation failed: %s", rms_exc)
+            logging.info(
+                "🎤 FEEDING VOSK call_id=%s bytes=%d",
+                session.call_id or "unknown",
+                len(audio_bytes),
+            )
 
         try:
             has_final = recognizer.AcceptWaveform(audio_bytes)
+            logging.info(
+                "🎤 VOSK PROCESSED call_id=%s has_final=%s",
+                session.call_id or "unknown",
+                has_final,
+            )
         except Exception as exc:  # pragma: no cover - defensive guard
             logging.error("STT recognition failed: %s", exc, exc_info=True)
             return updates
@@ -1076,6 +1103,13 @@ class LocalAIServer:
         call_id = data.get("call_id")
         if call_id:
             session.call_id = call_id
+        
+        logging.info(
+            "🎤 AUDIO PAYLOAD RECEIVED call_id=%s mode=%s request_id=%s",
+            call_id or "unknown",
+            mode,
+            request_id or "none",
+        )
 
         if incoming_bytes is None:
             encoded_audio = data.get("data", "")
@@ -1084,17 +1118,35 @@ class LocalAIServer:
                 return
             try:
                 audio_bytes = base64.b64decode(encoded_audio)
+                logging.info(
+                    "🎤 AUDIO DECODED call_id=%s bytes=%d base64_len=%d",
+                    call_id or "unknown",
+                    len(audio_bytes),
+                    len(encoded_audio),
+                )
             except Exception as exc:
                 logging.warning("Failed to decode base64 audio payload: %s", exc)
                 return
         else:
             audio_bytes = incoming_bytes
+            logging.info(
+                "🎤 AUDIO (binary) call_id=%s bytes=%d",
+                call_id or "unknown",
+                len(audio_bytes),
+            )
 
         if not audio_bytes:
             logging.debug("Audio payload empty after decoding")
             return
 
         input_rate = int(data.get("rate", PCM16_TARGET_RATE))
+        logging.info(
+            "🎤 ROUTING TO STT call_id=%s mode=%s bytes=%d rate=%d",
+            call_id or "unknown",
+            mode,
+            len(audio_bytes),
+            input_rate,
+        )
 
         stt_modes = {"stt", "llm", "full"}
         if mode in stt_modes:
