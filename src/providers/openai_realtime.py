@@ -1395,12 +1395,29 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                             exc_info=True,
                         )
                 else:
-                    # No audio generated - timeout will handle hangup
+                    # No audio generated - trigger hangup immediately
                     logger.warning(
-                        "⚠️  Farewell response completed WITHOUT audio - fallback timeout will trigger hangup",
+                        "⚠️  Farewell response completed WITHOUT audio - triggering immediate hangup",
                         call_id=self._call_id,
                         response_id=self._current_response_id
                     )
+                    
+                    # Emit HangupReady event immediately since there's no audio to wait for
+                    try:
+                        if self.on_event:
+                            await self.on_event({
+                                "type": "HangupReady",
+                                "call_id": self._call_id,
+                                "reason": "farewell_no_audio",
+                                "had_audio": False
+                            })
+                    except Exception as e:
+                        logger.error(
+                            "Failed to emit HangupReady event for no-audio farewell",
+                            call_id=self._call_id,
+                            error=str(e),
+                            exc_info=True,
+                        )
                 
                 # Reset farewell tracking
                 self._farewell_response_id = None
