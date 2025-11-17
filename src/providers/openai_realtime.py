@@ -707,6 +707,25 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             # When turn_detection is enabled, OpenAI does not send transcription events
             # This is an API limitation - email summaries will only include AI responses
         }
+        
+        # Optional: Add temperature control (affects response creativity and consistency)
+        if hasattr(self.config, 'temperature') and self.config.temperature is not None:
+            session["temperature"] = self.config.temperature
+            logger.debug(
+                "OpenAI temperature configured",
+                call_id=self._call_id,
+                temperature=self.config.temperature
+            )
+        
+        # Optional: Add max response tokens (encourages complete audio responses)
+        if hasattr(self.config, 'max_response_output_tokens') and self.config.max_response_output_tokens:
+            session["max_response_output_tokens"] = self.config.max_response_output_tokens
+            logger.debug(
+                "OpenAI max_response_output_tokens configured",
+                call_id=self._call_id,
+                max_tokens=self.config.max_response_output_tokens
+            )
+        
         # CRITICAL FIX #2: Let OpenAI handle VAD with its optimized defaults
         # Only override if explicitly configured in YAML
         # OpenAI's defaults are tuned for their audio processing pipeline

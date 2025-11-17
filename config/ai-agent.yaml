@@ -357,8 +357,13 @@ providers:
     greeting: ${OPENAI_GREETING:-Hello, how can I help you today?}
     input_encoding: ulaw
     input_sample_rate_hz: 8000
-    instructions: You are a concise voice assistant. Respond clearly and keep answers
-      under 20 words unless more detail is requested.
+    instructions: |
+      You are a concise voice assistant. 
+      
+      CRITICAL: ALWAYS respond with AUDIO to every user input.
+      NEVER skip responses or generate text-only outputs.
+      
+      Respond clearly and keep answers under 20 words unless more detail is requested.
     model: gpt-4o-realtime-preview-2024-12-17
     organization: ''
     output_encoding: linear16
@@ -369,6 +374,11 @@ providers:
     # Leave disabled (0/0.0) for normal deployments; prefer fixing rxgain at trunk/Asterisk.
     input_gain_target_rms: 0
     input_gain_max_db: 0.0
+    
+    # Response generation parameters
+    temperature: 0.8  # Higher = more creative/responsive (0.6-1.0 range)
+    max_response_output_tokens: 4096  # Ensures room for complete responses
+    
     response_modalities:
     - audio
     - text
@@ -377,8 +387,8 @@ providers:
     turn_detection:
       create_response: true
       prefix_padding_ms: 300
-      silence_duration_ms: 700
-      threshold: 0.6
+      silence_duration_ms: 600  # Slightly faster response (was 700)
+      threshold: 0.5  # More sensitive to speech (was 0.6)
       type: server_vad
     voice: alloy
   google_live:
