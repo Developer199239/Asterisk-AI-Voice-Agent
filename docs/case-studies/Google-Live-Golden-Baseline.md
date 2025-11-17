@@ -1,14 +1,21 @@
 # Google Live Golden Baseline
 
-**Validated**: November 14, 2025  
-**Version**: v4.2.0  
+**Validated**: November 17, 2025  
+**Version**: v4.3.0  
 **Status**: ✅ Production Ready
 
 ## Overview
 
 This document establishes the **golden baseline** for the Google Live provider - a validated, production-ready configuration that delivers exceptional real-time conversational AI performance.
 
-## Test Call Metrics
+## Latest Test Call Metrics (v4.3.0)
+
+**Date**: 2025-11-17 20:23-20:24 UTC  
+**Duration**: ~67 seconds  
+**Call ID**: 1763410994.5759  
+**Outcome**: ✅ Successful - Full tool access with complete transcription and email delivery
+
+### Previous Validation (v4.2.0)
 
 **Date**: 2025-11-14 03:52-03:54 UTC  
 **Duration**: 59 seconds  
@@ -23,8 +30,10 @@ This document establishes the **golden baseline** for the Google Live provider -
 | **Audio Quality** | Clear, natural | Good | ✅ Pass |
 | **Duplex Communication** | Full bidirectional | Required | ✅ Pass |
 | **Interruption Handling** | Smooth barge-in | Required | ✅ Pass |
-| **Tool Execution** | 1 tool call (transcript) | Functional | ✅ Pass |
+| **Tool Access** | 6/6 tools configured | All context tools | ✅ Pass |
+| **Tool Execution** | request_transcript (validated) | Functional | ✅ Pass |
 | **Transcription Quality** | Complete, accurate | Good | ✅ Pass |
+| **Conversation Tracking** | Full history saved | Required | ✅ Pass |
 | **Email Delivery** | Summary + Transcript | Both | ✅ Pass |
 | **Call Termination** | Clean hangup | Required | ✅ Pass |
 
@@ -106,9 +115,41 @@ exten => s,n,Stasis(asterisk-ai-voice-agent)
 exten => s,n,Hangup()
 ```
 
-## Test Call Transcript
+## Test Call Transcript (v4.3.0)
 
+```text
+AI: Hi Haider Jarral, I'm Ava with the Google Gemini Live voice demo. 
+    Ask me about the Asterisk AI Voice Agent project.
+
+Caller: What's the latency on this project?
+
+AI: This Google Gemini Live configuration typically has a response time 
+    of less than one second.
+
+Caller: That is great. Can you email me a transcript of this conversation?
+
+AI: I can definitely send you the transcript. Can you please tell me 
+    your email address?
+
+Caller: My email is Heider Khalil at Hotmill.com.
+
+AI: I have h a i d e r k h a l i l @ hotmail dot com. Is that correct?
+
+Caller: That is correct, yeah.
+
+AI: Perfect! I'll send the complete transcript to haiderkhalil@hotmail dot com 
+    when our call ends. Is there anything else I can help you with?
+
+Caller: No, that is all. Thank you so much. Goodbye.
+
+AI: Thank you for calling! Have a great day!
+
+[Call ends cleanly with transcript sent successfully to email]
 ```
+
+### v4.2.0 Transcript (Previous Baseline)
+
+```text
 AI: Hi HAIDER JARRAL, I'm Ava demonstrating Google Gemini Live API! 
     I can tell you all about the Asterisk AI Voice Agent project - 
     ask me anything about how it works, setup, or features. Try 
@@ -303,13 +344,67 @@ CALL ENDING PROTOCOL (CRITICAL):
 **Fix**: Added comprehensive YAML configuration for all parameters.
 
 **New Config Options**:
+
 - LLM generation parameters (temperature, max_tokens, top_p, top_k)
 - Response modalities (audio, text, audio_text)
 - Transcription toggles (enable_input, enable_output)
 
 **Learning**: Provide maximum user flexibility via configuration without code changes.
 
-### 7. Google Live realtimeInputConfig (CRITICAL, 2025-11-16 RCA)
+### 7. Tool Filtering and Conversation Tracking (CRITICAL, 2025-11-17)
+
+**Context**: After config cleanup deployment, Google Live agent only had 1 tool instead of 6, and email summaries were empty despite transcriptions being captured.
+
+**Root Cause Discovery**:
+
+**Bug #1 - Tool Filtering**:
+
+- `GoogleLiveProvider._send_setup()` called `get_tools_config()` which returned ALL tools from registry
+- Should have used context-filtered tool list like OpenAI and Deepgram providers
+- Result: Setup message sent only 1 tool wrapper to API instead of 6 individual tools
+
+**Bug #2 - Conversation Tracking**:
+
+- Engine only injects `_session_store` if `hasattr(provider, '_tool_adapter')` is true
+- `_tool_adapter` was created inside `_send_setup()` (called during `start_session()`)
+- Engine checks `hasattr(_tool_adapter)` BEFORE calling `start_session()`
+- Result: `_session_store` was never injected, transcriptions couldn't be saved to session
+
+**Fix**:
+
+```python
+# WRONG - Create adapter during session start (too late for injection)
+async def _send_setup(self, context):
+    self._tool_adapter = GoogleToolAdapter(tool_registry)
+    tools = self._tool_adapter.get_tools_config()  # Returns ALL tools
+
+# CORRECT - Create adapter in __init__, use context filtering
+def __init__(self, ...):
+    from src.tools.registry import tool_registry
+    self._tool_adapter = GoogleToolAdapter(tool_registry)  # Early creation
+
+async def _send_setup(self, context):
+    tool_names = context.get('tools', [])  # Get filtered list
+    tools = self._tool_adapter.format_tools(tool_names)  # Only context tools
+```
+
+**Validation** (call 1763410994.5759):
+
+- ✅ 6 tools configured and sent to API
+- ✅ `_session_store` injected before session start
+- ✅ Conversation messages tracked: "✅ Tracked conversation message"
+- ✅ Email summary contained full conversation history
+- ✅ request_transcript tool executed successfully
+
+**Learning**:
+
+- Tool adapters must be created in `__init__` for proper dependency injection
+- Always use context-filtered tool lists, not registry-wide exports
+- Timing of initialization matters for engine dependency injection
+
+**Deployment**: Commit `6eaa315`, November 17, 2025
+
+### 8. Google Live realtimeInputConfig (CRITICAL, 2025-11-16 RCA)
 
 **Context**: After this baseline was established (commit `d4affe8`), later experiments introduced an explicit `realtimeInputConfig` block in `GoogleLiveProvider._send_setup`:
 
@@ -496,7 +591,7 @@ The Google Live provider represents the **fastest and most natural conversationa
 
 ---
 
-**Document Version**: 1.1  
-**Last Updated**: November 16, 2025  
-**Validated By**: Production testing with real call data (including RCA on 2025-11-16, commit `2597f63`)  
+**Document Version**: 1.2  
+**Last Updated**: November 17, 2025  
+**Validated By**: Production testing with real call data (including v4.3.0 validation on 2025-11-17, commit `6eaa315`)  
 **Next Review**: December 2025 or after significant provider updates
