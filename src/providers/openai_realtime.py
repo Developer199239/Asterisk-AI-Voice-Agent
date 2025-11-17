@@ -1281,10 +1281,10 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                 self._current_response_id == self._farewell_response_id and 
                 event_type in ("response.completed", "response.done")):
                 
-                # If farewell has no audio, warn but still proceed with hangup
+                # If farewell has no audio, warn and KEEP THE CALL OPEN to avoid silent hangup
                 if not had_audio_burst:
                     logger.warning(
-                        "⚠️  Farewell response completed WITHOUT audio - OpenAI did not generate speech",
+                        "⚠️  Farewell response completed WITHOUT audio - OpenAI did not generate speech; skipping hangup",
                         call_id=self._call_id,
                         response_id=self._current_response_id
                     )
@@ -1294,19 +1294,24 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                         call_id=self._call_id,
                         response_id=self._current_response_id
                     )
-                
-                # Emit HangupReady event to trigger hangup in engine
-                # Engine will wait 1.0s to ensure any audio completes playing
-                try:
-                    if self.on_event:
-                        await self.on_event({
-                            "type": "HangupReady",
-                            "call_id": self._call_id,
-                            "reason": "farewell_completed",
-                            "had_audio": had_audio_burst
-                        })
-                except Exception as e:
-                    logger.error("Failed to emit HangupReady event", call_id=self._call_id, error=str(e))
+                    
+                    # Emit HangupReady event to trigger hangup in engine
+                    # Engine will wait 1.0s to ensure any audio completes playing
+                    try:
+                        if self.on_event:
+                            await self.on_event({
+                                "type": "HangupReady",
+                                "call_id": self._call_id,
+                                "reason": "farewell_completed",
+                                "had_audio": had_audio_burst
+                            })
+                    except Exception as e:
+                        logger.error(
+                            "Failed to emit HangupReady event",
+                            call_id=self._call_id,
+                            error=str(e),
+                            exc_info=True,
+                        )
                 
                 # Reset farewell tracking
                 self._farewell_response_id = None
