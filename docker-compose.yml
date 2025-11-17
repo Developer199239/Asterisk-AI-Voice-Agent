@@ -50,6 +50,8 @@ services:
       - ./models:/app/models
     environment:
       - PYTHONUNBUFFERED=1
+      - LOCAL_LOG_LEVEL=${LOCAL_LOG_LEVEL:-INFO}
+      - LOCAL_DEBUG=${LOCAL_DEBUG:-0}
       - LOCAL_STT_IDLE_MS=${LOCAL_STT_IDLE_MS:-5000}
       - LOCAL_LLM_INFER_TIMEOUT_SEC=${LOCAL_LLM_INFER_TIMEOUT_SEC:-30}
       - LOCAL_LLM_MODEL_PATH=${LOCAL_LLM_MODEL_PATH:-/app/models/llm/phi-3-mini-4k-instruct.Q4_K_M.gguf}
