@@ -1257,6 +1257,23 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                 )
                 # Re-enable turn_detection now that greeting is fully generated
                 await self._re_enable_vad()
+
+                # Request early TTS gating clear so caller audio can flow after greeting
+                try:
+                    if self.on_event and self._call_id:
+                        await self.on_event(
+                            {
+                                "type": "ClearTtsGating",
+                                "call_id": self._call_id,
+                                "reason": "greeting_completed",
+                            }
+                        )
+                except Exception:
+                    logger.debug(
+                        "Failed to emit ClearTtsGating event",
+                        call_id=self._call_id,
+                        exc_info=True,
+                    )
             
             # Check if this was the farewell response
             # CRITICAL: Check farewell_response_id is not None to prevent None == None false positive

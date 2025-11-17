@@ -98,7 +98,14 @@ else
   fi
   run_server_cmd "rm -f /tmp/ai-engine.all.log" || true
 fi
-CID=$(grep -oE '17[0-9]{8}\.[0-9]{4}' "$BASE/logs/ai-engine.log" | sort -u | head -1 || true)
+
+# Determine Call ID for RCA
+if [ -n "${FORCE_CALL_ID:-}" ]; then
+  CID="$FORCE_CALL_ID"
+  echo "[RCA] Using FORCE_CALL_ID=$CID"
+else
+  CID=$(grep -oE '17[0-9]{8}\.[0-9]{4}' "$BASE/logs/ai-engine.log" | sort -u | head -1 || true)
+fi
 echo -n "$CID" > "$BASE/call_id.txt"
 echo "[RCA] Active Call ID: ${CID:-unknown}"
 if [ -n "$CID" ]; then

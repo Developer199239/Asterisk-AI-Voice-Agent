@@ -3939,6 +3939,39 @@ class Engine:
                 logger.warning("Provider event for unknown call", event_type=etype, call_id=call_id)
                 return
 
+            # Provider requests early TTS gating clear (e.g., OpenAI greeting complete)
+            if etype == "ClearTtsGating":
+                try:
+                    tokens = list(getattr(session, "tts_tokens", set()) or [])
+                except Exception:
+                    tokens = []
+                if not tokens:
+                    logger.info(
+                        "ClearTtsGating received but no active TTS tokens",
+                        call_id=call_id,
+                        reason=event.get("reason"),
+                    )
+                    return
+
+                logger.info(
+                    "Processing ClearTtsGating event",
+                    call_id=call_id,
+                    reason=event.get("reason"),
+                    token_count=len(tokens),
+                )
+                for token in tokens:
+                    try:
+                        if self.conversation_coordinator:
+                            await self.conversation_coordinator.on_tts_end(call_id, token, reason=event.get("reason") or "provider-request")
+                    except Exception:
+                        logger.debug(
+                            "Failed to clear gating token from ClearTtsGating",
+                            call_id=call_id,
+                            token=token,
+                            exc_info=True,
+                        )
+                return
+
             # Provider announced its audio format before first audio chunk
             if etype == "ProviderAudioFormat":
                 encoding = event.get("encoding")
