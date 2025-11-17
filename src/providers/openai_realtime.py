@@ -409,7 +409,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         # THEN wait for session.updated ACK (doesn't block greeting anymore)
         try:
             logger.debug("Waiting for OpenAI session.updated ACK...", call_id=call_id)
-            await asyncio.wait_for(self._session_ack_event.wait(), timeout=3.0)  # Increased from 2.0s - ACK arrives at ~2.005s
+            await asyncio.wait_for(self._session_ack_event.wait(), timeout=3.5)  # Increased to 3.5s - ACK observed at ~3.004s
             logger.info(
                 "✅ OpenAI session.updated ACK received",
                 call_id=call_id,
