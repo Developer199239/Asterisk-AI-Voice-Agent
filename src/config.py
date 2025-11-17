@@ -86,6 +86,8 @@ class DeepgramProviderConfig(BaseModel):
     instructions: Optional[str] = None
     input_encoding: str = Field(default="mulaw")
     input_sample_rate_hz: int = Field(default=8000)
+    input_gain_target_rms: int = Field(default=0)
+    input_gain_max_db: float = Field(default=0.0)
     continuous_input: bool = Field(default=True)
     output_encoding: str = Field(default="mulaw")
     output_sample_rate_hz: int = Field(default=8000)
@@ -149,6 +151,8 @@ class GoogleProviderConfig(BaseModel):
     input_sample_rate_hz: int = Field(default=8000)  # Wire sample rate
     provider_input_encoding: str = Field(default="linear16")  # Gemini Live expects PCM16
     provider_input_sample_rate_hz: int = Field(default=16000)  # Gemini Live input rate
+    input_gain_target_rms: int = Field(default=0)
+    input_gain_max_db: float = Field(default=0.0)
     output_encoding: str = Field(default="linear16")  # Gemini Live outputs PCM16
     output_sample_rate_hz: int = Field(default=24000)  # Gemini Live native output rate
     target_encoding: str = Field(default="ulaw")  # Target wire format for playback
@@ -167,6 +171,8 @@ class OpenAIRealtimeProviderConfig(BaseModel):
     input_sample_rate_hz: int = Field(default=8000)  # AudioSocket source sample rate
     provider_input_encoding: str = Field(default="linear16")  # Provider expects PCM16 LE
     provider_input_sample_rate_hz: int = Field(default=24000)  # OpenAI Realtime input sample rate
+    input_gain_target_rms: int = Field(default=0)
+    input_gain_max_db: float = Field(default=0.0)
     output_encoding: str = Field(default="linear16")  # Provider emits PCM16 frames
     output_sample_rate_hz: int = Field(default=24000)
     target_encoding: str = Field(default="ulaw")  # Downstream AudioSocket expectations

@@ -5702,6 +5702,8 @@ class Engine:
 
         expected_enc = ""
         expected_rate = pcm_rate
+        gain_target_rms = 0
+        gain_max_db = 0.0
         try:
             provider_cfg = getattr(provider, "config", None)
             if provider_cfg is not None:
@@ -5714,6 +5716,16 @@ class Engine:
                 provider_rate = getattr(provider_cfg, "provider_input_sample_rate_hz", None)
                 wire_rate = getattr(provider_cfg, "input_sample_rate_hz", None)
                 expected_rate = int(provider_rate or wire_rate or pcm_rate)
+
+                # Optional inbound gain configuration (per-provider, disabled by default)
+                try:
+                    gain_target_rms = int(getattr(provider_cfg, "input_gain_target_rms", 0) or 0)
+                except Exception:
+                    gain_target_rms = 0
+                try:
+                    gain_max_db = float(getattr(provider_cfg, "input_gain_max_db", 0.0) or 0.0)
+                except Exception:
+                    gain_max_db = 0.0
                 
                 logger.info(
                     "🔧 ENCODE CONFIG - Reading provider config",
@@ -5737,6 +5749,8 @@ class Engine:
             )
             expected_enc = ""
             expected_rate = pcm_rate
+            gain_target_rms = 0
+            gain_max_db = 0.0
 
         # Prepare per-call/provider resample state holder
         prov_states = self._resample_state_provider_in.setdefault(call_id, {})
@@ -5825,12 +5839,16 @@ class Engine:
             # Root cause identified: Incoming audio had RMS=23 (needs ~1400)
             # Without normalization, Google Live cannot understand quiet audio
             # Silence frames during gating prevent echo while maintaining stream continuity
-            if pcm_bytes:
+            #
+            # NOTE: This is now gated by per-provider config:
+            # - input_gain_target_rms <= 0 or input_gain_max_db <= 0.0  => gain disabled (default)
+            # - both > 0 => enable normalization with configured target/max gain.
+            if pcm_bytes and gain_target_rms > 0 and gain_max_db > 0.0:
                 try:
                     # audioop already imported at module level - don't re-import here!
                     current_rms = audioop.rms(pcm_bytes, 2)
-                    target_rms = 1400  # Match normalizer target
-                    max_gain_db = 36.0  # Increased from 18dB - allow much higher gain
+                    target_rms = gain_target_rms
+                    max_gain_db = gain_max_db
                     
                     if current_rms > 10:  # Only apply if audio has some energy
                         gain_needed = target_rms / current_rms

@@ -615,6 +615,10 @@ providers:
     greeting: Hello, how can I help you today?
     input_encoding: mulaw
     input_sample_rate_hz: 8000
+    # Optional emergency inbound gain normalization (caller → Deepgram).
+    # Leave disabled (0/0.0) for normal deployments; prefer fixing rxgain at trunk/Asterisk.
+    input_gain_target_rms: 0
+    input_gain_max_db: 0.0
     instructions: Voice assistant. Answer in 5-8 words. Be direct. Expand only if
       asked.
     model: nova-2-phonecall
@@ -667,6 +671,10 @@ providers:
     output_sample_rate_hz: 24000
     provider_input_encoding: linear16
     provider_input_sample_rate_hz: 24000
+    # Optional emergency inbound gain normalization (caller → OpenAI Realtime).
+    # Leave disabled (0/0.0) for normal deployments; prefer fixing rxgain at trunk/Asterisk.
+    input_gain_target_rms: 0
+    input_gain_max_db: 0.0
     response_modalities:
     - audio
     - text
@@ -690,6 +698,10 @@ providers:
     input_sample_rate_hz: 8000               # Wire sample rate (ExternalMedia ulaw)
     provider_input_encoding: linear16        # Gemini Live expects PCM16
     provider_input_sample_rate_hz: 16000     # Gemini Live input rate (16kHz)
+    # Optional emergency inbound gain normalization (caller → Google Live).
+    # Leave disabled (0/0.0) for normal deployments; prefer fixing rxgain at trunk/Asterisk.
+    input_gain_target_rms: 0
+    input_gain_max_db: 0.0
     output_encoding: linear16                # Gemini Live outputs PCM16
     output_sample_rate_hz: 24000             # Gemini Live native output rate
     target_encoding: ulaw                    # Target wire format for playback (8kHz)
