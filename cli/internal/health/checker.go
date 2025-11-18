@@ -100,3 +100,29 @@ func (c *Checker) RunAll() (*HealthResult, error) {
 	
 	return result, nil
 }
+
+// AutoFix attempts to fix issues found during health checks
+// Focus: YAML config validation (codec/sample rate alignment, provider settings)
+func (c *Checker) AutoFix(result *HealthResult) (int, error) {
+	fixed := 0
+	
+	// For now, focus on config validation issues
+	// Look for configuration check failures/warnings
+	for _, check := range result.Checks {
+		if check.Name == "Configuration" && (check.Status == StatusFail || check.Status == StatusWarn) {
+			// Delegate to config validator for auto-fix
+			fmt.Println("Attempting to fix configuration issues...")
+			
+			// Note: This is a simplified implementation
+			// Full implementation would integrate with cli/internal/config package
+			fmt.Println("⚠️  Configuration issues detected")
+			fmt.Println("   Run: agent config validate --fix")
+			fmt.Println("   to interactively fix YAML configuration")
+			
+			return 0, nil
+		}
+	}
+	
+	// No fixable issues found
+	return fixed, nil
+}
