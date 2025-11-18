@@ -1,68 +1,50 @@
-## Description
-<!-- Describe your changes in detail -->
+## Summary
 
-## Related Issue
-<!-- Link to the issue this PR addresses -->
-Fixes #
+Describe the changes in this PR. What problem does it solve or what feature does it add?
 
-## Type of Change
-<!-- Mark relevant options with an 'x' -->
-- [ ] Bug fix (non-breaking change which fixes an issue)
-- [ ] New feature (non-breaking change which adds functionality)
-- [ ] Breaking change (fix or feature that would cause existing functionality to not work as expected)
-- [ ] Documentation update
-- [ ] Performance improvement
-- [ ] Code refactoring
-- [ ] CI/CD changes
+## Related Issue(s)
 
-## Changes Made
-<!-- List the specific changes -->
-- 
-- 
-- 
+- Linear / AAVA issue(s): <!-- e.g. AAVA-63, AAVA-64 -->
+- GitHub issue(s): <!-- optional -->
+
+## Implementation Notes
+
+- Key files touched (code/config/docs):
+  - 
+- High-level design decisions:
+  - 
+
+If you used AVA (project manager persona defined in `AVA.mdc`) to plan this work, summarize the agreed plan briefly.
 
 ## Testing
-### Test Environment
-- **Configuration**: <!-- e.g., local_hybrid, openai_realtime -->
-- **OS**: <!-- e.g., Ubuntu 22.04 -->
-- **Docker Version**: <!-- e.g., 24.0.7 -->
 
-### Tests Performed
-- [ ] Unit tests pass (`pytest`)
-- [ ] Integration tests pass
-- [ ] Manual testing completed
-- [ ] Test calls successful
+List the tests and checks you performed:
 
-### Test Results
-<!-- Describe what you tested and the results -->
+- [ ] Unit tests (specify commands)
+- [ ] Integration / manual tests
+- [ ] `agent doctor`
+- [ ] `agent demo`
+- [ ] `agent troubleshoot --last`
+- [ ] `./scripts/rca_collect.sh` (if applicable)
 
-## Checklist
-### Code Quality
-- [ ] My code follows the project's style guidelines
-- [ ] I have performed a self-review of my code
-- [ ] I have commented my code, particularly in hard-to-understand areas
-- [ ] I have made corresponding changes to the documentation
-- [ ] My changes generate no new warnings
-- [ ] I have added tests that prove my fix is effective or that my feature works
-- [ ] New and existing unit tests pass locally with my changes
+For telephony changes, include:
 
-### Security
-- [ ] I have reviewed security implications of my changes
-- [ ] No secrets or credentials are hardcoded or exposed
-- [ ] All sensitive data is properly sanitized in logs
+- Test call IDs:
+  - 
+- Providers/pipelines involved:
+  - 
+- Brief call behavior summary (any issues, notable findings):
+  - 
 
-### Deployment
-- [ ] Breaking changes are clearly documented
-- [ ] Database migrations are included (if applicable)
-- [ ] Configuration changes are documented
-- [ ] README/docs are updated
+## Documentation
 
-## Screenshots (if applicable)
-<!-- Add screenshots to help explain your changes -->
+Which docs were updated (if any)?
 
-## Additional Notes
-<!-- Any additional information for reviewers -->
+- [ ] `docs/Architecture.md`
+- [ ] `docs/ROADMAP.md` / `docs/milestones/*`
+- [ ] `docs/TOOL_CALLING_GUIDE.md`
+- [ ] Provider/tool-specific docs
+- [ ] `docs/DEVELOPER_ONBOARDING.md` / other onboarding content
 
-## Reviewers
-<!-- Tag relevant reviewers -->
-@hkjarral
+If no docs were needed, explain why.
+

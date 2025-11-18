@@ -1,10 +1,40 @@
-# Asterisk AI Voice Agent - Installation Guide (v4.0)
+# Asterisk AI Voice Agent - Installation Guide (v4.2)
 
-This guide provides detailed instructions for setting up the Asterisk AI Voice Agent v4.0 on your server.
+This guide provides detailed instructions for setting up the Asterisk AI Voice Agent v4.2 on your server.
 
-## Quick Start (5 Minutes)
+## Two Setup Paths
 
-v4.0 features a **streamlined installer** with 3 production-ready configurations:
+Choose the path that best fits your experience level:
+
+### Path A: Interactive Quickstart (Recommended for First-Time Users)
+
+**5-minute guided setup** with automatic validation:
+
+```bash
+git clone https://github.com/hkjarral/Asterisk-AI-Voice-Agent.git
+cd Asterisk-AI-Voice-Agent
+
+# Run installer (sets up Docker, offers CLI installation)
+./install.sh
+
+# After installation, run interactive wizard
+agent quickstart
+```
+
+The wizard will:
+1. ✅ Guide you through provider selection (OpenAI, Deepgram, Google, Local)
+2. ✅ Validate your API keys before saving
+3. ✅ Test Asterisk ARI connection
+4. ✅ Generate dialplan configuration
+5. ✅ Show clear next steps
+
+**Best for:** First-time users, quick deployments, validation testing
+
+---
+
+### Path B: Manual Setup (Advanced Users)
+
+**Traditional installer** with manual configuration:
 
 ```bash
 git clone https://github.com/hkjarral/Asterisk-AI-Voice-Agent.git
@@ -17,11 +47,12 @@ The installer will:
    - **OpenAI Realtime** - Fastest (0.5-1.5s), requires OPENAI_API_KEY
    - **Deepgram Voice Agent** - Enterprise (1-2s), requires DEEPGRAM_API_KEY + OPENAI_API_KEY
    - **Local Hybrid** - Privacy-focused (3-7s), requires OPENAI_API_KEY + 8GB RAM
-2. Prompt for required API keys only
-3. Start Docker containers automatically
-4. Configure Asterisk integration
+2. Validate ARI connection with your Asterisk server
+3. Prompt for required API keys
+4. Offer CLI tool installation
+5. Start Docker containers automatically
 
-**That's it!** Skip to [Section 5](#5-configure-asterisk-dialplan) for dialplan setup, then test your agent.
+**Best for:** Advanced users, custom configurations, specific requirements
 
 ---
 

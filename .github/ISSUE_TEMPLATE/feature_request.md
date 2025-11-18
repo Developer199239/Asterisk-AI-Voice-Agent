@@ -1,34 +1,43 @@
 ---
-name: Feature Request
-about: Suggest a new feature or enhancement
-title: '[FEATURE] '
-labels: enhancement
-assignees: ''
-
+name: "Feature Request"
+about: Suggest a new feature (provider, tool, pipeline, or enhancement)
+title: ""
+labels: ["feature", "enhancement"]
+assignees: []
 ---
 
-## Feature Description
-<!-- Clear and concise description of the feature you'd like -->
+## Summary
 
-## Problem It Solves
-<!-- What problem does this feature address? -->
+Describe the feature you’d like to see. What problem does it solve?
 
-## Proposed Solution
-<!-- How do you envision this feature working? -->
+## Type of Feature
 
-## Alternative Solutions
-<!-- Have you considered any alternative approaches? -->
+- [ ] New provider (STT/LLM/TTS)
+- [ ] New tool (telephony or business)
+- [ ] New pipeline or transport profile
+- [ ] Operational / CLI / monitoring improvement
+- [ ] Other (please describe)
 
-## Use Case
-<!-- Describe your specific use case for this feature -->
+## Context
 
-## Implementation Ideas
-<!-- (Optional) Technical suggestions for implementation -->
+- Are you running this on:
+  - [ ] Your own Asterisk/FreePBX server
+  - [ ] The shared lab server
+  - [ ] Other (describe)
+- Which provider(s) are you using today?
 
-## Additional Context
-<!-- Screenshots, mockups, examples from other projects, etc. -->
+## Desired Behavior
 
-## Checklist
-- [ ] I have searched existing issues and feature requests
-- [ ] This feature aligns with the project goals
-- [ ] I have considered implementation complexity
+Describe the desired call flow or behavior in as much detail as possible. If this maps to a known AAVA spec (from `docs/linear-issues-community-features.md`), include the ID (e.g. `AAVA-63`).
+
+## AVA’s Input (Optional but Recommended)
+
+If you’ve already asked AVA (the project manager persona defined in `AVA.mdc`) about this feature:
+
+- What did AVA suggest (briefly)?
+- Did AVA map this to an existing AAVA issue or propose a new one?
+
+## Additional Notes
+
+Include any links, call IDs, logs, or prior experiments that might help us scope and prioritize this feature.
+

@@ -2,6 +2,17 @@
 
 Thanks for your interest in contributing to the Asterisk AI Voice Agent!
 
+## New to the project? Start here
+
+If you’re setting up the project for the first time, read the Developer Onboarding guide before diving into branches and PRs:
+
+- `docs/DEVELOPER_ONBOARDING.md`
+
+It walks you through:
+- Choosing an AI-powered IDE (for example Windsurf via the referral link in that doc, or any IDE of your choice).
+- Cloning the repo, running `./install.sh`, and wiring the project to your Asterisk/FreePBX server.
+- Using the `agent` CLI and AVA (the project manager persona) to plan and test your first changes.
+
 ## Branches and workflow
 
 - Active branches:

@@ -11,7 +11,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Additional provider integrations
 - Enhanced monitoring features
 
-## [4.2.1] - 2025-11-17
+## [4.2.1] - 2025-11-18
+
+### Added
+
+#### Streamlined Onboarding Experience
+- **🚀 Interactive Setup Wizard**: New `agent quickstart` command guides first-time users through complete setup
+  - Step-by-step provider selection (OpenAI, Deepgram, Google, Local Hybrid)
+  - Real-time API key validation before saving
+  - Asterisk ARI connection testing
+  - Automatic dialplan snippet generation
+  - Clear next steps and FreePBX integration instructions
+- **🔧 Enhanced install.sh**: Improved installer with CLI integration
+  - ARI connection validation after credentials input
+  - Shows Asterisk version on successful connection
+  - Offers CLI tool installation with platform auto-detection
+  - Launches `agent dialplan` helper if CLI installed
+  - Graceful fallbacks for unsupported platforms or download failures
+- **📝 Dialplan Generation Helper**: New `agent dialplan` command
+  - Generates provider-specific dialplan snippets
+  - Supports all providers: OpenAI Realtime, Deepgram, Google Live, Local Hybrid
+  - Shows FreePBX Custom Destination setup steps
+  - Includes context override examples (AI_PROVIDER, AI_CONTEXT variables)
+  - Print-only approach (no auto-write to files)
+- **✅ Configuration Validation**: New `agent config validate` command
+  - Validates YAML syntax and structure
+  - Checks required fields and provider configurations
+  - Verifies sample rate alignment across providers
+  - Validates transport compatibility
+  - Checks barge-in configuration
+  - `--fix` flag for interactive auto-fix
+  - `--strict` mode for CI/CD (treats warnings as errors)
+  - Exit codes: 0 (valid), 1 (warnings), 2 (errors)
+- **🩺 Doctor Auto-Fix**: Enhanced `agent doctor` with `--fix` flag
+  - Focuses on YAML config validation issues
+  - Guides users to `agent config validate --fix` for detailed repairs
+  - Re-runs health checks after fixes applied
+
+#### API and Connection Validation
+- **API Key Validation**: Real-time validation before saving credentials
+  - OpenAI: Validates against `/v1/models` endpoint, checks for GPT models
+  - Deepgram: Validates against `/v1/projects` endpoint
+  - Google: Format validation (length check)
+  - Clear error messages with troubleshooting guidance
+  - Network timeout handling (10 second limit)
+- **ARI Connection Testing**: Validates Asterisk connectivity during setup
+  - Tests connection to `/ari/asterisk/info`
+  - Extracts and displays Asterisk version
+  - Shows troubleshooting steps on failure
+  - Continues with warning if validation fails
+
+#### Documentation
+- **CLI Tools Guide**: Updated with all new v4.2 commands
+  - Comprehensive `agent quickstart` reference with example session
+  - `agent dialplan` usage and output examples
+  - `agent config validate` with validation checks and flags
+  - Version bumped to v4.2
+- **README.md**: Updated Quick Start section
+  - Two-path approach: Interactive Quickstart vs Manual Setup
+  - Highlights new `agent quickstart` wizard
+  - Shows new CLI commands (`dialplan`, `config validate --fix`)
+  - Updated version references to v4.2
+- **Developer Experience**: Enhanced setup documentation
+  - Clear separation between first-time and advanced user paths
+  - Better CLI tool discovery and installation guidance
 
 ### Fixed
 
