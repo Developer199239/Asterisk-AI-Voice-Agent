@@ -1,6 +1,6 @@
 # Google Live Golden Baseline
 
-**Validated**: November 17, 2025  
+**Validated**: November 17, 2025  (Github Commit ID: 0d458486191c42b0d622530651ea4bd718923d42)
 **Version**: v4.3.0  
 **Status**: ✅ Production Ready
 
