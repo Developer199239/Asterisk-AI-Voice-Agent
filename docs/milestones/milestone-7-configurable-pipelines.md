@@ -121,7 +121,6 @@ Allow operators to mix and match STT, LLM, and TTS components (local or cloud) u
   - [`docs/milestones/milestone-7-configurable-pipelines.md`](docs/milestones/milestone-7-configurable-pipelines.md) — adds completion summary, validation checklist, and cross-links to pipeline assets.
   - [`docs/Architecture.md`](docs/Architecture.md) — captures pipeline orchestrator flow, config schema, and adapter mapping tables.
   - [`examples/pipelines/local_only.yaml`](examples/pipelines/local_only.yaml), [`examples/pipelines/hybrid_deepgram_openai.yaml`](examples/pipelines/hybrid_deepgram_openai.yaml), [`examples/pipelines/cloud_only_google.yaml`](examples/pipelines/cloud_only_google.yaml) — sample configurations with credential prerequisites and audio format notes.
-  - [`docs/regressions/milestone-7.md`](docs/regressions/milestone-7.md) — formal regression playbook covering hot reload, provider validation, and metrics capture.
 - Summary:
   - Documented Deepgram, OpenAI, Google, and local adapters with references so operators can map YAML entries to the correct factories.
   - Published sample pipelines covering full-local, hybrid, and cloud-only mixes to accelerate provisioning and smoke tests.
