@@ -74,16 +74,18 @@ The most powerful, flexible open-source AI voice agent for Asterisk/FreePBX. Fea
 
 ### 📞 Try it Live! (US Only)
 
-Experience all three golden baseline configurations with a single phone call:
+Experience all four production-ready configurations with a single phone call:
 
 **Dial: (925) 736-6718**
 
-- **Press 6** → Deepgram Voice Agent (Enterprise cloud with Think stage)
-- **Press 7** → OpenAI Realtime API (Modern cloud AI, most natural)
-- **Press 8** → Local Hybrid Pipeline (Privacy-focused, audio stays local)
+* **Press 5** → Google Live API (Multimodal AI with Gemini 2.0)
+* **Press 6** → Deepgram Voice Agent (Enterprise cloud with Think stage)
+* **Press 7** → OpenAI Realtime API (Modern cloud AI, most natural)
+* **Press 8** → Local Hybrid Pipeline (Privacy-focused, audio stays local)
 
-Each configuration uses the same Ava persona with full project knowledge. Compare response times, conversation quality, and naturalness!
+Each configuration uses the same Ava persona with full project knowledge. Compare response times, conversation quality, and naturalness across providers!
 
+**NEW in v4.2**: Google Live API integration with Gemini 2.0 Flash!
 **NEW in v4.1**: Try asking the agent to "transfer me to support" or "email me a transcript"!
 
 ## 🛠️ AI-Powered Actions (v4.1+)
