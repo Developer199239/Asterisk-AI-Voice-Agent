@@ -11,7 +11,7 @@ barge_in:
   energy_threshold: 700
   initial_protection_ms: 100
   min_ms: 150
-  post_tts_end_protection_ms: 100
+  post_tts_end_protection_ms: 800  # Increased from 100 to prevent agent hearing its own voice tail
 config_version: 4
 contexts:
   demo_deepgram:
@@ -388,8 +388,8 @@ providers:
     turn_detection:
       create_response: true
       prefix_padding_ms: 300
-      silence_duration_ms: 600  # Slightly faster response (was 700)
-      threshold: 0.5  # More sensitive to speech (was 0.6)
+      silence_duration_ms: 1000  # Increased from 600 - more patient, less self-interruption
+      threshold: 0.6  # Increased from 0.5 - less sensitive, won't trigger on agent's voice
       type: server_vad
     voice: alloy
   google_live:
