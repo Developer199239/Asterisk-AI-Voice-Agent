@@ -154,11 +154,39 @@ Common pitfalls:
 
 - Local STT/LLM/TTS parameters live under pipeline `options`. The engine plays `llm.initial_greeting` first if configured.
 
+### Google Live (monolithic agent)
+
+- `providers.google_live.api_key`: API key (`GOOGLE_API_KEY`) used for Gemini Live.
+- `providers.google_live.llm_model`: Live LLM model name (e.g., `gemini-2.5-flash-native-audio-preview-09-2025`).
+- `providers.google_live.websocket_endpoint`: WebSocket endpoint for Gemini Live API.
+  - Default: `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent`
+  - Override only if directed by Google or when fronting through a proxy.
+
+### Deepgram Voice Agent (monolithic agent)
+
+- `providers.deepgram.voice_agent_base_url`: WebSocket endpoint for Deepgram Voice Agent.
+  - Default: `wss://agent.deepgram.com/v1/agent/converse`
+  - YAML overrides allow regional endpoints or proxy URLs.
+
 ## Precedence summary
 
 - Provider/pipeline explicit overrides (instructions/greeting) take priority.
 - Otherwise providers/pipelines inherit `llm.prompt` / `llm.initial_greeting`.
 - Env `AI_ROLE`/`GREETING` act as defaults when YAML does not specify values.
+
+## Health & Contexts
+
+- Health endpoint:
+  - `health.host`: Bind address for `/live`, `/ready`, `/health`, and `/metrics` (default `127.0.0.1`).
+  - `health.port`: Port for the health/metrics HTTP server (default `15000`).
+  - Environment variables `HEALTH_BIND_HOST` / `HEALTH_BIND_PORT` override the YAML values when set.
+- Contexts:
+  - Inline: `contexts:` block in `config/ai-agent.yaml` defines named contexts (prompt, greeting, profile, provider, tools).
+  - External: YAML files in `config/contexts/*.yaml` are also loaded.
+    - Each file must define a `name` field; that becomes the context key.
+    - `system_prompt` in external files is treated as `prompt` if `prompt` is not present.
+    - If the same context `name` exists both inline and in an external file, the inline definition in `ai-agent.yaml` wins.
+
 
 ## Tips
 

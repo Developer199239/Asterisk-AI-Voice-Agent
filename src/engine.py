@@ -6606,10 +6606,18 @@ class Engine:
             app.router.add_get('/metrics', self._metrics_handler)
             runner = web.AppRunner(app)
             await runner.setup()
-            # Host/port now configurable via environment with localhost defaults (AAVA-30)
+            # Host/port configurable via YAML health block with environment overrides (AAVA-30)
             try:
-                health_host = os.getenv('HEALTH_BIND_HOST', '127.0.0.1')
-                health_port = int(os.getenv('HEALTH_BIND_PORT', '15000'))
+                # Precedence: env overrides > YAML health.* > defaults
+                if "HEALTH_BIND_HOST" in os.environ:
+                    health_host = os.getenv('HEALTH_BIND_HOST', '127.0.0.1')
+                else:
+                    health_host = getattr(getattr(self.config, "health", None), "host", "127.0.0.1")
+
+                if "HEALTH_BIND_PORT" in os.environ:
+                    health_port = int(os.getenv('HEALTH_BIND_PORT', '15000'))
+                else:
+                    health_port = int(getattr(getattr(self.config, "health", None), "port", 15000))
             except Exception:
                 health_host = '127.0.0.1'
                 health_port = 15000

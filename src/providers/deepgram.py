@@ -336,7 +336,9 @@ class DeepgramProvider(AIProviderInterface):
             return pcm_bytes
 
     async def start_session(self, call_id: str, context: Optional[Dict[str, Any]] = None):
-        ws_url = f"wss://agent.deepgram.com/v1/agent/converse"
+        # Use configurable voice agent endpoint when available; fall back to default.
+        base_url = getattr(self.config, "voice_agent_base_url", None) or "wss://agent.deepgram.com/v1/agent/converse"
+        ws_url = base_url
         headers = {'Authorization': f'Token {self.config.api_key}'}
 
         try:

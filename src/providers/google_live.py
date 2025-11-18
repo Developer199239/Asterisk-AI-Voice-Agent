@@ -53,7 +53,6 @@ _GEMINI_INPUT_RATE = 16000  # Gemini requires 16kHz input
 _GEMINI_OUTPUT_RATE = 24000  # Gemini outputs 24kHz audio
 _COMMIT_INTERVAL_SEC = 0.02  # 20ms chunks (320 bytes at 16kHz)
 _KEEPALIVE_INTERVAL_SEC = 15.0
-_WEBSOCKET_ENDPOINT = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
 
 # Metrics
 _GOOGLE_LIVE_SESSIONS = Gauge(
@@ -186,14 +185,19 @@ class GoogleLiveProvider(AIProviderInterface):
             raise ValueError("GOOGLE_API_KEY is required for Google Live provider")
         
         api_key_preview = f"{api_key[:8]}...{api_key[-4:]}" if len(api_key) > 12 else "<too_short>"
+        endpoint = (self.config.websocket_endpoint or "").strip()
+        if not endpoint:
+            # Fallback to historical constant if config not populated
+            endpoint = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
+
         logger.debug(
             "Connecting to Google Live API",
             call_id=call_id,
-            endpoint=_WEBSOCKET_ENDPOINT,
+            endpoint=endpoint,
             api_key_preview=api_key_preview,
         )
         
-        ws_url = f"{_WEBSOCKET_ENDPOINT}?key={api_key}"
+        ws_url = f"{endpoint}?key={api_key}"
 
         try:
             # Establish WebSocket connection

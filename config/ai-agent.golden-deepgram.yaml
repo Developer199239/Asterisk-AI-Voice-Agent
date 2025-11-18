@@ -132,6 +132,8 @@ providers:
     output_encoding: mulaw
     output_sample_rate_hz: 8000
     tts_model: aura-2-thalia-en
+    # Optional: override WebSocket endpoint for Deepgram Voice Agent
+    # voice_agent_base_url: wss://agent.deepgram.com/v1/agent/converse
 
 # LLM Fallback Configuration
 llm:

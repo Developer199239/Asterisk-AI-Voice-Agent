@@ -60,7 +60,7 @@ func (v *Validator) Validate() (*ValidationResult, error) {
 
 // validateStructure checks required top-level fields
 func (v *Validator) validateStructure(result *ValidationResult) {
-	required := []string{"default_provider", "providers", "contexts"}
+	required := []string{"default_provider", "providers"}
 	
 	for _, field := range required {
 		if _, ok := v.config[field]; ok {
@@ -68,6 +68,11 @@ func (v *Validator) validateStructure(result *ValidationResult) {
 		} else {
 			result.Errors = append(result.Errors, fmt.Sprintf("Missing required field: %s", field))
 		}
+	}
+
+	// Contexts block is optional in engine (defaults to empty); warn if missing.
+	if _, ok := v.config["contexts"]; !ok {
+		result.Warnings = append(result.Warnings, "No 'contexts' block defined (engine will use default context only)")
 	}
 }
 
@@ -82,7 +87,8 @@ func (v *Validator) validateProviders(result *ValidationResult) {
 	validProviders := map[string]bool{
 		"openai_realtime": true,
 		"deepgram":        true,
-		"local_hybrid":    true,
+		"local":           true,
+		"openai":          true,
 		"google_live":     true,
 	}
 	
@@ -160,11 +166,16 @@ func (v *Validator) validateProviderConfig(provider string, config map[string]in
 		}
 		
 	case "google_live":
+		// Accept either legacy 'model' or current 'llm_model' naming.
 		if model, ok := config["model"].(string); ok {
 			if model == "models/gemini-2.0-flash-exp" {
 				result.Passed = append(result.Passed, "Google model valid")
 			} else {
 				result.Warnings = append(result.Warnings, fmt.Sprintf("Google model '%s' may be outdated", model))
+			}
+		} else if llmModel, ok := config["llm_model"].(string); ok {
+			if llmModel != "" {
+				result.Passed = append(result.Passed, fmt.Sprintf("Google llm_model '%s' configured", llmModel))
 			}
 		}
 	}
@@ -188,9 +199,15 @@ func (v *Validator) validateSampleRates(result *ValidationResult) {
 			continue
 		}
 		
-		// Check sample rate consistency
+		// Check sample rate consistency (support both provider_* and plain input/output keys)
 		inputRate, hasInput := providerConfig["provider_input_sample_rate_hz"].(int)
+		if !hasInput {
+			inputRate, hasInput = providerConfig["input_sample_rate_hz"].(int)
+		}
 		outputRate, hasOutput := providerConfig["provider_output_sample_rate_hz"].(int)
+		if !hasOutput {
+			outputRate, hasOutput = providerConfig["output_sample_rate_hz"].(int)
+		}
 		
 		if hasInput && hasOutput {
 			if inputRate != outputRate {

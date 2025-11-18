@@ -95,6 +95,10 @@ class DeepgramProviderConfig(BaseModel):
     base_url: str = Field(default="https://api.deepgram.com")
     tts_voice: Optional[str] = None
     stt_language: str = Field(default="en-US")
+    # Deepgram Voice Agent (monolithic) WebSocket endpoint
+    voice_agent_base_url: str = Field(
+        default="wss://agent.deepgram.com/v1/agent/converse"
+    )
 
 
 class OpenAIProviderConfig(BaseModel):
@@ -157,6 +161,10 @@ class GoogleProviderConfig(BaseModel):
     output_sample_rate_hz: int = Field(default=24000)  # Gemini Live native output rate
     target_encoding: str = Field(default="ulaw")  # Target wire format for playback
     target_sample_rate_hz: int = Field(default=8000)  # Target wire sample rate
+    # Google Live WebSocket endpoint (monolithic agent)
+    websocket_endpoint: str = Field(
+        default="wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
+    )
 
 
 class OpenAIRealtimeProviderConfig(BaseModel):
@@ -205,8 +213,9 @@ class BargeInConfig(BaseModel):
 
 
 class LLMConfig(BaseModel):
-    initial_greeting: str = "Hello, I am an AI Assistant for Jugaar LLC. How can I help you today."
-    prompt: str = "You are a helpful AI assistant."
+    # Defaults are generic; inject_llm_config() applies YAML/env precedence.
+    initial_greeting: str = "Hello, how can I help you today?"
+    prompt: str = "You are a helpful assistant."
     # Note: model field removed - not used by any provider (each provider has its own model config)
     api_key: Optional[str] = None
 
@@ -260,6 +269,12 @@ class StreamingConfig(BaseModel):
 class LoggingConfig(BaseModel):
     """Top-level logging configuration for the ai-engine service."""
     level: str = Field(default="info")  # debug|info|warning|error|critical
+
+
+class HealthConfig(BaseModel):
+    """Health/metrics HTTP endpoint configuration."""
+    host: str = Field(default="127.0.0.1")
+    port: int = Field(default=15000)
 
 
 class PipelineEntry(BaseModel):
@@ -339,6 +354,7 @@ class AppConfig(BaseModel):
     streaming: Optional[StreamingConfig] = Field(default_factory=StreamingConfig)
     barge_in: Optional[BargeInConfig] = Field(default_factory=BargeInConfig)
     logging: Optional[LoggingConfig] = Field(default_factory=LoggingConfig)
+    health: Optional[HealthConfig] = Field(default_factory=HealthConfig)
     pipelines: Dict[str, PipelineEntry] = Field(default_factory=dict)
     active_pipeline: Optional[str] = None
     # P1: profiles/contexts for transport orchestration
@@ -416,6 +432,13 @@ def load_config(path: str = "config/ai-agent.yaml") -> AppConfig:
     inject_asterisk_credentials(config_data)
     inject_llm_config(config_data)
     inject_provider_api_keys(config_data)
+
+    # Phase 2b: Merge external context YAML files (config/contexts/*.yaml)
+    try:
+        _merge_external_contexts(config_data)
+    except Exception as e:
+        # Non-fatal; log debug and continue with inline contexts only
+        logger.debug("External context merge failed", error=str(e))
     
     # Phase 3: Apply default values
     apply_transport_defaults(config_data)
@@ -431,6 +454,62 @@ def load_config(path: str = "config/ai-agent.yaml") -> AppConfig:
     
     # Phase 5: Validate and return
     return AppConfig(**config_data)
+
+
+def _merge_external_contexts(config_data: Dict[str, Any]) -> None:
+    """
+    Merge contexts from config/contexts/*.yaml into config_data['contexts'].
+
+    Precedence:
+    - Inline contexts in ai-agent.yaml win over external files on key collision.
+    - External context files must define a 'name' field used as the context key.
+    - 'system_prompt' in external files is mapped to 'prompt' if 'prompt' is absent.
+    """
+    try:
+        import glob
+
+        contexts_dir = os.path.join(_PROJ_DIR, "config", "contexts")
+        if not os.path.isdir(contexts_dir):
+            return
+
+        # Start from any existing inline contexts
+        existing_contexts = config_data.get("contexts") or {}
+        if not isinstance(existing_contexts, dict):
+            existing_contexts = {}
+
+        pattern_yaml = os.path.join(contexts_dir, "*.yaml")
+        pattern_yml = os.path.join(contexts_dir, "*.yml")
+        files = glob.glob(pattern_yaml) + glob.glob(pattern_yml)
+
+        for ctx_path in files:
+            try:
+                with open(ctx_path, "r") as f:
+                    raw = f.read()
+                raw = os.path.expandvars(raw)
+                ctx_data = yaml.safe_load(raw) or {}
+            except Exception:
+                continue
+
+            if not isinstance(ctx_data, dict):
+                continue
+
+            name = ctx_data.get("name")
+            if not isinstance(name, str) or not name.strip():
+                continue
+            name = name.strip()
+
+            # Map system_prompt → prompt if prompt not explicitly provided
+            if "prompt" not in ctx_data and "system_prompt" in ctx_data:
+                ctx_data["prompt"] = ctx_data["system_prompt"]
+
+            # Only add external context if not already defined inline
+            if name not in existing_contexts:
+                existing_contexts[name] = ctx_data
+
+        config_data["contexts"] = existing_contexts
+    except Exception:
+        # Let caller decide how to handle/log; keep non-fatal here.
+        raise
 
 def validate_production_config(config: AppConfig) -> tuple[list[str], list[str]]:
     """Validate configuration for production deployment (AAVA-21).
@@ -463,8 +542,12 @@ def validate_production_config(config: AppConfig) -> tuple[list[str], list[str]]
         # Provider API keys validation
         has_openai = bool(os.getenv('OPENAI_API_KEY'))
         has_deepgram = bool(os.getenv('DEEPGRAM_API_KEY'))
-        if not has_openai and not has_deepgram:
-            errors.append("No provider API keys configured (need OPENAI_API_KEY or DEEPGRAM_API_KEY)")
+        has_google = bool(os.getenv('GOOGLE_API_KEY'))
+        if not (has_openai or has_deepgram or has_google):
+            errors.append(
+                "No provider API keys configured "
+                "(need OPENAI_API_KEY, DEEPGRAM_API_KEY, or GOOGLE_API_KEY)"
+            )
         
         # Port validation
         if hasattr(config, 'audiosocket') and config.audiosocket:
@@ -510,6 +593,59 @@ def validate_production_config(config: AppConfig) -> tuple[list[str], list[str]]
             if hasattr(config.streaming, 'diag_enable_taps'):
                 if getattr(config.streaming, 'diag_enable_taps', False):
                     warnings.append("Diagnostic taps enabled (performance impact, disable in production)")
+
+        # Transport/provider compatibility warnings (non-blocking)
+        try:
+            providers = getattr(config, "providers", {}) or {}
+            # Ensure providers is dict-like
+            if not isinstance(providers, dict):
+                providers = {}
+
+            # Audio transport vs provider shape
+            if getattr(config, "audio_transport", "externalmedia") == "audiosocket":
+                monolithic_names = ("openai_realtime", "deepgram", "google_live")
+                monolithic_enabled = []
+                for name, cfg in providers.items():
+                    if name not in monolithic_names:
+                        continue
+                    enabled = True
+                    if isinstance(cfg, dict):
+                        enabled = bool(cfg.get("enabled", True))
+                    monolithic_enabled.append((name, enabled))
+
+                if not any(enabled for _, enabled in monolithic_enabled):
+                    warnings.append(
+                        "audio_transport=audiosocket but no monolithic providers "
+                        "(openai_realtime, deepgram, google_live) are enabled; "
+                        "ensure transport matches provider architecture"
+                    )
+
+            if getattr(config, "audio_transport", "externalmedia") == "externalmedia":
+                pipelines = getattr(config, "pipelines", {}) or {}
+                if not isinstance(pipelines, dict):
+                    pipelines = {}
+                if not pipelines:
+                    warnings.append(
+                        "audio_transport=externalmedia but no pipelines are configured; "
+                        "pipelines are recommended for ExternalMedia mode"
+                    )
+
+                downstream_mode = getattr(config, "downstream_mode", "file")
+                if downstream_mode != "file":
+                    warnings.append(
+                        f"ExternalMedia + pipelines typically require downstream_mode='file'; "
+                        f"current downstream_mode='{downstream_mode}'"
+                    )
+
+            # default_provider-specific key hints (warnings only)
+            default_provider = getattr(config, "default_provider", None)
+            if default_provider == "google_live" and not has_google:
+                warnings.append(
+                    "default_provider='google_live' but GOOGLE_API_KEY is not set; "
+                    "Google Live provider will fail to connect"
+                )
+        except Exception as e:
+            logger.debug("Transport/provider compatibility checks failed", error=str(e))
     
     except Exception as e:
         # Don't let validation errors crash startup

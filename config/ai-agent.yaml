@@ -428,6 +428,8 @@ providers:
     # Transcription Configuration (for email summaries and conversation history)
     enable_input_transcription: true  # Enable user speech transcription
     enable_output_transcription: true # Enable AI speech transcription
+    # Optional: override WebSocket endpoint for Gemini Live API
+    # websocket_endpoint: wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent
 streaming:
   chunk_size_ms: 20
   connection_timeout_ms: 120000
