@@ -98,35 +98,73 @@ else
   fi
   run_server_cmd "rm -f /tmp/ai-engine.all.log" || true
 fi
-CID=$(grep -o '"call_id": "[^"]*"' "$BASE/logs/ai-engine.log" | awk -F '"' '{print $4}' | tail -n 1 || true)
+
+# Determine Call ID for RCA
+if [ -n "${FORCE_CALL_ID:-}" ]; then
+  CID="$FORCE_CALL_ID"
+  echo "[RCA] Using FORCE_CALL_ID=$CID"
+else
+  CID=$(grep -oE '17[0-9]{8}\.[0-9]{4}' "$BASE/logs/ai-engine.log" | sort -u | head -1 || true)
+fi
 echo -n "$CID" > "$BASE/call_id.txt"
 echo "[RCA] Active Call ID: ${CID:-unknown}"
 if [ -n "$CID" ]; then
-  run_server_cmd "docker exec ai_engine sh -lc 'cd /tmp/ai-engine-taps 2>/dev/null || exit 0; tar czf /tmp/ai_taps_${CID}.tgz *${CID}*.wav 2>/dev/null || true'" || true
-  if [ "$SERVER_MODE" = "local" ]; then
-    if run_server_cmd "docker cp ai_engine:/tmp/ai_taps_${CID}.tgz '$BASE/ai_taps_${CID}.tgz' 2>/dev/null"; then
-      run_server_cmd "docker exec ai_engine rm -f /tmp/ai_taps_${CID}.tgz" || true
+  # Check for tap files using flat layout: pre/post_compand_pcm16_<CID>* under /tmp/ai-engine-taps
+  TAP_COUNT=$(run_server_cmd "docker exec ai_engine sh -c 'ls -1 /tmp/ai-engine-taps/pre_compand_pcm16_${CID}*.wav /tmp/ai-engine-taps/post_compand_pcm16_${CID}*.wav 2>/dev/null | wc -l' 2>/dev/null" || echo "0")
+  echo "[RCA] Found ${TAP_COUNT} tap files for call ${CID}"
+
+  if [ "${TAP_COUNT}" -gt 0 ]; then
+    # Create tar archive of all matching tap files for this call id
+    run_server_cmd "docker exec ai_engine sh -c 'cd /tmp/ai-engine-taps && tar czf /tmp/ai_taps_${CID}.tgz pre_compand_pcm16_${CID}*.wav post_compand_pcm16_${CID}*.wav 2>/dev/null'" || true
+
+    if [ "$SERVER_MODE" = "local" ]; then
+      if run_server_cmd "docker cp ai_engine:/tmp/ai_taps_${CID}.tgz '$BASE/ai_taps_${CID}.tgz' 2>/dev/null"; then
+        echo "[RCA] Tap bundle fetched successfully"
+        run_server_cmd "docker exec ai_engine rm -f /tmp/ai_taps_${CID}.tgz" || true
+      else
+        echo "[WARN] Failed to copy tap bundle from container"
+      fi
     else
-      echo "[WARN] No tap bundle fetched"
-      run_server_cmd "docker exec ai_engine rm -f /tmp/ai_taps_${CID}.tgz" || true
+      run_server_cmd "docker cp ai_engine:/tmp/ai_taps_${CID}.tgz /tmp/ai_taps_${CID}.tgz" 2>/dev/null || true
+      if fetch_file "/tmp/ai_taps_${CID}.tgz" "$BASE/ai_taps_${CID}.tgz"; then
+        echo "[RCA] Tap bundle fetched successfully"
+        run_server_cmd "rm -f /tmp/ai_taps_${CID}.tgz" || true
+        run_server_cmd "docker exec ai_engine rm -f /tmp/ai_taps_${CID}.tgz" || true
+      else
+        echo "[WARN] Failed to fetch tap bundle"
+        run_server_cmd "rm -f /tmp/ai_taps_${CID}.tgz" || true
+      fi
     fi
   else
-    run_server_cmd "docker cp ai_engine:/tmp/ai_taps_${CID}.tgz /tmp/ai_taps_${CID}.tgz" 2>/dev/null || true
-    if fetch_file "/tmp/ai_taps_${CID}.tgz" "$BASE/ai_taps_${CID}.tgz"; then
-      run_server_cmd "rm -f /tmp/ai_taps_${CID}.tgz" || true
-      run_server_cmd "docker exec ai_engine rm -f /tmp/ai_taps_${CID}.tgz" || true
-    else
-      echo "[WARN] No tap bundle fetched"
-      run_server_cmd "rm -f /tmp/ai_taps_${CID}.tgz" || true
-      run_server_cmd "docker exec ai_engine rm -f /tmp/ai_taps_${CID}.tgz" || true
-    fi
+    echo "[WARN] No tap files found for call ${CID}"
   fi
 else
-  echo "[WARN] No call ID. Skipping tap bundle retrieval"
+  echo "[WARN] No call ID detected. Skipping tap bundle retrieval"
 fi
-if [ -f "$BASE/ai_taps_${CID}.tgz" ]; then tar xzf "$BASE/ai_taps_${CID}.tgz" -C "$BASE/taps"; fi
-REC_LIST=$(run_server_cmd "find /var/spool/asterisk/monitor -type f -name '*${CID}*.wav' -printf '%p\\n' 2>/dev/null | head -n 10") || true
+
+# Extract tap bundle if it exists
+if [ -f "$BASE/ai_taps_${CID}.tgz" ]; then 
+  echo "[RCA] Extracting tap files..."
+  tar xzf "$BASE/ai_taps_${CID}.tgz" -C "$BASE/taps" && rm "$BASE/ai_taps_${CID}.tgz"
+  echo "[RCA] Extracted $(ls -1 "$BASE/taps"/*.wav 2>/dev/null | wc -l) tap files"
+fi
+# Search for recordings in multiple locations (monitor dir and dated subdirs)
+REC_LIST=$(run_server_cmd "find /var/spool/asterisk/monitor -type f -name '*${CID}*.wav' 2>/dev/null | head -n 10") || true
+
+# If not found, try dated directory structure (YYYY/MM/DD)
+if [ -z "$REC_LIST" ]; then
+  TODAY=$(date +%Y/%m/%d)
+  YESTERDAY=$(date -d "yesterday" +%Y/%m/%d 2>/dev/null || date -v-1d +%Y/%m/%d 2>/dev/null || echo "")
+  
+  REC_LIST=$(run_server_cmd "find /var/spool/asterisk/monitor/$TODAY -type f -name '*.wav' 2>/dev/null | tail -n 5") || true
+  
+  if [ -z "$REC_LIST" ] && [ -n "$YESTERDAY" ]; then
+    REC_LIST=$(run_server_cmd "find /var/spool/asterisk/monitor/$YESTERDAY -type f -name '*.wav' 2>/dev/null | tail -n 5") || true
+  fi
+fi
+
 if [ -n "$REC_LIST" ]; then
+  echo "[RCA] Found $(echo "$REC_LIST" | wc -l | tr -d ' ') recording file(s)"
   while IFS= read -r f; do
     [ -z "$f" ] && continue
     if ! fetch_file "$f" "$BASE/recordings/$(basename "$f")"; then
@@ -134,7 +172,7 @@ if [ -n "$REC_LIST" ]; then
     fi
   done <<< "$REC_LIST"
 else
-  echo "[WARN] No recordings detected for CID $CID"
+  echo "[WARN] No recordings detected for CID $CID or in recent dated directories"
 fi
 # Fetch ARI channel recordings by parsing rec name from engine logs (name field)
 REC_NAME=$(grep -o '"name": "out-[^"]*"' "$BASE/logs/ai-engine.log" | awk -F '"' '{print $4}' | tail -n 1 || true)
@@ -145,10 +183,18 @@ fi
 TAPS=$(ls "$BASE"/taps/*.wav 2>/dev/null || true)
 RECS=$(ls "$BASE"/recordings/*.wav 2>/dev/null || true)
 if [ -n "$TAPS" ]; then
-  python3 scripts/wav_quality_analyzer.py "$BASE"/taps/*.wav --json "$BASE/metrics/wav_report_taps.json" --frame-ms "$FRAME_MS" || echo "[WARN] Tap analysis failed"
+  if [ -f "archived/dev-scripts/wav_quality_analyzer.py" ]; then
+    python3 archived/dev-scripts/wav_quality_analyzer.py "$BASE"/taps/*.wav --json "$BASE/metrics/wav_report_taps.json" --frame-ms "$FRAME_MS" || echo "[WARN] Tap analysis failed"
+  else
+    echo "[INFO] wav_quality_analyzer.py not found, skipping tap analysis"
+  fi
 fi
 if [ -n "$RECS" ]; then
-  python3 scripts/wav_quality_analyzer.py "$BASE"/recordings/*.wav --json "$BASE/metrics/wav_report_rec.json" --frame-ms "$FRAME_MS" || echo "[WARN] Recording analysis failed"
+  if [ -f "archived/dev-scripts/wav_quality_analyzer.py" ]; then
+    python3 archived/dev-scripts/wav_quality_analyzer.py "$BASE"/recordings/*.wav --json "$BASE/metrics/wav_report_rec.json" --frame-ms "$FRAME_MS" || echo "[WARN] Recording analysis failed"
+  else
+    echo "[INFO] wav_quality_analyzer.py not found, skipping recording analysis"
+  fi
 fi
 # Build call timeline with key events for the captured call
 if [ -n "$CID" ]; then
@@ -158,12 +204,20 @@ fi
 # Offline transcription of outbound audio when available
 OUT_WAVS=$(ls "$BASE"/recordings/out-*.wav 2>/dev/null | head -n 1 || true)
 if [ -n "$OUT_WAVS" ]; then
-  python3 scripts/transcribe_call.py "$BASE"/recordings/out-*.wav --json "$BASE/transcripts/out.json" || echo "[WARN] Outbound transcription failed"
+  if [ -f "archived/dev-scripts/transcribe_call.py" ]; then
+    python3 archived/dev-scripts/transcribe_call.py "$BASE"/recordings/out-*.wav --json "$BASE/transcripts/out.json" || echo "[WARN] Outbound transcription failed"
+  else
+    echo "[INFO] transcribe_call.py not found, skipping outbound transcription"
+  fi
 fi
 
 IN_WAVS=$(ls "$BASE"/recordings/in-*.wav 2>/dev/null | head -n 1 || true)
 if [ -n "$IN_WAVS" ]; then
-  python3 scripts/transcribe_call.py "$BASE"/recordings/in-*.wav --json "$BASE/transcripts/in.json" || echo "[WARN] Inbound transcription failed"
+  if [ -f "archived/dev-scripts/transcribe_call.py" ]; then
+    python3 archived/dev-scripts/transcribe_call.py "$BASE"/recordings/in-*.wav --json "$BASE/transcripts/in.json" || echo "[WARN] Inbound transcription failed"
+  else
+    echo "[INFO] transcribe_call.py not found, skipping inbound transcription"
+  fi
 fi
 
 if [ -n "$CID" ]; then
@@ -184,20 +238,25 @@ if [ -d "$BASE/captures" ]; then
 fi
 
 if [ ${#CAPTURE_FILES[@]} -gt 0 ]; then
-  python3 scripts/wav_quality_analyzer.py "${CAPTURE_FILES[@]}" --json "$BASE/metrics/wav_report_captures.json" --frame-ms "$FRAME_MS" || echo "[WARN] Capture analysis failed"
-  python3 scripts/transcribe_call.py "${CAPTURE_FILES[@]}" --json "$BASE/transcripts/captures.json" || echo "[WARN] Capture transcription failed"
+  if [ -f "archived/dev-scripts/wav_quality_analyzer.py" ]; then
+    python3 archived/dev-scripts/wav_quality_analyzer.py "${CAPTURE_FILES[@]}" --json "$BASE/metrics/wav_report_captures.json" --frame-ms "$FRAME_MS" || echo "[WARN] Capture analysis failed"
+  fi
+  if [ -f "archived/dev-scripts/transcribe_call.py" ]; then
+    python3 archived/dev-scripts/transcribe_call.py "${CAPTURE_FILES[@]}" --json "$BASE/transcripts/captures.json" || echo "[WARN] Capture transcription failed"
+  fi
 fi
 
 # Fetch server-side ai-agent.yaml for transport/provider troubleshooting
 if ! fetch_file "$PROJECT_PATH/config/ai-agent.yaml" "$BASE/config/ai-agent.yaml"; then
   echo "[WARN] Failed to fetch ai-agent.yaml"
 fi
-if ! fetch_file "/etc/asterisk/extensions_custom.conf" "$BASE/config/extensions_custom.conf"; then
-  echo "[WARN] Failed to fetch extensions_custom.conf"
-fi
-if ! fetch_file "/var/log/asterisk/full" "$BASE/logs/asterisk-full.log"; then
-  echo "[WARN] Failed to fetch asterisk full log"
-fi
+# Asterisk log collection disabled for faster RCA
+# if ! fetch_file "/etc/asterisk/extensions_custom.conf" "$BASE/config/extensions_custom.conf"; then
+#   echo "[WARN] Failed to fetch extensions_custom.conf"
+# fi
+# if ! fetch_file "/var/log/asterisk/full" "$BASE/logs/asterisk-full.log"; then
+#   echo "[WARN] Failed to fetch asterisk full log"
+# fi
 
 # Copy container log files from /app/logs when available
 CONTAINER_LOG_TMP="/tmp/ai-engine-logs-${CID:-latest}"

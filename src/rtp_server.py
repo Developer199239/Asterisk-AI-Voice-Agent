@@ -49,14 +49,14 @@ class RTPServer:
     RTP Server for handling bidirectional audio streams with Asterisk External Media.
 
     This server:
-        1. Receives RTP packets from Asterisk (caller audio)
-        2. Converts to PCM16 @ 16 kHz for provider processing
+        1. Receives RTP packets from Asterisk (caller audio) in configured codec
+        2. Converts to configured format @ sample_rate for provider processing
         3. Sends provider audio back to Asterisk as RTP using the same SSRC
     """
 
     RTP_VERSION = 2
     RTP_HEADER_SIZE = 12
-    SAMPLE_RATE = 8000
+    SAMPLE_RATE = 8000  # Asterisk-side sample rate (codec-dependent)
     SAMPLES_PER_PACKET = 160  # 20 ms @ 8 kHz
 
     def __init__(
@@ -65,12 +65,16 @@ class RTPServer:
         port: int,
         engine_callback: Callable[[int, bytes], Any],
         codec: str = "ulaw",
+        format: str = "slin16",
+        sample_rate: int = 16000,
         port_range: Optional[Tuple[int, int]] = None,
     ):
         self.host = host
         self.base_port = int(port)
         self.engine_callback = engine_callback
         self.codec = self._normalise_codec(codec)
+        self.format = format  # Engine-side format
+        self.sample_rate = sample_rate  # Engine-side sample rate
 
         if port_range:
             start, end = port_range
@@ -91,6 +95,8 @@ class RTPServer:
             host=self.host,
             port_range=self.port_range,
             codec=self.codec,
+            format=self.format,
+            sample_rate=self.sample_rate,
         )
 
     async def start(self) -> None:
@@ -104,6 +110,8 @@ class RTPServer:
             host=self.host,
             port_range=self.port_range,
             codec=self.codec,
+            format=self.format,
+            sample_rate=self.sample_rate,
         )
 
     async def stop(self) -> None:
@@ -388,15 +396,22 @@ class RTPServer:
         session.last_sequence = sequence
 
         try:
-            pcm_8k = self._decode_payload(payload)
-            pcm_16k, state = audioop.ratecv(pcm_8k, 2, 1, self.SAMPLE_RATE, 16000, session.resample_state)
-            session.resample_state = state
+            pcm_decoded = self._decode_payload(payload)
+            # Use configured sample_rate instead of hardcoded constant
+            # CRITICAL: Must match what engine expects based on config
+            if self.sample_rate != self.SAMPLE_RATE:
+                # Resample from codec rate to configured engine rate
+                pcm_resampled, state = audioop.ratecv(pcm_decoded, 2, 1, self.SAMPLE_RATE, self.sample_rate, session.resample_state)
+                session.resample_state = state
+            else:
+                # No resampling needed
+                pcm_resampled = pcm_decoded
         except Exception as exc:
             logger.error("RTP payload decode failed", call_id=call_id, error=str(exc))
             return
 
         try:
-            await self.engine_callback(ssrc, pcm_16k)
+            await self.engine_callback(ssrc, pcm_resampled)
         except Exception as exc:
             logger.error("Engine callback failed", call_id=call_id, error=str(exc))
         else:

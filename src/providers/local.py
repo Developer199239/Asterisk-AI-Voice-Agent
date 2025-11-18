@@ -132,7 +132,7 @@ class LocalProvider(AIProviderInterface):
             logger.error("Failed to initialize connection to Local AI Server", exc_info=True)
             raise
 
-    async def start_session(self, call_id: str):
+    async def start_session(self, call_id: str, context: Optional[Dict[str, Any]] = None):
         try:
             # Check if already connected
             if self.websocket and not self.websocket.closed:

@@ -34,6 +34,7 @@ from .config import (
     load_config,
     LocalProviderConfig,
     DeepgramProviderConfig,
+    GoogleProviderConfig,
     OpenAIRealtimeProviderConfig,
 )
 from .pipelines import PipelineOrchestrator, PipelineOrchestratorError, PipelineResolution
@@ -44,6 +45,7 @@ from .providers.base import AIProviderInterface
 from .providers.deepgram import DeepgramProvider
 from .providers.local import LocalProvider
 from .providers.openai_realtime import OpenAIRealtimeProvider
+from .providers.google_live import GoogleLiveProvider
 from .core import SessionStore, PlaybackManager, ConversationCoordinator
 from .core.vad_manager import EnhancedVADManager, VADResult
 from .core.streaming_playback_manager import StreamingPlaybackManager
@@ -223,7 +225,18 @@ class Engine:
         except Exception:
             streaming_config['audiosocket_broadcast_debug'] = False
 
-        self.audio_capture = AudioCaptureManager()
+        # Initialize per-call audio capture used for diagnostics/RCA.
+        # Captures are written under /tmp/ai-engine-captures/<call_id>/stream_name.wav,
+        # which is what scripts/rca_collect.sh expects when building the "captures" bundle.
+        capture_dir = "/tmp/ai-engine-captures"
+        # Use DIAG_ENABLE_TAPS as a generic switch for keeping capture files after calls complete.
+        keep_captures = os.getenv("DIAG_ENABLE_TAPS", "false").lower() in ("true", "1", "yes")
+        self.audio_capture = AudioCaptureManager(base_dir=capture_dir, keep_files=keep_captures)
+        logger.info(
+            "Audio capture initialized",
+            base_dir=capture_dir,
+            keep_files=keep_captures,
+        )
         self.streaming_playback_manager = StreamingPlaybackManager(
             self.session_store,
             self.ari_client,
@@ -275,7 +288,6 @@ class Engine:
         self.audio_socket_server: Optional[AudioSocketServer] = None
         self.audiosocket_conn_to_ssrc: Dict[str, int] = {}
         self.audiosocket_resample_state: Dict[str, Optional[tuple]] = {}
-        self.audio_capture = AudioCaptureManager()
         # Stateful resampling: maintain per-call/per-provider ratecv states to avoid drift
         # Provider input (caller -> provider) resample state
         self._resample_state_provider_in: Dict[str, Dict[str, Optional[tuple]]] = {}
@@ -511,8 +523,20 @@ class Engine:
                     raise ValueError("ExternalMedia configuration not found")
                 
                 rtp_host = self.config.external_media.rtp_host
-                rtp_port = self.config.external_media.rtp_port
-                codec = self.config.external_media.codec
+                rtp_port = int(getattr(self.config.external_media, "rtp_port", 0) or 18080)
+                codec = getattr(self.config.external_media, "codec", "ulaw")
+                format = getattr(self.config.external_media, "format", "slin16")
+                sample_rate = getattr(self.config.external_media, "sample_rate", None)
+                
+                # Infer sample_rate from format if not explicitly set
+                if not sample_rate:
+                    if format in ("slin16", "linear16", "pcm16"):
+                        sample_rate = 16000
+                    elif format in ("slin", "linear"):
+                        sample_rate = 8000
+                    else:  # ulaw, alaw
+                        sample_rate = 8000
+                
                 port_range = self._parse_port_range(getattr(self.config.external_media, "port_range", None), rtp_port)
                 
                 # Create RTP server with callback to route audio to providers
@@ -521,20 +545,47 @@ class Engine:
                     port=rtp_port,
                     engine_callback=self._on_rtp_audio,
                     codec=codec,
+                    format=format,
+                    sample_rate=sample_rate,
                     port_range=port_range,
                 )
                 
                 # Start RTP server
                 await self.rtp_server.start()
                 logger.info("RTP server started for ExternalMedia transport", 
-                           host=rtp_host, port=rtp_port, codec=codec)
+                           host=rtp_host, port=rtp_port, codec=codec, format=format, sample_rate=sample_rate)
                 self.streaming_playback_manager.set_transport(
                     rtp_server=self.rtp_server,
                     audio_transport=self.config.audio_transport,
                 )
+                
+                # Validate provider format alignment with ExternalMedia transport
+                try:
+                    for prov_name, provider in self.providers.items():
+                        if hasattr(provider, 'config'):
+                            cfg = provider.config
+                            # Check provider input sample rate
+                            provider_input_rate = getattr(cfg, 'provider_input_sample_rate_hz', None) or getattr(cfg, 'input_sample_rate_hz', None)
+                            if provider_input_rate and provider_input_rate != sample_rate:
+                                logger.warning(
+                                    "⚠️  TRANSPORT/PROVIDER MISMATCH",
+                                    provider=prov_name,
+                                    transport="ExternalMedia",
+                                    transport_rate=sample_rate,
+                                    provider_rate=provider_input_rate,
+                                    impact="Extra resampling step - slight quality loss",
+                                    suggestion=f"Consider updating providers.{prov_name}.input_sample_rate_hz to {sample_rate} for optimal quality"
+                                )
+                except Exception:
+                    logger.debug("Provider format validation failed", exc_info=True)
+                
                 # Pre-call transport summary and alignment audit
                 try:
-                    self._audit_transport_alignment()
+                    for prov_name, prov in self.providers.items():
+                        issues = self._describe_provider_alignment(prov_name, prov)
+                        if issues:
+                            for issue in issues:
+                                logger.info("Provider alignment info", provider=prov_name, issue=issue)
                 except Exception:
                     logger.debug("Transport alignment audit failed", exc_info=True)
             except Exception as exc:
@@ -609,7 +660,7 @@ class Engine:
 
     async def _load_providers(self):
         """Load and initialize AI providers from the configuration."""
-        logger.info("Loading AI providers...")
+        logger.info("Loading AI providers...", provider_names=list(self.config.providers.keys()))
         for name, provider_config_data in self.config.providers.items():
             if isinstance(provider_config_data, dict) and not provider_config_data.get("enabled", True):
                 logger.info("Provider '%s' disabled in configuration; skipping initialization.", name)
@@ -677,6 +728,28 @@ class Engine:
                     runtime_issues = self._describe_provider_alignment(name, provider)
                     if runtime_issues:
                         self.provider_alignment_issues.setdefault(name, []).extend(runtime_issues)
+                elif name == "google_live":
+                    # google_live uses GoogleProviderConfig like the pipeline adapters
+                    try:
+                        google_cfg = GoogleProviderConfig(**provider_config_data)
+                    except Exception as e:
+                        logger.error(f"Failed to build GoogleProviderConfig for google_live: {e}", exc_info=True)
+                        continue
+
+                    provider = GoogleLiveProvider(
+                        google_cfg,
+                        self.on_provider_event,
+                        gating_manager=self.audio_gating_manager
+                    )
+                    self.providers[name] = provider
+                    logger.info(
+                        "Provider 'google_live' loaded successfully",
+                        audio_gating_enabled=self.audio_gating_manager is not None
+                    )
+
+                    runtime_issues = self._describe_provider_alignment(name, provider)
+                    if runtime_issues:
+                        self.provider_alignment_issues.setdefault(name, []).extend(runtime_issues)
                 else:
                     logger.warning(f"Unknown provider type: {name}")
                     continue
@@ -685,7 +758,7 @@ class Engine:
                 logger.error(f"Failed to load provider '{name}': {e}", exc_info=True)
         
         # Validate that default provider is available
-        if self.config.default_provider not in self.providers:
+        if self.config.default_provider != "deepgram":
             available_providers = list(self.providers.keys())
             logger.error(f"Default provider '{self.config.default_provider}' not available. Available providers: {available_providers}")
         else:
@@ -1066,6 +1139,7 @@ class Engine:
             provider_aliases = {
                 "openai": "openai_realtime",
                 "deepgram_agent": "deepgram",
+                "google": "google_live",
             }
             resolved_provider = (
                 provider_aliases.get(ai_provider_value, ai_provider_value)
@@ -1740,6 +1814,10 @@ class Engine:
             except Exception:
                 logger.debug("Provider stop_session failed during cleanup", call_id=call_id, exc_info=True)
 
+            # Check if call was transferred to dialplan (e.g., queue transfer)
+            # If so, skip hanging up the caller channel
+            transfer_active = getattr(session, 'transfer_active', False)
+            
             # Tear down bridge.
             bridge_id = session.bridge_id
             if bridge_id:
@@ -1749,12 +1827,21 @@ class Engine:
                 except Exception:
                     logger.debug("Bridge destroy failed", call_id=call_id, bridge_id=bridge_id, exc_info=True)
 
-            # Hang up associated channels.
-            for channel_id in filter(None, [session.caller_channel_id, session.local_channel_id, session.external_media_id, session.audiosocket_channel_id]):
+            # Hang up RTP and supporting channels (always)
+            for channel_id in filter(None, [session.local_channel_id, session.external_media_id, session.audiosocket_channel_id]):
                 try:
                     await self.ari_client.hangup_channel(channel_id)
                 except Exception:
                     logger.debug("Hangup failed during cleanup", call_id=call_id, channel_id=channel_id, exc_info=True)
+            
+            # Hang up caller channel ONLY if not transferred
+            if not transfer_active:
+                try:
+                    await self.ari_client.hangup_channel(session.caller_channel_id)
+                except Exception:
+                    logger.debug("Hangup failed during cleanup", call_id=call_id, channel_id=session.caller_channel_id, exc_info=True)
+            else:
+                logger.info("Skipping caller hangup - transferred to dialplan", call_id=call_id, transfer_target=getattr(session, 'transfer_target', 'unknown'))
 
             if getattr(self, 'rtp_server', None):
                 try:
@@ -1808,27 +1895,94 @@ class Engine:
 
             # Auto-send email summary if enabled (before session is removed)
             try:
-                from src.tools.registry import tool_registry
+                # Auto-trigger email summary if configured and session has conversation history
                 email_tool_config = self.config.tools.get('send_email_summary', {})
                 if email_tool_config.get('enabled', False):
+                    from src.tools.registry import tool_registry
                     email_tool = tool_registry.get('send_email_summary')
                     if email_tool:
-                        # Build execution context
-                        from src.tools.context import ToolExecutionContext
-                        context = ToolExecutionContext(
-                            call_id=call_id,
-                            caller_channel_id=session.caller_channel_id,
-                            bridge_id=session.bridge_id,
-                            session_store=self.session_store,
-                            ari_client=self.ari_client,
-                            config=self.config.model_dump()
-                        )
-                        # Execute synchronously to ensure session is available
-                        # Email sending itself is still async (non-blocking)
-                        await email_tool.execute({}, context)
-                        logger.info("📧 Auto-triggered email summary", call_id=call_id)
+                        # Verify session still exists (race condition with multiple cleanup calls)
+                        check_session = await self.session_store.get_by_call_id(call_id)
+                        if not check_session:
+                            logger.debug(
+                                "Skipping email summary - session already removed by concurrent cleanup",
+                                call_id=call_id
+                            )
+                        else:
+                            # Build execution context
+                            from src.tools.context import ToolExecutionContext
+                            context = ToolExecutionContext(
+                                call_id=call_id,
+                                caller_channel_id=session.caller_channel_id,
+                                bridge_id=session.bridge_id,
+                                session_store=self.session_store,
+                                ari_client=self.ari_client,
+                                config=self.config.model_dump()
+                            )
+                            # Execute synchronously to ensure session is available
+                            # Email sending itself is still async (non-blocking)
+                            await email_tool.execute({}, context)
+                            logger.info("📧 Auto-triggered email summary", call_id=call_id)
+            except RuntimeError as e:
+                # Session not found is expected in concurrent cleanup scenarios
+                if "Session not found" in str(e):
+                    logger.debug(
+                        "Email summary skipped - session already cleaned up",
+                        call_id=call_id
+                    )
+                else:
+                    logger.warning("Failed to auto-trigger email summary", call_id=call_id, error=str(e))
             except Exception as e:
                 logger.warning("Failed to auto-trigger email summary", call_id=call_id, error=str(e), exc_info=True)
+
+            # Send transcript emails if requested during call (complete conversation)
+            try:
+                if hasattr(session, 'transcript_emails') and session.transcript_emails:
+                    transcript_tool_config = self.config.tools.get('request_transcript', {})
+                    if transcript_tool_config.get('enabled', False):
+                        from src.tools.registry import tool_registry
+                        transcript_tool = tool_registry.get('request_transcript')
+                        if transcript_tool:
+                            # Send transcript to each requested email
+                            for email_address in session.transcript_emails:
+                                try:
+                                    # Build execution context
+                                    from src.tools.context import ToolExecutionContext
+                                    context = ToolExecutionContext(
+                                        call_id=call_id,
+                                        caller_channel_id=session.caller_channel_id,
+                                        bridge_id=session.bridge_id,
+                                        session_store=self.session_store,
+                                        ari_client=self.ari_client,
+                                        config=self.config.model_dump()
+                                    )
+                                    
+                                    # Get fresh session data with complete conversation
+                                    current_session = await self.session_store.get_by_call_id(call_id)
+                                    if current_session:
+                                        # Prepare and send transcript email
+                                        email_data = transcript_tool._prepare_email_data(
+                                            email_address,
+                                            current_session,
+                                            transcript_tool_config,
+                                            call_id
+                                        )
+                                        # Send asynchronously (don't block cleanup)
+                                        asyncio.create_task(transcript_tool._send_transcript_async(email_data, call_id))
+                                        logger.info(
+                                            "📧 Sent end-of-call transcript",
+                                            call_id=call_id,
+                                            email=email_address
+                                        )
+                                except Exception as e:
+                                    logger.warning(
+                                        "Failed to send transcript to email",
+                                        call_id=call_id,
+                                        email=email_address,
+                                        error=str(e)
+                                    )
+            except Exception as e:
+                logger.warning("Failed to process transcript emails", call_id=call_id, error=str(e), exc_info=True)
 
             # Finally remove the session.
             await self.session_store.remove_call(call_id)
@@ -2128,6 +2282,10 @@ class Engine:
 
     async def _audiosocket_handle_audio(self, conn_id: str, audio_bytes: bytes) -> None:
         """Forward inbound AudioSocket audio to the active provider for the bound call."""
+        # Track every frame for diagnostics
+        if not hasattr(self, '_audiosocket_frame_count'):
+            self._audiosocket_frame_count = {}
+        
         try:
             caller_channel_id = self.conn_to_channel.get(conn_id)
             if not caller_channel_id and self.audio_socket_server:
@@ -2144,6 +2302,20 @@ class Engine:
             if not caller_channel_id:
                 logger.debug("AudioSocket audio received for unknown connection", conn_id=conn_id, bytes=len(audio_bytes))
                 return
+
+            # Track frame count per call
+            self._audiosocket_frame_count[caller_channel_id] = self._audiosocket_frame_count.get(caller_channel_id, 0) + 1
+            frame_num = self._audiosocket_frame_count[caller_channel_id]
+            
+            # Log every 10th frame + first 5 frames
+            if frame_num <= 5 or frame_num % 10 == 0:
+                logger.info(
+                    "🎤 AUDIOSOCKET RX - Frame received",
+                    call_id=caller_channel_id,
+                    frame_num=frame_num,
+                    frame_bytes=len(audio_bytes),
+                    conn_id=conn_id,
+                )
 
             session = await self.session_store.get_by_call_id(caller_channel_id)
             if not session:
@@ -2231,15 +2403,36 @@ class Engine:
             except Exception:
                 swap_needed_flag = False
             try:
-                profile_fmt = session.transport_profile.format or ""
-                if not profile_fmt:
-                    profile_fmt = getattr(self.config.audiosocket, "format", "ulaw") if getattr(self.config, "audiosocket", None) else "ulaw"
-                profile_rate = session.transport_profile.sample_rate or getattr(self.config.streaming, "sample_rate", 8000)
+                # CRITICAL: AudioSocket format is authoritative for AudioSocket transport
+                # For RTP, use transport profile (negotiated codec)
+                if self.config.audio_transport == "audiosocket":
+                    # Use AudioSocket's actual format (from YAML)
+                    profile_fmt = getattr(self.config.audiosocket, "format", "slin16")
+                    # Get sample rate from AudioSocket config or infer from format
+                    profile_rate = getattr(self.config.audiosocket, "sample_rate", None)
+                    if not profile_rate:
+                        # Infer rate from format: slin=8kHz, slin16=16kHz
+                        canonical_fmt = self._canonicalize_encoding(profile_fmt)
+                        if canonical_fmt == "slin":
+                            profile_rate = 8000
+                        elif canonical_fmt == "slin16":
+                            profile_rate = 16000
+                        else:
+                            profile_rate = getattr(self.config.streaming, "sample_rate", 8000)
+                else:
+                    # For RTP: use transport profile (negotiated codec)
+                    profile_fmt = session.transport_profile.format or "ulaw"
+                    profile_rate = session.transport_profile.sample_rate or 8000
             except Exception:
-                profile_fmt = "ulaw"
-                profile_rate = 8000
+                # Safe fallback based on transport type
+                if self.config.audio_transport == "audiosocket":
+                    profile_fmt = "slin16"
+                    profile_rate = 16000
+                else:
+                    profile_fmt = "ulaw"
+                    profile_rate = 8000
             pcm_bytes, pcm_rate = self._wire_to_pcm16(audio_bytes, profile_fmt, swap_needed_flag, profile_rate)
-            # Remove DC bias and apply a light DC-block filter to stabilize ASR input
+            # Remove DC bias ONLY (disable IIR DC-block filter - causes audio degradation)
             try:
                 if pcm_bytes:
                     try:
@@ -2251,29 +2444,10 @@ class Engine:
                             pcm_bytes = audioop.bias(pcm_bytes, 2, -mean)
                         except Exception:
                             pass
-                    # Per-call DC-block state
-                    if not hasattr(self, "_dc_block_state_inbound"):
-                        self._dc_block_state_inbound = {}
-                    prev_x, prev_y = self._dc_block_state_inbound.get(caller_channel_id, (0.0, 0.0))
-                    try:
-                        import array
-                        r = 0.995
-                        buf = array.array('h')
-                        buf.frombytes(pcm_bytes)
-                        if buf.itemsize == 2:
-                            for i, s in enumerate(buf):
-                                x = float(int(s))
-                                y = x - prev_x + r * prev_y
-                                prev_x, prev_y = x, y
-                                if y > 32767.0:
-                                    y = 32767.0
-                                elif y < -32768.0:
-                                    y = -32768.0
-                                buf[i] = int(y)
-                            pcm_bytes = buf.tobytes()
-                            self._dc_block_state_inbound[caller_channel_id] = (prev_x, prev_y)
-                    except Exception:
-                        pass
+                    # DC-block IIR filter DISABLED - was causing progressive audio level collapse
+                    # Symptoms: Audio started strong (RMS 4000) but degraded to near-silence (RMS 16)
+                    # Root cause: Stateful filter accumulated error, over-attenuated speech
+                    # Keep simple DC offset removal (audioop.bias) above, skip IIR filter
             except Exception:
                 logger.debug("Inbound DC conditioning failed", call_id=caller_channel_id, exc_info=True)
             try:
@@ -2317,9 +2491,18 @@ class Engine:
                 provider = None
             continuous_input = False
             try:
-                if provider_name == "deepgram":
+                # Use provider capabilities instead of hardcoded names
+                capabilities = None
+                if provider and hasattr(provider, 'get_capabilities'):
+                    try:
+                        capabilities = provider.get_capabilities()
+                    except Exception:
+                        pass
+                
+                if capabilities and capabilities.requires_continuous_audio:
                     continuous_input = True
                 else:
+                    # Fallback for legacy providers without capabilities
                     pcfg = getattr(provider, 'config', None)
                     if isinstance(pcfg, dict):
                         continuous_input = bool(pcfg.get('continuous_input', False))
@@ -2327,8 +2510,36 @@ class Engine:
                         continuous_input = bool(getattr(pcfg, 'continuous_input', False))
             except Exception:
                 continuous_input = False
+            
             if continuous_input and provider and hasattr(provider, 'send_audio'):
-                # Forward immediately, independent of audio_capture_enabled/VAD
+                # CRITICAL FIX: Google Live needs gating, but OpenAI/Deepgram don't
+                # - Google Live: Bidirectional audio, NO server-side echo cancellation → NEEDS gating
+                # - OpenAI Realtime: Server-side AEC → gating harmful
+                # - Deepgram: Text-based output → no echo risk
+                needs_gating = provider_name == "google_live"
+                
+                if needs_gating and not session.audio_capture_enabled:
+                    # CRITICAL: Google Live requires continuous audio stream (like WebRTC)
+                    # Send SILENCE frames instead of blocking to maintain stream continuity
+                    # This prevents echo while keeping VAD healthy
+                    logger.debug(
+                        "🔇 GATING ACTIVE - Sending silence frame for Google Live (TTS playing)",
+                        call_id=caller_channel_id,
+                        audio_capture_enabled=session.audio_capture_enabled,
+                    )
+                    # Replace audio with silence (zero-filled PCM16)
+                    pcm_bytes = b'\x00' * len(pcm_bytes)
+                
+                # Forward to provider
+                logger.info(
+                    "📤 CONTINUOUS INPUT - Forwarding frame to provider",
+                    call_id=caller_channel_id,
+                    provider=provider_name,
+                    frame_bytes=len(audio_bytes),
+                    pcm_bytes=len(pcm_bytes),
+                    gating_active=needs_gating and not session.audio_capture_enabled,
+                    is_silence=needs_gating and not session.audio_capture_enabled,
+                )
                 try:
                     self._update_audio_diagnostics(session, "provider_in", pcm_bytes, "slin16", pcm_rate)
                 except Exception:
@@ -2341,6 +2552,14 @@ class Engine:
                         pcm_bytes,
                         pcm_rate,
                     )
+                    logger.info(
+                        "📤 CONTINUOUS INPUT - Encoded for provider",
+                        call_id=caller_channel_id,
+                        provider=provider_name,
+                        prov_payload_bytes=len(prov_payload),
+                        prov_enc=prov_enc,
+                        prov_rate=prov_rate,
+                    )
                     try:
                         self.audio_capture.append_encoded(
                             session.call_id,
@@ -2351,10 +2570,42 @@ class Engine:
                         )
                     except Exception:
                         logger.debug("Provider input capture failed (unconditional)", call_id=session.call_id, exc_info=True)
-                    await provider.send_audio(prov_payload)
-                except Exception:
-                    logger.debug("Provider continuous-input forward error (unconditional)", call_id=caller_channel_id, exc_info=True)
+                    
+                    # CRITICAL: Pass sample_rate and encoding to prevent double resampling
+                    # Google Live needs to know audio is already at provider_rate to skip resampling
+                    try:
+                        await provider.send_audio(prov_payload, prov_rate, prov_enc)
+                        logger.info(
+                            "✅ CONTINUOUS INPUT - Frame sent to provider successfully",
+                            call_id=caller_channel_id,
+                            provider=provider_name,
+                        )
+                    except TypeError:
+                        # Fallback for providers with old signature (audio_chunk only)
+                        await provider.send_audio(prov_payload)
+                        logger.info(
+                            "✅ CONTINUOUS INPUT - Frame sent to provider (legacy signature)",
+                            call_id=caller_channel_id,
+                            provider=provider_name,
+                        )
+                except Exception as e:
+                    logger.error(
+                        "❌ CONTINUOUS INPUT - Provider forward error",
+                        call_id=caller_channel_id,
+                        provider=provider_name,
+                        error=str(e),
+                        exc_info=True,
+                    )
                 return
+            else:
+                logger.info(
+                    "⚠️ CONTINUOUS INPUT - Block skipped",
+                    call_id=caller_channel_id,
+                    continuous_input=continuous_input,
+                    provider_found=provider is not None,
+                    has_send_audio=hasattr(provider, 'send_audio') if provider else False,
+                    provider_name=provider_name,
+                )
 
             # Post-TTS end protection: drop inbound briefly after gating clears to avoid agent echo re-capture
             try:
@@ -2405,13 +2656,21 @@ class Engine:
                     provider = None
                 continuous_input = False
                 try:
-                    # CRITICAL: Providers requiring continuous audio flow during TTS
-                    # - deepgram: Traditional continuous STT throughout conversation
-                    # - openai_realtime: Full agent mode with server-side VAD managing turn-taking
-                    # NOTE: Does NOT apply to pipeline mode (handled above)
-                    if provider_name in ("deepgram", "openai_realtime"):
+                    # CRITICAL: Use provider capabilities to determine continuous audio requirement
+                    # Providers with native VAD (full agents) need continuous audio stream
+                    # Pipeline providers use engine-side VAD (gated audio)
+                    capabilities = None
+                    if provider and hasattr(provider, 'get_capabilities'):
+                        try:
+                            capabilities = provider.get_capabilities()
+                        except Exception:
+                            pass
+                    
+                    if capabilities and capabilities.requires_continuous_audio:
+                        # Provider declares it needs continuous audio (e.g., for native VAD)
                         continuous_input = True
                     else:
+                        # Fallback: check config for legacy providers
                         pcfg = getattr(provider, 'config', None)
                         if isinstance(pcfg, dict):
                             continuous_input = bool(pcfg.get('continuous_input', False))
@@ -2444,7 +2703,28 @@ class Engine:
                             )
                         except Exception:
                             logger.debug("Provider input capture failed (continuous-input)", call_id=session.call_id, exc_info=True)
-                        await provider.send_audio(prov_payload)
+                        # CRITICAL: Pass encoding and sample_rate to provider
+                        # Google Live needs these to correctly interpret audio format
+                        # Other providers with single-param signature will ignore extras
+                        logger.debug(
+                            "Sending audio to provider",
+                            call_id=session.call_id,
+                            provider=provider_name,
+                            encoding=prov_enc,
+                            sample_rate=prov_rate,
+                            payload_bytes=len(prov_payload),
+                        )
+                        try:
+                            await provider.send_audio(prov_payload, prov_rate, prov_enc)
+                        except TypeError as e:
+                            logger.warning(
+                                "Provider send_audio TypeError - falling back to old signature",
+                                call_id=session.call_id,
+                                provider=provider_name,
+                                error=str(e),
+                            )
+                            # Fallback for providers with old signature (audio_chunk only)
+                            await provider.send_audio(prov_payload)
                     except Exception:
                         logger.debug("Provider continuous-input forward error", call_id=caller_channel_id, exc_info=True)
                     return
@@ -3107,13 +3387,20 @@ class Engine:
                 else:
                     logger.warning("Pipeline mode active but no queue found (RTP)", call_id=caller_channel_id)
 
-            # Check if provider requires continuous audio input (P1 providers: Deepgram, OpenAI Realtime)
-            # These providers handle turn-taking internally and need uninterrupted audio flow
+            # Check if provider requires continuous audio input using capabilities
+            # Full agents with native VAD need uninterrupted audio flow for turn-taking
             provider_name = getattr(session, 'provider_name', None) or self.config.default_provider
             provider = self.providers.get(provider_name)
             continuous_input = False
             try:
-                if provider_name in ("deepgram", "openai_realtime"):
+                capabilities = None
+                if provider and hasattr(provider, 'get_capabilities'):
+                    try:
+                        capabilities = provider.get_capabilities()
+                    except Exception:
+                        pass
+                
+                if capabilities and capabilities.requires_continuous_audio:
                     continuous_input = True
                 else:
                     pcfg = getattr(provider, 'config', None)
@@ -3124,20 +3411,47 @@ class Engine:
             except Exception:
                 continuous_input = False
 
-            # For continuous-input providers, forward audio immediately and skip all gating/barge-in logic
-            # This matches the AudioSocket behavior for Deepgram/OpenAI Realtime (lines 2304-2342)
+            # For continuous-input providers, forward audio (but respect gating during TTS playback)
+            # OpenAI Realtime has server-side echo cancellation, but we still need to gate during TTS
+            # to prevent the provider from hearing its own audio as "user speech"
             if continuous_input:
                 if not provider or not hasattr(provider, 'send_audio'):
                     logger.debug("Provider unavailable for continuous RTP audio", provider=provider_name)
                     return
+                
+                # CRITICAL: Check if audio capture is disabled (TTS playing)
+                # For Google Live: Send silence frames to maintain stream continuity (like AudioSocket)
+                # For OpenAI/Deepgram: Can drop audio (they handle gaps gracefully)
+                needs_gating = provider_name == "google_live"
+                
+                if needs_gating and not session.audio_capture_enabled:
+                    # Send SILENCE instead of dropping to maintain Google Live's stream
+                    logger.debug(
+                        "🔇 GATING ACTIVE - Sending silence frame for Google Live (TTS playing)",
+                        call_id=caller_channel_id,
+                        provider=provider_name,
+                    )
+                    # Replace audio with silence (zero-filled PCM16)
+                    pcm_16k = b'\x00' * len(pcm_16k)
+                elif not needs_gating and not session.audio_capture_enabled:
+                    # For other providers, can safely drop audio during TTS
+                    logger.debug(
+                        "Dropping RTP audio for continuous provider during TTS playback",
+                        call_id=caller_channel_id,
+                        provider=provider_name,
+                    )
+                    return
                 # Encode audio for provider (same as AudioSocket path)
                 try:
+                    # Get RTP server's configured sample rate (no longer hardcoded)
+                    rtp_rate = getattr(self.rtp_server, 'sample_rate', 16000) if self.rtp_server else 16000
+                    
                     prov_payload, prov_enc, prov_rate = self._encode_for_provider(
                         session.call_id,
                         provider_name,
                         provider,
                         pcm_16k,
-                        16000,  # Input is PCM16 16kHz from RTP
+                        rtp_rate,  # Use configured rate from RTP server
                     )
                     try:
                         self.audio_capture.append_encoded(
@@ -3149,7 +3463,9 @@ class Engine:
                         )
                     except Exception:
                         logger.debug("Provider input capture failed (continuous-input RTP)", call_id=session.call_id, exc_info=True)
-                    await provider.send_audio(prov_payload)
+                    # CRITICAL: Pass sample_rate and encoding to provider
+                    # Google Live needs these to avoid double resampling
+                    await provider.send_audio(prov_payload, sample_rate=prov_rate, encoding=prov_enc)
                 except Exception as exc:
                     logger.debug("Continuous-input RTP forward error", call_id=caller_channel_id, error=str(exc))
                 return
@@ -3623,6 +3939,39 @@ class Engine:
                 logger.warning("Provider event for unknown call", event_type=etype, call_id=call_id)
                 return
 
+            # Provider requests early TTS gating clear (e.g., OpenAI greeting complete)
+            if etype == "ClearTtsGating":
+                try:
+                    tokens = list(getattr(session, "tts_tokens", set()) or [])
+                except Exception:
+                    tokens = []
+                if not tokens:
+                    logger.info(
+                        "ClearTtsGating received but no active TTS tokens",
+                        call_id=call_id,
+                        reason=event.get("reason"),
+                    )
+                    return
+
+                logger.info(
+                    "Processing ClearTtsGating event",
+                    call_id=call_id,
+                    reason=event.get("reason"),
+                    token_count=len(tokens),
+                )
+                for token in tokens:
+                    try:
+                        if self.conversation_coordinator:
+                            await self.conversation_coordinator.on_tts_end(call_id, token, reason=event.get("reason") or "provider-request")
+                    except Exception:
+                        logger.debug(
+                            "Failed to clear gating token from ClearTtsGating",
+                            call_id=call_id,
+                            token=token,
+                            exc_info=True,
+                        )
+                return
+
             # Provider announced its audio format before first audio chunk
             if etype == "ProviderAudioFormat":
                 encoding = event.get("encoding")
@@ -3811,7 +4160,7 @@ class Engine:
                             self._runtime_alignment_logged.add(call_id)
                         target_encoding, target_sample_rate, remediation = self._resolve_stream_targets(session, session.provider_name)
                         if target_sample_rate <= 0:
-                            target_sample_rate = session.transport_profile.sample_rate
+                            target_sample_rate = session.transport_profile.wire_sample_rate
                         if remediation:
                             session.audio_diagnostics["codec_remediation"] = remediation
                         
@@ -3902,7 +4251,7 @@ class Engine:
                                 self._runtime_alignment_logged.add(call_id)
                             target_encoding, target_sample_rate, remediation = self._resolve_stream_targets(session, session.provider_name)
                             if target_sample_rate <= 0:
-                                target_sample_rate = session.transport_profile.sample_rate
+                                target_sample_rate = session.transport_profile.wire_sample_rate
                             if remediation:
                                 session.audio_diagnostics["codec_remediation"] = remediation
                             src_encoding = fmt_info.get("encoding") or encoding
@@ -4060,7 +4409,7 @@ class Engine:
                             fmt_info = self._provider_stream_formats.get(call_id, {})
                             target_encoding, target_sample_rate, remediation = self._resolve_stream_targets(session, session.provider_name)
                             if target_sample_rate <= 0:
-                                target_sample_rate = session.transport_profile.sample_rate
+                                target_sample_rate = session.transport_profile.wire_sample_rate
                             await self.streaming_playback_manager.start_streaming_playback(
                                 call_id,
                                 q2,
@@ -4619,6 +4968,8 @@ class Engine:
                 accumulation_timeout = float(
                     (pipeline.llm_options or {}).get("aggregation_timeout_sec", 2.0)
                 )
+                # Track conversation history to include prior messages
+                conversation_history: List[Dict[str, str]] = []
 
                 async def cancel_flush() -> None:
                     nonlocal flush_task
@@ -4629,29 +4980,22 @@ class Engine:
                     flush_task = None
 
                 async def run_turn(transcript_text: str) -> None:
+                    nonlocal conversation_history
                     response_text = ""
                     pipeline_label = getattr(session, 'pipeline_name', None) or 'none'
                     provider_label = getattr(session, 'provider_name', None) or 'unknown'
                     t_start = self._last_transcript_ts.get(call_id)
                     
-                    # Build context with system prompt from llm_options (injected from AI_CONTEXT)
-                    context_messages = []
-                    system_prompt = llm_options.get('system_prompt')
-                    if system_prompt:
-                        context_messages.append({"role": "system", "content": system_prompt})
-                        logger.debug(
-                            "Pipeline LLM context with system prompt",
-                            call_id=call_id,
-                            system_prompt_length=len(system_prompt),
-                        )
-                    context_messages.append({"role": "user", "content": transcript_text})
+                    # Build context with conversation history
+                    # System prompt only in first turn (when history is empty)
+                    context_for_llm = {"prior_messages": list(conversation_history)}
                     
                     try:
                         response_text = await pipeline.llm_adapter.generate(
                             call_id,
                             transcript_text,
-                            {"messages": context_messages},  # Include system prompt in messages
-                            llm_options,  # Use context-injected options
+                            context_for_llm,  # Include conversation history
+                            llm_options,  # Use context-injected options (includes system_prompt)
                         )
                     except Exception:
                         logger.debug("LLM generate failed", call_id=call_id, exc_info=True)
@@ -4659,6 +5003,10 @@ class Engine:
                     response_text = (response_text or "").strip()
                     if not response_text:
                         return
+                    
+                    # Update conversation history
+                    conversation_history.append({"role": "user", "content": transcript_text})
+                    conversation_history.append({"role": "assistant", "content": response_text})
                     tts_bytes = bytearray()
                     first_tts_ts: Optional[float] = None
                     try:
@@ -5080,10 +5428,13 @@ class Engine:
         
         # Resolve transport profile
         try:
+            # Pass provider config so orchestrator can read actual provider requirements
+            provider_cfg = getattr(provider, "config", None) if provider else None
             transport = self.transport_orchestrator.resolve_transport(
                 provider_name=provider_name,
                 provider_caps=provider_caps,
                 channel_vars=channel_vars,
+                provider_config=provider_cfg,
             )
             
             # Store transport in session (keep as object, not dict, for legacy code compatibility)
@@ -5095,9 +5446,12 @@ class Engine:
             await self._save_session(session)
             
             # Apply to streaming manager
+            # CRITICAL: Do NOT set global sample_rate - it's shared across all calls!
+            # Each call must pass target_sample_rate explicitly to start_streaming_playback()
             try:
                 self.streaming_playback_manager.audiosocket_format = transport.wire_encoding
-                self.streaming_playback_manager.sample_rate = transport.wire_sample_rate
+                # REMOVED: self.streaming_playback_manager.sample_rate = transport.wire_sample_rate
+                # Global sample_rate causes race condition when multiple calls use different rates
                 if hasattr(self.streaming_playback_manager, 'chunk_size_ms'):
                     self.streaming_playback_manager.chunk_size_ms = transport.chunk_ms
                 if hasattr(self.streaming_playback_manager, 'idle_cutoff_ms'):
@@ -5116,12 +5470,20 @@ class Engine:
             try:
                 provider = self.providers.get(provider_name)
                 if provider and hasattr(provider, 'config'):
-                    # Check if this is a continuous_input provider (P1)
+                    # Check if this is a continuous_input provider using capabilities
                     is_continuous_input = False
                     try:
-                        if provider_name in ("deepgram", "openai_realtime"):
+                        capabilities = None
+                        if hasattr(provider, 'get_capabilities'):
+                            try:
+                                capabilities = provider.get_capabilities()
+                            except Exception:
+                                pass
+                        
+                        if capabilities and capabilities.requires_continuous_audio:
                             is_continuous_input = True
                         else:
+                            # Fallback for legacy providers
                             pcfg = getattr(provider, 'config', None)
                             if isinstance(pcfg, dict):
                                 is_continuous_input = bool(pcfg.get('continuous_input', False))
@@ -5373,14 +5735,55 @@ class Engine:
 
         expected_enc = ""
         expected_rate = pcm_rate
+        gain_target_rms = 0
+        gain_max_db = 0.0
         try:
             provider_cfg = getattr(provider, "config", None)
             if provider_cfg is not None:
-                expected_enc = self._canonicalize_encoding(getattr(provider_cfg, "input_encoding", None))
-                expected_rate = int(getattr(provider_cfg, "input_sample_rate_hz", pcm_rate) or pcm_rate)
-        except Exception:
+                # CRITICAL: Read provider-specific fields first (for real-time providers like Google Live, OpenAI)
+                # Fall back to wire-format fields for backward compatibility (Deepgram Voice Agent)
+                provider_enc = getattr(provider_cfg, "provider_input_encoding", None)
+                wire_enc = getattr(provider_cfg, "input_encoding", None)
+                expected_enc = self._canonicalize_encoding(provider_enc or wire_enc)
+                
+                provider_rate = getattr(provider_cfg, "provider_input_sample_rate_hz", None)
+                wire_rate = getattr(provider_cfg, "input_sample_rate_hz", None)
+                expected_rate = int(provider_rate or wire_rate or pcm_rate)
+
+                # Optional inbound gain configuration (per-provider, disabled by default)
+                try:
+                    gain_target_rms = int(getattr(provider_cfg, "input_gain_target_rms", 0) or 0)
+                except Exception:
+                    gain_target_rms = 0
+                try:
+                    gain_max_db = float(getattr(provider_cfg, "input_gain_max_db", 0.0) or 0.0)
+                except Exception:
+                    gain_max_db = 0.0
+                
+                logger.info(
+                    "🔧 ENCODE CONFIG - Reading provider config",
+                    call_id=call_id,
+                    provider=provider_name,
+                    provider_enc=provider_enc,
+                    wire_enc=wire_enc,
+                    provider_rate=provider_rate,
+                    wire_rate=wire_rate,
+                    expected_enc=expected_enc,
+                    expected_rate=expected_rate,
+                    pcm_rate=pcm_rate,
+                )
+        except Exception as e:
+            logger.error(
+                "🔧 ENCODE CONFIG - Exception reading config",
+                call_id=call_id,
+                provider=provider_name,
+                error=str(e),
+                exc_info=True,
+            )
             expected_enc = ""
             expected_rate = pcm_rate
+            gain_target_rms = 0
+            gain_max_db = 0.0
 
         # Prepare per-call/provider resample state holder
         prov_states = self._resample_state_provider_in.setdefault(call_id, {})
@@ -5389,13 +5792,131 @@ class Engine:
             if expected_rate <= 0:
                 expected_rate = pcm_rate
             if pcm_rate != expected_rate and pcm_bytes:
+                logger.info(
+                    "🔧 ENCODE RESAMPLE - Resampling needed",
+                    call_id=call_id,
+                    provider=provider_name,
+                    pcm_rate=pcm_rate,
+                    expected_rate=expected_rate,
+                    pcm_bytes=len(pcm_bytes),
+                )
                 try:
-                    state = prov_states.get(state_key)
-                    pcm_bytes, state = audioop.ratecv(pcm_bytes, 2, 1, pcm_rate, expected_rate, state)
-                    prov_states[state_key] = state
+                    # CRITICAL FIX: audioop.ratecv() produces incorrect output sizes
+                    # Example: 320 bytes @ 8kHz → 638 bytes @ 16kHz (should be 640)
+                    # This 2-byte misalignment corrupts streaming for Google Live
+                    input_bytes = len(pcm_bytes)
+                    pcm_bytes, _ = audioop.ratecv(pcm_bytes, 2, 1, pcm_rate, expected_rate, None)
+                    
+                    # Calculate expected output size based on sample rate ratio
+                    # input_samples = input_bytes // 2 (2 bytes per sample)
+                    # output_samples = input_samples * (expected_rate / pcm_rate)
+                    # output_bytes = output_samples * 2
+                    expected_bytes = int((input_bytes // 2) * (expected_rate / pcm_rate) * 2)
+                    
+                    # Force exact size by padding or trimming
+                    if len(pcm_bytes) < expected_bytes:
+                        # Pad with zeros (silence)
+                        padding = expected_bytes - len(pcm_bytes)
+                        pcm_bytes += b'\x00' * padding
+                        logger.debug(
+                            "🔧 ENCODE RESAMPLE - Padded to exact size",
+                            call_id=call_id,
+                            provider=provider_name,
+                            before=len(pcm_bytes) - padding,
+                            after=len(pcm_bytes),
+                            padding_bytes=padding,
+                        )
+                    elif len(pcm_bytes) > expected_bytes:
+                        # Trim excess
+                        excess = len(pcm_bytes) - expected_bytes
+                        pcm_bytes = pcm_bytes[:expected_bytes]
+                        logger.debug(
+                            "🔧 ENCODE RESAMPLE - Trimmed to exact size",
+                            call_id=call_id,
+                            provider=provider_name,
+                            before=len(pcm_bytes) + excess,
+                            after=len(pcm_bytes),
+                            trimmed_bytes=excess,
+                        )
+                    
                     pcm_rate = expected_rate
-                except Exception:
-                    pass
+                    logger.info(
+                        "🔧 ENCODE RESAMPLE - Resampling completed (corrected)",
+                        call_id=call_id,
+                        provider=provider_name,
+                        new_rate=pcm_rate,
+                        new_bytes=len(pcm_bytes),
+                        expected_bytes=expected_bytes,
+                    )
+                except Exception as e:
+                    logger.error(
+                        "🔧 ENCODE RESAMPLE - Resampling failed",
+                        call_id=call_id,
+                        provider=provider_name,
+                        error=str(e),
+                        exc_info=True,
+                    )
+            else:
+                logger.info(
+                    "🔧 ENCODE RESAMPLE - No resampling needed",
+                    call_id=call_id,
+                    provider=provider_name,
+                    pcm_rate=pcm_rate,
+                    expected_rate=expected_rate,
+                )
+            
+            if provider_name == "google_live":
+                return pcm_bytes, "slin16", pcm_rate
+            
+            # Re-enabled: Gain normalization required for low-volume audio
+            # Root cause identified: Incoming audio had RMS=23 (needs ~1400)
+            # Without normalization, Google Live cannot understand quiet audio
+            # Silence frames during gating prevent echo while maintaining stream continuity
+            #
+            # NOTE: This is now gated by per-provider config:
+            # - input_gain_target_rms <= 0 or input_gain_max_db <= 0.0  => gain disabled (default)
+            # - both > 0 => enable normalization with configured target/max gain.
+            if pcm_bytes and gain_target_rms > 0 and gain_max_db > 0.0:
+                try:
+                    # audioop already imported at module level - don't re-import here!
+                    current_rms = audioop.rms(pcm_bytes, 2)
+                    target_rms = gain_target_rms
+                    max_gain_db = gain_max_db
+                    
+                    if current_rms > 10:  # Only apply if audio has some energy
+                        gain_needed = target_rms / current_rms
+                        max_gain = 10 ** (max_gain_db / 20.0)
+                        gain = min(gain_needed, max_gain)
+                        
+                        if gain > 1.05:  # Apply if gain needed is >5%
+                            pcm_bytes = audioop.mul(pcm_bytes, 2, gain)
+                            actual_rms = audioop.rms(pcm_bytes, 2)
+                            
+                            # CRITICAL: Warn about excessive gain (indicates audio quality issues)
+                            # High gain on low-quality audio causes distortion and speech recognition failures
+                            if gain > 10.0:
+                                logger.warning(
+                                    "⚠️ AUDIO QUALITY ISSUE: Excessive gain required!",
+                                    call_id=call_id,
+                                    provider=provider_name,
+                                    gain_multiplier=f"{gain:.1f}x",
+                                    rms_before=current_rms,
+                                    rms_target=target_rms,
+                                    recommendation="Check SIP trunk rxgain configuration - incoming audio too quiet",
+                                )
+                            
+                            logger.info(
+                                "🔊 Provider input: Gain applied",
+                                call_id=call_id,
+                                provider=provider_name,
+                                rms_before=current_rms,
+                                rms_after=actual_rms,
+                                rms_target=target_rms,
+                                gain=f"{gain:.2f}",
+                            )
+                except Exception as e:
+                    logger.error(f"Provider input normalization failed: {e}", call_id=call_id, exc_info=True)
+            
             return pcm_bytes, "slin16", pcm_rate
 
         if expected_enc in ("ulaw", "mulaw", "g711_ulaw", "mu-law"):
@@ -5667,9 +6188,17 @@ class Engine:
     ) -> Tuple[str, int, Optional[str]]:
         provider_name = provider_name or getattr(session, "provider_name", None) or self.config.default_provider
 
-        transport_fmt = self._canonicalize_encoding(getattr(session.transport_profile, "format", None)) or "ulaw"
+        # CRITICAL: Use wire_encoding and wire_sample_rate from TransportProfile
+        # TransportProfile (P1) uses wire_encoding/wire_sample_rate, not format/sample_rate
+        transport_fmt = self._canonicalize_encoding(
+            getattr(session.transport_profile, "wire_encoding", None) or 
+            getattr(session.transport_profile, "format", None)
+        ) or "ulaw"
         try:
-            transport_rate = int(getattr(session.transport_profile, "sample_rate", 0) or 0)
+            transport_rate = int(
+                getattr(session.transport_profile, "wire_sample_rate", 0) or 
+                getattr(session.transport_profile, "sample_rate", 0) or 0
+            )
         except Exception:
             transport_rate = 0
         if transport_rate <= 0:
@@ -5682,28 +6211,48 @@ class Engine:
         }
 
         provider = self.providers.get(provider_name)
-        provider_target = None
-        provider_rate = None
+        
+        # CRITICAL FIX: Read provider INPUT format (what provider receives)
+        # NOT target format (what provider outputs)
+        # TransportCard should show: provider receives X, wire expects Y
+        provider_input_enc = None
+        provider_input_rate = None
+        provider_target_enc = None
+        provider_target_rate = None
         try:
             provider_cfg = getattr(provider, "config", None)
-            provider_target = self._canonicalize_encoding(getattr(provider_cfg, "target_encoding", None))
-            raw_rate = getattr(provider_cfg, "target_sample_rate_hz", None)
-            provider_rate = int(raw_rate) if raw_rate else None
+            if provider_cfg:
+                # Modern providers: read provider_input_* for what they receive
+                provider_input_enc = self._canonicalize_encoding(
+                    getattr(provider_cfg, "provider_input_encoding", None) or
+                    getattr(provider_cfg, "input_encoding", None)
+                )
+                raw_input_rate = (
+                    getattr(provider_cfg, "provider_input_sample_rate_hz", None) or
+                    getattr(provider_cfg, "input_sample_rate_hz", None)
+                )
+                provider_input_rate = int(raw_input_rate) if raw_input_rate else None
+                
+                # Also read target for alignment validation
+                provider_target_enc = self._canonicalize_encoding(getattr(provider_cfg, "target_encoding", None))
+                raw_target_rate = getattr(provider_cfg, "target_sample_rate_hz", None)
+                provider_target_rate = int(raw_target_rate) if raw_target_rate else None
         except Exception:
             provider_cfg = None
 
+        # Validate outbound alignment (provider output vs wire expectations)
         remediation: Optional[str] = None
         aligned = True
-        if provider_target and provider_target != transport_fmt:
+        if provider_target_enc and provider_target_enc != transport_fmt:
             aligned = False
             remediation = (
-                f"Provider target_encoding={provider_target} but transport format={transport_fmt}. "
+                f"Provider target_encoding={provider_target_enc} but transport format={transport_fmt}. "
                 f"Update providers.{provider_name}.target_encoding to '{transport_fmt}' in config/ai-agent.yaml."
             )
-        if provider_rate and provider_rate != transport_rate:
+        if provider_target_rate and provider_target_rate != transport_rate:
             aligned = False
             extra = (
-                f"Provider target_sample_rate_hz={provider_rate} but transport sample_rate={transport_rate}. "
+                f"Provider target_sample_rate_hz={provider_target_rate} but transport sample_rate={transport_rate}. "
                 f"Update providers.{provider_name}.target_sample_rate_hz to {transport_rate}."
             )
             remediation = f"{remediation} {extra}".strip() if remediation else extra
@@ -5723,13 +6272,14 @@ class Engine:
                 remediation=remediation,
             )
 
+        # CRITICAL FIX: TransportCard should show INBOUND encoding (what provider receives)
         self._emit_transport_card(
             session.call_id,
             session,
-            source_encoding=provider_target,
-            source_sample_rate=provider_rate,
-            target_encoding=transport_fmt,
-            target_sample_rate=transport_rate,
+            source_encoding=provider_input_enc,    # ✅ What provider RECEIVES
+            source_sample_rate=provider_input_rate, # ✅ What provider RECEIVES
+            target_encoding=transport_fmt,          # ✅ What wire EXPECTS
+            target_sample_rate=transport_rate,      # ✅ What wire EXPECTS
         )
 
         return transport_fmt, transport_rate, remediation
@@ -5928,8 +6478,43 @@ class Engine:
             # Note: Context greeting/prompt injection now happens earlier in P1 _resolve_audio_profile()
             # to ensure config is set BEFORE provider session starts and reads it.
             
-            # Inject tool execution context into provider if it supports tools (Deepgram)
-            if hasattr(provider, 'tool_adapter'):
+            # Build context dict for providers that need it (Google Live, OpenAI Realtime)
+            provider_context = {}
+            try:
+                if session.context_name:
+                    context_config = self.transport_orchestrator.get_context_config(session.context_name)
+                    logger.debug(
+                        "DEBUG: Building provider context",
+                        call_id=call_id,
+                        context_name=session.context_name,
+                        has_context_config=bool(context_config),
+                        config_type=type(context_config).__name__ if context_config else None,
+                        has_tools_attr=hasattr(context_config, 'tools') if context_config else False,
+                    )
+                    if context_config:
+                        # Include tools if defined in context
+                        if hasattr(context_config, 'tools') and context_config.tools:
+                            provider_context['tools'] = context_config.tools
+                            logger.debug(
+                                "Added tools to provider context",
+                                call_id=call_id,
+                                tools=context_config.tools,
+                            )
+                        else:
+                            logger.debug(
+                                "DEBUG: No tools found in context config",
+                                call_id=call_id,
+                                has_tools_attr=hasattr(context_config, 'tools'),
+                                tools_value=getattr(context_config, 'tools', 'NO_ATTR'),
+                            )
+                        # Include prompt for reference (though config.instructions should already be set)
+                        if hasattr(context_config, 'prompt') and context_config.prompt:
+                            provider_context['prompt'] = context_config.prompt
+            except Exception as e:
+                logger.warning(f"Failed to build provider context: {e}", call_id=call_id, exc_info=True)
+            
+            # Inject tool execution context into provider if it supports tools (Deepgram, Google Live)
+            if hasattr(provider, 'tool_adapter') or hasattr(provider, '_tool_adapter'):
                 try:
                     provider._caller_channel_id = session.caller_channel_id
                     provider._bridge_id = session.bridge_id
@@ -5945,7 +6530,7 @@ class Engine:
                     logger.warning(f"Failed to inject tool context: {e}", call_id=call_id)
 
             logger.info("DEBUG: About to call provider.start_session", call_id=call_id, provider=provider_name)
-            await provider.start_session(call_id)
+            await provider.start_session(call_id, context=provider_context if provider_context else None)
             logger.info("DEBUG: provider.start_session completed", call_id=call_id, provider=provider_name)
             # If provider supports an explicit greeting (e.g., LocalProvider), trigger it now
             try:
@@ -6021,10 +6606,18 @@ class Engine:
             app.router.add_get('/metrics', self._metrics_handler)
             runner = web.AppRunner(app)
             await runner.setup()
-            # Host/port now configurable via environment with localhost defaults (AAVA-30)
+            # Host/port configurable via YAML health block with environment overrides (AAVA-30)
             try:
-                health_host = os.getenv('HEALTH_BIND_HOST', '127.0.0.1')
-                health_port = int(os.getenv('HEALTH_BIND_PORT', '15000'))
+                # Precedence: env overrides > YAML health.* > defaults
+                if "HEALTH_BIND_HOST" in os.environ:
+                    health_host = os.getenv('HEALTH_BIND_HOST', '127.0.0.1')
+                else:
+                    health_host = getattr(getattr(self.config, "health", None), "host", "127.0.0.1")
+
+                if "HEALTH_BIND_PORT" in os.environ:
+                    health_port = int(os.getenv('HEALTH_BIND_PORT', '15000'))
+                else:
+                    health_port = int(getattr(getattr(self.config, "health", None), "port", 15000))
             except Exception:
                 health_host = '127.0.0.1'
                 health_port = 15000

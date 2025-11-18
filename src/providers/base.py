@@ -49,16 +49,23 @@ class AIProviderInterface(ABC):
 
 @dataclass
 class ProviderCapabilities:
-    """Static capability hints for transport orchestration.
+    """Static capability hints for transport orchestration and audio processing.
 
     These are not guarantees; providers may still negotiate different formats at runtime.
     """
+    # Audio format capabilities
     input_encodings: List[str]
     input_sample_rates_hz: List[int]
     output_encodings: List[str]
     output_sample_rates_hz: List[int]
     preferred_chunk_ms: int = 20
     can_negotiate: bool = True  # If False, use static config only
+    
+    # Provider type and audio processing capabilities
+    is_full_agent: bool = False  # True for providers like OpenAI Realtime, Google Live, Deepgram Voice Agent
+    has_native_vad: bool = False  # True if provider has built-in Voice Activity Detection
+    has_native_barge_in: bool = False  # True if provider handles interruption/barge-in internally
+    requires_continuous_audio: bool = False  # True if provider needs continuous audio stream (not VAD-gated)
 
 
 def _safe_list(val: Optional[List[Any]]) -> List[Any]:

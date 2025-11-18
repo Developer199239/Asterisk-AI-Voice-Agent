@@ -44,6 +44,7 @@ class ContextConfig:
     greeting: Optional[str] = None
     profile: Optional[str] = None
     provider: Optional[str] = None
+    tools: Optional[list] = None  # Tool names for function calling
 
 
 @dataclass
@@ -78,6 +79,12 @@ class TransportOrchestrator:
         self.profiles = self._load_profiles(config)
         self.contexts = self._load_contexts(config)
         self.default_profile_name = config.get('profiles', {}).get('default', 'telephony_ulaw_8k')
+        
+        # Store audio transport config for wire format detection
+        self.audio_transport = config.get('audio_transport', 'audiosocket')
+        audiosocket_config = config.get('audiosocket', {})
+        self.audiosocket_format = audiosocket_config.get('format', 'slin16') if audiosocket_config else 'slin16'
+        self.audiosocket_sample_rate = audiosocket_config.get('sample_rate', None) if audiosocket_config else None
         
         # If no profiles defined, synthesize from legacy config
         if not self.profiles:
@@ -126,6 +133,7 @@ class TransportOrchestrator:
                     greeting=context_dict.get('greeting'),
                     profile=context_dict.get('profile'),
                     provider=context_dict.get('provider'),
+                    tools=context_dict.get('tools'),  # Extract tools for function calling
                 )
                 logger.debug("Loaded context mapping", name=name, context=contexts[name])
             except Exception as exc:
@@ -184,7 +192,8 @@ class TransportOrchestrator:
         self,
         provider_name: str,
         provider_caps: Optional[ProviderCapabilities],
-        channel_vars: Dict[str, str],
+        channel_vars: Optional[Dict[str, str]] = None,
+        provider_config: Optional[Any] = None,
     ) -> TransportProfile:
         """
         Resolve transport profile for a call.
@@ -193,6 +202,7 @@ class TransportOrchestrator:
             provider_name: Selected provider (deepgram, openai_realtime, etc.)
             provider_caps: Provider capabilities (static or from ACK)
             channel_vars: Asterisk channel variables (AI_PROVIDER, AI_AUDIO_PROFILE, AI_CONTEXT)
+            provider_config: Provider configuration
         
         Returns:
             TransportProfile with resolved settings
@@ -218,7 +228,13 @@ class TransportOrchestrator:
         )
         
         # Step 2: Negotiate formats with provider capabilities
-        transport = self._negotiate_formats(profile, provider_name, provider_caps, context_name)
+        transport = self._negotiate_formats(
+            profile,
+            provider_name,
+            provider_caps,
+            context_name,
+            provider_config,
+        )
         
         # Step 3: Validate and add remediation if needed
         transport = self._validate_and_remediate(transport, provider_caps)
@@ -273,22 +289,74 @@ class TransportOrchestrator:
         provider_name: str,
         provider_caps: Optional[ProviderCapabilities],
         context_name: Optional[str] = None,
+        provider_config: Optional[Any] = None,
     ) -> TransportProfile:
         """
         Negotiate formats between profile preferences and provider capabilities.
         
-        Wire format (AudioSocket) always comes from profile.transport_out.
+        Wire format: For AudioSocket, use audiosocket.format (authoritative).
+                     For RTP, use profile.transport_out (negotiated codec).
         Provider format: try profile preference, fallback to provider's supported formats.
         """
-        # Wire format (AudioSocket) - ALWAYS from profile, never negotiated
-        wire_enc = profile.transport_out.get('encoding', 'slin')
-        wire_rate = profile.transport_out.get('sample_rate_hz', 8000)
+        # CRITICAL: Wire format depends on transport type
+        if self.audio_transport == "audiosocket":
+            # AudioSocket: use actual format from audiosocket.format config
+            wire_enc = self.audiosocket_format
+            wire_rate = self.audiosocket_sample_rate
+            if not wire_rate:
+                # Infer rate from format: slin=8kHz, slin16=16kHz
+                wire_enc_lower = wire_enc.lower().strip()
+                if wire_enc_lower in ('slin', 'linear', 'pcm'):
+                    wire_rate = 8000
+                elif wire_enc_lower in ('slin16', 'linear16', 'pcm16'):
+                    wire_rate = 16000
+                elif wire_enc_lower in ('ulaw', 'mulaw', 'g711_ulaw'):
+                    wire_rate = 8000
+                else:
+                    wire_rate = 8000
+        else:
+            # RTP: use profile's transport_out (negotiated codec)
+            wire_enc = profile.transport_out.get('encoding', 'slin')
+            wire_rate = profile.transport_out.get('sample_rate_hz', 8000)
         
-        # Provider format preferences from profile
-        pref_in_enc = profile.provider_pref.get('input_encoding', 'linear16')
-        pref_out_enc = profile.provider_pref.get('output_encoding', 'linear16')
-        pref_in_rate = profile.provider_pref.get('input_sample_rate_hz', 16000)
-        pref_out_rate = profile.provider_pref.get('output_sample_rate_hz', 16000)
+        # CRITICAL: Read provider's actual requirements from provider config
+        # Modern providers (Google Live, OpenAI) have provider_input_* fields
+        # Legacy providers (Deepgram Voice Agent) use input_* fields
+        # Fall back to profile preferences if provider config unavailable
+        if provider_config:
+            # Try modern provider-specific fields first
+            pref_in_enc = (
+                getattr(provider_config, "provider_input_encoding", None) or
+                getattr(provider_config, "input_encoding", None) or
+                profile.provider_pref.get('input_encoding', 'linear16')
+            )
+            pref_out_enc = (
+                getattr(provider_config, "provider_output_encoding", None) or
+                getattr(provider_config, "output_encoding", None) or
+                profile.provider_pref.get('output_encoding', 'linear16')
+            )
+            try:
+                pref_in_rate = (
+                    getattr(provider_config, "provider_input_sample_rate_hz", None) or
+                    getattr(provider_config, "input_sample_rate_hz", None) or
+                    profile.provider_pref.get('input_sample_rate_hz', 16000)
+                )
+            except Exception:
+                pref_in_rate = profile.provider_pref.get('input_sample_rate_hz', 16000)
+            try:
+                pref_out_rate = (
+                    getattr(provider_config, "provider_output_sample_rate_hz", None) or
+                    getattr(provider_config, "output_sample_rate_hz", None) or
+                    profile.provider_pref.get('output_sample_rate_hz', 16000)
+                )
+            except Exception:
+                pref_out_rate = profile.provider_pref.get('output_sample_rate_hz', 16000)
+        else:
+            # Fallback to profile preferences (legacy behavior)
+            pref_in_enc = profile.provider_pref.get('input_encoding', 'linear16')
+            pref_out_enc = profile.provider_pref.get('output_encoding', 'linear16')
+            pref_in_rate = profile.provider_pref.get('input_sample_rate_hz', 16000)
+            pref_out_rate = profile.provider_pref.get('output_sample_rate_hz', 16000)
         
         # Negotiate with provider if capabilities available
         if provider_caps:

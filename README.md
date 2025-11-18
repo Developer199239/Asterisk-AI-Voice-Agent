@@ -1,21 +1,30 @@
-# Asterisk AI Voice Agent v4.1
+# Asterisk AI Voice Agent v4.2
 
-![Version](https://img.shields.io/badge/version-4.1.0-blue.svg)
+![Version](https://img.shields.io/badge/version-4.2.1-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![Python](https://img.shields.io/badge/python-3.10+-blue.svg)
 ![Docker](https://img.shields.io/badge/docker-compose-blue.svg)
 ![Asterisk](https://img.shields.io/badge/asterisk-18+-orange.svg)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/hkjarral/Asterisk-AI-Voice-Agent)
 
 The most powerful, flexible open-source AI voice agent for Asterisk/FreePBX. Featuring a **modular pipeline architecture** that lets you mix and match STT, LLM, and TTS providers, plus **3 production-ready golden baselines** validated for enterprise deployment.
 
-## 🎉 What's New in v4.1
+## 🎉 What's New in v4.2
 
-* **🔧 Tool Calling**: AI agents can now transfer calls and send emails
+* **🚀 Streamlined Onboarding**: Interactive `agent quickstart` wizard for first-time users
+* **🔧 Enhanced Setup**: ARI validation, API key verification, and dialplan generation
+* **🩺 Config Validation**: `agent config validate` with auto-fix capabilities
+* **📝 Dialplan Helper**: `agent dialplan` generates provider-specific snippets
+* **⚡ Improved install.sh**: Offers CLI installation and automated setup
+* **✅ Production Ready**: All v4.1 features plus improved developer experience
+
+### Previous: v4.1
+
+* **🔧 Tool Calling**: AI agents can transfer calls and send emails
 * **🩺 Agent CLI**: Professional CLI tools (`agent doctor`, `agent troubleshoot`, `agent demo`, `agent init`)
 * **📞 Warm Transfers**: Direct SIP origination with bidirectional audio
 * **📧 Email Integration**: Send transcripts and call summaries via Resend API
 * **🏗️ Unified Architecture**: Write tools once, use with any provider (Deepgram, OpenAI)
-* **✅ Production Validated**: All features tested in production with real call traffic
 
 ## 🌟 Why Asterisk AI Voice Agent?
 
@@ -65,16 +74,18 @@ The most powerful, flexible open-source AI voice agent for Asterisk/FreePBX. Fea
 
 ### 📞 Try it Live! (US Only)
 
-Experience all three golden baseline configurations with a single phone call:
+Experience all four production-ready configurations with a single phone call:
 
 **Dial: (925) 736-6718**
 
-- **Press 6** → Deepgram Voice Agent (Enterprise cloud with Think stage)
-- **Press 7** → OpenAI Realtime API (Modern cloud AI, most natural)
-- **Press 8** → Local Hybrid Pipeline (Privacy-focused, audio stays local)
+* **Press 5** → Google Live API (Multimodal AI with Gemini 2.0)
+* **Press 6** → Deepgram Voice Agent (Enterprise cloud with Think stage)
+* **Press 7** → OpenAI Realtime API (Modern cloud AI, most natural)
+* **Press 8** → Local Hybrid Pipeline (Privacy-focused, audio stays local)
 
-Each configuration uses the same Ava persona with full project knowledge. Compare response times, conversation quality, and naturalness!
+Each configuration uses the same Ava persona with full project knowledge. Compare response times, conversation quality, and naturalness across providers!
 
+**NEW in v4.2**: Google Live API integration with Gemini 2.0 Flash!
 **NEW in v4.1**: Try asking the agent to "transfer me to support" or "email me a transcript"!
 
 ## 🛠️ AI-Powered Actions (v4.1+)
@@ -111,13 +122,22 @@ After every call, admins automatically receive:
 
 **Setup**: See [Tool Calling Guide](docs/TOOL_CALLING_GUIDE.md) for configuration.
 
-## 🩺 Agent CLI Tools (v4.1+)
+## 🩺 Agent CLI Tools (v4.2+)
 
-Production-ready CLI for operations:
+Production-ready CLI for operations and setup:
 
 ```bash
+# NEW: Interactive setup wizard
+agent quickstart
+
+# NEW: Generate dialplan snippets
+agent dialplan
+
+# NEW: Validate configuration
+agent config validate --fix
+
 # System health check
-agent doctor
+agent doctor --fix
 
 # Analyze specific call
 agent troubleshoot
@@ -139,9 +159,30 @@ Supports Linux, macOS (Intel + Apple Silicon), and Windows. See [CLI Tools Guide
 
 ## 🚀 Quick Start
 
-Get up and running in **5 minutes**:
+Get up and running in **5 minutes** with our new interactive wizard:
 
-### 1. Clone and Install
+### Option A: Interactive Quickstart (Recommended for First-Time Users)
+
+```bash
+# Clone repository
+git clone https://github.com/hkjarral/Asterisk-AI-Voice-Agent.git
+cd Asterisk-AI-Voice-Agent
+
+# Run installer (sets up Docker and offers CLI installation)
+./install.sh
+
+# After installation, run interactive setup wizard
+agent quickstart
+```
+
+The wizard will:
+* ✅ Guide you through provider selection
+* ✅ Validate your API keys
+* ✅ Test Asterisk ARI connection
+* ✅ Generate dialplan configuration
+* ✅ Provide next steps
+
+### Option B: Manual Setup (Advanced Users)
 
 ```bash
 git clone https://github.com/hkjarral/Asterisk-AI-Voice-Agent.git
@@ -153,30 +194,31 @@ The installer will:
 * Guide you through **3 simple configuration choices**
 * Prompt for required API keys (only what you need)
 * Set up Docker containers automatically
-* Configure Asterisk integration
+* Offer CLI installation
 
-### 2. Choose Your Configuration
-
-When prompted, select one of the 3 golden baselines:
+**Choose Your Configuration:**
 
 * **[1] OpenAI Realtime** - Fastest setup, modern AI (requires `OPENAI_API_KEY`)
 * **[2] Deepgram Voice Agent** - Enterprise features (requires `DEEPGRAM_API_KEY` + `OPENAI_API_KEY`)
 * **[3] Local Hybrid** - Privacy-focused (requires `OPENAI_API_KEY`, 8GB+ RAM)
 
-The installer automatically starts the correct services for your choice.
-
 ### 3. Configure Asterisk Dialplan
+
+**Option 1: Use the CLI helper:**
+```bash
+agent dialplan --provider openai_realtime
+```
+
+**Option 2: Manual configuration:**
 
 Add this to your FreePBX (Config Edit → extensions_custom.conf):
 
 ```asterisk
 [from-ai-agent]
-exten => s,1,NoOp(Asterisk AI Voice Agent v4.1)
+exten => s,1,NoOp(Asterisk AI Voice Agent v4.2)
  same => n,Stasis(asterisk-ai-voice-agent)
  same => n,Hangup()
 ```
-
-**That's it!** Without any variables, the system uses `local_hybrid` by default.
 
 Then create a Custom Destination pointing to `from-ai-agent,s,1` and route calls to it.
 
@@ -184,19 +226,19 @@ Then create a Custom Destination pointing to `from-ai-agent,s,1` and route calls
 
 Make a call to your configured destination and have a conversation!
 
-**Verify health** (optional):
+**Health check:**
 ```bash
-curl http://127.0.0.1:15000/health
+agent doctor
 ```
 
-**View logs**:
+**View logs:**
 ```bash
 docker compose logs -f ai-engine
 ```
 
 **That's it!** Your AI voice agent is ready. 🎉
 
-For detailed setup, see [docs/FreePBX-Integration-Guide.md](docs/FreePBX-Integration-Guide.md)
+For detailed setup, see [docs/CLI_TOOLS_GUIDE.md](docs/CLI_TOOLS_GUIDE.md) or [docs/FreePBX-Integration-Guide.md](docs/FreePBX-Integration-Guide.md)
 
 ## ⚙️ Configuration
 
@@ -348,6 +390,13 @@ Two-container architecture for performance and scalability:
 ## 🤝 Contributing
 
 Contributions are welcome! Please see our [Contributing Guide](CONTRIBUTING.md) for more details on how to get involved.
+
+### 👩‍💻 For Developers
+
+If you want to contribute features (providers, tools, pipelines) or run the project in a development setup, start with:
+
+- `docs/DEVELOPER_ONBOARDING.md` – end-to-end setup and workflow
+- `AVA.mdc` – AVA, the project manager persona, for guidance via your AI-powered IDE (e.g., Windsurf or any IDE of your choice)
 
 ## 💬 Community
 

@@ -86,6 +86,48 @@ print_error() {
     echo -e "${COLOR_RED}ERROR: $1${COLOR_RESET}"
 }
 
+# --- ARI Validation ---
+validate_ari_connection() {
+    local host="$1"
+    local port="${2:-8088}"
+    local user="$3"
+    local pass="$4"
+    
+    print_info "Testing ARI connection to $host:$port..."
+    
+    local response
+    response=$(curl -sf -u "$user:$pass" "http://$host:$port/ari/asterisk/info" 2>&1)
+    local curl_exit=$?
+    
+    if [ $curl_exit -eq 0 ] && [ -n "$response" ]; then
+        # Try to extract Asterisk version
+        local version=$(echo "$response" | grep -o '"version":"[^"]*' | cut -d'"' -f4)
+        print_success "ARI connection successful"
+        if [ -n "$version" ]; then
+            echo "  Asterisk version: $version"
+        fi
+        return 0
+    else
+        print_error "ARI connection failed"
+        echo ""
+        echo "Troubleshooting steps:"
+        echo "  1. Check Asterisk is running:"
+        echo "     systemctl status asterisk"
+        echo "     (or: docker ps | grep asterisk)"
+        echo ""
+        echo "  2. Verify ARI is enabled in /etc/asterisk/ari.conf:"
+        echo "     [general]"
+        echo "     enabled = yes"
+        echo ""
+        echo "  3. Test connection manually:"
+        echo "     curl -u $user:**** http://$host:$port/ari/asterisk/info"
+        echo ""
+        print_warning "Setup will continue, but calls may fail without working ARI"
+        echo ""
+        return 1
+    fi
+}
+
 # --- System Checks ---
 check_docker() {
     print_info "Checking for Docker..."
@@ -513,6 +555,11 @@ configure_env() {
     else
         ASTERISK_ARI_PASSWORD="$ASTERISK_ARI_PASSWORD_DEFAULT"
     fi
+
+    # Validate ARI connection before proceeding
+    echo ""
+    validate_ari_connection "$ASTERISK_HOST" "8088" "$ASTERISK_ARI_USERNAME" "$ASTERISK_ARI_PASSWORD"
+    echo ""
 
     # API Keys are now handled by prompt_required_api_keys() based on chosen provider
     # This avoids duplicate prompts and only asks for what's needed
@@ -1061,11 +1108,155 @@ EOF
     echo "  docs/FreePBX-Integration-Guide.md"
     echo ""
     
-    # Monitoring and Email Setup Instructions
+    # Call final summary which includes monitoring and CLI installation
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "📊 OPTIONAL: Monitoring & Email Summary Setup"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
+    print_final_summary
+}
+
+# --- Offer CLI Installation ---
+offer_cli_installation() {
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "🛠️  Agent CLI Tools"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    
+    # Check if agent CLI already exists
+    if command -v agent >/dev/null 2>&1; then
+        local version=$(agent version 2>/dev/null | head -1 || echo "unknown")
+        print_success "agent CLI already installed: $version"
+        echo ""
+        print_info "Available commands:"
+        print_info "  • agent dialplan  - Generate dialplan snippets"
+        print_info "  • agent doctor    - Health check"
+        print_info "  • agent demo      - Test audio pipeline"
+        echo ""
+        return 0
+    fi
+    
+    # Detect platform
+    local OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+    local ARCH=$(uname -m)
+    
+    case $ARCH in
+        x86_64) ARCH="amd64" ;;
+        aarch64|arm64) ARCH="arm64" ;;
+        *)
+            print_warning "Unsupported architecture: $ARCH"
+            print_info "You can build from source: make cli-build"
+            echo ""
+            return 1
+            ;;
+    esac
+    
+    case $OS in
+        linux|darwin) ;;
+        *)
+            print_warning "Unsupported OS: $OS"
+            print_info "You can build from source: make cli-build"
+            echo ""
+            return 1
+            ;;
+    esac
+    
+    # Offer installation
+    echo "The agent CLI provides helpful tools for setup and troubleshooting:"
+    echo "  • agent dialplan  - Generate dialplan configuration"
+    echo "  • agent doctor    - System health check"
+    echo "  • agent demo      - Test audio pipeline"
+    echo "  • agent troubleshoot - Post-call analysis"
+    echo ""
+    
+    read -p "Install agent CLI tool? [Y/n]: " install_cli
+    
+    if [[ "$install_cli" =~ ^[Nn]$ ]]; then
+        print_info "Skipping CLI installation"
+        echo ""
+        print_info "You can install it later with:"
+        print_info "  make cli-build && sudo cp bin/agent /usr/local/bin/"
+        echo ""
+        print_manual_next_steps
+        return 0
+    fi
+    
+    # Download and install
+    print_info "Installing agent CLI for $OS/$ARCH..."
+    
+    local BINARY_URL="https://github.com/hkjarral/Asterisk-AI-Voice-Agent/releases/latest/download/agent-${OS}-${ARCH}"
+    local TEMP_FILE="/tmp/agent-cli-$$"
+    
+    if curl -sfL "$BINARY_URL" -o "$TEMP_FILE"; then
+        chmod +x "$TEMP_FILE"
+        
+        # Try to install to /usr/local/bin
+        if $SUDO mv "$TEMP_FILE" /usr/local/bin/agent 2>/dev/null; then
+            print_success "agent CLI installed to /usr/local/bin/agent"
+        else
+            # Fallback to local bin
+            mkdir -p "$HOME/.local/bin"
+            mv "$TEMP_FILE" "$HOME/.local/bin/agent"
+            print_success "agent CLI installed to $HOME/.local/bin/agent"
+            
+            # Check if in PATH
+            if ! echo "$PATH" | grep -q "$HOME/.local/bin"; then
+                print_warning "$HOME/.local/bin is not in your PATH"
+                print_info "Add to ~/.bashrc or ~/.zshrc:"
+                print_info "  export PATH=\"\$HOME/.local/bin:\$PATH\""
+            fi
+        fi
+        
+        # Verify installation
+        local agent_path=$(command -v agent 2>/dev/null)
+        if [ -n "$agent_path" ]; then
+            local version=$(agent version 2>/dev/null | head -1 || echo "installed")
+            print_success "Verified: $version"
+            echo ""
+            
+            # Offer to run dialplan generator
+            echo "Generate dialplan configuration now?"
+            echo "  This will print the dialplan snippet you need to add to Asterisk"
+            echo ""
+            read -p "Run 'agent dialplan' now? [Y/n]: " run_dialplan
+            
+            if [[ ! "$run_dialplan" =~ ^[Nn]$ ]]; then
+                echo ""
+                agent dialplan --provider "$PROFILE" --file /etc/asterisk/extensions_custom.conf || true
+                echo ""
+            fi
+        fi
+    else
+        print_warning "Could not download agent CLI (network issue or release not available)"
+        echo ""
+        print_info "You can build from source:"
+        print_info "  make cli-build && sudo cp bin/agent /usr/local/bin/"
+        echo ""
+        print_manual_next_steps
+    fi
+    
+    echo ""
+}
+
+# --- Print Manual Next Steps ---
+print_manual_next_steps() {
+    echo "Manual Configuration Steps:"
+    echo ""
+    echo "1. Add dialplan configuration:"
+    echo "   See the snippet printed above"
+    echo "   File: /etc/asterisk/extensions_custom.conf (or via FreePBX GUI)"
+    echo ""
+    echo "2. Create FreePBX Custom Destination:"
+    echo "   Admin → Custom Destination → Add"
+    echo "   Target: from-ai-agent,s,1"
+    echo ""
+    echo "3. For detailed steps, see:"
+    echo "   docs/FreePBX-Integration-Guide.md"
+}
+
+# --- Print Monitoring Instructions ---
+print_monitoring_instructions() {
     echo "To enable email summaries and enhanced monitoring:"
     echo ""
     echo "1. Get a Resend API key:"
@@ -1089,14 +1280,24 @@ EOF
     echo "For Grafana/Prometheus integration, see:"
     echo "  docs/MONITORING_GUIDE.md"
     echo ""
+}
+
+# --- Final Summary ---
+print_final_summary() {
+    # Print monitoring instructions
+    print_monitoring_instructions
+    
+    # Offer CLI installation and quickstart
+    offer_cli_installation
     
     print_success "Installation complete! 🎉"
     echo ""
     print_info "🔍 Next steps:"
-    print_info "  1. Make a test call to verify everything works"
-    print_info "  2. Check logs: docker-compose logs -f ai-engine"
-    print_info "  3. Switch pipelines: Edit config/ai-agent.yaml (change default_provider)"
-    print_info "  4. Optional: Set up monitoring (see instructions above)"
+    print_info "  1. Configure dialplan (see snippet above or run: agent dialplan)"
+    print_info "  2. Make a test call to verify everything works"
+    print_info "  3. Check logs: docker-compose logs -f ai-engine"
+    print_info "  4. Switch pipelines: Edit config/ai-agent.yaml (change default_provider)"
+    print_info "  5. Optional: Set up monitoring (see instructions above)"
 }
 
 # --- Main ---

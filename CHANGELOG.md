@@ -5,6 +5,260 @@ All notable changes to the Asterisk AI Voice Agent project will be documented in
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Planned
+- Additional provider integrations
+- Enhanced monitoring features
+
+## [4.2.1] - 2025-11-18
+
+### Added
+
+#### Streamlined Onboarding Experience
+- **🚀 Interactive Setup Wizard**: New `agent quickstart` command guides first-time users through complete setup
+  - Step-by-step provider selection (OpenAI, Deepgram, Google, Local Hybrid)
+  - Real-time API key validation before saving
+  - Asterisk ARI connection testing
+  - Automatic dialplan snippet generation
+  - Clear next steps and FreePBX integration instructions
+- **🔧 Enhanced install.sh**: Improved installer with CLI integration
+  - ARI connection validation after credentials input
+  - Shows Asterisk version on successful connection
+  - Offers CLI tool installation with platform auto-detection
+  - Launches `agent dialplan` helper if CLI installed
+  - Graceful fallbacks for unsupported platforms or download failures
+- **📝 Dialplan Generation Helper**: New `agent dialplan` command
+  - Generates provider-specific dialplan snippets
+  - Supports all providers: OpenAI Realtime, Deepgram, Google Live, Local Hybrid
+  - Shows FreePBX Custom Destination setup steps
+  - Includes context override examples (AI_PROVIDER, AI_CONTEXT variables)
+  - Print-only approach (no auto-write to files)
+- **✅ Configuration Validation**: New `agent config validate` command
+  - Validates YAML syntax and structure
+  - Checks required fields and provider configurations
+  - Verifies sample rate alignment across providers
+  - Validates transport compatibility
+  - Checks barge-in configuration
+  - `--fix` flag for interactive auto-fix
+  - `--strict` mode for CI/CD (treats warnings as errors)
+  - Exit codes: 0 (valid), 1 (warnings), 2 (errors)
+- **🩺 Doctor Auto-Fix**: Enhanced `agent doctor` with `--fix` flag
+  - Focuses on YAML config validation issues
+  - Guides users to `agent config validate --fix` for detailed repairs
+  - Re-runs health checks after fixes applied
+
+#### API and Connection Validation
+- **API Key Validation**: Real-time validation before saving credentials
+  - OpenAI: Validates against `/v1/models` endpoint, checks for GPT models
+  - Deepgram: Validates against `/v1/projects` endpoint
+  - Google: Format validation (length check)
+  - Clear error messages with troubleshooting guidance
+  - Network timeout handling (10 second limit)
+- **ARI Connection Testing**: Validates Asterisk connectivity during setup
+  - Tests connection to `/ari/asterisk/info`
+  - Extracts and displays Asterisk version
+  - Shows troubleshooting steps on failure
+  - Continues with warning if validation fails
+
+#### Documentation
+- **CLI Tools Guide**: Updated with all new v4.2 commands
+  - Comprehensive `agent quickstart` reference with example session
+  - `agent dialplan` usage and output examples
+  - `agent config validate` with validation checks and flags
+  - Version bumped to v4.2
+- **README.md**: Updated Quick Start section
+  - Two-path approach: Interactive Quickstart vs Manual Setup
+  - Highlights new `agent quickstart` wizard
+  - Shows new CLI commands (`dialplan`, `config validate --fix`)
+  - Updated version references to v4.2
+- **Developer Experience**: Enhanced setup documentation
+  - Clear separation between first-time and advanced user paths
+  - Better CLI tool discovery and installation guidance
+
+### Fixed
+
+#### OpenAI Realtime Provider
+- **Hangup Tool Reliability**: Fixed issue where calls wouldn't hang up when OpenAI failed to generate farewell audio
+  - Now emits `HangupReady` immediately when `response.done` arrives without audio
+  - Eliminated reliance on timeout-only fallback mechanism
+  - Ensures consistent call termination regardless of OpenAI audio generation
+- **Self-Interruption Prevention**: Resolved agent overhearing itself and interrupting mid-response
+  - Increased `post_tts_end_protection_ms` from 100ms to 800ms (8x longer guard window)
+  - Tuned `turn_detection.threshold` from 0.5 to 0.6 (less sensitive to agent's own voice)
+  - Increased `turn_detection.silence_duration_ms` from 600ms to 1000ms (more patient turn-taking)
+  - Result: Clean, natural conversation flow without choppy interruptions
+- **Greeting Timing**: Attempted optimization of `session.updated` ACK timeout (reverted due to audio issues)
+
+#### Local Hybrid Pipeline
+- **Critical Sample Rate Fix**: Resolved Vosk STT recognition failure
+  - Changed `external_media.format` from `slin` to `slin16` and `sample_rate` from 8000 to 16000
+  - Enabled RTP server resampling to match Vosk's native 16kHz requirement
+  - Audio now correctly resampled: 8kHz μ-law → decode → 16kHz PCM16 → Vosk
+  - Result: Clear two-way conversation with accurate transcription
+- **Audio Flow Debugging**: Added comprehensive debug logging for troubleshooting
+  - Traces audio bytes, RMS levels, sample counts through full pipeline
+  - Helps diagnose future audio routing or quality issues
+
+#### Logging Optimization
+- **Production Log Volume**: Reduced local-ai-server log noise
+  - Implemented `LOCAL_DEBUG` environment flag to gate verbose audio flow logs
+  - Moved detailed audio processing logs (`FEEDING VOSK`, RMS calculation) behind debug flag
+  - Preserved essential logs (STT finals, LLM results, TTS output, connection events)
+  - Result: ~90% log volume reduction in production with `LOCAL_DEBUG=0`
+- **Configuration Clarity**: Improved `.env.example` documentation
+  - Clear section headers distinguishing ai-engine vs local-ai-server settings
+  - Explicit warnings about log volume impact of debug flags
+  - Better guidance on production vs development logging levels
+
+### Added
+
+#### Documentation
+- **Local Hybrid Golden Baseline**: Complete production-validated configuration reference
+  - Performance metrics, architecture, sample rate fix details
+  - Call quality assessment and tuning recommendations
+  - See `docs/case-studies/Local-Hybrid-Golden-Baseline.md`
+- **Logging Optimization Guide**: Comprehensive logging strategy documentation
+  - Debug flag usage, log volume comparison, configuration examples
+  - See `docs/LOCAL_AI_SERVER_LOGGING_OPTIMIZATION.md`
+
+#### Unified Transfer Tool (AAVA-63, AAVA-74)
+- **Unified Transfer System**: Single `transfer` tool replaces separate `transfer_call` and `transfer_to_queue` tools
+  - **Extension Transfers**: Direct dial to specific agents (ARI `redirect`, channel stays in Stasis)
+  - **Queue Transfers**: Transfer to ACD queues for next available agent (ARI `continue` to `ext-queues`)
+  - **Ring Group Transfers**: Transfer to ring groups that ring multiple agents simultaneously (ARI `continue` to `ext-group`)
+- **Smart Routing**: Automatic routing based on destination type configuration
+- **Proper Cleanup Handling**: `transfer_active` flag prevents premature caller hangup for queue/ring group transfers
+- **Production Verified**: All three transfer types validated on live production server
+- **Configuration**: Unified `tools.transfer.destinations` structure with type-based routing
+
+#### Voicemail Tool (AAVA-51)
+- **Voicemail Routing**: New `leave_voicemail` tool sends callers to voicemail
+  - Routes to FreePBX voicemail via `ext-local,vmu{extension},1` dialplan pattern
+  - Uses ARI `continue()` pattern consistent with queue/ring group transfers
+  - `transfer_active` flag prevents premature caller hangup
+  - Configurable voicemail box extension number
+- **Interactive Prompt Strategy**: Tool asks "Are you ready to leave a message now?" to work around FreePBX VoiceMail app behavior
+  - VoiceMail app requires bidirectional RTP and voice activity before playing greeting
+  - Without caller interaction, 5-8 second delay occurs before greeting plays
+  - Caller response establishes RTP path and triggers greeting immediately
+- **Comprehensive Documentation**: Detailed behavioral analysis and timeline evidence in module docstring
+- **Production Verified**: Tested and deployed on live production server
+
+### Changed
+- **Breaking**: Removed `transfer_call` and `transfer_to_queue` tools in favor of unified `transfer` tool
+- **Configuration Migration**: Update from separate tool configs to unified `transfer.destinations` structure
+
+## [4.2.0] - 2025-11-14
+
+### 🚀 Major Feature: Google Live Provider (Real-Time Agent)
+
+Version 4.2 introduces the **Google Live provider** - a real-time bidirectional streaming agent powered by Gemini 2.5 Flash with native audio capabilities. This provider delivers ultra-low latency (<1 second) and true duplex communication, making it the fastest option in the Asterisk AI Voice Agent.
+
+### Added
+
+#### Google Live Provider (AAVA-75)
+- **Real-Time Bidirectional Streaming**: Full-duplex communication with Gemini 2.5 Flash
+  - Native audio processing (no separate STT/TTS pipeline)
+  - Ultra-low latency: <1 second response time
+  - True duplex: Natural interruptions and barge-in
+  - WebSocket-based streaming communication
+- **Provider Implementation**: `src/providers/google_live.py`
+  - WebSocket connection to Gemini Live API
+  - Bidirectional audio streaming with automatic resampling
+  - Native tool execution via Google function declarations
+  - Session management with context retention
+- **Tool Adapter**: `src/tools/adapters/google.py`
+  - Converts tools to Google function declaration format
+  - Handles async tool execution in streaming mode
+  - Sends tool responses back to Gemini
+- **Audio Processing**: Automatic resampling for telephony compatibility
+  - Input: 8kHz μ-law → 16kHz PCM16 → Gemini
+  - Output: 24kHz PCM16 from Gemini → 8kHz μ-law → Asterisk
+- **Configurable Parameters**: Full YAML configuration support
+  - LLM generation parameters (temperature, max_output_tokens, top_p, top_k)
+  - Response modalities (audio, text, audio_text)
+  - Transcription toggles (enable_input_transcription, enable_output_transcription)
+  - Voice selection (Aoede, Kore, Leda, Puck, Charon, etc.)
+- **Golden Baseline**: Validated production-ready configuration
+  - See `docs/GOOGLE_LIVE_GOLDEN_BASELINE.md` for complete reference
+  - Call quality: Excellent, clean two-way conversation
+  - Response latency: <1 second (fastest available)
+  - All features validated: duplex, barge-in, tools, transcriptions
+
+#### Transcription System (AAVA-75)
+- **Dual Transcription Support**: User and AI speech transcription
+  - `inputTranscription`: Captures user speech
+  - `outputTranscription`: Captures AI speech
+  - Turn-complete based: Saves only final utterances
+  - Incremental fragment concatenation for complete transcripts
+- **Email Summary Integration**: Complete conversation history in emails
+  - Auto-triggered email summaries at call end
+  - Manual transcript requests via `request_transcript` tool
+  - Transcripts include both user and AI speech
+- **Conversation History**: Full conversation tracking
+  - Stored in session for context retention
+  - Available for email summaries and transcript requests
+  - Proper turn management with `turnComplete` flag
+
+### Fixed
+
+#### Transcript Email Timing (CRITICAL)
+- **Issue**: `request_transcript` tool sent email immediately (mid-call), missing final conversation
+- **Fix**: Defer transcript sending until call end
+  - Store email address in session during call
+  - Send complete transcript at call cleanup with full conversation history
+  - Prevents incomplete transcripts missing final exchanges
+- **Impact**: Transcripts now include complete conversation including goodbye
+
+#### Call Ending Protocol
+- **Issue**: AI didn't hang up calls after completing tasks, leaving silence
+- **Fix**: Explicit call ending protocol in system prompts
+  - Step-by-step protocol for detecting conversation end
+  - "Is there anything else?" prompt after completing tasks
+  - Immediate `hangup_call` tool execution on confirmation
+  - Never leave calls hanging in silence
+- **Impact**: Professional call termination, no manual hangup needed
+
+#### Greeting Implementation
+- **Issue**: Cannot pre-fill model responses in Gemini Live API
+- **Fix**: Send user turn requesting AI to speak greeting
+  - Changed from pre-filled model response to user request
+  - AI generates and speaks personalized greeting naturally
+  - Properly uses caller name in greeting
+- **Impact**: Greetings now work correctly with caller personalization
+
+#### Incremental Transcription Handling
+- **Issue**: API sends word-by-word fragments, not cumulative text
+- **Fix**: Concatenate fragments instead of replacing buffer
+  - Buffer accumulates fragments until `turnComplete`
+  - Prevents fragmented/incomplete transcriptions
+  - Matches actual API behavior (differs from documentation)
+- **Impact**: Complete, clean transcriptions of all speech
+
+### Changed
+- **Documentation**: Renamed `docs/GOOGLE_CLOUD_SETUP.md` → `docs/GOOGLE_PROVIDER_SETUP.md`
+  - Updated to cover both Google Live and Cloud Pipeline modes
+  - Added comprehensive setup instructions for both
+  - Separate dialplan examples for each mode
+- **Configuration Examples**: Updated `config/ai-agent.yaml`
+  - Added `demo_google_live` context with full configuration
+  - Includes all new configurable parameters with inline docs
+  - Clear call ending protocol in system prompts
+
+### Performance
+- **Latency**: <1 second response time (fastest provider)
+- **Audio Quality**: Excellent, natural conversation flow
+- **Duplex Communication**: True full-duplex with seamless interruptions
+- **Reliability**: Production-tested with clean call termination
+
+### Lessons Learned
+- Trust API turn completion signals over custom heuristics
+- API behavior may differ from documentation - always validate with testing
+- Defer email sending until call end for complete transcripts
+- Be explicit about call ending protocols in system prompts
+- Provide maximum user flexibility via YAML configuration
+
 ## [4.0.0] - 2025-10-29
 
 ### 🎉 Major Release: Modular Pipeline Architecture

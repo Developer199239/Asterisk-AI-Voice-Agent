@@ -6,8 +6,14 @@ Complete reference for the Asterisk AI Voice Agent command-line tools.
 
 The `agent` CLI provides a suite of tools for setup, diagnostics, and troubleshooting. These tools are implemented in Go and designed to simplify operations and reduce time-to-first-call.
 
-**Version**: v4.1  
+**Version**: v4.2  
 **Status**: Production Ready - Binary builds available
+
+**New in v4.2:**
+- `agent quickstart` - Interactive setup wizard for first-time users
+- `agent dialplan` - Generate dialplan snippets
+- `agent config validate` - YAML configuration validation
+- `agent doctor --fix` - Auto-fix configuration issues
 
 ---
 
@@ -346,6 +352,171 @@ if ! agent doctor; then
 fi
 
 echo "Proceeding with deployment"
+```
+
+---
+
+### `agent quickstart` - Interactive Setup Wizard
+
+Guided setup wizard for first-time users to configure the AI agent from scratch.
+
+**Usage:**
+```bash
+agent quickstart
+```
+
+**Steps:**
+1. Provider selection (OpenAI, Deepgram, Google, Local Hybrid)
+2. API key input and validation
+3. Asterisk ARI connection details
+4. Configuration generation
+5. Dialplan snippet generation
+6. Summary and next steps
+
+**Example Session:**
+```
+╔══════════════════════════════════════════════════════════╗
+║   Asterisk AI Voice Agent - Quickstart Wizard           ║
+╚══════════════════════════════════════════════════════════╝
+
+Step 1: Provider Selection
+────────────────────────────────────────────────────────────
+  1) OpenAI Realtime    - Full-duplex conversations
+  2) Deepgram           - Fast transcription
+  3) Google Live API    - Multimodal capabilities
+  4) Local Hybrid       - On-premise (no API key)
+
+Select provider [1-4]: 1
+✓ Selected: OpenAI Realtime
+
+Step 2: API Key Validation
+────────────────────────────────────────────────────────────
+Get your API key from: https://platform.openai.com/api-keys
+
+Enter API key: sk-...
+Validating API key... ✓
+
+Step 3: Asterisk ARI Connection
+────────────────────────────────────────────────────────────
+Asterisk host [localhost]: 
+ARI username [asterisk]: 
+ARI password: ******
+
+Step 5: Dialplan Configuration
+────────────────────────────────────────────────────────────
+Add this snippet to /etc/asterisk/extensions_custom.conf:
+
+[from-ai-agent-openai]
+exten => s,1,NoOp(AI Agent - OpenAI Realtime)
+ same => n,Set(AI_PROVIDER=openai_realtime)
+ same => n,Stasis(asterisk-ai-voice-agent)
+ same => n,Hangup()
+
+Setup Complete!
+```
+
+---
+
+### `agent dialplan` - Generate Dialplan Snippets
+
+Generate Asterisk dialplan configuration for a specific provider.
+
+**Usage:**
+```bash
+agent dialplan [--provider <name>] [--file <path>]
+```
+
+**Flags:**
+- `--provider` - Provider name (openai_realtime, deepgram, local_hybrid, google_live)
+- `--file` - Target file location (default: /etc/asterisk/extensions_custom.conf)
+
+**Example:**
+```bash
+# Interactive provider selection
+agent dialplan
+
+# Specific provider
+agent dialplan --provider openai_realtime
+```
+
+**Output:**
+```
+╔══════════════════════════════════════════════════════════╗
+║   Dialplan Configuration - OpenAI Realtime               ║
+╚══════════════════════════════════════════════════════════╝
+
+Add this snippet to: /etc/asterisk/extensions_custom.conf
+
+[from-ai-agent-openai]
+exten => s,1,NoOp(AI Agent - OpenAI Realtime)
+ same => n,Set(AI_PROVIDER=openai_realtime)
+ same => n,Stasis(asterisk-ai-voice-agent)
+ same => n,Hangup()
+
+FreePBX Setup:
+  1. Admin → Config Edit → extensions_custom.conf
+  2. Paste snippet above
+  3. Save and Apply Config
+  4. Create Custom Destination:
+     Target: from-ai-agent-openai,s,1
+```
+
+---
+
+### `agent config validate` - Configuration Validation
+
+Validate `config/ai-agent.yaml` for syntax and configuration errors.
+
+**Usage:**
+```bash
+agent config validate [flags]
+```
+
+**Flags:**
+- `--file <path>` - Path to config file (default: config/ai-agent.yaml)
+- `--fix` - Attempt to auto-fix issues
+- `--strict` - Treat warnings as errors
+
+**Exit Codes:**
+- `0` - Configuration valid
+- `1` - Warnings found (non-critical)
+- `2` - Errors found (critical)
+
+**Checks:**
+- YAML syntax
+- Required fields present
+- Provider configurations valid
+- Sample rate alignment
+- Transport compatibility
+- Barge-in settings
+
+**Example:**
+```bash
+# Basic validation
+agent config validate
+
+# With auto-fix
+agent config validate --fix
+
+# Strict mode (for CI/CD)
+agent config validate --strict
+```
+
+**Output:**
+```
+Validating config/ai-agent.yaml...
+
+✓ YAML syntax valid
+✓ Required field 'default_provider' present
+✓ Provider 'openai_realtime' enabled
+✓ Provider 'openai_realtime': sample rates aligned (24000 Hz)
+⚠️  No providers are enabled
+❌ Default provider 'unknown' not found in providers
+
+Summary: 4 passed, 1 warning(s), 1 error(s)
+
+❌ Configuration has errors
+   Run with --fix to attempt auto-fix
 ```
 
 ---

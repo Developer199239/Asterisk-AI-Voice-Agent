@@ -48,6 +48,35 @@ Exit codes:
 		
 		result.OutputText(os.Stdout)
 		
+		// If --fix requested and there are issues
+		if doctorFix && (result.CriticalCount > 0 || result.WarnCount > 0) {
+			fmt.Println("")
+			fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+			fmt.Println("🔧 Auto-Fix")
+			fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+			fmt.Println("")
+			
+			fixed, err := checker.AutoFix(result)
+			if err != nil {
+				fmt.Printf("❌ Auto-fix failed: %v\n", err)
+			} else if fixed > 0 {
+				fmt.Printf("✓ Fixed %d issue(s)\n", fixed)
+				fmt.Println("")
+				fmt.Println("Re-running health checks...")
+				fmt.Println("")
+				
+				// Re-run checks
+				result, err = checker.RunAll()
+				if err != nil {
+					return err
+				}
+				result.OutputText(os.Stdout)
+			} else {
+				fmt.Println("⚠️  No issues could be auto-fixed")
+				fmt.Println("   Manual intervention required")
+			}
+		}
+		
 		// Exit with appropriate code
 		if result.CriticalCount > 0 {
 			os.Exit(2)

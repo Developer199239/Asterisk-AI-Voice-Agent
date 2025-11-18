@@ -207,12 +207,18 @@ class DeepgramProvider(AIProviderInterface):
     # P1: Static capability hints for orchestrator
     def get_capabilities(self) -> ProviderCapabilities:
         return ProviderCapabilities(
+            # Audio format capabilities
             input_encodings=["mulaw", "linear16"],
             input_sample_rates_hz=[8000, 16000],
             output_encodings=["mulaw"],
             output_sample_rates_hz=[8000],
             preferred_chunk_ms=20,
             can_negotiate=True,  # Uses SettingsApplied ACK for runtime negotiation
+            # Provider type and audio processing capabilities
+            is_full_agent=True,  # Full voice agent (STT + LLM + TTS integrated)
+            has_native_vad=True,  # Deepgram Voice Agent has built-in VAD
+            has_native_barge_in=True,  # Handles interruptions internally
+            requires_continuous_audio=True,  # Needs continuous audio for VAD
         )
     
     def parse_ack(self, event_data: Dict[str, Any]) -> Optional[ProviderCapabilities]:
@@ -329,8 +335,10 @@ class DeepgramProvider(AIProviderInterface):
         except Exception:
             return pcm_bytes
 
-    async def start_session(self, call_id: str):
-        ws_url = f"wss://agent.deepgram.com/v1/agent/converse"
+    async def start_session(self, call_id: str, context: Optional[Dict[str, Any]] = None):
+        # Use configurable voice agent endpoint when available; fall back to default.
+        base_url = getattr(self.config, "voice_agent_base_url", None) or "wss://agent.deepgram.com/v1/agent/converse"
+        ws_url = base_url
         headers = {'Authorization': f'Token {self.config.api_key}'}
 
         try:
@@ -578,11 +586,16 @@ class DeepgramProvider(AIProviderInterface):
             **summary,
         )
 
-    async def send_audio(self, audio_chunk: bytes):
+    async def send_audio(self, audio_chunk: bytes, sample_rate: int = None, encoding: str = None):
         """Send caller audio to Deepgram in the declared input format.
 
-        Engine upstream uses AudioSocket with μ-law 8 kHz by default. Convert to
-        linear16 at the configured Deepgram input sample rate before sending.
+        Args:
+            audio_chunk: Audio data bytes
+            sample_rate: Source sample rate (if provided by engine)
+            encoding: Source encoding format (if provided by engine)
+        
+        Engine provides explicit encoding/sample_rate when available.
+        Falls back to chunk size inference for backward compatibility.
         """
         if self.websocket and audio_chunk:
             try:
@@ -590,25 +603,35 @@ class DeepgramProvider(AIProviderInterface):
                 chunk_len = len(audio_chunk)
                 input_encoding = (self._get_config_value("input_encoding", None) or "mulaw").strip().lower()
                 target_rate = int(self._get_config_value("input_sample_rate_hz", 8000) or 8000)
-                # Infer actual inbound format and source rate from canonical 20 ms frame sizes
-                #  - 160 B ≈ μ-law @ 8 kHz (20 ms)
-                #  - 320 B ≈ PCM16 @ 8 kHz (20 ms)
-                #  - 640 B ≈ PCM16 @ 16 kHz (20 ms)
-                if chunk_len == 160:
-                    actual_format = "ulaw"
-                    src_rate = 8000
-                elif chunk_len == 320:
-                    actual_format = "pcm16"
-                    src_rate = 8000
-                elif chunk_len == 640:
-                    actual_format = "pcm16"
-                    src_rate = 16000
+                
+                # Use explicit encoding/sample_rate from engine if provided
+                if encoding and sample_rate:
+                    actual_format = encoding.lower().strip()
+                    if actual_format in ("slin16", "linear16", "pcm16"):
+                        actual_format = "pcm16"
+                    elif actual_format in ("ulaw", "mulaw", "g711_ulaw"):
+                        actual_format = "ulaw"
+                    src_rate = sample_rate
                 else:
-                    actual_format = "pcm16" if input_encoding in ("slin16", "linear16", "pcm16") else "ulaw"
-                    try:
-                        src_rate = int(self._get_config_value("input_sample_rate_hz", 0) or 0) or (16000 if actual_format == "pcm16" else 8000)
-                    except Exception:
+                    # Fallback: Infer from chunk size (backward compatibility)
+                    # - 160 B ≈ μ-law @ 8 kHz (20 ms)
+                    # - 320 B ≈ PCM16 @ 8 kHz (20 ms)
+                    # - 640 B ≈ PCM16 @ 16 kHz (20 ms)
+                    if chunk_len == 160:
+                        actual_format = "ulaw"
                         src_rate = 8000
+                    elif chunk_len == 320:
+                        actual_format = "pcm16"
+                        src_rate = 8000
+                    elif chunk_len == 640:
+                        actual_format = "pcm16"
+                        src_rate = 16000
+                    else:
+                        actual_format = "pcm16" if input_encoding in ("slin16", "linear16", "pcm16") else "ulaw"
+                        try:
+                            src_rate = int(self._get_config_value("input_sample_rate_hz", 0) or 0) or (16000 if actual_format == "pcm16" else 8000)
+                        except Exception:
+                            src_rate = 8000
 
                 try:
                     frame_bytes = 160 if actual_format == "ulaw" else int(max(1, src_rate) / 50) * 2

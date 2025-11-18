@@ -9,8 +9,9 @@ import audioop
 class AudioCaptureManager:
     """Utility for capturing per-call audio streams to WAV files."""
 
-    def __init__(self, base_dir: str = "/tmp/ai-engine-captures"):
+    def __init__(self, base_dir: str = "/tmp/ai-engine-captures", keep_files: bool = False):
         self.base_dir = base_dir
+        self.keep_files = keep_files
         self._lock = threading.Lock()
         # key -> (wave.Wave_write, sample_rate)
         self._handles: Dict[Tuple[str, str], Tuple[wave.Wave_write, int]] = {}
@@ -94,9 +95,20 @@ class AudioCaptureManager:
                 pcm16 = payload
                 rate = sample_rate or 16000
             self.append_pcm16(call_id, stream_name, pcm16, rate)
-        except Exception:
-            # Ignore capture failures; they should not break call flow.
-            pass
+        except Exception as e:
+            # Log capture failures for debugging but don't break call flow
+            import structlog
+            logger = structlog.get_logger(__name__)
+            logger.warning(
+                "Audio capture failed",
+                call_id=call_id,
+                stream_name=stream_name,
+                encoding=encoding,
+                sample_rate=sample_rate,
+                payload_len=len(payload) if payload else 0,
+                error=str(e),
+                exc_info=True,
+            )
 
     def close_call(self, call_id: str) -> None:
         keys_to_close = []
@@ -110,6 +122,9 @@ class AudioCaptureManager:
                     keys_to_close.append(key)
             for key in keys_to_close:
                 self._handles.pop(key, None)
+        # Only delete files if not in diagnostic/keep mode
+        if self.keep_files:
+            return
         # After closing wave handles, remove captured files and call directory
         try:
             call_dir = os.path.join(self.base_dir, call_id)

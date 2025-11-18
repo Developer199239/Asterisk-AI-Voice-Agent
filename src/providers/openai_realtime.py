@@ -97,6 +97,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         self._greeting_completed: bool = False  # Track if greeting has finished
         self._farewell_response_id: Optional[str] = None  # Track farewell response for hangup
         self._hangup_after_response: bool = False  # Flag to trigger hangup after next response
+        self._farewell_timeout_task: Optional[asyncio.Task] = None  # Timeout fallback for hangup
         self._in_audio_burst: bool = False
         self._first_output_chunk_logged: bool = False
         self._closing: bool = False
@@ -241,6 +242,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
     # P1: Static capability hints for Transport Orchestrator
     def get_capabilities(self) -> ProviderCapabilities:
         return ProviderCapabilities(
+            # Audio format capabilities
             input_encodings=["ulaw", "linear16"],
             input_sample_rates_hz=[8000, 16000],
             # Output depends on session.update and downstream target; we advertise both
@@ -248,6 +250,11 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             output_sample_rates_hz=[8000, 24000],
             preferred_chunk_ms=20,
             can_negotiate=False,  # Uses static session.update config, not runtime ACK
+            # Provider type and audio processing capabilities
+            is_full_agent=True,  # Full bidirectional agent (not pipeline component)
+            has_native_vad=True,  # OpenAI Realtime has server-side VAD (turn detection)
+            has_native_barge_in=True,  # Handles interruptions via cancel_response
+            requires_continuous_audio=True,  # Needs continuous audio for server-side VAD
         )
     
     def parse_ack(self, event_data: Dict[str, Any]) -> Optional[ProviderCapabilities]:
@@ -304,7 +311,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             )
             return None
 
-    async def start_session(self, call_id: str):
+    async def start_session(self, call_id: str, context: Optional[Dict[str, Any]] = None):
         if not self.config.api_key:
             raise ValueError("OpenAI Realtime provider requires OPENAI_API_KEY")
 
@@ -434,7 +441,17 @@ class OpenAIRealtimeProvider(AIProviderInterface):
 
         logger.info("OpenAI Realtime session established", call_id=call_id)
 
-    async def send_audio(self, audio_chunk: bytes):
+    async def send_audio(self, audio_chunk: bytes, sample_rate: int = None, encoding: str = None):
+        """Send audio to OpenAI Realtime API.
+        
+        Args:
+            audio_chunk: Audio data bytes
+            sample_rate: Source sample rate (if provided by engine)
+            encoding: Source encoding format (if provided by engine)
+        
+        Engine provides explicit encoding/sample_rate when available.
+        Falls back to config-based conversion for backward compatibility.
+        """
         if not audio_chunk:
             return
         if not self.websocket or self.websocket.closed:
@@ -451,12 +468,36 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                         input_encoding=self.config.input_encoding,
                         input_sample_rate_hz=self.config.input_sample_rate_hz,
                         provider_input_sample_rate_hz=self.config.provider_input_sample_rate_hz,
+                        engine_provided_encoding=encoding,
+                        engine_provided_sample_rate=sample_rate,
                     )
                     self._input_info_logged = True
                 except Exception:
                     pass
 
-            pcm16 = self._convert_inbound_audio(audio_chunk)
+            # CRITICAL: Use engine-provided encoding/sample_rate if available
+            # This avoids double conversion and respects the engine's format negotiation
+            if encoding and sample_rate:
+                # Engine already converted to correct format via _encode_for_provider
+                # Trust the engine's conversion
+                if encoding.lower().strip() in ("linear16", "pcm16", "slin16"):
+                    pcm16 = audio_chunk
+                    provider_rate = sample_rate
+                else:
+                    # Unexpected format - fall back to conversion
+                    logger.warning(
+                        "OpenAI Realtime: unexpected encoding from engine, converting",
+                        call_id=self._call_id,
+                        encoding=encoding,
+                        sample_rate=sample_rate
+                    )
+                    pcm16 = self._convert_inbound_audio(audio_chunk)
+                    provider_rate = int(getattr(self.config, "provider_input_sample_rate_hz", 0) or 24000)
+            else:
+                # Fallback: No parameters from engine - do own conversion (backward compat)
+                pcm16 = self._convert_inbound_audio(audio_chunk)
+                provider_rate = int(getattr(self.config, "provider_input_sample_rate_hz", 0) or 24000)
+            
             if not pcm16:
                 return
             
@@ -578,6 +619,9 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                 self._keepalive_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await self._keepalive_task
+            
+            # Cancel farewell timeout if active
+            self._cancel_farewell_timeout()
 
             if self.websocket and not self.websocket.closed:
                 await self.websocket.close()
@@ -667,6 +711,25 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             # When turn_detection is enabled, OpenAI does not send transcription events
             # This is an API limitation - email summaries will only include AI responses
         }
+        
+        # Optional: Add temperature control (affects response creativity and consistency)
+        if hasattr(self.config, 'temperature') and self.config.temperature is not None:
+            session["temperature"] = self.config.temperature
+            logger.debug(
+                "OpenAI temperature configured",
+                call_id=self._call_id,
+                temperature=self.config.temperature
+            )
+        
+        # Optional: Add max response tokens (encourages complete audio responses)
+        if hasattr(self.config, 'max_response_output_tokens') and self.config.max_response_output_tokens:
+            session["max_response_output_tokens"] = self.config.max_response_output_tokens
+            logger.debug(
+                "OpenAI max_response_output_tokens configured",
+                call_id=self._call_id,
+                max_tokens=self.config.max_response_output_tokens
+            )
+        
         # CRITICAL FIX #2: Let OpenAI handle VAD with its optimized defaults
         # Only override if explicitly configured in YAML
         # OpenAI's defaults are tuned for their audio processing pipeline
@@ -834,6 +897,66 @@ class OpenAIRealtimeProvider(AIProviderInterface):
 
         await self._send_json(response_payload)
         self._pending_response = True
+
+    def _start_farewell_timeout(self):
+        """Start a 5-second timeout to ensure hangup happens even if OpenAI doesn't generate audio."""
+        # Cancel any existing timeout first
+        self._cancel_farewell_timeout()
+        
+        # Create new timeout task
+        self._farewell_timeout_task = asyncio.create_task(self._farewell_timeout_handler())
+        logger.debug(
+            "⏱️  Farewell timeout started (5s fallback)",
+            call_id=self._call_id
+        )
+    
+    def _cancel_farewell_timeout(self):
+        """Cancel the farewell timeout if it's still running."""
+        if self._farewell_timeout_task and not self._farewell_timeout_task.done():
+            self._farewell_timeout_task.cancel()
+            logger.debug(
+                "⏱️  Farewell timeout cancelled",
+                call_id=self._call_id
+            )
+            self._farewell_timeout_task = None
+    
+    async def _farewell_timeout_handler(self):
+        """Wait 5 seconds, then trigger hangup if farewell audio wasn't generated."""
+        try:
+            await asyncio.sleep(5.0)
+            
+            # If we reach here, timeout expired without being cancelled
+            logger.warning(
+                "⏱️  Farewell timeout expired - OpenAI did not generate audio within 5s, triggering hangup anyway",
+                call_id=self._call_id
+            )
+            
+            # Emit HangupReady event to trigger hangup
+            try:
+                if self.on_event:
+                    await self.on_event({
+                        "type": "HangupReady",
+                        "call_id": self._call_id,
+                        "reason": "farewell_timeout",
+                        "had_audio": False
+                    })
+            except Exception as e:
+                logger.error(
+                    "Failed to emit HangupReady event from timeout",
+                    call_id=self._call_id,
+                    error=str(e),
+                    exc_info=True
+                )
+        except asyncio.CancelledError:
+            # Normal cancellation when audio completes
+            pass
+        except Exception as e:
+            logger.error(
+                "Farewell timeout handler error",
+                call_id=self._call_id,
+                error=str(e),
+                exc_info=True
+            )
 
     async def _send_json(self, payload: Dict[str, Any]):
         if not self.websocket or self.websocket.closed:
@@ -1099,6 +1222,8 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                         call_id=self._call_id,
                         response_id=response_id
                     )
+                    # Start fallback timeout in case OpenAI doesn't generate audio
+                    self._start_farewell_timeout()
                 else:
                     logger.debug("OpenAI response created", call_id=self._call_id, response_id=response_id)
             return
@@ -1217,6 +1342,23 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                 )
                 # Re-enable turn_detection now that greeting is fully generated
                 await self._re_enable_vad()
+
+                # Request early TTS gating clear so caller audio can flow after greeting
+                try:
+                    if self.on_event and self._call_id:
+                        await self.on_event(
+                            {
+                                "type": "ClearTtsGating",
+                                "call_id": self._call_id,
+                                "reason": "greeting_completed",
+                            }
+                        )
+                except Exception:
+                    logger.debug(
+                        "Failed to emit ClearTtsGating event",
+                        call_id=self._call_id,
+                        exc_info=True,
+                    )
             
             # Check if this was the farewell response
             # CRITICAL: Check farewell_response_id is not None to prevent None == None false positive
@@ -1224,32 +1366,58 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                 self._current_response_id == self._farewell_response_id and 
                 event_type in ("response.completed", "response.done")):
                 
-                # If farewell has no audio, warn but still proceed with hangup
-                if not had_audio_burst:
-                    logger.warning(
-                        "⚠️  Farewell response completed WITHOUT audio - OpenAI did not generate speech",
-                        call_id=self._call_id,
-                        response_id=self._current_response_id
-                    )
-                else:
+                # Cancel timeout if it's still running
+                self._cancel_farewell_timeout()
+                
+                # If farewell has audio, trigger hangup immediately
+                if had_audio_burst:
                     logger.info(
                         "🔚 Farewell response completed with audio - triggering hangup",
                         call_id=self._call_id,
                         response_id=self._current_response_id
                     )
-                
-                # Emit HangupReady event to trigger hangup in engine
-                # Engine will wait 1.0s to ensure any audio completes playing
-                try:
-                    if self.on_event:
-                        await self.on_event({
-                            "type": "HangupReady",
-                            "call_id": self._call_id,
-                            "reason": "farewell_completed",
-                            "had_audio": had_audio_burst
-                        })
-                except Exception as e:
-                    logger.error("Failed to emit HangupReady event", call_id=self._call_id, error=str(e))
+                    
+                    # Emit HangupReady event to trigger hangup in engine
+                    # Engine will wait 1.0s to ensure any audio completes playing
+                    try:
+                        if self.on_event:
+                            await self.on_event({
+                                "type": "HangupReady",
+                                "call_id": self._call_id,
+                                "reason": "farewell_completed",
+                                "had_audio": had_audio_burst
+                            })
+                    except Exception as e:
+                        logger.error(
+                            "Failed to emit HangupReady event",
+                            call_id=self._call_id,
+                            error=str(e),
+                            exc_info=True,
+                        )
+                else:
+                    # No audio generated - trigger hangup immediately
+                    logger.warning(
+                        "⚠️  Farewell response completed WITHOUT audio - triggering immediate hangup",
+                        call_id=self._call_id,
+                        response_id=self._current_response_id
+                    )
+                    
+                    # Emit HangupReady event immediately since there's no audio to wait for
+                    try:
+                        if self.on_event:
+                            await self.on_event({
+                                "type": "HangupReady",
+                                "call_id": self._call_id,
+                                "reason": "farewell_no_audio",
+                                "had_audio": False
+                            })
+                    except Exception as e:
+                        logger.error(
+                            "Failed to emit HangupReady event for no-audio farewell",
+                            call_id=self._call_id,
+                            error=str(e),
+                            exc_info=True,
+                        )
                 
                 # Reset farewell tracking
                 self._farewell_response_id = None
