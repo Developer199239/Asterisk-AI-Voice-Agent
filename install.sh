@@ -86,6 +86,48 @@ print_error() {
     echo -e "${COLOR_RED}ERROR: $1${COLOR_RESET}"
 }
 
+# --- ARI Validation ---
+validate_ari_connection() {
+    local host="$1"
+    local port="${2:-8088}"
+    local user="$3"
+    local pass="$4"
+    
+    print_info "Testing ARI connection to $host:$port..."
+    
+    local response
+    response=$(curl -sf -u "$user:$pass" "http://$host:$port/ari/asterisk/info" 2>&1)
+    local curl_exit=$?
+    
+    if [ $curl_exit -eq 0 ] && [ -n "$response" ]; then
+        # Try to extract Asterisk version
+        local version=$(echo "$response" | grep -o '"version":"[^"]*' | cut -d'"' -f4)
+        print_success "ARI connection successful"
+        if [ -n "$version" ]; then
+            echo "  Asterisk version: $version"
+        fi
+        return 0
+    else
+        print_error "ARI connection failed"
+        echo ""
+        echo "Troubleshooting steps:"
+        echo "  1. Check Asterisk is running:"
+        echo "     systemctl status asterisk"
+        echo "     (or: docker ps | grep asterisk)"
+        echo ""
+        echo "  2. Verify ARI is enabled in /etc/asterisk/ari.conf:"
+        echo "     [general]"
+        echo "     enabled = yes"
+        echo ""
+        echo "  3. Test connection manually:"
+        echo "     curl -u $user:**** http://$host:$port/ari/asterisk/info"
+        echo ""
+        print_warning "Setup will continue, but calls may fail without working ARI"
+        echo ""
+        return 1
+    fi
+}
+
 # --- System Checks ---
 check_docker() {
     print_info "Checking for Docker..."
@@ -513,6 +555,11 @@ configure_env() {
     else
         ASTERISK_ARI_PASSWORD="$ASTERISK_ARI_PASSWORD_DEFAULT"
     fi
+
+    # Validate ARI connection before proceeding
+    echo ""
+    validate_ari_connection "$ASTERISK_HOST" "8088" "$ASTERISK_ARI_USERNAME" "$ASTERISK_ARI_PASSWORD"
+    echo ""
 
     # API Keys are now handled by prompt_required_api_keys() based on chosen provider
     # This avoids duplicate prompts and only asks for what's needed
