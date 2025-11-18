@@ -243,3 +243,12 @@ COMPLETE_*.md
 # Dialplan test/debug files (keep in archived/, never commit)
 dialplan_*.conf
 PRE_MERGE_CHECKLIST.md
+
+# IDE-specific rule files (development only - not for GA/main branch)
+AVA.mdc
+Agents.md
+Gemini.md
+
+# Development-only documentation (Linear integration for contributors)
+docs/LINEAR_MCP_SETUP.md
+docs/linear-issues-community-features.md
