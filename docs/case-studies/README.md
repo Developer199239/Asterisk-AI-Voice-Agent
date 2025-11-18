@@ -11,14 +11,14 @@ Comprehensive documentation of production-validated configurations with complete
   - Status: Production Ready (v4.2.0)
   - Best For: Interactive voice applications requiring natural conversation
 
-- **[OpenAI Realtime Golden Baseline](OPENAI_REALTIME_GOLDEN_BASELINE.md)**
+- **[OpenAI Realtime Golden Baseline](OpenAI-Realtime-Golden-Baseline.md)**
   - Response Latency: <2 seconds
   - Status: Production Ready
   - Best For: Full agent mode with streaming capabilities
 
 ### **Pipeline Providers**
 
-- **[Hybrid Pipeline Golden Baseline](Hybrid-Pipeline-Golden-Baseline.md)**
+- **[Hybrid Pipeline Golden Baseline](Local-Hybrid-Golden-Baseline.md)**
   - Configuration: Local STT/TTS + Cloud LLM
   - Status: Production Ready
   - Best For: Cost optimization with local processing
@@ -39,7 +39,7 @@ Each case study includes:
 
 ## Related Documentation
 
-- **[Milestones](../milestone/)** - Project milestone tracking
+- **[Milestones](../milestones/)** - Project milestone tracking
 - **[Provider Setup Guides](../)** - Initial configuration guides
 - **[Monitoring Guide](../MONITORING_GUIDE.md)** - Production monitoring
 - **[Troubleshooting Guide](../TROUBLESHOOTING_GUIDE.md)** - Common issues and fixes
