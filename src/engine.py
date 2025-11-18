@@ -5020,9 +5020,11 @@ class Engine:
                     if response_text:
                         conversation_history.append({"role": "assistant", "content": response_text})
                     elif tool_calls:
-                        # If only tools, append a placeholder or the tool call details
-                        # For now, just note that tools were called
                         conversation_history.append({"role": "assistant", "content": "(tool execution)"})
+                    
+                    # AAVA-85: Persist session history so tools (email) can access it
+                    session.conversation_history = list(conversation_history)
+                    await self.session_store.upsert_call(session)
 
                     playback_id = None
                     
@@ -5074,13 +5076,12 @@ class Engine:
 
                     # 2. Execute Tools (if any)
                     if tool_calls:
-                        # Wait for playback to finish before executing tools (especially transfer)
+                        # Wait for playback to finish before executing tools (especially transfer/hangup)
                         if playback_id:
                             try:
-                                # Simple wait - in future, improve with events
-                                # Currently play_audio waits for acceptance, not completion
-                                # We rely on the natural duration or provider handling
-                                pass 
+                                # Best effort wait to let user hear the response
+                                # In a real implementation, we'd subscribe to PlaybackFinished
+                                await asyncio.sleep(len(response_text) * 0.08) # Rough estimate 
                             except Exception:
                                 pass
 
@@ -5108,11 +5109,35 @@ class Engine:
                                     result = await tool.execute(args, tool_ctx)
                                     logger.info("Tool execution result", tool=name, result=result)
                                     
-                                    # Handle terminal actions
-                                    if name in ["transfer", "hangup_call", "hangup"]:
-                                        if result.get("status") == "success":
-                                            logger.info("Terminal tool action successful, ending turn loop", tool=name)
-                                            return
+                                    # Handle Hangup (AAVA-85 Fix)
+                                    if result.get("will_hangup"):
+                                        farewell = result.get("message")
+                                        if farewell:
+                                            # Speak farewell
+                                            try:
+                                                # Re-use TTS synthesis for farewell
+                                                fw_bytes = bytearray()
+                                                async for chunk in pipeline.tts_adapter.synthesize(call_id, farewell, pipeline.tts_options):
+                                                    fw_bytes.extend(chunk)
+                                                if fw_bytes:
+                                                    pid = await self.playback_manager.play_audio(call_id, bytes(fw_bytes), "pipeline-farewell")
+                                                    # Wait for farewell to finish (rough estimate or 2s)
+                                                    await asyncio.sleep(2.0)
+                                            except Exception as e:
+                                                logger.error("Farewell TTS failed", error=str(e))
+                                        
+                                        logger.info("Executing explicit hangup via ARI", call_id=call_id)
+                                        try:
+                                            channel_id = getattr(session, 'channel_id', call_id)
+                                            await self.ari_client.delete_channel(channel_id)
+                                        except Exception as e:
+                                            logger.error("ARI hangup failed", error=str(e))
+                                        return
+
+                                    # Handle Terminal Transfer
+                                    if name in ["transfer"] and result.get("status") == "success":
+                                        logger.info("Transfer successful, ending turn loop", tool=name)
+                                        return
                                 else:
                                     logger.warning("Tool not found", tool=name)
                             except Exception as e:
