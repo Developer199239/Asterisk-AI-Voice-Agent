@@ -20,30 +20,23 @@ class UnifiedTransferTool(Tool):
     - Extensions: Direct SIP/PJSIP endpoints
     - Queues: ACD queues via FreePBX ext-queues context
     - Ring Groups: Ring groups via FreePBX ext-group context
-    """
     
-    def __init__(self, config: Dict[str, Any]):
-        """Initialize with config to get available destinations."""
-        super().__init__(config)
-        self._config = config
+    Note: Available destinations are configured in tools.transfer.destinations
+    and validated at execution time.
+    """
     
     @property
     def definition(self) -> ToolDefinition:
-        """Return tool definition with dynamic destination enum."""
-        # Get configured destinations
-        transfer_config = self._config.get("tools", {}).get("transfer", {})
-        destinations = list(transfer_config.get("destinations", {}).keys())
-        
-        # Build description with available destinations
-        if destinations:
-            dest_list = "', '".join(destinations)
-            description = f"Destination name to transfer to. Available: '{dest_list}'"
-        else:
-            description = "Destination name to transfer to"
-        
+        """Return tool definition."""
         return ToolDefinition(
             name="transfer",
-            description="Transfer the caller to another destination (extension, queue, or ring group)",
+            description=(
+                "Transfer the caller to another destination. "
+                "Choose from configured destinations like: "
+                "'sales_agent', 'support_agent', 'sales_queue', 'support_queue', "
+                "'sales_team', 'support_team'. "
+                "The system will validate the destination exists."
+            ),
             category=ToolCategory.TELEPHONY,
             requires_channel=True,
             max_execution_time=30,
@@ -51,9 +44,12 @@ class UnifiedTransferTool(Tool):
                 ToolParameter(
                     name="destination",
                     type="string",
-                    description=description,
-                    required=True,
-                    enum=destinations if destinations else None  # Restrict to configured destinations
+                    description=(
+                        "Name of the destination to transfer to. "
+                        "Examples: 'sales_agent' for direct agent, "
+                        "'sales_queue' for ACD queue, 'sales_team' for ring group"
+                    ),
+                    required=True
                 )
             ]
         )
