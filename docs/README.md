@@ -7,10 +7,12 @@
   - Local AI Server Protocol: `docs/local-ai-server/PROTOCOL.md`
 
 - **Developer Guide**
+  - Developer Onboarding: `docs/DEVELOPER_ONBOARDING.md`
   - Architecture: `docs/Architecture.md`
   - Regression notes: `docs/regressions/`
 
 - **Project**
-  - Plans & milestones: `docs/plan/`, `docs/milestones/`
+  - Roadmap: `docs/ROADMAP.md`
+  - Milestones: `docs/milestones/`
 
 Tip: Start with the Quick Start, then Installation, then the FreePBX guide if you’re integrating with FreePBX.
