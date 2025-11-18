@@ -7,7 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Planned
+- Additional provider integrations
+- Enhanced monitoring features
+
+## [4.2.1] - 2025-11-17
+
+### Fixed
+
+#### OpenAI Realtime Provider
+- **Hangup Tool Reliability**: Fixed issue where calls wouldn't hang up when OpenAI failed to generate farewell audio
+  - Now emits `HangupReady` immediately when `response.done` arrives without audio
+  - Eliminated reliance on timeout-only fallback mechanism
+  - Ensures consistent call termination regardless of OpenAI audio generation
+- **Self-Interruption Prevention**: Resolved agent overhearing itself and interrupting mid-response
+  - Increased `post_tts_end_protection_ms` from 100ms to 800ms (8x longer guard window)
+  - Tuned `turn_detection.threshold` from 0.5 to 0.6 (less sensitive to agent's own voice)
+  - Increased `turn_detection.silence_duration_ms` from 600ms to 1000ms (more patient turn-taking)
+  - Result: Clean, natural conversation flow without choppy interruptions
+- **Greeting Timing**: Attempted optimization of `session.updated` ACK timeout (reverted due to audio issues)
+
+#### Local Hybrid Pipeline
+- **Critical Sample Rate Fix**: Resolved Vosk STT recognition failure
+  - Changed `external_media.format` from `slin` to `slin16` and `sample_rate` from 8000 to 16000
+  - Enabled RTP server resampling to match Vosk's native 16kHz requirement
+  - Audio now correctly resampled: 8kHz μ-law → decode → 16kHz PCM16 → Vosk
+  - Result: Clear two-way conversation with accurate transcription
+- **Audio Flow Debugging**: Added comprehensive debug logging for troubleshooting
+  - Traces audio bytes, RMS levels, sample counts through full pipeline
+  - Helps diagnose future audio routing or quality issues
+
+#### Logging Optimization
+- **Production Log Volume**: Reduced local-ai-server log noise
+  - Implemented `LOCAL_DEBUG` environment flag to gate verbose audio flow logs
+  - Moved detailed audio processing logs (`FEEDING VOSK`, RMS calculation) behind debug flag
+  - Preserved essential logs (STT finals, LLM results, TTS output, connection events)
+  - Result: ~90% log volume reduction in production with `LOCAL_DEBUG=0`
+- **Configuration Clarity**: Improved `.env.example` documentation
+  - Clear section headers distinguishing ai-engine vs local-ai-server settings
+  - Explicit warnings about log volume impact of debug flags
+  - Better guidance on production vs development logging levels
+
 ### Added
+
+#### Documentation
+- **Local Hybrid Golden Baseline**: Complete production-validated configuration reference
+  - Performance metrics, architecture, sample rate fix details
+  - Call quality assessment and tuning recommendations
+  - See `docs/case-studies/Local-Hybrid-Golden-Baseline.md`
+- **Logging Optimization Guide**: Comprehensive logging strategy documentation
+  - Debug flag usage, log volume comparison, configuration examples
+  - See `docs/LOCAL_AI_SERVER_LOGGING_OPTIMIZATION.md`
 
 #### Unified Transfer Tool (AAVA-63, AAVA-74)
 - **Unified Transfer System**: Single `transfer` tool replaces separate `transfer_call` and `transfer_to_queue` tools

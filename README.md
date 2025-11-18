@@ -1,6 +1,6 @@
-# Asterisk AI Voice Agent v4.1
+# Asterisk AI Voice Agent v4.2
 
-![Version](https://img.shields.io/badge/version-4.1.0-blue.svg)
+![Version](https://img.shields.io/badge/version-4.2.1-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![Python](https://img.shields.io/badge/python-3.10+-blue.svg)
 ![Docker](https://img.shields.io/badge/docker-compose-blue.svg)
@@ -348,6 +348,13 @@ Two-container architecture for performance and scalability:
 ## 🤝 Contributing
 
 Contributions are welcome! Please see our [Contributing Guide](CONTRIBUTING.md) for more details on how to get involved.
+
+### 👩‍💻 For Developers
+
+If you want to contribute features (providers, tools, pipelines) or run the project in a development setup, start with:
+
+- `docs/DEVELOPER_ONBOARDING.md` – end-to-end setup and workflow
+- `AVA.mdc` – AVA, the project manager persona, for guidance via your AI-powered IDE (e.g., Windsurf or any IDE of your choice)
 
 ## 💬 Community
 
