@@ -375,32 +375,45 @@ class OpenAILLMAdapter(LLMComponent):
             temperature=payload.get("temperature"),
         )
 
-        async with self._session.post(url, json=payload, headers=headers, timeout=merged["timeout_sec"]) as response:
-            body = await response.text()
-            if response.status >= 400:
-                logger.error(
-                    "OpenAI chat completion failed",
-                    call_id=call_id,
-                    status=response.status,
-                    body_preview=body[:128],
-                )
-                response.raise_for_status()
+        retries = 1
+        for attempt in range(retries + 1):
+            try:
+                async with self._session.post(url, json=payload, headers=headers, timeout=merged["timeout_sec"]) as response:
+                    body = await response.text()
+                    if response.status >= 400:
+                        logger.error(
+                            "OpenAI chat completion failed",
+                            call_id=call_id,
+                            status=response.status,
+                            body_preview=body[:128],
+                        )
+                        response.raise_for_status()
 
-            data = json.loads(body)
-            choices = data.get("choices") or []
-            if not choices:
-                logger.warning("OpenAI chat completion returned no choices", call_id=call_id)
-                return ""
+                    data = json.loads(body)
+                    choices = data.get("choices") or []
+                    if not choices:
+                        logger.warning("OpenAI chat completion returned no choices", call_id=call_id)
+                        return ""
 
-            message = choices[0].get("message") or {}
-            content = message.get("content", "")
-            logger.info(
-                "OpenAI chat completion received",
-                call_id=call_id,
-                model=payload.get("model"),
-                preview=content[:80],
-            )
-            return content
+                    message = choices[0].get("message") or {}
+                    content = message.get("content", "")
+                    logger.info(
+                        "OpenAI chat completion received",
+                        call_id=call_id,
+                        model=payload.get("model"),
+                        preview=content[:80],
+                    )
+                    return content
+            except aiohttp.ClientError as e:
+                if self._session is None or self._session.closed:
+                    logger.info("OpenAI LLM generation cancelled (session closed)", call_id=call_id)
+                    return ""
+
+                if attempt == retries:
+                    logger.error("OpenAI LLM connection error", call_id=call_id, error=str(e))
+                    raise
+
+                logger.warning("OpenAI LLM connection error, retrying", call_id=call_id, error=str(e))
 
     async def _generate_realtime(
         self,
