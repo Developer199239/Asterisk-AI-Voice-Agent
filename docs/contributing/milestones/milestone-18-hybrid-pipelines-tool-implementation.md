@@ -217,7 +217,7 @@ pipelines:
 
 - ✅ `docs/TOOL_CALLING_GUIDE.md` - Added pipeline section
 - ✅ `docs/contributing/COMMON_PITFALLS.md` - Tool execution issues
-- ✅ `docs/contributing/references/aava-85-implementation.md` - Technical deep-dive
+- ✅ `docs/contributing/references/Pipeline-Local_Hybrid-Implementation.md` - Technical deep-dive
 - ✅ `CHANGELOG.md` v4.1.0 - Release notes
 
 ## Success Criteria
@@ -250,7 +250,7 @@ pipelines:
 
 ## References
 
-- **Implementation RCA**: `docs/contributing/references/aava-85-implementation.md`
+- **Implementation RCA**: `docs/contributing/references/Pipeline-Local_Hybrid-Implementation.md`
 - **Tool Development**: `docs/contributing/tool-development.md` (planned)
 - **Common Pitfalls**: `docs/contributing/COMMON_PITFALLS.md#tool-execution-issues`
 - **Tool Calling Guide**: `docs/TOOL_CALLING_GUIDE.md`

@@ -4,6 +4,12 @@ This directory tracks major project milestones and implementation achievements.
 
 ## Recent Milestones
 
+### **Milestone 18: Hybrid Pipelines Tool Implementation (v4.3.1)** 🎯
+- [View Details →](milestone-18-hybrid-pipelines-tool-implementation.md)
+- **Date**: November 19, 2025
+- **Status**: ✅ Complete and Production Validated
+- **Impact**: Tool execution for modular pipelines (local_hybrid) - feature parity with monolithic providers
+
 ### **Milestone 17: Google Live Provider (v4.2.0)** ⚡
 - [View Details →](milestone-17-google-live.md)
 - **Date**: November 14, 2025
@@ -45,12 +51,6 @@ This directory tracks major project milestones and implementation achievements.
 - **Date**: October 2025
 - **Status**: ✅ Complete
 - **Impact**: Eliminated echo and self-interruption
-
-### **Milestone 8: Monitoring Stack**
-- [View Details →](milestone-8-monitoring-stack.md)
-- **Date**: October 2025
-- **Status**: ✅ Complete
-- **Impact**: Production monitoring with Prometheus + Grafana
 
 ### **Milestone 8: Transport Stabilization**
 - [View Details →](milestone-8-transport-stabilization.md)

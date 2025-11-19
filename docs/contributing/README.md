@@ -39,7 +39,7 @@ Technical specs for each provider:
 
 ### Case Studies
 
-- **[AAVA-85 Implementation](references/aava-85-implementation.md)** - Tool execution for pipelines (real-world example)
+- **[Local Hybrid Pipeline Implementation](references/Pipeline-Local_Hybrid-Implementation.md)** - Tool execution for pipelines (real-world example)
 - **[Team Setup Guide](references/team-setup.md)** - Linear MCP integration
 
 ### Development History
@@ -70,7 +70,7 @@ agent troubleshoot     # Debug last call
 agent config validate  # Validate configuration
 ```
 
-See [CLI_TOOLS_GUIDE.md](../CLI_TOOLS_GUIDE.md) for complete CLI reference.
+See [cli/README.md](../../cli/README.md) for complete CLI reference.
 
 ### Using RCA Scripts
 

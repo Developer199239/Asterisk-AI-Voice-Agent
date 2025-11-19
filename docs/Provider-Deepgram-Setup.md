@@ -221,8 +221,7 @@ providers:
 
 ## See Also
 
-- **Implementation Details**: `docs/contributing/references/Provider-Deepgram-Implementation.md`
-- **API Reference**: `docs/contributing/references/Provider-Deepgram-API-Reference.md`
+- **Implementation & API Reference**: `docs/contributing/references/Provider-Deepgram-Implementation.md`
 - **Golden Baseline**: `docs/case-studies/Deepgram-Agent-Golden-Baseline.md`
 - **Common Pitfalls**: `docs/contributing/COMMON_PITFALLS.md`
 - **Tool Calling Guide**: `docs/TOOL_CALLING_GUIDE.md`

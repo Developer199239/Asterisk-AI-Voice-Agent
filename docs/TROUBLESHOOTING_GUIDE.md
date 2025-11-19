@@ -1194,7 +1194,7 @@ docker logs --since 1h ai_engine > ai-engine.log 2>&1
 
 ### 2. Check Documentation
 
-- **[CLI Tools Guide](CLI_TOOLS_GUIDE.md)** - Complete CLI reference
+- **[CLI Tools Guide](../cli/README.md)** - Complete CLI reference
 - **[Production Deployment](PRODUCTION_DEPLOYMENT.md)** - Security & networking
 - **[Configuration Reference](Configuration-Reference.md)** - All settings explained
 - **[Golden Baselines](baselines/golden/)** - Validated configurations

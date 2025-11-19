@@ -134,7 +134,7 @@ Then route a test extension or DID to that context.
 
 ## 6. Use the `agent` CLI for Setup and Health Checks
 
-The project ships with a Go-based CLI (`agent`) to make setup and diagnostics easier. See `docs/CLI_TOOLS_GUIDE.md` for details.
+The project ships with a Go-based CLI (`agent`) to make setup and diagnostics easier. See `cli/README.md` for details.
 
 Typical flow:
 
