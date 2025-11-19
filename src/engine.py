@@ -4743,6 +4743,7 @@ class Engine:
                                 attempt=attempt,
                             )
                         else:
+                            logger.info("DEBUG: About to play audio", call_id=call_id)
                             await self.playback_manager.play_audio(call_id, bytes(tts_bytes), "pipeline-tts-greeting")
                             
                             # AAVA-85: Persist greeting to session history so it appears in email summary
@@ -5125,6 +5126,8 @@ class Engine:
                                 name = tool_call.get("name")
                                 args = tool_call.get("parameters") or {}
                                 tool = tool_registry.get(name)
+                                
+                                logger.info("DEBUG: Processing tool call", name=name, args=args, tool_found=bool(tool), call_id=call_id)
                                 
                                 if tool:
                                     logger.info("Executing pipeline tool", tool=name, call_id=call_id)
