@@ -52,6 +52,7 @@ from .core.streaming_playback_manager import StreamingPlaybackManager
 from .core.transport_orchestrator import TransportOrchestrator, TransportProfile
 from .core.models import CallSession
 from .utils.audio_capture import AudioCaptureManager
+from src.pipelines.base import LLMResponse
 
 logger = get_logger(__name__)
 
@@ -5027,7 +5028,10 @@ class Engine:
                         return
 
                     # Milestone7: Handle structured LLM response with tool calls
-                    from src.pipelines.base import LLMResponse
+                    # from src.pipelines.base import LLMResponse  # Moved to top-level
+                    
+                    logger.info("DEBUG: LLM Result Type", type=str(type(llm_result)), tool_calls_len=len(getattr(llm_result, 'tool_calls', [])), is_llm_response=isinstance(llm_result, LLMResponse), call_id=call_id)
+                    
                     if isinstance(llm_result, LLMResponse):
                         response_text = (llm_result.text or "").strip()
                         tool_calls = llm_result.tool_calls
