@@ -5174,7 +5174,7 @@ class Engine:
                                         logger.info("Executing explicit hangup via ARI", call_id=call_id)
                                         try:
                                             channel_id = getattr(session, 'channel_id', call_id)
-                                            await self.ari_client.delete_channel(channel_id)
+                                            await self.ari_client.hangup_channel(channel_id)
                                         except Exception as e:
                                             logger.error("ARI hangup failed", error=str(e))
                                         return
