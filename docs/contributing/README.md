@@ -99,6 +99,7 @@ For end-user and operator documentation, see the parent [/docs](../) directory:
 
 ## 🆘 Getting Help
 
+- **Join our Discord:** [https://discord.gg/CAVACtaY](https://discord.gg/CAVACtaY) - Community support and discussions
 - **Stuck on something?** Check [Common Pitfalls](COMMON_PITFALLS.md)
 - **Architecture questions?** See [Architecture Deep Dive](architecture-deep-dive.md)
 - **Tool issues?** See [Tool Development](tool-development.md)

@@ -1,8 +1,8 @@
 # Linear MCP Setup (Optional)
 
-This document explains how contributors can connect their AI IDE to the project’s Linear workspace via MCP (Model Context Protocol).
+This document explains how contributors can connect their AI IDE to the project's Linear workspace via MCP (Model Context Protocol).
 
-This is **optional** – all specs are also available locally in `docs/linear-issues-community-features.md`. MCP just makes it easier for tools like AVA to read/update issues directly.
+This is **optional** – join our [Discord server](https://discord.gg/CAVACtaY) for community support and feature discussions. MCP just makes it easier for tools like AVA to read/update issues directly.
 
 ---
 
@@ -55,7 +55,7 @@ When `linear-mcp-server` is available and configured:
 
 If MCP is not available or fails, AVA falls back to:
 
-- `docs/linear-issues-community-features.md`
+- The project [Discord server](https://discord.gg/CAVACtaY) for community discussions
 - `docs/ROADMAP.md` and milestone files
 
 as the canonical specs for community-requested features.
@@ -79,4 +79,3 @@ as the canonical specs for community-requested features.
    - Link your PR and include call IDs / RCA summaries.
 
 This keeps the repo docs and Linear issues in sync, while letting AVA coordinate work across all tools and IDEs.
-
