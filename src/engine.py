@@ -4747,10 +4747,13 @@ class Engine:
                             
                             # AAVA-85: Persist greeting to session history so it appears in email summary
                             try:
+                                logger.info("DEBUG: PERSISTING GREETING START", call_id=call_id, greeting_len=len(greeting))
                                 session.conversation_history.append({"role": "assistant", "content": greeting})
                                 await self.session_store.upsert_call(session)
+                                logger.info("DEBUG: PERSISTING GREETING DONE", call_id=call_id)
                                 logger.info("Persisted initial greeting to session history", call_id=call_id)
                             except Exception as e:
+                                logger.error("DEBUG: PERSISTING GREETING FAILED", call_id=call_id, error=str(e))
                                 logger.warning("Failed to persist greeting history", call_id=call_id, error=str(e))
                                 
                         break
