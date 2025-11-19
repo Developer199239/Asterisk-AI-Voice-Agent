@@ -265,7 +265,7 @@ class Engine:
         
         # DEBUG: Inspect loaded pipelines to verify tools
         try:
-            lh = self.app_config.pipelines.get('local_hybrid')
+            lh = self.config.pipelines.get('local_hybrid')
             if lh:
                 logger.info("DEBUG: local_hybrid pipeline config", tools=lh.tools, raw_entry=str(lh))
             else:
