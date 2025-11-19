@@ -236,6 +236,13 @@ llm:
 pipelines:
   local_hybrid:
     llm: openai_llm
+    tools:
+      - transfer
+      - cancel_transfer
+      - hangup_call
+      - leave_voicemail
+      - send_email_summary
+      - request_transcript
     options:
       llm:
         base_url: https://api.openai.com/v1

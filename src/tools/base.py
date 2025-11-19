@@ -97,9 +97,43 @@ class ToolDefinition:
     
     def to_openai_schema(self) -> Dict[str, Any]:
         """
-        Convert to OpenAI Realtime API function calling format.
+        Convert to OpenAI API function calling format (Chat Completions).
         
         OpenAI format:
+        {
+            "type": "function",
+            "function": {
+                "name": "tool_name",
+                "description": "Tool description",
+                "parameters": {
+                    "type": "object",
+                    "properties": {...},
+                    "required": [...]
+                }
+            }
+        }
+        """
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        p.name: p.to_dict()
+                        for p in self.parameters
+                    },
+                    "required": [p.name for p in self.parameters if p.required]
+                }
+            }
+        }
+    
+    def to_openai_realtime_schema(self) -> Dict[str, Any]:
+        """
+        Convert to OpenAI Realtime API function calling format.
+        
+        OpenAI Realtime format (flatter structure, different from Chat Completions):
         {
             "type": "function",
             "name": "tool_name",
@@ -110,6 +144,8 @@ class ToolDefinition:
                 "required": [...]
             }
         }
+        
+        Note: Realtime API has name/description at top level, not nested under "function"
         """
         return {
             "type": "function",

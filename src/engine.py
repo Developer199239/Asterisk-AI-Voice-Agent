@@ -52,6 +52,7 @@ from .core.streaming_playback_manager import StreamingPlaybackManager
 from .core.transport_orchestrator import TransportOrchestrator, TransportProfile
 from .core.models import CallSession
 from .utils.audio_capture import AudioCaptureManager
+from src.pipelines.base import LLMResponse
 
 logger = get_logger(__name__)
 
@@ -262,6 +263,16 @@ class Engine:
         
         # Milestone7: Pipeline orchestrator coordinates per-call STT/LLM/TTS adapters.
         self.pipeline_orchestrator = PipelineOrchestrator(config)
+        
+        # DEBUG: Inspect loaded pipelines to verify tools
+        try:
+            lh = self.config.pipelines.get('local_hybrid')
+            if lh:
+                logger.info("DEBUG: local_hybrid pipeline config", tools=lh.tools, raw_entry=str(lh))
+            else:
+                logger.warning("DEBUG: local_hybrid pipeline not found in config")
+        except Exception as e:
+            logger.error("DEBUG: failed to inspect pipeline config", error=str(e))
         
         # P1: Transport orchestrator for multi-provider audio format negotiation
         self.transport_orchestrator = TransportOrchestrator(config.dict() if hasattr(config, 'dict') else config.__dict__)
@@ -1917,7 +1928,7 @@ class Engine:
                                 bridge_id=session.bridge_id,
                                 session_store=self.session_store,
                                 ari_client=self.ari_client,
-                                config=self.config.model_dump()
+                                config=self.config.dict()
                             )
                             # Execute synchronously to ensure session is available
                             # Email sending itself is still async (non-blocking)
@@ -1954,7 +1965,7 @@ class Engine:
                                         bridge_id=session.bridge_id,
                                         session_store=self.session_store,
                                         ari_client=self.ari_client,
-                                        config=self.config.model_dump()
+                                        config=self.config.dict()
                                     )
                                     
                                     # Get fresh session data with complete conversation
@@ -4733,7 +4744,20 @@ class Engine:
                                 attempt=attempt,
                             )
                         else:
+                            logger.info("DEBUG: About to play audio", call_id=call_id)
                             await self.playback_manager.play_audio(call_id, bytes(tts_bytes), "pipeline-tts-greeting")
+                            
+                            # AAVA-85: Persist greeting to session history so it appears in email summary
+                            try:
+                                logger.info("DEBUG: PERSISTING GREETING START", call_id=call_id, greeting_len=len(greeting))
+                                session.conversation_history.append({"role": "assistant", "content": greeting})
+                                await self.session_store.upsert_call(session)
+                                logger.info("DEBUG: PERSISTING GREETING DONE", call_id=call_id)
+                                logger.info("Persisted initial greeting to session history", call_id=call_id)
+                            except Exception as e:
+                                logger.error("DEBUG: PERSISTING GREETING FAILED", call_id=call_id, error=str(e))
+                                logger.warning("Failed to persist greeting history", call_id=call_id, error=str(e))
+                                
                         break
                     except RuntimeError as exc:
                         error_text = str(exc).lower()
@@ -4969,7 +4993,8 @@ class Engine:
                     (pipeline.llm_options or {}).get("aggregation_timeout_sec", 2.0)
                 )
                 # Track conversation history to include prior messages
-                conversation_history: List[Dict[str, str]] = []
+                # AAVA-85 FIX: Initialize from session to preserve greeting
+                conversation_history: List[Dict[str, str]] = list(session.conversation_history or [])
 
                 async def cancel_flush() -> None:
                     nonlocal flush_task
@@ -4982,6 +5007,8 @@ class Engine:
                 async def run_turn(transcript_text: str) -> None:
                     nonlocal conversation_history
                     response_text = ""
+                    tool_calls = []
+                    
                     pipeline_label = getattr(session, 'pipeline_name', None) or 'none'
                     provider_label = getattr(session, 'provider_name', None) or 'unknown'
                     t_start = self._last_transcript_ts.get(call_id)
@@ -4991,7 +5018,7 @@ class Engine:
                     context_for_llm = {"prior_messages": list(conversation_history)}
                     
                     try:
-                        response_text = await pipeline.llm_adapter.generate(
+                        llm_result = await pipeline.llm_adapter.generate(
                             call_id,
                             transcript_text,
                             context_for_llm,  # Include conversation history
@@ -5000,54 +5027,175 @@ class Engine:
                     except Exception:
                         logger.debug("LLM generate failed", call_id=call_id, exc_info=True)
                         return
-                    response_text = (response_text or "").strip()
-                    if not response_text:
+
+                    # Milestone7: Handle structured LLM response with tool calls
+                    # from src.pipelines.base import LLMResponse  # Moved to top-level
+                    
+                    logger.info("DEBUG: LLM Result Type", type=str(type(llm_result)), tool_calls_len=len(getattr(llm_result, 'tool_calls', [])), is_llm_response=isinstance(llm_result, LLMResponse), call_id=call_id)
+                    
+                    if isinstance(llm_result, LLMResponse):
+                        response_text = (llm_result.text or "").strip()
+                        tool_calls = llm_result.tool_calls
+                    else:
+                        response_text = (str(llm_result) or "").strip()
+                        tool_calls = []
+
+                    if not response_text and not tool_calls:
                         return
                     
                     # Update conversation history
                     conversation_history.append({"role": "user", "content": transcript_text})
-                    conversation_history.append({"role": "assistant", "content": response_text})
-                    tts_bytes = bytearray()
-                    first_tts_ts: Optional[float] = None
-                    try:
-                        async for tts_chunk in pipeline.tts_adapter.synthesize(
-                            call_id,
-                            response_text,
-                            pipeline.tts_options,
-                        ):
-                            if tts_chunk:
-                                if first_tts_ts is None:
-                                    first_tts_ts = time.time()
-                                    try:
-                                        if t_start is not None:
-                                            _TURN_STT_TO_TTS.labels(pipeline_label, provider_label).observe(max(0.0, first_tts_ts - t_start))
-                                    except Exception:
-                                        pass
-                                tts_bytes.extend(tts_chunk)
-                    except Exception:
-                        logger.debug("TTS synth failed", call_id=call_id, exc_info=True)
-                        return
-                    if not tts_bytes:
-                        return
-                    try:
-                        playback_id = await self.playback_manager.play_audio(
-                            call_id,
-                            bytes(tts_bytes),
-                            "pipeline-tts",
-                        )
+                    if response_text:
+                        conversation_history.append({"role": "assistant", "content": response_text})
+                    elif tool_calls:
+                        conversation_history.append({"role": "assistant", "content": "(tool execution)"})
+                    
+                    # AAVA-85: Persist session history so tools (email) can access it
+                    session.conversation_history = list(conversation_history)
+                    await self.session_store.upsert_call(session)
+                    
+                    logger.info("DEBUG: Post-session-upsert", has_response_text=bool(response_text), has_tool_calls=bool(tool_calls), tool_calls_count=len(tool_calls), call_id=call_id)
+
+                    playback_id = None
+                    
+                    # 1. Synthesize and Play Text (if any)
+                    logger.info("DEBUG: Before TTS block", response_text_len=len(response_text), will_skip_tts=not bool(response_text), call_id=call_id)
+                    if response_text:
+                        tts_bytes = bytearray()
+                        first_tts_ts: Optional[float] = None
                         try:
-                            if playback_id and t_start is not None:
-                                _TURN_RESPONSE_SECONDS.labels(pipeline_label, provider_label).observe(max(0.0, time.time() - t_start))
+                            async for tts_chunk in pipeline.tts_adapter.synthesize(
+                                call_id,
+                                response_text,
+                                pipeline.tts_options,
+                            ):
+                                if tts_chunk:
+                                    if first_tts_ts is None:
+                                        first_tts_ts = time.time()
+                                        try:
+                                            if t_start is not None:
+                                                _TURN_STT_TO_TTS.labels(pipeline_label, provider_label).observe(max(0.0, first_tts_ts - t_start))
+                                        except Exception:
+                                            pass
+                                    tts_bytes.extend(tts_chunk)
                         except Exception:
-                            pass
-                        if not playback_id:
-                            logger.error(
-                                "Pipeline playback failed",
+                            logger.debug("TTS synth failed", call_id=call_id, exc_info=True)
+                            # If TTS fails but we have tools, continue to tools
+                            if not tool_calls:
+                                return
+                        
+                        if tts_bytes:
+                            try:
+                                playback_id = await self.playback_manager.play_audio(
+                                    call_id,
+                                    bytes(tts_bytes),
+                                    "pipeline-tts",
+                                )
+                                try:
+                                    if playback_id and t_start is not None:
+                                        _TURN_RESPONSE_SECONDS.labels(pipeline_label, provider_label).observe(max(0.0, time.time() - t_start))
+                                except Exception:
+                                    pass
+                                if not playback_id:
+                                    logger.error(
+                                        "Pipeline playback failed",
+                                        call_id=call_id,
+                                        size=len(tts_bytes),
+                                    )
+                            except Exception:
+                                logger.error("Pipeline playback exception", call_id=call_id, exc_info=True)
+
+                    # 2. Execute Tools (if any)
+                    logger.info("DEBUG: Reached tool execution block", tool_calls_present=bool(tool_calls), tool_calls_count=len(tool_calls), tool_calls_type=str(type(tool_calls)), call_id=call_id)
+                    if tool_calls:
+                        logger.info("DEBUG: Inside tool_calls block", tool_calls_count=len(tool_calls), playback_id=playback_id, call_id=call_id)
+                        # Wait for playback to finish before executing tools (especially transfer/hangup)
+                        if playback_id:
+                            try:
+                                # Best effort wait to let user hear the response
+                                # In a real implementation, we'd subscribe to PlaybackFinished
+                                await asyncio.sleep(len(response_text) * 0.08) # Rough estimate 
+                            except Exception:
+                                pass
+
+                        logger.info("DEBUG: Before import ToolExecutionContext", call_id=call_id)
+                        from src.tools.context import ToolExecutionContext
+                        from src.tools.registry import tool_registry
+                        logger.info("DEBUG: After imports, before creating context", call_id=call_id)
+                        
+                        # Create execution context
+                        try:
+                            logger.info("DEBUG: About to create ToolExecutionContext", call_id=call_id)
+                            tool_ctx = ToolExecutionContext(
                                 call_id=call_id,
-                                size=len(tts_bytes),
+                                caller_channel_id=getattr(session, 'channel_id', call_id),
+                                session_store=self.session_store,
+                                ari_client=self.ari_client,
+                                config=self.config.dict(),
+                                provider_name="pipeline"
                             )
-                    except Exception:
-                        logger.error("Pipeline playback exception", call_id=call_id, exc_info=True)
+                            logger.info("DEBUG: ToolExecutionContext created successfully", call_id=call_id)
+                        except Exception as ctx_error:
+                            logger.error("DEBUG: ToolExecutionContext creation FAILED", call_id=call_id, error=str(ctx_error), exc_info=True)
+                            raise
+
+                        logger.info("DEBUG: Before for loop", tool_calls_len=len(tool_calls), call_id=call_id)
+                        for tool_call in tool_calls:
+                            try:
+                                logger.info("DEBUG: Inside for loop iteration", tool_call=tool_call, call_id=call_id)
+                                name = tool_call.get("name")
+                                args = tool_call.get("parameters") or {}
+                                tool = tool_registry.get(name)
+                                
+                                logger.info("DEBUG: Processing tool call", name=name, args=args, tool_found=bool(tool), call_id=call_id)
+                                
+                                if tool:
+                                    logger.info("Executing pipeline tool", tool=name, call_id=call_id)
+                                    result = await tool.execute(args, tool_ctx)
+                                    logger.info("Tool execution result", tool=name, result=result)
+                                    
+                                    # Handle Hangup (AAVA-85 Fix)
+                                    if result.get("will_hangup"):
+                                        farewell = result.get("message")
+                                        if farewell:
+                                            # Add farewell to conversation history for email
+                                            conversation_history.append({"role": "assistant", "content": farewell})
+                                            session.conversation_history = list(conversation_history)
+                                            await self.session_store.upsert_call(session)
+                                            logger.info("Farewell added to conversation history", call_id=call_id)
+                                            
+                                            # Speak farewell
+                                            try:
+                                                # Re-use TTS synthesis for farewell
+                                                fw_bytes = bytearray()
+                                                async for chunk in pipeline.tts_adapter.synthesize(call_id, farewell, pipeline.tts_options):
+                                                    fw_bytes.extend(chunk)
+                                                if fw_bytes:
+                                                    pid = await self.playback_manager.play_audio(call_id, bytes(fw_bytes), "pipeline-farewell")
+                                                    # Calculate actual duration: mulaw 8kHz = 8000 bytes/sec
+                                                    duration_sec = len(fw_bytes) / 8000.0
+                                                    # Wait for farewell + small buffer to ensure completion
+                                                    await asyncio.sleep(duration_sec + 0.5)
+                                                    logger.info("Farewell playback completed", duration_sec=duration_sec, call_id=call_id)
+                                            except Exception as e:
+                                                logger.error("Farewell TTS failed", error=str(e))
+                                        
+                                        logger.info("Executing explicit hangup via ARI", call_id=call_id)
+                                        try:
+                                            channel_id = getattr(session, 'channel_id', call_id)
+                                            await self.ari_client.hangup_channel(channel_id)
+                                        except Exception as e:
+                                            logger.error("ARI hangup failed", error=str(e))
+                                        return
+
+                                    # Handle Terminal Transfer
+                                    if name in ["transfer"] and result.get("status") == "success":
+                                        logger.info("Transfer successful, ending turn loop", tool=name)
+                                        return
+                                else:
+                                    logger.warning("Tool not found", tool=name)
+                            except Exception as e:
+                                logger.error("Tool execution failed", tool=name, error=str(e), exc_info=True)
 
                 async def maybe_respond(force: bool, from_flush: bool = False) -> None:
                     nonlocal pending_segments, flush_task
@@ -6520,7 +6668,7 @@ class Engine:
                     provider._bridge_id = session.bridge_id
                     provider._session_store = self.session_store
                     provider._ari_client = self.ari_client
-                    provider._full_config = self.config.model_dump()  # Convert Pydantic model to dict
+                    provider._full_config = self.config.dict()  # Convert Pydantic model to dict
                     logger.debug(
                         "Injected tool execution context into provider",
                         call_id=call_id,

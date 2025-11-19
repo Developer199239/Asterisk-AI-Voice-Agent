@@ -589,6 +589,50 @@ For additional troubleshooting:
 - See monitoring dashboards: `monitoring/README.md`
 - Report issues: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/issues
 
+## 6. Queue Setup for Call Transfers (Optional)
+
+If you plan to use the `transfer` tool to send callers to ACD queues, configure queues in FreePBX:
+
+### 6.1 Create Queue via GUI
+
+1. Navigate to **Applications → Queues** in FreePBX admin
+2. Click **Add Queue**
+3. Configure your queue:
+   - **Queue Number**: e.g., `600` for sales
+   - **Queue Name**: e.g., "Sales Team"
+   - **Strategy**: Choose based on your needs:
+     - `ringall` - Ring all available agents simultaneously
+     - `leastrecent` - Ring agent who hasn't taken a call in longest time
+     - `random` - Random agent selection
+   - **Queue Options**: Configure timeouts, max callers, announcements as needed
+4. Click **Submit** and **Apply Config**
+
+### 6.2 Add Queue Members
+
+Add agents to the queue:
+- Navigate to your queue settings
+- In the **Static Agents** or **Dynamic Members** section, add extension numbers
+- Or configure agents to log in/out dynamically via feature codes
+
+### 6.3 Queue Context in Dialplan
+
+To ensure queues work with transfers, verify the queue context is accessible. In FreePBX, this is typically handled automatically when you create a queue.
+
+For custom dialplan routing, add to `/etc/asterisk/extensions_custom.conf`:
+
+```ini
+[queue-context]
+exten => _6XX,1,NoOp(Transfer to queue ${EXTEN})
+same => n,Queue(${EXTEN},t,,,300)
+same => n,Hangup()
+```
+
+Then reload dialplan: `asterisk -rx "dialplan reload"`
+
+**Testing**: After setup, test the `transfer` tool in a call by asking the AI to "transfer me to sales" (or your queue name).
+
+---
+
 ## 7. Next Steps
 
 Once your integration is working:
@@ -597,7 +641,7 @@ Once your integration is working:
 2. **Monitor performance**: Enable Prometheus + Grafana monitoring (see `monitoring/README.md`)
 3. **Scale up**: Test with higher call volumes
 4. **Explore features**: Try different AI providers, tune VAD/barge-in settings
-5. **Production hardening**: Review `docs/PRODUCTION_DEPLOYMENT.md` (when available)
+5. **Production hardening**: Review `docs/PRODUCTION_DEPLOYMENT.md`
 
 ---
 

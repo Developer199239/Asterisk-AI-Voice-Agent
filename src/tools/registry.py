@@ -106,13 +106,25 @@ class ToolRegistry:
     
     def to_openai_schema(self) -> List[Dict]:
         """
-        Export all tools in OpenAI Realtime API format.
+        Export all tools in OpenAI Chat Completions API format.
         
         Returns:
-            List of tool schemas for OpenAI
+            List of tool schemas for OpenAI Chat Completions (nested format)
         """
         return [
             tool.definition.to_openai_schema()
+            for tool in self._tools.values()
+        ]
+    
+    def to_openai_realtime_schema(self) -> List[Dict]:
+        """
+        Export all tools in OpenAI Realtime API format.
+        
+        Returns:
+            List of tool schemas for OpenAI Realtime API (flat format)
+        """
+        return [
+            tool.definition.to_openai_realtime_schema()
             for tool in self._tools.values()
         ]
     

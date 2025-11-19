@@ -48,9 +48,58 @@ Tool calling enables AI agents to perform real-world actions during conversation
 |----------|--------|-------|
 | **OpenAI Realtime** | ✅ Full Support | Production validated (Nov 9, 2025) |
 | **Deepgram Voice Agent** | ✅ Full Support | Production validated (Nov 9, 2025) |
-| **Custom Pipelines** | 🚧 Planned | v4.3 release (AAVA-56) |
+| **Modular Pipelines (local_hybrid)** | ✅ Full Support | Production validated (Nov 19, 2025) - AAVA-85 |
 
 All tools work identically across supported providers—no code changes needed when switching providers.
+
+### Modular Pipeline Tool Execution
+
+**Status**: ✅ Production validated (Nov 19, 2025)
+
+Modular pipelines (e.g., `local_hybrid`) now support full tool execution through OpenAI Chat Completions API integration. This enables cost-effective tool calling with local STT/TTS and cloud LLM.
+
+**How It Works**:
+1. User speech detected via STT (Vosk, Google, etc.)
+2. LLM (OpenAI Chat API) receives tool schemas and conversation context
+3. LLM returns `tool_calls` in response if tool needed
+4. Pipeline orchestrator executes tools via unified registry
+5. Tool results incorporated into conversation
+
+**Supported Tools**: All 6 tools validated in production
+- ✅ `transfer` - Tested with call transfers to ring groups
+- ✅ `hangup_call` - Tested with farewell messages
+- ✅ `send_email_summary` - Tested with auto-summaries
+- ✅ `request_transcript` - Tested with email delivery
+- 🟡 `cancel_transfer` - Deployed (requires active transfer to test)
+- 🟡 `leave_voicemail` - Deployed (requires voicemail config)
+
+**Configuration**:
+```yaml
+pipelines:
+  local_hybrid:
+    stt: vosk_local          # Local STT
+    llm: openai              # Cloud LLM with function calling
+    tts: piper_local         # Local TTS
+    tools:
+      - transfer
+      - hangup_call
+      - send_email_summary
+      - request_transcript
+```
+
+**Production Evidence**:
+- **Call 1763582071.6214**: Transfer to sales team ring group (✅ Success)
+- **Call 1763582133.6224**: Hangup + transcript email (✅ Success)
+
+**Key Benefits**:
+- Cost-effective: Local STT/TTS, only pay for LLM tool detection
+- Privacy-focused: Audio processed locally, only text to cloud LLM
+- Feature parity: Same tools as monolithic providers
+- Flexible: Mix and match STT/LLM/TTS components
+
+**See Also**:
+- Implementation details: `docs/contributing/milestones/milestone-18-hybrid-pipelines-tool-implementation.md`
+- Common pitfalls: `docs/contributing/COMMON_PITFALLS.md#tool-execution-issues`
 
 ---
 

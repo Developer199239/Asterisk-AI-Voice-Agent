@@ -130,17 +130,6 @@ class PlaybackManager:
                     await self.conversation_coordinator.update_conversation_state(call_id, "listening")
                 return None
             
-            # Play audio via ARI
-            success = await self._play_via_ari(session, audio_file, playback_id)
-            if not success:
-                # Cleanup gating token if playback failed
-                if self.conversation_coordinator:
-                    await self.conversation_coordinator.cancel_tts(call_id, playback_id)
-                    await self.conversation_coordinator.update_conversation_state(call_id, "listening")
-                else:
-                    await self.session_store.clear_gating_token(call_id, playback_id)
-                return None
-            
             # Create playback reference
             playback_ref = PlaybackRef(
                 playback_id=playback_id,
@@ -151,8 +140,22 @@ class PlaybackManager:
                 audio_file=audio_file
             )
             
-            # Track playback reference
+            # Track playback reference BEFORE playing to avoid race condition
+            # (PlaybackFinished might arrive before add_playback completes if order is reversed)
             await self.session_store.add_playback(playback_ref)
+            
+            # Play audio via ARI
+            success = await self._play_via_ari(session, audio_file, playback_id)
+            if not success:
+                # Cleanup if playback failed to start
+                await self.session_store.pop_playback(playback_id)
+                # Cleanup gating token
+                if self.conversation_coordinator:
+                    await self.conversation_coordinator.cancel_tts(call_id, playback_id)
+                    await self.conversation_coordinator.update_conversation_state(call_id, "listening")
+                else:
+                    await self.session_store.clear_gating_token(call_id, playback_id)
+                return None
             
             # Schedule token-aware fallback to ensure gating is cleared even if PlaybackFinished is missed
             await self._schedule_gating_fallback(call_id, playback_id, len(audio_bytes))

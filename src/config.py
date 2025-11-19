@@ -281,6 +281,7 @@ class PipelineEntry(BaseModel):
     stt: str
     llm: str
     tts: str
+    tools: List[str] = Field(default_factory=list)
     options: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
 
 
@@ -290,6 +291,7 @@ def _compose_provider_components(provider: str) -> Dict[str, Any]:
         "stt": f"{provider}_stt",
         "llm": f"{provider}_llm",
         "tts": f"{provider}_tts",
+        "tools": [],
         "options": {}
     }
 
@@ -329,6 +331,7 @@ def _normalize_pipelines(config_data: Dict[str, Any]) -> None:
                 "stt": raw_entry.get("stt", components["stt"]),
                 "llm": raw_entry.get("llm", components["llm"]),
                 "tts": raw_entry.get("tts", components["tts"]),
+                "tools": raw_entry.get("tools") or [],
                 "options": options_block,
             }
 

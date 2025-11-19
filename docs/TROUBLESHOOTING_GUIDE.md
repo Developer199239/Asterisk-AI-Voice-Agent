@@ -564,6 +564,222 @@ agent init --template openai-agent
 
 ---
 
+## Debugging Tool Execution Issues
+
+**Tool execution** allows AI agents to perform actions like call transfers, hangups, and sending emails. When tools don't work, follow this debugging workflow.
+
+### Quick Diagnostics for Tool Issues
+
+```bash
+# 1. Check system configuration
+agent config validate
+
+# 2. Review last call for tool execution
+agent troubleshoot --last
+
+# 3. Look for tool-specific errors
+docker logs ai_engine 2>&1 | grep -i "tool\|function"
+```
+
+### Common Tool Execution Problems
+
+#### Tools Not Executing (Generic)
+
+**Symptom**: AI mentions action ("I'll transfer you") but nothing happens.
+
+**Diagnostic Steps**:
+
+1. **Verify tools are configured:**
+   ```bash
+   grep -A 10 "tools:" config/ai-agent.yaml
+   ```
+   Should list enabled tools for your pipeline/provider.
+
+2. **Check tool registration in logs:**
+   ```bash
+   docker logs ai_engine 2>&1 | grep "tools configured"
+   ```
+   Expected pattern:
+   ```
+   ✅ "OpenAI session configured with 6 tools"
+   ✅ "Added tools to provider context: ['transfer', 'hangup_call', ...]"
+   ```
+
+3. **Look for tool invocation:**
+   ```bash
+   docker logs ai_engine 2>&1 | grep "function call\|tool call"
+   ```
+   Expected patterns:
+   ```
+   ✅ "OpenAI function call detected: hangup_call"
+   ✅ "Tool hangup_call executed: success"
+   ```
+
+**If No Tool Registration**:
+- Check `config/ai-agent.yaml` under your pipeline's `tools:` section
+- Ensure tools are listed (e.g., `- hangup_call`, `- transfer`)
+- Restart containers after config changes
+
+#### OpenAI Realtime: Schema Format Error
+
+**Symptom**: Error `Missing required parameter: 'session.tools[0].name'`
+
+**Root Cause**: Using Chat Completions schema format instead of Realtime API format.
+
+**Diagnostic**:
+```bash
+# Look for schema error
+docker logs ai_engine 2>&1 | grep "missing_required_parameter"
+```
+
+**Fix**: This is a code issue (should be fixed in v4.2+). If you see this error:
+- Verify you're on latest version: `git pull origin develop`
+- Check that `src/tools/adapters/openai.py` uses `to_openai_realtime_schema()`
+- See [Common Pitfalls](contributing/COMMON_PITFALLS.md#pitfall-1-tool-schema-format-mismatch-openai-realtime) for details
+
+#### Deepgram: Functions Not Being Called
+
+**Symptom**: Deepgram configured but never calls functions.
+
+**Diagnostic**:
+```bash
+# Check for FunctionCallRequest events
+docker logs ai_engine 2>&1 | grep "FunctionCallRequest"
+```
+
+**Common Issues**:
+- Using `agent.think.tools` instead of `agent.think.functions` (wrong field name)
+- Event handler checking `"function_call"` instead of `"FunctionCallRequest"`
+
+**Fix**: Verify code uses Deepgram-specific naming (fixed in v4.1+).
+
+#### Hangup Tool: Call Doesn't Disconnect
+
+**Symptom**: AI says "goodbye" but call stays connected.
+
+**Diagnostic Steps**:
+
+1. **Check if tool was invoked:**
+   ```bash
+   docker logs ai_engine 2>&1 | grep -i "hangup"
+   ```
+   Expected patterns:
+   ```
+   ✅ "Hangup requested"
+   ✅ "Hangup tool executed"
+   ✅ "Call will hangup after farewell"
+   ```
+
+2. **Check for execution errors:**
+   ```bash
+   docker logs ai_engine 2>&1 | grep -i "AttributeError\|hangup.*error"
+   ```
+
+**Common Issues**:
+- Wrong ARI method (using `delete_channel` instead of `hangup_channel`)
+- Missing farewell playback (call hangs up too quickly)
+- Tool not registered with provider
+
+**Workaround**: If urgent, caller can hang up manually.
+
+#### Transfer Tool: Not Transferring
+
+**Symptom**: AI says "transferring you" but call doesn't transfer.
+
+**Diagnostic**:
+```bash
+# Check transfer execution
+docker logs ai_engine 2>&1 | grep -i "transfer"
+```
+
+Expected patterns:
+```
+✅ "Transfer tool invoked"
+✅ "Resolved destination: ringgroup 600"
+✅ "Transfer initiated"
+```
+
+**Common Issues**:
+- Destination not found (extension/queue/ringgroup doesn't exist in Asterisk)
+- ARI redirect/continue failure
+- Transfer active flag not set correctly
+
+**Verification**:
+```bash
+# Check Asterisk for destination
+asterisk -rx "core show hints" | grep <extension>
+asterisk -rx "queue show <queue-name>"
+```
+
+### Using agent troubleshoot for Tool Issues
+
+The `agent troubleshoot` command is your best friend for diagnosing tool execution:
+
+```bash
+# Analyze last call with focus on tools
+agent troubleshoot --last
+
+# Look for these sections in output:
+# 1. Tool Registration: "Tools configured: 6"
+# 2. Tool Invocations: "function_call detected"
+# 3. Tool Results: "executed: success" or "executed: failure"
+# 4. Errors: AttributeError, missing methods, schema errors
+```
+
+### Expected Log Patterns for Successful Tool Execution
+
+**OpenAI Realtime**:
+```
+[info] Added tools to provider context: ['transfer', 'cancel_transfer', 'hangup_call', ...]
+[info] Generated OpenAI Realtime schemas for 6 tools
+[info] OpenAI session configured with 6 tools
+[info] OpenAI function call detected: hangup_call (call_id_...)
+[info] Hangup requested: farewell="Thank you for calling!"
+[info] Hangup tool executed - next response will trigger hangup
+[info] HangupReady event received - executing hangup
+```
+
+**Deepgram Voice Agent**:
+```
+[info] Configured agent.think.functions for Deepgram
+[info] FunctionCallRequest event received
+[info] Function: transfer_call, parameters: {destination: 'sales'}
+[info] Transfer tool executed: success
+```
+
+**Pipelines (OpenAI Chat Completions)**:
+```
+[info] LLM response contains tool_calls
+[info] Tool call: hangup_call
+[info] Executing tool via tool_registry
+[info] Tool hangup_call executed: success
+```
+
+### Warning Patterns (Tool Issues)
+
+```
+⚠️ "AI used farewell phrase without invoking hangup_call tool"
+   → Tool not being called by LLM
+
+❌ "Missing required parameter: 'session.tools[0].name'"
+   → Schema format mismatch (OpenAI Realtime)
+
+❌ "AttributeError: 'Engine' object has no attribute 'app_config'"
+   → Code bug in tool context creation
+
+❌ "AttributeError: 'ARIClient' object has no attribute 'delete_channel'"
+   → Wrong ARI method name
+```
+
+### Further Help
+
+For detailed explanations of tool execution issues and fixes:
+- **[Common Pitfalls - Tool Execution](contributing/COMMON_PITFALLS.md#tool-execution-issues)**
+- **[Tool Development Guide](contributing/tool-development.md)**
+- **[Tool Calling Guide](TOOL_CALLING_GUIDE.md)** (user perspective)
+
+---
+
 ## Symptom-Based Diagnosis
 
 ### Using Symptom Flags
@@ -978,7 +1194,7 @@ docker logs --since 1h ai_engine > ai-engine.log 2>&1
 
 ### 2. Check Documentation
 
-- **[CLI Tools Guide](CLI_TOOLS_GUIDE.md)** - Complete CLI reference
+- **[CLI Tools Guide](../cli/README.md)** - Complete CLI reference
 - **[Production Deployment](PRODUCTION_DEPLOYMENT.md)** - Security & networking
 - **[Configuration Reference](Configuration-Reference.md)** - All settings explained
 - **[Golden Baselines](baselines/golden/)** - Validated configurations

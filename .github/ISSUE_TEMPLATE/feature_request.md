@@ -28,7 +28,7 @@ Describe the feature you’d like to see. What problem does it solve?
 
 ## Desired Behavior
 
-Describe the desired call flow or behavior in as much detail as possible. If this maps to a known AAVA spec (from `docs/linear-issues-community-features.md`), include the ID (e.g. `AAVA-63`).
+Describe the desired call flow or behavior in as much detail as possible. If this maps to a known AAVA spec or has been discussed on our [Discord server](https://discord.gg/CAVACtaY), include the ID (e.g. `AAVA-63`).
 
 ## AVA’s Input (Optional but Recommended)
 

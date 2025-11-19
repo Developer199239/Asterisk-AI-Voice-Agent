@@ -134,7 +134,7 @@ class SendEmailSummaryTool(Tool):
     def definition(self) -> ToolDefinition:
         return ToolDefinition(
             name="send_email_summary",
-            description="Send call summary email to admin after call completion",
+            description="Send call summary email to admin. NOTE: This does NOT end the call. If the user wants to end the call, you MUST also use the 'hangup_call' tool.",
             category=ToolCategory.BUSINESS,
             parameters=[]  # No parameters - auto-triggered by engine
         )
