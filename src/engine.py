@@ -263,6 +263,16 @@ class Engine:
         # Milestone7: Pipeline orchestrator coordinates per-call STT/LLM/TTS adapters.
         self.pipeline_orchestrator = PipelineOrchestrator(config)
         
+        # DEBUG: Inspect loaded pipelines to verify tools
+        try:
+            lh = self.app_config.pipelines.get('local_hybrid')
+            if lh:
+                logger.info("DEBUG: local_hybrid pipeline config", tools=lh.tools, raw_entry=str(lh))
+            else:
+                logger.warning("DEBUG: local_hybrid pipeline not found in config")
+        except Exception as e:
+            logger.error("DEBUG: failed to inspect pipeline config", error=str(e))
+        
         # P1: Transport orchestrator for multi-provider audio format negotiation
         self.transport_orchestrator = TransportOrchestrator(config.dict() if hasattr(config, 'dict') else config.__dict__)
         logger.info(
