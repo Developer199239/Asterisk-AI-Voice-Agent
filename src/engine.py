@@ -1928,7 +1928,7 @@ class Engine:
                                 bridge_id=session.bridge_id,
                                 session_store=self.session_store,
                                 ari_client=self.ari_client,
-                                config=self.config.model_dump()
+                                config=self.config.dict()
                             )
                             # Execute synchronously to ensure session is available
                             # Email sending itself is still async (non-blocking)
@@ -1965,7 +1965,7 @@ class Engine:
                                         bridge_id=session.bridge_id,
                                         session_store=self.session_store,
                                         ari_client=self.ari_client,
-                                        config=self.config.model_dump()
+                                        config=self.config.dict()
                                     )
                                     
                                     # Get fresh session data with complete conversation
@@ -5121,7 +5121,7 @@ class Engine:
                             caller_channel_id=getattr(session, 'channel_id', call_id),
                             session_store=self.session_store,
                             ari_client=self.ari_client,
-                            config=self.app_config.model_dump(),
+                            config=self.app_config.dict(),
                             provider_name="pipeline"
                         )
 
@@ -6643,7 +6643,7 @@ class Engine:
                     provider._bridge_id = session.bridge_id
                     provider._session_store = self.session_store
                     provider._ari_client = self.ari_client
-                    provider._full_config = self.config.model_dump()  # Convert Pydantic model to dict
+                    provider._full_config = self.config.dict()  # Convert Pydantic model to dict
                     logger.debug(
                         "Injected tool execution context into provider",
                         call_id=call_id,
