@@ -4734,6 +4734,15 @@ class Engine:
                             )
                         else:
                             await self.playback_manager.play_audio(call_id, bytes(tts_bytes), "pipeline-tts-greeting")
+                            
+                            # AAVA-85: Persist greeting to session history so it appears in email summary
+                            try:
+                                session.conversation_history.append({"role": "assistant", "content": greeting})
+                                await self.session_store.upsert_call(session)
+                                logger.info("Persisted initial greeting to session history", call_id=call_id)
+                            except Exception as e:
+                                logger.warning("Failed to persist greeting history", call_id=call_id, error=str(e))
+                                
                         break
                     except RuntimeError as exc:
                         error_text = str(exc).lower()

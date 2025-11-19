@@ -556,6 +556,7 @@ class OpenAILLMAdapter(LLMComponent):
             "max_tokens": runtime_options.get("max_tokens", self._pipeline_defaults.get("max_tokens")),
             "timeout_sec": float(runtime_options.get("timeout_sec", self._pipeline_defaults.get("timeout_sec", self._default_timeout))),
             "use_realtime": runtime_options.get("use_realtime", self._pipeline_defaults.get("use_realtime", False)),
+            "tools": runtime_options.get("tools", self._pipeline_defaults.get("tools", [])),
         }
         # Fallback persona when missing
         try:
