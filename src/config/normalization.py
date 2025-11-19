@@ -119,6 +119,7 @@ def normalize_pipelines(config_data: Dict[str, Any]) -> None:
                 "stt": raw_entry.get("stt", components["stt"]),
                 "llm": raw_entry.get("llm", components["llm"]),
                 "tts": raw_entry.get("tts", components["tts"]),
+                "tools": raw_entry.get("tools") or [],
                 "options": options_block,
             }
             
