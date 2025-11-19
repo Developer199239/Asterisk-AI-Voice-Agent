@@ -4993,7 +4993,8 @@ class Engine:
                     (pipeline.llm_options or {}).get("aggregation_timeout_sec", 2.0)
                 )
                 # Track conversation history to include prior messages
-                conversation_history: List[Dict[str, str]] = []
+                # AAVA-85 FIX: Initialize from session to preserve greeting
+                conversation_history: List[Dict[str, str]] = list(session.conversation_history or [])
 
                 async def cancel_flush() -> None:
                     nonlocal flush_task
@@ -5052,10 +5053,13 @@ class Engine:
                     # AAVA-85: Persist session history so tools (email) can access it
                     session.conversation_history = list(conversation_history)
                     await self.session_store.upsert_call(session)
+                    
+                    logger.info("DEBUG: Post-session-upsert", has_response_text=bool(response_text), has_tool_calls=bool(tool_calls), tool_calls_count=len(tool_calls), call_id=call_id)
 
                     playback_id = None
                     
                     # 1. Synthesize and Play Text (if any)
+                    logger.info("DEBUG: Before TTS block", response_text_len=len(response_text), will_skip_tts=not bool(response_text), call_id=call_id)
                     if response_text:
                         tts_bytes = bytearray()
                         first_tts_ts: Optional[float] = None
@@ -5102,7 +5106,9 @@ class Engine:
                                 logger.error("Pipeline playback exception", call_id=call_id, exc_info=True)
 
                     # 2. Execute Tools (if any)
+                    logger.info("DEBUG: Reached tool execution block", tool_calls_present=bool(tool_calls), tool_calls_count=len(tool_calls), tool_calls_type=str(type(tool_calls)), call_id=call_id)
                     if tool_calls:
+                        logger.info("DEBUG: Inside tool_calls block", tool_calls_count=len(tool_calls), playback_id=playback_id, call_id=call_id)
                         # Wait for playback to finish before executing tools (especially transfer/hangup)
                         if playback_id:
                             try:
