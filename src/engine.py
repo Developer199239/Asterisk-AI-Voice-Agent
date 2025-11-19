@@ -5118,21 +5118,31 @@ class Engine:
                             except Exception:
                                 pass
 
+                        logger.info("DEBUG: Before import ToolExecutionContext", call_id=call_id)
                         from src.tools.context import ToolExecutionContext
                         from src.tools.registry import tool_registry
+                        logger.info("DEBUG: After imports, before creating context", call_id=call_id)
                         
                         # Create execution context
-                        tool_ctx = ToolExecutionContext(
-                            call_id=call_id,
-                            caller_channel_id=getattr(session, 'channel_id', call_id),
-                            session_store=self.session_store,
-                            ari_client=self.ari_client,
-                            config=self.app_config.dict(),
-                            provider_name="pipeline"
-                        )
+                        try:
+                            logger.info("DEBUG: About to create ToolExecutionContext", call_id=call_id)
+                            tool_ctx = ToolExecutionContext(
+                                call_id=call_id,
+                                caller_channel_id=getattr(session, 'channel_id', call_id),
+                                session_store=self.session_store,
+                                ari_client=self.ari_client,
+                                config=self.app_config.dict(),
+                                provider_name="pipeline"
+                            )
+                            logger.info("DEBUG: ToolExecutionContext created successfully", call_id=call_id)
+                        except Exception as ctx_error:
+                            logger.error("DEBUG: ToolExecutionContext creation FAILED", call_id=call_id, error=str(ctx_error), exc_info=True)
+                            raise
 
+                        logger.info("DEBUG: Before for loop", tool_calls_len=len(tool_calls), call_id=call_id)
                         for tool_call in tool_calls:
                             try:
+                                logger.info("DEBUG: Inside for loop iteration", tool_call=tool_call, call_id=call_id)
                                 name = tool_call.get("name")
                                 args = tool_call.get("parameters") or {}
                                 tool = tool_registry.get(name)
