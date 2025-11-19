@@ -129,6 +129,38 @@ class ToolDefinition:
             }
         }
     
+    def to_openai_realtime_schema(self) -> Dict[str, Any]:
+        """
+        Convert to OpenAI Realtime API function calling format.
+        
+        OpenAI Realtime format (flatter structure, different from Chat Completions):
+        {
+            "type": "function",
+            "name": "tool_name",
+            "description": "Tool description",
+            "parameters": {
+                "type": "object",
+                "properties": {...},
+                "required": [...]
+            }
+        }
+        
+        Note: Realtime API has name/description at top level, not nested under "function"
+        """
+        return {
+            "type": "function",
+            "name": self.name,
+            "description": self.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    p.name: p.to_dict()
+                    for p in self.parameters
+                },
+                "required": [p.name for p in self.parameters if p.required]
+            }
+        }
+    
     def to_prompt_text(self) -> str:
         """
         Convert to text format for custom pipeline system prompts.

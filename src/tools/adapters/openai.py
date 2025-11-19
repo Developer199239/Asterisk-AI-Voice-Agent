@@ -50,8 +50,8 @@ class OpenAIToolAdapter:
                 }
             ]
         """
-        schemas = self.registry.to_openai_schema()
-        logger.debug(f"Generated OpenAI schemas for {len(schemas)} tools")
+        schemas = self.registry.to_openai_realtime_schema()
+        logger.debug(f"Generated OpenAI Realtime schemas for {len(schemas)} tools")
         return schemas
     
     async def handle_tool_call_event(
