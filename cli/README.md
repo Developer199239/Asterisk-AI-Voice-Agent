@@ -102,56 +102,327 @@ make cli-checksums
 make cli-release
 ```
 
-## Quick Start
+## Command Reference
 
-### 1. Run Setup Wizard
+### `agent init` - Interactive Setup Wizard
 
+Guided setup wizard to configure Asterisk AI Voice Agent from scratch.
+
+**Usage:**
 ```bash
-./bin/agent init
+agent init
 ```
 
-Guides you through:
-- Asterisk ARI credentials
-- Audio transport selection (AudioSocket/ExternalMedia)
-- AI provider selection (OpenAI, Deepgram, Local)
-- Configuration validation
+**Steps:**
+1. **Asterisk ARI Connection** - Host, username, password validation
+2. **Audio Transport** - AudioSocket (modern) or ExternalMedia RTP (legacy)
+3. **AI Provider** - OpenAI, Deepgram, Google, or Local Hybrid
+4. **Configuration Review** - Saves to `.env` and restarts services
 
-### 2. Validate Environment
-
+**Example:**
 ```bash
-./bin/agent doctor
+$ agent init
+
+Step 1/4: Asterisk ARI Connection
+Enter Asterisk host [127.0.0.1]: 
+Enter ARI username: AIAgent
+Enter ARI password: ******
+✓ Testing ARI connection... Success!
+
+Step 2/4: Audio Transport Selection
+  1) AudioSocket (Modern, for full agents) [RECOMMENDED]
+  2) ExternalMedia RTP (Legacy, for hybrid pipelines)
+Your choice [1]: 1
+
+Step 3/4: AI Provider Selection
+  1) OpenAI Realtime (0.5-1.5s response time)
+  2) Deepgram Voice Agent (1-2s response time)
+  3) Local Hybrid (3-7s, privacy-focused)
+Your choice [1]: 1
+
+Enter OpenAI API Key: sk-...
+✓ API key validated
+✓ Configuration saved to .env
+✓ Docker services restarted
+
+Setup complete! 🎉
 ```
 
-Checks:
-- Docker containers running
+---
+
+### `agent doctor` - System Health Check
+
+Comprehensive health check and diagnostics tool.
+
+**Usage:**
+```bash
+agent doctor [flags]
+```
+
+**Flags:**
+- `--fix` - Attempt to auto-fix issues (future)
+- `--json` - Output as JSON
+- `--verbose` - Show detailed check output
+
+**Exit Codes:**
+- `0` - All checks passed ✅
+- `1` - Warnings detected (non-critical) ⚠️
+- `2` - Failures detected (critical) ❌
+
+**Checks Performed:**
+- Docker daemon and containers running
 - Asterisk ARI connectivity
 - AudioSocket/RTP ports available
-- Configuration validity
+- Configuration file validity
+- API keys present
 - Provider API connectivity
+- Recent call history
+- Disk space availability
 
-### 3. Test Audio Pipeline
-
+**Example:**
 ```bash
-./bin/agent demo
+$ agent doctor
+
+[1/11] Docker Daemon...     ✅ Docker running (v26.1.4)
+[2/11] Containers...        ✅ ai-engine running (healthy)
+[3/11] Asterisk ARI...      ✅ Connected to 127.0.0.1:8088
+[4/11] AudioSocket Port...  ✅ Port 8090 listening
+[5/11] Configuration...     ✅ YAML valid
+[6/11] API Keys...          ✅ OPENAI_API_KEY present
+[7/11] Provider Connectivity... ✅ OpenAI API reachable (134ms)
+
+Summary: 10 passed, 0 warnings, 0 failures
+✅ System is healthy - ready for calls!
 ```
 
-Validates audio without making real calls.
+**Use in Scripts:**
+```bash
+if ! agent doctor; then
+    echo "Health check failed"
+    exit 1
+fi
+```
 
-### 4. Troubleshoot Issues
+---
 
+### `agent demo` - Audio Pipeline Validation
+
+Tests audio pipeline without making real calls.
+
+**Usage:**
+```bash
+agent demo [flags]
+```
+
+**Flags:**
+- `--provider <name>` - Test specific provider
+- `--duration <seconds>` - Test duration (default: 10)
+- `--verbose` - Show detailed test output
+
+**What It Tests:**
+1. Audio capture and VAD
+2. Provider STT/LLM/TTS integration
+3. Audio quality and latency
+4. Playback path
+
+**Example:**
+```bash
+$ agent demo
+
+Testing Audio Pipeline (OpenAI Realtime)
+✓ Audio capture initialized
+✓ Provider connection established
+✓ Test audio processed (latency: 245ms)
+✓ Playback successful
+
+Pipeline validated successfully!
+```
+
+---
+
+### `agent troubleshoot` - Post-Call Analysis
+
+Analyze call issues with root cause analysis.
+
+**Usage:**
 ```bash
 # Analyze most recent call
-./bin/agent troubleshoot
+agent troubleshoot
 
 # Analyze specific call
-./bin/agent troubleshoot <call_id>
+agent troubleshoot <call_id>
+
+# With verbose output
+agent troubleshoot --verbose <call_id>
 ```
 
-## Documentation
+**Analysis Includes:**
+- Call duration and timeline
+- Audio transport issues
+- Provider errors and latency
+- Tool execution problems
+- Configuration mismatches
+- Suggested fixes
 
-For detailed usage examples and command reference, see:
-- **[CLI Tools Guide](../docs/CLI_TOOLS_GUIDE.md)** - Complete usage documentation
+**Example:**
+```bash
+$ agent troubleshoot 1763582071.6214
+
+Analyzing call 1763582071.6214...
+
+Call Summary:
+  Duration: 43.2s
+  Provider: local_hybrid
+  Transport: ExternalMedia RTP
+  Tools Used: transfer
+
+Issues Found:
+  ✅ No critical issues
+  ⚠️  High latency detected (3.2s avg)
+
+Recommendations:
+  - Consider OpenAI Realtime for lower latency
+  - Check network connectivity to cloud LLM
+
+Detailed logs: /var/log/ai-engine/call-1763582071.6214.log
+```
+
+---
+
+### `agent dialplan` - Generate Dialplan Snippets
+
+Generate Asterisk dialplan configuration for a provider.
+
+**Usage:**
+```bash
+agent dialplan [--provider <name>]
+```
+
+**Flags:**
+- `--provider` - Provider name (openai_realtime, deepgram, local_hybrid, google_live)
+
+**Example:**
+```bash
+$ agent dialplan --provider openai_realtime
+
+Add this snippet to: /etc/asterisk/extensions_custom.conf
+
+[from-ai-agent-openai]
+exten => s,1,NoOp(AI Agent - OpenAI Realtime)
+ same => n,Set(AI_PROVIDER=openai_realtime)
+ same => n,Stasis(asterisk-ai-voice-agent)
+ same => n,Hangup()
+
+FreePBX Setup:
+  1. Admin → Config Edit → extensions_custom.conf
+  2. Paste snippet above
+  3. Save and Apply Config
+  4. Create Custom Destination: from-ai-agent-openai,s,1
+```
+
+---
+
+### `agent config validate` - Configuration Validation
+
+Validate `config/ai-agent.yaml` for errors.
+
+**Usage:**
+```bash
+agent config validate [--file <path>] [--fix] [--strict]
+```
+
+**Flags:**
+- `--file` - Path to config file (default: config/ai-agent.yaml)
+- `--fix` - Attempt to auto-fix issues
+- `--strict` - Treat warnings as errors
+
+**Checks:**
+- YAML syntax
+- Required fields present
+- Provider configurations valid
+- Sample rate alignment
+- Transport compatibility
+
+**Example:**
+```bash
+$ agent config validate
+
+Validating config/ai-agent.yaml...
+✓ YAML syntax valid
+✓ Required fields present
+✓ Provider 'openai_realtime' enabled
+✓ Sample rates aligned (24000 Hz)
+
+Summary: 4 passed, 0 warnings, 0 errors
+✅ Configuration valid
+```
+
+---
+
+### `agent version` - Show Version
+
+**Usage:**
+```bash
+agent version
+```
+
+**Output:**
+```
+Asterisk AI Voice Agent CLI
+Version: 4.1.0
+Build: 2025-11-19
+Go: 1.21.0
+```
+
+---
+
+## Common Workflows
+
+### First-Time Setup
+```bash
+# 1. Run interactive setup
+agent init
+
+# 2. Validate installation
+agent doctor
+
+# 3. Test audio pipeline
+agent demo
+
+# 4. Generate dialplan snippet
+agent dialplan
+
+# 5. Make a test call
+```
+
+### Troubleshooting Issues
+```bash
+# 1. Run health check
+agent doctor
+
+# 2. Analyze recent call
+agent troubleshoot
+
+# 3. Validate configuration
+agent config validate
+```
+
+### CI/CD Integration
+```bash
+#!/bin/bash
+# Pre-deployment validation
+
+agent config validate --strict || exit 1
+agent doctor || exit 1
+
+echo "✅ Validation passed - deploying..."
+```
+
+## Additional Resources
+
+- **[TROUBLESHOOTING_GUIDE.md](../docs/TROUBLESHOOTING_GUIDE.md)** - General troubleshooting
 - **[CHANGELOG.md](../CHANGELOG.md)** - CLI tools features and updates
+- **[INSTALLATION.md](../docs/INSTALLATION.md)** - Full installation guide
 
 ## Development
 

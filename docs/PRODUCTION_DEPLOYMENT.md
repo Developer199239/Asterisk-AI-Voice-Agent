@@ -213,7 +213,62 @@ docker compose restart ai-engine
 
 ---
 
-### 3. Network Security
+### 3. Audio Transport Configuration
+
+When using **ExternalMedia + RTP** transport (primarily for modular pipelines like `local_hybrid`), keep these settings in mind:
+
+**Configuration in `config/ai-agent.yaml`:**
+```yaml
+external_media:
+  rtp_host: "0.0.0.0"        # Bind inside container
+  rtp_port: 18080            # Fixed port for simplicity
+  port_range: "18080:18099"  # Optional range for per-call allocation
+  codec: "ulaw"              # ulaw (8k) or slin16 (16k)
+  direction: "both"          # sendrecv | sendonly | recvonly
+  jitter_buffer_ms: 20       # Target frame size
+```
+
+**Key Considerations:**
+
+1. **Port Accessibility**: UDP port 18080 must be accessible from Asterisk to ai-engine
+   ```bash
+   # Verify port is listening
+   netstat -tuln | grep 18080
+   ```
+
+2. **Firewall Rules**: Ensure UDP traffic allowed
+   ```bash
+   ufw allow from <asterisk-ip> to any port 18080 proto udp
+   ```
+
+3. **Codec Alignment**: Match codec with Asterisk configuration
+   - `ulaw` (G.711 μ-law): 8kHz, telephony standard
+   - `slin16`: 16kHz, higher quality (if supported by provider)
+
+4. **Network Latency**: RTP is sensitive to network jitter
+   - Same host: <1ms latency ideal
+   - Different hosts: <10ms recommended
+   - Monitor network quality with `ping` and `mtr`
+
+5. **Provider Compatibility**: 
+   - **Local Hybrid**: Requires ExternalMedia RTP + file playback
+   - **OpenAI/Deepgram**: Can use AudioSocket (streaming) instead
+
+**When to Use ExternalMedia:**
+- Modular pipelines (local_hybrid, custom pipelines)
+- File-based TTS playback required
+- Legacy integration compatibility
+
+**When to Use AudioSocket Instead:**
+- Monolithic providers (OpenAI Realtime, Deepgram Agent)
+- Real-time streaming preferred
+- Lower latency requirements
+
+**See Also**: `docs/Transport-Mode-Compatibility.md` for detailed transport matrix
+
+---
+
+### 4. Network Security
 
 **Firewall Configuration**:
 ```bash
