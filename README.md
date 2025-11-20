@@ -21,11 +21,9 @@ The most powerful, flexible open-source AI voice agent for Asterisk/FreePBX. Fea
   - Session history persistence for full conversation context
   - Production-tested with real call flows
 * **📚 Documentation Overhaul**: Completely reorganized and professional documentation structure
-  - New `docs/contributing/` directory for developer documentation
+  - New [developer documentation](docs/contributing/README.md) with guides and references
   - Comprehensive provider setup guides (Deepgram, OpenAI, Google)
   - Technical implementation references for all providers
-  - Common pitfalls guide with production solutions
-  - Removed 2,763 lines of obsolete documentation
 * **💬 Discord Community**: Official Discord server integration for community support and discussions
 * **🐛 Critical Bug Fixes**: OpenAI Realtime tool schema, execution flow, and Pydantic compatibility issues resolved
 
