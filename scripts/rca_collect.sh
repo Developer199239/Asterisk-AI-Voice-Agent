@@ -15,7 +15,7 @@ else
   echo "[RCA] No .env found (ENV_FILE=$ENV_FILE) — proceeding without local credentials"
 fi
 SERVER_USER="${SERVER_USER:-root}"
-SERVER_HOST="${SERVER_HOST:-voiprnd.nemtclouddispatch.com}"
+SERVER_HOST="${SERVER_HOST:-mypbx.server.com}"
 PROJECT_PATH="${PROJECT_PATH:-/root/Asterisk-AI-Voice-Agent}"
 SINCE_MIN="${SINCE_MIN:-60}"
 FRAME_MS="${FRAME_MS:-20}"

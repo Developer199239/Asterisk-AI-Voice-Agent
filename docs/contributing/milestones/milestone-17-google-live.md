@@ -65,7 +65,7 @@ Implemented and validated **Google Live provider** - a real-time bidirectional s
 - Date: 2025-11-14 03:52-03:54 UTC
 - Duration: 59 seconds
 - Call ID: 1763092342.5132
-- Environment: voiprnd.nemtclouddispatch.com
+- Environment: mypbx.server.com
 
 **Quality Assessment**: ✅ Excellent
 - Clean two-way conversation
@@ -203,7 +203,7 @@ Asterisk
 ## Deployment Status
 
 **Environment**: Production  
-**Server**: voiprnd.nemtclouddispatch.com  
+**Server**: mypbx.server.com  
 **Status**: ✅ Active and Validated  
 **Next Review**: December 2025
 
