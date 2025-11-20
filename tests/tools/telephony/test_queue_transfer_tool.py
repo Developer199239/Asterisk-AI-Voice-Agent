@@ -90,19 +90,15 @@ class TestTransferToQueueTool:
         assert result["asterisk_queue"] == "sales-queue"
         assert "Sales team" in result["message"]
         
-        # Verify channel variable was set
-        mock_ari_client.channels.setChannelVar.assert_called_once_with(
-            channelId=tool_context.caller_channel_id,
-            variable="QUEUE_NAME",
-            value="sales-queue"
-        )
-        
-        # Verify dialplan continuation
-        mock_ari_client.channels.continueInDialplan.assert_called_once_with(
-            channelId=tool_context.caller_channel_id,
-            context="agent-queue",
-            extension="s",
-            priority=1
+        # Verify dialplan continuation via send_command
+        mock_ari_client.send_command.assert_called_once_with(
+            method="POST",
+            resource=f"channels/{tool_context.caller_channel_id}/continue",
+            params={
+                "context": "ext-queues",
+                "extension": "sales-queue",
+                "priority": 1
+            }
         )
     
     @pytest.mark.asyncio
@@ -182,8 +178,7 @@ class TestTransferToQueueTool:
         assert result["ai_should_speak"] is True
         
         # Verify no ARI operations were attempted
-        mock_ari_client.channels.setChannelVar.assert_not_called()
-        mock_ari_client.channels.continueInDialplan.assert_not_called()
+        mock_ari_client.send_command.assert_not_called()
     
     @pytest.mark.asyncio
     async def test_tool_not_configured(
