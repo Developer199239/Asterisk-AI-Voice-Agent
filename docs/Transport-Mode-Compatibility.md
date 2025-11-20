@@ -1,7 +1,7 @@
 # Transport & Playback Mode Compatibility Guide
 
-**Last Updated**: October 28, 2025  
-**Issue**: Linear AAVA-28
+**Last Updated**: November 19, 2025  
+**Issue**: Linear AAVA-28, AAVA-85
 
 ## Overview
 
@@ -76,64 +76,51 @@ downstream_mode: stream
 
 ---
 
-## ❌ Unsupported Configuration: AudioSocket + Pipelines + File Playback
+### ✅ Configuration 3: AudioSocket + Pipelines + File Playback
 
-**Configuration** (DO NOT USE):
+> **Note**: AudioSocket + pipelines was previously unstable due to audio routing issues; validated as stable as of **v4.0 (November 2025)** after fixes in commits `fbbe5b9`, `181b210`, and `fbaaf2e`.
+
+**Use Case**: Modular STT → LLM → TTS pipelines with AudioSocket transport
+
+**Configuration**:
 ```yaml
 audio_transport: audiosocket
-active_pipeline: hybrid_support
-downstream_mode: stream  # Ignored by pipelines!
+active_pipeline: local_hybrid  # or any pipeline
+downstream_mode: stream  # Ignored by pipelines
 ```
 
-**Issue**: Asterisk bridge routing conflict
+**Technical Details**:
+- **Transport**: AudioSocket (Asterisk channel in bridge)
+- **Provider Mode**: Pipeline (modular adapters)
+- **Playback Method**: File-based (PlaybackManager)
+- **Audio Flow**:
+  - Caller audio → AudioSocket channel → ai-engine → Pipeline STT
+  - TTS bytes → File → Asterisk Announcer channel → Caller
+  - **Bridge coexistence**: Both AudioSocket and Announcer channels work together
 
-**What Happens**:
-1. Pipeline mode always uses file playback (hardcoded)
-2. File playback creates Announcer channel in bridge
-3. Bridge contains: Caller ↔ AudioSocket ↔ Announcer
-4. **Asterisk routing issue**: Doesn't route caller audio to AudioSocket when Announcer present
-5. **Result**: Only initial greeting heard, no subsequent audio
+**Status**: ✅ **VALIDATED** (Call 1763610866.6294, November 19, 2025)
+- Clean two-way conversation
+- Continuous audio frame flow (277 frames, 54.57s)
+- Multiple playback cycles (greeting + responses + farewell)
+- Tool execution functional (hangup with farewell)
 
-**Evidence**: Call 1761699424.2631
-- Only 1 AudioSocket frame received
-- 20+ seconds of silence after greeting
-- AudioSocket disconnected with no audio
+**Why This Now Works**:
+1. **Pipeline audio routing fix** (commit `fbbe5b9`, Oct 27):
+   - Pipeline mode check added BEFORE continuous_input provider routing
+   - Audio correctly routed to pipeline queues
+2. **Pipeline gating enforcement** (commit `181b210`, Oct 28):
+   - Gating checks added to prevent feedback loop
+   - Agent doesn't hear own TTS playback
+3. **AudioSocket stability improvements**:
+   - Single-frame issue resolved
+   - Asterisk now continuously sends frames to AudioSocket even with Announcer present
 
-**Technical Root Cause**:
-```
-Bridge Configuration:
-┌─────────┐
-│  Caller │
-└────┬────┘
-     │
-┌────▼────────────┐
-│     Bridge      │
-│  ┌──────────┐  │
-│  │Announcer │  │  ← File playback
-│  └──────────┘  │
-│  ┌──────────┐  │
-│  │AudioSocket│ │  ← Audio ingestion (receives no frames!)
-│  └──────────┘  │
-└─────────────────┘
-```
-
-**Why RTP Doesn't Have This Issue**:
-```
-No Bridge Conflict:
-┌─────────┐
-│  Caller │
-└────┬────┘
-     │
-┌────▼────────────┐
-│     Bridge      │
-│  ┌──────────┐  │
-│  │Announcer │  │  ← File playback to caller
-│  └──────────┘  │
-└─────────────────┘
-     
-     (Separate path)
-     RTP Server ← Direct audio stream
-```
+**Historical Context** (archived):
+- **Pre-October 2025**: AudioSocket + Pipeline was unstable
+- **Issue**: Bridge routing conflict, single-frame reception
+- **Evidence**: Call 1761699424.2631 (only 1 frame received)
+- **Resolution**: Series of fixes in October 2025
+- **Current Status**: Fully functional and production-ready
 
 ---
 
@@ -143,7 +130,7 @@ No Bridge Conflict:
 |-----------|--------------|-----------------|--------|--------|
 | **ExternalMedia RTP** | Pipeline | File (PlaybackManager) | ✅ Working | ✅ **VALIDATED** |
 | **AudioSocket** | Full Agent | Streaming (StreamingPlaybackManager) | ✅ Working | ✅ **VALIDATED** |
-| AudioSocket | Pipeline | File (PlaybackManager) | ⚠️ N/A | ❌ **Bridge Conflict** |
+| **AudioSocket** | Pipeline | File (PlaybackManager) | ✅ Working | ✅ **VALIDATED** (v4.0+) |
 
 ---
 
@@ -157,9 +144,9 @@ No Bridge Conflict:
 
 ### Use AudioSocket When:
 - ✅ Running full agent providers (Deepgram Voice Agent, OpenAI Realtime)
-- ✅ Need streaming playback
+- ✅ Running pipelines (validated as of v4.0)
+- ✅ Need streaming playback (full agents) or file playback (pipelines)
 - ✅ Legacy compatibility requirements
-- ⚠️ **NOT for pipelines** (use RTP instead)
 
 ---
 
@@ -213,8 +200,16 @@ providers:
 
 ### Symptom: Only hear greeting, nothing after
 
-**Cause**: Using AudioSocket + Pipeline + File playback  
-**Solution**: Switch to `audio_transport: externalmedia`
+**Possible Causes**:
+1. Using pre-v4.0 version with AudioSocket + Pipeline
+2. Audio gating misconfiguration
+3. Pipeline STT not receiving audio
+
+**Solutions**:
+1. Upgrade to v4.0 or later (includes AudioSocket + Pipeline fixes)
+2. Check gating logs for feedback loop
+3. Verify pipeline audio routing in logs
+4. If issues persist, use `audio_transport: externalmedia` as fallback
 
 ### Symptom: No audio frames after initial connection
 
@@ -279,17 +274,24 @@ else:
 | Date | Transport | Mode | Result | Call ID | Notes |
 |------|-----------|------|--------|---------|-------|
 | 2025-10-28 | RTP | Pipeline | ✅ Pass | 1761698845.2619 | Clean two-way, no feedback |
-| 2025-10-28 | AudioSocket | Pipeline | ❌ Fail | 1761699424.2631 | Only greeting heard |
-| 2025-10-28 | AudioSocket | Full Agent | ✅ Pass | TBD | Streaming playback |
+| 2025-10-28 | AudioSocket | Pipeline | ❌ Fail | 1761699424.2631 | Pre-fix: Only greeting heard |
+| 2025-10-28 | AudioSocket | Full Agent | ✅ Pass | Multiple | Streaming playback |
+| 2025-11-19 | AudioSocket | Full Agent (Google Live) | ✅ Pass | 1763610697.6282 | 186 frames, 36.34s, clean conversation |
+| 2025-11-19 | AudioSocket | Full Agent (Deepgram) | ✅ Pass | 1763610742.6286 | 176 frames, 34.36s, clean conversation |
+| 2025-11-19 | AudioSocket | Full Agent (OpenAI) | ✅ Pass | 1763610785.6290 | 360 frames, 71.29s, tool execution |
+| 2025-11-19 | AudioSocket | Pipeline (local_hybrid) | ✅ Pass | 1763610866.6294 | 277 frames, 54.57s, post-fix validation |
 
 ---
 
 ## Recommendations
 
-1. **Production**: Use **ExternalMedia RTP** for all pipeline deployments
-2. **Legacy**: Use **AudioSocket** only with full agent providers
-3. **Future**: Consider implementing streaming playback for pipelines if AudioSocket + Pipeline support needed
+1. **Production (v4.0+)**: Both **ExternalMedia RTP** and **AudioSocket** are validated for pipeline deployments
+2. **Transport Selection**:
+   - **AudioSocket**: Simpler configuration, single transport mechanism for all modes
+   - **ExternalMedia RTP**: Separate ingestion path, proven in production longer
+3. **Pre-v4.0 Systems**: Use **ExternalMedia RTP** for pipelines (AudioSocket + Pipeline had known issues)
 4. **Monitoring**: Always check transport logs during deployment validation
+5. **Upgrades**: When upgrading from pre-v4.0, AudioSocket + Pipeline becomes a supported option
 
 ---
 

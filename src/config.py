@@ -604,41 +604,51 @@ def validate_production_config(config: AppConfig) -> tuple[list[str], list[str]]
             if not isinstance(providers, dict):
                 providers = {}
 
-            # Audio transport vs provider shape
-            if getattr(config, "audio_transport", "externalmedia") == "audiosocket":
-                monolithic_names = ("openai_realtime", "deepgram", "google_live")
-                monolithic_enabled = []
-                for name, cfg in providers.items():
-                    if name not in monolithic_names:
-                        continue
-                    enabled = True
-                    if isinstance(cfg, dict):
-                        enabled = bool(cfg.get("enabled", True))
-                    monolithic_enabled.append((name, enabled))
-
-                if not any(enabled for _, enabled in monolithic_enabled):
+            # Audio transport vs provider/pipeline availability
+            audio_transport = getattr(config, "audio_transport", "externalmedia")
+            
+            # Check for monolithic providers
+            monolithic_names = ("openai_realtime", "deepgram", "google_live")
+            monolithic_enabled = []
+            for name, cfg in providers.items():
+                if name not in monolithic_names:
+                    continue
+                enabled = True
+                if isinstance(cfg, dict):
+                    enabled = bool(cfg.get("enabled", True))
+                monolithic_enabled.append((name, enabled))
+            has_monolithic = any(enabled for _, enabled in monolithic_enabled)
+            
+            # Check for pipelines
+            pipelines = getattr(config, "pipelines", {}) or {}
+            if not isinstance(pipelines, dict):
+                pipelines = {}
+            has_pipelines = bool(pipelines)
+            
+            # Warn if transport has neither providers nor pipelines to use
+            if audio_transport == "audiosocket":
+                if not has_monolithic and not has_pipelines:
                     warnings.append(
-                        "audio_transport=audiosocket but no monolithic providers "
-                        "(openai_realtime, deepgram, google_live) are enabled; "
-                        "ensure transport matches provider architecture"
+                        "audio_transport=audiosocket but neither monolithic providers "
+                        "(openai_realtime, deepgram, google_live) nor pipelines are configured; "
+                        "AudioSocket requires at least one provider type to function"
                     )
-
-            if getattr(config, "audio_transport", "externalmedia") == "externalmedia":
-                pipelines = getattr(config, "pipelines", {}) or {}
-                if not isinstance(pipelines, dict):
-                    pipelines = {}
-                if not pipelines:
+            
+            if audio_transport == "externalmedia":
+                if not has_monolithic and not has_pipelines:
                     warnings.append(
-                        "audio_transport=externalmedia but no pipelines are configured; "
-                        "pipelines are recommended for ExternalMedia mode"
+                        "audio_transport=externalmedia but neither monolithic providers "
+                        "nor pipelines are configured; ExternalMedia requires at least one provider type"
                     )
-
-                downstream_mode = getattr(config, "downstream_mode", "file")
-                if downstream_mode != "file":
-                    warnings.append(
-                        f"ExternalMedia + pipelines typically require downstream_mode='file'; "
-                        f"current downstream_mode='{downstream_mode}'"
-                    )
+                
+                # Optional: downstream_mode hint for ExternalMedia + pipelines
+                if has_pipelines:
+                    downstream_mode = getattr(config, "downstream_mode", "file")
+                    if downstream_mode != "file":
+                        warnings.append(
+                            f"ExternalMedia + pipelines typically use downstream_mode='file'; "
+                            f"current downstream_mode='{downstream_mode}' (note: pipelines ignore this setting)"
+                        )
 
             # default_provider-specific key hints (warnings only)
             default_provider = getattr(config, "default_provider", None)
