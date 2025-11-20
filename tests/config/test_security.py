@@ -247,10 +247,10 @@ class TestInjectProviderApiKeys:
         """Should inject Google API key from environment."""
         monkeypatch.setenv("GOOGLE_API_KEY", "google-test-key")
         
-        config_data = {'providers': {'google': {}}}
+        config_data = {'providers': {'google_live': {}}}
         inject_provider_api_keys(config_data)
         
-        assert config_data['providers']['google']['api_key'] == "google-test-key"
+        assert config_data['providers']['google_live']['api_key'] == "google-test-key"
     
     def test_inject_multiple_keys(self, monkeypatch):
         """Should inject multiple provider keys at once."""
@@ -262,14 +262,14 @@ class TestInjectProviderApiKeys:
             'providers': {
                 'openai': {},
                 'deepgram': {},
-                'google': {}
+                'google_live': {}
             }
         }
         inject_provider_api_keys(config_data)
         
         assert config_data['providers']['openai']['api_key'] == "sk-openai"
         assert config_data['providers']['deepgram']['api_key'] == "dg-key"
-        assert config_data['providers']['google']['api_key'] == "google-key"
+        assert config_data['providers']['google_live']['api_key'] == "google-key"
     
     def test_handle_missing_providers_block(self):
         """Should handle config without providers block gracefully."""

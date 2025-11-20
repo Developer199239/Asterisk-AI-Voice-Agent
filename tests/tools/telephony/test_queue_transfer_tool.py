@@ -77,7 +77,7 @@ class TestTransferToQueueTool:
     
     @pytest.mark.asyncio
     async def test_transfer_to_sales_queue(
-        self, queue_tool, tool_context, mock_ari_client, queue_config
+        self, queue_tool, tool_context, mock_ari_client, queue_enabled_config
     ):
         """Test transfer to sales queue."""
         result = await queue_tool.execute(
@@ -107,7 +107,7 @@ class TestTransferToQueueTool:
     
     @pytest.mark.asyncio
     async def test_transfer_to_support_queue(
-        self, queue_tool, tool_context, mock_ari_client, queue_config
+        self, queue_tool, tool_context, mock_ari_client, queue_enabled_config
     ):
         """Test transfer to support queue."""
         result = await queue_tool.execute(
@@ -122,7 +122,7 @@ class TestTransferToQueueTool:
     
     @pytest.mark.asyncio
     async def test_transfer_to_billing_queue(
-        self, queue_tool, tool_context, mock_ari_client, queue_config
+        self, queue_tool, tool_context, mock_ari_client, queue_enabled_config
     ):
         """Test transfer to billing queue."""
         result = await queue_tool.execute(
@@ -137,7 +137,7 @@ class TestTransferToQueueTool:
     
     @pytest.mark.asyncio
     async def test_queue_name_case_insensitive(
-        self, queue_tool, tool_context, mock_ari_client, queue_config
+        self, queue_tool, tool_context, mock_ari_client, queue_enabled_config
     ):
         """Test queue resolution is case-insensitive."""
         # Test different cases
@@ -153,7 +153,7 @@ class TestTransferToQueueTool:
     
     @pytest.mark.asyncio
     async def test_queue_name_with_whitespace(
-        self, queue_tool, tool_context, mock_ari_client, queue_config
+        self, queue_tool, tool_context, mock_ari_client, queue_enabled_config
     ):
         """Test queue names with leading/trailing whitespace are handled."""
         result = await queue_tool.execute(
@@ -168,7 +168,7 @@ class TestTransferToQueueTool:
     
     @pytest.mark.asyncio
     async def test_invalid_queue_name(
-        self, queue_tool, tool_context, mock_ari_client, queue_config
+        self, queue_tool, tool_context, mock_ari_client, queue_enabled_config
     ):
         """Test error handling for invalid queue names."""
         result = await queue_tool.execute(
@@ -191,8 +191,8 @@ class TestTransferToQueueTool:
     ):
         """Test error when tool is not configured."""
         # Remove queue config
-        if "transfer_to_queue" in tool_context._config.get("tools", {}):
-            del tool_context._config["tools"]["transfer_to_queue"]
+        if tool_context.config and "transfer_to_queue" in tool_context.config.get("tools", {}):
+            del tool_context.config["tools"]["transfer_to_queue"]
         
         result = await queue_tool.execute(
             parameters={"queue": "sales"},
