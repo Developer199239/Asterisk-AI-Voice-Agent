@@ -411,10 +411,12 @@ Keep this roadmap updated after each milestone to help any collaborator—or fut
 
 ---
 
-### v4.2 Release (November 2025) - Pipeline Tool Execution & Transport Validation
+### v4.3.0 (November 2025) - Pipeline Tool Execution & Transport Validation
 
 **Release Date**: November 19, 2025  
 **Focus**: Full transport/mode parity and tool execution for modular pipelines
+
+> **Note**: This work was completed in Milestone 15 and released as v4.3.0 (not v4.2.x). The v4.2.1 patch release (Nov 18) focused on onboarding improvements (quickstart wizard, enhanced installer).
 
 **AudioSocket + Pipeline Validation**:
 
@@ -444,7 +446,7 @@ Keep this roadmap updated after each milestone to help any collaborator—or fut
 
 ---
 
-### v4.3 Planning (Q1 2026)
+### v4.4 Planning (Q1 2026)
 
 **Testing & Quality**:
 
@@ -612,4 +614,4 @@ For detailed implementation plans and specifications:
 ---
 
 **Last Updated**: November 19, 2025  
-**Roadmap Version**: 2.3 (Added Milestone 15 - AudioSocket + Pipeline Validation & Tool Execution)
+**Roadmap Version**: 2.4 (Corrected v4.3.0 release alignment, updated future planning to v4.4)
