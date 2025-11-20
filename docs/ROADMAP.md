@@ -310,6 +310,57 @@ Each milestone includes scope, implementation details, and verification criteria
 
 ---
 
+## Milestone 15 — AudioSocket + Pipeline Validation & Tool Execution (✅ Completed Nov 19, 2025)
+
+- **Goal**: Validate AudioSocket transport with pipeline mode and enable tool execution for modular pipelines, achieving full transport/mode parity.
+- **What We Shipped**:
+  - **AudioSocket + Pipeline Validation**: Comprehensive 4-call test suite demonstrating AudioSocket works with both full agents AND pipelines.
+  - **Tool Execution for Pipelines** (AAVA-85): Extended tool calling system to modular pipelines via OpenAI Chat Completions API.
+    - LLMResponse dataclass with tool_calls support
+    - Pipeline orchestrator executes tools via tool_registry
+    - Terminal tool handling (hangup, transfer) with proper flow control
+    - Conversation history persistence for email summaries
+  - **Configuration Validation Improvements**: Tightened warnings to only flag when neither pipelines nor providers are configured.
+  - **Documentation Updates**: Updated `Transport-Mode-Compatibility.md` to mark AudioSocket + Pipeline as validated with historical context.
+- **Test Suite Results (Nov 19, 2025)**:
+  - **Call 1** (1763610697.6282): Google Live monolithic, 36.34s, 186 frames ✅
+  - **Call 2** (1763610742.6286): Deepgram monolithic, 34.36s, 176 frames ✅
+  - **Call 3** (1763610785.6290): OpenAI Realtime monolithic, 71.29s, 360 frames, tool execution ✅
+  - **Call 4** (1763610866.6294): local_hybrid pipeline, 54.57s, 277 frames, tool execution ✅
+  - All calls: Continuous audio frame flow, clean two-way conversation, proper hangup
+- **Key Fixes Referenced**:
+  - `fbbe5b9` (Oct 27): Pipeline audio routing fix - added pipeline mode check BEFORE continuous_input provider routing
+  - `181b210` (Oct 28): Pipeline gating enforcement - prevents feedback loop
+  - `fbaaf2e` (Oct 28): Fallback safety margin increase for pipelines
+- **Tool Execution Validation** (AAVA-85):
+  - **Pipeline Tools Working**: transfer, hangup_call, send_email_summary, request_transcript
+  - **Call 1763610866.6294**: local_hybrid pipeline executed hangup_call with farewell, email summary sent
+  - **Call 1763582071.6214**: transfer to ringgroup 600 (Sales team) successful
+  - **Critical Bugs Fixed** (5 iterations):
+    - Config AttributeError: Fixed Engine.config vs self.app_config (commit a007241)
+    - Hangup method error: Used correct ARI method hangup_channel() (commit cc125fd)
+    - Farewell in email: Saved farewell to history before playback (commit 8058dab)
+    - Farewell audio cutoff: Accurate duration calculation from audio bytes (commit 8058dab)
+    - Conversation history preservation: Initialize from session.conversation_history (commit dd5bc5a)
+- **Configuration Matrix Update**:
+  - AudioSocket + Full Agent: ✅ VALIDATED
+  - AudioSocket + Pipeline: ✅ VALIDATED (v4.0+)
+  - ExternalMedia RTP + Pipeline: ✅ VALIDATED
+- **Verification**:
+  - All 4 transport/mode combinations now production-validated
+  - Tool execution functional in both monolithic providers and pipelines
+  - No false configuration warnings about valid combinations
+- **Acceptance**:
+  - AudioSocket + Pipeline produces clean two-way conversations with continuous audio flow
+  - Pipelines can execute all telephony and business tools
+  - Config validation warns only when neither providers nor pipelines are configured
+- **Impact**:
+  - Simplified transport selection: Both AudioSocket and ExternalMedia RTP work for all modes
+  - Full tool parity: Pipelines have same capabilities as monolithic providers
+  - Removed major deployment constraint documented since October 2025
+
+---
+
 ## Milestone 17 — Monitoring, Feedback & Guided Setup (Planned)
 
 - **Goal**: Ship an opt-in monitoring + analytics experience that is turnkey, captures per-call transcripts/metrics, and surfaces actionable YAML tuning guidance. Implementation details live in `docs/milestones/milestone-8-monitoring-stack.md`.
@@ -360,11 +411,45 @@ Keep this roadmap updated after each milestone to help any collaborator—or fut
 
 ---
 
-### v4.2 Planning (Q1 2026)
+### v4.2 Release (November 2025) - Pipeline Tool Execution & Transport Validation
+
+**Release Date**: November 19, 2025  
+**Focus**: Full transport/mode parity and tool execution for modular pipelines
+
+**AudioSocket + Pipeline Validation**:
+
+- Validated AudioSocket transport with pipeline mode (Milestone 15)
+- 4-call comprehensive test suite (Google Live, Deepgram, OpenAI Realtime, local_hybrid)
+- All transport/mode combinations now production-ready
+- Documentation updated with historical context and v4.0+ validation notes
+
+**Tool Execution for Pipelines** (AAVA-85):
+
+- Extended tool calling to modular pipelines via OpenAI Chat Completions API
+- Pipeline orchestrator executes tools via unified tool_registry
+- Validated tools: transfer, hangup_call, send_email_summary, request_transcript
+- Fixed 5 critical bugs during implementation (config, hangup method, farewell handling)
+
+**Configuration Improvements**:
+
+- Tightened validation warnings (only flag when neither providers nor pipelines configured)
+- Updated Transport-Mode-Compatibility.md to reflect AudioSocket + Pipeline as validated
+- Removed incorrect warnings about valid configurations
+
+**Production Validation**:
+
+- Call 1763610866.6294: local_hybrid pipeline, 54.57s, tool execution successful
+- Call 1763582071.6214: transfer tool, ringgroup resolution working
+- Zero false configuration warnings in production
+
+---
+
+### v4.3 Planning (Q1 2026)
 
 **Testing & Quality**:
 
 - ✅ Unit tests for tool adapters and email tools (111 tests, 27-29% coverage - Milestone 16)
+- ✅ AudioSocket + Pipeline validation (4-call test suite - Milestone 15)
 - ⏳ Integration tests for transfer workflows (unit tests complete, full workflow pending)
 - 🎯 Increase CI coverage threshold to 30% then 40% (currently 27%)
 - ⏳ Automated regression test suite (foundation in place)
@@ -526,5 +611,5 @@ For detailed implementation plans and specifications:
 
 ---
 
-**Last Updated**: November 12, 2025  
-**Roadmap Version**: 2.2 (Added Milestone 16 - Tool Testing & QA)
+**Last Updated**: November 19, 2025  
+**Roadmap Version**: 2.3 (Added Milestone 15 - AudioSocket + Pipeline Validation & Tool Execution)
