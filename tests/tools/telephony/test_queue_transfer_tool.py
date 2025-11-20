@@ -216,7 +216,7 @@ class TestTransferToQueueTool:
         self, queue_tool, tool_context, mock_ari_client, queue_enabled_config
     ):
         """Test handling of ARI client errors when setting channel variable."""
-        mock_ari_client.channels.setChannelVar.side_effect = Exception("Channel not found")
+        mock_ari_client.send_command.side_effect = Exception("Channel not found")
         
         result = await queue_tool.execute(
             parameters={"queue": "sales"},
@@ -232,7 +232,7 @@ class TestTransferToQueueTool:
         self, queue_tool, tool_context, mock_ari_client, queue_enabled_config
     ):
         """Test handling of ARI client errors when continuing in dialplan."""
-        mock_ari_client.channels.continueInDialplan.side_effect = Exception("Context not found")
+        mock_ari_client.send_command.side_effect = Exception("Context not found")
         
         result = await queue_tool.execute(
             parameters={"queue": "sales"},
@@ -260,7 +260,7 @@ class TestTransferToQueueTool:
         session = await tool_context.get_session()
         assert session.transfer_state == "in_queue"
         assert session.transfer_target == "sales"
-        assert session.transfer_time is not None
+        assert session.transfer_active is True
     
     # ==================== Message Formatting Tests ====================
     
