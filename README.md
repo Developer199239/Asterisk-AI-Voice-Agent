@@ -1,34 +1,57 @@
-# Asterisk AI Voice Agent v4.2
+<div align="center">
 
-![Version](https://img.shields.io/badge/version-4.2.1-blue.svg)
+# Asterisk AI Voice Agent
+
+![Version](https://img.shields.io/badge/version-4.3.0-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![Python](https://img.shields.io/badge/python-3.10+-blue.svg)
 ![Docker](https://img.shields.io/badge/docker-compose-blue.svg)
 ![Asterisk](https://img.shields.io/badge/asterisk-18+-orange.svg)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/hkjarral/Asterisk-AI-Voice-Agent)
-[![](https://dcbadge.limes.pink/api/server/https://discord.gg/CAVACtaY)](https://discord.gg/CAVACtaY)
+[![Discord](https://dcbadge.limes.pink/api/server/CAVACtaY)](https://discord.gg/CAVACtaY)
+
+</div>
 
 The most powerful, flexible open-source AI voice agent for Asterisk/FreePBX. Featuring a **modular pipeline architecture** that lets you mix and match STT, LLM, and TTS providers, plus **4 production-ready golden baselines** validated for enterprise deployment.
 
-## 🎉 What's New in v4.2
+## 🎉 What's New in v4.3.0
+
+* **🔧 Complete Tool Support for Pipelines**: Tool execution now works across ALL pipeline types, including `local_hybrid`
+  - All 6 tools validated and production-ready: hangup, transfer, email, transcript, voicemail, cancel
+  - Session history persistence for full conversation context
+  - Production-tested with real call flows
+* **📚 Documentation Overhaul**: Completely reorganized and professional documentation structure
+  - New `docs/contributing/` directory for developer documentation
+  - Comprehensive provider setup guides (Deepgram, OpenAI, Google)
+  - Technical implementation references for all providers
+  - Common pitfalls guide with production solutions
+  - Removed 2,763 lines of obsolete documentation
+* **💬 Discord Community**: Official Discord server integration for community support and discussions
+* **🐛 Critical Bug Fixes**: OpenAI Realtime tool schema, execution flow, and Pydantic compatibility issues resolved
+
+### Previous Releases
+
+<details>
+<summary><b>v4.2 - Google Live API & Enhanced Setup</b></summary>
 
 * **🤖 Google Live API**: Gemini 2.0 Flash integration with multimodal capabilities
-* **🚀 Streamlined Onboarding**: Interactive `agent quickstart` wizard for first-time users
-* **🔧 Enhanced Setup**: ARI validation, API key verification, and dialplan generation
+* **🚀 Interactive Setup**: `agent quickstart` wizard with API key validation
 * **📞 Unified Transfer Tool**: Single tool for extensions, queues, and ring groups
-* **📬 Voicemail Integration**: Leave voicemail tool with configurable extension routing
+* **📬 Voicemail Integration**: Leave voicemail tool with configurable routing
 * **🩺 Config Validation**: `agent config validate` with auto-fix capabilities
-* **📝 Dialplan Helper**: `agent dialplan` generates provider-specific snippets
-* **⚡ Improved install.sh**: Offers CLI installation and automated setup
-* **✅ Production Ready**: All v4.1 features plus improved developer experience
 
-### Previous: v4.1
+</details>
 
-* **🔧 Tool Calling**: AI agents can transfer calls and send emails
-* **🩺 Agent CLI**: Professional CLI tools (`agent doctor`, `agent troubleshoot`, `agent demo`, `agent init`)
+<details>
+<summary><b>v4.1 - Tool Calling & Agent CLI</b></summary>
+
+* **🔧 Tool Calling System**: AI agents can transfer calls and send emails
+* **🩺 Agent CLI Tools**: `doctor`, `troubleshoot`, `demo`, `init` commands
 * **📞 Warm Transfers**: Direct SIP origination with bidirectional audio
-* **📧 Email Integration**: Send transcripts and call summaries via Resend API
-* **🏗️ Unified Architecture**: Write tools once, use with any provider (Deepgram, OpenAI)
+* **📧 Email Integration**: Transcripts and call summaries via Resend API
+* **🏗️ Unified Architecture**: Write tools once, use with any provider
+
+</details>
 
 ## 🌟 Why Asterisk AI Voice Agent?
 
@@ -94,12 +117,11 @@ Experience all four production-ready configurations with a single phone call:
 
 Each configuration uses the same Ava persona with full project knowledge. Compare response times, conversation quality, and naturalness across providers!
 
-**NEW in v4.2**: Google Live API integration with Gemini 2.0 Flash!
-**NEW in v4.1**: Try asking the agent to "transfer me to support" or "email me a transcript"!
+**Try it out**: Ask the agent to "transfer me to support" or "email me a transcript"!
 
-## 🛠️ AI-Powered Actions (v4.2+)
+## 🛠️ AI-Powered Actions (v4.3+)
 
-Your AI agent can perform real-world telephony actions through tool calling:
+Your AI agent can perform real-world telephony actions through tool calling, now validated across **all pipeline types** including local hybrid:
 
 ### Unified Call Transfers
 
@@ -181,7 +203,7 @@ Agent: "Perfect! I'll send the transcript there shortly."
 
 **Setup**: See [Tool Calling Guide](docs/TOOL_CALLING_GUIDE.md) for configuration.
 
-## 🩺 Agent CLI Tools (v4.2+)
+## 🩺 Agent CLI Tools
 
 Production-ready CLI for operations and setup:
 
@@ -214,7 +236,7 @@ agent init
 curl -sSL https://raw.githubusercontent.com/hkjarral/Asterisk-AI-Voice-Agent/main/scripts/install-cli.sh | bash
 ```
 
-Supports Linux, macOS (Intel + Apple Silicon), and Windows. See [CLI Tools Guide](docs/CLI_TOOLS_GUIDE.md).
+Supports Linux, macOS (Intel + Apple Silicon), and Windows. See [CLI Tools Guide](cli/README.md) for complete reference.
 
 ## 🚀 Quick Start
 
@@ -274,7 +296,7 @@ Add this to your FreePBX (Config Edit → extensions_custom.conf):
 
 ```asterisk
 [from-ai-agent]
-exten => s,1,NoOp(Asterisk AI Voice Agent v4.2)
+exten => s,1,NoOp(Asterisk AI Voice Agent v4.3)
  same => n,Stasis(asterisk-ai-voice-agent)
  same => n,Hangup()
 ```
@@ -297,7 +319,7 @@ docker compose logs -f ai-engine
 
 **That's it!** Your AI voice agent is ready. 🎉
 
-For detailed setup, see [docs/CLI_TOOLS_GUIDE.md](docs/CLI_TOOLS_GUIDE.md) or [docs/FreePBX-Integration-Guide.md](docs/FreePBX-Integration-Guide.md)
+For detailed setup, see [CLI Tools Guide](cli/README.md) or [FreePBX Integration Guide](docs/FreePBX-Integration-Guide.md)
 
 ## ⚙️ Configuration
 
@@ -442,8 +464,11 @@ Two-container architecture for performance and scalability:
 * **[Hardware Requirements](docs/HARDWARE_REQUIREMENTS.md)** - System specs and sizing *(coming soon)*
 
 ### Development
-* **[Architecture](docs/Architecture.md)** - System design and components
-* **[Contributing](CONTRIBUTING.md)** - How to contribute
+* **[Developer Documentation](docs/contributing/README.md)** - Complete developer guide and index
+* **[Architecture Overview](docs/contributing/architecture-quickstart.md)** - 10-minute system overview
+* **[Architecture Deep Dive](docs/contributing/architecture-deep-dive.md)** - Complete technical architecture
+* **[Common Pitfalls](docs/contributing/COMMON_PITFALLS.md)** - Production issues and solutions
+* **[Contributing Guide](CONTRIBUTING.md)** - How to contribute
 * **[Changelog](CHANGELOG.md)** - Release history and changes
 
 ## 🤝 Contributing
@@ -454,15 +479,17 @@ Contributions are welcome! Please see our [Contributing Guide](CONTRIBUTING.md) 
 
 If you want to contribute features (providers, tools, pipelines) or run the project in a development setup, start with:
 
-- `docs/DEVELOPER_ONBOARDING.md` – end-to-end setup and workflow
-- `AVA.mdc` – AVA, the project manager persona, for guidance via your AI-powered IDE (e.g., Windsurf or any IDE of your choice)
+- [Developer Quickstart](docs/contributing/quickstart.md) – 15-minute dev environment setup
+- [Developer Documentation](docs/contributing/README.md) – Complete developer guide and index
+- `AVA.mdc` – AVA, the project manager persona, for guidance via your AI-powered IDE
 
 ## 💬 Community
 
 Have questions or want to chat with other users? Join our community:
 
-* [GitHub Issues](https://github.com/hkjarral/Asterisk-AI-Voice-Agent/issues)
-* [Community Forum](https://github.com/hkjarral/Asterisk-AI-Voice-Agent/discussions)
+* **[Discord Server](https://discord.gg/CAVACtaY)** - Community support and discussions
+* [GitHub Issues](https://github.com/hkjarral/Asterisk-AI-Voice-Agent/issues) - Bug reports and feature requests
+* [GitHub Discussions](https://github.com/hkjarral/Asterisk-AI-Voice-Agent/discussions) - General discussions
 
 ## 📝 License
 
