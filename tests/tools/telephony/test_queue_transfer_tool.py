@@ -204,10 +204,10 @@ class TestTransferToQueueTool:
     
     @pytest.mark.asyncio
     async def test_tool_disabled(
-        self, queue_tool, tool_context, mock_ari_client, queue_config
+        self, queue_tool, tool_context, mock_ari_client, queue_enabled_config
     ):
         """Test error when tool is disabled."""
-        tool_context._config["tools"]["transfer_to_queue"]["enabled"] = False
+        tool_context.config["tools"]["transfer_to_queue"]["enabled"] = False
         
         result = await queue_tool.execute(
             parameters={"queue": "sales"},
@@ -218,7 +218,7 @@ class TestTransferToQueueTool:
     
     @pytest.mark.asyncio
     async def test_ari_client_error_on_set_variable(
-        self, queue_tool, tool_context, mock_ari_client, queue_config
+        self, queue_tool, tool_context, mock_ari_client, queue_enabled_config
     ):
         """Test handling of ARI client errors when setting channel variable."""
         mock_ari_client.channels.setChannelVar.side_effect = Exception("Channel not found")
@@ -234,7 +234,7 @@ class TestTransferToQueueTool:
     
     @pytest.mark.asyncio
     async def test_ari_client_error_on_continue_dialplan(
-        self, queue_tool, tool_context, mock_ari_client, queue_config
+        self, queue_tool, tool_context, mock_ari_client, queue_enabled_config
     ):
         """Test handling of ARI client errors when continuing in dialplan."""
         mock_ari_client.channels.continueInDialplan.side_effect = Exception("Context not found")
@@ -251,7 +251,7 @@ class TestTransferToQueueTool:
     
     @pytest.mark.asyncio
     async def test_session_state_updated(
-        self, queue_tool, tool_context, mock_ari_client, queue_config
+        self, queue_tool, tool_context, mock_ari_client, queue_enabled_config
     ):
         """Test that session state is updated correctly."""
         result = await queue_tool.execute(
@@ -271,7 +271,7 @@ class TestTransferToQueueTool:
     
     @pytest.mark.asyncio
     async def test_message_includes_queue_description(
-        self, queue_tool, tool_context, mock_ari_client, queue_config
+        self, queue_tool, tool_context, mock_ari_client, queue_enabled_config
     ):
         """Test that success message includes queue description."""
         result = await queue_tool.execute(
@@ -333,7 +333,7 @@ class TestTransferToQueueTool:
     # ==================== Configuration Tests ====================
     
     def test_resolve_queue_returns_config(
-        self, queue_tool, tool_context, queue_config
+        self, queue_tool, tool_context, queue_enabled_config
     ):
         """Test that _resolve_queue returns correct configuration."""
         queue_config_result = queue_tool._resolve_queue("sales", tool_context)
@@ -344,7 +344,7 @@ class TestTransferToQueueTool:
         assert queue_config_result["max_wait_time"] == 300
     
     def test_resolve_queue_returns_none_for_invalid(
-        self, queue_tool, tool_context, queue_config
+        self, queue_tool, tool_context, queue_enabled_config
     ):
         """Test that _resolve_queue returns None for invalid queue names."""
         result = queue_tool._resolve_queue("invalid_queue", tool_context)
@@ -355,7 +355,7 @@ class TestTransferToQueueTool:
     
     @pytest.mark.asyncio
     async def test_return_includes_all_fields(
-        self, queue_tool, tool_context, mock_ari_client, queue_config
+        self, queue_tool, tool_context, mock_ari_client, queue_enabled_config
     ):
         """Test that return value includes all required fields."""
         result = await queue_tool.execute(
@@ -373,7 +373,7 @@ class TestTransferToQueueTool:
     
     @pytest.mark.asyncio
     async def test_return_includes_optional_fields(
-        self, queue_tool, tool_context, mock_ari_client, queue_config
+        self, queue_tool, tool_context, mock_ari_client, queue_enabled_config
     ):
         """Test that return value includes optional fields."""
         result = await queue_tool.execute(
