@@ -8,9 +8,8 @@
 ![Docker](https://img.shields.io/badge/docker-compose-blue.svg)
 ![Asterisk](https://img.shields.io/badge/asterisk-18+-orange.svg)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/hkjarral/Asterisk-AI-Voice-Agent)
-[![Discord](https://dcbadge.limes.pink/api/server/CAVACtaY)](https://discord.gg/CAVACtaY)
+[![Discord](https://dcbadge.limes.pink/api/server/CAVACtaY)](https://discord.gg/9DR7KvJajfdiv)
 
-</div>
 
 The most powerful, flexible open-source AI voice agent for Asterisk/FreePBX. Featuring a **modular pipeline architecture** that lets you mix and match STT, LLM, and TTS providers, plus **4 production-ready golden baselines** validated for enterprise deployment.
 
