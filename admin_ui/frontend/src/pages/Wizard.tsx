@@ -88,6 +88,27 @@ const Wizard = () => {
         serverReady: false
     });
 
+    // Load existing config from .env on mount
+    useEffect(() => {
+        const loadExistingConfig = async () => {
+            try {
+                const res = await axios.get('/api/wizard/load-config');
+                if (res.data) {
+                    setConfig(prev => ({
+                        ...prev,
+                        ...res.data,
+                        // Keep provider selection if not set in loaded config
+                        provider: res.data.provider || prev.provider
+                    }));
+                }
+            } catch (err) {
+                // Non-fatal - continue with defaults
+                console.log('No existing config found');
+            }
+        };
+        loadExistingConfig();
+    }, []);
+
     const handleSkip = () => {
         setShowSkipConfirm(true);
     };

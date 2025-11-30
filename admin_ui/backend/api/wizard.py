@@ -21,6 +21,53 @@ async def init_env():
     return {"created": created, "env_path": ENV_PATH}
 
 
+@router.get("/load-config")
+async def load_existing_config():
+    """Load existing configuration from .env file.
+    
+    Used to pre-populate wizard fields if config already exists.
+    """
+    from dotenv import dotenv_values
+    
+    config = {}
+    
+    # Load from .env if it exists
+    if os.path.exists(ENV_PATH):
+        env_values = dotenv_values(ENV_PATH)
+        config = {
+            "asterisk_host": env_values.get("ASTERISK_HOST", "127.0.0.1"),
+            "asterisk_username": env_values.get("ASTERISK_ARI_USERNAME", ""),
+            "asterisk_password": env_values.get("ASTERISK_ARI_PASSWORD", ""),
+            "asterisk_port": int(env_values.get("ASTERISK_ARI_PORT", "8088")),
+            "asterisk_scheme": env_values.get("ASTERISK_ARI_SCHEME", "http"),
+            "asterisk_app": env_values.get("ASTERISK_ARI_APP", "asterisk-ai-voice-agent"),
+            "openai_key": env_values.get("OPENAI_API_KEY", ""),
+            "deepgram_key": env_values.get("DEEPGRAM_API_KEY", ""),
+            "google_key": env_values.get("GOOGLE_API_KEY", ""),
+            "elevenlabs_key": env_values.get("ELEVENLABS_API_KEY", ""),
+        }
+    
+    # Load AI config from YAML if it exists
+    if os.path.exists(CONFIG_PATH):
+        try:
+            with open(CONFIG_PATH, 'r') as f:
+                yaml_config = yaml.safe_load(f)
+            
+            # Get default context settings
+            default_ctx = yaml_config.get("contexts", {}).get("default", {})
+            config["ai_name"] = default_ctx.get("ai_name", "Asterisk Agent")
+            config["ai_role"] = default_ctx.get("ai_role", "")
+            config["greeting"] = default_ctx.get("greeting", "")
+            
+            # Try to detect provider from config
+            if default_ctx.get("provider"):
+                config["provider"] = default_ctx.get("provider")
+        except:
+            pass
+    
+    return config
+
+
 @router.get("/engine-status")
 async def get_engine_status():
     """Check if ai-engine container is running.
