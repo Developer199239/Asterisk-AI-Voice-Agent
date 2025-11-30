@@ -1,13 +1,9 @@
 # Asterisk AI Voice Agent - Main Services
 #
-# DEFAULT NETWORK MODE: Bridge (Recommended)
-# - Better security with network isolation
-# - Explicit port mappings
-# - Works with firewall rules
-# - See docs/PRODUCTION_DEPLOYMENT.md section 3.1
-#
-# For host network mode (high-performance), use:
-#   docker compose -f docker-compose.yml -f docker-compose.host.yml up -d
+# DEFAULT NETWORK MODE: Host (for telephony/low-latency)
+# - Direct access to host network (127.0.0.1 reaches Asterisk)
+# - No port mapping needed
+# - Best for telephony integrations
 #
 # For optional monitoring (Prometheus + Grafana), use:
 #   docker compose -f docker-compose.monitoring.yml up -d
@@ -21,8 +17,7 @@ services:
       dockerfile: Dockerfile
     container_name: ai_engine
     user: "appuser"
-    ports:
-      - "15000:15000"
+    network_mode: host
     volumes:
       - ./src:/app/src
       - ./main.py:/app/main.py
@@ -36,9 +31,7 @@ services:
       - PYTHONPATH=/app
       - PYTHONUNBUFFERED=1
       - HEALTH_BIND_HOST=0.0.0.0
-      - ASTERISK_HOST=${ASTERISK_HOST:-host.docker.internal}
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - ASTERISK_HOST=${ASTERISK_HOST:-127.0.0.1}
     tty: true
     stdin_open: true
     restart: unless-stopped
@@ -48,8 +41,7 @@ services:
       context: ./local_ai_server
       dockerfile: Dockerfile
     container_name: local_ai_server
-    ports:
-      - "8765:8765"
+    network_mode: host
     env_file:
       - .env
     volumes:
@@ -86,11 +78,11 @@ services:
       context: ./admin_ui
       dockerfile: Dockerfile
     container_name: admin_ui
-    ports:
-      - "3003:8000"
+    network_mode: host
     volumes:
       - ./:/app/project
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - PROJECT_ROOT=/app/project
+      - UVICORN_PORT=3003
     restart: unless-stopped

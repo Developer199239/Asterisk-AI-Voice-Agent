@@ -57,22 +57,47 @@ async def start_engine():
     """Start the ai-engine container.
     
     Called from wizard completion step when user clicks 'Start AI Engine'.
+    Uses docker-compose to create/start the container.
     """
+    import subprocess
+    from settings import PROJECT_ROOT
+    
     try:
-        client = docker.from_env()
-        try:
-            container = client.containers.get("ai_engine")
-            if container.status != "running":
-                container.start()
-                return {"success": True, "action": "started", "message": "AI Engine started successfully"}
-            else:
-                return {"success": True, "action": "already_running", "message": "AI Engine is already running"}
-        except docker.errors.NotFound:
+        # Use docker-compose to create and start ai-engine
+        # This works whether container exists or not
+        result = subprocess.run(
+            ["docker-compose", "up", "-d", "ai-engine"],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=60
+        )
+        
+        if result.returncode == 0:
+            return {
+                "success": True,
+                "action": "started",
+                "message": "AI Engine started successfully",
+                "output": result.stdout
+            }
+        else:
             return {
                 "success": False,
-                "action": "not_found",
-                "message": "AI Engine container not found. Run: docker-compose up -d ai-engine"
+                "action": "error",
+                "message": f"Failed to start AI Engine: {result.stderr or result.stdout}"
             }
+    except subprocess.TimeoutExpired:
+        return {
+            "success": False,
+            "action": "timeout",
+            "message": "Timeout waiting for AI Engine to start. Check docker-compose logs."
+        }
+    except FileNotFoundError:
+        return {
+            "success": False,
+            "action": "not_found",
+            "message": "docker-compose not found. Please install Docker Compose."
+        }
     except Exception as e:
         return {"success": False, "action": "error", "message": str(e)}
 

@@ -23,8 +23,8 @@ COPY backend/ .
 # Copy built frontend assets to backend's static directory
 COPY --from=frontend-builder /app/frontend/dist ./static
 
-# Expose port 8000
-EXPOSE 8000
+# Expose default port (can be overridden by UVICORN_PORT)
+EXPOSE 3003
 
-# Run the application
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Run the application (port configurable via UVICORN_PORT env var)
+CMD uvicorn main:app --host 0.0.0.0 --port ${UVICORN_PORT:-3003}

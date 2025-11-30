@@ -680,10 +680,11 @@ const Wizard = () => {
                                 <button
                                     onClick={async () => {
                                         setStartingEngine(true);
+                                        setError(null);
                                         try {
                                             const res = await axios.post('/api/wizard/start-engine');
                                             if (res.data.success) {
-                                                setEngineStatus({ ...engineStatus, running: true });
+                                                setEngineStatus({ ...engineStatus, running: true, exists: true });
                                             } else {
                                                 setError(res.data.message);
                                             }
@@ -693,7 +694,7 @@ const Wizard = () => {
                                             setStartingEngine(false);
                                         }
                                     }}
-                                    disabled={startingEngine || !engineStatus.exists}
+                                    disabled={startingEngine}
                                     className="w-full px-4 py-2 rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center"
                                 >
                                     {startingEngine ? (
