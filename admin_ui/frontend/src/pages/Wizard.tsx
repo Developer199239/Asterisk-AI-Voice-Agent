@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AlertCircle, ArrowRight, Loader2, Cloud, Server, Shield, Zap, SkipForward, CheckCircle, Terminal, Copy, HardDrive } from 'lucide-react';
+import { AlertCircle, ArrowRight, Loader2, Cloud, Server, Shield, Zap, SkipForward, CheckCircle, Terminal, Copy, HardDrive, Play } from 'lucide-react';
 import axios from 'axios';
 
 interface SetupConfig {
@@ -50,10 +50,12 @@ const Wizard = () => {
     });
 
     const [showSkipConfirm, setShowSkipConfirm] = useState(false);
-    const [setupResult, setSetupResult] = useState<{
-        containers_started?: string[];
-        containers_failed?: string[];
-    }>({});
+    const [engineStatus, setEngineStatus] = useState<{
+        running: boolean;
+        exists: boolean;
+        checked: boolean;
+    }>({ running: false, exists: false, checked: false });
+    const [startingEngine, setStartingEngine] = useState(false);
 
     const handleSkip = () => {
         setShowSkipConfirm(true);
@@ -246,20 +248,37 @@ const Wizard = () => {
                 }
                 setLoading(false);
             }
-            // Save config and start containers
+            // Save config
             setLoading(true);
             try {
-                const res = await axios.post('/api/wizard/save', config);
-                setSetupResult({
-                    containers_started: res.data.containers_started || [],
-                    containers_failed: res.data.containers_failed || []
-                });
+                await axios.post('/api/wizard/save', config);
+                
+                // Check engine status for completion step
+                try {
+                    const statusRes = await axios.get('/api/wizard/engine-status');
+                    setEngineStatus({
+                        running: statusRes.data.running,
+                        exists: statusRes.data.exists,
+                        checked: true
+                    });
+                } catch {
+                    setEngineStatus({ running: false, exists: false, checked: true });
+                }
+                
                 setStep(5); // Go to completion step
             } catch (err: any) {
                 setError(err.response?.data?.detail || err.message);
             } finally {
                 setLoading(false);
             }
+        } else if (step === 2) {
+            // Initialize .env when moving from provider selection to API keys step
+            try {
+                await axios.post('/api/wizard/init-env');
+            } catch {
+                // Non-fatal - continue anyway
+            }
+            setStep(step + 1);
         } else {
             setStep(step + 1);
         }
@@ -641,34 +660,66 @@ const Wizard = () => {
                             Your AI Agent is configured and ready.
                         </p>
 
-                        {/* Container Status */}
-                        <div className="bg-muted p-4 rounded-lg text-left">
-                            <h3 className="font-semibold mb-3">Container Status</h3>
-                            {setupResult.containers_started && setupResult.containers_started.length > 0 && (
-                                <div className="mb-2">
-                                    {setupResult.containers_started.map((c, i) => (
-                                        <div key={i} className="flex items-center text-sm text-green-600 dark:text-green-400">
-                                            <CheckCircle className="w-4 h-4 mr-2" />
-                                            {c}
-                                        </div>
-                                    ))}
+                        {/* AI Engine Status - Show start button if not running */}
+                        {engineStatus.checked && !engineStatus.running && (
+                            <div className="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-lg text-left border border-blue-200 dark:border-blue-800">
+                                <h3 className="font-semibold mb-3 flex items-center text-blue-800 dark:text-blue-300">
+                                    <Server className="w-4 h-4 mr-2" />
+                                    Start AI Engine
+                                </h3>
+                                <p className="text-sm text-blue-700 dark:text-blue-400 mb-4">
+                                    {engineStatus.exists 
+                                        ? "The AI Engine container exists but is not running. Click below to start it."
+                                        : "The AI Engine container needs to be created. Run the command below, then click Start."}
+                                </p>
+                                {!engineStatus.exists && (
+                                    <pre className="bg-black text-green-400 p-3 rounded-md text-xs font-mono mb-4 overflow-x-auto">
+                                        docker-compose up -d ai-engine
+                                    </pre>
+                                )}
+                                <button
+                                    onClick={async () => {
+                                        setStartingEngine(true);
+                                        try {
+                                            const res = await axios.post('/api/wizard/start-engine');
+                                            if (res.data.success) {
+                                                setEngineStatus({ ...engineStatus, running: true });
+                                            } else {
+                                                setError(res.data.message);
+                                            }
+                                        } catch (err: any) {
+                                            setError(err.response?.data?.detail || err.message);
+                                        } finally {
+                                            setStartingEngine(false);
+                                        }
+                                    }}
+                                    disabled={startingEngine || !engineStatus.exists}
+                                    className="w-full px-4 py-2 rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center"
+                                >
+                                    {startingEngine ? (
+                                        <>
+                                            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                                            Starting...
+                                        </>
+                                    ) : (
+                                        <>
+                                            <Play className="w-4 h-4 mr-2" />
+                                            Start AI Engine
+                                        </>
+                                    )}
+                                </button>
+                            </div>
+                        )}
+
+                        {/* Engine Running - Success */}
+                        {engineStatus.checked && engineStatus.running && (
+                            <div className="bg-green-50 dark:bg-green-900/20 p-4 rounded-lg text-left border border-green-200 dark:border-green-800">
+                                <div className="flex items-center text-green-700 dark:text-green-400">
+                                    <CheckCircle className="w-5 h-5 mr-2" />
+                                    <span className="font-medium">AI Engine is running</span>
                                 </div>
-                            )}
-                            {setupResult.containers_failed && setupResult.containers_failed.length > 0 && (
-                                <div className="mt-2 p-3 bg-yellow-50 dark:bg-yellow-900/20 rounded border border-yellow-200 dark:border-yellow-800">
-                                    <p className="text-sm font-medium text-yellow-800 dark:text-yellow-300 mb-2">Action Required:</p>
-                                    {setupResult.containers_failed.map((c, i) => (
-                                        <div key={i} className="text-sm text-yellow-700 dark:text-yellow-400">
-                                            ⚠️ {c}
-                                        </div>
-                                    ))}
-                                </div>
-                            )}
-                            {(!setupResult.containers_started || setupResult.containers_started.length === 0) && 
-                             (!setupResult.containers_failed || setupResult.containers_failed.length === 0) && (
-                                <p className="text-sm text-muted-foreground">No container actions taken.</p>
-                            )}
-                        </div>
+                            </div>
+                        )}
 
                         <div className="bg-muted p-4 rounded-lg text-left">
                             <h3 className="font-semibold mb-2 flex items-center">

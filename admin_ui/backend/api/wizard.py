@@ -5,9 +5,76 @@ import httpx
 import os
 import yaml
 from typing import Dict, Any, Optional
-from settings import ENV_PATH, CONFIG_PATH
+from settings import ENV_PATH, CONFIG_PATH, ensure_env_file
 
 router = APIRouter()
+
+
+@router.post("/init-env")
+async def init_env():
+    """Initialize .env from .env.example on first wizard step.
+    
+    Called when user clicks Next from step 1 (provider selection).
+    This ensures .env exists with default values before proceeding.
+    """
+    created = ensure_env_file()
+    return {"created": created, "env_path": ENV_PATH}
+
+
+@router.get("/engine-status")
+async def get_engine_status():
+    """Check if ai-engine container is running.
+    
+    Used in wizard completion step to determine if user needs
+    to start the engine (first time) or if it's already running.
+    """
+    try:
+        client = docker.from_env()
+        try:
+            container = client.containers.get("ai_engine")
+            return {
+                "running": container.status == "running",
+                "status": container.status,
+                "exists": True
+            }
+        except docker.errors.NotFound:
+            return {
+                "running": False,
+                "status": "not_found",
+                "exists": False
+            }
+    except Exception as e:
+        return {
+            "running": False,
+            "status": "error",
+            "exists": False,
+            "error": str(e)
+        }
+
+
+@router.post("/start-engine")
+async def start_engine():
+    """Start the ai-engine container.
+    
+    Called from wizard completion step when user clicks 'Start AI Engine'.
+    """
+    try:
+        client = docker.from_env()
+        try:
+            container = client.containers.get("ai_engine")
+            if container.status != "running":
+                container.start()
+                return {"success": True, "action": "started", "message": "AI Engine started successfully"}
+            else:
+                return {"success": True, "action": "already_running", "message": "AI Engine is already running"}
+        except docker.errors.NotFound:
+            return {
+                "success": False,
+                "action": "not_found",
+                "message": "AI Engine container not found. Run: docker-compose up -d ai-engine"
+            }
+    except Exception as e:
+        return {"success": False, "action": "error", "message": str(e)}
 
 class ApiKeyValidation(BaseModel):
     provider: str
@@ -318,44 +385,8 @@ async def save_setup_config(config: SetupConfig):
             with open(CONFIG_PATH, "w") as f:
                 yaml.dump(yaml_config, f, default_flow_style=False)
         
-        # Start required containers based on provider
-        containers_started = []
-        containers_failed = []
-        
-        try:
-            client = docker.from_env()
-            
-            # Always start ai-engine
-            try:
-                ai_engine = client.containers.get("ai_engine")
-                if ai_engine.status != "running":
-                    ai_engine.start()
-                    containers_started.append("ai_engine")
-                else:
-                    # Restart to pick up new config
-                    ai_engine.restart()
-                    containers_started.append("ai_engine (restarted)")
-            except docker.errors.NotFound:
-                containers_failed.append("ai_engine (not found - run: docker-compose up -d ai-engine)")
-            
-            # Start local-ai-server for local providers
-            if config.provider in ["local_hybrid", "local"]:
-                try:
-                    local_ai = client.containers.get("local_ai_server")
-                    if local_ai.status != "running":
-                        local_ai.start()
-                        containers_started.append("local_ai_server")
-                except docker.errors.NotFound:
-                    containers_failed.append("local_ai_server (not found - run: docker-compose up -d local-ai-server)")
-                    
-        except Exception as e:
-            containers_failed.append(f"Docker error: {str(e)}")
-        
-        return {
-            "status": "success",
-            "containers_started": containers_started,
-            "containers_failed": containers_failed
-        }
+        # Config saved - engine start will be handled by completion step UI
+        return {"status": "success", "provider": config.provider}
     except HTTPException:
         raise
     except Exception as e:

@@ -38,7 +38,8 @@ That's it! The container will:
 - ✅ Set up the backend
 - ✅ Create a default admin user
 - ✅ Mount your config files
-- ✅ Auto-create `.env` from `.env.example` (with placeholder keys)
+
+> **Note**: The wizard will automatically create `.env` from `.env.example` when you start the setup process.
 
 ### 2. Access the UI
 

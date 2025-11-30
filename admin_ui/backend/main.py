@@ -5,11 +5,7 @@ import auth
 import settings
 from dotenv import load_dotenv
 
-# Ensure .env exists (copy from .env.example if needed)
-if settings.ensure_env_file():
-    print("✅ Created .env from .env.example")
-
-# Load environment variables
+# Load environment variables (wizard will create .env from .env.example on first Next click)
 load_dotenv(settings.ENV_PATH)
 
 app = FastAPI(title="Asterisk AI Voice Agent Admin API")
