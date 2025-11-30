@@ -261,8 +261,9 @@ const Wizard = () => {
                 return;
             }
 
-            // Health Check for Local Providers
-            if (config.provider === 'local_hybrid' || config.provider === 'local') {
+            // Health Check for Local Hybrid Provider only
+            // Note: For "local" (Full) provider, server is started in step 5
+            if (config.provider === 'local_hybrid') {
                 setLoading(true);
                 try {
                     // Check if Local AI Server is reachable via backend proxy
