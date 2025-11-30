@@ -68,6 +68,9 @@ class AudioSocketConfig(BaseModel):
 
 class LocalProviderConfig(BaseModel):
     enabled: bool = Field(default=True)
+    # base_url is preferred for full agent mode (consistent with other providers)
+    # ws_url is kept for backward compatibility with modular providers
+    base_url: Optional[str] = Field(default=None)
     ws_url: Optional[str] = Field(default="ws://127.0.0.1:8765")
     connect_timeout_sec: float = Field(default=5.0)
     response_timeout_sec: float = Field(default=5.0)
@@ -75,6 +78,13 @@ class LocalProviderConfig(BaseModel):
     stt_model: Optional[str] = None
     tts_voice: Optional[str] = None
     max_tokens: int = Field(default=150)
+    greeting: Optional[str] = None
+    instructions: Optional[str] = None
+    
+    @property
+    def effective_ws_url(self) -> str:
+        """Return base_url if set, otherwise ws_url."""
+        return self.base_url or self.ws_url or "ws://127.0.0.1:8765"
 
 
 class DeepgramProviderConfig(BaseModel):
@@ -542,14 +552,29 @@ def validate_production_config(config: AppConfig) -> tuple[list[str], list[str]]
             if format_val and format_val not in ['slin', 'slin16', 'slin24', 'ulaw', 'alaw']:
                 errors.append(f"Invalid audiosocket format: {format_val} (must be slin, slin16, slin24, ulaw, or alaw)")
         
-        # Provider API keys validation
+        # Provider API keys validation (non-blocking for local-only setups)
         has_openai = bool(os.getenv('OPENAI_API_KEY'))
         has_deepgram = bool(os.getenv('DEEPGRAM_API_KEY'))
         has_google = bool(os.getenv('GOOGLE_API_KEY'))
-        if not (has_openai or has_deepgram or has_google):
-            errors.append(
-                "No provider API keys configured "
-                "(need OPENAI_API_KEY, DEEPGRAM_API_KEY, or GOOGLE_API_KEY)"
+        providers_in_use = set()
+        try:
+            for entry in (getattr(config, 'pipelines', {}) or {}).values():
+                stt = getattr(entry, 'stt', None) if not isinstance(entry, dict) else entry.get('stt')
+                llm = getattr(entry, 'llm', None) if not isinstance(entry, dict) else entry.get('llm')
+                tts = getattr(entry, 'tts', None) if not isinstance(entry, dict) else entry.get('tts')
+                for name in (stt, llm, tts):
+                    if not name:
+                        continue
+                    lower = str(name).lower()
+                    if lower.startswith('local'):
+                        continue
+                    providers_in_use.add(lower)
+        except Exception:
+            pass
+
+        if providers_in_use and not (has_openai or has_deepgram or has_google):
+            warnings.append(
+                "No provider API keys configured; pipelines referencing non-local providers will fall back to placeholders or fail."
             )
         
         # Port validation

@@ -1361,6 +1361,37 @@ class LocalAIServer:
             await self._send_json(websocket, response)
             return
 
+        if msg_type == "status":
+            response = {
+                "type": "status_response",
+                "status": "ok",
+                "models": {
+                    "stt": {
+                        "loaded": self.stt_model is not None,
+                        "path": self.stt_model_path,
+                    },
+                    "llm": {
+                        "loaded": self.llm_model is not None,
+                        "path": self.llm_model_path,
+                        "config": {
+                            "context": self.llm_context,
+                            "threads": self.llm_threads,
+                            "batch": self.llm_batch,
+                        }
+                    },
+                    "tts": {
+                        "loaded": self.tts_model is not None,
+                        "path": self.tts_model_path,
+                    }
+                },
+                "config": {
+                    "log_level": _level_name,
+                    "debug_audio": DEBUG_AUDIO_FLOW,
+                }
+            }
+            await self._send_json(websocket, response)
+            return
+
         logging.warning("❓ Unknown message type: %s", msg_type)
 
     async def _handle_binary_message(self, websocket, session: SessionContext, message: bytes) -> None:
@@ -1401,6 +1432,7 @@ async def main():
         ping_interval=30,
         ping_timeout=30,
         max_size=None,
+        origins=None,  # Allow connections from other containers/browsers
     ):
         logging.info("🚀 Enhanced Local AI Server started on ws://0.0.0.0:8765")
         logging.info(

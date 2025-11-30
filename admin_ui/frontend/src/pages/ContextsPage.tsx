@@ -1,0 +1,221 @@
+import React, { useState, useEffect } from 'react';
+import axios from 'axios';
+import yaml from 'js-yaml';
+import { Plus, Settings, Trash2, MessageSquare } from 'lucide-react';
+import { ConfigSection } from '../components/ui/ConfigSection';
+import { ConfigCard } from '../components/ui/ConfigCard';
+import { Modal } from '../components/ui/Modal';
+import ContextForm from '../components/config/ContextForm';
+
+const ContextsPage = () => {
+    const [config, setConfig] = useState<any>({});
+    const [loading, setLoading] = useState(true);
+    const [editingContext, setEditingContext] = useState<string | null>(null);
+    const [contextForm, setContextForm] = useState<any>({});
+    const [isNewContext, setIsNewContext] = useState(false);
+
+    useEffect(() => {
+        fetchConfig();
+    }, []);
+
+    const fetchConfig = async () => {
+        try {
+            const res = await axios.get('/api/config/yaml');
+            const parsed = yaml.load(res.data.content) as any;
+            setConfig(parsed || {});
+        } catch (err) {
+            console.error('Failed to load config', err);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const saveConfig = async (newConfig: any) => {
+        try {
+            await axios.post('/api/config/yaml', { content: yaml.dump(newConfig) });
+            setConfig(newConfig);
+        } catch (err) {
+            console.error('Failed to save config', err);
+            alert('Failed to save configuration');
+        }
+    };
+
+    const handleEditContext = (name: string) => {
+        setEditingContext(name);
+        setContextForm({ name, ...config.contexts?.[name] });
+        setIsNewContext(false);
+    };
+
+    const handleAddContext = () => {
+        setEditingContext('new_context');
+        setContextForm({
+            name: '',
+            greeting: 'Hi {caller_name}, how can I help you today?',
+            prompt: 'You are a helpful voice assistant.',
+            profile: 'telephony_ulaw_8k',
+            provider: '',
+            tools: ['transfer', 'hangup_call']
+        });
+        setIsNewContext(true);
+    };
+
+    const handleDeleteContext = async (name: string) => {
+        if (!confirm(`Are you sure you want to delete context "${name}"?`)) return;
+        const newContexts = { ...config.contexts };
+        delete newContexts[name];
+        await saveConfig({ ...config, contexts: newContexts });
+    };
+
+    const handleSaveContext = async () => {
+        if (!contextForm.name) return;
+
+        // Validation: Check provider
+        if (contextForm.provider) {
+            const provider = config.providers?.[contextForm.provider];
+            if (!provider) {
+                alert(`Provider '${contextForm.provider}' does not exist.`);
+                return;
+            }
+            if (provider.enabled === false) {
+                alert(`Provider '${contextForm.provider}' is disabled. Please enable it or select another provider.`);
+                return;
+            }
+        }
+
+        const newConfig = { ...config };
+        if (!newConfig.contexts) newConfig.contexts = {};
+
+        const { name, ...contextData } = contextForm;
+
+        if (isNewContext && newConfig.contexts[name]) {
+            alert('Context already exists');
+            return;
+        }
+
+        newConfig.contexts[name] = contextData;
+        await saveConfig(newConfig);
+        setEditingContext(null);
+    };
+
+    if (loading) return <div className="p-8 text-center text-muted-foreground">Loading configuration...</div>;
+
+    return (
+        <div className="space-y-6">
+            <div className="flex justify-between items-center">
+                <div>
+                    <h1 className="text-3xl font-bold tracking-tight">Contexts</h1>
+                    <p className="text-muted-foreground mt-1">
+                        Define AI personalities and behaviors for different use cases.
+                    </p>
+                </div>
+                <button
+                    onClick={handleAddContext}
+                    className="inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 bg-primary text-primary-foreground shadow hover:bg-primary/90 h-9 px-4 py-2"
+                >
+                    <Plus className="w-4 h-4 mr-2" />
+                    Add Context
+                </button>
+            </div>
+
+            <ConfigSection title="Defined Contexts" description="Manage conversation contexts and their settings.">
+                <div className="grid grid-cols-1 gap-4">
+                    {Object.entries(config.contexts || {}).map(([name, contextData]: [string, any]) => (
+                        <ConfigCard key={name} className="group relative hover:border-primary/50 transition-colors">
+                            <div className="flex justify-between items-start">
+                                <div className="flex items-center gap-3 mb-4">
+                                    <div className="p-2 bg-secondary rounded-md">
+                                        <MessageSquare className="w-5 h-5 text-primary" />
+                                    </div>
+                                    <div>
+                                        <h4 className="font-semibold text-lg">{name}</h4>
+                                        <div className="flex gap-2 mt-1">
+                                            <span className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 text-muted-foreground bg-secondary/50">
+                                                {contextData.profile || 'default'}
+                                            </span>
+                                            {contextData.provider && (
+                                                <span className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 text-muted-foreground bg-secondary/50">
+                                                    {contextData.provider}
+                                                </span>
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
+                                <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                    <button
+                                        onClick={() => handleEditContext(name)}
+                                        className="p-2 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground"
+                                    >
+                                        <Settings className="w-4 h-4" />
+                                    </button>
+                                    <button
+                                        onClick={() => handleDeleteContext(name)}
+                                        className="p-2 hover:bg-destructive/10 rounded-md text-destructive"
+                                    >
+                                        <Trash2 className="w-4 h-4" />
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div className="space-y-3 text-sm">
+                                <div className="bg-secondary/30 p-3 rounded-md">
+                                    <span className="font-medium text-xs uppercase tracking-wider text-muted-foreground block mb-1">Greeting</span>
+                                    <p className="text-foreground/90 italic">"{contextData.greeting}"</p>
+                                </div>
+
+                                {contextData.tools && contextData.tools.length > 0 && (
+                                    <div>
+                                        <span className="font-medium text-xs uppercase tracking-wider text-muted-foreground block mb-2">Enabled Tools</span>
+                                        <div className="flex flex-wrap gap-1.5">
+                                            {contextData.tools.map((tool: string) => (
+                                                <span key={tool} className="px-2 py-1 rounded-md text-xs bg-accent text-accent-foreground font-medium border border-accent-foreground/10">
+                                                    {tool}
+                                                </span>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        </ConfigCard>
+                    ))}
+                    {Object.keys(config.contexts || {}).length === 0 && (
+                        <div className="col-span-full p-8 border border-dashed rounded-lg text-center text-muted-foreground">
+                            No contexts configured. Click "Add Context" to create one.
+                        </div>
+                    )}
+                </div>
+            </ConfigSection>
+
+            <Modal
+                isOpen={!!editingContext}
+                onClose={() => setEditingContext(null)}
+                title={isNewContext ? 'Add Context' : 'Edit Context'}
+                size="lg"
+                footer={
+                    <>
+                        <button
+                            onClick={() => setEditingContext(null)}
+                            className="inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 border border-input bg-background shadow-sm hover:bg-accent hover:text-accent-foreground h-9 px-4 py-2"
+                        >
+                            Cancel
+                        </button>
+                        <button
+                            onClick={handleSaveContext}
+                            className="inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 bg-primary text-primary-foreground shadow hover:bg-primary/90 h-9 px-4 py-2"
+                        >
+                            Save Changes
+                        </button>
+                    </>
+                }
+            >
+                <ContextForm
+                    config={contextForm}
+                    providers={config.providers}
+                    onChange={setContextForm}
+                    isNew={isNewContext}
+                />
+            </Modal>
+        </div>
+    );
+};
+
+export default ContextsPage;

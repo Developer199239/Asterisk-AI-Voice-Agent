@@ -264,16 +264,6 @@ class Engine:
         # Milestone7: Pipeline orchestrator coordinates per-call STT/LLM/TTS adapters.
         self.pipeline_orchestrator = PipelineOrchestrator(config)
         
-        # DEBUG: Inspect loaded pipelines to verify tools
-        try:
-            lh = self.config.pipelines.get('local_hybrid')
-            if lh:
-                logger.info("DEBUG: local_hybrid pipeline config", tools=lh.tools, raw_entry=str(lh))
-            else:
-                logger.warning("DEBUG: local_hybrid pipeline not found in config")
-        except Exception as e:
-            logger.error("DEBUG: failed to inspect pipeline config", error=str(e))
-        
         # P1: Transport orchestrator for multi-provider audio format negotiation
         self.transport_orchestrator = TransportOrchestrator(config.dict() if hasattr(config, 'dict') else config.__dict__)
         logger.info(
@@ -4744,18 +4734,14 @@ class Engine:
                                 attempt=attempt,
                             )
                         else:
-                            logger.info("DEBUG: About to play audio", call_id=call_id)
                             await self.playback_manager.play_audio(call_id, bytes(tts_bytes), "pipeline-tts-greeting")
                             
                             # AAVA-85: Persist greeting to session history so it appears in email summary
                             try:
-                                logger.info("DEBUG: PERSISTING GREETING START", call_id=call_id, greeting_len=len(greeting))
                                 session.conversation_history.append({"role": "assistant", "content": greeting})
                                 await self.session_store.upsert_call(session)
-                                logger.info("DEBUG: PERSISTING GREETING DONE", call_id=call_id)
                                 logger.info("Persisted initial greeting to session history", call_id=call_id)
                             except Exception as e:
-                                logger.error("DEBUG: PERSISTING GREETING FAILED", call_id=call_id, error=str(e))
                                 logger.warning("Failed to persist greeting history", call_id=call_id, error=str(e))
                                 
                         break
@@ -5029,10 +5015,6 @@ class Engine:
                         return
 
                     # Milestone7: Handle structured LLM response with tool calls
-                    # from src.pipelines.base import LLMResponse  # Moved to top-level
-                    
-                    logger.info("DEBUG: LLM Result Type", type=str(type(llm_result)), tool_calls_len=len(getattr(llm_result, 'tool_calls', [])), is_llm_response=isinstance(llm_result, LLMResponse), call_id=call_id)
-                    
                     if isinstance(llm_result, LLMResponse):
                         response_text = (llm_result.text or "").strip()
                         tool_calls = llm_result.tool_calls
@@ -5053,13 +5035,10 @@ class Engine:
                     # AAVA-85: Persist session history so tools (email) can access it
                     session.conversation_history = list(conversation_history)
                     await self.session_store.upsert_call(session)
-                    
-                    logger.info("DEBUG: Post-session-upsert", has_response_text=bool(response_text), has_tool_calls=bool(tool_calls), tool_calls_count=len(tool_calls), call_id=call_id)
 
                     playback_id = None
                     
                     # 1. Synthesize and Play Text (if any)
-                    logger.info("DEBUG: Before TTS block", response_text_len=len(response_text), will_skip_tts=not bool(response_text), call_id=call_id)
                     if response_text:
                         tts_bytes = bytearray()
                         first_tts_ts: Optional[float] = None
@@ -5106,48 +5085,33 @@ class Engine:
                                 logger.error("Pipeline playback exception", call_id=call_id, exc_info=True)
 
                     # 2. Execute Tools (if any)
-                    logger.info("DEBUG: Reached tool execution block", tool_calls_present=bool(tool_calls), tool_calls_count=len(tool_calls), tool_calls_type=str(type(tool_calls)), call_id=call_id)
                     if tool_calls:
-                        logger.info("DEBUG: Inside tool_calls block", tool_calls_count=len(tool_calls), playback_id=playback_id, call_id=call_id)
                         # Wait for playback to finish before executing tools (especially transfer/hangup)
                         if playback_id:
                             try:
                                 # Best effort wait to let user hear the response
-                                # In a real implementation, we'd subscribe to PlaybackFinished
-                                await asyncio.sleep(len(response_text) * 0.08) # Rough estimate 
+                                await asyncio.sleep(len(response_text) * 0.08)
                             except Exception:
                                 pass
 
-                        logger.info("DEBUG: Before import ToolExecutionContext", call_id=call_id)
                         from src.tools.context import ToolExecutionContext
                         from src.tools.registry import tool_registry
-                        logger.info("DEBUG: After imports, before creating context", call_id=call_id)
                         
                         # Create execution context
-                        try:
-                            logger.info("DEBUG: About to create ToolExecutionContext", call_id=call_id)
-                            tool_ctx = ToolExecutionContext(
-                                call_id=call_id,
-                                caller_channel_id=getattr(session, 'channel_id', call_id),
-                                session_store=self.session_store,
-                                ari_client=self.ari_client,
-                                config=self.config.dict(),
-                                provider_name="pipeline"
-                            )
-                            logger.info("DEBUG: ToolExecutionContext created successfully", call_id=call_id)
-                        except Exception as ctx_error:
-                            logger.error("DEBUG: ToolExecutionContext creation FAILED", call_id=call_id, error=str(ctx_error), exc_info=True)
-                            raise
+                        tool_ctx = ToolExecutionContext(
+                            call_id=call_id,
+                            caller_channel_id=getattr(session, 'channel_id', call_id),
+                            session_store=self.session_store,
+                            ari_client=self.ari_client,
+                            config=self.config.dict(),
+                            provider_name="pipeline"
+                        )
 
-                        logger.info("DEBUG: Before for loop", tool_calls_len=len(tool_calls), call_id=call_id)
                         for tool_call in tool_calls:
                             try:
-                                logger.info("DEBUG: Inside for loop iteration", tool_call=tool_call, call_id=call_id)
                                 name = tool_call.get("name")
                                 args = tool_call.get("parameters") or {}
                                 tool = tool_registry.get(name)
-                                
-                                logger.info("DEBUG: Processing tool call", name=name, args=args, tool_found=bool(tool), call_id=call_id)
                                 
                                 if tool:
                                     logger.info("Executing pipeline tool", tool=name, call_id=call_id)
@@ -5670,14 +5634,14 @@ class Engine:
             # Get context config for prompt/greeting and apply to provider
             context_config = None
             logger.debug(
-                "DEBUG: Checking context config",
+                "Checking context config",
                 call_id=session.call_id,
                 transport_context=transport.context if hasattr(transport, 'context') else None,
             )
             if transport.context:
                 context_config = self.transport_orchestrator.get_context_config(transport.context)
                 logger.debug(
-                    "DEBUG: Context config loaded",
+                    "Context config loaded",
                     call_id=session.call_id,
                     context=transport.context,
                     has_config=context_config is not None,
@@ -6632,7 +6596,7 @@ class Engine:
                 if session.context_name:
                     context_config = self.transport_orchestrator.get_context_config(session.context_name)
                     logger.debug(
-                        "DEBUG: Building provider context",
+                        "Building provider context",
                         call_id=call_id,
                         context_name=session.context_name,
                         has_context_config=bool(context_config),
@@ -6650,7 +6614,7 @@ class Engine:
                             )
                         else:
                             logger.debug(
-                                "DEBUG: No tools found in context config",
+                                "No tools found in context config",
                                 call_id=call_id,
                                 has_tools_attr=hasattr(context_config, 'tools'),
                                 tools_value=getattr(context_config, 'tools', 'NO_ATTR'),
@@ -6677,9 +6641,8 @@ class Engine:
                 except Exception as e:
                     logger.warning(f"Failed to inject tool context: {e}", call_id=call_id)
 
-            logger.info("DEBUG: About to call provider.start_session", call_id=call_id, provider=provider_name)
             await provider.start_session(call_id, context=provider_context if provider_context else None)
-            logger.info("DEBUG: provider.start_session completed", call_id=call_id, provider=provider_name)
+            logger.info("Provider session started", call_id=call_id, provider=provider_name)
             # If provider supports an explicit greeting (e.g., LocalProvider), trigger it now
             try:
                 if hasattr(provider, 'play_initial_greeting'):
@@ -6779,7 +6742,19 @@ class Engine:
     async def _health_handler(self, request):
         """Return JSON with engine/provider status."""
         try:
-            providers = {}
+            # Gather pipeline details
+            pipelines_info = {}
+            if self.config and hasattr(self.config, 'pipelines'):
+                for p_name, p_cfg in self.config.pipelines.items():
+                    pipelines_info[p_name] = {
+                        "stt": p_cfg.stt,
+                        "llm": p_cfg.llm,
+                        "tts": p_cfg.tts,
+                        "tools": p_cfg.tools
+                    }
+
+            # Gather provider details
+            providers_info = {}
             for name, prov in (self.providers or {}).items():
                 ready = True
                 try:
@@ -6787,7 +6762,7 @@ class Engine:
                         ready = bool(prov.is_ready())
                 except Exception:
                     ready = True
-                providers[name] = {"ready": ready}
+                providers_info[name] = {"ready": ready}
 
             # Compute readiness
             default_ready = False
@@ -6808,7 +6783,8 @@ class Engine:
                 "audio_transport": self.config.audio_transport,
                 "active_calls": len(await self.session_store.get_all_sessions()),
                 "active_playbacks": 0,
-                "providers": providers,
+                "providers": providers_info,
+                "pipelines": pipelines_info,
                 "rtp_server": {},
                 "audiosocket": {
                     "listening": audiosocket_listening,

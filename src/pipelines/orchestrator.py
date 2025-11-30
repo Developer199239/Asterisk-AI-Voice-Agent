@@ -330,6 +330,16 @@ class PipelineOrchestrator:
         providers = getattr(self.config, "providers", {}) or {}
         raw_config = providers.get("local")
         if not raw_config:
+            # Fallback: accept modular local providers (local_stt/local_llm/local_tts)
+            for name, cfg in providers.items():
+                try:
+                    lower = str(name).lower()
+                except Exception:
+                    lower = ""
+                if lower.startswith("local_") or (isinstance(cfg, dict) and str(cfg.get("type", "")).lower() == "local"):
+                    raw_config = cfg
+                    break
+        if not raw_config:
             return None
         if isinstance(raw_config, LocalProviderConfig):
             cfg = raw_config
@@ -686,6 +696,18 @@ class PipelineOrchestrator:
     def _hydrate_openai_config(self) -> Optional[OpenAIProviderConfig]:
         providers = getattr(self.config, "providers", {}) or {}
         raw_config = providers.get("openai")
+        if not raw_config:
+            # Fallback: accept modular OpenAI providers (openai_stt/openai_llm/openai_tts) but skip realtime agent
+            for name, cfg in providers.items():
+                try:
+                    lower = str(name).lower()
+                except Exception:
+                    lower = ""
+                if "realtime" in lower:
+                    continue
+                if lower.startswith("openai_") or (isinstance(cfg, dict) and str(cfg.get("type", "")).lower() == "openai"):
+                    raw_config = cfg
+                    break
         if not raw_config:
             return None
         if isinstance(raw_config, OpenAIProviderConfig):
