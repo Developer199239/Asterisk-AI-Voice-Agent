@@ -62,6 +62,8 @@ async def start_engine():
     import subprocess
     from settings import PROJECT_ROOT
     
+    print(f"DEBUG: Starting AI Engine from PROJECT_ROOT={PROJECT_ROOT}")
+    
     try:
         # Use docker-compose to create and start ai-engine
         # This works whether container exists or not
@@ -70,8 +72,12 @@ async def start_engine():
             cwd=PROJECT_ROOT,
             capture_output=True,
             text=True,
-            timeout=60
+            timeout=120  # Give more time for potential build
         )
+        
+        print(f"DEBUG: docker-compose returncode={result.returncode}")
+        print(f"DEBUG: docker-compose stdout={result.stdout}")
+        print(f"DEBUG: docker-compose stderr={result.stderr}")
         
         if result.returncode == 0:
             return {
@@ -81,24 +87,27 @@ async def start_engine():
                 "output": result.stdout
             }
         else:
+            error_msg = result.stderr or result.stdout or "Unknown error"
             return {
                 "success": False,
                 "action": "error",
-                "message": f"Failed to start AI Engine: {result.stderr or result.stdout}"
+                "message": f"Failed to start AI Engine: {error_msg}"
             }
     except subprocess.TimeoutExpired:
         return {
             "success": False,
             "action": "timeout",
-            "message": "Timeout waiting for AI Engine to start. Check docker-compose logs."
+            "message": "Timeout waiting for AI Engine to start (120s). Check docker-compose logs."
         }
-    except FileNotFoundError:
+    except FileNotFoundError as e:
+        print(f"DEBUG: FileNotFoundError: {e}")
         return {
             "success": False,
             "action": "not_found",
             "message": "docker-compose not found. Please install Docker Compose."
         }
     except Exception as e:
+        print(f"DEBUG: Exception: {type(e).__name__}: {e}")
         return {"success": False, "action": "error", "message": str(e)}
 
 class ApiKeyValidation(BaseModel):

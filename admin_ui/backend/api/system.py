@@ -84,7 +84,8 @@ async def get_system_health():
             import json
             import asyncio
             
-            uri = os.getenv("HEALTH_CHECK_LOCAL_AI_URL", "ws://local_ai_server:8765")
+            # With host networking, use localhost instead of container name
+            uri = os.getenv("HEALTH_CHECK_LOCAL_AI_URL", "ws://127.0.0.1:8765")
             print(f"DEBUG: Checking Local AI at {uri}")
             async with websockets.connect(uri, open_timeout=5) as websocket:
                 print("DEBUG: Local AI connected, sending status...")
@@ -113,7 +114,8 @@ async def get_system_health():
     async def check_ai_engine():
         try:
             import httpx
-            url = os.getenv("HEALTH_CHECK_AI_ENGINE_URL", "http://ai_engine:15000/health")
+            # With host networking, use localhost instead of container name
+            url = os.getenv("HEALTH_CHECK_AI_ENGINE_URL", "http://127.0.0.1:15000/health")
             print(f"DEBUG: Checking AI Engine at {url}")
             async with httpx.AsyncClient(timeout=5.0) as client:
                 resp = await client.get(url)
