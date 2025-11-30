@@ -26,8 +26,11 @@ The Admin UI provides a modern web interface for managing your Asterisk AI Voice
 ### 1. Start the Admin UI
 
 ```bash
-# From your project root
-docker-compose up -d admin-ui
+# From your project root (runs in background)
+docker-compose up -d admin-ui --build
+
+# View logs if needed
+docker-compose logs -f admin-ui
 ```
 
 That's it! The container will:

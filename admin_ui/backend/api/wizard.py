@@ -318,7 +318,44 @@ async def save_setup_config(config: SetupConfig):
             with open(CONFIG_PATH, "w") as f:
                 yaml.dump(yaml_config, f, default_flow_style=False)
         
-        return {"status": "success"}
+        # Start required containers based on provider
+        containers_started = []
+        containers_failed = []
+        
+        try:
+            client = docker.from_env()
+            
+            # Always start ai-engine
+            try:
+                ai_engine = client.containers.get("ai_engine")
+                if ai_engine.status != "running":
+                    ai_engine.start()
+                    containers_started.append("ai_engine")
+                else:
+                    # Restart to pick up new config
+                    ai_engine.restart()
+                    containers_started.append("ai_engine (restarted)")
+            except docker.errors.NotFound:
+                containers_failed.append("ai_engine (not found - run: docker-compose up -d ai-engine)")
+            
+            # Start local-ai-server for local providers
+            if config.provider in ["local_hybrid", "local"]:
+                try:
+                    local_ai = client.containers.get("local_ai_server")
+                    if local_ai.status != "running":
+                        local_ai.start()
+                        containers_started.append("local_ai_server")
+                except docker.errors.NotFound:
+                    containers_failed.append("local_ai_server (not found - run: docker-compose up -d local-ai-server)")
+                    
+        except Exception as e:
+            containers_failed.append(f"Docker error: {str(e)}")
+        
+        return {
+            "status": "success",
+            "containers_started": containers_started,
+            "containers_failed": containers_failed
+        }
     except HTTPException:
         raise
     except Exception as e:

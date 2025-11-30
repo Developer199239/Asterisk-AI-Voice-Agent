@@ -50,6 +50,10 @@ const Wizard = () => {
     });
 
     const [showSkipConfirm, setShowSkipConfirm] = useState(false);
+    const [setupResult, setSetupResult] = useState<{
+        containers_started?: string[];
+        containers_failed?: string[];
+    }>({});
 
     const handleSkip = () => {
         setShowSkipConfirm(true);
@@ -242,13 +246,17 @@ const Wizard = () => {
                 }
                 setLoading(false);
             }
-            // Save config
+            // Save config and start containers
             setLoading(true);
             try {
-                await axios.post('/api/wizard/save', config);
+                const res = await axios.post('/api/wizard/save', config);
+                setSetupResult({
+                    containers_started: res.data.containers_started || [],
+                    containers_failed: res.data.containers_failed || []
+                });
                 setStep(5); // Go to completion step
             } catch (err: any) {
-                setError(err.message);
+                setError(err.response?.data?.detail || err.message);
             } finally {
                 setLoading(false);
             }
@@ -632,6 +640,35 @@ const Wizard = () => {
                         <p className="text-muted-foreground">
                             Your AI Agent is configured and ready.
                         </p>
+
+                        {/* Container Status */}
+                        <div className="bg-muted p-4 rounded-lg text-left">
+                            <h3 className="font-semibold mb-3">Container Status</h3>
+                            {setupResult.containers_started && setupResult.containers_started.length > 0 && (
+                                <div className="mb-2">
+                                    {setupResult.containers_started.map((c, i) => (
+                                        <div key={i} className="flex items-center text-sm text-green-600 dark:text-green-400">
+                                            <CheckCircle className="w-4 h-4 mr-2" />
+                                            {c}
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                            {setupResult.containers_failed && setupResult.containers_failed.length > 0 && (
+                                <div className="mt-2 p-3 bg-yellow-50 dark:bg-yellow-900/20 rounded border border-yellow-200 dark:border-yellow-800">
+                                    <p className="text-sm font-medium text-yellow-800 dark:text-yellow-300 mb-2">Action Required:</p>
+                                    {setupResult.containers_failed.map((c, i) => (
+                                        <div key={i} className="text-sm text-yellow-700 dark:text-yellow-400">
+                                            ⚠️ {c}
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                            {(!setupResult.containers_started || setupResult.containers_started.length === 0) && 
+                             (!setupResult.containers_failed || setupResult.containers_failed.length === 0) && (
+                                <p className="text-sm text-muted-foreground">No container actions taken.</p>
+                            )}
+                        </div>
 
                         <div className="bg-muted p-4 rounded-lg text-left">
                             <h3 className="font-semibold mb-2 flex items-center">
