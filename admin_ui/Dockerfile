@@ -10,8 +10,8 @@ RUN npm run build
 FROM python:3.10-slim
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y curl gcc && rm -rf /var/lib/apt/lists/*
+# Install system dependencies (unzip needed for model_setup.sh to extract STT models)
+RUN apt-get update && apt-get install -y curl gcc unzip && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
 COPY backend/requirements.txt .
