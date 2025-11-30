@@ -5,6 +5,10 @@ import auth
 import settings
 from dotenv import load_dotenv
 
+# Ensure .env exists (copy from .env.example if needed)
+if settings.ensure_env_file():
+    print("✅ Created .env from .env.example")
+
 # Load environment variables
 load_dotenv(settings.ENV_PATH)
 
