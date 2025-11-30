@@ -37,11 +37,53 @@ async def get_containers():
 
 @router.post("/containers/{container_id}/restart")
 async def restart_container(container_id: str):
+    """Restart a container using docker-compose for proper recreation."""
+    import subprocess
+    
+    # Map container names to docker-compose service names
+    service_map = {
+        "ai_engine": "ai-engine",
+        "admin_ui": "admin-ui",
+        "local_ai_server": "local-ai-server"
+    }
+    
+    service_name = service_map.get(container_id, container_id)
+    project_root = os.getenv("PROJECT_ROOT", "/app/project")
+    
+    print(f"DEBUG: Restarting {service_name} from {project_root}")
+    
     try:
-        client = docker.from_env()
-        container = client.containers.get(container_id)
-        container.restart()
-        return {"status": "success"}
+        # Use docker-compose up --force-recreate for proper restart
+        result = subprocess.run(
+            ["docker-compose", "up", "-d", "--force-recreate", service_name],
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+            timeout=120
+        )
+        
+        print(f"DEBUG: docker-compose restart returncode={result.returncode}")
+        print(f"DEBUG: docker-compose stdout={result.stdout}")
+        print(f"DEBUG: docker-compose stderr={result.stderr}")
+        
+        if result.returncode == 0:
+            return {"status": "success", "output": result.stdout}
+        else:
+            raise HTTPException(
+                status_code=500, 
+                detail=f"Failed to restart: {result.stderr or result.stdout}"
+            )
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=500, detail="Timeout waiting for container restart")
+    except FileNotFoundError:
+        # Fallback to Docker API if docker-compose not available
+        try:
+            client = docker.from_env()
+            container = client.containers.get(container_id)
+            container.restart()
+            return {"status": "success", "method": "docker-api"}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

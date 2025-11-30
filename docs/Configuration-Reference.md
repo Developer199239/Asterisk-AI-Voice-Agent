@@ -157,7 +157,7 @@ Common pitfalls:
 ### Google Live (monolithic agent)
 
 - `providers.google_live.api_key`: API key (`GOOGLE_API_KEY`) used for Gemini Live.
-- `providers.google_live.llm_model`: Live LLM model name (e.g., `gemini-2.5-flash-native-audio-preview-09-2025`).
+- `providers.google_live.llm_model`: Live LLM model name (e.g., `gemini-2.0-flash-live-001-preview-09-2025`).
 - `providers.google_live.websocket_endpoint`: WebSocket endpoint for Gemini Live API.
   - Default: `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent`
   - Override only if directed by Google or when fronting through a proxy.

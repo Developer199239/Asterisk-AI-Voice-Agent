@@ -30,7 +30,11 @@ async def update_yaml_config(update: ConfigUpdate):
 
         with open(settings.CONFIG_PATH, 'w') as f:
             f.write(update.content)
-        return {"status": "success"}
+        return {
+            "status": "success",
+            "restart_required": True,
+            "message": "Configuration saved. Restart AI Engine to apply changes."
+        }
     except HTTPException:
         raise
     except Exception as e:

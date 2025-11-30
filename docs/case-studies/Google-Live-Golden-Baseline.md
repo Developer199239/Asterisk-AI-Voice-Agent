@@ -59,7 +59,7 @@ providers:
     greeting: "Hi {caller_name}, I'm Ava demonstrating Google Gemini Live API! I can tell you all about the Asterisk AI Voice Agent project - ask me anything about how it works, setup, or features. Try interrupting me anytime!"
     
     # LLM Configuration
-    llm_model: gemini-2.5-flash-native-audio-preview-09-2025
+    llm_model: gemini-2.0-flash-live-001-preview-09-2025
     llm_temperature: 0.7              # Response creativity (0.0-2.0)
     llm_max_output_tokens: 8192       # Max response length (1-8192)
     llm_top_p: 0.95                   # Nucleus sampling (0.0-1.0)
