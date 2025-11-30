@@ -177,11 +177,17 @@ download() { # url dest_path label
 
 extract_zip() { # zip_path target_dir
   local zip_path="$1" target_dir="$2"
+  local target_name="$(basename "$target_dir")"
   if command -v unzip >/dev/null 2>&1; then
     echo "Extracting $(basename "$zip_path") → $target_dir"
     rm -rf "$target_dir"
     mkdir -p "$target_dir"
     unzip -q -o "$zip_path" -d "$target_dir"
+    # Fix nested directory if zip contained a folder with same name
+    if [ -d "$target_dir/$target_name" ] && [ ! -f "$target_dir/README" ]; then
+      mv "$target_dir/$target_name"/* "$target_dir/" 2>/dev/null || true
+      rmdir "$target_dir/$target_name" 2>/dev/null || true
+    fi
   else
     echo "ERROR: unzip not found. Please install unzip and re-run." >&2
     exit 1
