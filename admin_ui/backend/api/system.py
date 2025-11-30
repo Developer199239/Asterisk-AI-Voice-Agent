@@ -53,9 +53,9 @@ async def restart_container(container_id: str):
     print(f"DEBUG: Restarting {service_name} from {project_root}")
     
     try:
-        # Use docker-compose up --force-recreate for proper restart
+        # Use docker compose (V2) up --force-recreate for proper restart
         result = subprocess.run(
-            ["docker-compose", "up", "-d", "--force-recreate", service_name],
+            ["docker", "compose", "up", "-d", "--force-recreate", service_name],
             cwd=project_root,
             capture_output=True,
             text=True,

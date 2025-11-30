@@ -112,10 +112,10 @@ async def start_engine():
     print(f"DEBUG: Starting AI Engine from PROJECT_ROOT={PROJECT_ROOT}")
     
     try:
-        # Use docker-compose to create and start ai-engine
+        # Use docker compose (V2) to create and start ai-engine
         # This works whether container exists or not
         result = subprocess.run(
-            ["docker-compose", "up", "-d", "ai-engine"],
+            ["docker", "compose", "up", "-d", "ai-engine"],
             cwd=PROJECT_ROOT,
             capture_output=True,
             text=True,
@@ -366,7 +366,7 @@ async def start_local_ai_server():
     
     try:
         result = subprocess.run(
-            ["docker-compose", "up", "-d", "local-ai-server"],
+            ["docker", "compose", "up", "-d", "local-ai-server"],
             cwd=PROJECT_ROOT,
             capture_output=True,
             text=True,
