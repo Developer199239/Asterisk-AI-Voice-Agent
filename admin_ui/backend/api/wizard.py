@@ -4,10 +4,105 @@ from pydantic import BaseModel
 import httpx
 import os
 import yaml
+import subprocess
+import stat
 from typing import Dict, Any, Optional
-from settings import ENV_PATH, CONFIG_PATH, ensure_env_file
+from settings import ENV_PATH, CONFIG_PATH, ensure_env_file, PROJECT_ROOT
 
 router = APIRouter()
+
+
+def setup_media_paths() -> dict:
+    """Setup media directories and symlink for Asterisk playback.
+    
+    Mirrors the setup_media_paths() function from install.sh to ensure
+    the wizard provides the same out-of-box experience.
+    """
+    results = {
+        "success": True,
+        "messages": [],
+        "errors": []
+    }
+    
+    # Path inside container (mounted from host)
+    container_media_dir = "/mnt/asterisk_media/ai-generated"
+    # Path on host (PROJECT_ROOT is mounted from host)
+    host_media_dir = os.path.join(PROJECT_ROOT, "asterisk_media", "ai-generated")
+    
+    # 1. Create directories with proper permissions
+    try:
+        os.makedirs(host_media_dir, mode=0o777, exist_ok=True)
+        # Ensure parent also has correct permissions
+        os.chmod(os.path.dirname(host_media_dir), 0o777)
+        os.chmod(host_media_dir, 0o777)
+        results["messages"].append(f"Created media directory: {host_media_dir}")
+    except Exception as e:
+        results["errors"].append(f"Failed to create media directory: {e}")
+        results["success"] = False
+    
+    # 2. Try to create symlink on host via docker exec on host system
+    # This runs a privileged command to create the symlink
+    try:
+        # Check if we can access docker socket
+        client = docker.from_env()
+        
+        # Get the actual host path for PROJECT_ROOT
+        # The symlink should be: /var/lib/asterisk/sounds/ai-generated -> {PROJECT_ROOT}/asterisk_media/ai-generated
+        # We need to detect the actual host path
+        
+        # Run a command on host to create the symlink
+        # Using alpine image with host volume mounts
+        symlink_script = f'''
+            mkdir -p /mnt/asterisk_media/ai-generated 2>/dev/null || true
+            chmod 777 /mnt/asterisk_media/ai-generated 2>/dev/null || true
+            chmod 777 /mnt/asterisk_media 2>/dev/null || true
+            if [ -L /var/lib/asterisk/sounds/ai-generated ] || [ -e /var/lib/asterisk/sounds/ai-generated ]; then
+                rm -rf /var/lib/asterisk/sounds/ai-generated 2>/dev/null || true
+            fi
+            ln -sfn /mnt/asterisk_media/ai-generated /var/lib/asterisk/sounds/ai-generated 2>/dev/null || true
+            if [ -d /var/lib/asterisk/sounds/ai-generated ]; then
+                echo "SUCCESS: Symlink created"
+            else
+                echo "FALLBACK: Creating alternative symlink"
+                # Try alternative path if /mnt/asterisk_media doesn't exist
+                PROJ_MEDIA="{PROJECT_ROOT}/asterisk_media/ai-generated"
+                if [ -d "$PROJ_MEDIA" ]; then
+                    ln -sfn "$PROJ_MEDIA" /var/lib/asterisk/sounds/ai-generated 2>/dev/null || true
+                fi
+            fi
+        '''
+        
+        # Run on host via privileged container
+        container = client.containers.run(
+            "alpine:latest",
+            command=["sh", "-c", symlink_script],
+            volumes={
+                "/var/lib/asterisk/sounds": {"bind": "/var/lib/asterisk/sounds", "mode": "rw"},
+                "/mnt/asterisk_media": {"bind": "/mnt/asterisk_media", "mode": "rw"},
+                PROJECT_ROOT: {"bind": PROJECT_ROOT, "mode": "rw"},
+            },
+            remove=True,
+            detach=False,
+        )
+        output = container.decode() if isinstance(container, bytes) else str(container)
+        results["messages"].append(f"Symlink setup: {output.strip()}")
+        
+    except docker.errors.ImageNotFound:
+        results["messages"].append("Alpine image not found, will pull on next attempt")
+        try:
+            client.images.pull("alpine:latest")
+            results["messages"].append("Pulled alpine image")
+        except:
+            results["errors"].append("Could not pull alpine image for symlink setup")
+    except Exception as e:
+        # Symlink creation failed, provide manual instructions
+        results["messages"].append(f"Auto symlink setup skipped: {e}")
+        results["messages"].append(
+            "Manual setup required: Run on host:\n"
+            f"  sudo ln -sfn {PROJECT_ROOT}/asterisk_media/ai-generated /var/lib/asterisk/sounds/ai-generated"
+        )
+    
+    return results
 
 
 @router.post("/init-env")
@@ -99,17 +194,35 @@ async def get_engine_status():
         }
 
 
+@router.post("/setup-media-paths")
+async def setup_media_paths_endpoint():
+    """Setup media directories and symlinks for Asterisk audio playback.
+    
+    This endpoint ensures the AI Engine can write audio files that Asterisk
+    can read for playback. Creates directories and symlinks as needed.
+    """
+    result = setup_media_paths()
+    return result
+
+
 @router.post("/start-engine")
 async def start_engine():
     """Start the ai-engine container.
     
     Called from wizard completion step when user clicks 'Start AI Engine'.
     Uses docker-compose to create/start the container.
+    
+    Automatically sets up media paths before starting to ensure audio playback works.
     """
     import subprocess
     from settings import PROJECT_ROOT
     
     print(f"DEBUG: Starting AI Engine from PROJECT_ROOT={PROJECT_ROOT}")
+    
+    # First, setup media paths for audio playback
+    print("DEBUG: Setting up media paths...")
+    media_setup = setup_media_paths()
+    print(f"DEBUG: Media setup result: {media_setup}")
     
     try:
         # Use docker compose (V2) to create and start ai-engine
@@ -131,31 +244,35 @@ async def start_engine():
                 "success": True,
                 "action": "started",
                 "message": "AI Engine started successfully",
-                "output": result.stdout
+                "output": result.stdout,
+                "media_setup": media_setup
             }
         else:
             error_msg = result.stderr or result.stdout or "Unknown error"
             return {
                 "success": False,
                 "action": "error",
-                "message": f"Failed to start AI Engine: {error_msg}"
+                "message": f"Failed to start AI Engine: {error_msg}",
+                "media_setup": media_setup
             }
     except subprocess.TimeoutExpired:
         return {
             "success": False,
             "action": "timeout",
-            "message": "Timeout waiting for AI Engine to start (120s). Check docker-compose logs."
+            "message": "Timeout waiting for AI Engine to start (120s). Check docker-compose logs.",
+            "media_setup": media_setup
         }
     except FileNotFoundError as e:
         print(f"DEBUG: FileNotFoundError: {e}")
         return {
             "success": False,
             "action": "not_found",
-            "message": "docker-compose not found. Please install Docker Compose."
+            "message": "docker-compose not found. Please install Docker Compose.",
+            "media_setup": media_setup
         }
     except Exception as e:
         print(f"DEBUG: Exception: {type(e).__name__}: {e}")
-        return {"success": False, "action": "error", "message": str(e)}
+        return {"success": False, "action": "error", "message": str(e), "media_setup": media_setup}
 
 # ============== Local AI Server Setup ==============
 
@@ -360,9 +477,17 @@ async def check_models_status():
 
 @router.post("/local/start-server")
 async def start_local_ai_server():
-    """Start the local-ai-server container."""
+    """Start the local-ai-server container.
+    
+    Also sets up media paths for audio playback to work correctly.
+    """
     import subprocess
     from settings import PROJECT_ROOT
+    
+    # Setup media paths first (same as start_engine)
+    print("DEBUG: Setting up media paths for local AI server...")
+    media_setup = setup_media_paths()
+    print(f"DEBUG: Media setup result: {media_setup}")
     
     try:
         result = subprocess.run(
@@ -376,15 +501,17 @@ async def start_local_ai_server():
         if result.returncode == 0:
             return {
                 "success": True,
-                "message": "Local AI Server started successfully"
+                "message": "Local AI Server started successfully",
+                "media_setup": media_setup
             }
         else:
             return {
                 "success": False,
-                "message": f"Failed to start: {result.stderr or result.stdout}"
+                "message": f"Failed to start: {result.stderr or result.stdout}",
+                "media_setup": media_setup
             }
     except Exception as e:
-        return {"success": False, "message": str(e)}
+        return {"success": False, "message": str(e), "media_setup": media_setup}
 
 
 @router.get("/local/server-logs")
