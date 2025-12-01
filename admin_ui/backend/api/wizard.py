@@ -12,6 +12,63 @@ from settings import ENV_PATH, CONFIG_PATH, ensure_env_file, PROJECT_ROOT
 router = APIRouter()
 
 
+def setup_host_symlink() -> dict:
+    """Create /app/project symlink on host for Docker path resolution.
+    
+    The admin_ui container uses PROJECT_ROOT=/app/project internally.
+    When docker-compose runs from inside the container, the docker daemon
+    (on the host) resolves paths like /app/project/models on the HOST.
+    This symlink ensures the host's /app/project points to the actual project.
+    """
+    results = {"success": True, "messages": [], "errors": []}
+    
+    try:
+        client = docker.from_env()
+        
+        # Create symlink on host: /app/project -> actual project path
+        # We detect the actual host path from the admin_ui container's mount
+        admin_container = client.containers.get("admin_ui")
+        mounts = admin_container.attrs.get("Mounts", [])
+        
+        # Find the mount for /app/project
+        host_project_path = None
+        for mount in mounts:
+            if mount.get("Destination") == "/app/project":
+                host_project_path = mount.get("Source")
+                break
+        
+        if host_project_path:
+            # Run alpine container to create symlink on host
+            symlink_script = f'''
+                mkdir -p /app 2>/dev/null || true
+                if [ -L /app/project ]; then
+                    # Symlink exists, check if pointing to correct path
+                    CURRENT=$(readlink /app/project)
+                    if [ "$CURRENT" = "{host_project_path}" ]; then
+                        echo "Symlink already correct"
+                        exit 0
+                    fi
+                fi
+                rm -rf /app/project 2>/dev/null || true
+                ln -sfn {host_project_path} /app/project
+                echo "Created symlink /app/project -> {host_project_path}"
+            '''
+            output = client.containers.run(
+                "alpine:latest",
+                command=["sh", "-c", symlink_script],
+                volumes={"/app": {"bind": "/app", "mode": "rw"}},
+                remove=True,
+            )
+            results["messages"].append(output.decode().strip() if output else "Symlink setup complete")
+        else:
+            results["messages"].append("Could not detect host project path from mounts")
+            
+    except Exception as e:
+        results["errors"].append(f"Symlink setup error: {e}")
+    
+    return results
+
+
 def setup_media_paths() -> dict:
     """Setup media directories and symlink for Asterisk playback.
     
@@ -23,6 +80,11 @@ def setup_media_paths() -> dict:
         "messages": [],
         "errors": []
     }
+    
+    # First, ensure host symlink exists for Docker path resolution
+    symlink_result = setup_host_symlink()
+    results["messages"].extend(symlink_result.get("messages", []))
+    results["errors"].extend(symlink_result.get("errors", []))
     
     # Path inside container (mounted from host)
     container_media_dir = "/mnt/asterisk_media/ai-generated"
