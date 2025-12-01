@@ -273,6 +273,7 @@ async def start_engine():
     
     Called from wizard completion step when user clicks 'Start AI Engine'.
     Uses docker-compose to create/start the container.
+    Uses --force-recreate if container is already running.
     
     Automatically sets up media paths before starting to ensure audio playback works.
     """
@@ -286,11 +287,29 @@ async def start_engine():
     media_setup = setup_media_paths()
     print(f"DEBUG: Media setup result: {media_setup}")
     
+    # Check if container is already running
+    already_running = False
     try:
-        # Use docker compose (V2) to create and start ai-engine
-        # This works whether container exists or not
+        client = docker.from_env()
+        try:
+            container = client.containers.get("ai_engine")
+            already_running = container.status == "running"
+            print(f"DEBUG: ai_engine container status: {container.status}")
+        except docker.errors.NotFound:
+            print("DEBUG: ai_engine container not found, will create")
+    except Exception as e:
+        print(f"DEBUG: Could not check container status: {e}")
+    
+    try:
+        # Use --force-recreate if already running to ensure fresh start with latest config
+        cmd = ["docker", "compose", "up", "-d"]
+        if already_running:
+            cmd.append("--force-recreate")
+            print("DEBUG: Container already running, using --force-recreate")
+        cmd.append("ai-engine")
+        
         result = subprocess.run(
-            ["docker", "compose", "up", "-d", "ai-engine"],
+            cmd,
             cwd=PROJECT_ROOT,
             capture_output=True,
             text=True,
@@ -305,9 +324,10 @@ async def start_engine():
             return {
                 "success": True,
                 "action": "started",
-                "message": "AI Engine started successfully",
+                "message": "AI Engine started successfully" + (" (recreated)" if already_running else ""),
                 "output": result.stdout,
-                "media_setup": media_setup
+                "media_setup": media_setup,
+                "recreated": already_running
             }
         else:
             error_msg = result.stderr or result.stdout or "Unknown error"
@@ -542,6 +562,7 @@ async def start_local_ai_server():
     """Start the local-ai-server container.
     
     Also sets up media paths for audio playback to work correctly.
+    Uses --force-recreate to handle cases where container is already running.
     """
     import subprocess
     from settings import PROJECT_ROOT
@@ -551,9 +572,29 @@ async def start_local_ai_server():
     media_setup = setup_media_paths()
     print(f"DEBUG: Media setup result: {media_setup}")
     
+    # Check if container is already running
+    already_running = False
     try:
+        client = docker.from_env()
+        try:
+            container = client.containers.get("local_ai_server")
+            already_running = container.status == "running"
+            print(f"DEBUG: local_ai_server container status: {container.status}")
+        except docker.errors.NotFound:
+            print("DEBUG: local_ai_server container not found, will create")
+    except Exception as e:
+        print(f"DEBUG: Could not check container status: {e}")
+    
+    try:
+        # Use --force-recreate if already running to ensure fresh start
+        cmd = ["docker", "compose", "up", "-d"]
+        if already_running:
+            cmd.append("--force-recreate")
+            print("DEBUG: Container already running, using --force-recreate")
+        cmd.append("local-ai-server")
+        
         result = subprocess.run(
-            ["docker", "compose", "up", "-d", "local-ai-server"],
+            cmd,
             cwd=PROJECT_ROOT,
             capture_output=True,
             text=True,
@@ -563,8 +604,9 @@ async def start_local_ai_server():
         if result.returncode == 0:
             return {
                 "success": True,
-                "message": "Local AI Server started successfully",
-                "media_setup": media_setup
+                "message": "Local AI Server started successfully" + (" (recreated)" if already_running else ""),
+                "media_setup": media_setup,
+                "recreated": already_running
             }
         else:
             return {
