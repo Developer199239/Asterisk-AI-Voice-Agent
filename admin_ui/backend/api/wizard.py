@@ -624,6 +624,7 @@ async def get_local_server_logs():
     import subprocess
     
     try:
+        # Get recent logs for display
         result = subprocess.run(
             ["docker", "logs", "--tail", "30", "local_ai_server"],
             capture_output=True,
@@ -634,10 +635,20 @@ async def get_local_server_logs():
         logs = result.stdout or result.stderr
         lines = logs.strip().split('\n') if logs else []
         
-        # Check if server is ready (looking for typical ready message)
-        ready = any("uvicorn" in line.lower() and "started" in line.lower() for line in lines) or \
-                any("application startup complete" in line.lower() for line in lines) or \
-                any("models loaded" in line.lower() for line in lines)
+        # Check if server is ready by looking at ALL logs (not just tail)
+        # The startup message might be pushed out by connection logs
+        ready_result = subprocess.run(
+            ["docker", "logs", "local_ai_server"],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        all_logs = (ready_result.stdout or "") + (ready_result.stderr or "")
+        
+        # Check for ready indicators in full log history
+        ready = "Enhanced Local AI Server started" in all_logs or \
+                "All models loaded successfully" in all_logs or \
+                "models loaded" in all_logs.lower()
         
         return {
             "logs": lines[-20:],
