@@ -330,7 +330,7 @@ providers:
     tts_voice_name: Aoede
     type: full
   local:
-    base_url: ${LOCAL_WS_URL:-ws://local_ai_server:8765}
+    base_url: ${LOCAL_WS_URL:-ws://127.0.0.1:8765}
     capabilities:
     - stt
     - llm
@@ -356,7 +356,7 @@ providers:
     max_tokens: 32
     temperature: 0.4
     type: local
-    ws_url: ${LOCAL_WS_URL:-ws://local_ai_server:8765}
+    ws_url: ${LOCAL_WS_URL:-ws://127.0.0.1:8765}
   local_stt:
     capabilities:
     - stt
@@ -366,7 +366,7 @@ providers:
     response_timeout_sec: ${LOCAL_WS_RESPONSE_TIMEOUT:=10.0}
     stt_model: models/stt/vosk-model-en-us-0.22
     type: local
-    ws_url: ${LOCAL_WS_URL:-ws://local_ai_server:8765}
+    ws_url: ${LOCAL_WS_URL:-ws://127.0.0.1:8765}
   local_tts:
     capabilities:
     - tts
@@ -374,7 +374,7 @@ providers:
     response_timeout_sec: ${LOCAL_WS_RESPONSE_TIMEOUT:=10.0}
     tts_voice: models/tts/en_US-lessac-medium.onnx
     type: local
-    ws_url: ${LOCAL_WS_URL:-ws://local_ai_server:8765}
+    ws_url: ${LOCAL_WS_URL:-ws://127.0.0.1:8765}
   openai_llm:
     capabilities:
     - llm
