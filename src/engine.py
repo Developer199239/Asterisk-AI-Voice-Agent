@@ -261,7 +261,7 @@ class Engine:
         except Exception:
             logger.debug("Failed to pre-seed streaming manager format", exc_info=True)
         
-        # Milestone7: Pipeline orchestrator coordinates per-call STT/LLM/TTS adapters.
+        # Modular pipeline orchestrator coordinates per-call STT/LLM/TTS adapters.
         self.pipeline_orchestrator = PipelineOrchestrator(config)
         
         # P1: Transport orchestrator for multi-provider audio format negotiation
@@ -453,12 +453,12 @@ class Engine:
         except Exception as e:
             logger.warning(f"Failed to initialize tool calling system: {e}", exc_info=True)
 
-        # Milestone7: Start pipeline orchestrator to prepare per-call component lookups.
+        # Start modular pipeline orchestrator to prepare per-call component lookups.
         try:
             await self.pipeline_orchestrator.start()
         except PipelineOrchestratorError as exc:
             logger.error(
-                "Milestone7 pipeline orchestrator failed to start; legacy provider flow will be used",
+                "Modular pipeline orchestrator failed to start; using direct provider mode",
                 error=str(exc),
                 exc_info=True,
             )
@@ -652,7 +652,7 @@ class Engine:
                 await self._health_runner.cleanup()
         except Exception:
             logger.debug("Health server cleanup error", exc_info=True)
-        # Milestone7: ensure orchestrator releases component assignments before shutdown.
+        # Ensure orchestrator releases component assignments before shutdown.
         try:
             await self.pipeline_orchestrator.stop()
         except Exception:
@@ -1117,7 +1117,7 @@ class Engine:
             except Exception:
                 logger.debug("Audio profile resolution failed", call_id=caller_channel_id, exc_info=True)
 
-            # Milestone7: Per-call override via Asterisk channel var AI_PROVIDER.
+            # Per-call override via Asterisk channel var AI_PROVIDER.
             # Values:
             #   - openai_realtime | deepgram → full agent override
             #   - customX (any other token) → pipeline name
@@ -1204,7 +1204,7 @@ class Engine:
                     pipeline_resolution = await self._assign_pipeline_to_session(session)
                     if not pipeline_resolution and getattr(self.pipeline_orchestrator, "started", False):
                         logger.info(
-                            "Milestone7 pipeline orchestrator falling back to legacy provider flow",
+                            "Pipeline orchestrator using direct provider mode",
                             call_id=caller_channel_id,
                             provider=session.provider_name,
                         )
@@ -1892,7 +1892,7 @@ class Engine:
                 try:
                     await self.pipeline_orchestrator.release_pipeline(call_id)
                 except Exception:
-                    logger.debug("Milestone7 pipeline release failed during cleanup", call_id=call_id, exc_info=True)
+                    logger.debug("Pipeline release failed during cleanup", call_id=call_id, exc_info=True)
 
             # Auto-send email summary if enabled (before session is removed)
             try:
@@ -5014,7 +5014,7 @@ class Engine:
                         logger.debug("LLM generate failed", call_id=call_id, exc_info=True)
                         return
 
-                    # Milestone7: Handle structured LLM response with tool calls
+                    # Handle structured LLM response with tool calls
                     if isinstance(llm_result, LLMResponse):
                         response_text = (llm_result.text or "").strip()
                         tool_calls = llm_result.tool_calls
@@ -6401,7 +6401,7 @@ class Engine:
         session: CallSession,
         pipeline_name: Optional[str] = None,
     ) -> Optional[PipelineResolution]:
-        """Milestone7: Resolve pipeline components for a session and persist metadata."""
+        """Resolve modular pipeline components for a session and persist metadata."""
         if not getattr(self, "pipeline_orchestrator", None):
             return None
         if not self.pipeline_orchestrator.enabled:
@@ -6410,7 +6410,7 @@ class Engine:
             resolution = self.pipeline_orchestrator.get_pipeline(session.call_id, pipeline_name)
         except PipelineOrchestratorError as exc:
             logger.error(
-                "Milestone7 pipeline resolution failed",
+                "Pipeline resolution failed",
                 call_id=session.call_id,
                 requested_pipeline=pipeline_name,
                 error=str(exc),
@@ -6419,7 +6419,7 @@ class Engine:
             return None
         except Exception as exc:
             logger.error(
-                "Milestone7 pipeline resolution unexpected error",
+                "Pipeline resolution unexpected error",
                 call_id=session.call_id,
                 requested_pipeline=pipeline_name,
                 error=str(exc),
@@ -6429,7 +6429,7 @@ class Engine:
  
         if not resolution:
             logger.debug(
-                "Milestone7 pipeline orchestrator returned no resolution",
+                "Pipeline orchestrator returned no resolution",
                 call_id=session.call_id,
                 requested_pipeline=pipeline_name,
             )
@@ -6451,7 +6451,7 @@ class Engine:
             if provider_override in self.providers:
                 if session.provider_name != provider_override:
                     logger.info(
-                        "Milestone7 pipeline overriding provider",
+                        "Pipeline overriding provider",
                         call_id=session.call_id,
                         previous_provider=session.provider_name,
                         override_provider=provider_override,
