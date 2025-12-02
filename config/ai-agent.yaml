@@ -477,7 +477,7 @@ providers:
     target_encoding: ulaw
     target_sample_rate_hz: 8000
     # Voice settings
-    voice_id: "21m00Tcm4TlvDq8ikWAM"  # Rachel - change as needed
+    voice_id: "uDsPstFWFBUXjIBimV7s"  # User specified voice
     model_id: eleven_flash_v2_5       # Fast model for conversations
     voice_settings:
       stability: 0.5
