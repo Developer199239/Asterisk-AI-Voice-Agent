@@ -950,21 +950,6 @@ class LocalAIServer:
             )
             return
 
-        # Filter out noise words and very short transcripts that are likely artifacts
-        # These are common false positives from Vosk when picking up noise/echo
-        NOISE_WORDS = {"the", "a", "uh", "um", "oh", "ah", "huh", "hmm", "er", "eh"}
-        words = clean_text.lower().split()
-        if mode in ("llm", "full") and len(words) <= 1:
-            single_word = words[0] if words else ""
-            if single_word in NOISE_WORDS or len(single_word) <= 2:
-                logging.info(
-                    "📝 STT FINAL SUPPRESSED - Noise word filtered call_id=%s mode=%s text=%s",
-                    session.call_id,
-                    mode,
-                    clean_text,
-                )
-                return
-
         reason = "idle-timeout" if idle_promoted else "recognizer-final"
         logging.info(
             "📝 STT FINAL - Emitting transcript call_id=%s mode=%s reason=%s confidence=%s preview=%s",
@@ -1232,6 +1217,8 @@ class LocalAIServer:
         data: Dict[str, Any],
     ) -> None:
         text = data.get("text", "").strip()
+        call_id = data.get("call_id", session.call_id)
+        logging.info("📢 TTS request received call_id=%s text_preview=%s", call_id, text[:50] if text else "(empty)")
         if not text:
             logging.warning("TTS request missing 'text'")
             return
