@@ -6998,7 +6998,8 @@ class Engine:
                 bridge_id=session.bridge_id,
                 session_store=self.session_store,
                 ari_client=self.ari_client,
-                full_config=self.config.dict() if hasattr(self.config, 'dict') else {},
+                config=self.config.dict() if hasattr(self.config, 'dict') else {},
+                provider_name=provider_name,
             )
             
             # Execute tool via registry
