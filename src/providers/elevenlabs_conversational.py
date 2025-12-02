@@ -144,7 +144,7 @@ class ElevenLabsConversationalProvider(AIProviderInterface, ProviderCapabilities
             self._ws = await asyncio.wait_for(
                 websockets.connect(
                     ws_url,
-                    additional_headers=headers,
+                    extra_headers=headers,  # Use extra_headers for compatibility
                     max_size=16 * 1024 * 1024,  # 16MB max message size
                     ping_interval=20,
                     ping_timeout=20,
@@ -163,7 +163,7 @@ class ElevenLabsConversationalProvider(AIProviderInterface, ProviderCapabilities
                 await self._send_session_config(context)
             
             # Emit session started event
-            self.on_event({
+            await self.on_event({
                 "type": "session_started",
                 "call_id": call_id,
                 "provider": "elevenlabs_conversational",
@@ -297,7 +297,7 @@ class ElevenLabsConversationalProvider(AIProviderInterface, ProviderCapabilities
         self._connected = False
         
         # Emit session ended event
-        self.on_event({
+        await self.on_event({
             "type": "session_ended",
             "call_id": self._call_id,
             "provider": "elevenlabs_conversational",
@@ -393,7 +393,7 @@ class ElevenLabsConversationalProvider(AIProviderInterface, ProviderCapabilities
             f"{self._session_state.conversation_id}"
         )
         
-        self.on_event({
+        await self.on_event({
             "type": "conversation_initialized",
             "call_id": self._call_id,
             "conversation_id": self._session_state.conversation_id,
@@ -415,10 +415,10 @@ class ElevenLabsConversationalProvider(AIProviderInterface, ProviderCapabilities
         output_audio = self._convert_output_audio(pcm16_audio)
         
         # Emit audio event
-        self.on_event({
-            "type": "audio",
+        await self.on_event({
+            "type": "AgentAudio",
             "call_id": self._call_id,
-            "audio": output_audio,
+            "data": output_audio,
             "encoding": self.config.target_encoding,
             "sample_rate": self.config.target_sample_rate_hz,
         })
@@ -454,7 +454,7 @@ class ElevenLabsConversationalProvider(AIProviderInterface, ProviderCapabilities
         if text:
             logger.debug(f"[elevenlabs] [{self._call_id}] Agent: {text[:100]}...")
             
-            self.on_event({
+            await self.on_event({
                 "type": "agent_transcript",
                 "call_id": self._call_id,
                 "text": text,
@@ -470,7 +470,7 @@ class ElevenLabsConversationalProvider(AIProviderInterface, ProviderCapabilities
         if text:
             logger.debug(f"[elevenlabs] [{self._call_id}] User: {text[:100]}...")
             
-            self.on_event({
+            await self.on_event({
                 "type": "transcript",
                 "call_id": self._call_id,
                 "text": text,
@@ -489,7 +489,7 @@ class ElevenLabsConversationalProvider(AIProviderInterface, ProviderCapabilities
             f"'{original[:30]}...' -> '{corrected[:30]}...'"
         )
         
-        self.on_event({
+        await self.on_event({
             "type": "agent_correction",
             "call_id": self._call_id,
             "original": original,
@@ -500,7 +500,7 @@ class ElevenLabsConversationalProvider(AIProviderInterface, ProviderCapabilities
         """Handle interruption event (barge-in detected)."""
         logger.debug(f"[elevenlabs] [{self._call_id}] Interruption detected")
         
-        self.on_event({
+        await self.on_event({
             "type": "interruption",
             "call_id": self._call_id,
         })
@@ -530,7 +530,7 @@ class ElevenLabsConversationalProvider(AIProviderInterface, ProviderCapabilities
         logger.info(f"[elevenlabs] [{self._call_id}] Tool call: {tool_name}")
         
         # Emit tool call event for engine to handle
-        self.on_event({
+        await self.on_event({
             "type": "function_call",
             "call_id": self._call_id,
             "function_name": tool_name,
@@ -569,7 +569,7 @@ class ElevenLabsConversationalProvider(AIProviderInterface, ProviderCapabilities
         
         logger.error(f"[elevenlabs] [{self._call_id}] Error: {code} - {message}")
         
-        self.on_event({
+        await self.on_event({
             "type": "error",
             "call_id": self._call_id,
             "error_code": code,
