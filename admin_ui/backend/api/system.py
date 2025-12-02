@@ -37,7 +37,7 @@ async def get_containers():
 
 @router.post("/containers/{container_id}/restart")
 async def restart_container(container_id: str):
-    """Restart a container using docker-compose for proper recreation."""
+    """Restart a container using docker-compose with proper stop/remove/recreate."""
     import subprocess
     
     # Map container names to docker-compose service names
@@ -62,30 +62,51 @@ async def restart_container(container_id: str):
         except:
             # Fallback to using the input as is
             service_name = container_id
+    
     project_root = os.getenv("PROJECT_ROOT", "/app/project")
     
     print(f"DEBUG: Restarting {service_name} from {project_root}")
     
     try:
-        # Use docker compose (V2) up --force-recreate for proper restart
-        result = subprocess.run(
-            ["docker", "compose", "up", "-d", "--force-recreate", service_name],
+        # Step 1: Stop the service first
+        stop_result = subprocess.run(
+            ["docker", "compose", "stop", service_name],
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+            timeout=60
+        )
+        print(f"DEBUG: stop returncode={stop_result.returncode}")
+        
+        # Step 2: Remove the container (force remove to handle any state)
+        rm_result = subprocess.run(
+            ["docker", "compose", "rm", "-f", service_name],
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        print(f"DEBUG: rm returncode={rm_result.returncode}")
+        
+        # Step 3: Bring the service back up
+        up_result = subprocess.run(
+            ["docker", "compose", "up", "-d", service_name],
             cwd=project_root,
             capture_output=True,
             text=True,
             timeout=120
         )
         
-        print(f"DEBUG: docker-compose restart returncode={result.returncode}")
-        print(f"DEBUG: docker-compose stdout={result.stdout}")
-        print(f"DEBUG: docker-compose stderr={result.stderr}")
+        print(f"DEBUG: up returncode={up_result.returncode}")
+        print(f"DEBUG: up stdout={up_result.stdout}")
+        print(f"DEBUG: up stderr={up_result.stderr}")
         
-        if result.returncode == 0:
-            return {"status": "success", "output": result.stdout}
+        if up_result.returncode == 0:
+            return {"status": "success", "output": up_result.stdout or "Container restarted"}
         else:
             raise HTTPException(
                 status_code=500, 
-                detail=f"Failed to restart: {result.stderr or result.stdout}"
+                detail=f"Failed to restart: {up_result.stderr or up_result.stdout}"
             )
     except subprocess.TimeoutExpired:
         raise HTTPException(status_code=500, detail="Timeout waiting for container restart")
