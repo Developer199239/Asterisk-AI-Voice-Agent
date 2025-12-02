@@ -6984,6 +6984,7 @@ class Engine:
             Tool execution result
         """
         from src.tools.context import ToolExecutionContext
+        from src.tools.registry import tool_registry
         
         provider_name = getattr(session, 'provider_name', None) or self.config.default_provider
         provider = self.providers.get(provider_name)
@@ -7002,9 +7003,9 @@ class Engine:
                 provider_name=provider_name,
             )
             
-            # Execute tool via registry
-            if self.tool_registry and function_name in self.tool_registry.tools:
-                tool = self.tool_registry.tools[function_name]
+            # Execute tool via registry (tool_registry is a module-level singleton)
+            if tool_registry and function_name in tool_registry.tools:
+                tool = tool_registry.tools[function_name]
                 result = await tool.execute(parameters, context)
                 
                 # Handle special tools
@@ -7018,7 +7019,7 @@ class Engine:
                     "Tool not found in registry",
                     call_id=call_id,
                     function_name=function_name,
-                    available_tools=list(self.tool_registry.tools.keys()) if self.tool_registry else [],
+                    available_tools=list(tool_registry.tools.keys()) if tool_registry else [],
                 )
         except Exception as e:
             logger.error(
