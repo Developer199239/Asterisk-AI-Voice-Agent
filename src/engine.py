@@ -7004,8 +7004,8 @@ class Engine:
             )
             
             # Execute tool via registry (tool_registry is a module-level singleton)
-            if tool_registry and function_name in tool_registry.tools:
-                tool = tool_registry.tools[function_name]
+            tool = tool_registry.get(function_name) if tool_registry else None
+            if tool:
                 result = await tool.execute(parameters, context)
                 
                 # Handle special tools
@@ -7019,7 +7019,7 @@ class Engine:
                     "Tool not found in registry",
                     call_id=call_id,
                     function_name=function_name,
-                    available_tools=list(tool_registry.tools.keys()) if tool_registry else [],
+                    available_tools=tool_registry.list_tools() if tool_registry else [],
                 )
         except Exception as e:
             logger.error(
