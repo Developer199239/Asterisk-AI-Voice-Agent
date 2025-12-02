@@ -67,26 +67,32 @@ async def restart_container(container_id: str):
     
     print(f"DEBUG: Restarting {service_name} from {project_root}")
     
+    # Map service names to container names
+    container_name_map = {
+        "ai-engine": "ai_engine",
+        "admin-ui": "admin_ui", 
+        "local-ai-server": "local_ai_server"
+    }
+    container_name = container_name_map.get(service_name, service_name.replace("-", "_"))
+    
     try:
-        # Step 1: Stop the service first
+        # Step 1: Stop the container using docker directly (more reliable)
         stop_result = subprocess.run(
-            ["docker", "compose", "stop", service_name],
-            cwd=project_root,
+            ["docker", "stop", container_name],
             capture_output=True,
             text=True,
             timeout=60
         )
-        print(f"DEBUG: stop returncode={stop_result.returncode}")
+        print(f"DEBUG: docker stop returncode={stop_result.returncode}")
         
-        # Step 2: Remove the container (force remove to handle any state)
+        # Step 2: Force remove the container using docker directly
         rm_result = subprocess.run(
-            ["docker", "compose", "rm", "-f", service_name],
-            cwd=project_root,
+            ["docker", "rm", "-f", container_name],
             capture_output=True,
             text=True,
             timeout=30
         )
-        print(f"DEBUG: rm returncode={rm_result.returncode}")
+        print(f"DEBUG: docker rm returncode={rm_result.returncode}")
         
         # Step 3: Bring the service back up
         up_result = subprocess.run(
