@@ -4295,6 +4295,8 @@ class Engine:
                             logger.info("Streaming playback started", call_id=call_id)
                         except Exception:
                             logger.error("Failed to start streaming playback", call_id=call_id, exc_info=True)
+                            # CRITICAL: Remove orphan queue so subsequent chunks trigger fresh playback
+                            self._provider_stream_queues.pop(call_id, None)
                             try:
                                 playback_id = await self.playback_manager.play_audio(call_id, out_chunk, "streaming-response")
                                 if not playback_id:
