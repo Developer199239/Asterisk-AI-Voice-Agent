@@ -4577,6 +4577,43 @@ class Engine:
                         exc_info=True
                     )
             
+            elif etype == "function_call":
+                # Handle tool/function calls from providers (ElevenLabs, etc.)
+                function_name = event.get("function_name")
+                function_call_id = event.get("function_call_id")
+                parameters = event.get("parameters", {})
+                
+                logger.info(
+                    "🔧 Function call received from provider",
+                    call_id=call_id,
+                    function_name=function_name,
+                    function_call_id=function_call_id,
+                )
+                
+                # Execute tool using tool registry
+                try:
+                    result = await self._execute_provider_tool(
+                        call_id=call_id,
+                        function_name=function_name,
+                        function_call_id=function_call_id,
+                        parameters=parameters,
+                        session=session,
+                    )
+                    logger.info(
+                        "✅ Tool execution complete",
+                        call_id=call_id,
+                        function_name=function_name,
+                        status=result.get("status"),
+                    )
+                except Exception as e:
+                    logger.error(
+                        "❌ Tool execution failed",
+                        call_id=call_id,
+                        function_name=function_name,
+                        error=str(e),
+                        exc_info=True,
+                    )
+            
             else:
                 # Log control/JSON events at debug for now
                 logger.debug("Provider control event", provider_event=event)
@@ -6924,6 +6961,94 @@ class Engine:
             logger.info("Health endpoint started", host=health_host, port=health_port)
         except Exception as exc:
             logger.error("Failed to start health endpoint", error=str(exc), exc_info=True)
+
+    async def _execute_provider_tool(
+        self,
+        call_id: str,
+        function_name: str,
+        function_call_id: str,
+        parameters: Dict[str, Any],
+        session: "CallSession",
+    ) -> Dict[str, Any]:
+        """
+        Execute a tool called by a provider (ElevenLabs, etc.) and send result back.
+        
+        Args:
+            call_id: Call identifier
+            function_name: Name of the tool to execute
+            function_call_id: Provider's ID for this tool call
+            parameters: Tool parameters
+            session: Call session
+        
+        Returns:
+            Tool execution result
+        """
+        from src.tools.context import ToolExecutionContext
+        
+        provider_name = getattr(session, 'provider_name', None) or self.config.default_provider
+        provider = self.providers.get(provider_name)
+        
+        result = {"status": "error", "message": f"Tool '{function_name}' not found"}
+        
+        try:
+            # Build tool execution context
+            context = ToolExecutionContext(
+                call_id=call_id,
+                caller_channel_id=session.caller_channel_id,
+                bridge_id=session.bridge_id,
+                session_store=self.session_store,
+                ari_client=self.ari_client,
+                full_config=self.config.dict() if hasattr(self.config, 'dict') else {},
+            )
+            
+            # Execute tool via registry
+            if self.tool_registry and function_name in self.tool_registry.tools:
+                tool = self.tool_registry.tools[function_name]
+                result = await tool.execute(parameters, context)
+                
+                # Handle special tools
+                if function_name == "hangup_call" and result.get("will_hangup"):
+                    # Queue hangup after TTS completes
+                    session.cleanup_after_tts = True
+                    await self.session_store.upsert_call(session)
+                    logger.info("Hangup queued for after TTS", call_id=call_id)
+            else:
+                logger.warning(
+                    "Tool not found in registry",
+                    call_id=call_id,
+                    function_name=function_name,
+                    available_tools=list(self.tool_registry.tools.keys()) if self.tool_registry else [],
+                )
+        except Exception as e:
+            logger.error(
+                "Tool execution error",
+                call_id=call_id,
+                function_name=function_name,
+                error=str(e),
+                exc_info=True,
+            )
+            result = {"status": "error", "message": str(e)}
+        
+        # Send result back to provider
+        if provider and hasattr(provider, 'send_tool_result'):
+            try:
+                is_error = result.get("status") == "error"
+                await provider.send_tool_result(function_call_id, result, is_error=is_error)
+                logger.debug(
+                    "Tool result sent to provider",
+                    call_id=call_id,
+                    function_name=function_name,
+                    function_call_id=function_call_id,
+                )
+            except Exception as e:
+                logger.error(
+                    "Failed to send tool result to provider",
+                    call_id=call_id,
+                    function_name=function_name,
+                    error=str(e),
+                )
+        
+        return result
 
     async def _health_handler(self, request):
         """Return JSON with engine/provider status."""
