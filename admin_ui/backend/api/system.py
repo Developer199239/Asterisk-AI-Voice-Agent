@@ -47,7 +47,21 @@ async def restart_container(container_id: str):
         "local_ai_server": "local-ai-server"
     }
     
-    service_name = service_map.get(container_id, container_id)
+    service_name = service_map.get(container_id)
+    
+    # If not in map, it might be an ID or a raw name.
+    # Try to resolve ID to name if possible.
+    if not service_name:
+        try:
+            client = docker.from_env()
+            container = client.containers.get(container_id)
+            # Strip leading slash
+            name = container.name.lstrip('/')
+            # Try map again with name, or use name directly
+            service_name = service_map.get(name, name)
+        except:
+            # Fallback to using the input as is
+            service_name = container_id
     project_root = os.getenv("PROJECT_ROOT", "/app/project")
     
     print(f"DEBUG: Restarting {service_name} from {project_root}")

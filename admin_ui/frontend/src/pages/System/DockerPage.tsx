@@ -108,7 +108,7 @@ const DockerPage = () => {
                                     </div>
                                     <div className="flex items-center gap-1">
                                         <button
-                                            onClick={() => handleRestart(container.id)}
+                                            onClick={() => handleRestart(container.name.replace(/^\//, ''))}
                                             disabled={actionLoading === container.id}
                                             className="p-2 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground disabled:opacity-50"
                                             title="Restart"

@@ -303,6 +303,20 @@ async def start_engine():
     try:
         # Use --force-recreate if already running to ensure fresh start with latest config
         cmd = ["docker", "compose", "up", "-d"]
+        
+        # Explicitly remove container if it exists to avoid "Conflict" errors
+        # This handles cases where the container exists but isn't managed by compose correctly
+        try:
+            client = docker.from_env()
+            try:
+                old_container = client.containers.get("ai_engine")
+                print(f"DEBUG: Removing existing ai_engine container ({old_container.status})")
+                old_container.remove(force=True)
+            except docker.errors.NotFound:
+                pass
+        except Exception as e:
+            print(f"DEBUG: Error removing container: {e}")
+
         if already_running:
             cmd.append("--force-recreate")
             print("DEBUG: Container already running, using --force-recreate")
@@ -588,6 +602,19 @@ async def start_local_ai_server():
     try:
         # Use --force-recreate if already running to ensure fresh start
         cmd = ["docker", "compose", "up", "-d"]
+        
+        # Explicitly remove container if it exists to avoid "Conflict" errors
+        try:
+            client = docker.from_env()
+            try:
+                old_container = client.containers.get("local_ai_server")
+                print(f"DEBUG: Removing existing local_ai_server container ({old_container.status})")
+                old_container.remove(force=True)
+            except docker.errors.NotFound:
+                pass
+        except Exception as e:
+            print(f"DEBUG: Error removing container: {e}")
+
         if already_running:
             cmd.append("--force-recreate")
             print("DEBUG: Container already running, using --force-recreate")
