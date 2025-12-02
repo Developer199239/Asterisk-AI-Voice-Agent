@@ -218,11 +218,16 @@ class ElevenLabsConversationalProvider(AIProviderInterface, ProviderCapabilities
         converted to PCM16 16kHz for ElevenLabs.
         """
         if not self._ws or not self._connected or self._closing:
+            logger.debug(f"[elevenlabs] [{self._call_id}] send_audio skipped: ws={self._ws is not None}, connected={self._connected}, closing={self._closing}")
             return
         
         # Determine input format
         in_rate = sample_rate or self.config.input_sample_rate_hz
         in_encoding = encoding or self.config.input_encoding
+        
+        # Log first audio chunk for debugging
+        if self._session_state.total_audio_sent == 0:
+            logger.info(f"[elevenlabs] [{self._call_id}] First audio chunk: {len(audio_chunk)} bytes, rate={in_rate}, encoding={in_encoding}")
         
         # Convert to PCM16 if needed
         pcm16_audio = audio_chunk
@@ -251,6 +256,10 @@ class ElevenLabsConversationalProvider(AIProviderInterface, ProviderCapabilities
         try:
             await self._ws.send(json.dumps(message))
             self._session_state.total_audio_sent += len(pcm16_audio)
+            # Log every 10 chunks for debugging
+            chunks_sent = self._session_state.total_audio_sent // 640  # 640 bytes = 20ms @ 16kHz
+            if chunks_sent % 50 == 0 and chunks_sent > 0:
+                logger.debug(f"[elevenlabs] [{self._call_id}] Audio progress: {self._session_state.total_audio_sent} bytes sent")
         except Exception as e:
             logger.warning(f"[elevenlabs] [{self._call_id}] Failed to send audio: {e}")
     
@@ -340,6 +349,10 @@ class ElevenLabsConversationalProvider(AIProviderInterface, ProviderCapabilities
         
         msg_type = data.get("type", "")
         
+        # Log all message types for debugging
+        if msg_type and msg_type not in ("ping", "internal_vad_score", "internal_turn_probability", "internal_tentative_agent_response"):
+            logger.debug(f"[elevenlabs] [{self._call_id}] Received message type: {msg_type}")
+        
         # Handle different message types
         if msg_type == "conversation_initiation_metadata":
             await self._handle_conversation_init(data)
@@ -405,7 +418,15 @@ class ElevenLabsConversationalProvider(AIProviderInterface, ProviderCapabilities
         audio_b64 = audio_event.get("audio_base_64", "")
         
         if not audio_b64:
-            return
+            # Try alternative field name
+            audio_b64 = data.get("audio", "")
+            if not audio_b64:
+                logger.debug(f"[elevenlabs] [{self._call_id}] Empty audio event: {list(data.keys())}")
+                return
+        
+        # Log first audio received
+        if self._session_state.total_audio_received == 0:
+            logger.info(f"[elevenlabs] [{self._call_id}] First agent audio received")
         
         # Decode base64 audio (PCM16 16kHz from ElevenLabs)
         pcm16_audio = base64.b64decode(audio_b64)
