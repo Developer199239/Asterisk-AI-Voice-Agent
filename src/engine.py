@@ -7010,10 +7010,22 @@ class Engine:
                 
                 # Handle special tools
                 if function_name == "hangup_call" and result.get("will_hangup"):
-                    # Queue hangup after TTS completes
-                    session.cleanup_after_tts = True
-                    await self.session_store.upsert_call(session)
-                    logger.info("Hangup queued for after TTS", call_id=call_id)
+                    # For full agent providers like ElevenLabs, they manage their own TTS
+                    # so we should hangup after a short delay for the farewell to play
+                    logger.info("Hangup requested - scheduling delayed hangup", call_id=call_id)
+                    
+                    # Schedule hangup after delay to let farewell audio play
+                    async def delayed_hangup():
+                        await asyncio.sleep(3.0)  # Wait for farewell TTS
+                        try:
+                            current_session = await self.session_store.get_by_call_id(call_id)
+                            if current_session:
+                                await self.ari_client.hangup_channel(current_session.caller_channel_id)
+                                logger.info("✅ Call hung up after farewell", call_id=call_id)
+                        except Exception as e:
+                            logger.debug(f"Delayed hangup failed (may already be hung up): {e}", call_id=call_id)
+                    
+                    asyncio.create_task(delayed_hangup())
             else:
                 logger.warning(
                     "Tool not found in registry",
