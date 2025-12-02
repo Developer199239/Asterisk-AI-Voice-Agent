@@ -4614,6 +4614,28 @@ class Engine:
                         exc_info=True,
                     )
             
+            elif etype == "transcript":
+                # User speech transcript from provider (ElevenLabs, etc.)
+                text = event.get("text", "").strip()
+                if text and text != "...":
+                    # Add to conversation history
+                    if not hasattr(session, 'conversation_history') or session.conversation_history is None:
+                        session.conversation_history = []
+                    session.conversation_history.append({"role": "user", "content": text})
+                    await self.session_store.upsert_call(session)
+                    logger.debug("Added user transcript to history", call_id=call_id, text_preview=text[:50])
+            
+            elif etype == "agent_transcript":
+                # Agent speech transcript from provider (ElevenLabs, etc.)
+                text = event.get("text", "").strip()
+                if text and text != "...":
+                    # Add to conversation history
+                    if not hasattr(session, 'conversation_history') or session.conversation_history is None:
+                        session.conversation_history = []
+                    session.conversation_history.append({"role": "assistant", "content": text})
+                    await self.session_store.upsert_call(session)
+                    logger.debug("Added agent transcript to history", call_id=call_id, text_preview=text[:50])
+            
             else:
                 # Log control/JSON events at debug for now
                 logger.debug("Provider control event", provider_event=event)
