@@ -1,0 +1,577 @@
+"""
+ElevenLabs Conversational AI Provider
+
+Full agent provider that integrates ElevenLabs' Conversational AI platform
+for real-time voice conversations with STT, LLM, and TTS capabilities.
+
+WebSocket Protocol:
+- Endpoint: wss://api.elevenlabs.io/v1/convai/conversation
+- Auth: xi-api-key header or signed URL
+- Audio: PCM16 base64 encoded, 16kHz mono
+"""
+import asyncio
+import base64
+import json
+import logging
+import os
+import audioop
+import struct
+from typing import Any, Callable, Dict, List, Optional
+from dataclasses import dataclass
+
+import websockets
+from websockets.client import WebSocketClientProtocol
+
+from .base import AIProviderInterface, ProviderCapabilities, ProviderCapabilitiesMixin
+from .elevenlabs_config import ElevenLabsConversationalConfig
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ElevenLabsSessionState:
+    """Tracks the state of an ElevenLabs conversation session."""
+    conversation_id: Optional[str] = None
+    is_agent_speaking: bool = False
+    is_user_speaking: bool = False
+    pending_audio_chunks: List[bytes] = None
+    total_audio_sent: int = 0
+    total_audio_received: int = 0
+    
+    def __post_init__(self):
+        if self.pending_audio_chunks is None:
+            self.pending_audio_chunks = []
+
+
+class ElevenLabsConversationalProvider(AIProviderInterface, ProviderCapabilitiesMixin):
+    """
+    ElevenLabs Conversational AI full agent provider.
+    
+    Provides STT + LLM + TTS in a single WebSocket connection,
+    similar to Deepgram Voice Agent and OpenAI Realtime providers.
+    """
+    
+    # ElevenLabs WebSocket endpoint
+    CONVAI_WS_URL = "wss://api.elevenlabs.io/v1/convai/conversation"
+    
+    def __init__(
+        self,
+        config: ElevenLabsConversationalConfig,
+        on_event: Callable[[Dict[str, Any]], None],
+        tool_registry: Optional[Any] = None,
+    ):
+        super().__init__(on_event)
+        self.config = config
+        self.tool_registry = tool_registry
+        
+        # WebSocket connection
+        self._ws: Optional[WebSocketClientProtocol] = None
+        self._receive_task: Optional[asyncio.Task] = None
+        self._keepalive_task: Optional[asyncio.Task] = None
+        
+        # Session state
+        self._call_id: Optional[str] = None
+        self._session_state = ElevenLabsSessionState()
+        self._connected = False
+        self._closing = False
+        
+        # Audio resampling state
+        self._resample_state_in = None  # For input resampling
+        self._resample_state_out = None  # For output resampling
+        
+        logger.info(f"[elevenlabs] Provider initialized with agent_id={config.agent_id[:8]}...")
+    
+    @property
+    def supported_codecs(self) -> List[str]:
+        """Returns supported codec names."""
+        return ["linear16", "pcm16", "ulaw"]
+    
+    def get_capabilities(self) -> ProviderCapabilities:
+        """Return static capability hints for the orchestrator."""
+        return ProviderCapabilities(
+            input_encodings=["linear16", "pcm16", "ulaw"],
+            input_sample_rates_hz=[8000, 16000],
+            output_encodings=["linear16", "pcm16"],
+            output_sample_rates_hz=[16000, 22050],
+            preferred_chunk_ms=20,
+            can_negotiate=False,
+            is_full_agent=True,
+            has_native_vad=True,
+            has_native_barge_in=True,
+            requires_continuous_audio=True,
+        )
+    
+    async def start_session(
+        self,
+        call_id: str,
+        on_event: Optional[Callable] = None,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """
+        Initialize the connection to ElevenLabs Conversational AI.
+        
+        Args:
+            call_id: Unique identifier for this call
+            on_event: Optional callback for events (uses self.on_event if not provided)
+            context: Optional context with greeting, instructions, tools, etc.
+        """
+        self._call_id = call_id
+        self._session_state = ElevenLabsSessionState()
+        
+        if on_event:
+            self.on_event = on_event
+        
+        # Get API key from config or environment
+        api_key = self.config.api_key or os.getenv("ELEVENLABS_API_KEY", "")
+        if not api_key:
+            raise ValueError("ELEVENLABS_API_KEY not configured")
+        
+        agent_id = self.config.agent_id or os.getenv("ELEVENLABS_AGENT_ID", "")
+        if not agent_id:
+            raise ValueError("ELEVENLABS_AGENT_ID not configured")
+        
+        # Build WebSocket URL with agent_id
+        ws_url = f"{self.CONVAI_WS_URL}?agent_id={agent_id}"
+        
+        # Headers for authentication
+        headers = {
+            "xi-api-key": api_key,
+        }
+        
+        logger.info(f"[elevenlabs] [{call_id}] Connecting to ElevenLabs Conversational AI...")
+        
+        try:
+            self._ws = await asyncio.wait_for(
+                websockets.connect(
+                    ws_url,
+                    additional_headers=headers,
+                    max_size=16 * 1024 * 1024,  # 16MB max message size
+                    ping_interval=20,
+                    ping_timeout=20,
+                    close_timeout=5,
+                ),
+                timeout=10.0,
+            )
+            self._connected = True
+            logger.info(f"[elevenlabs] [{call_id}] WebSocket connected")
+            
+            # Start receive loop
+            self._receive_task = asyncio.create_task(self._receive_loop())
+            
+            # Send initial configuration if context provided
+            if context:
+                await self._send_session_config(context)
+            
+            # Emit session started event
+            self.on_event({
+                "type": "session_started",
+                "call_id": call_id,
+                "provider": "elevenlabs_conversational",
+            })
+            
+        except asyncio.TimeoutError:
+            logger.error(f"[elevenlabs] [{call_id}] Connection timeout")
+            raise ConnectionError("ElevenLabs connection timeout")
+        except Exception as e:
+            logger.error(f"[elevenlabs] [{call_id}] Connection failed: {e}")
+            raise
+    
+    async def _send_session_config(self, context: Dict[str, Any]) -> None:
+        """Send session configuration to ElevenLabs."""
+        if not self._ws or not self._connected:
+            return
+        
+        # Build conversation initiation data
+        init_data = {}
+        
+        # Add custom system prompt if provided
+        if context.get("instructions"):
+            init_data["custom_llm_extra_body"] = {
+                "system": context["instructions"]
+            }
+        
+        # Add dynamic variables
+        if context.get("caller_name"):
+            init_data["dynamic_variables"] = {
+                "caller_name": context["caller_name"]
+            }
+        
+        # Send initialization message if we have config
+        if init_data:
+            message = {
+                "type": "conversation_initiation_client_data",
+                "conversation_initiation_client_data": init_data,
+            }
+            await self._ws.send(json.dumps(message))
+            logger.debug(f"[elevenlabs] [{self._call_id}] Sent session config")
+    
+    async def send_audio(
+        self,
+        audio_chunk: bytes,
+        sample_rate: Optional[int] = None,
+        encoding: Optional[str] = None,
+    ) -> None:
+        """
+        Send audio chunk to ElevenLabs.
+        
+        Audio is expected to be from telephony (μ-law 8kHz) and will be
+        converted to PCM16 16kHz for ElevenLabs.
+        """
+        if not self._ws or not self._connected or self._closing:
+            return
+        
+        # Determine input format
+        in_rate = sample_rate or self.config.input_sample_rate_hz
+        in_encoding = encoding or self.config.input_encoding
+        
+        # Convert to PCM16 if needed
+        pcm16_audio = audio_chunk
+        
+        if in_encoding in ("ulaw", "mulaw"):
+            # Decode μ-law to PCM16
+            pcm16_audio = audioop.ulaw2lin(audio_chunk, 2)
+        elif in_encoding == "alaw":
+            pcm16_audio = audioop.alaw2lin(audio_chunk, 2)
+        
+        # Resample to 16kHz if needed
+        target_rate = self.config.provider_input_sample_rate_hz
+        if in_rate != target_rate:
+            pcm16_audio, self._resample_state_in = audioop.ratecv(
+                pcm16_audio, 2, 1, in_rate, target_rate, self._resample_state_in
+            )
+        
+        # Encode to base64
+        audio_b64 = base64.b64encode(pcm16_audio).decode("utf-8")
+        
+        # Send audio message
+        message = {
+            "user_audio_chunk": audio_b64,
+        }
+        
+        try:
+            await self._ws.send(json.dumps(message))
+            self._session_state.total_audio_sent += len(pcm16_audio)
+        except Exception as e:
+            logger.warning(f"[elevenlabs] [{self._call_id}] Failed to send audio: {e}")
+    
+    async def send_interrupt(self) -> None:
+        """Send interrupt signal to stop agent speech (barge-in)."""
+        if not self._ws or not self._connected:
+            return
+        
+        message = {"type": "interrupt"}
+        try:
+            await self._ws.send(json.dumps(message))
+            logger.debug(f"[elevenlabs] [{self._call_id}] Sent interrupt")
+        except Exception as e:
+            logger.warning(f"[elevenlabs] [{self._call_id}] Failed to send interrupt: {e}")
+    
+    async def stop_session(self) -> None:
+        """Close the connection and clean up resources."""
+        self._closing = True
+        logger.info(f"[elevenlabs] [{self._call_id}] Stopping session...")
+        
+        # Cancel tasks
+        if self._receive_task and not self._receive_task.done():
+            self._receive_task.cancel()
+            try:
+                await asyncio.wait_for(self._receive_task, timeout=2.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                pass
+        
+        if self._keepalive_task and not self._keepalive_task.done():
+            self._keepalive_task.cancel()
+            try:
+                await asyncio.wait_for(self._keepalive_task, timeout=1.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                pass
+        
+        # Close WebSocket
+        if self._ws:
+            try:
+                await self._ws.close()
+            except Exception as e:
+                logger.debug(f"[elevenlabs] [{self._call_id}] WebSocket close error: {e}")
+            self._ws = None
+        
+        self._connected = False
+        
+        # Emit session ended event
+        self.on_event({
+            "type": "session_ended",
+            "call_id": self._call_id,
+            "provider": "elevenlabs_conversational",
+            "audio_sent_bytes": self._session_state.total_audio_sent,
+            "audio_received_bytes": self._session_state.total_audio_received,
+        })
+        
+        logger.info(f"[elevenlabs] [{self._call_id}] Session stopped")
+    
+    async def _receive_loop(self) -> None:
+        """Process incoming WebSocket messages from ElevenLabs."""
+        logger.debug(f"[elevenlabs] [{self._call_id}] Receive loop started")
+        
+        try:
+            async for message in self._ws:
+                if self._closing:
+                    break
+                
+                try:
+                    await self._handle_message(message)
+                except Exception as e:
+                    logger.error(f"[elevenlabs] [{self._call_id}] Error handling message: {e}")
+                    
+        except websockets.exceptions.ConnectionClosed as e:
+            logger.info(f"[elevenlabs] [{self._call_id}] WebSocket closed: {e}")
+        except asyncio.CancelledError:
+            logger.debug(f"[elevenlabs] [{self._call_id}] Receive loop cancelled")
+        except Exception as e:
+            logger.error(f"[elevenlabs] [{self._call_id}] Receive loop error: {e}")
+        finally:
+            self._connected = False
+    
+    async def _handle_message(self, raw_message: str) -> None:
+        """Handle a single WebSocket message."""
+        try:
+            data = json.loads(raw_message)
+        except json.JSONDecodeError:
+            logger.warning(f"[elevenlabs] [{self._call_id}] Invalid JSON message")
+            return
+        
+        msg_type = data.get("type", "")
+        
+        # Handle different message types
+        if msg_type == "conversation_initiation_metadata":
+            await self._handle_conversation_init(data)
+        
+        elif msg_type == "audio":
+            await self._handle_audio(data)
+        
+        elif msg_type == "agent_response":
+            await self._handle_agent_response(data)
+        
+        elif msg_type == "user_transcript":
+            await self._handle_user_transcript(data)
+        
+        elif msg_type == "agent_response_correction":
+            await self._handle_agent_correction(data)
+        
+        elif msg_type == "interruption":
+            await self._handle_interruption(data)
+        
+        elif msg_type == "ping":
+            await self._handle_ping(data)
+        
+        elif msg_type == "internal_vad_score":
+            # VAD score updates - used for voice activity detection
+            pass  # Handled internally by ElevenLabs
+        
+        elif msg_type == "internal_turn_probability":
+            # Turn-taking probability updates
+            pass
+        
+        elif msg_type == "internal_tentative_agent_response":
+            # Tentative response (before finalization)
+            pass
+        
+        elif msg_type == "client_tool_call":
+            await self._handle_tool_call(data)
+        
+        elif msg_type == "error":
+            await self._handle_error(data)
+        
+        else:
+            logger.debug(f"[elevenlabs] [{self._call_id}] Unhandled message type: {msg_type}")
+    
+    async def _handle_conversation_init(self, data: Dict[str, Any]) -> None:
+        """Handle conversation initialization metadata."""
+        metadata = data.get("conversation_initiation_metadata_event", {})
+        self._session_state.conversation_id = metadata.get("conversation_id")
+        
+        logger.info(
+            f"[elevenlabs] [{self._call_id}] Conversation initialized: "
+            f"{self._session_state.conversation_id}"
+        )
+        
+        self.on_event({
+            "type": "conversation_initialized",
+            "call_id": self._call_id,
+            "conversation_id": self._session_state.conversation_id,
+        })
+    
+    async def _handle_audio(self, data: Dict[str, Any]) -> None:
+        """Handle audio chunk from agent."""
+        audio_event = data.get("audio_event", {})
+        audio_b64 = audio_event.get("audio_base_64", "")
+        
+        if not audio_b64:
+            return
+        
+        # Decode base64 audio (PCM16 16kHz from ElevenLabs)
+        pcm16_audio = base64.b64decode(audio_b64)
+        self._session_state.total_audio_received += len(pcm16_audio)
+        
+        # Convert to telephony format if needed
+        output_audio = self._convert_output_audio(pcm16_audio)
+        
+        # Emit audio event
+        self.on_event({
+            "type": "audio",
+            "call_id": self._call_id,
+            "audio": output_audio,
+            "encoding": self.config.target_encoding,
+            "sample_rate": self.config.target_sample_rate_hz,
+        })
+    
+    def _convert_output_audio(self, pcm16_audio: bytes) -> bytes:
+        """Convert PCM16 audio from ElevenLabs to telephony format."""
+        # ElevenLabs outputs PCM16 at 16kHz
+        source_rate = self.config.output_sample_rate_hz
+        target_rate = self.config.target_sample_rate_hz
+        target_encoding = self.config.target_encoding
+        
+        output = pcm16_audio
+        
+        # Resample if needed
+        if source_rate != target_rate:
+            output, self._resample_state_out = audioop.ratecv(
+                output, 2, 1, source_rate, target_rate, self._resample_state_out
+            )
+        
+        # Encode to μ-law or a-law if needed
+        if target_encoding in ("ulaw", "mulaw"):
+            output = audioop.lin2ulaw(output, 2)
+        elif target_encoding == "alaw":
+            output = audioop.lin2alaw(output, 2)
+        
+        return output
+    
+    async def _handle_agent_response(self, data: Dict[str, Any]) -> None:
+        """Handle agent text response (transcript of what agent said)."""
+        response = data.get("agent_response_event", {})
+        text = response.get("agent_response", "")
+        
+        if text:
+            logger.debug(f"[elevenlabs] [{self._call_id}] Agent: {text[:100]}...")
+            
+            self.on_event({
+                "type": "agent_transcript",
+                "call_id": self._call_id,
+                "text": text,
+                "role": "assistant",
+            })
+    
+    async def _handle_user_transcript(self, data: Dict[str, Any]) -> None:
+        """Handle user transcript (STT result)."""
+        transcript_event = data.get("user_transcription_event", {})
+        text = transcript_event.get("user_transcript", "")
+        is_final = transcript_event.get("is_final", True)
+        
+        if text:
+            logger.debug(f"[elevenlabs] [{self._call_id}] User: {text[:100]}...")
+            
+            self.on_event({
+                "type": "transcript",
+                "call_id": self._call_id,
+                "text": text,
+                "is_final": is_final,
+                "role": "user",
+            })
+    
+    async def _handle_agent_correction(self, data: Dict[str, Any]) -> None:
+        """Handle agent response correction (when interrupted)."""
+        correction = data.get("agent_response_correction_event", {})
+        original = correction.get("original_agent_response", "")
+        corrected = correction.get("corrected_agent_response", "")
+        
+        logger.debug(
+            f"[elevenlabs] [{self._call_id}] Agent correction: "
+            f"'{original[:30]}...' -> '{corrected[:30]}...'"
+        )
+        
+        self.on_event({
+            "type": "agent_correction",
+            "call_id": self._call_id,
+            "original": original,
+            "corrected": corrected,
+        })
+    
+    async def _handle_interruption(self, data: Dict[str, Any]) -> None:
+        """Handle interruption event (barge-in detected)."""
+        logger.debug(f"[elevenlabs] [{self._call_id}] Interruption detected")
+        
+        self.on_event({
+            "type": "interruption",
+            "call_id": self._call_id,
+        })
+    
+    async def _handle_ping(self, data: Dict[str, Any]) -> None:
+        """Handle ping message - send pong response."""
+        ping_event = data.get("ping_event", {})
+        event_id = ping_event.get("event_id")
+        
+        if event_id:
+            pong = {
+                "type": "pong",
+                "event_id": event_id,
+            }
+            try:
+                await self._ws.send(json.dumps(pong))
+            except Exception as e:
+                logger.warning(f"[elevenlabs] [{self._call_id}] Failed to send pong: {e}")
+    
+    async def _handle_tool_call(self, data: Dict[str, Any]) -> None:
+        """Handle tool/function call request from ElevenLabs."""
+        tool_call = data.get("client_tool_call", {})
+        tool_name = tool_call.get("tool_name", "")
+        tool_call_id = tool_call.get("tool_call_id", "")
+        parameters = tool_call.get("parameters", {})
+        
+        logger.info(f"[elevenlabs] [{self._call_id}] Tool call: {tool_name}")
+        
+        # Emit tool call event for engine to handle
+        self.on_event({
+            "type": "function_call",
+            "call_id": self._call_id,
+            "function_name": tool_name,
+            "function_call_id": tool_call_id,
+            "parameters": parameters,
+        })
+    
+    async def send_tool_result(
+        self,
+        tool_call_id: str,
+        result: Any,
+        is_error: bool = False,
+    ) -> None:
+        """Send tool execution result back to ElevenLabs."""
+        if not self._ws or not self._connected:
+            return
+        
+        message = {
+            "type": "client_tool_result",
+            "tool_call_id": tool_call_id,
+            "result": json.dumps(result) if not isinstance(result, str) else result,
+            "is_error": is_error,
+        }
+        
+        try:
+            await self._ws.send(json.dumps(message))
+            logger.debug(f"[elevenlabs] [{self._call_id}] Sent tool result for {tool_call_id}")
+        except Exception as e:
+            logger.warning(f"[elevenlabs] [{self._call_id}] Failed to send tool result: {e}")
+    
+    async def _handle_error(self, data: Dict[str, Any]) -> None:
+        """Handle error message from ElevenLabs."""
+        error = data.get("error", {})
+        code = error.get("code", "unknown")
+        message = error.get("message", "Unknown error")
+        
+        logger.error(f"[elevenlabs] [{self._call_id}] Error: {code} - {message}")
+        
+        self.on_event({
+            "type": "error",
+            "call_id": self._call_id,
+            "error_code": code,
+            "error_message": message,
+        })

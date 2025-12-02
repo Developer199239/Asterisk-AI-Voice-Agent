@@ -128,6 +128,18 @@ class ToolRegistry:
             for tool in self._tools.values()
         ]
     
+    def to_elevenlabs_schema(self) -> List[Dict]:
+        """
+        Export all tools in ElevenLabs Conversational AI format.
+        
+        Returns:
+            List of tool schemas for ElevenLabs (client-side execution)
+        """
+        return [
+            tool.definition.to_elevenlabs_schema()
+            for tool in self._tools.values()
+        ]
+    
     def to_prompt_text(self) -> str:
         """
         Export all tools as text for custom pipeline system prompts.

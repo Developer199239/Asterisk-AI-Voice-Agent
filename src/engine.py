@@ -46,6 +46,8 @@ from .providers.deepgram import DeepgramProvider
 from .providers.local import LocalProvider
 from .providers.openai_realtime import OpenAIRealtimeProvider
 from .providers.google_live import GoogleLiveProvider
+from .providers.elevenlabs_conversational import ElevenLabsConversationalProvider
+from .providers.elevenlabs_config import ElevenLabsConversationalConfig
 from .core import SessionStore, PlaybackManager, ConversationCoordinator
 from .core.vad_manager import EnhancedVADManager, VADResult
 from .core.streaming_playback_manager import StreamingPlaybackManager
@@ -746,6 +748,23 @@ class Engine:
                     logger.info(
                         "Provider 'google_live' loaded successfully",
                         audio_gating_enabled=self.audio_gating_manager is not None
+                    )
+
+                    runtime_issues = self._describe_provider_alignment(name, provider)
+                    if runtime_issues:
+                        self.provider_alignment_issues.setdefault(name, []).extend(runtime_issues)
+                elif name == "elevenlabs_conversational":
+                    elevenlabs_cfg = self._build_elevenlabs_config(provider_config_data)
+                    if not elevenlabs_cfg:
+                        continue
+
+                    provider = ElevenLabsConversationalProvider(
+                        elevenlabs_cfg, 
+                        self.on_provider_event,
+                    )
+                    self.providers[name] = provider
+                    logger.info(
+                        "Provider 'elevenlabs_conversational' loaded successfully"
                     )
 
                     runtime_issues = self._describe_provider_alignment(name, provider)
@@ -3682,6 +3701,44 @@ class Engine:
             return cfg
         except Exception as exc:
             logger.error("Failed to build OpenAIRealtimeProviderConfig", error=str(exc), exc_info=True)
+            return None
+
+    def _build_elevenlabs_config(self, provider_cfg: Dict[str, Any]) -> Optional[ElevenLabsConversationalConfig]:
+        """Construct an ElevenLabsConversationalConfig from raw provider settings."""
+        try:
+            merged = dict(provider_cfg)
+            
+            # SECURITY: API keys ONLY from environment variables, never from YAML
+            merged['api_key'] = os.getenv('ELEVENLABS_API_KEY')
+            merged['agent_id'] = os.getenv('ELEVENLABS_AGENT_ID', merged.get('agent_id', ''))
+            
+            # Fill in defaults from llm config if not provided
+            try:
+                instr = (merged.get("instructions") or "").strip()
+            except Exception:
+                instr = ""
+            if not instr:
+                merged["instructions"] = getattr(self.config.llm, "prompt", None)
+            try:
+                greet = (merged.get("greeting") or "").strip()
+            except Exception:
+                greet = ""
+            if not greet:
+                merged["greeting"] = getattr(self.config.llm, "initial_greeting", None)
+
+            cfg = ElevenLabsConversationalConfig.from_dict(merged)
+            if not cfg.enabled:
+                logger.info("ElevenLabs provider disabled in configuration; skipping initialization.")
+                return None
+            if not cfg.api_key:
+                logger.error("ElevenLabs provider API key missing (ELEVENLABS_API_KEY)")
+                return None
+            if not cfg.agent_id:
+                logger.error("ElevenLabs provider agent ID missing (ELEVENLABS_AGENT_ID)")
+                return None
+            return cfg
+        except Exception as exc:
+            logger.error("Failed to build ElevenLabsConversationalConfig", error=str(exc), exc_info=True)
             return None
 
     def _audit_provider_config(self, name: str, provider_cfg: Dict[str, Any]) -> List[str]:

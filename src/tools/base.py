@@ -161,6 +161,36 @@ class ToolDefinition:
             }
         }
     
+    def to_elevenlabs_schema(self) -> Dict[str, Any]:
+        """
+        Convert to ElevenLabs Conversational AI tool format.
+        
+        ElevenLabs format:
+        {
+            "type": "client",  # client-side tool execution
+            "name": "tool_name",
+            "description": "Tool description",
+            "parameters": {
+                "type": "object",
+                "properties": {...},
+                "required": [...]
+            }
+        }
+        """
+        return {
+            "type": "client",
+            "name": self.name,
+            "description": self.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    p.name: p.to_dict()
+                    for p in self.parameters
+                },
+                "required": [p.name for p in self.parameters if p.required]
+            }
+        }
+    
     def to_prompt_text(self) -> str:
         """
         Convert to text format for custom pipeline system prompts.
