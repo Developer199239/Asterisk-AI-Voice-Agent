@@ -130,21 +130,15 @@ class ElevenLabsConversationalProvider(AIProviderInterface, ProviderCapabilities
         if not agent_id:
             raise ValueError("ELEVENLABS_AGENT_ID not configured")
         
-        # Build WebSocket URL with agent_id
-        ws_url = f"{self.CONVAI_WS_URL}?agent_id={agent_id}"
-        
-        # Headers for authentication
-        headers = {
-            "xi-api-key": api_key,
-        }
-        
         logger.info(f"[elevenlabs] [{call_id}] Connecting to ElevenLabs Conversational AI...")
+        
+        # For authenticated agents, get a signed URL first
+        signed_url = await self._get_signed_url(api_key, agent_id, call_id)
         
         try:
             self._ws = await asyncio.wait_for(
                 websockets.connect(
-                    ws_url,
-                    extra_headers=headers,  # Use extra_headers for compatibility
+                    signed_url,
                     max_size=16 * 1024 * 1024,  # 16MB max message size
                     ping_interval=20,
                     ping_timeout=20,
@@ -175,6 +169,41 @@ class ElevenLabsConversationalProvider(AIProviderInterface, ProviderCapabilities
         except Exception as e:
             logger.error(f"[elevenlabs] [{call_id}] Connection failed: {e}")
             raise
+    
+    async def _get_signed_url(self, api_key: str, agent_id: str, call_id: str) -> str:
+        """
+        Get a signed URL for connecting to an authenticated ElevenLabs agent.
+        
+        For agents with authentication enabled, we need to request a signed URL
+        from the ElevenLabs API before connecting via WebSocket.
+        """
+        import aiohttp
+        
+        url = f"https://api.elevenlabs.io/v1/convai/conversation/get_signed_url?agent_id={agent_id}"
+        headers = {
+            "xi-api-key": api_key,
+        }
+        
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                    if response.status != 200:
+                        error_text = await response.text()
+                        logger.error(f"[elevenlabs] [{call_id}] Failed to get signed URL: {response.status} - {error_text}")
+                        raise ConnectionError(f"Failed to get signed URL: {response.status}")
+                    
+                    data = await response.json()
+                    signed_url = data.get("signed_url")
+                    
+                    if not signed_url:
+                        raise ConnectionError("No signed_url in response")
+                    
+                    logger.info(f"[elevenlabs] [{call_id}] Got signed URL for authenticated agent")
+                    return signed_url
+                    
+        except aiohttp.ClientError as e:
+            logger.error(f"[elevenlabs] [{call_id}] HTTP error getting signed URL: {e}")
+            raise ConnectionError(f"HTTP error: {e}")
     
     async def _send_session_config(self, context: Dict[str, Any]) -> None:
         """Send session configuration to ElevenLabs."""
