@@ -1471,6 +1471,7 @@ class Engine:
             'voicemail-complete': self._handle_voicemail_complete,
             'queue-answered': self._handle_queue_answered,
             'queue-failed': self._handle_queue_failed,
+            'bgm': self._handle_background_music_channel,  # Background music snoop channel (AAVA-89)
         }
         
         handler = handlers.get(action_type)
@@ -1480,6 +1481,20 @@ class Engine:
             logger.warning(f"🔀 AGENT ACTION - Unknown action type: {action_type}",
                           channel_id=channel_id, args=args)
             await self.ari_client.hangup_channel(channel_id)
+    
+    async def _handle_background_music_channel(self, channel_id: str, args: list):
+        """
+        Handle background music snoop channel entering Stasis.
+        
+        The snoop channel is created by _start_background_music() and enters Stasis
+        automatically. We just need to keep it alive - MOH is already started.
+        The channel will be cleaned up when the call ends.
+        """
+        call_id = args[1] if len(args) > 1 else "unknown"
+        logger.info("🎵 Background music channel entered Stasis - keeping alive",
+                   channel_id=channel_id,
+                   call_id=call_id)
+        # Don't hang up - let MOH play. Channel cleanup happens in _stop_background_music()
     
     async def _handle_transfer_answered(self, channel_id: str, args: list):
         """
