@@ -1806,6 +1806,12 @@ class Engine:
             except Exception:
                 logger.debug("Streaming playback stop failed during cleanup", call_id=call_id, exc_info=True)
 
+            # Stop background music if playing (AAVA-89)
+            try:
+                await self._stop_background_music(session)
+            except Exception:
+                logger.debug("Background music stop failed during cleanup", call_id=call_id, exc_info=True)
+
             # Stop the active provider session if one exists.
             try:
                 provider_name = session.provider_name
@@ -5734,6 +5740,10 @@ class Engine:
                             error=str(exc),
                             exc_info=True,
                         )
+                    
+                    # Start background music if configured for this context (AAVA-89)
+                    if context_config.background_music:
+                        await self._start_background_music(session, context_config.background_music)
             
             # Note: TransportCard will be emitted by legacy code path
             
@@ -5754,6 +5764,106 @@ class Engine:
                 error=str(exc),
                 exc_info=True,
             )
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # Background Music (AAVA-89)
+    # ─────────────────────────────────────────────────────────────────────────
+    
+    async def _start_background_music(self, session, moh_class: str) -> None:
+        """
+        Start background music playback using a Snoop channel with MOH.
+        
+        Uses Asterisk's Snoop channel in 'whisper' mode to inject audio
+        TO the caller only, without affecting the bridge (AI won't hear it).
+        
+        Args:
+            session: CallSession with caller_channel_id
+            moh_class: Music On Hold class name from musiconhold.conf
+        """
+        try:
+            if not session.caller_channel_id:
+                logger.warning(
+                    "Cannot start background music - no caller channel",
+                    call_id=session.call_id,
+                    moh_class=moh_class
+                )
+                return
+            
+            # Create snoop channel on caller - whisper mode sends audio TO caller only
+            response = await self.ari_client.send_command(
+                "POST",
+                f"channels/{session.caller_channel_id}/snoop",
+                data={
+                    "app": self.app_name,
+                    "spy": "none",       # Don't listen to caller
+                    "whisper": "out",    # Send audio TO caller only
+                    "appArgs": f"bgm,{session.call_id}"
+                }
+            )
+            
+            if not response or not response.get("id"):
+                logger.warning(
+                    "Failed to create snoop channel for background music",
+                    call_id=session.call_id,
+                    moh_class=moh_class,
+                    response=response
+                )
+                return
+            
+            snoop_channel_id = response["id"]
+            session.music_snoop_channel_id = snoop_channel_id
+            await self._save_session(session)
+            
+            # Start MOH on the snoop channel (auto-loops)
+            moh_response = await self.ari_client.send_command(
+                "POST",
+                f"channels/{snoop_channel_id}/moh",
+                data={"mohClass": moh_class}
+            )
+            
+            logger.info(
+                "🎵 Background music started",
+                call_id=session.call_id,
+                snoop_channel_id=snoop_channel_id,
+                moh_class=moh_class
+            )
+            
+        except Exception as e:
+            logger.warning(
+                "Background music failed to start",
+                call_id=session.call_id,
+                moh_class=moh_class,
+                error=str(e),
+                exc_info=True
+            )
+    
+    async def _stop_background_music(self, session) -> None:
+        """
+        Stop background music by hanging up the snoop channel.
+        
+        The snoop channel will also be auto-destroyed when the caller hangs up,
+        but explicit cleanup ensures we release resources promptly.
+        """
+        snoop_id = getattr(session, 'music_snoop_channel_id', None)
+        if not snoop_id:
+            return
+        
+        try:
+            await self.ari_client.hangup_channel(snoop_id)
+            logger.info(
+                "🎵 Background music stopped",
+                call_id=session.call_id,
+                snoop_channel_id=snoop_id
+            )
+        except Exception:
+            # Channel may already be gone (caller hung up)
+            logger.debug(
+                "Background music snoop channel already gone",
+                call_id=session.call_id,
+                snoop_channel_id=snoop_id
+            )
+        
+        session.music_snoop_channel_id = None
     
     @staticmethod
     def _canonicalize_encoding(value: Optional[str]) -> str:

@@ -45,6 +45,7 @@ class ContextConfig:
     profile: Optional[str] = None
     provider: Optional[str] = None
     tools: Optional[list] = None  # Tool names for function calling
+    background_music: Optional[str] = None  # MOH class name for background music during calls
 
 
 @dataclass
@@ -134,6 +135,7 @@ class TransportOrchestrator:
                     profile=context_dict.get('profile'),
                     provider=context_dict.get('provider'),
                     tools=context_dict.get('tools'),  # Extract tools for function calling
+                    background_music=context_dict.get('background_music'),  # MOH class for background music
                 )
                 logger.debug("Loaded context mapping", name=name, context=contexts[name])
             except Exception as exc:

@@ -107,6 +107,9 @@ class CallSession:
     pending_local_channel_id: Optional[str] = None
     pending_external_media_id: Optional[str] = None
     ssrc: Optional[int] = None
+    
+    # Background music (AAVA-89)
+    music_snoop_channel_id: Optional[str] = None  # Snoop channel for background music playback
     created_at: float = field(default_factory=time.time)
     agent_audio_buffer: bytearray = field(default_factory=bytearray)
     last_agent_audio_ts: float = 0.0

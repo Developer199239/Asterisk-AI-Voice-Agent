@@ -19,6 +19,14 @@ contexts:
     profile: telephony_ulaw_8k
     prompt: You are Asterisk, a Assistant. Be helpful and concise.
     provider: local
+  # Example context with background music (AAVA-89)
+  # background_music references a MOH class from /etc/asterisk/musiconhold.conf
+  # Place audio files in /var/lib/asterisk/moh/{class-name}/ (pre-reduced volume recommended)
+  # demo_with_music:
+  #   greeting: Welcome to our premium line!
+  #   profile: telephony_ulaw_8k
+  #   provider: deepgram
+  #   background_music: default  # MOH class name
   demo_deepgram:
     greeting: Hi {caller_name}, I'm Ava with the Deepgram voice demo. Ask me anything
       about the Asterisk AI Voice Agent project.
