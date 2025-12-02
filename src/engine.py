@@ -5794,7 +5794,7 @@ class Engine:
                 "POST",
                 f"channels/{session.caller_channel_id}/snoop",
                 data={
-                    "app": self.app_name,
+                    "app": self.config.asterisk.app_name,
                     "spy": "none",       # Don't listen to caller
                     "whisper": "out",    # Send audio TO caller only
                     "appArgs": f"bgm,{session.call_id}"
