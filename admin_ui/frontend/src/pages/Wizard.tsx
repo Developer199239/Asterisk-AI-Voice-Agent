@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AlertCircle, AlertTriangle, ArrowRight, Loader2, Cloud, Server, Shield, Zap, SkipForward, CheckCircle, Terminal, Copy, HardDrive, Play } from 'lucide-react';
+import { AlertCircle, AlertTriangle, ArrowRight, Loader2, Cloud, Server, Shield, Zap, SkipForward, CheckCircle, CheckCircle2, XCircle, Terminal, Copy, HardDrive, Play } from 'lucide-react';
 import axios from 'axios';
 
 interface SetupConfig {
@@ -51,6 +51,12 @@ const Wizard = () => {
     });
 
     const [showSkipConfirm, setShowSkipConfirm] = useState(false);
+    const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+
+    const showToast = (message: string, type: 'success' | 'error') => {
+        setToast({ message, type });
+        setTimeout(() => setToast(null), 4000);
+    };
     const [engineStatus, setEngineStatus] = useState<{
         running: boolean;
         exists: boolean;
@@ -158,9 +164,9 @@ const Wizard = () => {
             if (!res.data.valid) throw new Error(`${provider} Key Invalid: ${res.data.error}`);
 
             setValidations(prev => ({ ...prev, [provider === 'openai_realtime' ? 'openai' : provider]: true }));
-            alert(`${provider} API Key is valid!`);
+            showToast(`${provider} API Key is valid!`, 'success');
         } catch (err: any) {
-            setError(err.message);
+            showToast(err.message, 'error');
             setValidations(prev => ({ ...prev, [provider === 'openai_realtime' ? 'openai' : provider]: false }));
         } finally {
             setLoading(false);
@@ -567,6 +573,7 @@ const Wizard = () => {
                                             placeholder="sk-..."
                                         />
                                         <button
+                                            type="button"
                                             onClick={() => handleTestKey('openai', config.openai_key || '')}
                                             className="px-3 py-2 rounded-md bg-secondary text-secondary-foreground hover:bg-secondary/80"
                                             disabled={loading}
@@ -591,6 +598,7 @@ const Wizard = () => {
                                         placeholder="Token..."
                                     />
                                     <button
+                                        type="button"
                                         onClick={() => handleTestKey('deepgram', config.deepgram_key || '')}
                                         className="px-3 py-2 rounded-md bg-secondary text-secondary-foreground hover:bg-secondary/80"
                                         disabled={loading}
@@ -614,6 +622,7 @@ const Wizard = () => {
                                         placeholder="AIza..."
                                     />
                                     <button
+                                        type="button"
                                         onClick={() => handleTestKey('google', config.google_key || '')}
                                         className="px-3 py-2 rounded-md bg-secondary text-secondary-foreground hover:bg-secondary/80"
                                         disabled={loading}
@@ -666,6 +675,7 @@ const Wizard = () => {
                                             placeholder="xi-..."
                                         />
                                         <button
+                                            type="button"
                                             onClick={() => handleTestKey('elevenlabs', config.elevenlabs_key || '')}
                                             className="px-3 py-2 rounded-md bg-secondary text-secondary-foreground hover:bg-secondary/80"
                                             disabled={loading}
@@ -1366,6 +1376,26 @@ exten => s,1,NoOp(AI Agent Call)
                                     Skip Setup
                                 </button>
                             </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* Toast Notification */}
+                {toast && (
+                    <div className="fixed bottom-4 right-4 z-50">
+                        <div
+                            className={`flex items-center gap-2 px-4 py-3 rounded-lg shadow-lg text-sm font-medium animate-in slide-in-from-right ${
+                                toast.type === 'success' 
+                                    ? 'bg-green-500 text-white' 
+                                    : 'bg-red-500 text-white'
+                            }`}
+                        >
+                            {toast.type === 'success' ? (
+                                <CheckCircle2 className="w-4 h-4" />
+                            ) : (
+                                <XCircle className="w-4 h-4" />
+                            )}
+                            {toast.message}
                         </div>
                     </div>
                 )}
