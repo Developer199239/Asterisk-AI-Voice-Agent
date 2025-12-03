@@ -1,0 +1,302 @@
+# ElevenLabs Provider Setup Guide
+
+## Overview
+
+ElevenLabs Conversational AI is a full-agent provider that combines speech-to-text, LLM reasoning, and high-quality text-to-speech in a single streaming API. Ideal for applications requiring premium voice quality with natural conversation flow.
+
+**Performance**: 1-2 second response latency | Full duplex | Client-side tool execution
+
+> **Note**: ElevenLabs is a **full agent only** provider. TTS-only mode for hybrid pipelines is not currently supported.
+
+## Quick Start
+
+### 1. Create ElevenLabs Agent
+
+1. Sign up at [ElevenLabs](https://elevenlabs.io/)
+2. Navigate to [Agents Dashboard](https://elevenlabs.io/app/agents)
+3. Click **"Create Agent"**
+4. Configure your agent:
+   - **Name**: Your agent name (e.g., "Customer Support Agent")
+   - **Voice**: Select from the voice library
+   - **First Message**: Initial greeting
+   - **System Prompt**: Define behavior and personality
+   - **LLM Model**: Select model (GPT-4o, Claude, etc.)
+
+### 2. Enable Agent Security (Required)
+
+**CRITICAL**: Authentication must be enabled for API access.
+
+1. In agent settings, go to **"Security"** tab
+2. Enable **"Require authentication"**
+3. This allows secure signed URL connections
+
+Without authentication, the agent cannot be accessed via API.
+
+### 3. Get Credentials
+
+1. Get your **API Key** from [API Keys](https://elevenlabs.io/app/settings/api-keys)
+2. Get your **Agent ID** from the agent dashboard URL (format: `agent_xxxxxxxxxxxxxxxxxxxxxxxxxxxx`)
+
+### 4. Configure Environment Variables
+
+Add to your `.env` file:
+
+```bash
+# ElevenLabs Conversational AI (required)
+ELEVENLABS_API_KEY=xi-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+ELEVENLABS_AGENT_ID=agent_xxxxxxxxxxxxxxxxxxxxxxxxxxxx
+```
+
+**Test API Key**:
+```bash
+curl -X GET "https://api.elevenlabs.io/v1/user" \
+  -H "xi-api-key: ${ELEVENLABS_API_KEY}"
+```
+
+### 5. Configure Provider
+
+The ElevenLabs provider is configured in `config/ai-agent.yaml`:
+
+```yaml
+providers:
+  elevenlabs_agent:
+    enabled: true
+    # API credentials loaded from environment variables
+    # api_key: ${ELEVENLABS_API_KEY}  # Read from env
+    # agent_id: ${ELEVENLABS_AGENT_ID}  # Read from env
+    
+    # Audio Configuration (fixed for ElevenLabs)
+    input_sample_rate: 16000
+    output_sample_rate: 16000
+```
+
+**Key Settings**:
+- Audio format is fixed at PCM16 @ 16kHz (engine handles resampling from telephony)
+- Voice, prompt, and LLM model are configured in the ElevenLabs dashboard
+- Greeting is configured in the ElevenLabs dashboard (not YAML)
+
+### 6. Configure Asterisk Dialplan
+
+Add to `/etc/asterisk/extensions_custom.conf`:
+
+```ini
+[from-ai-agent-elevenlabs]
+exten => s,1,NoOp(AI Voice Agent - ElevenLabs)
+exten => s,n,Set(AI_CONTEXT=demo_elevenlabs)
+exten => s,n,Set(AI_PROVIDER=elevenlabs_agent)
+exten => s,n,Stasis(asterisk-ai-voice-agent)
+exten => s,n,Hangup()
+```
+
+**CRITICAL**: Both `AI_CONTEXT` and `AI_PROVIDER` must be set:
+- `AI_CONTEXT` - Selects the context (profile, tools)
+- `AI_PROVIDER` - Must be `elevenlabs_agent`
+
+### 7. Reload Asterisk
+
+```bash
+asterisk -rx "dialplan reload"
+```
+
+### 8. Create FreePBX Custom Destination
+
+1. Navigate to **Admin → Custom Destinations**
+2. Click **Add Custom Destination**
+3. Set:
+   - **Target**: `from-ai-agent-elevenlabs,s,1`
+   - **Description**: `ElevenLabs AI Agent`
+4. Save and Apply Config
+
+### 9. Test Call
+
+Route a test call to the custom destination and verify:
+- ✅ Greeting plays within 1-2 seconds
+- ✅ AI responds with high-quality voice
+- ✅ Duplex communication works (can interrupt AI)
+- ✅ Tools execute if configured (hangup, transfer, etc.)
+
+## Tool Configuration
+
+ElevenLabs uses **Client Tools** - tools defined in the dashboard but executed by this system.
+
+### Add Tools to ElevenLabs Dashboard
+
+1. In agent settings, go to **"Tools"** tab
+2. Click **"Add Tool"** → **"Client Tool"**
+3. Add each tool schema below
+4. Ensure tools show your agent in "Dependent agents"
+
+### hangup_call
+
+```json
+{
+  "name": "hangup_call",
+  "description": "Use this tool when the caller wants to end the call, says goodbye, or there's nothing more to discuss. Always use a polite farewell message.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "farewell_message": {
+        "type": "string",
+        "description": "A polite goodbye message to say before hanging up"
+      }
+    },
+    "required": []
+  }
+}
+```
+
+### transfer_call
+
+```json
+{
+  "name": "transfer_call",
+  "description": "Transfer the call to another person, department, or extension. Use when caller requests to speak with someone specific.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "target": {
+        "type": "string",
+        "description": "The transfer destination - extension number, queue name, or department"
+      }
+    },
+    "required": ["target"]
+  }
+}
+```
+
+### send_email_summary
+
+```json
+{
+  "name": "send_email_summary",
+  "description": "Send an email summary of the call to the caller. Use when they request a summary or confirmation.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "recipient_email": {
+        "type": "string",
+        "description": "Email address to send the summary to"
+      }
+    },
+    "required": ["recipient_email"]
+  }
+}
+```
+
+### request_transcript
+
+```json
+{
+  "name": "request_transcript",
+  "description": "Send the full call transcript to the caller via email.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "recipient_email": {
+        "type": "string",
+        "description": "Email address to send the transcript to"
+      }
+    },
+    "required": ["recipient_email"]
+  }
+}
+```
+
+## Context Configuration
+
+Define your context in `config/ai-agent.yaml`:
+
+```yaml
+contexts:
+  demo_elevenlabs:
+    provider: elevenlabs_agent
+    profile: telephony_ulaw_8k
+    # Note: greeting and prompt are managed in ElevenLabs dashboard
+    tools:
+      - hangup_call
+      - transfer_call
+      - send_email_summary
+      - request_transcript
+```
+
+**Important**: Unlike other providers, the greeting and system prompt are configured in the ElevenLabs dashboard, not in YAML.
+
+## Troubleshooting
+
+### Issue: "No Audio" or "Silence"
+
+**Cause**: Environment variables not set or agent security not enabled
+
+**Fix**:
+1. Verify `.env` has both `ELEVENLABS_API_KEY` and `ELEVENLABS_AGENT_ID`
+2. Ensure agent has "Require authentication" enabled in dashboard
+3. Check logs: `docker logs ai_engine 2>&1 | grep -i elevenlabs`
+
+### Issue: "Connection Timeout"
+
+**Cause**: Invalid API key or agent ID
+
+**Fix**:
+1. Test API key: `curl -H "xi-api-key: $ELEVENLABS_API_KEY" https://api.elevenlabs.io/v1/user`
+2. Verify agent ID matches dashboard URL
+3. Check network connectivity to elevenlabs.io
+
+### Issue: "Tools Not Working"
+
+**Cause**: Tools not configured in ElevenLabs dashboard or names don't match
+
+**Fix**:
+1. Verify tool schemas are added in ElevenLabs Agent → Tools tab
+2. Ensure tool names match exactly (e.g., `hangup_call` not `hangup`)
+3. Check tools are linked to your agent ("Dependent agents")
+4. Check logs for `client_tool_call` events
+
+### Issue: "AI Doesn't Hang Up"
+
+**Cause**: `hangup_call` tool not configured in ElevenLabs dashboard
+
+**Fix**:
+1. Add `hangup_call` tool schema to agent's Tools tab
+2. Update agent's system prompt to use the tool when user says goodbye
+3. Example prompt addition: "When the user says goodbye or indicates they want to end the call, use the hangup_call tool."
+
+### Issue: "Second Call Fails"
+
+**Cause**: Provider state not reset between calls (fixed in v4.4.1)
+
+**Fix**: Update to latest version - this was fixed in commit e123a45.
+
+## Production Considerations
+
+### API Key Management
+- API keys are loaded from environment variables only (for security)
+- Rotate keys periodically
+- Use separate keys for dev/staging/production
+
+### Cost Optimization
+- ElevenLabs charges per character of generated speech
+- Monitor usage in ElevenLabs dashboard
+- Consider voice selection (some voices cost more)
+
+### Monitoring
+- Track response latency in logs
+- Monitor ElevenLabs API status
+- Set up alerts for connection failures
+
+### Voice Quality
+- ElevenLabs offers premium voice quality
+- Test different voices for your use case
+- Adjust voice settings (stability, similarity) in dashboard
+
+## See Also
+
+- **Implementation & API Reference**: `docs/contributing/references/Provider-ElevenLabs-Implementation.md`
+- **Configuration Reference**: `docs/Configuration-Reference.md#elevenlabs-agent-monolithic-agent`
+- **Common Pitfalls**: `docs/contributing/COMMON_PITFALLS.md`
+- **Tool Calling Guide**: `docs/TOOL_CALLING_GUIDE.md`
+
+---
+
+**ElevenLabs Provider Setup - Complete** ✅
+
+For questions or issues, see the [GitHub repository](https://github.com/hkjarral/Asterisk-AI-Voice-Agent).

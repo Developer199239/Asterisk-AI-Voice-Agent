@@ -131,10 +131,10 @@ cython_debug/
 # Cursor/Windsurf IDE
 .cursor/
 .windsurf/
-!.cursor/rules/
-!.cursor/rules/asterisk_ai_voice_agent.mdc
-!.windsurf/rules/
-!.windsurf/rules/asterisk_ai_voice_agent.md
+.cursor/rules/
+.cursor/rules/asterisk_ai_voice_agent.mdc
+.windsurf/rules/
+.windsurf/rules/asterisk_ai_voice_agent.md
 
 # Archives and old documentation
 Archived/
@@ -187,6 +187,16 @@ test_piper.py
 
 # Docker volumes
 docker-data/
+
+# Asterisk media files (generated at runtime)
+asterisk_media/
+
+# Admin UI user database (generated at first login)
+config/users.json
+
+# Logs and archived folders (development artifacts, not for main)
+logs/
+archived/
 
 # IDE specific
 *.swp
@@ -245,10 +255,14 @@ dialplan_*.conf
 PRE_MERGE_CHECKLIST.md
 
 # IDE-specific rule files (development only - not for GA/main branch)
-AVA.mdc
 Agents.md
 Gemini.md
 
 # Development-only documentation (Linear integration for contributors)
 docs/LINEAR_MCP_SETUP.md
 docs/linear-issues-community-features.md
+
+# AI Persona and IDE rule files (keep local with dev server URLs, don't commit changes)
+AVA.mdc
+.cursor/rules/asterisk_ai_voice_agent.mdc
+.windsurf/rules/asterisk_ai_voice_agent.md

@@ -11,6 +11,102 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Additional provider integrations
 - Enhanced monitoring features
 
+## [4.4.1] - 2025-11-30
+
+### Added - Admin UI v1.0 🎉
+- **Web-Based Administration Interface**: Modern React + TypeScript UI replacing CLI setup workflow
+  - **Setup Wizard**: Visual provider configuration with API key validation (replaces `agent quickstart`)
+  - **Configuration Management**: Full CRUD for providers, pipelines, contexts, and audio profiles
+  - **System Dashboard**: Real-time monitoring (CPU, memory, disk usage, container status)
+  - **Live Logs**: WebSocket-based log streaming from ai-engine
+  - **Raw YAML Editor**: Monaco-based editor with syntax validation
+  - **Environment Manager**: Visual editor for `.env` variables
+  - **Container Control**: Start/stop/restart containers from UI
+- **JWT Authentication System**: Production-ready security
+  - Token-based authentication with 24-hour expiry
+  - Password hashing (pbkdf2_sha256)
+  - Default credentials: admin/admin (must be changed on first login)
+  - Change password functionality
+  - Auto-created default admin user
+  - Optional JWT secret configuration (development default provided)
+- **Docker Integration**: Multi-stage build and deployment
+  - Single container with frontend + backend
+  - Port 3003 (configurable)
+  - Volume mounts for config/users.json access
+  - Health check endpoint
+  - Restart policies
+- **Comprehensive Documentation**:
+  - `admin_ui/UI_Setup_Guide.md`: Complete setup and troubleshooting guide
+  - Docker deployment (recommended)
+  - Standalone deployment with daemon mode (nohup, screen, systemd)
+  - Production deployment with reverse proxy (Nginx, Traefik)
+  - Security best practices and JWT configuration
+  - Upgrade path from CLI setup
+
+### Added - Provider System Enhancements
+- **Provider Registration System**: Explicit validation of supported provider types
+  - `REGISTERED_PROVIDER_TYPES` defines engine-supported providers
+  - Unregistered providers show warning but can be saved
+  - Pipeline dropdowns only show registered providers
+- **Local Full Agent**: 100% on-premises deployment option
+  - New `local` provider with `type: full` for monolithic Local AI Server mode
+  - Wizard option "Local (Full)" - no API keys required
+  - Health check verification before setup completion
+- **Provider Classification**: Clear distinction between Full Agent and Modular providers
+  - `isFullAgentProvider()` logic based on type and capabilities
+  - Full agents blocked from modular pipeline slots
+  - Modular providers require explicit `capabilities` arrays
+
+### Added - ElevenLabs Conversational AI Provider (AAVA-90)
+- **Full Agent Provider**: ElevenLabs Conversational AI integration
+  - WebSocket-based real-time voice conversations (STT + LLM + TTS)
+  - Premium voice quality with natural conversation flow
+  - Tool calling support (tools defined in ElevenLabs dashboard, executed locally)
+  - Audio format: PCM16 16kHz, automatic resampling from telephony (μ-law 8kHz)
+- **Configuration**: 
+  - `ELEVENLABS_API_KEY` and `ELEVENLABS_AGENT_ID` environment variables
+  - Provider config in `ai-agent.yaml` under `providers.elevenlabs_agent`
+  - Admin UI support: Wizard option, provider form, card badges
+- **Documentation**: `docs/contributing/references/Provider-ElevenLabs-Implementation.md` (578 lines)
+- **Files**: `src/providers/elevenlabs_agent.py`, `src/providers/elevenlabs_config.py`, `src/tools/adapters/elevenlabs.py`
+
+### Added - Background Music Support (AAVA-89)
+- **In-Call Background Music**: Play music during AI conversations
+  - Uses Asterisk Music On Hold (MOH) via snoop channel
+  - Configurable per-context via `background_music` field
+  - Admin UI toggle in Context configuration
+- **Implementation**: Snoop channel with MOH starts when call begins, stops on hangup
+- **Configuration**: Set MOH class name (default: "default") in context settings
+- **Note**: Music is heard by AI (affects VAD); use low-volume ambient music for best results
+
+### Changed
+- **Port Configuration**: Admin UI runs on port 3003 (updated from 3000)
+- **Version Numbers**: Admin UI frontend package.json updated to 1.0.0
+- **docker-compose.yml**: Added admin-ui service with proper volume mounts
+- **LocalProviderConfig**: Added `base_url` field for consistency with other full agents
+
+### Technical Details
+- **Frontend**: React 18, TypeScript, Vite, TailwindCSS, Monaco Editor
+- **Backend**: FastAPI, Python 3.10, JWT auth, YAML/JSON config management
+- **Build**: Multi-stage Dockerfile (Node.js build → Python runtime)
+- **Authentication**: JWT tokens, OAuth2 password flow, session management
+- **API**: RESTful endpoints with OpenAPI/Swagger documentation
+- **Real-time**: WebSocket support for log streaming
+
+### Security
+- JWT-based authentication (optional custom secret for production)
+- Password hashing with pbkdf2_sha256
+- Route protection on all API endpoints
+- CORS configuration (restrict in production)
+- HTTPS support via reverse proxy
+- Default credentials documented with change instructions
+
+### Migration
+- **New Installations**: Use setup wizard on first access
+- **Existing Users**: Config auto-detected, wizard skipped
+- **CLI Coexistence**: `agent` CLI tools continue to work
+- **Backward Compatible**: No breaking changes to ai-engine
+
 ## [4.3.0] - 2025-11-19
 
 ### Added

@@ -2,7 +2,7 @@
 
 # Asterisk AI Voice Agent
 
-![Version](https://img.shields.io/badge/version-4.3.0-blue.svg)
+![Version](https://img.shields.io/badge/version-4.4.1-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![Python](https://img.shields.io/badge/python-3.10+-blue.svg)
 ![Docker](https://img.shields.io/badge/docker-compose-blue.svg)
@@ -11,9 +11,36 @@
 [![Discord](https://dcbadge.limes.pink/api/server/CAVACtaY)](https://discord.gg/QhPSju6aCh)
 
 
-The most powerful, flexible open-source AI voice agent for Asterisk/FreePBX. Featuring a **modular pipeline architecture** that lets you mix and match STT, LLM, and TTS providers, plus **4 production-ready golden baselines** validated for enterprise deployment.
+The most powerful, flexible open-source AI voice agent for Asterisk/FreePBX. Featuring a **modular pipeline architecture** that lets you mix and match STT, LLM, and TTS providers, plus **5 production-ready golden baselines** validated for enterprise deployment.
 
-## 🎉 What's New in v4.3.0
+## 🎉 What's New in v4.4.1
+
+* **🖥️ Admin UI v1.0**: Modern web interface for configuration and monitoring
+  - Visual setup wizard replaces `agent quickstart` CLI
+  - Real-time dashboard with system metrics and container status
+  - Complete configuration management (providers, pipelines, contexts)
+  - Live log streaming and YAML editor
+  - JWT authentication with default admin/admin credentials
+  - Access at http://localhost:3003 after starting admin-ui container
+  - See [Admin UI Setup Guide](admin_ui/UI_Setup_Guide.md) for details
+
+<div align="center">
+<img src="AVA-Admin-UI.jpg" alt="Asterisk AI Voice Agent Admin UI Dashboard" width="800"/>
+<p><em>Admin UI Dashboard - Real-time monitoring and configuration</em></p>
+</div>
+
+* **🎙️ ElevenLabs Conversational AI**: Premium voice quality provider
+  - Full agent with WebSocket-based real-time conversations
+  - Tool calling support (define in ElevenLabs dashboard, execute locally)
+  - See [ElevenLabs Setup Guide](docs/contributing/references/Provider-ElevenLabs-Implementation.md)
+
+* **🎵 Background Music**: Ambient music during AI calls
+  - Configure per-context via Admin UI or YAML
+  - Uses Asterisk Music On Hold (MOH) classes
+  - See [Background Music docs](admin_ui/UI_Setup_Guide.md#background-music-configuration)
+
+<details>
+<summary><b>v4.3 - Complete Tool Support & Documentation</b></summary>
 
 * **🔧 Complete Tool Support for Pipelines**: Tool execution now works across ALL pipeline types, including `local_hybrid`
   - All 6 tools validated and production-ready: hangup, transfer, email, transcript, voicemail, cancel
@@ -26,7 +53,7 @@ The most powerful, flexible open-source AI voice agent for Asterisk/FreePBX. Fea
 * **💬 Discord Community**: Official Discord server integration for community support and discussions
 * **🐛 Critical Bug Fixes**: OpenAI Realtime tool schema, execution flow, and Pydantic compatibility issues resolved
 
-### Previous Releases
+</details>
 
 <details>
 <summary><b>v4.2 - Google Live API & Enhanced Setup</b></summary>
@@ -61,7 +88,7 @@ The most powerful, flexible open-source AI voice agent for Asterisk/FreePBX. Fea
 
 ## ✨ Features
 
-### 4 Golden Baseline Configurations
+### 5 Golden Baseline Configurations
 
 1. **OpenAI Realtime** (Recommended for Quick Start)
    * Modern cloud AI with natural conversations
@@ -78,7 +105,12 @@ The most powerful, flexible open-source AI voice agent for Asterisk/FreePBX. Fea
    * Response time: <2 seconds
    * Best for: Google ecosystem, advanced AI features
 
-4. **Local Hybrid** (Privacy-Focused)
+4. **ElevenLabs Agent** (Premium Voice Quality)
+   * ElevenLabs Conversational AI with premium voices
+   * Response time: <2 seconds
+   * Best for: Voice quality priority, natural conversations
+
+5. **Local Hybrid** (Privacy-Focused)
    * Local STT/TTS + Cloud LLM (OpenAI)
    * Audio stays on-premises, only text to cloud
    * Response time: 3-7 seconds
@@ -96,6 +128,35 @@ The most powerful, flexible open-source AI voice agent for Asterisk/FreePBX. Fea
 * **Barge-In Support**: Interrupt handling with configurable gating
 * **Docker Deployment**: Simple two-service orchestration
 * **Customizable**: YAML configuration for greetings, personas, and behavior
+
+### 🖥️ Admin UI v1.0
+
+Modern web interface for configuration and system management:
+
+**Quick Start:**
+
+```bash
+# From project root
+docker-compose up -d admin-ui
+
+# Access at: http://localhost:3003
+# Login: admin / admin (change immediately!)
+```
+
+**Features:**
+
+* **Setup Wizard**: Visual provider configuration replaces `agent quickstart`
+* **Dashboard**: Real-time system metrics and container status
+* **Configuration Management**: Full CRUD for providers, pipelines, contexts, profiles
+* **Live Logs**: WebSocket-based log streaming from ai-engine
+* **YAML Editor**: Monaco-based editor with syntax validation
+* **JWT Authentication**: Secure access with password management
+
+**Documentation:**
+* [Setup Guide](admin_ui/UI_Setup_Guide.md) - Docker, standalone, and production deployment
+* [Milestone 19](docs/contributing/milestones/milestone-19-admin-ui-implementation.md) - Technical details
+
+**Status:** ✅ Production ready (v1.0.0)
 
 ## 🎥 Demo
 
@@ -124,7 +185,7 @@ Your AI agent can perform real-world telephony actions through tool calling, now
 
 Single tool handles all transfer types:
 
-```
+```text
 Caller: "Transfer me to the sales team"
 Agent: "I'll connect you to our sales team right away."
 [Transfer to sales queue with queue music]
@@ -139,6 +200,7 @@ Agent: "I'll transfer you to our customer service ring group."
 ```
 
 **Transfer Destinations:**
+
 - **Extensions**: Direct SIP/PJSIP endpoint transfers
 - **Queues**: ACD queue transfers with position announcements
 - **Ring Groups**: Multiple agents ring simultaneously
@@ -146,14 +208,16 @@ Agent: "I'll transfer you to our customer service ring group."
 ### Call Control
 
 **Cancel Transfer** (during ring):
-```
+
+```text
 Agent: "Let me transfer you to support..."
 Caller: "Actually, cancel that"
 Agent: "No problem, I've cancelled the transfer. How can I help?"
 ```
 
 **Hangup Call** (with farewell):
-```
+
+```text
 Caller: "That's all I needed, thanks!"
 Agent: "Thank you for calling. Goodbye!"
 [Call ends gracefully]
@@ -161,7 +225,7 @@ Agent: "Thank you for calling. Goodbye!"
 
 ### Voicemail
 
-```
+```text
 Caller: "Can I leave a voicemail for John?"
 Agent: "Of course! I'll transfer you to John's voicemail."
 [Routes to voicemail box, caller records message]
@@ -177,7 +241,8 @@ After every call, admins receive:
 - Professional HTML formatting
 
 **Caller-Requested Transcripts**:
-```
+
+```text
 Caller: "Can you email me a transcript of this call?"
 Agent: "I'd be happy to! What email address should I use?"
 Caller: "john dot smith at gmail dot com"

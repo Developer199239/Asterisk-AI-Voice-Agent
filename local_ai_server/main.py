@@ -156,6 +156,9 @@ class LocalAIServer:
         self.llm_model: Optional[Llama] = None
         self.tts_model: Optional[PiperVoice] = None
         self.audio_processor = AudioProcessor()
+        
+        # Lock to serialize LLM inference (llama-cpp is NOT thread-safe)
+        self._llm_lock = asyncio.Lock()
 
         # Model paths
         self.stt_model_path = os.getenv(
@@ -494,42 +497,48 @@ class LocalAIServer:
             return ""
 
     async def process_llm(self, prompt: str) -> str:
-        """Run LLM inference using the prepared Phi-style prompt."""
-        try:
-            if not self.llm_model:
-                logging.warning("LLM model not loaded, using fallback")
+        """Run LLM inference using the prepared Phi-style prompt.
+        
+        Uses a lock to serialize inference calls - llama-cpp is NOT thread-safe
+        and will segfault if multiple threads try to use the model simultaneously.
+        """
+        # Acquire lock to prevent concurrent LLM calls (causes segfault in libggml)
+        async with self._llm_lock:
+            try:
+                if not self.llm_model:
+                    logging.warning("LLM model not loaded, using fallback")
+                    return "I'm here to help you. How can I assist you today?"
+
+                loop = asyncio.get_running_loop()
+                started = loop.time()
+                output = await asyncio.to_thread(
+                    self.llm_model,
+                    prompt,
+                    max_tokens=self.llm_max_tokens,
+                    stop=self.llm_stop_tokens,
+                    echo=False,
+                    temperature=self.llm_temperature,
+                    top_p=self.llm_top_p,
+                    repeat_penalty=self.llm_repeat_penalty,
+                )
+
+                choices = output.get("choices", []) if isinstance(output, dict) else []
+                if not choices:
+                    logging.warning("🤖 LLM RESULT - No choices returned, using fallback response")
+                    return "I'm here to help you. How can I assist you today?"
+
+                response = choices[0].get("text", "").strip()
+                latency_ms = round((loop.time() - started) * 1000.0, 2)
+                logging.info(
+                    "🤖 LLM RESULT - Completed in %s ms tokens=%s",
+                    latency_ms,
+                    len(response.split()),
+                )
+                return response
+
+            except Exception as exc:
+                logging.error("LLM processing failed: %s", exc, exc_info=True)
                 return "I'm here to help you. How can I assist you today?"
-
-            loop = asyncio.get_running_loop()
-            started = loop.time()
-            output = await asyncio.to_thread(
-                self.llm_model,
-                prompt,
-                max_tokens=self.llm_max_tokens,
-                stop=self.llm_stop_tokens,
-                echo=False,
-                temperature=self.llm_temperature,
-                top_p=self.llm_top_p,
-                repeat_penalty=self.llm_repeat_penalty,
-            )
-
-            choices = output.get("choices", []) if isinstance(output, dict) else []
-            if not choices:
-                logging.warning("🤖 LLM RESULT - No choices returned, using fallback response")
-                return "I'm here to help you. How can I assist you today?"
-
-            response = choices[0].get("text", "").strip()
-            latency_ms = round((loop.time() - started) * 1000.0, 2)
-            logging.info(
-                "🤖 LLM RESULT - Completed in %s ms tokens=%s",
-                latency_ms,
-                len(response.split()),
-            )
-            return response
-
-        except Exception as exc:
-            logging.error("LLM processing failed: %s", exc, exc_info=True)
-            return "I'm here to help you. How can I assist you today?"
 
     def _count_prompt_tokens(self, text: str) -> int:
         if not text:
@@ -1208,6 +1217,8 @@ class LocalAIServer:
         data: Dict[str, Any],
     ) -> None:
         text = data.get("text", "").strip()
+        call_id = data.get("call_id", session.call_id)
+        logging.info("📢 TTS request received call_id=%s text_preview=%s", call_id, text[:50] if text else "(empty)")
         if not text:
             logging.warning("TTS request missing 'text'")
             return
@@ -1361,6 +1372,37 @@ class LocalAIServer:
             await self._send_json(websocket, response)
             return
 
+        if msg_type == "status":
+            response = {
+                "type": "status_response",
+                "status": "ok",
+                "models": {
+                    "stt": {
+                        "loaded": self.stt_model is not None,
+                        "path": self.stt_model_path,
+                    },
+                    "llm": {
+                        "loaded": self.llm_model is not None,
+                        "path": self.llm_model_path,
+                        "config": {
+                            "context": self.llm_context,
+                            "threads": self.llm_threads,
+                            "batch": self.llm_batch,
+                        }
+                    },
+                    "tts": {
+                        "loaded": self.tts_model is not None,
+                        "path": self.tts_model_path,
+                    }
+                },
+                "config": {
+                    "log_level": _level_name,
+                    "debug_audio": DEBUG_AUDIO_FLOW,
+                }
+            }
+            await self._send_json(websocket, response)
+            return
+
         logging.warning("❓ Unknown message type: %s", msg_type)
 
     async def _handle_binary_message(self, websocket, session: SessionContext, message: bytes) -> None:
@@ -1401,6 +1443,7 @@ async def main():
         ping_interval=30,
         ping_timeout=30,
         max_size=None,
+        origins=None,  # Allow connections from other containers/browsers
     ):
         logging.info("🚀 Enhanced Local AI Server started on ws://0.0.0.0:8765")
         logging.info(

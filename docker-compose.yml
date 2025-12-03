@@ -1,13 +1,15 @@
 # Asterisk AI Voice Agent - Main Services
 #
-# DEFAULT NETWORK MODE: Bridge (Recommended)
-# - Better security with network isolation
-# - Explicit port mappings
-# - Works with firewall rules
-# - See docs/PRODUCTION_DEPLOYMENT.md section 3.1
+# DEFAULT NETWORK MODE: Host (for telephony/low-latency)
+# - Direct access to host network (127.0.0.1 reaches Asterisk)
+# - No port mapping needed
+# - Best for telephony integrations
 #
-# For host network mode (high-performance), use:
-#   docker compose -f docker-compose.yml -f docker-compose.host.yml up -d
+# PERMISSION ALIGNMENT:
+# If your Asterisk uses a different GID than 995 (FreePBX default):
+#   export ASTERISK_GID=$(id -g asterisk)
+#   docker compose build ai-engine
+#   docker compose up -d
 #
 # For optional monitoring (Prometheus + Grafana), use:
 #   docker compose -f docker-compose.monitoring.yml up -d
@@ -19,21 +21,25 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        ASTERISK_GID: ${ASTERISK_GID:-995}
     container_name: ai_engine
     user: "appuser"
-    network_mode: "host"
+    network_mode: host
     volumes:
       - ./src:/app/src
       - ./main.py:/app/main.py
       - ./config:/app/config
       - ./scripts:/app/scripts
       - ./models:/app/models
-      - /mnt/asterisk_media:/mnt/asterisk_media
+      - ./asterisk_media:/mnt/asterisk_media
     env_file:
       - .env
     environment:
       - PYTHONPATH=/app
       - PYTHONUNBUFFERED=1
+      - HEALTH_BIND_HOST=0.0.0.0
+      - ASTERISK_HOST=${ASTERISK_HOST:-127.0.0.1}
     tty: true
     stdin_open: true
     restart: unless-stopped
@@ -43,7 +49,7 @@ services:
       context: ./local_ai_server
       dockerfile: Dockerfile
     container_name: local_ai_server
-    network_mode: "host"
+    network_mode: host
     env_file:
       - .env
     volumes:
@@ -74,3 +80,17 @@ services:
       timeout: 5s
       retries: 180
       start_period: 120s
+
+  admin-ui:
+    build:
+      context: ./admin_ui
+      dockerfile: Dockerfile
+    container_name: admin_ui
+    network_mode: host
+    volumes:
+      - ./:/app/project
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - PROJECT_ROOT=/app/project
+      - UVICORN_PORT=3003
+    restart: unless-stopped

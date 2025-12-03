@@ -323,8 +323,10 @@ Each milestone includes scope, implementation details, and verification criteria
   - **Configuration Validation Improvements**: Tightened warnings to only flag when neither pipelines nor providers are configured.
   - **Documentation Updates**: Updated `Transport-Mode-Compatibility.md` to mark AudioSocket + Pipeline as validated with historical context.
 - **Test Suite Results (Nov 19, 2025)**:
-  - **Call 1** (1763610697.6282): Google Live monolithic, 36.34s, 186 frames ✅
-  - **Call 2** (1763610742.6286): Deepgram monolithic, 34.36s, 176 frames ✅
+  - **Call 1** (1763610697.6282): Google Live monolithic, 36.34s, 186 frames 
+  - **Call 2** (1763610742.6286): Deepgram monolithic, 34.36s, 176 frames 
+  - **Call 3** (1763610785.6290): OpenAI Realtime monolithic, 71.29s, 360 frames, tool execution 
+  - **Call 4** (1763610866.6294): local_hybrid pipeline, 54.57s, 277 frames, tool execution 
   - **Call 3** (1763610785.6290): OpenAI Realtime monolithic, 71.29s, 360 frames, tool execution ✅
   - **Call 4** (1763610866.6294): local_hybrid pipeline, 54.57s, 277 frames, tool execution ✅
   - All calls: Continuous audio frame flow, clean two-way conversation, proper hangup

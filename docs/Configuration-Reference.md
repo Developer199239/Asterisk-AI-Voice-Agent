@@ -157,7 +157,7 @@ Common pitfalls:
 ### Google Live (monolithic agent)
 
 - `providers.google_live.api_key`: API key (`GOOGLE_API_KEY`) used for Gemini Live.
-- `providers.google_live.llm_model`: Live LLM model name (e.g., `gemini-2.5-flash-native-audio-preview-09-2025`).
+- `providers.google_live.llm_model`: Live LLM model name (e.g., `gemini-2.0-flash-live-001-preview-09-2025`).
 - `providers.google_live.websocket_endpoint`: WebSocket endpoint for Gemini Live API.
   - Default: `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent`
   - Override only if directed by Google or when fronting through a proxy.
@@ -167,6 +167,35 @@ Common pitfalls:
 - `providers.deepgram.voice_agent_base_url`: WebSocket endpoint for Deepgram Voice Agent.
   - Default: `wss://agent.deepgram.com/v1/agent/converse`
   - YAML overrides allow regional endpoints or proxy URLs.
+
+### ElevenLabs Agent (monolithic agent)
+
+Full agent provider using ElevenLabs Conversational AI for premium voice quality.
+
+> **Scope Note**: ElevenLabs is supported as a **full agent only** (STT+LLM+TTS combined). TTS-only mode for hybrid pipelines is not currently supported. Use ElevenLabs when you want premium voice quality with their hosted agent handling the entire conversation.
+
+- `providers.elevenlabs_agent.api_key`: ElevenLabs API key (or use `ELEVENLABS_API_KEY` env var).
+- `providers.elevenlabs_agent.agent_id`: ElevenLabs Agent ID from [ElevenLabs dashboard](https://elevenlabs.io/app/agents) (or use `ELEVENLABS_AGENT_ID` env var).
+- `providers.elevenlabs_agent.voice_id`: Voice ID for TTS output (configured in agent dashboard).
+- `providers.elevenlabs_agent.model_id`: Model ID (e.g., `eleven_flash_v2_5`).
+- `providers.elevenlabs_agent.voice_settings`: Optional object with `stability`, `similarity_boost`, `style` (0.0-1.0).
+- `providers.elevenlabs_agent.input_sample_rate`: Input audio sample rate (default: `16000`).
+- `providers.elevenlabs_agent.output_sample_rate`: Output audio sample rate (default: `16000`).
+
+**Tool Calling**: ElevenLabs tools must be defined in the ElevenLabs dashboard. The engine executes tool calls locally based on matching function names. See [ElevenLabs Implementation Guide](contributing/references/Provider-ElevenLabs-Implementation.md) for tool schema format.
+
+**Audio Format**: ElevenLabs uses PCM16 at 16kHz. The engine automatically resamples from telephony μ-law 8kHz.
+
+Example:
+```yaml
+providers:
+  elevenlabs_agent:
+    enabled: true
+    api_key: ${ELEVENLABS_API_KEY}
+    agent_id: ${ELEVENLABS_AGENT_ID}
+    voice_id: "pNInz6obpgDQGcFmaJgB"
+    model_id: "eleven_flash_v2_5"
+```
 
 ## Precedence summary
 
@@ -186,6 +215,62 @@ Common pitfalls:
     - Each file must define a `name` field; that becomes the context key.
     - `system_prompt` in external files is treated as `prompt` if `prompt` is not present.
     - If the same context `name` exists both inline and in an external file, the inline definition in `ai-agent.yaml` wins.
+
+### Context Options
+
+Each context supports the following fields:
+
+- `prompt`: System prompt/persona instructions for the AI.
+- `greeting`: Initial greeting spoken when call connects.
+- `profile`: Audio profile name to use for this context.
+- `provider`: Provider override for this context.
+- `tools`: List of tool names to enable for this context.
+- `background_music`: Music On Hold class name for ambient music during calls (see below).
+
+### Background Music
+
+Play ambient music during AI conversations. Music is mixed into the call audio.
+
+- `contexts.<name>.background_music`: MOH class name (e.g., `default`, `ambient`).
+  - When set, a snoop channel with Music On Hold starts when the call begins.
+  - Music continues until the call ends.
+  - Leave empty/omit to disable background music.
+
+**Setup Requirements**:
+
+1. Place audio files in `/var/lib/asterisk/moh/<class-name>/`
+2. For FreePBX: Configure via **Settings → Music On Hold**
+3. Supported formats: WAV, ulaw, alaw, sln, mp3
+
+**Best Practices**:
+
+- Use low-volume (15-20%) ambient/instrumental music
+- Music is heard by the AI (affects VAD); loud music reduces accuracy
+- Test with real calls before production
+
+Example:
+```yaml
+contexts:
+  support:
+    greeting: "Hello, how can I help?"
+    prompt: "You are a helpful support agent."
+    background_music: "ambient"  # MOH class name
+```
+
+## Environment Variable Resolution
+
+**Current Scope**: Environment variable placeholders (`${VAR}`, `${VAR:-default}`) are resolved **only for the local provider** configuration.
+
+Example (supported):
+```yaml
+providers:
+  local:
+    base_url: ${LOCAL_WS_URL:-ws://127.0.0.1:8765}  # ✅ Resolved
+```
+
+Other provider configs should use environment variables directly via Python's `os.getenv()` in their implementation, or reference env vars in `.env` which are loaded at startup.
+
+**Note**: Future versions may extend env var resolution to all provider configurations.
 
 
 ## Tips

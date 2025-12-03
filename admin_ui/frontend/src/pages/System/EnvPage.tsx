@@ -1,0 +1,514 @@
+import axios from 'axios';
+
+import React, { useState, useEffect } from 'react';
+import { Save, Eye, EyeOff, RefreshCw, AlertTriangle } from 'lucide-react';
+import { ConfigSection } from '../../components/ui/ConfigSection';
+import { ConfigCard } from '../../components/ui/ConfigCard';
+import { FormInput, FormSelect, FormSwitch } from '../../components/ui/FormComponents';
+
+import { useAuth } from '../../auth/AuthContext';
+
+const EnvPage = () => {
+    const { token, loading: authLoading } = useAuth();
+    const [env, setEnv] = useState<Record<string, string>>({});
+    const [loading, setLoading] = useState(true);
+    const [saving, setSaving] = useState(false);
+    const [showSecrets, setShowSecrets] = useState<Record<string, boolean>>({});
+
+    const [error, setError] = useState<string | null>(null);
+
+    useEffect(() => {
+        if (!authLoading && token) {
+            fetchEnv();
+        }
+    }, [authLoading, token]);
+
+    const fetchEnv = async () => {
+        setLoading(true);
+        setError(null);
+        try {
+            const res = await axios.get('/api/config/env', {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            setEnv(res.data);
+        } catch (err: any) {
+            console.error('Failed to load env', err);
+            setError(err.response?.data?.detail || 'Failed to load environment variables');
+            if (err.response && err.response.status === 401) {
+                // AuthContext handles logout
+            }
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleSave = async () => {
+        // Validate ARI Port
+        const port = parseInt(env['ASTERISK_ARI_PORT'] || '8088');
+        if (isNaN(port) || port < 1 || port > 65535) {
+            alert('Invalid ARI Port. Must be between 1 and 65535.');
+            return;
+        }
+
+        setSaving(true);
+        try {
+            await axios.post('/api/config/env', env, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            alert('Environment variables saved successfully');
+        } catch (err: any) {
+            console.error('Failed to save env', err);
+            if (err.response && err.response.status === 401) {
+                alert('Session expired. Please login again.');
+            } else {
+                alert('Failed to save environment variables');
+            }
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    const updateEnv = (key: string, value: string) => {
+        setEnv(prev => ({ ...prev, [key]: value }));
+    };
+
+    const toggleSecret = (key: string) => {
+        setShowSecrets(prev => ({ ...prev, [key]: !prev[key] }));
+    };
+
+    const SecretInput = ({ label, name, placeholder }: { label: string, name: string, placeholder?: string }) => (
+        <div className="relative">
+            <FormInput
+                label={label}
+                type={showSecrets[name] ? 'text' : 'password'}
+                value={env[name] || ''}
+                onChange={(e) => updateEnv(name, e.target.value)}
+                placeholder={placeholder}
+            />
+            <button
+                type="button"
+                onClick={() => toggleSecret(name)}
+                className="absolute right-3 top-[38px] text-muted-foreground hover:text-foreground"
+            >
+                {showSecrets[name] ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+            </button>
+        </div>
+    );
+
+    if (loading) return <div className="p-8 text-center text-muted-foreground">Loading environment variables...</div>;
+
+    if (error) return (
+        <div className="p-8 text-center text-destructive">
+            <AlertTriangle className="w-8 h-8 mx-auto mb-4" />
+            <h3 className="text-lg font-semibold">Error Loading Configuration</h3>
+            <p className="mt-2">{error}</p>
+            <button
+                onClick={fetchEnv}
+                className="mt-4 px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90"
+            >
+                Retry
+            </button>
+        </div>
+    );
+
+    // Define known keys to exclude from "Other Variables"
+    const knownKeys = [
+        'ASTERISK_HOST', 'ASTERISK_ARI_USERNAME', 'ASTERISK_ARI_PASSWORD',
+        'DIAG_ENABLE_TAPS', 'DIAG_TAP_PRE_SECS', 'DIAG_TAP_POST_SECS', 'DIAG_TAP_OUTPUT_DIR',
+        'DIAG_EGRESS_SWAP_MODE', 'DIAG_EGRESS_FORCE_MULAW', 'DIAG_ATTACK_MS',
+        'LOG_LEVEL', 'LOG_FORMAT', 'LOG_COLOR', 'LOG_SHOW_TRACEBACKS',
+        'STREAMING_LOG_LEVEL', 'LOG_TO_FILE', 'LOG_FILE_PATH',
+        'LOCAL_WS_URL', 'LOCAL_WS_CONNECT_TIMEOUT', 'LOCAL_WS_RESPONSE_TIMEOUT', 'LOCAL_WS_CHUNK_MS',
+        'LOCAL_STT_MODEL_PATH', 'LOCAL_LLM_MODEL_PATH', 'LOCAL_TTS_MODEL_PATH',
+        'LOCAL_LLM_CONTEXT', 'LOCAL_LLM_BATCH', 'LOCAL_LLM_MAX_TOKENS', 'LOCAL_LLM_TEMPERATURE', 'LOCAL_LLM_INFER_TIMEOUT_SEC',
+        'OPENAI_API_KEY', 'DEEPGRAM_API_KEY', 'GOOGLE_API_KEY', 'RESEND_API_KEY', 'ELEVENLABS_API_KEY', 'CARTESIA_API_KEY', 'JWT_SECRET',
+        'AI_NAME', 'AI_ROLE', 'ASTERISK_ARI_PORT', 'ASTERISK_ARI_WEBSOCKET_SCHEME',
+        'HEALTH_CHECK_LOCAL_AI_URL', 'HEALTH_CHECK_AI_ENGINE_URL'
+    ];
+
+    const otherSettings = Object.keys(env).filter(k => !knownKeys.includes(k));
+
+    // Helper to check boolean values (handles 'true', '1', 'on', etc.)
+    const isTrue = (val: string | undefined) => {
+        if (!val) return false;
+        const v = val.toLowerCase();
+        return v === 'true' || v === '1' || v === 'on' || v === 'yes';
+    };
+
+    return (
+        <div className="space-y-6">
+            <div className="bg-yellow-500/10 border border-yellow-500/20 text-yellow-500 p-4 rounded-md flex items-center">
+                <AlertTriangle className="w-5 h-5 mr-2" />
+                Changes to environment variables require a system restart to take effect.
+            </div>
+            <div className="flex justify-between items-center">
+                <div>
+                    <h1 className="text-3xl font-bold tracking-tight">Environment Variables</h1>
+                    <p className="text-muted-foreground mt-1">
+                        Manage system-level configuration and API secrets.
+                    </p>
+                </div>
+                <div className="flex gap-2">
+                    <button
+                        onClick={() => {
+                            if (window.confirm('Warning: Running the Setup Wizard will overwrite your current configuration. Are you sure you want to continue?')) {
+                                window.location.href = '/wizard';
+                            }
+                        }}
+                        className="inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 border border-input bg-background shadow-sm hover:bg-accent hover:text-accent-foreground h-9 px-4 py-2"
+                    >
+                        <RefreshCw className="w-4 h-4 mr-2" />
+                        Run Setup Wizard
+                    </button>
+                    <button
+                        onClick={fetchEnv}
+                        className="inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 border border-input bg-background shadow-sm hover:bg-accent hover:text-accent-foreground h-9 px-4 py-2"
+                    >
+                        <RefreshCw className="w-4 h-4 mr-2" />
+                        Refresh
+                    </button>
+                    <button
+                        onClick={handleSave}
+                        disabled={saving}
+                        className="inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 bg-primary text-primary-foreground shadow hover:bg-primary/90 h-9 px-4 py-2"
+                    >
+                        <Save className="w-4 h-4 mr-2" />
+                        {saving ? 'Saving...' : 'Save Changes'}
+                    </button>
+                </div>
+            </div>
+
+            {/* Asterisk Settings */}
+            <ConfigSection title="Asterisk Settings" description="Connection details for the Asterisk server.">
+                <ConfigCard>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <FormInput
+                            label="Asterisk Host"
+                            value={env['ASTERISK_HOST'] || ''}
+                            onChange={(e) => updateEnv('ASTERISK_HOST', e.target.value)}
+                        />
+                        <FormInput
+                            label="ARI Username"
+                            value={env['ASTERISK_ARI_USERNAME'] || ''}
+                            onChange={(e) => updateEnv('ASTERISK_ARI_USERNAME', e.target.value)}
+                        />
+                        <SecretInput label="ARI Password" name="ASTERISK_ARI_PASSWORD" />
+                        <FormInput
+                            label="ARI Port"
+                            type="number"
+                            value={env['ASTERISK_ARI_PORT'] || '8088'}
+                            onChange={(e) => updateEnv('ASTERISK_ARI_PORT', e.target.value)}
+                        />
+                        <FormSelect
+                            label="WebSocket Scheme"
+                            value={env['ASTERISK_ARI_WEBSOCKET_SCHEME'] || 'ws'}
+                            onChange={(e) => updateEnv('ASTERISK_ARI_WEBSOCKET_SCHEME', e.target.value)}
+                            options={[
+                                { value: 'ws', label: 'WS (Unencrypted)' },
+                                { value: 'wss', label: 'WSS (Encrypted)' },
+                            ]}
+                        />
+                    </div>
+                </ConfigCard>
+            </ConfigSection>
+
+            {/* API Keys */}
+            <ConfigSection title="API Keys" description="Securely manage API keys for external services.">
+                <ConfigCard>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <SecretInput label="OpenAI API Key" name="OPENAI_API_KEY" placeholder="sk-..." />
+                        <SecretInput label="Deepgram API Key" name="DEEPGRAM_API_KEY" placeholder="Token..." />
+                        <SecretInput label="Google API Key" name="GOOGLE_API_KEY" placeholder="AIza..." />
+                        <SecretInput label="ElevenLabs API Key" name="ELEVENLABS_API_KEY" placeholder="xi-..." />
+                        <SecretInput label="Cartesia API Key" name="CARTESIA_API_KEY" placeholder="Token..." />
+                        <SecretInput label="Resend API Key" name="RESEND_API_KEY" placeholder="re_..." />
+                        <SecretInput label="JWT Secret" name="JWT_SECRET" placeholder="Secret for auth tokens" />
+                    </div>
+                </ConfigCard>
+            </ConfigSection>
+
+            {/* AI Persona */}
+            <ConfigSection title="Default Persona" description="Global identity settings for the AI agent.">
+                <ConfigCard>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <FormInput
+                            label="AI Name"
+                            value={env['AI_NAME'] || ''}
+                            onChange={(e) => updateEnv('AI_NAME', e.target.value)}
+                            placeholder="Asterisk"
+                        />
+                        <FormInput
+                            label="AI Role"
+                            value={env['AI_ROLE'] || ''}
+                            onChange={(e) => updateEnv('AI_ROLE', e.target.value)}
+                            placeholder="Voice Assistant"
+                        />
+                    </div>
+                </ConfigCard>
+            </ConfigSection>
+
+            {/* Logging Section */}
+            <ConfigSection title="Logging" description="System logging configuration.">
+                <ConfigCard>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <FormSelect
+                            label="Log Level"
+                            value={env['LOG_LEVEL'] || 'INFO'}
+                            onChange={(e) => updateEnv('LOG_LEVEL', e.target.value)}
+                            options={[
+                                { value: 'DEBUG', label: 'Debug' },
+                                { value: 'INFO', label: 'Info' },
+                                { value: 'WARNING', label: 'Warning' },
+                                { value: 'ERROR', label: 'Error' },
+                            ]}
+                        />
+                        <FormSelect
+                            label="Log Format"
+                            value={env['LOG_FORMAT'] || 'console'}
+                            onChange={(e) => updateEnv('LOG_FORMAT', e.target.value)}
+                            options={[
+                                { value: 'console', label: 'Console' },
+                                { value: 'json', label: 'JSON' },
+                            ]}
+                        />
+                        <FormSwitch
+                            id="log-color"
+                            label="Log Color"
+                            description="Enable colored log output."
+                            checked={isTrue(env['LOG_COLOR'])}
+                            onChange={(e) => updateEnv('LOG_COLOR', e.target.checked ? '1' : '0')}
+                        />
+                        <FormSelect
+                            label="Show Tracebacks"
+                            value={env['LOG_SHOW_TRACEBACKS'] || 'auto'}
+                            onChange={(e) => updateEnv('LOG_SHOW_TRACEBACKS', e.target.value)}
+                            options={[
+                                { value: 'auto', label: 'Auto' },
+                                { value: 'always', label: 'Always' },
+                                { value: 'never', label: 'Never' },
+                            ]}
+                        />
+                        <FormSwitch
+                            id="log-to-file"
+                            label="Log to File"
+                            description="Enable logging to file."
+                            checked={isTrue(env['LOG_TO_FILE'])}
+                            onChange={(e) => updateEnv('LOG_TO_FILE', e.target.checked ? '1' : '0')}
+                        />
+                        <div className="col-span-full">
+                            <FormInput
+                                label="Log File Path"
+                                value={env['LOG_FILE_PATH'] || '/mnt/asterisk_media/ai-engine.log'}
+                                onChange={(e) => updateEnv('LOG_FILE_PATH', e.target.value)}
+                            />
+                        </div>
+                    </div>
+                </ConfigCard>
+            </ConfigSection>
+
+            {/* Streaming Logging Section */}
+            <ConfigSection title="Streaming Logging" description="Logging settings for streaming operations.">
+                <ConfigCard>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <FormSelect
+                            label="Streaming Log Level"
+                            value={env['STREAMING_LOG_LEVEL'] || 'debug'}
+                            onChange={(e) => updateEnv('STREAMING_LOG_LEVEL', e.target.value)}
+                            options={[
+                                { value: 'DEBUG', label: 'Debug' },
+                                { value: 'INFO', label: 'Info' },
+                                { value: 'WARNING', label: 'Warning' },
+                                { value: 'ERROR', label: 'Error' },
+                            ]}
+                        />
+                    </div>
+                </ConfigCard>
+            </ConfigSection>
+
+            {/* Diagnostics */}
+            <ConfigSection title="Diagnostics" description="Advanced debugging and diagnostic output settings.">
+                <ConfigCard>
+                    <div className="space-y-6">
+                        <FormSwitch
+                            id="diag-enable-taps"
+                            label="Enable Diagnostic Taps"
+                            description="Save audio streams to disk for debugging."
+                            checked={isTrue(env['DIAG_ENABLE_TAPS'])}
+                            onChange={(e) => updateEnv('DIAG_ENABLE_TAPS', String(e.target.checked))}
+                        />
+
+                        {isTrue(env['DIAG_ENABLE_TAPS']) && (
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pl-4 border-l-2 border-border ml-2">
+                                <FormInput
+                                    label="Pre-Event Seconds"
+                                    type="number"
+                                    value={env['DIAG_TAP_PRE_SECS'] || '1'}
+                                    onChange={(e) => updateEnv('DIAG_TAP_PRE_SECS', e.target.value)}
+                                />
+                                <FormInput
+                                    label="Post-Event Seconds"
+                                    type="number"
+                                    value={env['DIAG_TAP_POST_SECS'] || '1'}
+                                    onChange={(e) => updateEnv('DIAG_TAP_POST_SECS', e.target.value)}
+                                />
+                                <FormInput
+                                    label="Output Directory"
+                                    value={env['DIAG_TAP_OUTPUT_DIR'] || '/tmp/ai-engine-taps'}
+                                    onChange={(e) => updateEnv('DIAG_TAP_OUTPUT_DIR', e.target.value)}
+                                />
+                                <FormSelect
+                                    label="Egress Swap Mode"
+                                    value={env['DIAG_EGRESS_SWAP_MODE'] || 'none'}
+                                    onChange={(e) => updateEnv('DIAG_EGRESS_SWAP_MODE', e.target.value)}
+                                    options={[
+                                        { value: 'none', label: 'None (Normal)' },
+                                        { value: 'swap', label: 'Swap Channels' },
+                                        { value: 'left_only', label: 'Left Channel Only' },
+                                        { value: 'right_only', label: 'Right Channel Only' }
+                                    ]}
+                                />
+                                <FormSwitch
+                                    id="diag-egress-force-mulaw"
+                                    label="Force MuLaw"
+                                    description="Force MuLaw encoding for egress."
+                                    checked={isTrue(env['DIAG_EGRESS_FORCE_MULAW'])}
+                                    onChange={(e) => updateEnv('DIAG_EGRESS_FORCE_MULAW', String(e.target.checked))}
+                                />
+                                <FormInput
+                                    label="Attack MS"
+                                    type="number"
+                                    value={env['DIAG_ATTACK_MS'] || '0'}
+                                    onChange={(e) => updateEnv('DIAG_ATTACK_MS', e.target.value)}
+                                />
+                            </div>
+                        )}
+                    </div>
+                </ConfigCard>
+            </ConfigSection>
+
+            {/* Local AI Server Connection Settings */}
+            <ConfigSection title="Local AI Server" description="Connection settings for local AI services.">
+                <ConfigCard>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <FormInput
+                            label="WebSocket URL"
+                            value={env['LOCAL_WS_URL'] || 'ws://127.0.0.1:8765'}
+                            onChange={(e) => updateEnv('LOCAL_WS_URL', e.target.value)}
+                        />
+                        <FormInput
+                            label="Connect Timeout (s)"
+                            type="number"
+                            value={env['LOCAL_WS_CONNECT_TIMEOUT'] || '2.0'}
+                            onChange={(e) => updateEnv('LOCAL_WS_CONNECT_TIMEOUT', e.target.value)}
+                        />
+                        <FormInput
+                            label="Response Timeout (s)"
+                            type="number"
+                            value={env['LOCAL_WS_RESPONSE_TIMEOUT'] || '5.0'}
+                            onChange={(e) => updateEnv('LOCAL_WS_RESPONSE_TIMEOUT', e.target.value)}
+                        />
+                        <FormInput
+                            label="Chunk Size (ms)"
+                            type="number"
+                            value={env['LOCAL_WS_CHUNK_MS'] || '320'}
+                            onChange={(e) => updateEnv('LOCAL_WS_CHUNK_MS', e.target.value)}
+                        />
+                        <div className="col-span-full">
+                            <FormInput
+                                label="STT Model Path"
+                                value={env['LOCAL_STT_MODEL_PATH'] || '/app/models/stt/vosk-model-en-us-0.22'}
+                                onChange={(e) => updateEnv('LOCAL_STT_MODEL_PATH', e.target.value)}
+                            />
+                        </div>
+                        <div className="col-span-full">
+                            <FormInput
+                                label="LLM Model Path"
+                                value={env['LOCAL_LLM_MODEL_PATH'] || '/app/models/llm/phi-3-mini-4k-instruct.Q4_K_M.gguf'}
+                                onChange={(e) => updateEnv('LOCAL_LLM_MODEL_PATH', e.target.value)}
+                            />
+                        </div>
+                        <div className="col-span-full">
+                            <FormInput
+                                label="TTS Model Path"
+                                value={env['LOCAL_TTS_MODEL_PATH'] || '/app/models/tts/en_US-lessac-medium.onnx'}
+                                onChange={(e) => updateEnv('LOCAL_TTS_MODEL_PATH', e.target.value)}
+                            />
+                        </div>
+                        <FormInput
+                            label="LLM Context"
+                            type="number"
+                            value={env['LOCAL_LLM_CONTEXT'] || '512'}
+                            onChange={(e) => updateEnv('LOCAL_LLM_CONTEXT', e.target.value)}
+                        />
+                        <FormInput
+                            label="LLM Batch"
+                            type="number"
+                            value={env['LOCAL_LLM_BATCH'] || '512'}
+                            onChange={(e) => updateEnv('LOCAL_LLM_BATCH', e.target.value)}
+                        />
+                        <FormInput
+                            label="LLM Max Tokens"
+                            type="number"
+                            value={env['LOCAL_LLM_MAX_TOKENS'] || '32'}
+                            onChange={(e) => updateEnv('LOCAL_LLM_MAX_TOKENS', e.target.value)}
+                        />
+                        <FormInput
+                            label="LLM Temperature"
+                            type="number"
+                            step="0.1"
+                            value={env['LOCAL_LLM_TEMPERATURE'] || '0.3'}
+                            onChange={(e) => updateEnv('LOCAL_LLM_TEMPERATURE', e.target.value)}
+                        />
+                        <FormInput
+                            label="Infer Timeout (s)"
+                            type="number"
+                            value={env['LOCAL_LLM_INFER_TIMEOUT_SEC'] || '30'}
+                            onChange={(e) => updateEnv('LOCAL_LLM_INFER_TIMEOUT_SEC', e.target.value)}
+                        />
+                    </div>
+                </ConfigCard>
+            </ConfigSection>
+
+
+
+            {/* Health Checks */}
+            <ConfigSection title="Health Checks" description="URLs used for system health monitoring.">
+                <ConfigCard>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <FormInput
+                            label="Local AI Health URL"
+                            value={env['HEALTH_CHECK_LOCAL_AI_URL'] || 'ws://local_ai_server:8765'}
+                            onChange={(e) => updateEnv('HEALTH_CHECK_LOCAL_AI_URL', e.target.value)}
+                            placeholder="ws://local_ai_server:8765"
+                        />
+                        <FormInput
+                            label="AI Engine Health URL"
+                            value={env['HEALTH_CHECK_AI_ENGINE_URL'] || 'http://ai_engine:15000/health'}
+                            onChange={(e) => updateEnv('HEALTH_CHECK_AI_ENGINE_URL', e.target.value)}
+                            placeholder="http://ai_engine:15000/health"
+                        />
+                    </div>
+                </ConfigCard>
+            </ConfigSection>
+
+            {otherSettings.length > 0 && (
+                <ConfigSection title="Other Variables" description="Additional environment variables found in .env file.">
+                    <ConfigCard>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            {otherSettings.map(key => (
+                                <FormInput
+                                    key={key}
+                                    label={key}
+                                    value={env[key] || ''}
+                                    onChange={(e) => updateEnv(key, e.target.value)}
+                                />
+                            ))}
+                        </div>
+                    </ConfigCard>
+                </ConfigSection>
+            )}
+        </div>
+    );
+};
+
+export default EnvPage;

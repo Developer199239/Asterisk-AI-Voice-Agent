@@ -177,11 +177,17 @@ download() { # url dest_path label
 
 extract_zip() { # zip_path target_dir
   local zip_path="$1" target_dir="$2"
+  local target_name="$(basename "$target_dir")"
   if command -v unzip >/dev/null 2>&1; then
     echo "Extracting $(basename "$zip_path") → $target_dir"
     rm -rf "$target_dir"
     mkdir -p "$target_dir"
     unzip -q -o "$zip_path" -d "$target_dir"
+    # Fix nested directory if zip contained a folder with same name
+    if [ -d "$target_dir/$target_name" ] && [ ! -f "$target_dir/README" ]; then
+      mv "$target_dir/$target_name"/* "$target_dir/" 2>/dev/null || true
+      rmdir "$target_dir/$target_name" 2>/dev/null || true
+    fi
   else
     echo "ERROR: unzip not found. Please install unzip and re-run." >&2
     exit 1
@@ -189,9 +195,9 @@ extract_zip() { # zip_path target_dir
 }
 
 setup_light_cpu() {
-  # STT (Vosk small)
+  # STT (Vosk small) - check for README to verify correct extraction
   local stt_zip="$MODELS_DIR/stt/vosk-model-small-en-us-0.15.zip"
-  if [ ! -d "$MODELS_DIR/stt/vosk-model-small-en-us-0.15" ]; then
+  if [ ! -f "$MODELS_DIR/stt/vosk-model-small-en-us-0.15/README" ]; then
     download "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip" "$stt_zip" "vosk-model-small-en-us-0.15"
     extract_zip "$stt_zip" "$MODELS_DIR/stt/vosk-model-small-en-us-0.15"
     rm -f "$stt_zip"
@@ -217,9 +223,9 @@ setup_light_cpu() {
 }
 
 setup_medium_cpu() {
-  # STT (Vosk 0.22)
+  # STT (Vosk 0.22) - check for README to verify correct extraction
   local stt_zip="$MODELS_DIR/stt/vosk-model-en-us-0.22.zip"
-  if [ ! -d "$MODELS_DIR/stt/vosk-model-en-us-0.22" ]; then
+  if [ ! -f "$MODELS_DIR/stt/vosk-model-en-us-0.22/README" ]; then
     download "https://alphacephei.com/vosk/models/vosk-model-en-us-0.22.zip" "$stt_zip" "vosk-model-en-us-0.22"
     extract_zip "$stt_zip" "$MODELS_DIR/stt/vosk-model-en-us-0.22"
     rm -f "$stt_zip"
@@ -258,9 +264,9 @@ setup_medium_gpu() {
 }
 
 setup_heavy_gpu() {
-  # STT (Vosk 0.22)
+  # STT (Vosk 0.22) - check for README to verify correct extraction
   local stt_zip="$MODELS_DIR/stt/vosk-model-en-us-0.22.zip"
-  if [ ! -d "$MODELS_DIR/stt/vosk-model-en-us-0.22" ]; then
+  if [ ! -f "$MODELS_DIR/stt/vosk-model-en-us-0.22/README" ]; then
     download "https://alphacephei.com/vosk/models/vosk-model-en-us-0.22.zip" "$stt_zip" "vosk-model-en-us-0.22"
     extract_zip "$stt_zip" "$MODELS_DIR/stt/vosk-model-en-us-0.22"
     rm -f "$stt_zip"

@@ -19,7 +19,8 @@ class LocalProvider(AIProviderInterface):
         super().__init__(on_event)
         self.config = config
         self.websocket: Optional[websockets.WebSocketClientProtocol] = None
-        self.ws_url = config.ws_url or "ws://127.0.0.1:8765"
+        # Use effective_ws_url which prefers base_url over ws_url
+        self.ws_url = config.effective_ws_url
         self.connect_timeout = float(getattr(config, "connect_timeout_sec", 5.0) or 5.0)
         self.response_timeout = float(getattr(config, "response_timeout_sec", 5.0) or 5.0)
         self._batch_ms = max(5, int(getattr(config, "chunk_ms", 200) or 200))

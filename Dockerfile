@@ -26,10 +26,12 @@ RUN apt-get update \
 
 WORKDIR /app
 
-# Create non-root user for security and grant access to asterisk group (GID 995)
-RUN groupadd -g 995 asterisk || true \
+# Create non-root user for security and grant access to asterisk group
+# GID defaults to 995 (FreePBX standard) but can be overridden at build time
+ARG ASTERISK_GID=995
+RUN groupadd -g ${ASTERISK_GID} asterisk || true \
     && useradd --create-home appuser \
-    && usermod -aG 995 appuser
+    && usermod -aG ${ASTERISK_GID} appuser
 
 # Copy the virtual environment from builder
 COPY --from=builder /opt/venv /opt/venv

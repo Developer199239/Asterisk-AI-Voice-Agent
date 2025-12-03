@@ -4,18 +4,33 @@ asterisk:
 audio_transport: externalmedia
 audiosocket:
   format: slin
-  host: "127.0.0.1"
+  host: 127.0.0.1
   port: 8090
 barge_in:
   enabled: true
   energy_threshold: 700
   initial_protection_ms: 100
   min_ms: 150
-  post_tts_end_protection_ms: 800  # Increased from 100 to prevent agent hearing its own voice tail
+  post_tts_end_protection_ms: 800
 config_version: 4
 contexts:
+  default:
+    greeting: Hello
+    profile: telephony_ulaw_8k
+    prompt: You are Asterisk, a Assistant. Be helpful and concise.
+    provider: local
+  # Example context with background music (AAVA-89)
+  # background_music references a MOH class from /etc/asterisk/musiconhold.conf
+  # Place audio files in /var/lib/asterisk/moh/{class-name}/ (pre-reduced volume recommended)
+  # demo_with_music:
+  #   greeting: Welcome to our premium line!
+  #   profile: telephony_ulaw_8k
+  #   provider: deepgram
+  #   background_music: default  # MOH class name
   demo_deepgram:
-    greeting: "Hi {caller_name}, I'm Ava with the Deepgram voice demo. Ask me anything about the Asterisk AI Voice Agent project."
+    greeting: Hi {caller_name}, I'm Ava with the Deepgram voice demo. Ask me anything
+      about the Asterisk AI Voice Agent project.
+    profile: telephony_ulaw_8k
     prompt: "You are Ava (Asterisk Voice Agent) demonstrating the Deepgram Voice Agent\
       \ configuration.\n\n\nABOUT ASTERISK AI VOICE AGENT v4.0:\n- Open-source (MIT),\
       \ production-ready AI voice agent for Asterisk/FreePBX\n- Enables real-time,\
@@ -45,7 +60,7 @@ contexts:
       - Enterprise-grade monolithic provider (STT + Think + TTS integrated)\n- Think\
       \ Stage: Advanced reasoning with OpenAI GPT-4o-mini for complex queries\n- Response\
       \ time: 1-2 seconds typical\n- Transport: AudioSocket (TCP, bidirectional streaming)\n\
-      - Audio format: \u03bc-law @ 8kHz (telephony quality)\n- Best for: Enterprise\
+      - Audio format: \u03BC-law @ 8kHz (telephony quality)\n- Best for: Enterprise\
       \ deployments, Deepgram ecosystem, advanced features\n- API Keys needed: DEEPGRAM_API_KEY\
       \ + OPENAI_API_KEY (for Think stage)\n\nTECHNICAL DETAILS YOU CAN EXPLAIN:\n\
       - How Deepgram Voice Agent integrates STT+Think+TTS in one WebSocket connection\n\
@@ -57,196 +72,173 @@ contexts:
       \ and how Deepgram Voice Agent works\n- Answer questions about project architecture,\
       \ setup, and features\n- Help users understand when to choose Deepgram vs other\
       \ options\n- Be conversational, clear, and adapt to user's technical level\n\
-      - Keep responses short and concise (1-3 sentences) unless the caller asks for more detail. Do not read punctuation characters like '-', '*', ':' or '_' out loud; pause briefly instead"
-    profile: telephony_ulaw_8k
+      - Keep responses short and concise (1-3 sentences) unless the caller asks for\
+      \ more detail. Do not read punctuation characters like '-', '*', ':' or '_'\
+      \ out loud; pause briefly instead"
     provider: deepgram
     tools:
-      - transfer
-      - cancel_transfer
-      - hangup_call
-      - leave_voicemail
-      - send_email_summary
-      - request_transcript
-  demo_hybrid:
-    greeting: "Hi {caller_name}, I'm Ava with the local hybrid voice demo. I can explain how this project works in simple terms."
-    prompt: |
-      You are Ava (Asterisk Voice Agent) demonstrating the Local Hybrid pipeline configuration.
-
-      ABOUT THIS CONFIGURATION:
-      - Vosk STT + OpenAI LLM + Piper TTS (local audio, cloud intelligence)
-      - Audio stays on-premises; only text goes to the cloud
-      - ExternalMedia RTP is used for clean, low-latency audio routing
-
-      YOUR ROLE:
-      - Explain the privacy-focused hybrid architecture
-      - Answer questions about the project, setup, and features
-      - Help callers understand when local processing is the right choice
-      - Speak in short, concise sentences by default (1–3 sentences)
-      - Only elaborate when the caller asks for more detail
-      - Do not read punctuation characters like '-', '*', ':' or '_' out loud; pause briefly instead
+    - transfer
+    - cancel_transfer
+    - hangup_call
+    - leave_voicemail
+    - send_email_summary
+    - request_transcript
+  demo_google_live:
+    greeting: Hi {caller_name}, I'm Ava with the Google Gemini Live voice demo. Ask
+      me about the Asterisk AI Voice Agent project.
     profile: telephony_ulaw_8k
+    prompt: "You are Ava (Asterisk Voice Agent) demonstrating the Google Gemini Live\
+      \ API configuration.\n\nCRITICAL LANGUAGE INSTRUCTION:\n- This conversation\
+      \ is in ENGLISH ONLY\n- The caller is speaking ENGLISH\n- You MUST respond in\
+      \ ENGLISH\n- Do NOT interpret the audio as any other language (Thai, Arabic,\
+      \ Chinese, etc.)\n- All audio transcription must be treated as English language\n\
+      \nABOUT ASTERISK AI VOICE AGENT v4.0:\n- Open-source (MIT), production-ready\
+      \ AI voice agent for Asterisk/FreePBX\n- Enables real-time, two-way natural\
+      \ voice conversations through your PBX\n- No external telephony providers needed\
+      \ - works directly with your existing Asterisk\n\nKEY ARCHITECTURE:\n- Modular\
+      \ pipeline system: Mix and match STT, LLM, and TTS providers independently\n\
+      - Dual transport support: AudioSocket (legacy) and ExternalMedia RTP (modern)\n\
+      - Two-container design: ai-engine (orchestrator) + local-ai-server (optional,\
+      \ for local AI)\n- Uses Asterisk REST Interface (ARI) for call control\n- Enterprise\
+      \ monitoring: Prometheus + Grafana with 50+ metrics\n\n3 VALIDATED CONFIGURATIONS\
+      \ (Golden Baselines):\n1. Google Gemini Live - Native audio AI, <1s response,\
+      \ TRUE duplex, built-in VAD\n2. OpenAI Realtime - Modern cloud AI, <2s response,\
+      \ server-side VAD, easiest setup\n3. Deepgram Voice Agent - Enterprise cloud\
+      \ with Think stage, <3s response, advanced features\n4. Local Hybrid - Privacy-focused:\
+      \ Local STT/TTS + Cloud LLM, 3-7s response, audio stays on-premises\n\nSETUP\
+      \ PROCESS:\n1. Clone repo: git clone https://github.com/hkjarral/Asterisk-AI-Voice-Agent.git\n\
+      2. Run installer: ./install.sh (guides through 3 config choices, handles everything)\n\
+      3. Add dialplan to FreePBX (Config Edit \u2192 extensions_custom.conf)\n4. Route\
+      \ calls to Stasis application: Stasis(asterisk-ai-voice-agent)\n\nMINIMAL DIALPLAN:\n\
+      [from-ai-agent]\nexten => s,1,NoOp(AI Voice Agent v4.0)\nsame => n,Set(AI_CONTEXT=demo_google_live)\
+      \  ; Optional: select context\nsame => n,Stasis(asterisk-ai-voice-agent)\nsame\
+      \ => n,Hangup()\n\nCUSTOMIZATION:\n- Edit config/ai-agent.yaml for greetings,\
+      \ personas, tuning\n- Use AI_CONTEXT dialplan variable to select different agent\
+      \ personalities\n- Contexts provide custom greetings and prompts per use case\n\
+      \nREQUIREMENTS:\n- Cloud configs: 2+ CPU cores, 4GB RAM, stable internet\n-\
+      \ Local Hybrid: 4+ cores (modern 2020+), 8GB+ RAM\n- Docker + Docker Compose,\
+      \ Asterisk 18+ with ARI enabled\n\n\nTHIS CONFIGURATION (Google Gemini Live):\n\
+      - Native audio processing with multimodal AI (text + audio understanding)\n\
+      - Response time: <1 second (fastest of all options!)\n- TRUE duplex communication:\
+      \ Natural interruptions and turn-taking\n- Built-in VAD: Google handles speech\
+      \ detection automatically\n- Transport: ExternalMedia RTP (UDP, low latency)\n\
+      - Audio format: \u03BC-law @ 8kHz (telephony), resampled to 16kHz for Gemini\n\
+      - Best for: Most natural conversations, ultra-low latency, modern deployments\n\
+      - API Key needed: GOOGLE_API_KEY only\n- Model: gemini-2.0-flash-live-001\
+      \ (optimized for real-time voice)\n\nTECHNICAL DETAILS YOU CAN EXPLAIN:\n- How\
+      \ Google Gemini Live provides native audio understanding (not just transcription)\n\
+      - Why continuous streaming mode avoids latency from buffering/bursting\n- Server-side\
+      \ VAD benefits: No client VAD needed, natural turn-taking\n- Audio resampling:\
+      \ 8kHz telephony \u2192 16kHz Gemini input, 24kHz Gemini output \u2192 8kHz\
+      \ telephony\n- How ExternalMedia RTP provides clean audio routing vs AudioSocket\n\
+      - Configuration tuning: voice selection, temperature, response modalities\n\
+      - Function calling in streaming mode for tool use\n\nYOUR ROLE:\n- Explain this\
+      \ demo's configuration and how Google Gemini Live works\n- Answer questions\
+      \ about project architecture, setup, and features\n- Help users understand when\
+      \ to choose Google Live vs other options\n- Be conversational, clear, and adapt\
+      \ to user's technical level\n- Keep responses short and concise (1-3 sentences)\
+      \ unless the caller asks for more detail. Do not read punctuation characters\
+      \ like '-', '*', ':' or '_' out loud; pause briefly instead\n\nCALL ENDING PROTOCOL:\n\
+      - When user indicates they're done (goodbye, that's all, thanks, etc.), politely\
+      \ confirm: 'Is there anything else I can help with?'\n- After user confirms\
+      \ they're done, use the hangup_call tool with an appropriate farewell\n- Always\
+      \ use hangup_call tool to end conversations properly - never end without it\n\
+      - Farewell messages should be warm and professional (e.g., 'Have a great day!',\
+      \ 'Thank you for calling!')\n"
     tools:
-      - transfer
-      - cancel_transfer
-      - hangup_call
-      - leave_voicemail
-      - send_email_summary
-      - request_transcript
+    - transfer
+    - cancel_transfer
+    - hangup_call
+    - leave_voicemail
+    - send_email_summary
+    - request_transcript
+  demo_hybrid:
+    greeting: Hi {caller_name}, I'm Ava with the local hybrid voice demo. I can explain
+      how this project works in simple terms.
+    profile: telephony_ulaw_8k
+    prompt: "You are Ava (Asterisk Voice Agent) demonstrating the Local Hybrid pipeline\
+      \ configuration.\n\nABOUT THIS CONFIGURATION:\n- Vosk STT + OpenAI LLM + Piper\
+      \ TTS (local audio, cloud intelligence)\n- Audio stays on-premises; only text\
+      \ goes to the cloud\n- ExternalMedia RTP is used for clean, low-latency audio\
+      \ routing\n\nYOUR ROLE:\n- Explain the privacy-focused hybrid architecture\n\
+      - Answer questions about the project, setup, and features\n- Help callers understand\
+      \ when local processing is the right choice\n- Speak in short, concise sentences\
+      \ by default (1\u20133 sentences)\n- Only elaborate when the caller asks for\
+      \ more detail\n- Do not read punctuation characters like '-', '*', ':' or '_'\
+      \ out loud; pause briefly instead\n"
+    tools:
+    - transfer
+    - cancel_transfer
+    - hangup_call
+    - leave_voicemail
+    - send_email_summary
+    - request_transcript
   demo_openai:
-    greeting: "Hi {caller_name}, I'm Ava with the OpenAI Realtime voice demo. Ask me anything about the Asterisk AI Voice Agent project."
-    prompt: |
-      You are Ava (Asterisk Voice Agent) demonstrating the OpenAI Realtime API configuration.
-
-      YOUR ROLE:
-      - Explain this demo's configuration and OpenAI Realtime capabilities
-      - Answer questions about the project, architecture, and setup
-      - Help callers understand when OpenAI Realtime is the best choice
-      - Speak in short, natural sentences by default (1–3 sentences)
-      - Only elaborate when the caller asks for more detail
-      - Do not read punctuation characters like '-', '*', ':' or '_' out loud; pause briefly instead
-
-      CALL ENDING PROTOCOL:
-      - When the caller indicates they're done (e.g., goodbye, that's all, thanks), politely confirm: "Is there anything else I can help with?"
-      - After the caller confirms they're done, call the hangup_call tool with a brief, warm farewell
-      - Farewell messages should be warm and professional (for example: "Have a great day!" or "Thank you for calling!")
+    greeting: Hi {caller_name}, I'm Ava with the OpenAI Realtime voice demo. Ask me
+      anything about the Asterisk AI Voice Agent project.
     profile: openai_realtime_24k
+    prompt: "You are Ava (Asterisk Voice Agent) demonstrating the OpenAI Realtime\
+      \ API configuration.\n\nYOUR ROLE:\n- Explain this demo's configuration and\
+      \ OpenAI Realtime capabilities\n- Answer questions about the project, architecture,\
+      \ and setup\n- Help callers understand when OpenAI Realtime is the best choice\n\
+      - Speak in short, natural sentences by default (1\u20133 sentences)\n- Only\
+      \ elaborate when the caller asks for more detail\n- Do not read punctuation\
+      \ characters like '-', '*', ':' or '_' out loud; pause briefly instead\n\nCALL\
+      \ ENDING PROTOCOL:\n- When the caller indicates they're done (e.g., goodbye,\
+      \ that's all, thanks), politely confirm: \"Is there anything else I can help\
+      \ with?\"\n- After the caller confirms they're done, call the hangup_call tool\
+      \ with a brief, warm farewell\n- Farewell messages should be warm and professional\
+      \ (for example: \"Have a great day!\" or \"Thank you for calling!\")\n"
     provider: openai_realtime
     tools:
-      - transfer
-      - cancel_transfer
-      - hangup_call
-      - leave_voicemail
-      - send_email_summary
-      - request_transcript
-  demo_google_live:
-    greeting: "Hi {caller_name}, I'm Ava with the Google Gemini Live voice demo. Ask me about the Asterisk AI Voice Agent project."
-    profile: telephony_ulaw_8k  # Use telephony profile (ulaw@8kHz) matching Golden Baseline
-    prompt: |
-      You are Ava (Asterisk Voice Agent) demonstrating the Google Gemini Live API configuration.
-      
-      CRITICAL LANGUAGE INSTRUCTION:
-      - This conversation is in ENGLISH ONLY
-      - The caller is speaking ENGLISH
-      - You MUST respond in ENGLISH
-      - Do NOT interpret the audio as any other language (Thai, Arabic, Chinese, etc.)
-      - All audio transcription must be treated as English language
-      
-      ABOUT ASTERISK AI VOICE AGENT v4.0:
-      - Open-source (MIT), production-ready AI voice agent for Asterisk/FreePBX
-      - Enables real-time, two-way natural voice conversations through your PBX
-      - No external telephony providers needed - works directly with your existing Asterisk
-      
-      KEY ARCHITECTURE:
-      - Modular pipeline system: Mix and match STT, LLM, and TTS providers independently
-      - Dual transport support: AudioSocket (legacy) and ExternalMedia RTP (modern)
-      - Two-container design: ai-engine (orchestrator) + local-ai-server (optional, for local AI)
-      - Uses Asterisk REST Interface (ARI) for call control
-      - Enterprise monitoring: Prometheus + Grafana with 50+ metrics
-      
-      3 VALIDATED CONFIGURATIONS (Golden Baselines):
-      1. Google Gemini Live - Native audio AI, <1s response, TRUE duplex, built-in VAD
-      2. OpenAI Realtime - Modern cloud AI, <2s response, server-side VAD, easiest setup
-      3. Deepgram Voice Agent - Enterprise cloud with Think stage, <3s response, advanced features
-      4. Local Hybrid - Privacy-focused: Local STT/TTS + Cloud LLM, 3-7s response, audio stays on-premises
-      
-      SETUP PROCESS:
-      1. Clone repo: git clone https://github.com/hkjarral/Asterisk-AI-Voice-Agent.git
-      2. Run installer: ./install.sh (guides through 3 config choices, handles everything)
-      3. Add dialplan to FreePBX (Config Edit → extensions_custom.conf)
-      4. Route calls to Stasis application: Stasis(asterisk-ai-voice-agent)
-      
-      MINIMAL DIALPLAN:
-      [from-ai-agent]
-      exten => s,1,NoOp(AI Voice Agent v4.0)
-      same => n,Set(AI_CONTEXT=demo_google_live)  ; Optional: select context
-      same => n,Stasis(asterisk-ai-voice-agent)
-      same => n,Hangup()
-      
-      CUSTOMIZATION:
-      - Edit config/ai-agent.yaml for greetings, personas, tuning
-      - Use AI_CONTEXT dialplan variable to select different agent personalities
-      - Contexts provide custom greetings and prompts per use case
-      
-      REQUIREMENTS:
-      - Cloud configs: 2+ CPU cores, 4GB RAM, stable internet
-      - Local Hybrid: 4+ cores (modern 2020+), 8GB+ RAM
-      - Docker + Docker Compose, Asterisk 18+ with ARI enabled
-      
-      
-      THIS CONFIGURATION (Google Gemini Live):
-      - Native audio processing with multimodal AI (text + audio understanding)
-      - Response time: <1 second (fastest of all options!)
-      - TRUE duplex communication: Natural interruptions and turn-taking
-      - Built-in VAD: Google handles speech detection automatically
-      - Transport: ExternalMedia RTP (UDP, low latency)
-      - Audio format: μ-law @ 8kHz (telephony), resampled to 16kHz for Gemini
-      - Best for: Most natural conversations, ultra-low latency, modern deployments
-      - API Key needed: GOOGLE_API_KEY only
-      - Model: gemini-2.5-flash-native-audio (optimized for real-time voice)
-      
-      TECHNICAL DETAILS YOU CAN EXPLAIN:
-      - How Google Gemini Live provides native audio understanding (not just transcription)
-      - Why continuous streaming mode avoids latency from buffering/bursting
-      - Server-side VAD benefits: No client VAD needed, natural turn-taking
-      - Audio resampling: 8kHz telephony → 16kHz Gemini input, 24kHz Gemini output → 8kHz telephony
-      - How ExternalMedia RTP provides clean audio routing vs AudioSocket
-      - Configuration tuning: voice selection, temperature, response modalities
-      - Function calling in streaming mode for tool use
-      
-      YOUR ROLE:
-      - Explain this demo's configuration and how Google Gemini Live works
-      - Answer questions about project architecture, setup, and features
-      - Help users understand when to choose Google Live vs other options
-      - Be conversational, clear, and adapt to user's technical level
-      - Keep responses short and concise (1-3 sentences) unless the caller asks for more detail. Do not read punctuation characters like '-', '*', ':' or '_' out loud; pause briefly instead
-      
-      CALL ENDING PROTOCOL:
-      - When user indicates they're done (goodbye, that's all, thanks, etc.), politely confirm: 'Is there anything else I can help with?'
-      - After user confirms they're done, use the hangup_call tool with an appropriate farewell
-      - Always use hangup_call tool to end conversations properly - never end without it
-      - Farewell messages should be warm and professional (e.g., 'Have a great day!', 'Thank you for calling!')
+    - transfer
+    - cancel_transfer
+    - hangup_call
+    - leave_voicemail
+    - send_email_summary
+    - request_transcript
+  demo_elevenlabs:
+    greeting: Hi {caller_name}, I'm using ElevenLabs premium voice technology. Ask
+      me anything about my capabilities!
+    profile: telephony_ulaw_8k
+    prompt: "You are a helpful voice assistant demonstrating ElevenLabs Conversational\
+      \ AI.\n\nABOUT THIS CONFIGURATION:\n- ElevenLabs provides premium, natural-sounding\
+      \ voices\n- Full conversational AI with STT, LLM, and TTS integrated\n- Low\
+      \ latency responses optimized for voice\n- Supports interruption and natural\
+      \ turn-taking\n\nYOUR ROLE:\n- Demonstrate ElevenLabs voice quality and capabilities\n\
+      - Answer questions about the Asterisk AI Voice Agent project\n- Speak naturally\
+      \ and conversationally\n- Keep responses concise (1-3 sentences) unless more\
+      \ detail is requested\n\nCALL ENDING PROTOCOL:\n- When the caller indicates\
+      \ they're done, confirm: \"Is there anything else I can help with?\"\n- After\
+      \ confirmation, use the hangup_call tool with a warm farewell\n"
+    provider: elevenlabs_agent
     tools:
-      - transfer
-      - cancel_transfer
-      - hangup_call
-      - leave_voicemail
-      - send_email_summary
-      - request_transcript
-
-default_provider: deepgram
+    - transfer
+    - cancel_transfer
+    - hangup_call
+    - leave_voicemail
+    - send_email_summary
+    - request_transcript
+default_provider: local
 downstream_mode: stream
 external_media:
-  # Network configuration
-  rtp_host: "127.0.0.1"
-  rtp_port: 18080
+  codec: ulaw
+  direction: both
+  format: slin16
   port_range: 18080:18099
-  
-  # Asterisk-side configuration (RTP payload)
-  codec: ulaw  # Codec Asterisk sends/receives: ulaw, alaw, slin, slin16
-  direction: both  # RTP direction: both, sendonly, recvonly
-  
-  # Engine-side configuration (internal processing)
-  # Defines how RTP server delivers audio to engine/providers
-  format: slin16  # Engine internal format: slin (8kHz), slin16 (16kHz), ulaw (8kHz)
-  sample_rate: 16000  # Optional: auto-inferred from format if not set
-  # CRITICAL: Pipelines expect 16kHz PCM16 for STT. RTP server will resample 8kHz→16kHz.
+  rtp_host: 127.0.0.1
+  rtp_port: 18080
+  sample_rate: 16000
 llm:
   initial_greeting: Hello, how can I help you today?
   prompt: Voice assistant. Answer in 5-8 words. Be direct. Expand only if asked.
 pipelines:
   local_hybrid:
-    llm: openai_llm
-    tools:
-      - transfer
-      - cancel_transfer
-      - hangup_call
-      - leave_voicemail
-      - send_email_summary
-      - request_transcript
+    llm: openai
     options:
       llm:
         base_url: https://api.openai.com/v1
-        max_tokens: 150
+        max_tokens: 200
         model: gpt-4o-mini
         temperature: 0.7
       stt:
@@ -258,8 +250,15 @@ pipelines:
         format:
           encoding: mulaw
           sample_rate: 8000
-    stt: local_stt
-    tts: local_tts
+    stt: local
+    tools:
+    - transfer
+    - cancel_transfer
+    - hangup_call
+    - leave_voicemail
+    - send_email_summary
+    - request_transcript
+    tts: local
 profiles:
   default: telephony_responsive
   openai_realtime_24k:
@@ -296,7 +295,7 @@ profiles:
       output_encoding: mulaw
       output_sample_rate_hz: 8000
     transport_out:
-      encoding: ulaw  # Match RTP codec (not slin)
+      encoding: ulaw
       sample_rate_hz: 8000
   wideband_pcm_16k:
     chunk_ms: auto
@@ -312,135 +311,208 @@ profiles:
       sample_rate_hz: 16000
 providers:
   deepgram:
+    capabilities:
+    - stt
+    - llm
+    - tts
     continuous_input: true
     enabled: true
     greeting: Hello, how can I help you today?
     input_encoding: mulaw
-    input_sample_rate_hz: 8000
-    # Optional emergency inbound gain normalization (caller → Deepgram).
-    # Leave disabled (0/0.0) for normal deployments; prefer fixing rxgain at trunk/Asterisk.
+    input_gain_max_db: 0
     input_gain_target_rms: 0
-    input_gain_max_db: 0.0
+    input_sample_rate_hz: 8000
     instructions: Voice assistant. Answer in 5-8 words. Be direct. Expand only if
       asked.
-    model: nova-2-phonecall
+    model: nova-2
     output_encoding: mulaw
     output_sample_rate_hz: 8000
     tts_model: aura-2-thalia-en
+    type: full
+  google_live:
+    api_key: ${GOOGLE_API_KEY}
+    capabilities:
+    - stt
+    - llm
+    - tts
+    continuous_input: true
+    enable_input_transcription: true
+    enable_output_transcription: true
+    enabled: true
+    greeting: ${GOOGLE_LIVE_GREETING:-Hi! I'm powered by Google Gemini Live API. Try
+      interrupting me!}
+    input_encoding: ulaw
+    input_gain_max_db: 0
+    input_gain_target_rms: 0
+    input_sample_rate_hz: 8000
+    llm_max_output_tokens: 8192
+    llm_model: gemini-2.0-flash-live-001
+    llm_temperature: 0.8
+    llm_top_k: 40
+    llm_top_p: 0.95
+    output_encoding: linear16
+    output_sample_rate_hz: 24000
+    provider_input_encoding: linear16
+    provider_input_sample_rate_hz: 16000
+    response_modalities: audio
+    target_encoding: ulaw
+    target_sample_rate_hz: 8000
+    tts_voice_name: Aoede
+    type: full
   local:
+    base_url: ${LOCAL_WS_URL:-ws://127.0.0.1:8765}
+    capabilities:
+    - stt
+    - llm
+    - tts
     chunk_ms: ${LOCAL_WS_CHUNK_MS:=320}
     connect_timeout_sec: ${LOCAL_WS_CONNECT_TIMEOUT:=2.0}
+    continuous_input: true
     enabled: true
+    greeting: Hello! I'm your local AI assistant running entirely on-premises.
+    instructions: You are a helpful voice assistant running locally. Be concise and friendly.
     llm_model: models/llm/phi-3-mini-4k-instruct.Q4_K_M.gguf
-    max_tokens: 32
+    max_tokens: 64
     response_timeout_sec: ${LOCAL_WS_RESPONSE_TIMEOUT:=10.0}
     stt_model: models/stt/vosk-model-en-us-0.22
     temperature: 0.4
     tts_voice: models/tts/en_US-lessac-medium.onnx
+    type: full
+  local_llm:
+    capabilities:
+    - llm
+    enabled: true
+    llm_model: models/llm/phi-3-mini-4k-instruct.Q4_K_M.gguf
+    max_tokens: 32
+    temperature: 0.4
+    type: local
     ws_url: ${LOCAL_WS_URL:-ws://127.0.0.1:8765}
-  openai:
+  local_stt:
+    capabilities:
+    - stt
+    chunk_ms: ${LOCAL_WS_CHUNK_MS:=320}
+    connect_timeout_sec: ${LOCAL_WS_CONNECT_TIMEOUT:=2.0}
+    enabled: true
+    response_timeout_sec: ${LOCAL_WS_RESPONSE_TIMEOUT:=10.0}
+    stt_model: models/stt/vosk-model-en-us-0.22
+    type: local
+    ws_url: ${LOCAL_WS_URL:-ws://127.0.0.1:8765}
+  local_tts:
+    capabilities:
+    - tts
+    enabled: true
+    response_timeout_sec: ${LOCAL_WS_RESPONSE_TIMEOUT:=10.0}
+    tts_voice: models/tts/en_US-lessac-medium.onnx
+    type: local
+    ws_url: ${LOCAL_WS_URL:-ws://127.0.0.1:8765}
+  openai_llm:
+    capabilities:
+    - llm
     chat_base_url: https://api.openai.com/v1
     chat_model: gpt-4o-mini
-    chunk_size_ms: 20
-    default_modalities:
-    - text
-    enabled: false
-    input_encoding: linear16
-    input_sample_rate_hz: 16000
-    organization: ''
-    project: ''
-    realtime_base_url: wss://api.openai.com/v1/realtime
-    realtime_model: gpt-4o-realtime-preview-2024-12-17
-    response_timeout_sec: 5.0
-    target_encoding: mulaw
-    target_sample_rate_hz: 8000
-    tts_base_url: https://api.openai.com/v1/audio/speech
-    tts_model: gpt-4o-mini-tts
-    voice: alloy
+    enabled: true
+    response_timeout_sec: 5
+    temperature: 0.7
+    type: openai
   openai_realtime:
     base_url: wss://api.openai.com/v1/realtime
+    capabilities:
+    - stt
+    - llm
+    - tts
+    continuous_input: true
     egress_pacer_enabled: true
     egress_pacer_warmup_ms: 320
     enabled: true
-    greeting: ${OPENAI_GREETING:-Hello, how can I help you today?}
+    greeting: Hello, how can I help you today?
     input_encoding: ulaw
+    input_gain_max_db: 0
+    input_gain_target_rms: 0
     input_sample_rate_hz: 8000
-    instructions: |
-      You are a concise voice assistant. 
-      
-      CRITICAL: ALWAYS respond with AUDIO to every user input.
-      NEVER skip responses or generate text-only outputs.
-      
-      Respond clearly and keep answers under 20 words unless more detail is requested.
+    instructions: "You are a concise voice assistant. \n\nCRITICAL: ALWAYS respond\
+      \ with AUDIO to every user input.\nNEVER skip responses or generate text-only\
+      \ outputs.\n\nRespond clearly and keep answers under 20 words unless more detail\
+      \ is requested.\n"
+    max_response_output_tokens: 4096
     model: gpt-4o-realtime-preview-2024-12-17
     organization: ''
     output_encoding: linear16
     output_sample_rate_hz: 24000
     provider_input_encoding: linear16
     provider_input_sample_rate_hz: 24000
-    # Optional emergency inbound gain normalization (caller → OpenAI Realtime).
-    # Leave disabled (0/0.0) for normal deployments; prefer fixing rxgain at trunk/Asterisk.
-    input_gain_target_rms: 0
-    input_gain_max_db: 0.0
-    
-    # Response generation parameters
-    temperature: 0.8  # Higher = more creative/responsive (0.6-1.0 range)
-    max_response_output_tokens: 4096  # Ensures room for complete responses
-    
     response_modalities:
     - audio
     - text
     target_encoding: mulaw
     target_sample_rate_hz: 8000
+    temperature: 0.8
     turn_detection:
       create_response: true
       prefix_padding_ms: 300
-      silence_duration_ms: 1000  # Increased from 600 - more patient, less self-interruption
-      threshold: 0.6  # Increased from 0.5 - less sensitive, won't trigger on agent's voice
+      silence_duration_ms: 1000
+      threshold: 0.6
       type: server_vad
+    type: openai_realtime
     voice: alloy
-  google_live:
-    continuous_input: true
-    api_key: ${GOOGLE_API_KEY}
+  elevenlabs_agent:
+    # ElevenLabs Conversational AI - Full Agent Provider
+    # Requires: ELEVENLABS_API_KEY and ELEVENLABS_AGENT_ID in .env
+    # Create an agent at https://elevenlabs.io/app/agents and copy the agent_id
+    type: full
     enabled: true
-    greeting: ${GOOGLE_LIVE_GREETING:-Hi! I'm powered by Google Gemini Live API. Try interrupting me!}
-    
-    # Audio format configuration (aligns engine with provider API)
-    input_encoding: ulaw                     # Wire format from ExternalMedia (8kHz)
-    input_sample_rate_hz: 8000               # Wire sample rate (ExternalMedia ulaw)
-    provider_input_encoding: linear16        # Gemini Live expects PCM16
-    provider_input_sample_rate_hz: 16000     # Gemini Live input rate (16kHz)
-    # Optional emergency inbound gain normalization (caller → Google Live).
-    # Leave disabled (0/0.0) for normal deployments; prefer fixing rxgain at trunk/Asterisk.
+    capabilities:
+    - stt
+    - llm
+    - tts
+    # Audio input from telephony
+    input_encoding: ulaw
+    input_sample_rate_hz: 8000
+    # ElevenLabs native format (internal resampling)
+    provider_input_encoding: pcm16
+    provider_input_sample_rate_hz: 16000
+    # Output from ElevenLabs
+    output_encoding: pcm16
+    output_sample_rate_hz: 16000
+    # Target for telephony
+    target_encoding: ulaw
+    target_sample_rate_hz: 8000
+    # Voice settings
+    voice_id: "uDsPstFWFBUXjIBimV7s"  # User specified voice
+    model_id: eleven_flash_v2_5       # Fast model for conversations
+    voice_settings:
+      stability: 0.5
+      similarity_boost: 0.75
+      style: 0.0
+      use_speaker_boost: true
+    # Agent behavior
+    greeting: Hello! I'm your ElevenLabs voice assistant. How can I help you today?
+    instructions: You are a helpful voice assistant. Be concise and friendly.
+    continuous_input: true
     input_gain_target_rms: 0
-    input_gain_max_db: 0.0
-    output_encoding: linear16                # Gemini Live outputs PCM16
-    output_sample_rate_hz: 24000             # Gemini Live native output rate
-    target_encoding: ulaw                    # Target wire format for playback (8kHz)
-    target_sample_rate_hz: 8000              # Target wire sample rate (ExternalMedia ulaw)
-    
-    # LLM Configuration
-    llm_model: gemini-2.5-flash-native-audio-preview-09-2025
-    llm_temperature: 0.7              # Response creativity (0.0-2.0, default: 0.7)
-    llm_max_output_tokens: 8192       # Max response length (1-8192, default: 8192)
-    llm_top_p: 0.95                   # Nucleus sampling (0.0-1.0, default: 0.95)
-    llm_top_k: 40                     # Top-k sampling (1-100, default: 40)
-    
-    # Voice Configuration
-    tts_voice_name: Aoede             # Female: Aoede/Kore/Leda | Male: Puck/Charon/Fenrir/Orus/Zephyr
-    
-    # Response Modalities
-    response_modalities: audio        # Options: "audio" (voice only), "text" (text only), "audio_text" (both)
-    
-    # Transcription Configuration (for email summaries and conversation history)
-    enable_input_transcription: true  # Enable user speech transcription
-    enable_output_transcription: true # Enable AI speech transcription
-    # Optional: override WebSocket endpoint for Gemini Live API
-    # websocket_endpoint: wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent
+    input_gain_max_db: 0
+  openai_stt:
+    chunk_size_ms: 20
+    enabled: true
+    input_encoding: linear16
+    input_sample_rate_hz: 16000
+    stt_model: whisper-1
+    type: openai
+  openai_tts:
+    enabled: true
+    target_encoding: mulaw
+    target_sample_rate_hz: 8000
+    tts_base_url: https://api.openai.com/v1/audio/speech
+    tts_model: gpt-4o-mini-tts
+    type: openai
+    voice: alloy
 streaming:
   chunk_size_ms: 20
   connection_timeout_ms: 120000
   continuous_stream: true
+  diag_enable_taps: true
+  diag_out_dir: /tmp/ai-engine-taps
+  diag_post_secs: 1
+  diag_pre_secs: 1
   empty_backoff_ticks_max: 5
   fallback_timeout_ms: 8000
   greeting_min_start_ms: 40
@@ -450,14 +522,101 @@ streaming:
   min_start_ms: 120
   normalizer:
     enabled: true
-    max_gain_db: 18.0
+    max_gain_db: 18
     target_rms: 1400
   provider_grace_ms: 200
   sample_rate: 8000
-  diag_enable_taps: true
-  diag_pre_secs: 1
-  diag_post_secs: 1
-  diag_out_dir: "/tmp/ai-engine-taps"
+tools:
+  ai_identity:
+    name: AI Agent
+    number: '6789'
+  cancel_transfer:
+    allow_after_answer: false
+    allow_during_ring: true
+    enabled: true
+  default_action_timeout: 30
+  enabled: true
+  extensions:
+    internal:
+      '6000':
+        action_type: transfer
+        aliases:
+        - agent
+        - representative
+        - human
+        - real person
+        - live person
+        - someone
+        - support
+        - sales
+        - operator
+        - help desk
+        description: Live customer service representative
+        dial_string: SIP/6000
+        mode: warm
+        name: Live Agent
+        pass_caller_info: true
+        timeout: 30
+        transfer: true
+  hangup_call:
+    enabled: true
+    farewell_message: Thank you for calling. Goodbye!
+    require_confirmation: false
+  leave_voicemail:
+    enabled: true
+    extension: '2765'
+  request_transcript:
+    admin_email: haider@jugaar.llc
+    api_key: ${RESEND_API_KEY}
+    common_domains:
+    - gmail.com
+    - yahoo.com
+    - outlook.com
+    - hotmail.com
+    - icloud.com
+    confirm_email: true
+    enabled: true
+    from_email: ava@jugaar.llc
+    from_name: AI Voice Agent
+    max_attempts: 2
+    provider: resend
+    validate_domain: true
+  send_email_summary:
+    admin_email: haider@jugaar.llc
+    api_key: ${RESEND_API_KEY}
+    enabled: true
+    from_email: ava@jugaar.llc
+    from_name: AI Voice Agent
+    include_metadata: true
+    include_transcript: true
+    provider: resend
+  transfer:
+    destinations:
+      sales_agent:
+        description: Sales agent
+        target: '2765'
+        type: extension
+      sales_queue:
+        description: Sales team queue
+        target: '300'
+        type: queue
+      sales_team:
+        description: Sales team ring group
+        target: '600'
+        type: ringgroup
+      support_agent:
+        description: Support agent
+        target: '6000'
+        type: extension
+      support_queue:
+        description: Technical support queue
+        target: '301'
+        type: queue
+      support_team:
+        description: Support team ring group
+        target: '601'
+        type: ringgroup
+    enabled: true
 vad:
   enhanced_enabled: true
   fallback_buffer_size: 128000
@@ -470,108 +629,3 @@ vad:
   webrtc_aggressiveness: 1
   webrtc_end_silence_frames: 50
   webrtc_start_frames: 3
-
-# Tool calling configuration (v4.2 - Agent Outbound)
-tools:
-  enabled: true
-  
-  # AI system identity - used as CallerID when initiating transfers
-  ai_identity:
-    name: "AI Agent"          # Name shown on transfers
-    number: "6789"            # Virtual extension number for AI system
-  
-  # Default settings for agent actions
-  default_action_timeout: 30
-  
-  # Extension directory - internal extensions for transfers
-  extensions:
-    internal:
-      "6000":
-        name: "Live Agent"
-        description: "Live customer service representative"
-        aliases: ["agent", "representative", "human", "real person", "live person", "someone", "support", "sales", "operator", "help desk"]
-        transfer: true
-        dial_string: "SIP/6000"
-        action_type: "transfer"         # Warm transfer to human
-        mode: "warm"                    # Announce caller info first
-        timeout: 30
-        pass_caller_info: true          # Pass caller name/number/purpose
-        # queue: "support_queue"        # Optional: fallback queue if busy
-  
-  # Unified Transfer Tool - handles extensions, queues, and ring groups
-  transfer:
-    enabled: true
-    destinations:
-      # Direct extension transfers (using redirect - stays in Stasis)
-      sales_agent:
-        type: extension
-        target: "2765"
-        description: "Sales agent"
-      
-      support_agent:
-        type: extension
-        target: "6000"
-        description: "Support agent"
-      
-      # Queue transfers (using continue to ext-queues)
-      sales_queue:
-        type: queue
-        target: "300"
-        description: "Sales team queue"
-      
-      support_queue:
-        type: queue
-        target: "301"
-        description: "Technical support queue"
-      
-      # Ring group transfers (using continue to ext-group)
-      sales_team:
-        type: ringgroup
-        target: "600"
-        description: "Sales team ring group"
-      
-      support_team:
-        type: ringgroup
-        target: "601"
-        description: "Support team ring group"
-  
-  # Cancel transfer settings
-  cancel_transfer:
-    enabled: true
-    allow_during_ring: true
-    allow_after_answer: false
-  
-  # Hangup settings (for full agents)
-  hangup_call:
-    enabled: true
-    require_confirmation: false
-    farewell_message: "Thank you for calling. Goodbye!"
-  
-  # Leave voicemail - route caller to voicemail
-  leave_voicemail:
-    enabled: true
-    extension: "2765"  # Extension number for voicemail box
-  
-  # Email summary tool - auto-send call summaries to admin
-  send_email_summary:
-    enabled: true                          # Set to true to enable auto-send after calls
-    provider: "resend"
-    api_key: "${RESEND_API_KEY}"            # Set in .env file
-    from_email: "ava@jugaar.llc"
-    from_name: "AI Voice Agent"
-    admin_email: "haider@jugaar.llc"  # Change to your admin email
-    include_transcript: true
-    include_metadata: true
-  
-  # Request transcript tool - caller-initiated transcript requests
-  request_transcript:
-    enabled: true                          # Set to true to allow caller transcript requests
-    provider: "resend"
-    api_key: "${RESEND_API_KEY}"            # Set in .env file
-    from_email: "ava@jugaar.llc"
-    from_name: "AI Voice Agent"
-    admin_email: "haider@jugaar.llc"  # BCC on caller transcript requests
-    confirm_email: true                     # AI reads back email for confirmation
-    validate_domain: true                   # Verify domain exists via DNS
-    max_attempts: 2                         # Retry attempts for invalid email
-    common_domains: ["gmail.com", "yahoo.com", "outlook.com", "hotmail.com", "icloud.com"]

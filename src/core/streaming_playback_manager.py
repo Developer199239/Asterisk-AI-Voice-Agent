@@ -562,8 +562,19 @@ class StreamingPlaybackManager:
                 await self.session_store.upsert_call(session)
             
             # Set TTS gating before starting stream
+            # Skip gating for full agent providers that handle turn-taking internally
+            # These providers have server-side VAD and don't need client-side audio gating
+            FULL_AGENT_PROVIDERS = {'deepgram', 'openai_realtime', 'elevenlabs_agent', 'google_live'}
+            provider_name = getattr(session, 'provider_name', None) if session else None
+            skip_gating = provider_name in FULL_AGENT_PROVIDERS
+            
             gating_success = True
-            if self.conversation_coordinator:
+            if skip_gating:
+                logger.debug("Skipping TTS gating for full agent provider",
+                           call_id=call_id,
+                           provider=provider_name,
+                           stream_id=stream_id)
+            elif self.conversation_coordinator:
                 gating_success = await self.conversation_coordinator.on_tts_start(call_id, stream_id)
             else:
                 gating_success = await self.session_store.set_gating_token(call_id, stream_id)

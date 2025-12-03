@@ -1,0 +1,308 @@
+import React, { useState, useEffect } from 'react';
+import axios from 'axios';
+import yaml from 'js-yaml';
+import { Plus, Settings, Trash2, ArrowRight, Workflow } from 'lucide-react';
+import { ConfigSection } from '../components/ui/ConfigSection';
+import { ConfigCard } from '../components/ui/ConfigCard';
+import { Modal } from '../components/ui/Modal';
+import PipelineForm from '../components/config/PipelineForm';
+import { ensureModularKey, isFullAgentProvider } from '../utils/providerNaming';
+
+const PipelinesPage = () => {
+    const [config, setConfig] = useState<any>({});
+    const [loading, setLoading] = useState(true);
+    const [editingPipeline, setEditingPipeline] = useState<string | null>(null);
+    const [pipelineForm, setPipelineForm] = useState<any>({});
+    const [isNewPipeline, setIsNewPipeline] = useState(false);
+
+    useEffect(() => {
+        fetchConfig();
+    }, []);
+
+    const fetchConfig = async () => {
+        try {
+            const res = await axios.get('/api/config/yaml');
+            const parsed = yaml.load(res.data.content) as any;
+            setConfig(parsed || {});
+        } catch (err) {
+            console.error('Failed to load config', err);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const saveConfig = async (newConfig: any) => {
+        try {
+            await axios.post('/api/config/yaml', { content: yaml.dump(newConfig) });
+            setConfig(newConfig);
+        } catch (err) {
+            console.error('Failed to save config', err);
+            alert('Failed to save configuration');
+        }
+    };
+
+    const handleEditPipeline = (name: string) => {
+        setEditingPipeline(name);
+        setPipelineForm({ name, ...config.pipelines?.[name] });
+        setIsNewPipeline(false);
+    };
+
+    const handleAddPipeline = () => {
+        setEditingPipeline('new_pipeline');
+        setPipelineForm({
+            name: '',
+            stt: 'local_stt',
+            llm: 'openai_llm',
+            tts: 'local_tts',
+            options: {
+                stt: { streaming: true, chunk_ms: 160, stream_format: 'pcm16_16k' },
+                llm: { model: 'gpt-4o-mini', temperature: 0.7, max_tokens: 150 },
+                tts: { format: { encoding: 'mulaw', sample_rate: 8000 } }
+            },
+            tools: []
+        });
+        setIsNewPipeline(true);
+    };
+
+    const handleDeletePipeline = async (name: string) => {
+        if (!confirm(`Are you sure you want to delete pipeline "${name}"?`)) return;
+        const newPipelines = { ...config.pipelines };
+        delete newPipelines[name];
+        await saveConfig({ ...config, pipelines: newPipelines });
+    };
+
+    const handleSavePipeline = async () => {
+        if (!pipelineForm.name) {
+            alert('Pipeline name is required');
+            return;
+        }
+
+        const pipelineName = isNewPipeline ? pipelineForm.name : editingPipeline;
+        if (!pipelineName) return;
+
+        const normalizedForm = {
+            ...pipelineForm,
+            stt: ensureModularKey(pipelineForm.stt || '', 'stt'),
+            llm: ensureModularKey(pipelineForm.llm || '', 'llm'),
+            tts: ensureModularKey(pipelineForm.tts || '', 'tts'),
+        };
+
+        // Validate required components
+        if (!normalizedForm.stt || !normalizedForm.llm || !normalizedForm.tts) {
+            alert('STT, LLM, and TTS providers are required');
+            return;
+        }
+
+        // Validate provider existence
+        const providers = config.providers || {};
+        if (!providers[normalizedForm.stt]) {
+            alert(`STT provider '${normalizedForm.stt}' does not exist`);
+            return;
+        }
+        if (!providers[normalizedForm.llm]) {
+            alert(`LLM provider '${normalizedForm.llm}' does not exist`);
+            return;
+        }
+        if (!providers[normalizedForm.tts]) {
+            alert(`TTS provider '${normalizedForm.tts}' does not exist`);
+            return;
+        }
+
+        // Block full agents in modular slots
+        if (isFullAgentProvider(providers[normalizedForm.stt]) || isFullAgentProvider(providers[normalizedForm.llm]) || isFullAgentProvider(providers[normalizedForm.tts])) {
+            alert('Full-agent providers cannot be used in modular pipeline slots. Please select modular providers with a single capability.');
+            return;
+        }
+
+        // Basic compatibility check: ensure provider capabilities match roles
+        const sttCaps = providers[normalizedForm.stt]?.capabilities || [];
+        const llmCaps = providers[normalizedForm.llm]?.capabilities || [];
+        const ttsCaps = providers[normalizedForm.tts]?.capabilities || [];
+        if (sttCaps.length && !sttCaps.includes('stt')) {
+            alert(`Provider '${normalizedForm.stt}' is not marked as STT-capable.`);
+            return;
+        }
+        if (llmCaps.length && !llmCaps.includes('llm')) {
+            alert(`Provider '${normalizedForm.llm}' is not marked as LLM-capable.`);
+            return;
+        }
+        if (ttsCaps.length && !ttsCaps.includes('tts')) {
+            alert(`Provider '${normalizedForm.tts}' is not marked as TTS-capable.`);
+            return;
+        }
+
+        // Check for disabled providers
+        const components = ['stt', 'llm', 'tts'];
+        const disabledComponents: string[] = [];
+
+        components.forEach(comp => {
+            const providerName = normalizedForm[comp];
+            if (providerName && providers[providerName] && providers[providerName].enabled === false) {
+                disabledComponents.push(`${comp.toUpperCase()}: ${providerName}`);
+            }
+        });
+
+        if (disabledComponents.length > 0) {
+            alert(`Cannot save pipeline. The following providers are disabled:\n- ${disabledComponents.join('\n- ')}\n\nPlease enable them in the Providers page first.`);
+            return;
+        }
+
+        const newConfig = { ...config };
+        if (!newConfig.pipelines) newConfig.pipelines = {};
+
+        const { name, ...pipelineData } = normalizedForm;
+
+        // Merge with existing config
+        const existingData = !isNewPipeline && config.pipelines ? config.pipelines[pipelineName] : {};
+        newConfig.pipelines[pipelineName] = { ...existingData, ...pipelineData };
+
+        await saveConfig(newConfig);
+        setEditingPipeline(null);
+    };
+
+    if (loading) return <div className="p-8 text-center text-muted-foreground">Loading configuration...</div>;
+
+    return (
+        <div className="space-y-6">
+            <div className="flex justify-between items-center">
+                <div>
+                    <h1 className="text-3xl font-bold tracking-tight">Pipelines</h1>
+                    <p className="text-muted-foreground mt-1">
+                        Define data flow pipelines (Input → Processors → Output).
+                    </p>
+                </div>
+                <button
+                    onClick={handleAddPipeline}
+                    className="inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 bg-primary text-primary-foreground shadow hover:bg-primary/90 h-9 px-4 py-2"
+                >
+                    <Plus className="w-4 h-4 mr-2" />
+                    Add Pipeline
+                </button>
+            </div>
+
+            <ConfigSection title="Active Pipeline" description="Select the pipeline to use for incoming calls.">
+                <ConfigCard>
+                    <div className="flex items-center space-x-4">
+                        <select
+                            className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                            value={config.active_pipeline || ''}
+                            onChange={(e) => saveConfig({ ...config, active_pipeline: e.target.value })}
+                        >
+                            <option value="" disabled>Select a pipeline...</option>
+                            {Object.keys(config.pipelines || {}).map((name) => (
+                                <option key={name} value={name}>{name}</option>
+                            ))}
+                        </select>
+                        <button
+                            onClick={() => saveConfig({ ...config, active_pipeline: config.active_pipeline })}
+                            className="inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 bg-secondary text-secondary-foreground hover:bg-secondary/80 h-10 px-4 py-2"
+                        >
+                            Set Active
+                        </button>
+                    </div>
+                </ConfigCard>
+            </ConfigSection>
+
+            <ConfigSection title="Active Pipelines" description="Configure how audio streams are processed.">
+                <div className="grid grid-cols-1 gap-4">
+                    {Object.entries(config.pipelines || {}).map(([name, pipeline]: [string, any]) => (
+                        <ConfigCard key={name} className="group relative hover:border-primary/50 transition-colors">
+                            <div className="flex justify-between items-start mb-4">
+                                <div className="flex items-center gap-3">
+                                    <div className="p-2 bg-secondary rounded-md">
+                                        <Workflow className="w-5 h-5 text-primary" />
+                                    </div>
+                                    <h4 className="font-semibold text-lg">{name}</h4>
+                                </div>
+                                <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                    <button
+                                        onClick={() => handleEditPipeline(name)}
+                                        className="p-2 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground"
+                                    >
+                                        <Settings className="w-4 h-4" />
+                                    </button>
+                                    <button
+                                        onClick={() => handleDeletePipeline(name)}
+                                        className="p-2 hover:bg-destructive/10 rounded-md text-destructive"
+                                    >
+                                        <Trash2 className="w-4 h-4" />
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div className="flex items-center space-x-2 text-sm overflow-x-auto pb-2 scrollbar-thin scrollbar-thumb-secondary">
+                                {/* STT Node */}
+                                <div className="flex flex-col items-center p-3 bg-secondary/50 rounded-lg min-w-[120px] border border-border">
+                                    <span className="font-semibold text-xs uppercase tracking-wider text-muted-foreground mb-1">STT</span>
+                                    <span className="font-medium">{pipeline.stt || 'default'}</span>
+                                    <span className="text-xs text-muted-foreground mt-1">
+                                        {pipeline.options?.stt?.streaming ? 'Streaming' : 'Buffered'}
+                                    </span>
+                                </div>
+
+                                <ArrowRight className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+
+                                {/* LLM Node */}
+                                <div className="flex flex-col items-center p-3 bg-accent/50 rounded-lg min-w-[120px] border border-accent-foreground/10">
+                                    <span className="font-semibold text-xs uppercase tracking-wider text-primary mb-1">LLM</span>
+                                    <span className="font-medium">{pipeline.llm || 'default'}</span>
+                                    <span className="text-xs text-muted-foreground mt-1">
+                                        {pipeline.options?.llm?.model || 'default model'}
+                                    </span>
+                                </div>
+
+                                <ArrowRight className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+
+                                {/* TTS Node */}
+                                <div className="flex flex-col items-center p-3 bg-secondary/50 rounded-lg min-w-[120px] border border-border">
+                                    <span className="font-semibold text-xs uppercase tracking-wider text-muted-foreground mb-1">TTS</span>
+                                    <span className="font-medium">{pipeline.tts || 'default'}</span>
+                                    <span className="text-xs text-muted-foreground mt-1">
+                                        {pipeline.options?.tts?.format?.encoding || 'mulaw'}
+                                    </span>
+                                </div>
+                            </div>
+                        </ConfigCard>
+                    ))}
+                    {Object.keys(config.pipelines || {}).length === 0 && (
+                        <div className="col-span-full p-8 border border-dashed rounded-lg text-center text-muted-foreground">
+                            No pipelines configured. Click "Add Pipeline" to create one.
+                        </div>
+                    )}
+                </div>
+            </ConfigSection>
+
+            <Modal
+                isOpen={!!editingPipeline}
+                onClose={() => setEditingPipeline(null)}
+                title={isNewPipeline ? 'Add Pipeline' : 'Edit Pipeline'}
+                size="xl"
+                footer={
+                    <>
+                        <button
+                            onClick={() => setEditingPipeline(null)}
+                            className="inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 border border-input bg-background shadow-sm hover:bg-accent hover:text-accent-foreground h-9 px-4 py-2"
+                        >
+                            Cancel
+                        </button>
+                        <button
+                            onClick={handleSavePipeline}
+                            className="inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 bg-primary text-primary-foreground shadow hover:bg-primary/90 h-9 px-4 py-2"
+                        >
+                            Save Changes
+                        </button>
+                    </>
+                }
+            >
+                <PipelineForm
+                    config={pipelineForm}
+                    providers={config.providers}
+                    onChange={setPipelineForm}
+                    isNew={isNewPipeline}
+                />
+            </Modal>
+        </div>
+    );
+};
+
+export default PipelinesPage;

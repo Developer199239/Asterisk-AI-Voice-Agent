@@ -14,6 +14,7 @@
 - **[Google Live API Setup](Provider-Google-Setup.md)** - Google Cloud Speech integration
 - **[Deepgram Voice Agent Setup](Provider-Deepgram-Setup.md)** - Deepgram all-in-one provider
 - **[OpenAI Realtime API Setup](Provider-OpenAI-Setup.md)** - GPT-4o Realtime integration
+- **[ElevenLabs Agent Setup](Provider-ElevenLabs-Setup.md)** - ElevenLabs Conversational AI with premium voices
 
 ## 🚀 Operations & Production
 

@@ -1,5 +1,5 @@
 """
-Milestone7 pipeline orchestrator and placeholder component adapters.
+Modular pipeline orchestrator and placeholder component adapters.
 
 This module introduces the PipelineOrchestrator that resolves STT/LLM/TTS
 component adapters per configured pipeline. Components that are not yet
@@ -40,7 +40,7 @@ class PipelineOrchestratorError(Exception):
 
 @dataclass
 class PipelineResolution:
-    """Milestone7: Snapshot of the STT/LLM/TTS adapters assigned to a call."""
+    """Snapshot of the STT/LLM/TTS adapters assigned to a call."""
     call_id: str
     pipeline_name: str
     stt_key: str
@@ -71,7 +71,7 @@ class PipelineResolution:
 
 
 class _PlaceholderBase:
-    """# Milestone7: Shared helper for placeholder adapters."""
+    """Shared helper for placeholder adapters."""
 
     def __init__(self, component_key: str, options: Optional[Dict[str, Any]] = None):
         self.component_key = component_key
@@ -82,7 +82,7 @@ class _PlaceholderBase:
 
 
 class PlaceholderSTTAdapter(STTComponent, _PlaceholderBase):
-    """# Milestone7: Placeholder STT adapter awaiting concrete implementation."""
+    """Placeholder STT adapter awaiting concrete implementation."""
 
     def __init__(self, component_key: str, options: Optional[Dict[str, Any]] = None):
         _PlaceholderBase.__init__(self, component_key, options)
@@ -95,12 +95,12 @@ class PlaceholderSTTAdapter(STTComponent, _PlaceholderBase):
         options: Dict[str, Any],
     ) -> str:
         raise NotImplementedError(
-            f"# Milestone7 placeholder STT adapter '{self.component_key}' is not implemented yet."
+            f"Placeholder STT adapter '{self.component_key}' is not implemented yet."
         )
 
 
 class PlaceholderLLMAdapter(LLMComponent, _PlaceholderBase):
-    """# Milestone7: Placeholder LLM adapter awaiting concrete implementation."""
+    """Placeholder LLM adapter awaiting concrete implementation."""
 
     def __init__(self, component_key: str, options: Optional[Dict[str, Any]] = None):
         _PlaceholderBase.__init__(self, component_key, options)
@@ -113,12 +113,12 @@ class PlaceholderLLMAdapter(LLMComponent, _PlaceholderBase):
         options: Dict[str, Any],
     ) -> str:
         raise NotImplementedError(
-            f"# Milestone7 placeholder LLM adapter '{self.component_key}' is not implemented yet."
+            f"Placeholder LLM adapter '{self.component_key}' is not implemented yet."
         )
 
 
 class PlaceholderTTSAdapter(TTSComponent, _PlaceholderBase):
-    """# Milestone7: Placeholder TTS adapter awaiting concrete implementation."""
+    """Placeholder TTS adapter awaiting concrete implementation."""
 
     def __init__(self, component_key: str, options: Optional[Dict[str, Any]] = None):
         _PlaceholderBase.__init__(self, component_key, options)
@@ -130,7 +130,7 @@ class PlaceholderTTSAdapter(TTSComponent, _PlaceholderBase):
         options: Dict[str, Any],
     ):
         raise NotImplementedError(
-            f"# Milestone7 placeholder TTS adapter '{self.component_key}' is not implemented yet."
+            f"Placeholder TTS adapter '{self.component_key}' is not implemented yet."
         )
 
 
@@ -142,9 +142,14 @@ _PLACEHOLDER_CLASS_BY_ROLE: Dict[str, Callable[[str, Dict[str, Any]], Component]
 
 
 def _extract_role(component_key: str) -> str:
+    """Extract the role (stt, llm, tts) from a component key like 'local_stt' or 'openai_llm'."""
     parts = component_key.rsplit("_", 1)
-    if len(parts) != 2:
-        raise PipelineOrchestratorError(f"Cannot determine component role for '{component_key}'")
+    if len(parts) != 2 or parts[1] not in ("stt", "llm", "tts"):
+        raise PipelineOrchestratorError(
+            f"Invalid component key '{component_key}'. "
+            f"Expected format: '<provider>_<role>' where role is 'stt', 'llm', or 'tts'. "
+            f"Example: 'local_stt', 'openai_llm', 'deepgram_tts'"
+        )
     return parts[1]
 
 
@@ -191,7 +196,7 @@ DEFAULT_COMPONENT_REGISTRY = _build_default_registry()
 
 
 class PipelineOrchestrator:
-    """# Milestone7: Resolve STT/LLM/TTS adapters for calls based on pipeline config."""
+    """Resolve STT/LLM/TTS adapters for calls based on pipeline config."""
 
     def __init__(
         self,
@@ -329,6 +334,16 @@ class PipelineOrchestrator:
     def _hydrate_local_config(self) -> Optional[LocalProviderConfig]:
         providers = getattr(self.config, "providers", {}) or {}
         raw_config = providers.get("local")
+        if not raw_config:
+            # Fallback: accept modular local providers (local_stt/local_llm/local_tts)
+            for name, cfg in providers.items():
+                try:
+                    lower = str(name).lower()
+                except Exception:
+                    lower = ""
+                if lower.startswith("local_") or (isinstance(cfg, dict) and str(cfg.get("type", "")).lower() == "local"):
+                    raw_config = cfg
+                    break
         if not raw_config:
             return None
         if isinstance(raw_config, LocalProviderConfig):
@@ -687,6 +702,18 @@ class PipelineOrchestrator:
         providers = getattr(self.config, "providers", {}) or {}
         raw_config = providers.get("openai")
         if not raw_config:
+            # Fallback: accept modular OpenAI providers (openai_stt/openai_llm/openai_tts) but skip realtime agent
+            for name, cfg in providers.items():
+                try:
+                    lower = str(name).lower()
+                except Exception:
+                    lower = ""
+                if "realtime" in lower:
+                    continue
+                if lower.startswith("openai_") or (isinstance(cfg, dict) and str(cfg.get("type", "")).lower() == "openai"):
+                    raw_config = cfg
+                    break
+        if not raw_config:
             return None
         if isinstance(raw_config, OpenAIProviderConfig):
             config = raw_config
@@ -874,7 +901,7 @@ class PipelineOrchestrator:
         llm_options = dict(options_map.get("llm", {}))
         tts_options = dict(options_map.get("tts", {}))
 
-        # Milestone7: Inject tools into LLM options if configured
+        # Inject tools into LLM options if configured
         if hasattr(entry, "tools") and entry.tools:
             llm_options["tools"] = entry.tools
 

@@ -46,6 +46,8 @@ from .providers.deepgram import DeepgramProvider
 from .providers.local import LocalProvider
 from .providers.openai_realtime import OpenAIRealtimeProvider
 from .providers.google_live import GoogleLiveProvider
+from .providers.elevenlabs_agent import ElevenLabsAgentProvider
+from .providers.elevenlabs_config import ElevenLabsAgentConfig
 from .core import SessionStore, PlaybackManager, ConversationCoordinator
 from .core.vad_manager import EnhancedVADManager, VADResult
 from .core.streaming_playback_manager import StreamingPlaybackManager
@@ -55,6 +57,43 @@ from .utils.audio_capture import AudioCaptureManager
 from src.pipelines.base import LLMResponse
 
 logger = get_logger(__name__)
+
+# -----------------------------------------------------------------------------
+# Environment variable resolution helper
+# -----------------------------------------------------------------------------
+import re
+
+def _resolve_env_vars(value: Any) -> Any:
+    """
+    Resolve environment variable placeholders in config values.
+    Supports ${VAR}, ${VAR:-default}, and ${VAR:=default} syntax.
+    """
+    if not isinstance(value, str):
+        return value
+    
+    # Pattern matches ${VAR}, ${VAR:-default}, ${VAR:=default}
+    pattern = r'\$\{([^}:]+)(?::-|:=)?([^}]*)?\}'
+    
+    def replace_env(match):
+        var_name = match.group(1)
+        default_value = match.group(2) if match.group(2) else ""
+        return os.getenv(var_name, default_value)
+    
+    resolved = re.sub(pattern, replace_env, value)
+    return resolved
+
+
+def _resolve_config_env_vars(config_dict: Dict[str, Any]) -> Dict[str, Any]:
+    """Resolve environment variables in all string values of a config dict."""
+    resolved = {}
+    for key, value in config_dict.items():
+        if isinstance(value, str):
+            resolved[key] = _resolve_env_vars(value)
+        elif isinstance(value, dict):
+            resolved[key] = _resolve_config_env_vars(value)
+        else:
+            resolved[key] = value
+    return resolved
 
 # -----------------------------------------------------------------------------
 # Prometheus latency histograms (module scope, registered once)
@@ -261,18 +300,8 @@ class Engine:
         except Exception:
             logger.debug("Failed to pre-seed streaming manager format", exc_info=True)
         
-        # Milestone7: Pipeline orchestrator coordinates per-call STT/LLM/TTS adapters.
+        # Modular pipeline orchestrator coordinates per-call STT/LLM/TTS adapters.
         self.pipeline_orchestrator = PipelineOrchestrator(config)
-        
-        # DEBUG: Inspect loaded pipelines to verify tools
-        try:
-            lh = self.config.pipelines.get('local_hybrid')
-            if lh:
-                logger.info("DEBUG: local_hybrid pipeline config", tools=lh.tools, raw_entry=str(lh))
-            else:
-                logger.warning("DEBUG: local_hybrid pipeline not found in config")
-        except Exception as e:
-            logger.error("DEBUG: failed to inspect pipeline config", error=str(e))
         
         # P1: Transport orchestrator for multi-provider audio format negotiation
         self.transport_orchestrator = TransportOrchestrator(config.dict() if hasattr(config, 'dict') else config.__dict__)
@@ -463,20 +492,23 @@ class Engine:
         except Exception as e:
             logger.warning(f"Failed to initialize tool calling system: {e}", exc_info=True)
 
-        # Milestone7: Start pipeline orchestrator to prepare per-call component lookups.
+        # Start modular pipeline orchestrator to prepare per-call component lookups.
+        # Note: Full agent providers (deepgram, google_live, openai_realtime, elevenlabs_agent, local)
+        # don't need pipelines - they handle STT+LLM+TTS internally. Pipeline errors are expected
+        # when using full agent mode without modular pipeline configuration.
         try:
             await self.pipeline_orchestrator.start()
         except PipelineOrchestratorError as exc:
-            logger.error(
-                "Milestone7 pipeline orchestrator failed to start; legacy provider flow will be used",
-                error=str(exc),
-                exc_info=True,
+            # This is expected when using full agent mode without modular pipelines configured
+            logger.info(
+                "Pipeline orchestrator not configured - using full agent provider mode. "
+                "This is normal when default_provider is a full agent (deepgram, google_live, openai_realtime, elevenlabs_agent, local).",
+                detail=str(exc),
             )
         except Exception as exc:
-            logger.error(
-                "Unexpected error starting pipeline orchestrator",
+            logger.warning(
+                "Unexpected error starting pipeline orchestrator - falling back to direct provider mode",
                 error=str(exc),
-                exc_info=True,
             )
 
         # 2) Start health server EARLY so diagnostics are available even if transport/ARI fail
@@ -662,7 +694,7 @@ class Engine:
                 await self._health_runner.cleanup()
         except Exception:
             logger.debug("Health server cleanup error", exc_info=True)
-        # Milestone7: ensure orchestrator releases component assignments before shutdown.
+        # Ensure orchestrator releases component assignments before shutdown.
         try:
             await self.pipeline_orchestrator.stop()
         except Exception:
@@ -683,7 +715,9 @@ class Engine:
                 elif name in self.provider_alignment_issues:
                     self.provider_alignment_issues.pop(name, None)
                 if name == "local":
-                    config = LocalProviderConfig(**provider_config_data)
+                    # Resolve env vars like ${LOCAL_WS_URL:-ws://127.0.0.1:8765}
+                    resolved_config = _resolve_config_env_vars(provider_config_data)
+                    config = LocalProviderConfig(**resolved_config)
                     provider = LocalProvider(config, self.on_provider_event)
                     self.providers[name] = provider
                     logger.info(f"Provider '{name}' loaded successfully.")
@@ -761,6 +795,23 @@ class Engine:
                     runtime_issues = self._describe_provider_alignment(name, provider)
                     if runtime_issues:
                         self.provider_alignment_issues.setdefault(name, []).extend(runtime_issues)
+                elif name == "elevenlabs_agent":
+                    elevenlabs_cfg = self._build_elevenlabs_config(provider_config_data)
+                    if not elevenlabs_cfg:
+                        continue
+
+                    provider = ElevenLabsAgentProvider(
+                        elevenlabs_cfg, 
+                        self.on_provider_event,
+                    )
+                    self.providers[name] = provider
+                    logger.info(
+                        "Provider 'elevenlabs_agent' loaded successfully"
+                    )
+
+                    runtime_issues = self._describe_provider_alignment(name, provider)
+                    if runtime_issues:
+                        self.provider_alignment_issues.setdefault(name, []).extend(runtime_issues)
                 else:
                     logger.warning(f"Unknown provider type: {name}")
                     continue
@@ -769,9 +820,12 @@ class Engine:
                 logger.error(f"Failed to load provider '{name}': {e}", exc_info=True)
         
         # Validate that default provider is available
-        if self.config.default_provider != "deepgram":
-            available_providers = list(self.providers.keys())
-            logger.error(f"Default provider '{self.config.default_provider}' not available. Available providers: {available_providers}")
+        available_providers = list(self.providers.keys())
+        if self.config.default_provider not in available_providers:
+            logger.error(
+                f"Default provider '{self.config.default_provider}' not loaded. "
+                f"Check provider configuration and API keys. Available providers: {available_providers}"
+            )
         else:
             logger.info(f"Default provider '{self.config.default_provider}' is available and ready.")
             
@@ -1127,7 +1181,7 @@ class Engine:
             except Exception:
                 logger.debug("Audio profile resolution failed", call_id=caller_channel_id, exc_info=True)
 
-            # Milestone7: Per-call override via Asterisk channel var AI_PROVIDER.
+            # Per-call override via Asterisk channel var AI_PROVIDER.
             # Values:
             #   - openai_realtime | deepgram → full agent override
             #   - customX (any other token) → pipeline name
@@ -1214,7 +1268,7 @@ class Engine:
                     pipeline_resolution = await self._assign_pipeline_to_session(session)
                     if not pipeline_resolution and getattr(self.pipeline_orchestrator, "started", False):
                         logger.info(
-                            "Milestone7 pipeline orchestrator falling back to legacy provider flow",
+                            "Pipeline orchestrator using direct provider mode",
                             call_id=caller_channel_id,
                             provider=session.provider_name,
                         )
@@ -1481,6 +1535,7 @@ class Engine:
             'voicemail-complete': self._handle_voicemail_complete,
             'queue-answered': self._handle_queue_answered,
             'queue-failed': self._handle_queue_failed,
+            'bgm': self._handle_background_music_channel,  # Background music snoop channel (AAVA-89)
         }
         
         handler = handlers.get(action_type)
@@ -1490,6 +1545,20 @@ class Engine:
             logger.warning(f"🔀 AGENT ACTION - Unknown action type: {action_type}",
                           channel_id=channel_id, args=args)
             await self.ari_client.hangup_channel(channel_id)
+    
+    async def _handle_background_music_channel(self, channel_id: str, args: list):
+        """
+        Handle background music snoop channel entering Stasis.
+        
+        The snoop channel is created by _start_background_music() and enters Stasis
+        automatically. We just need to keep it alive - MOH is already started.
+        The channel will be cleaned up when the call ends.
+        """
+        call_id = args[1] if len(args) > 1 else "unknown"
+        logger.info("🎵 Background music channel entered Stasis - keeping alive",
+                   channel_id=channel_id,
+                   call_id=call_id)
+        # Don't hang up - let MOH play. Channel cleanup happens in _stop_background_music()
     
     async def _handle_transfer_answered(self, channel_id: str, args: list):
         """
@@ -1816,6 +1885,12 @@ class Engine:
             except Exception:
                 logger.debug("Streaming playback stop failed during cleanup", call_id=call_id, exc_info=True)
 
+            # Stop background music if playing (AAVA-89)
+            try:
+                await self._stop_background_music(session)
+            except Exception:
+                logger.debug("Background music stop failed during cleanup", call_id=call_id, exc_info=True)
+
             # Stop the active provider session if one exists.
             try:
                 provider_name = session.provider_name
@@ -1902,7 +1977,7 @@ class Engine:
                 try:
                     await self.pipeline_orchestrator.release_pipeline(call_id)
                 except Exception:
-                    logger.debug("Milestone7 pipeline release failed during cleanup", call_id=call_id, exc_info=True)
+                    logger.debug("Pipeline release failed during cleanup", call_id=call_id, exc_info=True)
 
             # Auto-send email summary if enabled (before session is removed)
             try:
@@ -3673,6 +3748,44 @@ class Engine:
             logger.error("Failed to build OpenAIRealtimeProviderConfig", error=str(exc), exc_info=True)
             return None
 
+    def _build_elevenlabs_config(self, provider_cfg: Dict[str, Any]) -> Optional[ElevenLabsAgentConfig]:
+        """Construct an ElevenLabsAgentConfig from raw provider settings."""
+        try:
+            merged = dict(provider_cfg)
+            
+            # SECURITY: API keys ONLY from environment variables, never from YAML
+            merged['api_key'] = os.getenv('ELEVENLABS_API_KEY')
+            merged['agent_id'] = os.getenv('ELEVENLABS_AGENT_ID', merged.get('agent_id', ''))
+            
+            # Fill in defaults from llm config if not provided
+            try:
+                instr = (merged.get("instructions") or "").strip()
+            except Exception:
+                instr = ""
+            if not instr:
+                merged["instructions"] = getattr(self.config.llm, "prompt", None)
+            try:
+                greet = (merged.get("greeting") or "").strip()
+            except Exception:
+                greet = ""
+            if not greet:
+                merged["greeting"] = getattr(self.config.llm, "initial_greeting", None)
+
+            cfg = ElevenLabsAgentConfig.from_dict(merged)
+            if not cfg.enabled:
+                logger.info("ElevenLabs provider disabled in configuration; skipping initialization.")
+                return None
+            if not cfg.api_key:
+                logger.error("ElevenLabs provider API key missing (ELEVENLABS_API_KEY)")
+                return None
+            if not cfg.agent_id:
+                logger.error("ElevenLabs provider agent ID missing (ELEVENLABS_AGENT_ID)")
+                return None
+            return cfg
+        except Exception as exc:
+            logger.error("Failed to build ElevenLabsAgentConfig", error=str(exc), exc_info=True)
+            return None
+
     def _audit_provider_config(self, name: str, provider_cfg: Dict[str, Any]) -> List[str]:
         """Static sanity checks for provider/audio format alignment.
 
@@ -4046,29 +4159,33 @@ class Engine:
                     fmt_entry["sample_rate"] = sample_rate_int
                 if fmt_entry:
                     self._provider_stream_formats[call_id] = fmt_entry
+                # Initialize diag vars outside try block to avoid UnboundLocalError
+                diag_encoding = encoding or ""
+                diag_rate = sample_rate_int or 0
                 try:
-                    diag_encoding = fmt_entry.get("encoding") or encoding or session.transport_profile.format
-                    diag_rate = int(fmt_entry.get("sample_rate") or sample_rate_int or session.transport_profile.sample_rate)
+                    diag_encoding = fmt_entry.get("encoding") or encoding or (session.transport_profile.format if session.transport_profile else "")
+                    diag_rate = int(fmt_entry.get("sample_rate") or sample_rate_int or (session.transport_profile.sample_rate if session.transport_profile else 0))
                     self._update_audio_diagnostics(session, "provider_out", chunk, diag_encoding, diag_rate)
                 except Exception:
                     logger.debug("Provider audio diagnostics update failed", call_id=call_id, exc_info=True)
                 try:
-                    self.audio_capture.append_encoded(
-                        call_id,
-                        "agent_from_provider",
-                        chunk,
-                        diag_encoding,
-                        diag_rate,
-                    )
+                    if diag_encoding and diag_rate:
+                        self.audio_capture.append_encoded(
+                            call_id,
+                            "agent_from_provider",
+                            chunk,
+                            diag_encoding,
+                            diag_rate,
+                        )
                 except Exception:
                     logger.debug("Provider audio capture failed", call_id=call_id, exc_info=True)
                 # Log provider AgentAudio chunk metrics for RCA
                 try:
-                    rate = int(sample_rate_int or diag_rate or 0) if (locals().get('diag_rate') is not None) else int(sample_rate_int or 0)
+                    rate = int(sample_rate_int or diag_rate or 0)
                 except Exception:
                     rate = 0
                 try:
-                    enc = (encoding or diag_encoding or "").lower() if (locals().get('diag_encoding') is not None) else (encoding or "")
+                    enc = (encoding or diag_encoding or "").lower()
                 except Exception:
                     enc = encoding or ""
                 bps = 2 if enc in ("linear16", "pcm16", "slin", "slin16") else 1
@@ -4180,8 +4297,8 @@ class Engine:
                         if not source_sample_rate:
                             # Fallback: use provider's configured output rate (prevents 8kHz default)
                             try:
-                                provider = session.provider
-                                if hasattr(provider, '_dg_output_rate'):
+                                provider = self.providers.get(session.provider_name)
+                                if provider and hasattr(provider, '_dg_output_rate'):
                                     source_sample_rate = provider._dg_output_rate
                                     logger.debug(
                                         "Using provider configured output rate as source_sample_rate fallback",
@@ -4266,7 +4383,8 @@ class Engine:
                             if remediation:
                                 session.audio_diagnostics["codec_remediation"] = remediation
                             src_encoding = fmt_info.get("encoding") or encoding
-                            src_rate = fmt_info.get("sample_rate") or sample_rate_int or getattr(session.provider, "_dg_output_rate", None)
+                            provider_obj = self.providers.get(session.provider_name)
+                            src_rate = fmt_info.get("sample_rate") or sample_rate_int or (getattr(provider_obj, "_dg_output_rate", None) if provider_obj else None)
                             
                             # DOWNSTREAM_MODE GATING: Check if streaming playback is allowed
                             use_streaming = self.config.downstream_mode != "file"
@@ -4305,6 +4423,8 @@ class Engine:
                             logger.info("Streaming playback started", call_id=call_id)
                         except Exception:
                             logger.error("Failed to start streaming playback", call_id=call_id, exc_info=True)
+                            # CRITICAL: Remove orphan queue so subsequent chunks trigger fresh playback
+                            self._provider_stream_queues.pop(call_id, None)
                             try:
                                 playback_id = await self.playback_manager.play_audio(call_id, out_chunk, "streaming-response")
                                 if not playback_id:
@@ -4506,6 +4626,65 @@ class Engine:
                         error=str(e),
                         exc_info=True
                     )
+            
+            elif etype == "function_call":
+                # Handle tool/function calls from providers (ElevenLabs, etc.)
+                function_name = event.get("function_name")
+                function_call_id = event.get("function_call_id")
+                parameters = event.get("parameters", {})
+                
+                logger.info(
+                    "🔧 Function call received from provider",
+                    call_id=call_id,
+                    function_name=function_name,
+                    function_call_id=function_call_id,
+                )
+                
+                # Execute tool using tool registry
+                try:
+                    result = await self._execute_provider_tool(
+                        call_id=call_id,
+                        function_name=function_name,
+                        function_call_id=function_call_id,
+                        parameters=parameters,
+                        session=session,
+                    )
+                    logger.info(
+                        "✅ Tool execution complete",
+                        call_id=call_id,
+                        function_name=function_name,
+                        status=result.get("status"),
+                    )
+                except Exception as e:
+                    logger.error(
+                        "❌ Tool execution failed",
+                        call_id=call_id,
+                        function_name=function_name,
+                        error=str(e),
+                        exc_info=True,
+                    )
+            
+            elif etype == "transcript":
+                # User speech transcript from provider (ElevenLabs, etc.)
+                text = event.get("text", "").strip()
+                if text and text != "...":
+                    # Add to conversation history
+                    if not hasattr(session, 'conversation_history') or session.conversation_history is None:
+                        session.conversation_history = []
+                    session.conversation_history.append({"role": "user", "content": text})
+                    await self.session_store.upsert_call(session)
+                    logger.debug("Added user transcript to history", call_id=call_id, text_preview=text[:50])
+            
+            elif etype == "agent_transcript":
+                # Agent speech transcript from provider (ElevenLabs, etc.)
+                text = event.get("text", "").strip()
+                if text and text != "...":
+                    # Add to conversation history
+                    if not hasattr(session, 'conversation_history') or session.conversation_history is None:
+                        session.conversation_history = []
+                    session.conversation_history.append({"role": "assistant", "content": text})
+                    await self.session_store.upsert_call(session)
+                    logger.debug("Added agent transcript to history", call_id=call_id, text_preview=text[:50])
             
             else:
                 # Log control/JSON events at debug for now
@@ -4744,18 +4923,14 @@ class Engine:
                                 attempt=attempt,
                             )
                         else:
-                            logger.info("DEBUG: About to play audio", call_id=call_id)
                             await self.playback_manager.play_audio(call_id, bytes(tts_bytes), "pipeline-tts-greeting")
                             
                             # AAVA-85: Persist greeting to session history so it appears in email summary
                             try:
-                                logger.info("DEBUG: PERSISTING GREETING START", call_id=call_id, greeting_len=len(greeting))
                                 session.conversation_history.append({"role": "assistant", "content": greeting})
                                 await self.session_store.upsert_call(session)
-                                logger.info("DEBUG: PERSISTING GREETING DONE", call_id=call_id)
                                 logger.info("Persisted initial greeting to session history", call_id=call_id)
                             except Exception as e:
-                                logger.error("DEBUG: PERSISTING GREETING FAILED", call_id=call_id, error=str(e))
                                 logger.warning("Failed to persist greeting history", call_id=call_id, error=str(e))
                                 
                         break
@@ -5028,11 +5203,7 @@ class Engine:
                         logger.debug("LLM generate failed", call_id=call_id, exc_info=True)
                         return
 
-                    # Milestone7: Handle structured LLM response with tool calls
-                    # from src.pipelines.base import LLMResponse  # Moved to top-level
-                    
-                    logger.info("DEBUG: LLM Result Type", type=str(type(llm_result)), tool_calls_len=len(getattr(llm_result, 'tool_calls', [])), is_llm_response=isinstance(llm_result, LLMResponse), call_id=call_id)
-                    
+                    # Handle structured LLM response with tool calls
                     if isinstance(llm_result, LLMResponse):
                         response_text = (llm_result.text or "").strip()
                         tool_calls = llm_result.tool_calls
@@ -5053,13 +5224,10 @@ class Engine:
                     # AAVA-85: Persist session history so tools (email) can access it
                     session.conversation_history = list(conversation_history)
                     await self.session_store.upsert_call(session)
-                    
-                    logger.info("DEBUG: Post-session-upsert", has_response_text=bool(response_text), has_tool_calls=bool(tool_calls), tool_calls_count=len(tool_calls), call_id=call_id)
 
                     playback_id = None
                     
                     # 1. Synthesize and Play Text (if any)
-                    logger.info("DEBUG: Before TTS block", response_text_len=len(response_text), will_skip_tts=not bool(response_text), call_id=call_id)
                     if response_text:
                         tts_bytes = bytearray()
                         first_tts_ts: Optional[float] = None
@@ -5106,48 +5274,33 @@ class Engine:
                                 logger.error("Pipeline playback exception", call_id=call_id, exc_info=True)
 
                     # 2. Execute Tools (if any)
-                    logger.info("DEBUG: Reached tool execution block", tool_calls_present=bool(tool_calls), tool_calls_count=len(tool_calls), tool_calls_type=str(type(tool_calls)), call_id=call_id)
                     if tool_calls:
-                        logger.info("DEBUG: Inside tool_calls block", tool_calls_count=len(tool_calls), playback_id=playback_id, call_id=call_id)
                         # Wait for playback to finish before executing tools (especially transfer/hangup)
                         if playback_id:
                             try:
                                 # Best effort wait to let user hear the response
-                                # In a real implementation, we'd subscribe to PlaybackFinished
-                                await asyncio.sleep(len(response_text) * 0.08) # Rough estimate 
+                                await asyncio.sleep(len(response_text) * 0.08)
                             except Exception:
                                 pass
 
-                        logger.info("DEBUG: Before import ToolExecutionContext", call_id=call_id)
                         from src.tools.context import ToolExecutionContext
                         from src.tools.registry import tool_registry
-                        logger.info("DEBUG: After imports, before creating context", call_id=call_id)
                         
                         # Create execution context
-                        try:
-                            logger.info("DEBUG: About to create ToolExecutionContext", call_id=call_id)
-                            tool_ctx = ToolExecutionContext(
-                                call_id=call_id,
-                                caller_channel_id=getattr(session, 'channel_id', call_id),
-                                session_store=self.session_store,
-                                ari_client=self.ari_client,
-                                config=self.config.dict(),
-                                provider_name="pipeline"
-                            )
-                            logger.info("DEBUG: ToolExecutionContext created successfully", call_id=call_id)
-                        except Exception as ctx_error:
-                            logger.error("DEBUG: ToolExecutionContext creation FAILED", call_id=call_id, error=str(ctx_error), exc_info=True)
-                            raise
+                        tool_ctx = ToolExecutionContext(
+                            call_id=call_id,
+                            caller_channel_id=getattr(session, 'channel_id', call_id),
+                            session_store=self.session_store,
+                            ari_client=self.ari_client,
+                            config=self.config.dict(),
+                            provider_name="pipeline"
+                        )
 
-                        logger.info("DEBUG: Before for loop", tool_calls_len=len(tool_calls), call_id=call_id)
                         for tool_call in tool_calls:
                             try:
-                                logger.info("DEBUG: Inside for loop iteration", tool_call=tool_call, call_id=call_id)
                                 name = tool_call.get("name")
                                 args = tool_call.get("parameters") or {}
                                 tool = tool_registry.get(name)
-                                
-                                logger.info("DEBUG: Processing tool call", name=name, args=args, tool_found=bool(tool), call_id=call_id)
                                 
                                 if tool:
                                     logger.info("Executing pipeline tool", tool=name, call_id=call_id)
@@ -5670,14 +5823,14 @@ class Engine:
             # Get context config for prompt/greeting and apply to provider
             context_config = None
             logger.debug(
-                "DEBUG: Checking context config",
+                "Checking context config",
                 call_id=session.call_id,
                 transport_context=transport.context if hasattr(transport, 'context') else None,
             )
             if transport.context:
                 context_config = self.transport_orchestrator.get_context_config(transport.context)
                 logger.debug(
-                    "DEBUG: Context config loaded",
+                    "Context config loaded",
                     call_id=session.call_id,
                     context=transport.context,
                     has_config=context_config is not None,
@@ -5768,6 +5921,10 @@ class Engine:
                             error=str(exc),
                             exc_info=True,
                         )
+                    
+                    # Start background music if configured for this context (AAVA-89)
+                    if context_config.background_music:
+                        await self._start_background_music(session, context_config.background_music)
             
             # Note: TransportCard will be emitted by legacy code path
             
@@ -5788,6 +5945,109 @@ class Engine:
                 error=str(exc),
                 exc_info=True,
             )
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # Background Music (AAVA-89)
+    # ─────────────────────────────────────────────────────────────────────────
+    
+    async def _start_background_music(self, session, moh_class: str) -> None:
+        """
+        Start background music playback using bridge MOH.
+        
+        Uses Asterisk's bridge MOH feature to play music to all bridge participants.
+        Note: The AI will hear the music (affects VAD). Use low-volume ambient music
+        to minimize interference with speech detection.
+        
+        Args:
+            session: CallSession with bridge_id
+            moh_class: Music On Hold class name from musiconhold.conf
+        """
+        try:
+            if not session.caller_channel_id:
+                logger.warning(
+                    "Cannot start background music - no caller channel",
+                    call_id=session.call_id,
+                    moh_class=moh_class
+                )
+                return
+            
+            # Use bridge's MOH - plays to all channels in bridge (including AI)
+            # Note: At low volume, this shouldn't significantly impact VAD
+            if not session.bridge_id:
+                logger.warning(
+                    "Cannot start background music - no bridge yet",
+                    call_id=session.call_id,
+                    moh_class=moh_class
+                )
+                return
+            
+            # Start MOH on the bridge itself
+            response = await self.ari_client.send_command(
+                "POST",
+                f"bridges/{session.bridge_id}/moh",
+                data={"mohClass": moh_class}
+            )
+            
+            # Store that we're using bridge MOH (for cleanup)
+            session.music_snoop_channel_id = f"bridge-moh:{session.bridge_id}"
+            await self._save_session(session)
+            
+            logger.info(
+                "🎵 Background music started (bridge MOH)",
+                call_id=session.call_id,
+                bridge_id=session.bridge_id,
+                moh_class=moh_class
+            )
+            
+        except Exception as e:
+            logger.warning(
+                "Background music failed to start",
+                call_id=session.call_id,
+                moh_class=moh_class,
+                error=str(e),
+                exc_info=True
+            )
+    
+    async def _stop_background_music(self, session) -> None:
+        """
+        Stop background music.
+        
+        Handles both bridge MOH and snoop channel approaches.
+        """
+        music_id = getattr(session, 'music_snoop_channel_id', None)
+        if not music_id:
+            return
+        
+        try:
+            if music_id.startswith("bridge-moh:"):
+                # Bridge MOH - stop MOH on the bridge
+                bridge_id = music_id.replace("bridge-moh:", "")
+                await self.ari_client.send_command(
+                    "DELETE",
+                    f"bridges/{bridge_id}/moh"
+                )
+                logger.info(
+                    "🎵 Background music stopped (bridge MOH)",
+                    call_id=session.call_id,
+                    bridge_id=bridge_id
+                )
+            else:
+                # Snoop channel - hang up the channel
+                await self.ari_client.hangup_channel(music_id)
+                logger.info(
+                    "🎵 Background music stopped",
+                    call_id=session.call_id,
+                    snoop_channel_id=music_id
+                )
+        except Exception:
+            # Channel/bridge may already be gone
+            logger.debug(
+                "Background music already stopped",
+                call_id=session.call_id,
+                music_id=music_id
+            )
+        
+        session.music_snoop_channel_id = None
     
     @staticmethod
     def _canonicalize_encoding(value: Optional[str]) -> str:
@@ -6437,7 +6697,7 @@ class Engine:
         session: CallSession,
         pipeline_name: Optional[str] = None,
     ) -> Optional[PipelineResolution]:
-        """Milestone7: Resolve pipeline components for a session and persist metadata."""
+        """Resolve modular pipeline components for a session and persist metadata."""
         if not getattr(self, "pipeline_orchestrator", None):
             return None
         if not self.pipeline_orchestrator.enabled:
@@ -6446,7 +6706,7 @@ class Engine:
             resolution = self.pipeline_orchestrator.get_pipeline(session.call_id, pipeline_name)
         except PipelineOrchestratorError as exc:
             logger.error(
-                "Milestone7 pipeline resolution failed",
+                "Pipeline resolution failed",
                 call_id=session.call_id,
                 requested_pipeline=pipeline_name,
                 error=str(exc),
@@ -6455,7 +6715,7 @@ class Engine:
             return None
         except Exception as exc:
             logger.error(
-                "Milestone7 pipeline resolution unexpected error",
+                "Pipeline resolution unexpected error",
                 call_id=session.call_id,
                 requested_pipeline=pipeline_name,
                 error=str(exc),
@@ -6465,7 +6725,7 @@ class Engine:
  
         if not resolution:
             logger.debug(
-                "Milestone7 pipeline orchestrator returned no resolution",
+                "Pipeline orchestrator returned no resolution",
                 call_id=session.call_id,
                 requested_pipeline=pipeline_name,
             )
@@ -6487,7 +6747,7 @@ class Engine:
             if provider_override in self.providers:
                 if session.provider_name != provider_override:
                     logger.info(
-                        "Milestone7 pipeline overriding provider",
+                        "Pipeline overriding provider",
                         call_id=session.call_id,
                         previous_provider=session.provider_name,
                         override_provider=provider_override,
@@ -6632,7 +6892,7 @@ class Engine:
                 if session.context_name:
                     context_config = self.transport_orchestrator.get_context_config(session.context_name)
                     logger.debug(
-                        "DEBUG: Building provider context",
+                        "Building provider context",
                         call_id=call_id,
                         context_name=session.context_name,
                         has_context_config=bool(context_config),
@@ -6650,7 +6910,7 @@ class Engine:
                             )
                         else:
                             logger.debug(
-                                "DEBUG: No tools found in context config",
+                                "No tools found in context config",
                                 call_id=call_id,
                                 has_tools_attr=hasattr(context_config, 'tools'),
                                 tools_value=getattr(context_config, 'tools', 'NO_ATTR'),
@@ -6677,9 +6937,8 @@ class Engine:
                 except Exception as e:
                     logger.warning(f"Failed to inject tool context: {e}", call_id=call_id)
 
-            logger.info("DEBUG: About to call provider.start_session", call_id=call_id, provider=provider_name)
             await provider.start_session(call_id, context=provider_context if provider_context else None)
-            logger.info("DEBUG: provider.start_session completed", call_id=call_id, provider=provider_name)
+            logger.info("Provider session started", call_id=call_id, provider=provider_name)
             # If provider supports an explicit greeting (e.g., LocalProvider), trigger it now
             try:
                 if hasattr(provider, 'play_initial_greeting'):
@@ -6776,10 +7035,124 @@ class Engine:
         except Exception as exc:
             logger.error("Failed to start health endpoint", error=str(exc), exc_info=True)
 
+    async def _execute_provider_tool(
+        self,
+        call_id: str,
+        function_name: str,
+        function_call_id: str,
+        parameters: Dict[str, Any],
+        session: "CallSession",
+    ) -> Dict[str, Any]:
+        """
+        Execute a tool called by a provider (ElevenLabs, etc.) and send result back.
+        
+        Args:
+            call_id: Call identifier
+            function_name: Name of the tool to execute
+            function_call_id: Provider's ID for this tool call
+            parameters: Tool parameters
+            session: Call session
+        
+        Returns:
+            Tool execution result
+        """
+        from src.tools.context import ToolExecutionContext
+        from src.tools.registry import tool_registry
+        
+        provider_name = getattr(session, 'provider_name', None) or self.config.default_provider
+        provider = self.providers.get(provider_name)
+        
+        result = {"status": "error", "message": f"Tool '{function_name}' not found"}
+        
+        try:
+            # Build tool execution context
+            context = ToolExecutionContext(
+                call_id=call_id,
+                caller_channel_id=session.caller_channel_id,
+                bridge_id=session.bridge_id,
+                session_store=self.session_store,
+                ari_client=self.ari_client,
+                config=self.config.dict() if hasattr(self.config, 'dict') else {},
+                provider_name=provider_name,
+            )
+            
+            # Execute tool via registry (tool_registry is a module-level singleton)
+            tool = tool_registry.get(function_name) if tool_registry else None
+            if tool:
+                result = await tool.execute(parameters, context)
+                
+                # Handle special tools
+                if function_name == "hangup_call" and result.get("will_hangup"):
+                    # For full agent providers like ElevenLabs, they manage their own TTS
+                    # so we should hangup after a short delay for the farewell to play
+                    logger.info("Hangup requested - scheduling delayed hangup", call_id=call_id)
+                    
+                    # Schedule hangup after delay to let farewell audio play
+                    async def delayed_hangup():
+                        await asyncio.sleep(3.0)  # Wait for farewell TTS
+                        try:
+                            current_session = await self.session_store.get_by_call_id(call_id)
+                            if current_session:
+                                await self.ari_client.hangup_channel(current_session.caller_channel_id)
+                                logger.info("✅ Call hung up after farewell", call_id=call_id)
+                        except Exception as e:
+                            logger.debug(f"Delayed hangup failed (may already be hung up): {e}", call_id=call_id)
+                    
+                    asyncio.create_task(delayed_hangup())
+            else:
+                logger.warning(
+                    "Tool not found in registry",
+                    call_id=call_id,
+                    function_name=function_name,
+                    available_tools=tool_registry.list_tools() if tool_registry else [],
+                )
+        except Exception as e:
+            logger.error(
+                "Tool execution error",
+                call_id=call_id,
+                function_name=function_name,
+                error=str(e),
+                exc_info=True,
+            )
+            result = {"status": "error", "message": str(e)}
+        
+        # Send result back to provider
+        if provider and hasattr(provider, 'send_tool_result'):
+            try:
+                is_error = result.get("status") == "error"
+                await provider.send_tool_result(function_call_id, result, is_error=is_error)
+                logger.debug(
+                    "Tool result sent to provider",
+                    call_id=call_id,
+                    function_name=function_name,
+                    function_call_id=function_call_id,
+                )
+            except Exception as e:
+                logger.error(
+                    "Failed to send tool result to provider",
+                    call_id=call_id,
+                    function_name=function_name,
+                    error=str(e),
+                )
+        
+        return result
+
     async def _health_handler(self, request):
         """Return JSON with engine/provider status."""
         try:
-            providers = {}
+            # Gather pipeline details
+            pipelines_info = {}
+            if self.config and hasattr(self.config, 'pipelines'):
+                for p_name, p_cfg in self.config.pipelines.items():
+                    pipelines_info[p_name] = {
+                        "stt": p_cfg.stt,
+                        "llm": p_cfg.llm,
+                        "tts": p_cfg.tts,
+                        "tools": p_cfg.tools
+                    }
+
+            # Gather provider details
+            providers_info = {}
             for name, prov in (self.providers or {}).items():
                 ready = True
                 try:
@@ -6787,7 +7160,7 @@ class Engine:
                         ready = bool(prov.is_ready())
                 except Exception:
                     ready = True
-                providers[name] = {"ready": ready}
+                providers_info[name] = {"ready": ready}
 
             # Compute readiness
             default_ready = False
@@ -6808,7 +7181,8 @@ class Engine:
                 "audio_transport": self.config.audio_transport,
                 "active_calls": len(await self.session_store.get_all_sessions()),
                 "active_playbacks": 0,
-                "providers": providers,
+                "providers": providers_info,
+                "pipelines": pipelines_info,
                 "rtp_server": {},
                 "audiosocket": {
                     "listening": audiosocket_listening,
