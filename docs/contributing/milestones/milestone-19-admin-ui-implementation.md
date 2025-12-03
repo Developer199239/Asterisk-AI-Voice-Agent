@@ -89,6 +89,7 @@ Implemented a production-ready web-based administration interface for the Asteri
   - OpenAI Realtime (full agent)
   - Deepgram Voice Agent (full agent)
   - Google Live API (full agent)
+  - ElevenLabs Agent (full agent) - Added in v4.4.1
   - OpenAI Pipeline (STT/LLM/TTS components)
   - Local Provider (local STT/LLM/TTS)
   - Generic Provider (custom configurations)
@@ -471,6 +472,6 @@ Milestone 19 successfully delivers a modern, production-ready web interface for 
 
 ---
 
-**Document Version**: 1.0  
-**Last Updated**: November 27, 2025  
-**Next Milestone**: Milestone 20 - Call History & Analytics (v1.1)
+**Document Version**: 1.1  
+**Last Updated**: December 3, 2025  
+**Next Milestone**: Milestone 20 - ElevenLabs Provider (v4.4.1)
