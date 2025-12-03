@@ -16,13 +16,13 @@ The most powerful, flexible open-source AI voice agent for Asterisk/FreePBX. Fea
 ## 🎉 What's New in v4.4.1
 
 * **🖥️ Admin UI v1.0**: Modern web interface for configuration and monitoring
-  - Visual setup wizard replaces `agent quickstart` CLI
-  - Real-time dashboard with system metrics and container status
-  - Complete configuration management (providers, pipelines, contexts)
-  - Live log streaming and YAML editor
-  - JWT authentication with default admin/admin credentials
-  - Access at http://localhost:3003 after starting admin-ui container
-  - See [Admin UI Setup Guide](admin_ui/UI_Setup_Guide.md) for details
+    * Visual setup wizard replaces `agent quickstart` CLI
+    * Real-time dashboard with system metrics and container status
+    * Complete configuration management (providers, pipelines, contexts)
+    * Live log streaming and YAML editor
+    * JWT authentication with default admin/admin credentials
+    * Access at http://localhost:3003 after starting admin-ui container
+    * See [Admin UI Setup Guide](admin_ui/UI_Setup_Guide.md) for details
 
 <div align="center">
 <img src="AVA-Admin-UI.jpg" alt="Asterisk AI Voice Agent Admin UI Dashboard" width="800"/>
@@ -30,26 +30,26 @@ The most powerful, flexible open-source AI voice agent for Asterisk/FreePBX. Fea
 </div>
 
 * **🎙️ ElevenLabs Conversational AI**: Premium voice quality provider
-  - Full agent with WebSocket-based real-time conversations
-  - Tool calling support (define in ElevenLabs dashboard, execute locally)
-  - See [ElevenLabs Setup Guide](docs/contributing/references/Provider-ElevenLabs-Implementation.md)
+    * Full agent with WebSocket-based real-time conversations
+    * Tool calling support (define in ElevenLabs dashboard, execute locally)
+    * See [ElevenLabs Setup Guide](docs/contributing/references/Provider-ElevenLabs-Implementation.md)
 
 * **🎵 Background Music**: Ambient music during AI calls
-  - Configure per-context via Admin UI or YAML
-  - Uses Asterisk Music On Hold (MOH) classes
-  - See [Background Music docs](admin_ui/UI_Setup_Guide.md#background-music-configuration)
+    * Configure per-context via Admin UI or YAML
+    * Uses Asterisk Music On Hold (MOH) classes
+    * See [Background Music docs](admin_ui/UI_Setup_Guide.md#background-music-configuration)
 
 <details>
 <summary><b>v4.3 - Complete Tool Support & Documentation</b></summary>
 
 * **🔧 Complete Tool Support for Pipelines**: Tool execution now works across ALL pipeline types, including `local_hybrid`
-  - All 6 tools validated and production-ready: hangup, transfer, email, transcript, voicemail, cancel
-  - Session history persistence for full conversation context
-  - Production-tested with real call flows
+    * All 6 tools validated and production-ready: hangup, transfer, email, transcript, voicemail, cancel
+    * Session history persistence for full conversation context
+    * Production-tested with real call flows
 * **📚 Documentation Overhaul**: Completely reorganized and professional documentation structure
-  - New [developer documentation](docs/contributing/README.md) with guides and references
-  - Comprehensive provider setup guides (Deepgram, OpenAI, Google)
-  - Technical implementation references for all providers
+    * New [developer documentation](docs/contributing/README.md) with guides and references
+    * Comprehensive provider setup guides (Deepgram, OpenAI, Google)
+    * Technical implementation references for all providers
 * **💬 Discord Community**: Official Discord server integration for community support and discussions
 * **🐛 Critical Bug Fixes**: OpenAI Realtime tool schema, execution flow, and Pydantic compatibility issues resolved
 
