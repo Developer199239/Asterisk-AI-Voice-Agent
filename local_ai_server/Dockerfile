@@ -16,6 +16,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # --- Stage 2: Final Runtime Image ---
 FROM python:3.11-slim
 
+# Build argument to optionally include Kroko embedded server
+ARG INCLUDE_KROKO_EMBEDDED=false
+
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y \
     libsndfile1 \
@@ -24,7 +27,27 @@ RUN apt-get update && apt-get install -y \
     libgomp1 \
     libatomic1 \
     sox \
+    wget \
     && rm -rf /var/lib/apt/lists/*
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Optional: Install Kroko ONNX server for embedded mode
+# Only included if INCLUDE_KROKO_EMBEDDED=true during build
+# ─────────────────────────────────────────────────────────────────────────────
+RUN if [ "$INCLUDE_KROKO_EMBEDDED" = "true" ]; then \
+        echo "Installing ONNX Runtime for Kroko..." && \
+        wget -q https://github.com/microsoft/onnxruntime/releases/download/v1.17.1/onnxruntime-linux-x64-1.17.1.tgz && \
+        tar -xzf onnxruntime-linux-x64-1.17.1.tgz && \
+        mv onnxruntime-linux-x64-1.17.1/lib/* /usr/lib/ && \
+        rm -rf onnxruntime-linux-x64-1.17.1* && \
+        echo "Downloading Kroko ONNX server binary..." && \
+        wget -q https://download.kroko.ai/binaries/kroko-onnx-online-websocket-server \
+            -O /usr/local/bin/kroko-server && \
+        chmod +x /usr/local/bin/kroko-server && \
+        echo "Kroko embedded server installed successfully"; \
+    else \
+        echo "Skipping Kroko embedded server (use KROKO_URL for external/hosted)"; \
+    fi
 
 WORKDIR /app
 
