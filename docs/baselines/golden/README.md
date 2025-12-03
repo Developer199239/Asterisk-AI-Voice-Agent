@@ -7,6 +7,7 @@ This directory provides **quick reference links** for golden baselines, used in 
 - **Deepgram Agent**: see `deepgram.md`
 - **OpenAI Realtime**: see `openai.md`
 - **Google Live**: see `google-live.md`
+- **ElevenLabs Agent**: see [`docs/contributing/references/Provider-ElevenLabs-Implementation.md`](../../contributing/references/Provider-ElevenLabs-Implementation.md)
 
 ## Purpose
 

@@ -57,6 +57,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Full agents blocked from modular pipeline slots
   - Modular providers require explicit `capabilities` arrays
 
+### Added - ElevenLabs Conversational AI Provider (AAVA-90)
+- **Full Agent Provider**: ElevenLabs Conversational AI integration
+  - WebSocket-based real-time voice conversations (STT + LLM + TTS)
+  - Premium voice quality with natural conversation flow
+  - Tool calling support (tools defined in ElevenLabs dashboard, executed locally)
+  - Audio format: PCM16 16kHz, automatic resampling from telephony (μ-law 8kHz)
+- **Configuration**: 
+  - `ELEVENLABS_API_KEY` and `ELEVENLABS_AGENT_ID` environment variables
+  - Provider config in `ai-agent.yaml` under `providers.elevenlabs_agent`
+  - Admin UI support: Wizard option, provider form, card badges
+- **Documentation**: `docs/contributing/references/Provider-ElevenLabs-Implementation.md` (578 lines)
+- **Files**: `src/providers/elevenlabs_agent.py`, `src/providers/elevenlabs_config.py`, `src/tools/adapters/elevenlabs.py`
+
+### Added - Background Music Support (AAVA-89)
+- **In-Call Background Music**: Play music during AI conversations
+  - Uses Asterisk Music On Hold (MOH) via snoop channel
+  - Configurable per-context via `background_music` field
+  - Admin UI toggle in Context configuration
+- **Implementation**: Snoop channel with MOH starts when call begins, stops on hangup
+- **Configuration**: Set MOH class name (default: "default") in context settings
+- **Note**: Music is heard by AI (affects VAD); use low-volume ambient music for best results
+
 ### Changed
 - **Port Configuration**: Admin UI runs on port 3003 (updated from 3000)
 - **Version Numbers**: Admin UI frontend package.json updated to 1.0.0

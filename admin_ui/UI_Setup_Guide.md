@@ -422,6 +422,46 @@ The main dashboard shows:
 - Set greetings and prompts
 - Override providers per context
 - Configure audio profiles
+- Enable background music (see below)
+
+#### Background Music Configuration
+
+Enable ambient music during AI conversations. Music plays to the caller while they talk with the AI agent.
+
+**How to Enable**:
+1. Go to **Configuration → Contexts**
+2. Edit a context (or create new)
+3. Scroll to **Background Music** section
+4. Toggle **Enable Background Music**
+5. Enter MOH class name (default: `default`)
+6. Save changes
+
+**Setting Up Music On Hold in Asterisk**:
+
+1. **Place audio files** in `/var/lib/asterisk/moh/<class-name>/`
+   ```bash
+   # Example: Create custom class
+   mkdir -p /var/lib/asterisk/moh/ambient
+   cp your-music.wav /var/lib/asterisk/moh/ambient/
+   ```
+
+2. **For FreePBX**: Go to **Settings → Music On Hold** to create categories
+
+3. **Supported formats**: WAV, ulaw, alaw, sln, mp3
+
+**Best Practices**:
+- **Reduce volume to 15-20%** - Loud music interferes with conversation
+- Use **ambient/instrumental** music without lyrics
+- Music is heard by the AI (affects VAD) - low volume helps accuracy
+- Test with a real call before production use
+
+**YAML Configuration** (manual):
+```yaml
+contexts:
+  my_context:
+    greeting: "Hello!"
+    background_music: "ambient"  # MOH class name
+```
 
 **Audio Profiles**:
 - Edit encoding settings

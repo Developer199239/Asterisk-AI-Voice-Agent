@@ -11,7 +11,7 @@
 [![Discord](https://dcbadge.limes.pink/api/server/CAVACtaY)](https://discord.gg/QhPSju6aCh)
 
 
-The most powerful, flexible open-source AI voice agent for Asterisk/FreePBX. Featuring a **modular pipeline architecture** that lets you mix and match STT, LLM, and TTS providers, plus **4 production-ready golden baselines** validated for enterprise deployment.
+The most powerful, flexible open-source AI voice agent for Asterisk/FreePBX. Featuring a **modular pipeline architecture** that lets you mix and match STT, LLM, and TTS providers, plus **5 production-ready golden baselines** validated for enterprise deployment.
 
 ## 🎉 What's New in v4.4.1
 
@@ -23,6 +23,16 @@ The most powerful, flexible open-source AI voice agent for Asterisk/FreePBX. Fea
   - JWT authentication with default admin/admin credentials
   - Access at http://localhost:3003 after starting admin-ui container
   - See [Admin UI Setup Guide](admin_ui/UI_Setup_Guide.md) for details
+
+* **🎙️ ElevenLabs Conversational AI**: Premium voice quality provider
+  - Full agent with WebSocket-based real-time conversations
+  - Tool calling support (define in ElevenLabs dashboard, execute locally)
+  - See [ElevenLabs Setup Guide](docs/contributing/references/Provider-ElevenLabs-Implementation.md)
+
+* **🎵 Background Music**: Ambient music during AI calls
+  - Configure per-context via Admin UI or YAML
+  - Uses Asterisk Music On Hold (MOH) classes
+  - See [Background Music docs](admin_ui/UI_Setup_Guide.md#background-music-configuration)
 
 ### Previous Releases
 
@@ -77,7 +87,7 @@ The most powerful, flexible open-source AI voice agent for Asterisk/FreePBX. Fea
 
 ## ✨ Features
 
-### 4 Golden Baseline Configurations
+### 5 Golden Baseline Configurations
 
 1. **OpenAI Realtime** (Recommended for Quick Start)
    * Modern cloud AI with natural conversations
@@ -94,7 +104,12 @@ The most powerful, flexible open-source AI voice agent for Asterisk/FreePBX. Fea
    * Response time: <2 seconds
    * Best for: Google ecosystem, advanced AI features
 
-4. **Local Hybrid** (Privacy-Focused)
+4. **ElevenLabs Agent** (Premium Voice Quality)
+   * ElevenLabs Conversational AI with premium voices
+   * Response time: <2 seconds
+   * Best for: Voice quality priority, natural conversations
+
+5. **Local Hybrid** (Privacy-Focused)
    * Local STT/TTS + Cloud LLM (OpenAI)
    * Audio stays on-premises, only text to cloud
    * Response time: 3-7 seconds
