@@ -174,7 +174,7 @@ docker-compose up -d admin-ui
 
 ### 📞 Try it Live! (US Only)
 
-Experience all four production-ready configurations with a single phone call:
+Experience all five production-ready configurations with a single phone call:
 
 **Dial: (925) 736-6718**
 
@@ -182,8 +182,9 @@ Experience all four production-ready configurations with a single phone call:
 * **Press 6** → Deepgram Voice Agent (Enterprise cloud with Think stage)
 * **Press 7** → OpenAI Realtime API (Modern cloud AI, most natural)
 * **Press 8** → Local Hybrid Pipeline (Privacy-focused, audio stays local)
+* **Press 9** → ElevenLabs Agent (Premium voice quality, ultra-realistic speech)
 
-Each configuration uses the same Ava persona with full project knowledge. Compare response times, conversation quality, and naturalness across providers!
+Each configuration uses the same Ava persona with full project knowledge. Compare response times, voice quality, and naturalness across providers!
 
 **Try it out**: Ask the agent to "transfer me to support" or "email me a transcript"!
 
