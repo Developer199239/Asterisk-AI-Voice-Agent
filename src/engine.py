@@ -493,19 +493,22 @@ class Engine:
             logger.warning(f"Failed to initialize tool calling system: {e}", exc_info=True)
 
         # Start modular pipeline orchestrator to prepare per-call component lookups.
+        # Note: Full agent providers (deepgram, google_live, openai_realtime, elevenlabs_agent, local)
+        # don't need pipelines - they handle STT+LLM+TTS internally. Pipeline errors are expected
+        # when using full agent mode without modular pipeline configuration.
         try:
             await self.pipeline_orchestrator.start()
         except PipelineOrchestratorError as exc:
-            logger.error(
-                "Modular pipeline orchestrator failed to start; using direct provider mode",
-                error=str(exc),
-                exc_info=True,
+            # This is expected when using full agent mode without modular pipelines configured
+            logger.info(
+                "Pipeline orchestrator not configured - using full agent provider mode. "
+                "This is normal when default_provider is a full agent (deepgram, google_live, openai_realtime, elevenlabs_agent, local).",
+                detail=str(exc),
             )
         except Exception as exc:
-            logger.error(
-                "Unexpected error starting pipeline orchestrator",
+            logger.warning(
+                "Unexpected error starting pipeline orchestrator - falling back to direct provider mode",
                 error=str(exc),
-                exc_info=True,
             )
 
         # 2) Start health server EARLY so diagnostics are available even if transport/ARI fail
@@ -817,9 +820,12 @@ class Engine:
                 logger.error(f"Failed to load provider '{name}': {e}", exc_info=True)
         
         # Validate that default provider is available
-        if self.config.default_provider != "deepgram":
-            available_providers = list(self.providers.keys())
-            logger.error(f"Default provider '{self.config.default_provider}' not available. Available providers: {available_providers}")
+        available_providers = list(self.providers.keys())
+        if self.config.default_provider not in available_providers:
+            logger.error(
+                f"Default provider '{self.config.default_provider}' not loaded. "
+                f"Check provider configuration and API keys. Available providers: {available_providers}"
+            )
         else:
             logger.info(f"Default provider '{self.config.default_provider}' is available and ready.")
             
