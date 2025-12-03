@@ -194,6 +194,10 @@ asterisk_media/
 # Admin UI user database (generated at first login)
 config/users.json
 
+# Logs and archived folders (development artifacts, not for main)
+logs/
+archived/
+
 # IDE specific
 *.swp
 *.swo
