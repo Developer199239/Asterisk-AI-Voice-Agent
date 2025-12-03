@@ -9,6 +9,7 @@
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![Docker](https://img.shields.io/badge/docker-compose-2496ED.svg?logo=docker&logoColor=white)](https://www.docker.com/)
 [![Asterisk](https://img.shields.io/badge/asterisk-18+-orange.svg)](https://www.asterisk.org/)
+[![Discord](https://img.shields.io/badge/Discord-Join%20Us-5865F2?style=flat&logo=discord&logoColor=white)](https://discord.gg/QhPSju6aCh)
 
 **A production-ready, modular voice agent platform integrating Asterisk with modern AI providers.**
 *Build intelligent, conversational voice experiences with ease.*
