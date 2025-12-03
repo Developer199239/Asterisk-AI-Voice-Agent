@@ -297,7 +297,7 @@ const ProvidersPage: React.FC = () => {
                                             )}
                                         </div>
                                         <div className="flex flex-wrap gap-2 mt-1">
-                                            {(providerData.model || providerData.voice || providerData.tts_model || providerData.llm_model || providerData.tts_voice_name || providerData.agent_id) && (
+                                            {(providerData.model || providerData.voice || providerData.tts_model || providerData.llm_model || providerData.tts_voice_name || providerData.agent_id || providerData.voice_id || providerData.model_id) && (
                                                 <>
                                                     {providerData.model && (
                                                         <span className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 text-foreground">
@@ -324,7 +324,17 @@ const ProvidersPage: React.FC = () => {
                                                             {providerData.tts_voice_name}
                                                         </span>
                                                     )}
-                                                    {providerData.agent_id && (
+                                                    {providerData.model_id && (
+                                                        <span className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 text-foreground">
+                                                            {providerData.model_id}
+                                                        </span>
+                                                    )}
+                                                    {providerData.voice_id && (
+                                                        <span className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 text-muted-foreground" title={providerData.voice_id}>
+                                                            {providerData.voice_id.length > 15 ? `${providerData.voice_id.substring(0, 15)}...` : providerData.voice_id}
+                                                        </span>
+                                                    )}
+                                                    {providerData.agent_id && !providerData.agent_id.startsWith('${') && (
                                                         <span className="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 text-muted-foreground" title={providerData.agent_id}>
                                                             {providerData.agent_id.length > 20 ? `${providerData.agent_id.substring(0, 20)}...` : providerData.agent_id}
                                                         </span>

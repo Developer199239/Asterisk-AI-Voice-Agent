@@ -877,17 +877,6 @@ const Wizard = () => {
                                 )}
                             </div>
                         )}
-
-                        <div className="space-y-2 pt-4 border-t border-border">
-                            <label className="text-sm font-medium">ElevenLabs API Key (Optional)</label>
-                            <input
-                                type="password"
-                                className="w-full p-2 rounded-md border border-input bg-background"
-                                value={config.elevenlabs_key || ''}
-                                onChange={e => setConfig({ ...config, elevenlabs_key: e.target.value })}
-                                placeholder="xi-..."
-                            />
-                        </div>
                     </div>
                 )}
 
