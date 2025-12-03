@@ -116,8 +116,8 @@ def setup_media_paths() -> dict:
         # Using alpine image with host volume mounts
         symlink_script = f'''
             mkdir -p /mnt/asterisk_media/ai-generated 2>/dev/null || true
-            chmod 777 /mnt/asterisk_media/ai-generated 2>/dev/null || true
-            chmod 777 /mnt/asterisk_media 2>/dev/null || true
+            chmod 775 /mnt/asterisk_media/ai-generated 2>/dev/null || true
+            chmod 775 /mnt/asterisk_media 2>/dev/null || true
             if [ -L /var/lib/asterisk/sounds/ai-generated ] || [ -e /var/lib/asterisk/sounds/ai-generated ]; then
                 rm -rf /var/lib/asterisk/sounds/ai-generated 2>/dev/null || true
             fi

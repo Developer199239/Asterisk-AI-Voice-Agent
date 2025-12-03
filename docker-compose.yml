@@ -5,6 +5,12 @@
 # - No port mapping needed
 # - Best for telephony integrations
 #
+# PERMISSION ALIGNMENT:
+# If your Asterisk uses a different GID than 995 (FreePBX default):
+#   export ASTERISK_GID=$(id -g asterisk)
+#   docker compose build ai-engine
+#   docker compose up -d
+#
 # For optional monitoring (Prometheus + Grafana), use:
 #   docker compose -f docker-compose.monitoring.yml up -d
 #
@@ -15,6 +21,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        ASTERISK_GID: ${ASTERISK_GID:-995}
     container_name: ai_engine
     user: "appuser"
     network_mode: host

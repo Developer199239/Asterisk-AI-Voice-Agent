@@ -188,6 +188,9 @@ test_piper.py
 # Docker volumes
 docker-data/
 
+# Asterisk media files (generated at runtime)
+asterisk_media/
+
 # IDE specific
 *.swp
 *.swo
