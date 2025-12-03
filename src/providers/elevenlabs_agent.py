@@ -23,7 +23,7 @@ import websockets
 from websockets.client import WebSocketClientProtocol
 
 from .base import AIProviderInterface, ProviderCapabilities, ProviderCapabilitiesMixin
-from .elevenlabs_config import ElevenLabsConversationalConfig
+from .elevenlabs_config import ElevenLabsAgentConfig
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +43,7 @@ class ElevenLabsSessionState:
             self.pending_audio_chunks = []
 
 
-class ElevenLabsConversationalProvider(AIProviderInterface, ProviderCapabilitiesMixin):
+class ElevenLabsAgentProvider(AIProviderInterface, ProviderCapabilitiesMixin):
     """
     ElevenLabs Conversational AI full agent provider.
     
@@ -56,7 +56,7 @@ class ElevenLabsConversationalProvider(AIProviderInterface, ProviderCapabilities
     
     def __init__(
         self,
-        config: ElevenLabsConversationalConfig,
+        config: ElevenLabsAgentConfig,
         on_event: Callable[[Dict[str, Any]], None],
         tool_registry: Optional[Any] = None,
     ):
@@ -160,7 +160,7 @@ class ElevenLabsConversationalProvider(AIProviderInterface, ProviderCapabilities
             await self.on_event({
                 "type": "session_started",
                 "call_id": call_id,
-                "provider": "elevenlabs_conversational",
+                "provider": "elevenlabs_agent",
             })
             
         except asyncio.TimeoutError:
@@ -338,7 +338,7 @@ class ElevenLabsConversationalProvider(AIProviderInterface, ProviderCapabilities
         await self.on_event({
             "type": "session_ended",
             "call_id": self._call_id,
-            "provider": "elevenlabs_conversational",
+            "provider": "elevenlabs_agent",
             "audio_sent_bytes": self._session_state.total_audio_sent,
             "audio_received_bytes": self._session_state.total_audio_received,
         })

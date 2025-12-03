@@ -894,7 +894,7 @@ async def save_setup_config(config: SetupConfig):
     # Local hybrid uses OpenAI for LLM, so check that too
     if config.provider == "local_hybrid" and not config.openai_key:
             raise HTTPException(status_code=400, detail="OpenAI API Key is required for Local Hybrid pipeline (LLM)")
-    if config.provider == "elevenlabs_conversational":
+    if config.provider == "elevenlabs_agent":
         if not config.elevenlabs_key:
             raise HTTPException(status_code=400, detail="ElevenLabs API Key is required for ElevenLabs Conversational provider")
         if not config.elevenlabs_agent_id:
@@ -1015,12 +1015,12 @@ async def save_setup_config(config: SetupConfig):
                 yaml_config["providers"].setdefault("deepgram", {})["enabled"] = False
                 yaml_config["providers"].setdefault("local", {})["enabled"] = False
 
-            elif config.provider == "elevenlabs_conversational":
-                yaml_config["default_provider"] = "elevenlabs_conversational"
+            elif config.provider == "elevenlabs_agent":
+                yaml_config["default_provider"] = "elevenlabs_agent"
                 yaml_config.setdefault("providers", {})
-                yaml_config["providers"].setdefault("elevenlabs_conversational", {})["enabled"] = True
-                yaml_config["providers"]["elevenlabs_conversational"]["api_key"] = "${ELEVENLABS_API_KEY}"
-                yaml_config["providers"]["elevenlabs_conversational"]["agent_id"] = "${ELEVENLABS_AGENT_ID}"
+                yaml_config["providers"].setdefault("elevenlabs_agent", {})["enabled"] = True
+                yaml_config["providers"]["elevenlabs_agent"]["api_key"] = "${ELEVENLABS_API_KEY}"
+                yaml_config["providers"]["elevenlabs_agent"]["agent_id"] = "${ELEVENLABS_AGENT_ID}"
                 # ElevenLabs greeting is configured in the agent dashboard, not here
                 yaml_config["providers"].setdefault("openai_realtime", {})["enabled"] = False
                 yaml_config["providers"].setdefault("deepgram", {})["enabled"] = False

@@ -94,7 +94,7 @@ class AudioGatingManager:
                 'gating_enabled': False,  # Hybrid mode doesn't need gating
                 'sample_rate': 16000,  # Common for hybrid pipelines
             },
-            'elevenlabs_conversational': {
+            'elevenlabs_agent': {
                 'gating_enabled': False,  # ElevenLabs handles VAD/echo internally
                 'sample_rate': 16000,  # ElevenLabs uses 16kHz PCM16
             }

@@ -4,7 +4,7 @@ Complete technical reference for ElevenLabs Conversational AI integration in Ast
 
 ## Overview
 
-**File**: `src/providers/elevenlabs_conversational.py`
+**File**: `src/providers/elevenlabs_agent.py`
 
 ElevenLabs Conversational AI is a full-agent provider with built-in STT (Speech-to-Text), LLM reasoning, and TTS (Text-to-Speech) in a single WebSocket connection.
 
@@ -67,7 +67,7 @@ ElevenLabs uses **Client Tools** - tools defined in the dashboard but executed b
 
 ```yaml
 providers:
-  elevenlabs_conversational:
+  elevenlabs_agent:
     api_key: ${ELEVENLABS_API_KEY}
     agent_id: ${ELEVENLABS_AGENT_ID}
     enabled: true
@@ -80,7 +80,7 @@ providers:
 
 contexts:
   demo_elevenlabs:
-    provider: elevenlabs_conversational
+    provider: elevenlabs_agent
     greeting: ""  # Greeting managed by ElevenLabs agent
 ```
 
@@ -549,7 +549,7 @@ History is stored in `session.conversation_history` for email summaries and tran
 - Authentication: https://elevenlabs.io/docs/api-reference/authentication
 
 ### Project Documentation
-- Provider Implementation: `src/providers/elevenlabs_conversational.py`
+- Provider Implementation: `src/providers/elevenlabs_agent.py`
 - Config Classes: `src/providers/elevenlabs_config.py`
 - Tool Adapter: `src/tools/adapters/elevenlabs.py`
 

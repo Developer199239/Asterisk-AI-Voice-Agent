@@ -63,7 +63,7 @@ const ProvidersPage: React.FC = () => {
                 if (lowerName.includes('openai')) providerData.type = 'openai';
                 else if (lowerName.includes('deepgram')) providerData.type = 'deepgram';
                 else if (lowerName.includes('google') || lowerName.includes('gemini')) providerData.type = 'google_live';
-                else if (lowerName.includes('elevenlabs')) providerData.type = 'elevenlabs_conversational';
+                else if (lowerName.includes('elevenlabs')) providerData.type = 'elevenlabs_agent';
                 else if (lowerName.includes('local')) providerData.type = 'local';
                 else providerData.type = 'other';
             }
@@ -227,7 +227,7 @@ const ProvidersPage: React.FC = () => {
                 return <GoogleLiveProviderForm config={providerForm} onChange={updateForm} />;
             case 'openai':
                 return <OpenAIProviderForm config={providerForm} onChange={updateForm} />;
-            case 'elevenlabs_conversational':
+            case 'elevenlabs_agent':
                 return <ElevenLabsProviderForm config={providerForm} onChange={updateForm} />;
             default:
                 return <GenericProviderForm config={providerForm} onChange={updateForm} isNew={isNewProvider} />;

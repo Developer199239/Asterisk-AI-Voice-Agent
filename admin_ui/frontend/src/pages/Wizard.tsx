@@ -207,7 +207,7 @@ const Wizard = () => {
                 setError('Google API key is required for Google Live.');
                 return;
             }
-            if (config.provider === 'elevenlabs_conversational') {
+            if (config.provider === 'elevenlabs_agent') {
                 if (!config.elevenlabs_key) {
                     setError('ElevenLabs API key is required.');
                     return;
@@ -262,7 +262,7 @@ const Wizard = () => {
                     }
                 }
 
-                if (config.provider === 'elevenlabs_conversational') {
+                if (config.provider === 'elevenlabs_agent') {
                     if (!config.elevenlabs_agent_id) {
                         throw new Error('ElevenLabs Agent ID is required');
                     }
@@ -483,7 +483,7 @@ const Wizard = () => {
                                 icon={HardDrive}
                             />
                             <ProviderCard
-                                id="elevenlabs_conversational"
+                                id="elevenlabs_agent"
                                 title="ElevenLabs Conversational"
                                 description="High-quality voices with pre-configured agent. Configure voice, prompt, and tools in ElevenLabs dashboard."
                                 icon={Cloud}
@@ -625,7 +625,7 @@ const Wizard = () => {
                             </div>
                         )}
 
-                        {config.provider === 'elevenlabs_conversational' && (
+                        {config.provider === 'elevenlabs_agent' && (
                             <div className="space-y-4">
                                 <div className="bg-blue-50/50 dark:bg-blue-900/10 p-4 rounded-md border border-blue-100 dark:border-blue-900/20 text-sm text-blue-800 dark:text-blue-300">
                                     <p className="font-semibold mb-1">ElevenLabs Conversational AI</p>

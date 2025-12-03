@@ -15,7 +15,7 @@ class ElevenLabsVoiceSettings:
 
 
 @dataclass
-class ElevenLabsConversationalConfig:
+class ElevenLabsAgentConfig:
     """Configuration for ElevenLabs Conversational AI (Full Agent) provider."""
     # Authentication
     api_key: str = ""
@@ -59,7 +59,7 @@ class ElevenLabsConversationalConfig:
     input_gain_max_db: int = 0
     
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "ElevenLabsConversationalConfig":
+    def from_dict(cls, data: Dict[str, Any]) -> "ElevenLabsAgentConfig":
         """Create config from dictionary (YAML)."""
         voice_settings_data = data.pop("voice_settings", {})
         voice_settings = ElevenLabsVoiceSettings(**voice_settings_data) if voice_settings_data else ElevenLabsVoiceSettings()

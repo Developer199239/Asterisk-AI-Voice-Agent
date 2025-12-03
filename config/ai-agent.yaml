@@ -211,7 +211,7 @@ contexts:
       \ detail is requested\n\nCALL ENDING PROTOCOL:\n- When the caller indicates\
       \ they're done, confirm: \"Is there anything else I can help with?\"\n- After\
       \ confirmation, use the hangup_call tool with a warm farewell\n"
-    provider: elevenlabs_conversational
+    provider: elevenlabs_agent
     tools:
     - transfer
     - cancel_transfer
@@ -454,7 +454,7 @@ providers:
       type: server_vad
     type: openai_realtime
     voice: alloy
-  elevenlabs_conversational:
+  elevenlabs_agent:
     # ElevenLabs Conversational AI - Full Agent Provider
     # Requires: ELEVENLABS_API_KEY and ELEVENLABS_AGENT_ID in .env
     # Create an agent at https://elevenlabs.io/app/agents and copy the agent_id
