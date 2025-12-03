@@ -172,6 +172,8 @@ Common pitfalls:
 
 Full agent provider using ElevenLabs Conversational AI for premium voice quality.
 
+> **Scope Note**: ElevenLabs is supported as a **full agent only** (STT+LLM+TTS combined). TTS-only mode for hybrid pipelines is not currently supported. Use ElevenLabs when you want premium voice quality with their hosted agent handling the entire conversation.
+
 - `providers.elevenlabs_agent.api_key`: ElevenLabs API key (or use `ELEVENLABS_API_KEY` env var).
 - `providers.elevenlabs_agent.agent_id`: ElevenLabs Agent ID from [ElevenLabs dashboard](https://elevenlabs.io/app/agents) (or use `ELEVENLABS_AGENT_ID` env var).
 - `providers.elevenlabs_agent.voice_id`: Voice ID for TTS output (configured in agent dashboard).

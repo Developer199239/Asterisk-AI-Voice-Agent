@@ -231,6 +231,24 @@ async def test_provider_connection(request: ProviderTestRequest):
                         return {"success": True, "message": f"Connected to OpenAI (HTTP {response.status_code})"}
                     return {"success": False, "message": f"OpenAI API error: HTTP {response.status_code}"}
         
+        elif 'agent_id' in provider_config or 'elevenlabs' in provider_name.lower():
+            # ElevenLabs Agent
+            api_key = get_env_key('ELEVENLABS_API_KEY')
+            if not api_key:
+                return {"success": False, "message": "ELEVENLABS_API_KEY not set in .env file. ElevenLabs requires API key in environment variables."}
+            agent_id = get_env_key('ELEVENLABS_AGENT_ID')
+            if not agent_id:
+                return {"success": False, "message": "ELEVENLABS_AGENT_ID not set in .env file. Set this to your agent ID from elevenlabs.io/app/agents"}
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    "https://api.elevenlabs.io/v1/user",
+                    headers={"xi-api-key": api_key},
+                    timeout=10.0
+                )
+                if response.status_code == 200:
+                    return {"success": True, "message": f"Connected to ElevenLabs API (HTTP {response.status_code}). Agent ID: {agent_id[:8]}..."}
+                return {"success": False, "message": f"ElevenLabs API error: HTTP {response.status_code}"}
+        
         return {"success": False, "message": "Unknown provider type - cannot test"}
         
     except httpx.TimeoutException:

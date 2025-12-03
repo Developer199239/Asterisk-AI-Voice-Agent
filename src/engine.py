@@ -5952,13 +5952,14 @@ class Engine:
     
     async def _start_background_music(self, session, moh_class: str) -> None:
         """
-        Start background music playback using a Snoop channel with MOH.
+        Start background music playback using bridge MOH.
         
-        Uses Asterisk's Snoop channel in 'whisper' mode to inject audio
-        TO the caller only, without affecting the bridge (AI won't hear it).
+        Uses Asterisk's bridge MOH feature to play music to all bridge participants.
+        Note: The AI will hear the music (affects VAD). Use low-volume ambient music
+        to minimize interference with speech detection.
         
         Args:
-            session: CallSession with caller_channel_id
+            session: CallSession with bridge_id
             moh_class: Music On Hold class name from musiconhold.conf
         """
         try:

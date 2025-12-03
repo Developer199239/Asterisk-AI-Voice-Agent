@@ -18,10 +18,12 @@ const ElevenLabsProviderForm: React.FC<ElevenLabsProviderFormProps> = ({ config,
                 <div className="flex items-start gap-3">
                     <Info className="w-5 h-5 text-blue-600 dark:text-blue-400 mt-0.5 flex-shrink-0" />
                     <div className="text-sm text-blue-800 dark:text-blue-300">
-                        <p className="font-semibold mb-1">ElevenLabs Conversational AI</p>
+                        <p className="font-semibold mb-1">ElevenLabs Conversational AI (Full Agent Only)</p>
                         <p className="text-blue-700 dark:text-blue-400">
                             This provider uses a pre-configured agent from your ElevenLabs dashboard.
                             Voice, system prompt, LLM model, and first message are all configured there.
+                            <strong className="block mt-1">Note:</strong> ElevenLabs is a full agent provider (STT+LLM+TTS).
+                            TTS-only mode for hybrid pipelines is not currently supported.
                         </p>
                     </div>
                 </div>
@@ -73,17 +75,24 @@ const ElevenLabsProviderForm: React.FC<ElevenLabsProviderFormProps> = ({ config,
             {/* Authentication */}
             <div>
                 <h4 className="font-semibold mb-3">Authentication</h4>
+                <div className="bg-amber-50/30 dark:bg-amber-900/10 p-3 rounded-md border border-amber-200 dark:border-amber-900/30 mb-3">
+                    <p className="text-sm text-amber-800 dark:text-amber-300">
+                        <strong>⚠️ Required:</strong> Set <code className="bg-amber-100 dark:bg-amber-900/50 px-1 rounded">ELEVENLABS_API_KEY</code> and{' '}
+                        <code className="bg-amber-100 dark:bg-amber-900/50 px-1 rounded">ELEVENLABS_AGENT_ID</code> in your <strong>.env file</strong>.
+                        The engine reads credentials from environment variables only (for security).
+                    </p>
+                </div>
                 <div className="space-y-2">
-                    <label className="text-sm font-medium">API Key (Environment Variable)</label>
+                    <label className="text-sm font-medium text-muted-foreground">API Key Reference (read-only)</label>
                     <input
                         type="text"
-                        className="w-full p-2 rounded border border-input bg-background"
-                        value={config.api_key || '${ELEVENLABS_API_KEY}'}
-                        onChange={(e) => handleChange('api_key', e.target.value)}
-                        placeholder="${ELEVENLABS_API_KEY}"
+                        className="w-full p-2 rounded border border-input bg-muted cursor-not-allowed"
+                        value="${ELEVENLABS_API_KEY}"
+                        disabled
+                        readOnly
                     />
                     <p className="text-xs text-muted-foreground">
-                        Use {'${VAR_NAME}'} to reference environment variables. Set ELEVENLABS_API_KEY in your .env file.
+                        API key is loaded from ELEVENLABS_API_KEY environment variable. Edit via Environment Variables page.
                     </p>
                 </div>
             </div>
