@@ -118,6 +118,15 @@ class ElevenLabsAgentProvider(AIProviderInterface, ProviderCapabilitiesMixin):
         self._call_id = call_id
         self._session_state = ElevenLabsSessionState()
         
+        # Reset connection state for new session
+        self._connected = False
+        self._closing = False
+        self._ws = None
+        self._receive_task = None
+        self._keepalive_task = None
+        self._resample_state_in = None
+        self._resample_state_out = None
+        
         if on_event:
             self.on_event = on_event
         
