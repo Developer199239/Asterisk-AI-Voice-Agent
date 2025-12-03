@@ -191,6 +191,9 @@ docker-data/
 # Asterisk media files (generated at runtime)
 asterisk_media/
 
+# Admin UI user database (generated at first login)
+config/users.json
+
 # IDE specific
 *.swp
 *.swo

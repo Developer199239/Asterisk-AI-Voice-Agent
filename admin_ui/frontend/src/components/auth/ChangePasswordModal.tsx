@@ -6,9 +6,10 @@ import { FormInput } from '../ui/FormComponents';
 interface ChangePasswordModalProps {
     isOpen: boolean;
     onClose: () => void;
+    mandatory?: boolean;  // If true, user cannot close modal without changing password
 }
 
-const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({ isOpen, onClose }) => {
+const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({ isOpen, onClose, mandatory = false }) => {
     const [oldPassword, setOldPassword] = useState('');
     const [newPassword, setNewPassword] = useState('');
     const [confirmPassword, setConfirmPassword] = useState('');
@@ -55,19 +56,29 @@ const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({ isOpen, onClo
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
             <div className="bg-card w-full max-w-md rounded-lg border border-border shadow-lg p-6 relative">
-                <button
-                    onClick={onClose}
-                    className="absolute top-4 right-4 text-muted-foreground hover:text-foreground"
-                >
-                    <X className="w-5 h-5" />
-                </button>
+                {!mandatory && (
+                    <button
+                        onClick={onClose}
+                        className="absolute top-4 right-4 text-muted-foreground hover:text-foreground"
+                    >
+                        <X className="w-5 h-5" />
+                    </button>
+                )}
 
                 <div className="flex items-center gap-2 mb-6">
                     <div className="p-2 bg-primary/10 rounded-full text-primary">
                         <Lock className="w-5 h-5" />
                     </div>
-                    <h2 className="text-xl font-semibold">Change Password</h2>
+                    <h2 className="text-xl font-semibold">
+                        {mandatory ? 'Password Change Required' : 'Change Password'}
+                    </h2>
                 </div>
+
+                {mandatory && (
+                    <div className="mb-4 p-3 bg-amber-500/10 border border-amber-500/20 text-amber-600 dark:text-amber-400 rounded text-sm">
+                        For security, you must change your password before continuing.
+                    </div>
+                )}
 
                 {error && (
                     <div className="mb-4 p-3 bg-destructive/10 border border-destructive/20 text-destructive rounded text-sm">
@@ -105,13 +116,15 @@ const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({ isOpen, onClo
                     />
 
                     <div className="flex justify-end gap-3 mt-6">
-                        <button
-                            type="button"
-                            onClick={onClose}
-                            className="px-4 py-2 text-sm font-medium text-muted-foreground hover:text-foreground"
-                        >
-                            Cancel
-                        </button>
+                        {!mandatory && (
+                            <button
+                                type="button"
+                                onClick={onClose}
+                                className="px-4 py-2 text-sm font-medium text-muted-foreground hover:text-foreground"
+                            >
+                                Cancel
+                            </button>
+                        )}
                         <button
                             type="submit"
                             disabled={loading}

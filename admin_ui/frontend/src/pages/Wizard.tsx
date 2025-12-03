@@ -1152,6 +1152,13 @@ const Wizard = () => {
                                                     const res = await axios.post('/api/wizard/start-engine');
                                                     if (res.data.success) {
                                                         setEngineStatus({ ...engineStatus, running: true, exists: true });
+                                                        // Show media setup warnings if any
+                                                        const mediaErrors = res.data.media_setup?.errors || [];
+                                                        if (mediaErrors.length > 0) {
+                                                            setError('Warning: Media path setup had issues. Audio playback may not work.\n\n' + 
+                                                                mediaErrors.join('\n') + 
+                                                                '\n\nManual fix: Run on your host:\n  sudo ln -sfn /path/to/asterisk_media/ai-generated /var/lib/asterisk/sounds/ai-generated');
+                                                        }
                                                     } else {
                                                         setError(res.data.message);
                                                     }
@@ -1246,6 +1253,13 @@ exten => s,1,NoOp(AI Agent - Local Full)
                                             const res = await axios.post('/api/wizard/start-engine');
                                             if (res.data.success) {
                                                 setEngineStatus({ ...engineStatus, running: true, exists: true });
+                                                // Show media setup warnings if any
+                                                const mediaErrors = res.data.media_setup?.errors || [];
+                                                if (mediaErrors.length > 0) {
+                                                    setError('Warning: Media path setup had issues. Audio playback may not work.\n\n' + 
+                                                        mediaErrors.join('\n') + 
+                                                        '\n\nManual fix: Run on your host:\n  sudo ln -sfn /path/to/asterisk_media/ai-generated /var/lib/asterisk/sounds/ai-generated');
+                                                }
                                             } else {
                                                 setError(res.data.message);
                                             }

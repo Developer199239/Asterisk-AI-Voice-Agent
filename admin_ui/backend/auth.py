@@ -23,6 +23,7 @@ router = APIRouter()
 class Token(BaseModel):
     access_token: str
     token_type: str
+    must_change_password: bool = False
 
 class TokenData(BaseModel):
     username: Optional[str] = None
@@ -30,9 +31,11 @@ class TokenData(BaseModel):
 class User(BaseModel):
     username: str
     disabled: Optional[bool] = None
+    must_change_password: Optional[bool] = False
 
 class UserInDB(User):
     hashed_password: str
+    must_change_password: Optional[bool] = False
 
 class ChangePasswordRequest(BaseModel):
     old_password: str
@@ -48,12 +51,13 @@ def verify_password(plain_password, hashed_password):
 
 def load_users():
     if not os.path.exists(USERS_PATH):
-        # Create default admin user
+        # Create default admin user with must_change_password flag
         default_users = {
             "admin": {
                 "username": "admin",
                 "hashed_password": get_password_hash("admin"),
-                "disabled": False
+                "disabled": False,
+                "must_change_password": True  # Force password change on first login
             }
         }
         os.makedirs(os.path.dirname(USERS_PATH), exist_ok=True)
@@ -118,11 +122,16 @@ async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(
             headers={"WWW-Authenticate": "Bearer"},
         )
     
+    # Check if user needs to change password
+    users = load_users()
+    user_dict = users.get(user.username, {})
+    must_change = user_dict.get("must_change_password", False)
+    
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
         data={"sub": user.username}, expires_delta=access_token_expires
     )
-    return {"access_token": access_token, "token_type": "bearer"}
+    return {"access_token": access_token, "token_type": "bearer", "must_change_password": must_change}
 
 @router.post("/change-password")
 async def change_password(
@@ -138,8 +147,9 @@ async def change_password(
     if not verify_password(request.old_password, user_dict["hashed_password"]):
         raise HTTPException(status_code=400, detail="Incorrect old password")
         
-    # Update password
+    # Update password and clear must_change_password flag
     users[current_user.username]["hashed_password"] = get_password_hash(request.new_password)
+    users[current_user.username]["must_change_password"] = False
     save_users(users)
     
     return {"status": "success", "message": "Password updated successfully"}

@@ -14,6 +14,7 @@ interface AuthContextType {
     changePassword: (oldPassword: string, newPassword: string) => Promise<void>;
     isAuthenticated: boolean;
     loading: boolean;
+    mustChangePassword: boolean;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -22,6 +23,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const [user, setUser] = useState<User | null>(null);
     const [token, setToken] = useState<string | null>(localStorage.getItem('token'));
     const [loading, setLoading] = useState(true);
+    const [mustChangePassword, setMustChangePassword] = useState(false);
 
     useEffect(() => {
         console.log("AuthProvider effect: token =", token);
@@ -53,9 +55,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
         const response = await axios.post('/api/auth/login', formData);
         const newToken = response.data.access_token;
+        const needsPasswordChange = response.data.must_change_password || false;
 
         localStorage.setItem('token', newToken);
         setToken(newToken);
+        setMustChangePassword(needsPasswordChange);
 
         // Get user info immediately
         const userResponse = await axios.get('/api/auth/me', {
@@ -68,6 +72,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         localStorage.removeItem('token');
         setToken(null);
         setUser(null);
+        setMustChangePassword(false);
     };
 
     const changePassword = async (oldPassword: string, newPassword: string) => {
@@ -77,6 +82,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }, {
             headers: { Authorization: `Bearer ${token}` }
         });
+        // Clear the flag after successful password change
+        setMustChangePassword(false);
     };
 
     // Add interceptor to attach token to all requests
@@ -111,7 +118,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }, []);
 
     return (
-        <AuthContext.Provider value={{ user, token, login, logout, changePassword, isAuthenticated: !!user, loading }}>
+        <AuthContext.Provider value={{ user, token, login, logout, changePassword, isAuthenticated: !!user, loading, mustChangePassword }}>
             {children}
         </AuthContext.Provider>
     );
