@@ -32,8 +32,23 @@ async def get_containers():
                 try:
                     started_str = c.attrs['State'].get('StartedAt', '')
                     if started_str and started_str != '0001-01-01T00:00:00Z':
-                        # Parse ISO format with timezone
-                        started_dt = datetime.fromisoformat(started_str.replace('Z', '+00:00'))
+                        # Docker uses nanoseconds (9 digits), Python only handles microseconds (6)
+                        # Truncate nanoseconds to microseconds and normalize timezone
+                        import re
+                        # Match: 2025-12-03T06:23:45.362413338+00:00 or 2025-12-03T06:23:45.362413338Z
+                        match = re.match(r'(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})\.(\d+)(Z|[+-]\d{2}:\d{2})?', started_str)
+                        if match:
+                            base = match.group(1)
+                            frac = match.group(2)[:6].ljust(6, '0')  # Truncate to 6 digits
+                            tz = match.group(3) or '+00:00'
+                            if tz == 'Z':
+                                tz = '+00:00'
+                            normalized = f"{base}.{frac}{tz}"
+                            started_dt = datetime.fromisoformat(normalized)
+                        else:
+                            # Fallback for simple format
+                            started_dt = datetime.fromisoformat(started_str.replace('Z', '+00:00'))
+                        
                         started_at = started_str
                         now = datetime.now(timezone.utc)
                         delta = now - started_dt
