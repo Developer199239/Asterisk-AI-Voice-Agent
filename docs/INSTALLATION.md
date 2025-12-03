@@ -1,38 +1,62 @@
-# Asterisk AI Voice Agent - Installation Guide (v4.2)
+# Asterisk AI Voice Agent - Installation Guide (v4.4)
 
-This guide provides detailed instructions for setting up the Asterisk AI Voice Agent v4.2 on your server.
+This guide provides detailed instructions for setting up the Asterisk AI Voice Agent v4.4 on your server.
 
-## Two Setup Paths
+## Three Setup Paths
 
 Choose the path that best fits your experience level:
 
-### Path A: Interactive Quickstart (Recommended for First-Time Users)
+### Path A: Admin UI Setup Wizard (Recommended)
 
-**5-minute guided setup** with automatic validation:
+**5-minute visual setup** with the new web-based Admin UI:
+
+```bash
+git clone https://github.com/hkjarral/Asterisk-AI-Voice-Agent.git
+cd Asterisk-AI-Voice-Agent
+cp .env.example .env
+
+# Start services
+docker compose up -d admin-ui ai-engine
+
+# Open browser to complete setup
+open http://localhost:3003
+```
+
+The Setup Wizard will:
+1. ✅ Guide you through provider selection (OpenAI, Deepgram, Google, ElevenLabs, Local)
+2. ✅ Validate your API keys with live testing
+3. ✅ Test Asterisk ARI connection
+4. ✅ Configure contexts and greeting
+5. ✅ Start containers automatically
+
+**Default Login:** `admin` / `admin` (must be changed on first login)
+
+**Best for:** First-time users, production deployments, visual configuration
+
+See [Admin UI Setup Guide](../admin_ui/UI_Setup_Guide.md) for detailed instructions.
+
+---
+
+### Path B: CLI Quickstart (Alternative)
+
+**Command-line wizard** for terminal-based setup:
 
 ```bash
 git clone https://github.com/hkjarral/Asterisk-AI-Voice-Agent.git
 cd Asterisk-AI-Voice-Agent
 
-# Run installer (sets up Docker, offers CLI installation)
+# Run installer
 ./install.sh
 
-# After installation, run interactive wizard
+# Run CLI wizard
 agent quickstart
 ```
 
-The wizard will:
-1. ✅ Guide you through provider selection (OpenAI, Deepgram, Google, Local)
-2. ✅ Validate your API keys before saving
-3. ✅ Test Asterisk ARI connection
-4. ✅ Generate dialplan configuration
-5. ✅ Show clear next steps
-
-**Best for:** First-time users, quick deployments, validation testing
+**Best for:** Headless servers, scripted deployments, CLI preference
 
 ---
 
-### Path B: Manual Setup (Advanced Users)
+### Path C: Manual Setup (Advanced Users)
 
 **Traditional installer** with manual configuration:
 

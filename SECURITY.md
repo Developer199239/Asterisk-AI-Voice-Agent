@@ -6,11 +6,12 @@ We actively support the following versions with security updates:
 
 | Version | Supported          | End of Support |
 | ------- | ------------------ | -------------- |
-| 4.1.x   | :white_check_mark: | TBD            |
-| 4.0.x   | :white_check_mark: | TBD            |
-| < 4.0   | :x:                | Ended          |
+| 4.4.x   | :white_check_mark: | TBD            |
+| 4.3.x   | :white_check_mark: | TBD            |
+| 4.2.x   | :white_check_mark: | 2026-06-01     |
+| < 4.2   | :x:                | Ended          |
 
-**Recommendation**: Always use the latest v4.1.x release for the most recent security patches and features.
+**Recommendation**: Always use the latest v4.4.x release for the most recent security patches and features.
 
 ---
 
