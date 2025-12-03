@@ -59,6 +59,43 @@ from src.pipelines.base import LLMResponse
 logger = get_logger(__name__)
 
 # -----------------------------------------------------------------------------
+# Environment variable resolution helper
+# -----------------------------------------------------------------------------
+import re
+
+def _resolve_env_vars(value: Any) -> Any:
+    """
+    Resolve environment variable placeholders in config values.
+    Supports ${VAR}, ${VAR:-default}, and ${VAR:=default} syntax.
+    """
+    if not isinstance(value, str):
+        return value
+    
+    # Pattern matches ${VAR}, ${VAR:-default}, ${VAR:=default}
+    pattern = r'\$\{([^}:]+)(?::-|:=)?([^}]*)?\}'
+    
+    def replace_env(match):
+        var_name = match.group(1)
+        default_value = match.group(2) if match.group(2) else ""
+        return os.getenv(var_name, default_value)
+    
+    resolved = re.sub(pattern, replace_env, value)
+    return resolved
+
+
+def _resolve_config_env_vars(config_dict: Dict[str, Any]) -> Dict[str, Any]:
+    """Resolve environment variables in all string values of a config dict."""
+    resolved = {}
+    for key, value in config_dict.items():
+        if isinstance(value, str):
+            resolved[key] = _resolve_env_vars(value)
+        elif isinstance(value, dict):
+            resolved[key] = _resolve_config_env_vars(value)
+        else:
+            resolved[key] = value
+    return resolved
+
+# -----------------------------------------------------------------------------
 # Prometheus latency histograms (module scope, registered once)
 # -----------------------------------------------------------------------------
 _TURN_STT_TO_TTS = Histogram(
@@ -675,7 +712,9 @@ class Engine:
                 elif name in self.provider_alignment_issues:
                     self.provider_alignment_issues.pop(name, None)
                 if name == "local":
-                    config = LocalProviderConfig(**provider_config_data)
+                    # Resolve env vars like ${LOCAL_WS_URL:-ws://127.0.0.1:8765}
+                    resolved_config = _resolve_config_env_vars(provider_config_data)
+                    config = LocalProviderConfig(**resolved_config)
                     provider = LocalProvider(config, self.on_provider_event)
                     self.providers[name] = provider
                     logger.info(f"Provider '{name}' loaded successfully.")
