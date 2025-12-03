@@ -266,3 +266,6 @@ docs/linear-issues-community-features.md
 AVA.mdc
 .cursor/rules/asterisk_ai_voice_agent.mdc
 .windsurf/rules/asterisk_ai_voice_agent.md
+
+# Vite cache
+.vite/

@@ -5,51 +5,56 @@
 ![Version](https://img.shields.io/badge/version-4.4.1-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![Python](https://img.shields.io/badge/python-3.10+-blue.svg)
-![Docker](https://img.shields.io/badge/docker-compose-blue.svg)
-![Asterisk](https://img.shields.io/badge/asterisk-18+-orange.svg)
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/hkjarral/Asterisk-AI-Voice-Agent)
-[![Discord](https://dcbadge.limes.pink/api/server/CAVACtaY)](https://discord.gg/QhPSju6aCh)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
+[![Docker](https://img.shields.io/badge/docker-compose-2496ED.svg?logo=docker&logoColor=white)](https://www.docker.com/)
+[![Asterisk](https://img.shields.io/badge/asterisk-18+-orange.svg)](https://www.asterisk.org/)
 
+**A production-ready, modular voice agent platform integrating Asterisk with modern AI providers.**
+*Build intelligent, conversational voice experiences with ease.*
 
-The most powerful, flexible open-source AI voice agent for Asterisk/FreePBX. Featuring a **modular pipeline architecture** that lets you mix and match STT, LLM, and TTS providers, plus **5 production-ready golden baselines** validated for enterprise deployment.
+[Features](#-features) • [Quick Start](#-quick-start) • [Configuration](#%EF%B8%8F-configuration) • [Documentation](#-documentation)
+
+</div>
+
+---
 
 ## 🎉 What's New in v4.4.1
 
-* **🖥️ Admin UI v1.0**: Modern web interface for configuration and monitoring
-    * Visual setup wizard replaces `agent quickstart` CLI
-    * Real-time dashboard with system metrics and container status
-    * Complete configuration management (providers, pipelines, contexts)
-    * Live log streaming and YAML editor
-    * JWT authentication with default admin/admin credentials
-    * Access at http://localhost:3003 after starting admin-ui container
-    * See [Admin UI Setup Guide](admin_ui/UI_Setup_Guide.md) for details
+### **🖥️ Admin UI v1.0**
+A modern web interface for complete system management.
+- **Visual Setup Wizard**: Replaces CLI for easier initialization.
+- **Real-time Dashboard**: Monitor system metrics and container status.
+- **Configuration Management**: Manage providers, pipelines, and contexts visually.
+- **Access**: http://localhost:3003 (Default: `admin`/`admin`)
+- [Admin UI Setup Guide](admin_ui/UI_Setup_Guide.md)
 
 <div align="center">
 <img src="AVA-Admin-UI.jpg" alt="Asterisk AI Voice Agent Admin UI Dashboard" width="800"/>
-<p><em>Admin UI Dashboard - Real-time monitoring and configuration</em></p>
 </div>
 
-* **🎙️ ElevenLabs Conversational AI**: Premium voice quality provider
-    * Full agent with WebSocket-based real-time conversations
-    * Tool calling support (define in ElevenLabs dashboard, execute locally)
-    * See [ElevenLabs Setup Guide](docs/contributing/references/Provider-ElevenLabs-Implementation.md)
+### **🎙️ ElevenLabs Conversational AI**
+- Full agent support with WebSocket-based real-time conversations.
+- Native tool calling support.
+- [ElevenLabs Setup Guide](docs/contributing/references/Provider-ElevenLabs-Implementation.md)
 
-* **🎵 Background Music**: Ambient music during AI calls
-    * Configure per-context via Admin UI or YAML
-    * Uses Asterisk Music On Hold (MOH) classes
-    * See [Background Music docs](admin_ui/UI_Setup_Guide.md#background-music-configuration)
+### **🎵 Background Music**
+- Ambient music support during AI calls using Asterisk MOH.
+- Configurable per-context via Admin UI.
+
+---
 
 <details>
 <summary><b>v4.3 - Complete Tool Support & Documentation</b></summary>
 
 * **🔧 Complete Tool Support for Pipelines**: Tool execution now works across ALL pipeline types, including `local_hybrid`
-    * All 6 tools validated and production-ready: hangup, transfer, email, transcript, voicemail, cancel
-    * Session history persistence for full conversation context
-    * Production-tested with real call flows
+  - All 6 tools validated and production-ready: hangup, transfer, email, transcript, voicemail, cancel
+  - Session history persistence for full conversation context
+  - Production-tested with real call flows
 * **📚 Documentation Overhaul**: Completely reorganized and professional documentation structure
-    * New [developer documentation](docs/contributing/README.md) with guides and references
-    * Comprehensive provider setup guides (Deepgram, OpenAI, Google)
-    * Technical implementation references for all providers
+  - New [developer documentation](docs/contributing/README.md) with guides and references
+  - Comprehensive provider setup guides (Deepgram, OpenAI, Google)
+  - Technical implementation references for all providers
 * **💬 Discord Community**: Official Discord server integration for community support and discussions
 * **🐛 Critical Bug Fixes**: OpenAI Realtime tool schema, execution flow, and Pydantic compatibility issues resolved
 
@@ -118,16 +123,21 @@ The most powerful, flexible open-source AI voice agent for Asterisk/FreePBX. Fea
 
 ### Technical Features
 
+#### Core Architecture
 * **Tool Calling System**: AI-powered actions (transfers, emails) work with any provider
-* **Agent CLI Tools**: `doctor`, `troubleshoot`, `demo`, `init` commands for operations
-* **Modular Pipeline System**: Independent STT, LLM, and TTS provider selection
-* **Dual Transport Support**: AudioSocket (full agents) and ExternalMedia RTP (pipelines)
-* **High-Performance Architecture**: Separate `ai-engine` and `local-ai-server` containers
-* **Enterprise Monitoring**: Prometheus + Grafana with 5 dashboards and 50+ metrics
+* **Dual Transport Support**: AudioSocket (full agents) or ExternalMedia RTP (pipelines)
+* **High-Performance**: Separate `ai-engine` and `local-ai-server` containers
 * **State Management**: SessionStore for centralized, typed call state
+
+#### AI Capabilities
+* **Modular Pipeline System**: Independent STT, LLM, and TTS provider selection
 * **Barge-In Support**: Interrupt handling with configurable gating
-* **Docker Deployment**: Simple two-service orchestration
 * **Customizable**: YAML configuration for greetings, personas, and behavior
+
+#### Management & Operations
+* **Agent CLI Tools**: `doctor`, `troubleshoot`, `demo`, `init` commands
+* **Enterprise Monitoring**: Prometheus + Grafana with 5 dashboards and 50+ metrics
+* **Docker Deployment**: Simple two-service orchestration
 
 ### 🖥️ Admin UI v1.0
 
@@ -302,86 +312,70 @@ Supports Linux, macOS (Intel + Apple Silicon), and Windows. See [CLI Tools Guide
 
 ## 🚀 Quick Start
 
-Get up and running in **5 minutes** with our new interactive wizard:
+Get up and running in **5 minutes**.
 
-### Option A: Interactive Quickstart (Recommended for First-Time Users)
+### Option A: Interactive Setup (Recommended)
+
+The easiest way to get started is using our new **Admin UI Wizard**.
+
+1.  **Clone & Install**
+    ```bash
+    git clone https://github.com/hkjarral/Asterisk-AI-Voice-Agent.git
+    cd Asterisk-AI-Voice-Agent
+    ./install.sh
+    ```
+
+2.  **Start the Admin UI**
+    ```bash
+    docker compose up -d admin-ui
+    ```
+
+3.  **Launch the Wizard**
+    *   Open **[http://localhost:3003](http://localhost:3003)**
+    *   Login with default credentials: `admin` / `admin`
+    *   Follow the visual setup guide to configure providers and Asterisk.
+
+### Option B: CLI Quickstart
+
+If you prefer the command line:
 
 ```bash
-# Clone repository
-git clone https://github.com/hkjarral/Asterisk-AI-Voice-Agent.git
-cd Asterisk-AI-Voice-Agent
-
-# Run installer (sets up Docker and offers CLI installation)
-./install.sh
-
-# After installation, run interactive setup wizard
+# Run the interactive CLI wizard
 agent quickstart
 ```
 
 The wizard will:
-* ✅ Guide you through provider selection
-* ✅ Validate your API keys
-* ✅ Test Asterisk ARI connection
-* ✅ Generate dialplan configuration
-* ✅ Provide next steps
+*   ✅ Guide you through provider selection
+*   ✅ Validate your API keys
+*   ✅ Test Asterisk ARI connection
+*   ✅ Generate dialplan configuration
 
-### Option B: Manual Setup (Advanced Users)
+---
 
-```bash
-git clone https://github.com/hkjarral/Asterisk-AI-Voice-Agent.git
-cd Asterisk-AI-Voice-Agent
-./install.sh
-```
+### 📞 Test Your Agent
 
-The installer will:
-* Guide you through **3 simple configuration choices**
-* Prompt for required API keys (only what you need)
-* Set up Docker containers automatically
-* Offer CLI installation
+Once configured, you can test your agent immediately.
 
-**Choose Your Configuration:**
+1.  **Configure Dialplan** (if not done by Wizard)
+    Add this to `extensions_custom.conf` in FreePBX:
+    ```asterisk
+    [from-ai-agent]
+    exten => s,1,NoOp(Asterisk AI Voice Agent)
+     same => n,Stasis(asterisk-ai-voice-agent)
+     same => n,Hangup()
+    ```
 
-* **[1] OpenAI Realtime** - Fastest setup, modern AI (requires `OPENAI_API_KEY`)
-* **[2] Deepgram Voice Agent** - Enterprise features (requires `DEEPGRAM_API_KEY` + `OPENAI_API_KEY`)
-* **[3] Local Hybrid** - Privacy-focused (requires `OPENAI_API_KEY`, 8GB+ RAM)
+2.  **Make a Call**
+    Route a number or extension to the `from-ai-agent` context and call it.
 
-### 3. Configure Asterisk Dialplan
+3.  **Health Check**
+    ```bash
+    agent doctor
+    ```
 
-**Option 1: Use the CLI helper:**
-```bash
-agent dialplan --provider openai_realtime
-```
+For detailed setup, see the [Admin UI Setup Guide](admin_ui/UI_Setup_Guide.md) or [FreePBX Integration Guide](docs/FreePBX-Integration-Guide.md).
 
-**Option 2: Manual configuration:**
-
-Add this to your FreePBX (Config Edit → extensions_custom.conf):
-
-```asterisk
-[from-ai-agent]
-exten => s,1,NoOp(Asterisk AI Voice Agent v4.3)
- same => n,Stasis(asterisk-ai-voice-agent)
- same => n,Hangup()
-```
-
-Then create a Custom Destination pointing to `from-ai-agent,s,1` and route calls to it.
-
-### 4. Test Your Agent
-
-Make a call to your configured destination and have a conversation!
-
-**Health check:**
-```bash
-agent doctor
-```
-
-**View logs:**
-```bash
-docker compose logs -f ai-engine
-```
-
-**That's it!** Your AI voice agent is ready. 🎉
-
-For detailed setup, see [CLI Tools Guide](cli/README.md) or [FreePBX Integration Guide](docs/FreePBX-Integration-Guide.md)
+---
 
 ## ⚙️ Configuration
 
@@ -443,6 +437,8 @@ For advanced tuning, see:
 * [docs/Configuration-Reference.md](docs/Configuration-Reference.md) - Complete reference
 * [docs/Transport-Mode-Compatibility.md](docs/Transport-Mode-Compatibility.md) - Transport modes
 
+---
+
 ## 🏗️ Project Architecture
 
 Two-container architecture for performance and scalability:
@@ -479,6 +475,8 @@ Two-container architecture for performance and scalability:
 * Transport flexibility - AudioSocket (legacy) or ExternalMedia RTP (modern)
 * Enterprise-ready - Monitoring, observability, production-hardened
 
+---
+
 ## 📊 Requirements
 
 ### Minimum System Requirements
@@ -509,6 +507,8 @@ Two-container architecture for performance and scalability:
 | Deepgram Voice Agent | `DEEPGRAM_API_KEY` + `OPENAI_API_KEY` |
 | Local Hybrid | `OPENAI_API_KEY` |
 
+---
+
 ## 🗺️ Documentation
 
 ### Getting Started
@@ -533,6 +533,8 @@ Two-container architecture for performance and scalability:
 * **[Contributing Guide](CONTRIBUTING.md)** - How to contribute
 * **[Changelog](CHANGELOG.md)** - Release history and changes
 
+---
+
 ## 🤝 Contributing
 
 Contributions are welcome! Please see our [Contributing Guide](CONTRIBUTING.md) for more details on how to get involved.
@@ -545,6 +547,8 @@ If you want to contribute features (providers, tools, pipelines) or run the proj
 - [Developer Documentation](docs/contributing/README.md) – Complete developer guide and index
 - `AVA.mdc` – AVA, the project manager persona, for guidance via your AI-powered IDE
 
+---
+
 ## 💬 Community
 
 Have questions or want to chat with other users? Join our community:
@@ -553,9 +557,13 @@ Have questions or want to chat with other users? Join our community:
 * [GitHub Issues](https://github.com/hkjarral/Asterisk-AI-Voice-Agent/issues) - Bug reports and feature requests
 * [GitHub Discussions](https://github.com/hkjarral/Asterisk-AI-Voice-Agent/discussions) - General discussions
 
+---
+
 ## 📝 License
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+
+---
 
 ## 🙏 Show Your Support
 
