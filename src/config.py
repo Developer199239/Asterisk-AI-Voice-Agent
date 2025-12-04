@@ -197,6 +197,26 @@ class GoogleProviderConfig(BaseModel):
     )
 
 
+class ElevenLabsProviderConfig(BaseModel):
+    """ElevenLabs TTS provider configuration.
+    
+    API Reference: https://elevenlabs.io/docs/api-reference/text-to-speech
+    """
+    enabled: bool = Field(default=True)
+    api_key: Optional[str] = None
+    # Default voice: Rachel (warm, professional)
+    voice_id: str = Field(default="21m00Tcm4TlvDq8ikWAM")
+    model_id: str = Field(default="eleven_turbo_v2_5")  # Fast, high-quality
+    base_url: str = Field(default="https://api.elevenlabs.io/v1")
+    # Audio settings
+    output_format: str = Field(default="ulaw_8000")  # ulaw_8000, mp3_44100, pcm_16000, etc.
+    # Voice settings
+    stability: float = Field(default=0.5)
+    similarity_boost: float = Field(default=0.75)
+    style: float = Field(default=0.0)
+    use_speaker_boost: bool = Field(default=True)
+
+
 class OpenAIRealtimeProviderConfig(BaseModel):
     enabled: bool = Field(default=True)
     api_key: Optional[str] = None

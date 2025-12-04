@@ -17,6 +17,7 @@ from ..config import (
     AppConfig,
     PipelineEntry,
     DeepgramProviderConfig,
+    ElevenLabsProviderConfig,
     GoogleProviderConfig,
     LocalProviderConfig,
     OpenAIProviderConfig,
@@ -25,6 +26,7 @@ from ..logging_config import get_logger
 from .base import Component, STTComponent, LLMComponent, TTSComponent
 from .deepgram import DeepgramSTTAdapter, DeepgramTTSAdapter
 from .deepgram_flux import DeepgramFluxSTTAdapter
+from .elevenlabs import ElevenLabsTTSAdapter
 from .google import GoogleLLMAdapter, GoogleSTTAdapter, GoogleTTSAdapter
 from .local import LocalLLMAdapter, LocalSTTAdapter, LocalTTSAdapter
 from .openai import OpenAISTTAdapter, OpenAILLMAdapter, OpenAITTSAdapter
@@ -179,6 +181,7 @@ def _build_default_registry() -> Dict[str, ComponentFactory]:
         "openai",
         "openai_realtime",
         "google",
+        "elevenlabs",
     )
 
     for provider in default_providers:
@@ -213,6 +216,7 @@ class PipelineOrchestrator:
         self._deepgram_provider_config: Optional[DeepgramProviderConfig] = self._hydrate_deepgram_config()
         self._openai_provider_config: Optional[OpenAIProviderConfig] = self._hydrate_openai_config()
         self._google_provider_config: Optional[GoogleProviderConfig] = self._hydrate_google_config()
+        self._elevenlabs_provider_config: Optional[ElevenLabsProviderConfig] = self._hydrate_elevenlabs_config()
         self._register_builtin_factories()
 
         self._assignments: Dict[str, PipelineResolution] = {}
@@ -475,6 +479,19 @@ class PipelineOrchestrator:
         else:
             logger.debug("Google pipeline adapters not registered - credentials unavailable or invalid")
 
+        # ElevenLabs TTS adapter
+        if self._elevenlabs_provider_config:
+            tts_factory = self._make_elevenlabs_tts_factory(self._elevenlabs_provider_config)
+            self.register_factory("elevenlabs_tts", tts_factory)
+            
+            logger.info(
+                "ElevenLabs pipeline adapters registered",
+                tts_factory="elevenlabs_tts",
+                voice_id=self._elevenlabs_provider_config.voice_id,
+            )
+        else:
+            logger.debug("ElevenLabs pipeline adapters not registered - API key unavailable")
+
     def _make_local_stt_factory(
         self,
         provider_config: LocalProviderConfig,
@@ -669,6 +686,23 @@ class PipelineOrchestrator:
 
         return factory
 
+    def _make_elevenlabs_tts_factory(
+        self,
+        provider_config: ElevenLabsProviderConfig,
+    ) -> ComponentFactory:
+        """Create factory for ElevenLabs TTS adapter."""
+        config_payload = provider_config.model_dump()
+
+        def factory(component_key: str, options: Dict[str, Any]) -> Component:
+            return ElevenLabsTTSAdapter(
+                component_key,
+                self.config,
+                ElevenLabsProviderConfig(**config_payload),
+                options,
+            )
+
+        return factory
+
     def _hydrate_google_config(self) -> Optional[GoogleProviderConfig]:
         providers = getattr(self.config, "providers", {}) or {}
         raw_config = providers.get("google")
@@ -701,6 +735,59 @@ class PipelineOrchestrator:
                 "Google pipeline adapters require GOOGLE_API_KEY or GOOGLE_APPLICATION_CREDENTIALS; falling back to placeholder adapters",
             )
             return None
+
+        return config
+
+    def _hydrate_elevenlabs_config(self) -> Optional[ElevenLabsProviderConfig]:
+        """Hydrate ElevenLabs provider config from YAML or env."""
+        providers = getattr(self.config, "providers", {}) or {}
+        raw_config = providers.get("elevenlabs")
+        if not raw_config:
+            # Fallback: accept modular elevenlabs_tts provider
+            for name, cfg in providers.items():
+                try:
+                    lower = str(name).lower()
+                except Exception:
+                    lower = ""
+                if lower.startswith("elevenlabs_") or (isinstance(cfg, dict) and str(cfg.get("type", "")).lower() == "elevenlabs"):
+                    raw_config = cfg
+                    break
+        if not raw_config:
+            # Check if API key exists in env (allow usage without explicit provider config)
+            api_key = os.getenv("ELEVENLABS_API_KEY")
+            if api_key:
+                return ElevenLabsProviderConfig(api_key=api_key)
+            return None
+        if isinstance(raw_config, ElevenLabsProviderConfig):
+            config = raw_config
+        elif isinstance(raw_config, dict):
+            try:
+                config = ElevenLabsProviderConfig(**raw_config)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to hydrate ElevenLabs provider config for pipelines",
+                    error=str(exc),
+                )
+                return None
+        else:
+            logger.warning(
+                "Unsupported ElevenLabs provider config type for pipelines",
+                config_type=type(raw_config).__name__,
+            )
+            return None
+
+        # Check for API key
+        if not config.api_key and not os.getenv("ELEVENLABS_API_KEY"):
+            logger.warning(
+                "ElevenLabs pipeline adapters require ELEVENLABS_API_KEY; falling back to placeholder adapters",
+            )
+            return None
+
+        # Fill API key from env if not in config
+        if not config.api_key:
+            config = ElevenLabsProviderConfig(
+                **{**config.model_dump(), "api_key": os.getenv("ELEVENLABS_API_KEY")}
+            )
 
         return config
 
