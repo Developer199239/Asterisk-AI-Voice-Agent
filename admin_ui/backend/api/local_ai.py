@@ -217,7 +217,10 @@ async def switch_model(request: SwitchModelRequest):
     from settings import PROJECT_ROOT, get_setting
     from api.config import update_yaml_provider_field
     
+    print(f"DEBUG switch_model: model_type={request.model_type}, backend={request.backend}, model_path={request.model_path}")
+    
     env_file = os.path.join(PROJECT_ROOT, ".env")
+    print(f"DEBUG switch_model: env_file={env_file}")
     env_updates = {}
     yaml_updates = {}  # Track YAML updates for sync
     requires_restart = False
@@ -289,13 +292,16 @@ async def switch_model(request: SwitchModelRequest):
                 requires_restart = True
     
     # 2. Update .env file AND YAML config
+    print(f"DEBUG switch_model: env_updates={env_updates}, requires_restart={requires_restart}")
     if env_updates:
         _update_env_file(env_file, env_updates)
+        print(f"DEBUG switch_model: .env file updated")
     
     # Sync to YAML config for consistency
     if yaml_updates:
         for field, value in yaml_updates.items():
             update_yaml_provider_field("local", field, value)
+        print(f"DEBUG switch_model: YAML config updated")
     
     # 3. Recreate container if needed (restart doesn't reload .env)
     if requires_restart:
