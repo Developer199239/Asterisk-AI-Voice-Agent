@@ -91,6 +91,7 @@ services:
       - ./:/app/project
       - /var/run/docker.sock:/var/run/docker.sock
       - /usr/bin/docker:/usr/bin/docker:ro
+      - /usr/local/bin/docker-compose:/usr/local/bin/docker-compose:ro
     environment:
       - PROJECT_ROOT=/app/project
       - UVICORN_PORT=3003

@@ -312,9 +312,9 @@ async def switch_model(request: SwitchModelRequest):
             except Exception:
                 pass  # Container might not exist
             
-            # Let docker compose create a fresh container with the new .env values
+            # Let docker-compose create a fresh container with the new .env values
             result = subprocess.run(
-                ["/usr/bin/docker", "compose", "up", "-d", "local-ai-server"],
+                ["/usr/local/bin/docker-compose", "up", "-d", "local-ai-server"],
                 cwd=PROJECT_ROOT,
                 capture_output=True,
                 text=True,
