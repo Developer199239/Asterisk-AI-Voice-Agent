@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { Cpu, HardDrive, AlertCircle, CheckCircle2, XCircle, Activity, Layers, Box } from 'lucide-react';
 import { ConfigCard } from './ui/ConfigCard';
 import axios from 'axios';
@@ -83,7 +83,12 @@ export const HealthWidget = () => {
                     <div className="space-y-4">
                         <div className="space-y-3">
                             <div className="flex justify-between items-center text-sm">
-                                <span className="text-muted-foreground font-medium">STT Model</span>
+                                <span className="text-muted-foreground font-medium">
+                                    STT 
+                                    <span className="ml-2 px-1.5 py-0.5 bg-blue-500/10 text-blue-500 rounded text-xs uppercase">
+                                        {health.local_ai_server.details.models?.stt?.backend || health.local_ai_server.details.stt_backend || 'vosk'}
+                                    </span>
+                                </span>
                                 <span className={`px-2 py-1 rounded-md text-xs font-medium ${health.local_ai_server.details.models?.stt?.loaded ? "bg-green-500/10 text-green-500" : "bg-yellow-500/10 text-yellow-500"}`}>
                                     {health.local_ai_server.details.models?.stt?.loaded ? "Loaded" : "Not Loaded"}
                                 </span>
@@ -111,7 +116,12 @@ export const HealthWidget = () => {
 
                         <div className="space-y-3">
                             <div className="flex justify-between items-center text-sm">
-                                <span className="text-muted-foreground font-medium">TTS Model</span>
+                                <span className="text-muted-foreground font-medium">
+                                    TTS
+                                    <span className="ml-2 px-1.5 py-0.5 bg-purple-500/10 text-purple-500 rounded text-xs uppercase">
+                                        {health.local_ai_server.details.models?.tts?.backend || health.local_ai_server.details.tts_backend || 'piper'}
+                                    </span>
+                                </span>
                                 <span className={`px-2 py-1 rounded-md text-xs font-medium ${health.local_ai_server.details.models?.tts?.loaded ? "bg-green-500/10 text-green-500" : "bg-yellow-500/10 text-yellow-500"}`}>
                                     {health.local_ai_server.details.models?.tts?.loaded ? "Loaded" : "Not Loaded"}
                                 </span>

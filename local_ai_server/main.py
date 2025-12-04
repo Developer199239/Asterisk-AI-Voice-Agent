@@ -2270,13 +2270,39 @@ class LocalAIServer:
             return
 
         if msg_type == "status":
+            # Determine STT loaded state based on active backend
+            stt_loaded = False
+            stt_model_info = self.stt_model_path
+            if self.stt_backend == "vosk":
+                stt_loaded = self.stt_model is not None
+                stt_model_info = self.stt_model_path
+            elif self.stt_backend == "kroko":
+                stt_loaded = self.kroko_backend is not None
+                stt_model_info = self.kroko_url
+            elif self.stt_backend == "sherpa":
+                stt_loaded = self.sherpa_backend is not None
+                stt_model_info = self.sherpa_model_path
+            
+            # Determine TTS loaded state based on active backend
+            tts_loaded = False
+            tts_model_info = self.tts_model_path
+            if self.tts_backend == "piper":
+                tts_loaded = self.tts_model is not None
+                tts_model_info = self.tts_model_path
+            elif self.tts_backend == "kokoro":
+                tts_loaded = self.kokoro_backend is not None
+                tts_model_info = f"{self.kokoro_model_path} (voice: {self.kokoro_voice})"
+            
             response = {
                 "type": "status_response",
                 "status": "ok",
+                "stt_backend": self.stt_backend,
+                "tts_backend": self.tts_backend,
                 "models": {
                     "stt": {
-                        "loaded": self.stt_model is not None,
-                        "path": self.stt_model_path,
+                        "backend": self.stt_backend,
+                        "loaded": stt_loaded,
+                        "path": stt_model_info,
                     },
                     "llm": {
                         "loaded": self.llm_model is not None,
@@ -2288,8 +2314,9 @@ class LocalAIServer:
                         }
                     },
                     "tts": {
-                        "loaded": self.tts_model is not None,
-                        "path": self.tts_model_path,
+                        "backend": self.tts_backend,
+                        "loaded": tts_loaded,
+                        "path": tts_model_info,
                     }
                 },
                 "config": {
