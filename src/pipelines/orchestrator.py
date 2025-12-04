@@ -406,11 +406,17 @@ class PipelineOrchestrator:
             self.register_factory("local_llm", llm_factory)
             self.register_factory("local_tts", tts_factory)
 
+            # Log configured backends from LocalProviderConfig
+            stt_backend = getattr(self._local_provider_config, 'stt_backend', 'vosk')
+            tts_backend = getattr(self._local_provider_config, 'tts_backend', 'piper')
+            
             logger.info(
                 "Local pipeline adapters registered",
                 stt_factory="local_stt",
                 llm_factory="local_llm",
                 tts_factory="local_tts",
+                stt_backend=stt_backend,
+                tts_backend=tts_backend,
             )
         else:
             logger.debug("Local pipeline adapters not registered - provider config unavailable or disabled")
