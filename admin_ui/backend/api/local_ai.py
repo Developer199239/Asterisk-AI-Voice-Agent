@@ -300,55 +300,30 @@ async def switch_model(request: SwitchModelRequest):
     # 3. Recreate container if needed (restart doesn't reload .env)
     if requires_restart:
         try:
-            import time
+            import subprocess
             
-            # Read new env values from .env file to pass to container
-            new_env = _read_env_values(env_file, list(env_updates.keys()))
-            
-            # Use Docker SDK to recreate container with new environment
+            # Use docker compose to properly recreate container with new .env values
+            # First, stop and remove the existing container
             client = docker.from_env()
-            container = client.containers.get("local_ai_server")
+            try:
+                container = client.containers.get("local_ai_server")
+                container.stop(timeout=10)
+                container.remove(force=True)
+            except Exception:
+                pass  # Container might not exist
             
-            # Get container config
-            old_config = container.attrs
-            image = old_config['Config']['Image']
-            
-            # Build new environment - merge old with updates
-            old_env_list = old_config['Config'].get('Env', [])
-            old_env_dict = {}
-            for e in old_env_list:
-                if '=' in e:
-                    k, v = e.split('=', 1)
-                    old_env_dict[k] = v
-            
-            # Apply updates
-            for key, value in env_updates.items():
-                old_env_dict[key] = value
-            
-            new_env_list = [f"{k}={v}" for k, v in old_env_dict.items()]
-            
-            # Stop and remove old container
-            container.stop(timeout=10)
-            container.remove()
-            
-            # Recreate with same config but new env
-            # Get volumes, network, and other settings
-            host_config = old_config['HostConfig']
-            networking_config = old_config['NetworkSettings']
-            
-            new_container = client.containers.run(
-                image,
-                name="local_ai_server",
-                environment=new_env_list,
-                volumes=host_config.get('Binds', []),
-                network_mode=host_config.get('NetworkMode', 'bridge'),
-                detach=True,
-                restart_policy=host_config.get('RestartPolicy', {'Name': 'unless-stopped'}),
+            # Let docker compose create a fresh container with the new .env values
+            result = subprocess.run(
+                ["/usr/bin/docker", "compose", "up", "-d", "local-ai-server"],
+                cwd=PROJECT_ROOT,
+                capture_output=True,
+                text=True,
+                timeout=60
             )
             
-            # Success - container recreated with new env
-            # Skip verification as Docker SDK recreation may not preserve all network settings
-            # User will see the actual status in the health widget
+            if result.returncode != 0:
+                raise Exception(f"docker compose failed: {result.stderr}")
+            
             return SwitchModelResponse(
                 success=True,
                 message=f"Model switch initiated. Container recreating with new settings...",
