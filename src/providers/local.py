@@ -81,11 +81,17 @@ class LocalProvider(AIProviderInterface):
                 self.websocket = await self._connect_ws()
                 logger.info("✅ Connected to Local AI Server", elapsed=f"{total_elapsed}s")
                 
-                # Restart listener and sender loops
-                if self._listener_task is None or self._listener_task.done():
-                    self._listener_task = asyncio.create_task(self._receive_loop())
-                if self._sender_task is None or self._sender_task.done():
-                    self._sender_task = asyncio.create_task(self._send_loop())
+                # Cancel old tasks and restart listener/sender loops on new connection
+                if self._listener_task and not self._listener_task.done():
+                    self._listener_task.cancel()
+                    logger.debug("Cancelled old listener task before restart")
+                if self._sender_task and not self._sender_task.done():
+                    self._sender_task.cancel()
+                    logger.debug("Cancelled old sender task before restart")
+                
+                self._listener_task = asyncio.create_task(self._receive_loop())
+                self._sender_task = asyncio.create_task(self._send_loop())
+                logger.info("✅ Reconnected to Local AI Server, restarting receive loop")
                 return True
                 
             except (ConnectionRefusedError, OSError) as e:
