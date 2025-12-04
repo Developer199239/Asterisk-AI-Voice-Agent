@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
-import { Cpu, HardDrive, AlertCircle, CheckCircle2, XCircle, Activity, Layers, Box } from 'lucide-react';
+import { Cpu, HardDrive, AlertCircle, CheckCircle2, XCircle, Activity, Layers, Box, RefreshCw, ExternalLink } from 'lucide-react';
 import { ConfigCard } from './ui/ConfigCard';
+import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 
 interface HealthInfo {
@@ -14,10 +15,29 @@ interface HealthInfo {
     };
 }
 
+interface ModelInfo {
+    name: string;
+    path: string;
+    type: string;
+    backend?: string;
+    size_mb?: number;
+}
+
+interface AvailableModels {
+    stt: Record<string, ModelInfo[]>;
+    tts: Record<string, ModelInfo[]>;
+    llm: ModelInfo[];
+}
+
 export const HealthWidget = () => {
+    const navigate = useNavigate();
     const [health, setHealth] = useState<HealthInfo | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    const [availableModels, setAvailableModels] = useState<AvailableModels | null>(null);
+    const [switching, setSwitching] = useState<string | null>(null);
+    const [restartRequired, setRestartRequired] = useState(false);
+    const [restarting, setRestarting] = useState(false);
 
     useEffect(() => {
         const fetchHealth = async () => {
@@ -37,6 +57,55 @@ export const HealthWidget = () => {
         const interval = setInterval(fetchHealth, 5000);
         return () => clearInterval(interval);
     }, []);
+
+    // Fetch available models
+    useEffect(() => {
+        const fetchModels = async () => {
+            try {
+                const res = await axios.get('/api/local-ai/models');
+                setAvailableModels(res.data);
+            } catch (err) {
+                console.error('Failed to fetch available models', err);
+            }
+        };
+        fetchModels();
+    }, []);
+
+    const handleSwitchModel = async (modelType: string, backend: string, modelPath?: string, voice?: string) => {
+        setSwitching(modelType);
+        try {
+            const res = await axios.post('/api/local-ai/switch', {
+                model_type: modelType,
+                backend: backend,
+                model_path: modelPath,
+                voice: voice
+            });
+            if (res.data.requires_restart) {
+                setRestartRequired(true);
+            }
+        } catch (err) {
+            console.error('Failed to switch model', err);
+            alert('Failed to switch model');
+        } finally {
+            setSwitching(null);
+        }
+    };
+
+    const handleRestart = async () => {
+        setRestarting(true);
+        try {
+            await axios.post('/api/system/containers/local_ai_server/restart');
+            setRestartRequired(false);
+            // Wait a bit for restart
+            setTimeout(() => {
+                setRestarting(false);
+            }, 5000);
+        } catch (err) {
+            console.error('Failed to restart container', err);
+            alert('Failed to restart. Go to Docker Services to restart manually.');
+            setRestarting(false);
+        }
+    };
 
     if (loading) return <div className="animate-pulse h-48 bg-muted rounded-lg mb-6"></div>;
 
@@ -81,57 +150,138 @@ export const HealthWidget = () => {
 
                 {health.local_ai_server.status === 'connected' && (
                     <div className="space-y-4">
-                        <div className="space-y-3">
+                        {/* STT Section */}
+                        <div className="space-y-2">
                             <div className="flex justify-between items-center text-sm">
-                                <span className="text-muted-foreground font-medium">
-                                    STT 
-                                    <span className="ml-2 px-1.5 py-0.5 bg-blue-500/10 text-blue-500 rounded text-xs uppercase">
-                                        {health.local_ai_server.details.models?.stt?.backend || health.local_ai_server.details.stt_backend || 'vosk'}
-                                    </span>
-                                </span>
+                                <span className="text-muted-foreground font-medium">STT</span>
                                 <span className={`px-2 py-1 rounded-md text-xs font-medium ${health.local_ai_server.details.models?.stt?.loaded ? "bg-green-500/10 text-green-500" : "bg-yellow-500/10 text-yellow-500"}`}>
                                     {health.local_ai_server.details.models?.stt?.loaded ? "Loaded" : "Not Loaded"}
                                 </span>
                             </div>
-                            {health.local_ai_server.details.models?.stt?.path && (
-                                <div className="text-xs text-muted-foreground bg-muted/50 p-2 rounded border border-border/50 truncate">
-                                    {getModelName(health.local_ai_server.details.models.stt.path)}
-                                </div>
-                            )}
+                            <div className="flex gap-2">
+                                <select
+                                    className="flex-1 text-xs p-2 rounded border border-border bg-background"
+                                    value={health.local_ai_server.details.models?.stt?.backend || health.local_ai_server.details.stt_backend || 'vosk'}
+                                    onChange={(e) => {
+                                        const backend = e.target.value;
+                                        const models = availableModels?.stt[backend] || [];
+                                        const firstModel = models[0];
+                                        handleSwitchModel('stt', backend, firstModel?.path);
+                                    }}
+                                    disabled={switching === 'stt'}
+                                >
+                                    {availableModels?.stt && Object.entries(availableModels.stt).map(([backend, models]) => (
+                                        models.length > 0 && (
+                                            <option key={backend} value={backend}>
+                                                {backend.charAt(0).toUpperCase() + backend.slice(1)} ({models.length})
+                                            </option>
+                                        )
+                                    ))}
+                                </select>
+                            </div>
+                            <div className="text-xs text-muted-foreground bg-muted/50 p-2 rounded border border-border/50 truncate">
+                                {getModelName(health.local_ai_server.details.models?.stt?.path || 'Not configured')}
+                            </div>
                         </div>
 
-                        <div className="space-y-3">
+                        {/* LLM Section */}
+                        <div className="space-y-2">
                             <div className="flex justify-between items-center text-sm">
-                                <span className="text-muted-foreground font-medium">LLM Model</span>
+                                <span className="text-muted-foreground font-medium">LLM</span>
                                 <span className={`px-2 py-1 rounded-md text-xs font-medium ${health.local_ai_server.details.models?.llm?.loaded ? "bg-green-500/10 text-green-500" : "bg-yellow-500/10 text-yellow-500"}`}>
                                     {health.local_ai_server.details.models?.llm?.loaded ? "Loaded" : "Not Loaded"}
                                 </span>
                             </div>
-                            {health.local_ai_server.details.models?.llm?.path && (
-                                <div className="text-xs text-muted-foreground bg-muted/50 p-2 rounded border border-border/50 truncate">
-                                    {getModelName(health.local_ai_server.details.models.llm.path)}
-                                </div>
-                            )}
+                            <select
+                                className="w-full text-xs p-2 rounded border border-border bg-background"
+                                value={health.local_ai_server.details.models?.llm?.path || ''}
+                                onChange={(e) => handleSwitchModel('llm', '', e.target.value)}
+                                disabled={switching === 'llm'}
+                            >
+                                {availableModels?.llm?.map((model) => (
+                                    <option key={model.path} value={model.path}>
+                                        {model.name} {model.size_mb ? `(${model.size_mb} MB)` : ''}
+                                    </option>
+                                ))}
+                            </select>
+                            <div className="text-xs text-muted-foreground bg-muted/50 p-2 rounded border border-border/50 truncate">
+                                {getModelName(health.local_ai_server.details.models?.llm?.path || 'Not configured')}
+                            </div>
                         </div>
 
-                        <div className="space-y-3">
+                        {/* TTS Section */}
+                        <div className="space-y-2">
                             <div className="flex justify-between items-center text-sm">
-                                <span className="text-muted-foreground font-medium">
-                                    TTS
-                                    <span className="ml-2 px-1.5 py-0.5 bg-purple-500/10 text-purple-500 rounded text-xs uppercase">
-                                        {health.local_ai_server.details.models?.tts?.backend || health.local_ai_server.details.tts_backend || 'piper'}
-                                    </span>
-                                </span>
+                                <span className="text-muted-foreground font-medium">TTS</span>
                                 <span className={`px-2 py-1 rounded-md text-xs font-medium ${health.local_ai_server.details.models?.tts?.loaded ? "bg-green-500/10 text-green-500" : "bg-yellow-500/10 text-yellow-500"}`}>
                                     {health.local_ai_server.details.models?.tts?.loaded ? "Loaded" : "Not Loaded"}
                                 </span>
                             </div>
-                            {health.local_ai_server.details.models?.tts?.path && (
-                                <div className="text-xs text-muted-foreground bg-muted/50 p-2 rounded border border-border/50 truncate">
-                                    {getModelName(health.local_ai_server.details.models.tts.path)}
-                                </div>
-                            )}
+                            <div className="flex gap-2">
+                                <select
+                                    className="flex-1 text-xs p-2 rounded border border-border bg-background"
+                                    value={health.local_ai_server.details.models?.tts?.backend || health.local_ai_server.details.tts_backend || 'piper'}
+                                    onChange={(e) => {
+                                        const backend = e.target.value;
+                                        const models = availableModels?.tts[backend] || [];
+                                        const firstModel = models[0];
+                                        if (backend === 'kokoro') {
+                                            handleSwitchModel('tts', backend, firstModel?.path, 'af_heart');
+                                        } else {
+                                            handleSwitchModel('tts', backend, firstModel?.path);
+                                        }
+                                    }}
+                                    disabled={switching === 'tts'}
+                                >
+                                    {availableModels?.tts && Object.entries(availableModels.tts).map(([backend, models]) => (
+                                        models.length > 0 && (
+                                            <option key={backend} value={backend}>
+                                                {backend.charAt(0).toUpperCase() + backend.slice(1)} ({models.length})
+                                            </option>
+                                        )
+                                    ))}
+                                </select>
+                            </div>
+                            <div className="text-xs text-muted-foreground bg-muted/50 p-2 rounded border border-border/50 truncate">
+                                {getModelName(health.local_ai_server.details.models?.tts?.path || 'Not configured')}
+                            </div>
                         </div>
+
+                        {/* Restart Banner */}
+                        {restartRequired && (
+                            <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-3 space-y-2">
+                                <div className="flex items-center gap-2 text-yellow-600 dark:text-yellow-400 text-sm font-medium">
+                                    <AlertCircle className="w-4 h-4" />
+                                    Restart required to apply changes
+                                </div>
+                                <div className="flex gap-2">
+                                    <button
+                                        onClick={handleRestart}
+                                        disabled={restarting}
+                                        className="flex-1 flex items-center justify-center gap-2 px-3 py-1.5 bg-yellow-500 text-white rounded text-xs font-medium hover:bg-yellow-600 disabled:opacity-50"
+                                    >
+                                        {restarting ? (
+                                            <>
+                                                <RefreshCw className="w-3 h-3 animate-spin" />
+                                                Restarting...
+                                            </>
+                                        ) : (
+                                            <>
+                                                <RefreshCw className="w-3 h-3" />
+                                                Restart Now
+                                            </>
+                                        )}
+                                    </button>
+                                    <button
+                                        onClick={() => navigate('/docker')}
+                                        className="flex items-center gap-1 px-3 py-1.5 bg-muted text-muted-foreground rounded text-xs font-medium hover:bg-muted/80"
+                                    >
+                                        <ExternalLink className="w-3 h-3" />
+                                        Docker Services
+                                    </button>
+                                </div>
+                            </div>
+                        )}
                     </div>
                 )}
             </ConfigCard>
