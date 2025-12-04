@@ -406,6 +406,7 @@ def _read_env_values(env_file: str, keys: list) -> Dict[str, str]:
 
 def _update_env_file(env_file: str, updates: Dict[str, str]):
     """Update environment variables in .env file."""
+    print(f"DEBUG _update_env_file: env_file={env_file}, updates={updates}")
     lines = []
     updated_keys = set()
     
@@ -413,6 +414,9 @@ def _update_env_file(env_file: str, updates: Dict[str, str]):
     if os.path.exists(env_file):
         with open(env_file, 'r') as f:
             lines = f.readlines()
+        print(f"DEBUG _update_env_file: read {len(lines)} lines from file")
+    else:
+        print(f"DEBUG _update_env_file: file does not exist!")
     
     # Update existing lines
     new_lines = []
@@ -424,6 +428,7 @@ def _update_env_file(env_file: str, updates: Dict[str, str]):
         if key and key in updates:
             new_lines.append(f"{key}={updates[key]}\n")
             updated_keys.add(key)
+            print(f"DEBUG _update_env_file: updated {key}={updates[key]}")
         else:
             new_lines.append(line)
     
@@ -431,10 +436,13 @@ def _update_env_file(env_file: str, updates: Dict[str, str]):
     for key, value in updates.items():
         if key not in updated_keys:
             new_lines.append(f"{key}={value}\n")
+            print(f"DEBUG _update_env_file: added new key {key}={value}")
     
     # Write back
+    print(f"DEBUG _update_env_file: writing {len(new_lines)} lines to {env_file}")
     with open(env_file, 'w') as f:
         f.writelines(new_lines)
+    print(f"DEBUG _update_env_file: write complete")
 
 
 # Import docker at module level for switch endpoint
