@@ -952,43 +952,110 @@ async def download_selected_models(selection: ModelSelection):
 
 @router.get("/local/models-status")
 async def check_models_status():
-    """Check if required models are downloaded."""
+    """Check if required models are downloaded.
+    
+    Detects all supported STT/TTS backends:
+    - STT: Vosk (vosk-model*), Sherpa-ONNX (sherpa*), Kroko (kroko*)
+    - TTS: Piper (*.onnx), Kokoro (kokoro/voices/*.pt)
+    - LLM: GGUF models (*.gguf)
+    """
     from settings import PROJECT_ROOT
     import os
     
     models_dir = os.path.join(PROJECT_ROOT, "models")
     
-    # Check for model files
-    stt_models = []
+    # STT models grouped by backend
+    stt_backends = {
+        "vosk": [],
+        "sherpa": [],
+        "kroko": []
+    }
+    
+    # TTS models grouped by backend
+    tts_backends = {
+        "piper": [],
+        "kokoro": []
+    }
+    
+    # LLM models
     llm_models = []
-    tts_models = []
     
     stt_dir = os.path.join(models_dir, "stt")
     llm_dir = os.path.join(models_dir, "llm")
     tts_dir = os.path.join(models_dir, "tts")
     
+    # Scan STT models
     if os.path.exists(stt_dir):
         for item in os.listdir(stt_dir):
-            if item.startswith("vosk-model"):
-                stt_models.append(item)
+            item_path = os.path.join(stt_dir, item)
+            if item.startswith("vosk-model") and os.path.isdir(item_path):
+                stt_backends["vosk"].append(item)
+            elif "sherpa" in item.lower() and os.path.isdir(item_path):
+                stt_backends["sherpa"].append(item)
     
+    # Check for Kroko models (separate directory)
+    kroko_dir = os.path.join(models_dir, "kroko")
+    if os.path.exists(kroko_dir):
+        for item in os.listdir(kroko_dir):
+            if item.endswith(".onnx"):
+                stt_backends["kroko"].append(item)
+    
+    # Scan LLM models
     if os.path.exists(llm_dir):
         for item in os.listdir(llm_dir):
             if item.endswith(".gguf"):
                 llm_models.append(item)
     
+    # Scan TTS models
     if os.path.exists(tts_dir):
         for item in os.listdir(tts_dir):
+            item_path = os.path.join(tts_dir, item)
             if item.endswith(".onnx"):
-                tts_models.append(item)
+                tts_backends["piper"].append(item)
+            elif item == "kokoro" and os.path.isdir(item_path):
+                # Check for Kokoro voice files
+                voices_dir = os.path.join(item_path, "voices")
+                if os.path.exists(voices_dir):
+                    for voice in os.listdir(voices_dir):
+                        if voice.endswith(".pt"):
+                            tts_backends["kokoro"].append(voice.replace(".pt", ""))
+                # Also check for model files directly in kokoro dir
+                if not tts_backends["kokoro"]:
+                    # Fall back to checking for .pt files in kokoro dir
+                    for f in os.listdir(item_path):
+                        if f.endswith(".pt"):
+                            tts_backends["kokoro"].append(f.replace(".pt", ""))
     
-    ready = len(stt_models) > 0 and len(llm_models) > 0 and len(tts_models) > 0
+    # Compute ready state: at least one STT backend, one TTS backend, and LLM
+    stt_ready = any(stt_backends.values())
+    tts_ready = any(tts_backends.values())
+    llm_ready = len(llm_models) > 0
+    ready = stt_ready and tts_ready and llm_ready
+    
+    # Flatten for backward compatibility
+    stt_models = (
+        stt_backends["vosk"] + 
+        [f"sherpa:{m}" for m in stt_backends["sherpa"]] +
+        [f"kroko:{m}" for m in stt_backends["kroko"]]
+    )
+    tts_models = (
+        tts_backends["piper"] +
+        [f"kokoro:{v}" for v in tts_backends["kokoro"]]
+    )
     
     return {
         "ready": ready,
         "stt_models": stt_models,
         "llm_models": llm_models,
-        "tts_models": tts_models
+        "tts_models": tts_models,
+        # New detailed breakdown by backend
+        "stt_backends": stt_backends,
+        "tts_backends": tts_backends,
+        "status": {
+            "stt_ready": stt_ready,
+            "llm_ready": llm_ready,
+            "tts_ready": tts_ready
+        }
     }
 
 
