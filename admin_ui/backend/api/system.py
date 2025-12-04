@@ -140,7 +140,7 @@ async def restart_container(container_id: str):
     try:
         # Step 1: Stop the container using docker directly (more reliable)
         stop_result = subprocess.run(
-            ["docker", "stop", container_name],
+            ["/usr/bin/docker", "stop", container_name],
             capture_output=True,
             text=True,
             timeout=60
@@ -149,16 +149,18 @@ async def restart_container(container_id: str):
         
         # Step 2: Force remove the container using docker directly
         rm_result = subprocess.run(
-            ["docker", "rm", "-f", container_name],
+            ["/usr/bin/docker", "rm", "-f", container_name],
             capture_output=True,
             text=True,
             timeout=30
         )
         print(f"DEBUG: docker rm returncode={rm_result.returncode}")
         
-        # Step 3: Bring the service back up
+        # Step 3: Bring the service back up using docker-compose
+        # -p: Use correct project name to match existing images
         up_result = subprocess.run(
-            ["docker", "compose", "up", "-d", service_name],
+            ["/usr/local/bin/docker-compose", "-p", "asterisk-ai-voice-agent",
+             "up", "-d", "--no-build", service_name],
             cwd=project_root,
             capture_output=True,
             text=True,
