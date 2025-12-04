@@ -339,3 +339,46 @@ async def import_configuration(file: UploadFile = File(...)):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Import failed: {str(e)}")
+
+
+def update_yaml_provider_field(provider_name: str, field: str, value: Any) -> bool:
+    """
+    Update a single field in a provider's YAML config.
+    
+    Args:
+        provider_name: Name of the provider (e.g., 'local')
+        field: Field name to update (e.g., 'stt_backend')
+        value: New value for the field
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        if not os.path.exists(settings.CONFIG_PATH):
+            return False
+            
+        with open(settings.CONFIG_PATH, 'r') as f:
+            config = yaml.safe_load(f)
+        
+        if not config:
+            return False
+            
+        # Ensure providers section exists
+        if 'providers' not in config:
+            config['providers'] = {}
+        
+        # Ensure provider exists
+        if provider_name not in config['providers']:
+            config['providers'][provider_name] = {}
+        
+        # Update the field
+        config['providers'][provider_name][field] = value
+        
+        # Write back
+        with open(settings.CONFIG_PATH, 'w') as f:
+            yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+        
+        return True
+    except Exception as e:
+        print(f"Error updating YAML provider field: {e}")
+        return False

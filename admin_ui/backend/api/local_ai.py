@@ -210,14 +210,16 @@ async def switch_model(request: SwitchModelRequest):
     """
     Switch the active model on local-ai-server with rollback support.
     
-    For STT/TTS backend changes, updates environment variables and
-    triggers a container restart to reload the model. If the new model
+    For STT/TTS backend changes, updates environment variables AND YAML config,
+    then triggers a container restart to reload the model. If the new model
     fails to load, automatically rolls back to the previous configuration.
     """
     from settings import PROJECT_ROOT, get_setting
+    from api.config import update_yaml_provider_field
     
     env_file = os.path.join(PROJECT_ROOT, ".env")
     env_updates = {}
+    yaml_updates = {}  # Track YAML updates for sync
     requires_restart = False
     
     # 1. Save current config for potential rollback
@@ -230,28 +232,36 @@ async def switch_model(request: SwitchModelRequest):
     if request.model_type == "stt":
         if request.backend:
             env_updates["LOCAL_STT_BACKEND"] = request.backend
+            yaml_updates["stt_backend"] = request.backend
             requires_restart = True
             
             if request.backend == "vosk" and request.model_path:
                 env_updates["LOCAL_STT_MODEL_PATH"] = request.model_path
+                yaml_updates["stt_model"] = request.model_path
             elif request.backend == "kroko":
                 if request.language:
                     env_updates["KROKO_LANGUAGE"] = request.language
+                    yaml_updates["kroko_language"] = request.language
             elif request.backend == "sherpa" and request.model_path:
                 env_updates["SHERPA_MODEL_PATH"] = request.model_path
+                yaml_updates["sherpa_model_path"] = request.model_path
                 
     elif request.model_type == "tts":
         if request.backend:
             env_updates["LOCAL_TTS_BACKEND"] = request.backend
+            yaml_updates["tts_backend"] = request.backend
             requires_restart = True
             
             if request.backend == "piper" and request.model_path:
                 env_updates["LOCAL_TTS_MODEL_PATH"] = request.model_path
+                yaml_updates["tts_voice"] = request.model_path
             elif request.backend == "kokoro":
                 if request.voice:
                     env_updates["KOKORO_VOICE"] = request.voice
+                    yaml_updates["kokoro_voice"] = request.voice
                 if request.model_path:
                     env_updates["KOKORO_MODEL_PATH"] = request.model_path
+                    yaml_updates["kokoro_model_path"] = request.model_path
                     
     elif request.model_type == "llm":
         if request.model_path:
@@ -278,9 +288,14 @@ async def switch_model(request: SwitchModelRequest):
                 # Fall back to restart
                 requires_restart = True
     
-    # 2. Update .env file
+    # 2. Update .env file AND YAML config
     if env_updates:
         _update_env_file(env_file, env_updates)
+    
+    # Sync to YAML config for consistency
+    if yaml_updates:
+        for field, value in yaml_updates.items():
+            update_yaml_provider_field("local", field, value)
     
     # 3. Restart container if needed
     if requires_restart:
