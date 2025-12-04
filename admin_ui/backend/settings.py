@@ -27,3 +27,31 @@ def ensure_env_file():
         shutil.copy(ENV_EXAMPLE_PATH, ENV_PATH)
         return True
     return False
+
+
+def get_setting(key: str, default: str = "") -> str:
+    """Get a setting from .env file or environment variable.
+    
+    Args:
+        key: The setting key to look up
+        default: Default value if not found
+        
+    Returns:
+        The setting value or default
+    """
+    # First check environment variable
+    value = os.environ.get(key)
+    if value:
+        return value
+    
+    # Then check .env file
+    if os.path.exists(ENV_PATH):
+        with open(ENV_PATH, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#') and '=' in line:
+                    k, v = line.split('=', 1)
+                    if k.strip() == key:
+                        return v.strip()
+    
+    return default
