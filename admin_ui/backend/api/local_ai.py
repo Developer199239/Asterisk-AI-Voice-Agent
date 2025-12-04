@@ -306,37 +306,84 @@ async def switch_model(request: SwitchModelRequest):
     # 3. Recreate container if needed (restart doesn't reload .env)
     if requires_restart:
         try:
-            import subprocess
             import time
             
-            # Use docker compose to recreate with new .env values
-            # This is necessary because container.restart() doesn't reload env vars
-            result = subprocess.run(
-                ["docker", "compose", "up", "-d", "--force-recreate", "local_ai_server"],
-                cwd=PROJECT_ROOT,
-                capture_output=True,
-                text=True,
-                timeout=60
+            # Read new env values from .env file to pass to container
+            new_env = _read_env_values(env_file, list(env_updates.keys()))
+            print(f"DEBUG: New env values to apply: {new_env}")
+            
+            # Use Docker SDK to recreate container with new environment
+            client = docker.from_env()
+            container = client.containers.get("local_ai_server")
+            
+            # Get container config
+            old_config = container.attrs
+            image = old_config['Config']['Image']
+            
+            # Build new environment - merge old with updates
+            old_env_list = old_config['Config'].get('Env', [])
+            old_env_dict = {}
+            for e in old_env_list:
+                if '=' in e:
+                    k, v = e.split('=', 1)
+                    old_env_dict[k] = v
+            
+            # Apply updates
+            for key, value in env_updates.items():
+                old_env_dict[key] = value
+            
+            new_env_list = [f"{k}={v}" for k, v in old_env_dict.items()]
+            print(f"DEBUG: Recreating container with updated env")
+            
+            # Stop and remove old container
+            container.stop(timeout=10)
+            container.remove()
+            
+            # Recreate with same config but new env
+            # Get volumes, network, and other settings
+            host_config = old_config['HostConfig']
+            networking_config = old_config['NetworkSettings']
+            
+            new_container = client.containers.run(
+                image,
+                name="local_ai_server",
+                environment=new_env_list,
+                volumes=host_config.get('Binds', []),
+                network_mode=host_config.get('NetworkMode', 'bridge'),
+                detach=True,
+                restart_policy=host_config.get('RestartPolicy', {'Name': 'unless-stopped'}),
             )
             
-            if result.returncode != 0:
-                raise Exception(f"docker compose failed: {result.stderr}")
+            print(f"DEBUG: New container created: {new_container.id[:12]}")
             
             # 4. Wait for container to be healthy and verify model loaded
-            time.sleep(8)  # Give container time to start and load models
+            time.sleep(10)  # Give container time to start and load models
             
             # Check health
             health_ok = await _verify_model_loaded(request.model_type, get_setting)
             
             if not health_ok:
-                # 5. Rollback on failure
+                # 5. Rollback on failure - recreate with old env
                 _update_env_file(env_file, previous_env)
-                subprocess.run(
-                    ["docker", "compose", "up", "-d", "--force-recreate", "local_ai_server"],
-                    cwd=PROJECT_ROOT,
-                    capture_output=True,
-                    timeout=60
+                new_container.stop(timeout=10)
+                new_container.remove()
+                
+                # Restore old env
+                for key, value in previous_env.items():
+                    if value:
+                        old_env_dict[key] = value
+                rollback_env_list = [f"{k}={v}" for k, v in old_env_dict.items()]
+                
+                client.containers.run(
+                    image,
+                    name="local_ai_server",
+                    environment=rollback_env_list,
+                    volumes=host_config.get('Binds', []),
+                    network_mode=host_config.get('NetworkMode', 'bridge'),
+                    detach=True,
+                    restart_policy=host_config.get('RestartPolicy', {'Name': 'unless-stopped'}),
                 )
+                
                 return SwitchModelResponse(
                     success=False,
                     message=f"Model failed to load. Rolled back to previous configuration.",
@@ -349,6 +396,8 @@ async def switch_model(request: SwitchModelRequest):
                 requires_restart=True
             )
         except Exception as e:
+            import traceback
+            print(f"DEBUG: Error during container recreation: {traceback.format_exc()}")
             # Attempt rollback on any error
             try:
                 _update_env_file(env_file, previous_env)
