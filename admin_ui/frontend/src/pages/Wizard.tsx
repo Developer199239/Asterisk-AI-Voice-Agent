@@ -85,7 +85,7 @@ const Wizard = () => {
     
     const [modelCatalog, setModelCatalog] = useState<ModelCatalog | null>(null);
     const [selectedModels, setSelectedModels] = useState({
-        stt: 'kroko_local',
+        stt: 'sherpa_streaming',
         llm: 'phi3_mini',
         tts: 'piper_lessac_medium'
     });

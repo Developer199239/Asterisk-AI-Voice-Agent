@@ -389,18 +389,20 @@ MODEL_CATALOG = {
             "env_var": "LOCAL_STT_BACKEND=vosk"
         },
         {
-            "id": "kroko_local",
-            "name": "Kroko Local (ONNX)",
-            "size_mb": 128,
-            "size_display": "128 MB",
+            "id": "sherpa_streaming",
+            "name": "Sherpa Streaming (Local)",
+            "size_mb": 100,
+            "size_display": "100 MB",
             "latency": "~100ms",
-            "description": "Fast, no hallucination, 12+ languages",
-            "download_url": "https://huggingface.co/Banafo/Kroko-ASR/resolve/main/Kroko-EN-Community-128-L-Streaming-001.data",
-            "model_path": "kroko-en-v1.0.onnx",
+            "description": "Fast local streaming ASR, no server needed",
+            "download_url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-en-2023-06-26.tar.bz2",
+            "model_path": "sherpa-onnx-streaming-zipformer-en-2023-06-26",
             "recommended_ram_gb": 2,
             "requires_api_key": False,
-            "env_var": "LOCAL_STT_BACKEND=kroko\nKROKO_EMBEDDED=1",
-            "recommended": True
+            "env_var": "LOCAL_STT_BACKEND=sherpa",
+            "recommended": True,
+            "is_archive": True,
+            "archive_type": "tar.bz2"
         },
         {
             "id": "kroko_hosted",
@@ -777,10 +779,22 @@ async def download_selected_models(selection: ModelSelection):
                         _download_output.append("✅ Vosk model extracted")
                     else:
                         success = False
-                elif selection.stt == "kroko_local":
-                    # Kroko is a single file
+                elif selection.stt == "sherpa_streaming":
+                    # Sherpa is a tar.bz2 archive
+                    import tarfile
+                    archive_path = os.path.join(stt_dir, "sherpa-model.tar.bz2")
+                    if download_file(stt_model["download_url"], archive_path, "Sherpa STT Model"):
+                        _download_output.append("📦 Extracting Sherpa model...")
+                        with tarfile.open(archive_path, 'r:bz2') as tf:
+                            tf.extractall(stt_dir)
+                        os.remove(archive_path)
+                        _download_output.append("✅ Sherpa model extracted")
+                    else:
+                        success = False
+                else:
+                    # Single file model
                     dest = os.path.join(stt_dir, stt_model["model_path"])
-                    if not download_file(stt_model["download_url"], dest, "Kroko STT Model"):
+                    if not download_file(stt_model["download_url"], dest, "STT Model"):
                         success = False
             else:
                 _download_output.append(f"ℹ️ STT: {stt_model['name']} (no download needed)")
@@ -820,7 +834,10 @@ async def download_selected_models(selection: ModelSelection):
             # Set model paths
             if stt_model.get("model_path") and stt_model.get("download_url"):
                 stt_path = os.path.join("/app/models/stt", stt_model["model_path"])
-                env_updates.append(f"LOCAL_STT_MODEL_PATH={stt_path}")
+                if selection.stt == "sherpa_streaming":
+                    env_updates.append(f"SHERPA_MODEL_PATH={stt_path}")
+                else:
+                    env_updates.append(f"LOCAL_STT_MODEL_PATH={stt_path}")
             
             if llm_model.get("model_path") and llm_model.get("download_url"):
                 llm_path = os.path.join("/app/models/llm", llm_model["model_path"])

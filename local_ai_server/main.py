@@ -56,6 +56,8 @@ class SessionContext:
     # Kroko-specific session state
     kroko_ws: Optional[Any] = None
     kroko_connected: bool = False
+    # Sherpa-onnx session state
+    sherpa_stream: Optional[Any] = None
 
 
 class KrokoSTTBackend:
@@ -269,6 +271,171 @@ class KrokoSTTBackend:
                 self._subprocess = None
 
 
+class SherpaONNXSTTBackend:
+    """
+    Local streaming STT backend using sherpa-onnx.
+    
+    Sherpa-onnx is the underlying library that Kroko ASR is built on.
+    This provides fully local ASR without needing a separate server process.
+    
+    Supports streaming (online) recognition with low latency.
+    """
+    
+    def __init__(self, model_path: str, sample_rate: int = 16000):
+        """
+        Initialize the sherpa-onnx recognizer.
+        
+        Args:
+            model_path: Path to the model directory or .onnx file
+            sample_rate: Audio sample rate (default 16000 Hz)
+        """
+        self.model_path = model_path
+        self.sample_rate = sample_rate
+        self.recognizer = None
+        self._initialized = False
+        
+    def initialize(self) -> bool:
+        """
+        Initialize the recognizer with the model.
+        
+        Returns:
+            True if initialization succeeded
+        """
+        try:
+            import sherpa_onnx
+            
+            # Check if model exists
+            if not os.path.exists(self.model_path):
+                logging.error("❌ SHERPA - Model not found at %s", self.model_path)
+                return False
+            
+            # Determine model type and create appropriate config
+            if self.model_path.endswith('.onnx'):
+                # Transducer model (like Kroko)
+                recognizer_config = sherpa_onnx.OnlineRecognizerConfig(
+                    tokens=self._find_tokens_file(),
+                    model_config=sherpa_onnx.OnlineTransducerModelConfig(
+                        encoder=self.model_path,
+                        decoder=self._find_decoder_file(),
+                        joiner=self._find_joiner_file(),
+                    ),
+                    enable_endpoint_detection=True,
+                    decoding_method="greedy_search",
+                )
+            else:
+                # Directory-based model
+                recognizer_config = sherpa_onnx.OnlineRecognizerConfig(
+                    tokens=os.path.join(self.model_path, "tokens.txt"),
+                    model_config=sherpa_onnx.OnlineTransducerModelConfig(
+                        encoder=os.path.join(self.model_path, "encoder.onnx"),
+                        decoder=os.path.join(self.model_path, "decoder.onnx"),
+                        joiner=os.path.join(self.model_path, "joiner.onnx"),
+                    ),
+                    enable_endpoint_detection=True,
+                    decoding_method="greedy_search",
+                )
+            
+            self.recognizer = sherpa_onnx.OnlineRecognizer(recognizer_config)
+            self._initialized = True
+            logging.info("✅ SHERPA - Recognizer initialized with model %s", self.model_path)
+            return True
+            
+        except ImportError:
+            logging.error("❌ SHERPA - sherpa-onnx not installed")
+            return False
+        except Exception as exc:
+            logging.error("❌ SHERPA - Failed to initialize: %s", exc)
+            return False
+    
+    def _find_tokens_file(self) -> str:
+        """Find tokens file near the model."""
+        model_dir = os.path.dirname(self.model_path)
+        tokens_path = os.path.join(model_dir, "tokens.txt")
+        if os.path.exists(tokens_path):
+            return tokens_path
+        # Try parent directory
+        tokens_path = os.path.join(os.path.dirname(model_dir), "tokens.txt")
+        if os.path.exists(tokens_path):
+            return tokens_path
+        return ""
+    
+    def _find_decoder_file(self) -> str:
+        """Find decoder model near the encoder."""
+        model_dir = os.path.dirname(self.model_path)
+        decoder_path = os.path.join(model_dir, "decoder.onnx")
+        return decoder_path if os.path.exists(decoder_path) else ""
+    
+    def _find_joiner_file(self) -> str:
+        """Find joiner model near the encoder."""
+        model_dir = os.path.dirname(self.model_path)
+        joiner_path = os.path.join(model_dir, "joiner.onnx")
+        return joiner_path if os.path.exists(joiner_path) else ""
+    
+    def create_stream(self) -> Any:
+        """Create a new recognition stream for a session."""
+        if not self._initialized or not self.recognizer:
+            return None
+        return self.recognizer.create_stream()
+    
+    def process_audio(self, stream: Any, pcm16_audio: bytes) -> Optional[Dict[str, Any]]:
+        """
+        Process PCM16 audio and return transcript if available.
+        
+        Args:
+            stream: Recognition stream from create_stream()
+            pcm16_audio: Audio in PCM16 format, 16kHz mono
+            
+        Returns:
+            Dict with keys: type ("partial"|"final"), text
+            None if no result yet
+        """
+        if stream is None or not self._initialized:
+            return None
+        
+        try:
+            # Convert PCM16 bytes to float32 samples
+            samples = np.frombuffer(pcm16_audio, dtype=np.int16)
+            float_samples = samples.astype(np.float32) / 32768.0
+            
+            # Feed audio to recognizer
+            stream.accept_waveform(self.sample_rate, float_samples)
+            
+            # Check if we have results
+            if self.recognizer.is_ready(stream):
+                self.recognizer.decode_stream(stream)
+            
+            result = self.recognizer.get_result(stream)
+            text = result.text.strip() if result.text else ""
+            
+            if not text:
+                return None
+            
+            # Check if this is a final result (endpoint detected)
+            is_final = self.recognizer.is_endpoint(stream)
+            
+            if is_final:
+                # Reset stream for next utterance
+                self.recognizer.reset(stream)
+                return {"type": "final", "text": text}
+            else:
+                return {"type": "partial", "text": text}
+                
+        except Exception as exc:
+            logging.error("❌ SHERPA - Process error: %s", exc)
+            return None
+    
+    def close_stream(self, stream: Any) -> None:
+        """Close a recognition stream."""
+        # Sherpa streams don't need explicit cleanup
+        pass
+    
+    def shutdown(self) -> None:
+        """Shutdown the recognizer."""
+        self.recognizer = None
+        self._initialized = False
+        logging.info("🛑 SHERPA - Recognizer shutdown")
+
+
 class AudioProcessor:
     """Handles audio format conversions for MVP uLaw 8kHz pipeline"""
 
@@ -377,12 +544,18 @@ class LocalAIServer:
         self._llm_lock = asyncio.Lock()
 
         # ─────────────────────────────────────────────────────────────────────
-        # STT Backend Selection: vosk (default) or kroko
+        # STT Backend Selection: vosk (default), kroko, or sherpa
         # ─────────────────────────────────────────────────────────────────────
         self.stt_backend = os.getenv("LOCAL_STT_BACKEND", "vosk").lower()
         
         # Kroko STT settings (if using kroko backend)
         self.kroko_backend: Optional[KrokoSTTBackend] = None
+        
+        # Sherpa-onnx STT settings (if using sherpa backend for local streaming ASR)
+        self.sherpa_backend: Optional[SherpaONNXSTTBackend] = None
+        self.sherpa_model_path = os.getenv(
+            "SHERPA_MODEL_PATH", "/app/models/stt/sherpa"
+        )
         self.kroko_url = os.getenv(
             "KROKO_URL",
             "wss://app.kroko.ai/api/v1/transcripts/streaming"  # Default to hosted API
@@ -467,9 +640,11 @@ class LocalAIServer:
         logging.info("✅ All models loaded successfully for MVP pipeline")
 
     async def _load_stt_model(self):
-        """Load STT model based on configured backend (vosk or kroko)."""
+        """Load STT model based on configured backend (vosk, kroko, or sherpa)."""
         if self.stt_backend == "kroko":
             await self._load_kroko_backend()
+        elif self.stt_backend == "sherpa":
+            await self._load_sherpa_backend()
         else:
             await self._load_vosk_backend()
 
@@ -539,6 +714,25 @@ class LocalAIServer:
 
         except Exception as exc:
             logging.error("❌ Failed to initialize Kroko STT backend: %s", exc)
+            raise
+
+    async def _load_sherpa_backend(self):
+        """Initialize Sherpa-onnx STT backend for local streaming ASR."""
+        try:
+            logging.info("🎤 STT backend: Sherpa-onnx (local streaming ASR)")
+
+            self.sherpa_backend = SherpaONNXSTTBackend(
+                model_path=self.sherpa_model_path,
+                sample_rate=PCM16_TARGET_RATE,
+            )
+
+            if not self.sherpa_backend.initialize():
+                raise RuntimeError("Failed to initialize Sherpa-onnx recognizer")
+
+            logging.info("✅ STT backend: Sherpa-onnx initialized with model %s", self.sherpa_model_path)
+
+        except Exception as exc:
+            logging.error("❌ Failed to initialize Sherpa STT backend: %s", exc)
             raise
 
     async def _load_llm_model(self):
@@ -973,6 +1167,8 @@ class LocalAIServer:
         # Route to appropriate backend
         if self.stt_backend == "kroko":
             return await self._process_stt_stream_kroko(session, audio_data, input_rate)
+        elif self.stt_backend == "sherpa":
+            return await self._process_stt_stream_sherpa(session, audio_data, input_rate)
         else:
             return await self._process_stt_stream_vosk(session, audio_data, input_rate)
 
@@ -1040,6 +1236,68 @@ class LocalAIServer:
                 if text != session.last_partial:
                     session.last_partial = text
                     logging.debug("📝 STT PARTIAL - Kroko: '%s'", text)
+                    updates.append({
+                        "text": text,
+                        "is_final": False,
+                        "is_partial": True,
+                        "confidence": None,
+                    })
+
+        return updates
+
+    async def _process_stt_stream_sherpa(
+        self,
+        session: SessionContext,
+        audio_data: bytes,
+        input_rate: int,
+    ) -> List[Dict[str, Any]]:
+        """Feed audio into Sherpa-onnx and return transcript updates."""
+        if not self.sherpa_backend:
+            logging.error("Sherpa backend not initialized")
+            return []
+
+        # Resample to 16kHz if needed
+        if input_rate != PCM16_TARGET_RATE:
+            audio_bytes = self.audio_processor.resample_audio(
+                audio_data, input_rate, PCM16_TARGET_RATE, "raw", "raw"
+            )
+        else:
+            audio_bytes = audio_data
+
+        updates: List[Dict[str, Any]] = []
+
+        try:
+            session.last_audio_at = asyncio.get_running_loop().time()
+        except RuntimeError:
+            session.last_audio_at = 0.0
+
+        # Ensure sherpa stream exists for this session
+        if session.sherpa_stream is None:
+            session.sherpa_stream = self.sherpa_backend.create_stream()
+            if session.sherpa_stream is None:
+                logging.error("❌ SHERPA - Failed to create stream")
+                return []
+
+        # Process audio and get results
+        result = self.sherpa_backend.process_audio(session.sherpa_stream, audio_bytes)
+        
+        if result:
+            result_type = result.get("type", "")
+            text = (result.get("text") or "").strip()
+
+            if result_type == "final":
+                logging.info("📝 STT RESULT - Sherpa final transcript: '%s'", text)
+                updates.append({
+                    "text": text,
+                    "is_final": True,
+                    "is_partial": False,
+                    "confidence": None,
+                })
+                session.last_partial = ""
+            elif result_type == "partial":
+                if text != session.last_partial:
+                    session.last_partial = text
+                    logging.debug("📝 STT PARTIAL - Sherpa: '%s'", text)
                     updates.append({
                         "text": text,
                         "is_final": False,

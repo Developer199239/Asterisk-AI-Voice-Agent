@@ -4,4 +4,6 @@ llama-cpp-python==0.3.16
 piper-tts==1.2.0
 numpy==1.26.4
 soundfile==0.13.1
-# Note: numpy is used by both Piper TTS and Kroko STT (PCM16→float32 conversion)
+sherpa-onnx==1.12.18
+# Note: numpy is used by both Piper TTS and Kroko/Sherpa STT (PCM16→float32 conversion)
+# sherpa-onnx provides local streaming ASR (Kroko is built on sherpa-onnx)
