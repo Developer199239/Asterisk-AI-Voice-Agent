@@ -505,6 +505,15 @@ def load_config(path: str = "config/ai-agent.yaml") -> AppConfig:
     normalize_profiles(config_data)
     normalize_local_provider_tokens(config_data)
     
+    # Phase 4b: Validate normalized configuration
+    from .config.normalization import validate_providers, validate_pipelines, ConfigValidationError
+    try:
+        validate_providers(config_data)
+        validate_pipelines(config_data)
+    except ConfigValidationError as e:
+        logger.warning("Configuration validation warning", error=str(e))
+        # Log warning but don't fail - allow backward compatibility
+    
     # Phase 5: Validate and return
     return AppConfig(**config_data)
 
