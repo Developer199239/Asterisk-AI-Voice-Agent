@@ -313,14 +313,17 @@ async def switch_model(request: SwitchModelRequest):
                 pass  # Container might not exist
             
             # Let docker-compose create a fresh container with the new .env values
-            # Run async with Popen - don't wait for completion (can take 10+ mins if rebuilding)
-            process = subprocess.Popen(
-                ["/usr/local/bin/docker-compose", "up", "-d", "local-ai-server"],
+            # --no-build: Use existing image, don't rebuild (models are in mounted volume)
+            result = subprocess.run(
+                ["/usr/local/bin/docker-compose", "up", "-d", "--no-build", "local-ai-server"],
                 cwd=PROJECT_ROOT,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
+                capture_output=True,
+                text=True,
+                timeout=30  # Should be fast with --no-build
             )
-            # Don't wait - let it run in background
+            
+            if result.returncode != 0:
+                raise Exception(f"docker-compose failed: {result.stderr}")
             
             return SwitchModelResponse(
                 success=True,
