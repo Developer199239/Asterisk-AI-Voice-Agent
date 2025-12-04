@@ -160,24 +160,33 @@ const Dashboard = () => {
                     {directoryHealth.overall}
                 </div>
                 
-                <div className="mt-3 space-y-2">
-                    <div className="flex items-center gap-2 text-xs">
-                        <StatusIcon status={checks.media_dir_configured.status} />
-                        <span className="text-muted-foreground truncate" title={checks.media_dir_configured.message}>
-                            Media Dir Config
-                        </span>
+                <div className="mt-3 space-y-3">
+                    <div className="text-xs">
+                        <div className="flex items-center gap-2">
+                            <StatusIcon status={checks.media_dir_configured.status} />
+                            <span className="text-muted-foreground font-medium">Media Dir Config</span>
+                        </div>
+                        <div className="ml-6 text-[10px] text-muted-foreground/70 truncate" title={checks.media_dir_configured.configured_path || checks.media_dir_configured.expected_path}>
+                            {checks.media_dir_configured.configured_path || checks.media_dir_configured.expected_path || 'Not set'}
+                        </div>
                     </div>
-                    <div className="flex items-center gap-2 text-xs">
-                        <StatusIcon status={checks.host_directory.status} />
-                        <span className="text-muted-foreground truncate" title={checks.host_directory.message}>
-                            Host Directory
-                        </span>
+                    <div className="text-xs">
+                        <div className="flex items-center gap-2">
+                            <StatusIcon status={checks.host_directory.status} />
+                            <span className="text-muted-foreground font-medium">Host Directory</span>
+                        </div>
+                        <div className="ml-6 text-[10px] text-muted-foreground/70 truncate" title={checks.host_directory.path}>
+                            {checks.host_directory.path || 'Unknown'}
+                        </div>
                     </div>
-                    <div className="flex items-center gap-2 text-xs">
-                        <StatusIcon status={checks.asterisk_symlink.status} />
-                        <span className="text-muted-foreground truncate" title={checks.asterisk_symlink.message}>
-                            Asterisk Symlink
-                        </span>
+                    <div className="text-xs">
+                        <div className="flex items-center gap-2">
+                            <StatusIcon status={checks.asterisk_symlink.status} />
+                            <span className="text-muted-foreground font-medium">Asterisk Symlink</span>
+                        </div>
+                        <div className="ml-6 text-[10px] text-muted-foreground/70 truncate" title={checks.asterisk_symlink.message}>
+                            {checks.asterisk_symlink.target || checks.asterisk_symlink.path || checks.asterisk_symlink.message}
+                        </div>
                     </div>
                 </div>
 
