@@ -372,6 +372,173 @@ async def start_engine():
 
 # ============== Local AI Server Setup ==============
 
+# Model catalog with all available options
+MODEL_CATALOG = {
+    "stt": [
+        {
+            "id": "vosk",
+            "name": "Vosk English",
+            "size_mb": 1800,
+            "size_display": "1.8 GB",
+            "latency": "~200ms",
+            "description": "Offline, proven accuracy, English only",
+            "download_url": "https://alphacephei.com/vosk/models/vosk-model-en-us-0.22.zip",
+            "model_path": "vosk-model-en-us-0.22",
+            "recommended_ram_gb": 4,
+            "requires_api_key": False,
+            "env_var": "LOCAL_STT_BACKEND=vosk"
+        },
+        {
+            "id": "kroko_local",
+            "name": "Kroko Local (ONNX)",
+            "size_mb": 128,
+            "size_display": "128 MB",
+            "latency": "~100ms",
+            "description": "Fast, no hallucination, 12+ languages",
+            "download_url": "https://huggingface.co/Banafo/Kroko-ASR/resolve/main/Kroko-EN-Community-128-L-Streaming-001.data",
+            "model_path": "kroko-en-v1.0.onnx",
+            "recommended_ram_gb": 2,
+            "requires_api_key": False,
+            "env_var": "LOCAL_STT_BACKEND=kroko\nKROKO_EMBEDDED=1",
+            "recommended": True
+        },
+        {
+            "id": "kroko_hosted",
+            "name": "Kroko Hosted API",
+            "size_mb": 0,
+            "size_display": "0 (Cloud)",
+            "latency": "~50ms",
+            "description": "Fastest, requires API key, cloud-based",
+            "download_url": None,
+            "model_path": None,
+            "recommended_ram_gb": 0,
+            "requires_api_key": True,
+            "api_key_name": "KROKO_API_KEY",
+            "env_var": "LOCAL_STT_BACKEND=kroko\nKROKO_URL=wss://app.kroko.ai/api/v1/transcripts/streaming"
+        }
+    ],
+    "llm": [
+        {
+            "id": "phi3_mini",
+            "name": "Phi-3-mini-4K",
+            "size_mb": 2500,
+            "size_display": "2.5 GB",
+            "latency": "Fast",
+            "description": "Good quality, optimized for 4K context",
+            "download_url": "https://huggingface.co/microsoft/Phi-3-mini-4k-instruct-gguf/resolve/main/Phi-3-mini-4k-instruct-q4.gguf",
+            "model_path": "phi-3-mini-4k-instruct.Q4_K_M.gguf",
+            "recommended_ram_gb": 8,
+            "requires_api_key": False,
+            "recommended": True
+        },
+        {
+            "id": "tinyllama",
+            "name": "TinyLlama 1.1B",
+            "size_mb": 700,
+            "size_display": "700 MB",
+            "latency": "Fastest",
+            "description": "Lightweight, for low-resource systems",
+            "download_url": "https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
+            "model_path": "tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
+            "recommended_ram_gb": 4,
+            "requires_api_key": False
+        },
+        {
+            "id": "llama32_3b",
+            "name": "Llama-3.2-3B",
+            "size_mb": 2000,
+            "size_display": "2 GB",
+            "latency": "Fast",
+            "description": "Balanced performance and quality",
+            "download_url": "https://huggingface.co/lmstudio-community/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+            "model_path": "Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+            "recommended_ram_gb": 8,
+            "requires_api_key": False
+        },
+        {
+            "id": "openai_cloud",
+            "name": "OpenAI Cloud",
+            "size_mb": 0,
+            "size_display": "0 (Cloud)",
+            "latency": "Fast",
+            "description": "Best quality, requires API key",
+            "download_url": None,
+            "model_path": None,
+            "recommended_ram_gb": 0,
+            "requires_api_key": True,
+            "api_key_name": "OPENAI_API_KEY"
+        }
+    ],
+    "tts": [
+        {
+            "id": "piper_lessac_medium",
+            "name": "Piper lessac-medium",
+            "size_mb": 100,
+            "size_display": "100 MB",
+            "latency": "Good quality",
+            "description": "Clear American English voice",
+            "download_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/lessac/medium/en_US-lessac-medium.onnx",
+            "model_path": "en_US-lessac-medium.onnx",
+            "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json",
+            "recommended_ram_gb": 1,
+            "requires_api_key": False,
+            "recommended": True
+        },
+        {
+            "id": "piper_lessac_high",
+            "name": "Piper lessac-high",
+            "size_mb": 200,
+            "size_display": "200 MB",
+            "latency": "Better quality",
+            "description": "Higher quality American English",
+            "download_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/lessac/high/en_US-lessac-high.onnx",
+            "model_path": "en_US-lessac-high.onnx",
+            "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/lessac/high/en_US-lessac-high.onnx.json",
+            "recommended_ram_gb": 2,
+            "requires_api_key": False
+        },
+        {
+            "id": "piper_amy_medium",
+            "name": "Piper amy-medium",
+            "size_mb": 100,
+            "size_display": "100 MB",
+            "latency": "Good quality",
+            "description": "British English voice",
+            "download_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_GB/amy/medium/en_GB-amy-medium.onnx",
+            "model_path": "en_GB-amy-medium.onnx",
+            "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_GB/amy/medium/en_GB-amy-medium.onnx.json",
+            "recommended_ram_gb": 1,
+            "requires_api_key": False
+        }
+    ]
+}
+
+
+@router.get("/local/available-models")
+async def get_available_models():
+    """Return catalog of available models with system recommendations."""
+    import psutil
+    
+    # Get system info for recommendations
+    ram_gb = psutil.virtual_memory().total // (1024**3)
+    
+    # Add recommendation flags based on system
+    catalog = {}
+    for category, models in MODEL_CATALOG.items():
+        catalog[category] = []
+        for model in models:
+            model_copy = model.copy()
+            # Mark as system-recommended if RAM is sufficient
+            if model.get("recommended") and ram_gb >= model.get("recommended_ram_gb", 0):
+                model_copy["system_recommended"] = True
+            catalog[category].append(model_copy)
+    
+    return {
+        "catalog": catalog,
+        "system_ram_gb": ram_gb
+    }
+
+
 @router.get("/local/detect-tier")
 async def detect_local_tier():
     """Detect system tier for local AI models based on CPU/RAM/GPU."""
@@ -526,6 +693,192 @@ async def get_download_progress():
         "completed": _download_status.get("completed", False),
         "error": _download_status.get("error"),
         "output": _download_output[-20:] if _download_output else []  # Last 20 lines
+    }
+
+
+class ModelSelection(BaseModel):
+    stt: str
+    llm: str
+    tts: str
+
+
+@router.post("/local/download-selected-models")
+async def download_selected_models(selection: ModelSelection):
+    """Download user-selected models from the catalog."""
+    import subprocess
+    import threading
+    import urllib.request
+    import zipfile
+    import shutil
+    from settings import PROJECT_ROOT
+    
+    global _download_output, _download_status
+    
+    # Reset state
+    _download_output = []
+    _download_status = {"running": True, "completed": False, "error": None}
+    
+    # Get model info from catalog
+    stt_model = next((m for m in MODEL_CATALOG["stt"] if m["id"] == selection.stt), None)
+    llm_model = next((m for m in MODEL_CATALOG["llm"] if m["id"] == selection.llm), None)
+    tts_model = next((m for m in MODEL_CATALOG["tts"] if m["id"] == selection.tts), None)
+    
+    if not stt_model:
+        return {"status": "error", "message": f"Unknown STT model: {selection.stt}"}
+    if not llm_model:
+        return {"status": "error", "message": f"Unknown LLM model: {selection.llm}"}
+    if not tts_model:
+        return {"status": "error", "message": f"Unknown TTS model: {selection.tts}"}
+    
+    def download_file(url: str, dest_path: str, label: str):
+        """Download a file with progress reporting."""
+        global _download_output
+        try:
+            _download_output.append(f"⬇️ Downloading {label}...")
+            
+            # Create directory if needed
+            os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+            
+            # Download with progress
+            def report_progress(block_num, block_size, total_size):
+                if total_size > 0:
+                    percent = min(100, block_num * block_size * 100 // total_size)
+                    if block_num % 100 == 0:  # Report every 100 blocks
+                        mb_done = (block_num * block_size) / (1024 * 1024)
+                        mb_total = total_size / (1024 * 1024)
+                        _download_output.append(f"   {label}: {mb_done:.1f}/{mb_total:.1f} MB ({percent}%)")
+            
+            urllib.request.urlretrieve(url, dest_path, report_progress)
+            _download_output.append(f"✅ {label} downloaded successfully")
+            return True
+        except Exception as e:
+            _download_output.append(f"❌ Failed to download {label}: {e}")
+            return False
+    
+    def run_downloads():
+        global _download_status, _download_output
+        models_dir = os.path.join(PROJECT_ROOT, "models")
+        success = True
+        
+        try:
+            # Download STT model
+            if stt_model.get("download_url"):
+                stt_dir = os.path.join(models_dir, "stt")
+                os.makedirs(stt_dir, exist_ok=True)
+                
+                if selection.stt == "vosk":
+                    # Vosk is a zip file
+                    zip_path = os.path.join(stt_dir, "vosk-model.zip")
+                    if download_file(stt_model["download_url"], zip_path, "Vosk STT Model"):
+                        _download_output.append("📦 Extracting Vosk model...")
+                        with zipfile.ZipFile(zip_path, 'r') as zf:
+                            zf.extractall(stt_dir)
+                        os.remove(zip_path)
+                        _download_output.append("✅ Vosk model extracted")
+                    else:
+                        success = False
+                elif selection.stt == "kroko_local":
+                    # Kroko is a single file
+                    dest = os.path.join(stt_dir, stt_model["model_path"])
+                    if not download_file(stt_model["download_url"], dest, "Kroko STT Model"):
+                        success = False
+            else:
+                _download_output.append(f"ℹ️ STT: {stt_model['name']} (no download needed)")
+            
+            # Download LLM model
+            if llm_model.get("download_url"):
+                llm_dir = os.path.join(models_dir, "llm")
+                os.makedirs(llm_dir, exist_ok=True)
+                dest = os.path.join(llm_dir, llm_model["model_path"])
+                if not download_file(llm_model["download_url"], dest, "LLM Model"):
+                    success = False
+            else:
+                _download_output.append(f"ℹ️ LLM: {llm_model['name']} (no download needed)")
+            
+            # Download TTS model
+            if tts_model.get("download_url"):
+                tts_dir = os.path.join(models_dir, "tts")
+                os.makedirs(tts_dir, exist_ok=True)
+                dest = os.path.join(tts_dir, tts_model["model_path"])
+                if not download_file(tts_model["download_url"], dest, "TTS Model"):
+                    success = False
+                
+                # Also download config file if present
+                if tts_model.get("config_url"):
+                    config_dest = dest + ".json"
+                    download_file(tts_model["config_url"], config_dest, "TTS Config")
+            else:
+                _download_output.append(f"ℹ️ TTS: {tts_model['name']} (no download needed)")
+            
+            # Update .env with selected models
+            _download_output.append("📝 Updating configuration...")
+            env_updates = []
+            
+            if stt_model.get("env_var"):
+                env_updates.extend(stt_model["env_var"].split("\n"))
+            
+            # Set model paths
+            if stt_model.get("model_path") and stt_model.get("download_url"):
+                stt_path = os.path.join("/app/models/stt", stt_model["model_path"])
+                env_updates.append(f"LOCAL_STT_MODEL_PATH={stt_path}")
+            
+            if llm_model.get("model_path") and llm_model.get("download_url"):
+                llm_path = os.path.join("/app/models/llm", llm_model["model_path"])
+                env_updates.append(f"LOCAL_LLM_MODEL_PATH={llm_path}")
+            
+            if tts_model.get("model_path") and tts_model.get("download_url"):
+                tts_path = os.path.join("/app/models/tts", tts_model["model_path"])
+                env_updates.append(f"LOCAL_TTS_MODEL_PATH={tts_path}")
+            
+            # Write to .env
+            if env_updates:
+                env_path = os.path.join(PROJECT_ROOT, ".env")
+                env_content = ""
+                if os.path.exists(env_path):
+                    with open(env_path, "r") as f:
+                        env_content = f.read()
+                
+                for update in env_updates:
+                    key = update.split("=")[0]
+                    # Remove existing line if present
+                    import re
+                    env_content = re.sub(f"^{key}=.*$", "", env_content, flags=re.MULTILINE)
+                
+                # Add new values
+                with open(env_path, "a") as f:
+                    f.write("\n# Model selections from wizard\n")
+                    for update in env_updates:
+                        f.write(f"{update}\n")
+                
+                _download_output.append("✅ Configuration updated")
+            
+            _download_status["completed"] = success
+            _download_status["running"] = False
+            
+            if success:
+                _download_output.append("🎉 All models downloaded successfully!")
+            else:
+                _download_status["error"] = "Some downloads failed"
+                
+        except Exception as e:
+            _download_status["running"] = False
+            _download_status["error"] = str(e)
+            _download_output.append(f"❌ Error: {e}")
+    
+    # Start download thread
+    thread = threading.Thread(target=run_downloads, daemon=True)
+    thread.start()
+    
+    total_mb = (stt_model.get("size_mb", 0) + llm_model.get("size_mb", 0) + tts_model.get("size_mb", 0))
+    
+    return {
+        "status": "started",
+        "message": f"Downloading {total_mb} MB of models...",
+        "models": {
+            "stt": stt_model["name"],
+            "llm": llm_model["name"],
+            "tts": tts_model["name"]
+        }
     }
 
 

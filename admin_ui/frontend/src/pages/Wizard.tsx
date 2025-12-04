@@ -64,6 +64,32 @@ const Wizard = () => {
     }>({ running: false, exists: false, checked: false });
     const [startingEngine, setStartingEngine] = useState(false);
     
+    // Model selection state
+    interface ModelOption {
+        id: string;
+        name: string;
+        size_mb: number;
+        size_display: string;
+        latency: string;
+        description: string;
+        requires_api_key: boolean;
+        recommended?: boolean;
+        system_recommended?: boolean;
+    }
+    
+    interface ModelCatalog {
+        stt: ModelOption[];
+        llm: ModelOption[];
+        tts: ModelOption[];
+    }
+    
+    const [modelCatalog, setModelCatalog] = useState<ModelCatalog | null>(null);
+    const [selectedModels, setSelectedModels] = useState({
+        stt: 'kroko_local',
+        llm: 'phi3_mini',
+        tts: 'piper_lessac_medium'
+    });
+    
     // Local AI Server state
     const [localAIStatus, setLocalAIStatus] = useState<{
         tier: string;
@@ -79,6 +105,7 @@ const Wizard = () => {
         serverStarted: boolean;
         serverLogs: string[];
         serverReady: boolean;
+        systemDetected: boolean;
     }>({
         tier: '',
         tierInfo: {},
@@ -92,7 +119,8 @@ const Wizard = () => {
         downloadCompleted: false,
         serverStarted: false,
         serverLogs: [],
-        serverReady: false
+        serverReady: false,
+        systemDetected: false
     });
 
     // Load existing config from .env on mount
@@ -717,10 +745,10 @@ const Wizard = () => {
                                             onClick={async () => {
                                                 setLoading(true);
                                                 try {
-                                                    // Detect tier and check existing models in parallel
-                                                    const [tierRes, modelsRes] = await Promise.all([
+                                                    const [tierRes, modelsRes, catalogRes] = await Promise.all([
                                                         axios.get('/api/wizard/local/detect-tier'),
-                                                        axios.get('/api/wizard/local/models-status')
+                                                        axios.get('/api/wizard/local/models-status'),
+                                                        axios.get('/api/wizard/local/available-models')
                                                     ]);
                                                     setLocalAIStatus(prev => ({
                                                         ...prev,
@@ -734,8 +762,21 @@ const Wizard = () => {
                                                             llm: modelsRes.data.llm_models || [],
                                                             tts: modelsRes.data.tts_models || []
                                                         },
-                                                        modelsReady: modelsRes.data.ready
+                                                        modelsReady: modelsRes.data.ready,
+                                                        systemDetected: true
                                                     }));
+                                                    setModelCatalog(catalogRes.data.catalog);
+                                                    
+                                                    // Auto-select recommended models
+                                                    const catalog = catalogRes.data.catalog;
+                                                    const sttRec = catalog.stt.find((m: ModelOption) => m.system_recommended || m.recommended);
+                                                    const llmRec = catalog.llm.find((m: ModelOption) => m.system_recommended || m.recommended);
+                                                    const ttsRec = catalog.tts.find((m: ModelOption) => m.system_recommended || m.recommended);
+                                                    setSelectedModels({
+                                                        stt: sttRec?.id || 'kroko_local',
+                                                        llm: llmRec?.id || 'phi3_mini',
+                                                        tts: ttsRec?.id || 'piper_lessac_medium'
+                                                    });
                                                 } catch (err: any) {
                                                     setError('Failed to detect system: ' + err.message);
                                                 }
@@ -748,141 +789,260 @@ const Wizard = () => {
                                         </button>
                                     </div>
                                     
-                                    {localAIStatus.tier && (
-                                        <div className="space-y-2 text-sm">
-                                            <div className="grid grid-cols-3 gap-2">
-                                                <div className="p-2 bg-background rounded">
-                                                    <span className="text-muted-foreground">CPU Cores:</span>
-                                                    <span className="ml-2 font-medium">{localAIStatus.cpuCores}</span>
-                                                </div>
-                                                <div className="p-2 bg-background rounded">
-                                                    <span className="text-muted-foreground">RAM:</span>
-                                                    <span className="ml-2 font-medium">{localAIStatus.ramGb} GB</span>
-                                                </div>
-                                                <div className="p-2 bg-background rounded">
-                                                    <span className="text-muted-foreground">GPU:</span>
-                                                    <span className="ml-2 font-medium">{localAIStatus.gpuDetected ? 'Yes' : 'No'}</span>
-                                                </div>
+                                    {localAIStatus.systemDetected && (
+                                        <div className="grid grid-cols-3 gap-2 text-sm">
+                                            <div className="p-2 bg-background rounded">
+                                                <span className="text-muted-foreground">CPU:</span>
+                                                <span className="ml-2 font-medium">{localAIStatus.cpuCores} Cores</span>
                                             </div>
-                                            <div className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded border border-blue-200 dark:border-blue-800">
-                                                <p className="font-medium text-blue-800 dark:text-blue-300">
-                                                    Recommended Tier: {localAIStatus.tier}
-                                                </p>
-                                                <p className="text-blue-700 dark:text-blue-400 mt-1">
-                                                    {localAIStatus.tierInfo?.models}
-                                                </p>
-                                                <p className="text-xs text-blue-600 dark:text-blue-500 mt-1">
-                                                    Performance: {localAIStatus.tierInfo?.performance} | 
-                                                    Download: {localAIStatus.tierInfo?.download_size}
-                                                </p>
+                                            <div className="p-2 bg-background rounded">
+                                                <span className="text-muted-foreground">RAM:</span>
+                                                <span className="ml-2 font-medium">{localAIStatus.ramGb} GB</span>
                                             </div>
-                                            
-                                            {/* Warning if models already exist */}
-                                            {localAIStatus.modelsReady && (
-                                                <div className="p-3 bg-yellow-50 dark:bg-yellow-900/20 rounded border border-yellow-200 dark:border-yellow-800">
-                                                    <p className="font-medium text-yellow-800 dark:text-yellow-300 flex items-center">
-                                                        <AlertTriangle className="w-4 h-4 mr-2" />
-                                                        Existing Models Detected
-                                                    </p>
-                                                    <p className="text-yellow-700 dark:text-yellow-400 mt-1 text-xs">
-                                                        Models are already downloaded on this system:
-                                                    </p>
-                                                    <ul className="text-xs text-yellow-600 dark:text-yellow-500 mt-1 ml-4 list-disc">
-                                                        {localAIStatus.existingModels.stt.length > 0 && (
-                                                            <li>STT: {localAIStatus.existingModels.stt.join(', ')}</li>
-                                                        )}
-                                                        {localAIStatus.existingModels.llm.length > 0 && (
-                                                            <li>LLM: {localAIStatus.existingModels.llm.join(', ')}</li>
-                                                        )}
-                                                        {localAIStatus.existingModels.tts.length > 0 && (
-                                                            <li>TTS: {localAIStatus.existingModels.tts.join(', ')}</li>
-                                                        )}
-                                                    </ul>
-                                                    <p className="text-yellow-700 dark:text-yellow-400 mt-2 text-xs font-medium">
-                                                        ⚠️ Downloading new models will overwrite existing ones.
-                                                    </p>
-                                                </div>
-                                            )}
+                                            <div className="p-2 bg-background rounded">
+                                                <span className="text-muted-foreground">GPU:</span>
+                                                <span className="ml-2 font-medium">{localAIStatus.gpuDetected ? 'Yes' : 'No'}</span>
+                                            </div>
                                         </div>
                                     )}
                                 </div>
 
-                                {/* Model Download */}
-                                {localAIStatus.tier && (
-                                    <div className="bg-muted p-4 rounded-lg">
-                                        <div className="flex justify-between items-center mb-3">
-                                            <h4 className="font-medium">Download Models</h4>
-                                            <button
-                                                onClick={async () => {
-                                                    setLocalAIStatus(prev => ({ ...prev, downloading: true, downloadOutput: [] }));
-                                                    try {
-                                                        await axios.post('/api/wizard/local/download-models', null, {
-                                                            params: { tier: localAIStatus.tier }
-                                                        });
-                                                        // Poll for progress
-                                                        const pollProgress = async () => {
-                                                            try {
-                                                                const res = await axios.get('/api/wizard/local/download-progress');
-                                                                setLocalAIStatus(prev => ({
-                                                                    ...prev,
-                                                                    downloadOutput: res.data.output || []
-                                                                }));
-                                                                
-                                                                if (res.data.completed) {
+                                {/* Model Selection UI */}
+                                {localAIStatus.systemDetected && modelCatalog && !localAIStatus.downloading && !localAIStatus.downloadCompleted && (
+                                    <div className="space-y-4">
+                                        {/* STT Selection */}
+                                        <div className="bg-muted p-4 rounded-lg">
+                                            <h4 className="font-medium mb-3 flex items-center gap-2">
+                                                🎤 STT (Speech-to-Text)
+                                            </h4>
+                                            <div className="space-y-2">
+                                                {modelCatalog.stt.map((model) => (
+                                                    <label
+                                                        key={model.id}
+                                                        className={`flex items-center p-3 rounded-md border cursor-pointer transition-all ${
+                                                            selectedModels.stt === model.id
+                                                                ? 'border-primary bg-primary/5'
+                                                                : 'border-border hover:border-primary/50'
+                                                        }`}
+                                                    >
+                                                        <input
+                                                            type="radio"
+                                                            name="stt"
+                                                            value={model.id}
+                                                            checked={selectedModels.stt === model.id}
+                                                            onChange={(e) => setSelectedModels(prev => ({ ...prev, stt: e.target.value }))}
+                                                            className="mr-3"
+                                                        />
+                                                        <div className="flex-1">
+                                                            <div className="flex items-center gap-2">
+                                                                <span className="font-medium">{model.name}</span>
+                                                                <span className="text-xs text-muted-foreground">({model.size_display})</span>
+                                                                {(model.system_recommended || model.recommended) && (
+                                                                    <span className="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded-full">⭐ Recommended</span>
+                                                                )}
+                                                                {model.requires_api_key && (
+                                                                    <span className="text-xs bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400 px-2 py-0.5 rounded-full">API Key</span>
+                                                                )}
+                                                            </div>
+                                                            <p className="text-xs text-muted-foreground mt-1">{model.description} • {model.latency}</p>
+                                                        </div>
+                                                    </label>
+                                                ))}
+                                            </div>
+                                        </div>
+
+                                        {/* LLM Selection */}
+                                        <div className="bg-muted p-4 rounded-lg">
+                                            <h4 className="font-medium mb-3 flex items-center gap-2">
+                                                🧠 LLM (Language Model)
+                                            </h4>
+                                            <div className="space-y-2">
+                                                {modelCatalog.llm.map((model) => (
+                                                    <label
+                                                        key={model.id}
+                                                        className={`flex items-center p-3 rounded-md border cursor-pointer transition-all ${
+                                                            selectedModels.llm === model.id
+                                                                ? 'border-primary bg-primary/5'
+                                                                : 'border-border hover:border-primary/50'
+                                                        }`}
+                                                    >
+                                                        <input
+                                                            type="radio"
+                                                            name="llm"
+                                                            value={model.id}
+                                                            checked={selectedModels.llm === model.id}
+                                                            onChange={(e) => setSelectedModels(prev => ({ ...prev, llm: e.target.value }))}
+                                                            className="mr-3"
+                                                        />
+                                                        <div className="flex-1">
+                                                            <div className="flex items-center gap-2">
+                                                                <span className="font-medium">{model.name}</span>
+                                                                <span className="text-xs text-muted-foreground">({model.size_display})</span>
+                                                                {(model.system_recommended || model.recommended) && (
+                                                                    <span className="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded-full">⭐ Recommended</span>
+                                                                )}
+                                                                {model.requires_api_key && (
+                                                                    <span className="text-xs bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400 px-2 py-0.5 rounded-full">API Key</span>
+                                                                )}
+                                                            </div>
+                                                            <p className="text-xs text-muted-foreground mt-1">{model.description} • {model.latency}</p>
+                                                        </div>
+                                                    </label>
+                                                ))}
+                                            </div>
+                                        </div>
+
+                                        {/* TTS Selection */}
+                                        <div className="bg-muted p-4 rounded-lg">
+                                            <h4 className="font-medium mb-3 flex items-center gap-2">
+                                                🔊 TTS (Text-to-Speech)
+                                            </h4>
+                                            <div className="space-y-2">
+                                                {modelCatalog.tts.map((model) => (
+                                                    <label
+                                                        key={model.id}
+                                                        className={`flex items-center p-3 rounded-md border cursor-pointer transition-all ${
+                                                            selectedModels.tts === model.id
+                                                                ? 'border-primary bg-primary/5'
+                                                                : 'border-border hover:border-primary/50'
+                                                        }`}
+                                                    >
+                                                        <input
+                                                            type="radio"
+                                                            name="tts"
+                                                            value={model.id}
+                                                            checked={selectedModels.tts === model.id}
+                                                            onChange={(e) => setSelectedModels(prev => ({ ...prev, tts: e.target.value }))}
+                                                            className="mr-3"
+                                                        />
+                                                        <div className="flex-1">
+                                                            <div className="flex items-center gap-2">
+                                                                <span className="font-medium">{model.name}</span>
+                                                                <span className="text-xs text-muted-foreground">({model.size_display})</span>
+                                                                {(model.system_recommended || model.recommended) && (
+                                                                    <span className="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded-full">⭐ Recommended</span>
+                                                                )}
+                                                            </div>
+                                                            <p className="text-xs text-muted-foreground mt-1">{model.description} • {model.latency}</p>
+                                                        </div>
+                                                    </label>
+                                                ))}
+                                            </div>
+                                        </div>
+
+                                        {/* Download Summary */}
+                                        <div className="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-lg border border-blue-200 dark:border-blue-800">
+                                            <div className="flex justify-between items-center">
+                                                <div>
+                                                    <p className="font-medium text-blue-800 dark:text-blue-300">
+                                                        📦 Total Download: {(
+                                                            (modelCatalog.stt.find(m => m.id === selectedModels.stt)?.size_mb || 0) +
+                                                            (modelCatalog.llm.find(m => m.id === selectedModels.llm)?.size_mb || 0) +
+                                                            (modelCatalog.tts.find(m => m.id === selectedModels.tts)?.size_mb || 0)
+                                                        ) > 1000 
+                                                            ? `${((
+                                                                (modelCatalog.stt.find(m => m.id === selectedModels.stt)?.size_mb || 0) +
+                                                                (modelCatalog.llm.find(m => m.id === selectedModels.llm)?.size_mb || 0) +
+                                                                (modelCatalog.tts.find(m => m.id === selectedModels.tts)?.size_mb || 0)
+                                                            ) / 1000).toFixed(1)} GB`
+                                                            : `${(
+                                                                (modelCatalog.stt.find(m => m.id === selectedModels.stt)?.size_mb || 0) +
+                                                                (modelCatalog.llm.find(m => m.id === selectedModels.llm)?.size_mb || 0) +
+                                                                (modelCatalog.tts.find(m => m.id === selectedModels.tts)?.size_mb || 0)
+                                                            )} MB`
+                                                        }
+                                                    </p>
+                                                    <p className="text-xs text-blue-600 dark:text-blue-400 mt-1">
+                                                        Estimated time: 5-15 minutes depending on connection
+                                                    </p>
+                                                </div>
+                                                <button
+                                                    onClick={async () => {
+                                                        setLocalAIStatus(prev => ({ ...prev, downloading: true, downloadOutput: [] }));
+                                                        try {
+                                                            await axios.post('/api/wizard/local/download-selected-models', selectedModels);
+                                                            const pollProgress = async () => {
+                                                                try {
+                                                                    const res = await axios.get('/api/wizard/local/download-progress');
                                                                     setLocalAIStatus(prev => ({
                                                                         ...prev,
-                                                                        downloading: false,
-                                                                        downloadCompleted: true,
-                                                                        modelsReady: true
+                                                                        downloadOutput: res.data.output || []
                                                                     }));
-                                                                } else if (res.data.error) {
-                                                                    setError('Download failed: ' + res.data.error);
-                                                                    setLocalAIStatus(prev => ({ ...prev, downloading: false }));
-                                                                } else if (res.data.running) {
-                                                                    setTimeout(pollProgress, 2000);
+                                                                    
+                                                                    if (res.data.completed) {
+                                                                        setLocalAIStatus(prev => ({
+                                                                            ...prev,
+                                                                            downloading: false,
+                                                                            downloadCompleted: true,
+                                                                            modelsReady: true
+                                                                        }));
+                                                                    } else if (res.data.error) {
+                                                                        setError('Download failed: ' + res.data.error);
+                                                                        setLocalAIStatus(prev => ({ ...prev, downloading: false }));
+                                                                    } else if (res.data.running) {
+                                                                        setTimeout(pollProgress, 2000);
+                                                                    }
+                                                                } catch (err) {
+                                                                    setTimeout(pollProgress, 3000);
                                                                 }
-                                                            } catch (err) {
-                                                                setTimeout(pollProgress, 3000);
-                                                            }
-                                                        };
-                                                        setTimeout(pollProgress, 1000);
-                                                    } catch (err: any) {
-                                                        setError('Failed to start download: ' + err.message);
-                                                        setLocalAIStatus(prev => ({ ...prev, downloading: false }));
-                                                    }
-                                                }}
-                                                disabled={localAIStatus.downloading || localAIStatus.downloadCompleted}
-                                                className="px-3 py-1 text-sm rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-                                            >
-                                                {localAIStatus.downloading ? 'Downloading...' : localAIStatus.downloadCompleted ? 'Download Complete' : 'Download Models'}
-                                            </button>
+                                                            };
+                                                            setTimeout(pollProgress, 1000);
+                                                        } catch (err: any) {
+                                                            setError('Failed to start download: ' + err.message);
+                                                            setLocalAIStatus(prev => ({ ...prev, downloading: false }));
+                                                        }
+                                                    }}
+                                                    className="px-4 py-2 rounded-md bg-primary text-primary-foreground hover:bg-primary/90"
+                                                >
+                                                    Download Selected Models
+                                                </button>
+                                            </div>
                                         </div>
-                                        
-                                        {/* Download Progress Output */}
-                                        {localAIStatus.downloading && (
-                                            <div className="mt-3">
-                                                <div className="flex items-center gap-2 mb-2">
-                                                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary"></div>
-                                                    <span className="text-sm text-muted-foreground">Downloading models...</span>
-                                                </div>
-                                                <div className="bg-black/90 rounded p-3 max-h-48 overflow-y-auto font-mono text-xs text-green-400">
-                                                    {localAIStatus.downloadOutput.length > 0 ? (
-                                                        localAIStatus.downloadOutput.map((line, i) => (
-                                                            <div key={i} className="whitespace-pre-wrap">{line}</div>
-                                                        ))
-                                                    ) : (
-                                                        <div className="text-gray-500">Starting download...</div>
-                                                    )}
-                                                </div>
+
+                                        {/* Existing Models Warning */}
+                                        {localAIStatus.modelsReady && (
+                                            <div className="p-3 bg-yellow-50 dark:bg-yellow-900/20 rounded border border-yellow-200 dark:border-yellow-800">
+                                                <p className="font-medium text-yellow-800 dark:text-yellow-300 flex items-center">
+                                                    <AlertTriangle className="w-4 h-4 mr-2" />
+                                                    Existing Models Detected
+                                                </p>
+                                                <p className="text-yellow-700 dark:text-yellow-400 mt-1 text-xs">
+                                                    ⚠️ Downloading new models will overwrite existing ones.
+                                                </p>
                                             </div>
                                         )}
-                                        
-                                        {localAIStatus.downloadCompleted && (
-                                            <p className="text-sm text-green-600 dark:text-green-400 flex items-center mt-2">
-                                                <CheckCircle className="w-4 h-4 mr-2" />
-                                                Models downloaded successfully! Click Next to start the Local AI Server.
-                                            </p>
-                                        )}
+                                    </div>
+                                )}
+
+                                {/* Download Progress */}
+                                {localAIStatus.downloading && (
+                                    <div className="bg-muted p-4 rounded-lg">
+                                        <div className="flex items-center gap-2 mb-3">
+                                            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary"></div>
+                                            <span className="font-medium">Downloading models...</span>
+                                        </div>
+                                        <div className="bg-black/90 rounded p-3 max-h-64 overflow-y-auto font-mono text-xs text-green-400">
+                                            {localAIStatus.downloadOutput.length > 0 ? (
+                                                localAIStatus.downloadOutput.map((line, i) => (
+                                                    <div key={i} className="whitespace-pre-wrap">{line}</div>
+                                                ))
+                                            ) : (
+                                                <div className="text-gray-500">Starting download...</div>
+                                            )}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Download Complete */}
+                                {localAIStatus.downloadCompleted && (
+                                    <div className="bg-green-50 dark:bg-green-900/20 p-4 rounded-lg border border-green-200 dark:border-green-800">
+                                        <p className="text-green-800 dark:text-green-300 flex items-center font-medium">
+                                            <CheckCircle className="w-5 h-5 mr-2" />
+                                            Models downloaded successfully!
+                                        </p>
+                                        <p className="text-sm text-green-700 dark:text-green-400 mt-1">
+                                            Click Next to continue with the setup.
+                                        </p>
                                     </div>
                                 )}
                             </div>
