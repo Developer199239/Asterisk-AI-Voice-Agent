@@ -313,9 +313,11 @@ async def switch_model(request: SwitchModelRequest):
                 pass  # Container might not exist
             
             # Let docker-compose create a fresh container with the new .env values
+            # -p: Use correct project name (matches image name prefix)
             # --no-build: Use existing image, don't rebuild (models are in mounted volume)
             result = subprocess.run(
-                ["/usr/local/bin/docker-compose", "up", "-d", "--no-build", "local-ai-server"],
+                ["/usr/local/bin/docker-compose", "-p", "asterisk-ai-voice-agent", 
+                 "up", "-d", "--no-build", "local-ai-server"],
                 cwd=PROJECT_ROOT,
                 capture_output=True,
                 text=True,
