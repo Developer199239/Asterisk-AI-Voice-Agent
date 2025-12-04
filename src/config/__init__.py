@@ -34,6 +34,7 @@ LocalProviderConfig = _parent_config.LocalProviderConfig
 DeepgramProviderConfig = _parent_config.DeepgramProviderConfig
 OpenAIProviderConfig = _parent_config.OpenAIProviderConfig
 GoogleProviderConfig = _parent_config.GoogleProviderConfig
+ElevenLabsProviderConfig = _parent_config.ElevenLabsProviderConfig
 OpenAIRealtimeProviderConfig = _parent_config.OpenAIRealtimeProviderConfig
 BargeInConfig = _parent_config.BargeInConfig
 LLMConfig = _parent_config.LLMConfig
@@ -53,6 +54,7 @@ __all__ = [
     'DeepgramProviderConfig',
     'OpenAIProviderConfig',
     'GoogleProviderConfig',
+    'ElevenLabsProviderConfig',
     'OpenAIRealtimeProviderConfig',
     'BargeInConfig',
     'LLMConfig',
