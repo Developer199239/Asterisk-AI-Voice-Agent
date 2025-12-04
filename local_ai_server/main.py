@@ -309,31 +309,38 @@ class SherpaONNXSTTBackend:
                 logging.error("❌ SHERPA - Model not found at %s", self.model_path)
                 return False
             
-            # Determine model type and create appropriate config
-            if self.model_path.endswith('.onnx'):
-                # Transducer model (like Kroko)
-                recognizer_config = sherpa_onnx.OnlineRecognizerConfig(
-                    tokens=self._find_tokens_file(),
-                    model_config=sherpa_onnx.OnlineTransducerModelConfig(
-                        encoder=self.model_path,
-                        decoder=self._find_decoder_file(),
-                        joiner=self._find_joiner_file(),
-                    ),
-                    enable_endpoint_detection=True,
-                    decoding_method="greedy_search",
-                )
-            else:
-                # Directory-based model
-                recognizer_config = sherpa_onnx.OnlineRecognizerConfig(
-                    tokens=os.path.join(self.model_path, "tokens.txt"),
-                    model_config=sherpa_onnx.OnlineTransducerModelConfig(
-                        encoder=os.path.join(self.model_path, "encoder.onnx"),
-                        decoder=os.path.join(self.model_path, "decoder.onnx"),
-                        joiner=os.path.join(self.model_path, "joiner.onnx"),
-                    ),
-                    enable_endpoint_detection=True,
-                    decoding_method="greedy_search",
-                )
+            # Find model files (handles various naming conventions)
+            tokens_file = self._find_tokens_file()
+            encoder_file = self._find_encoder_file()
+            decoder_file = self._find_decoder_file()
+            joiner_file = self._find_joiner_file()
+            
+            if not all([tokens_file, encoder_file, decoder_file, joiner_file]):
+                missing = []
+                if not tokens_file: missing.append("tokens.txt")
+                if not encoder_file: missing.append("encoder*.onnx")
+                if not decoder_file: missing.append("decoder*.onnx")
+                if not joiner_file: missing.append("joiner*.onnx")
+                logging.error("❌ SHERPA - Missing model files: %s", ", ".join(missing))
+                return False
+            
+            logging.info("📁 SHERPA - Model files found:")
+            logging.info("   tokens: %s", tokens_file)
+            logging.info("   encoder: %s", encoder_file)
+            logging.info("   decoder: %s", decoder_file)
+            logging.info("   joiner: %s", joiner_file)
+            
+            # Create recognizer config
+            recognizer_config = sherpa_onnx.OnlineRecognizerConfig(
+                tokens=tokens_file,
+                model_config=sherpa_onnx.OnlineTransducerModelConfig(
+                    encoder=encoder_file,
+                    decoder=decoder_file,
+                    joiner=joiner_file,
+                ),
+                enable_endpoint_detection=True,
+                decoding_method="greedy_search",
+            )
             
             self.recognizer = sherpa_onnx.OnlineRecognizer(recognizer_config)
             self._initialized = True
@@ -347,29 +354,63 @@ class SherpaONNXSTTBackend:
             logging.error("❌ SHERPA - Failed to initialize: %s", exc)
             return False
     
+    def _find_file_by_pattern(self, directory: str, prefix: str, suffix: str = ".onnx") -> str:
+        """Find a file matching prefix*suffix in directory."""
+        if not os.path.isdir(directory):
+            return ""
+        for filename in os.listdir(directory):
+            if filename.startswith(prefix) and filename.endswith(suffix):
+                return os.path.join(directory, filename)
+        return ""
+    
     def _find_tokens_file(self) -> str:
-        """Find tokens file near the model."""
+        """Find tokens file in model directory."""
+        # If model_path is a directory
+        if os.path.isdir(self.model_path):
+            tokens_path = os.path.join(self.model_path, "tokens.txt")
+            if os.path.exists(tokens_path):
+                return tokens_path
+        # If model_path is a file, check its directory
         model_dir = os.path.dirname(self.model_path)
         tokens_path = os.path.join(model_dir, "tokens.txt")
         if os.path.exists(tokens_path):
             return tokens_path
-        # Try parent directory
-        tokens_path = os.path.join(os.path.dirname(model_dir), "tokens.txt")
-        if os.path.exists(tokens_path):
-            return tokens_path
         return ""
     
+    def _find_encoder_file(self) -> str:
+        """Find encoder model in directory."""
+        search_dir = self.model_path if os.path.isdir(self.model_path) else os.path.dirname(self.model_path)
+        # First try exact name
+        exact = os.path.join(search_dir, "encoder.onnx")
+        if os.path.exists(exact):
+            return exact
+        # Try pattern matching (prefer int8 for speed)
+        int8 = self._find_file_by_pattern(search_dir, "encoder", ".int8.onnx")
+        if int8:
+            return int8
+        return self._find_file_by_pattern(search_dir, "encoder", ".onnx")
+    
     def _find_decoder_file(self) -> str:
-        """Find decoder model near the encoder."""
-        model_dir = os.path.dirname(self.model_path)
-        decoder_path = os.path.join(model_dir, "decoder.onnx")
-        return decoder_path if os.path.exists(decoder_path) else ""
+        """Find decoder model in directory."""
+        search_dir = self.model_path if os.path.isdir(self.model_path) else os.path.dirname(self.model_path)
+        exact = os.path.join(search_dir, "decoder.onnx")
+        if os.path.exists(exact):
+            return exact
+        int8 = self._find_file_by_pattern(search_dir, "decoder", ".int8.onnx")
+        if int8:
+            return int8
+        return self._find_file_by_pattern(search_dir, "decoder", ".onnx")
     
     def _find_joiner_file(self) -> str:
-        """Find joiner model near the encoder."""
-        model_dir = os.path.dirname(self.model_path)
-        joiner_path = os.path.join(model_dir, "joiner.onnx")
-        return joiner_path if os.path.exists(joiner_path) else ""
+        """Find joiner model in directory."""
+        search_dir = self.model_path if os.path.isdir(self.model_path) else os.path.dirname(self.model_path)
+        exact = os.path.join(search_dir, "joiner.onnx")
+        if os.path.exists(exact):
+            return exact
+        int8 = self._find_file_by_pattern(search_dir, "joiner", ".int8.onnx")
+        if int8:
+            return int8
+        return self._find_file_by_pattern(search_dir, "joiner", ".onnx")
     
     def create_stream(self) -> Any:
         """Create a new recognition stream for a session."""
