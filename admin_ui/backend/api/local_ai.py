@@ -208,20 +208,24 @@ async def get_local_ai_status():
 @router.post("/switch", response_model=SwitchModelResponse)
 async def switch_model(request: SwitchModelRequest):
     """
-    Switch the active model on local-ai-server.
+    Switch the active model on local-ai-server with rollback support.
     
     For STT/TTS backend changes, updates environment variables and
-    triggers a container restart to reload the model.
-    
-    For model path changes within the same backend, attempts hot-reload
-    via WebSocket command if supported.
+    triggers a container restart to reload the model. If the new model
+    fails to load, automatically rolls back to the previous configuration.
     """
-    import subprocess
     from settings import PROJECT_ROOT, get_setting
     
     env_file = os.path.join(PROJECT_ROOT, ".env")
     env_updates = {}
     requires_restart = False
+    
+    # 1. Save current config for potential rollback
+    previous_env = _read_env_values(env_file, [
+        "LOCAL_STT_BACKEND", "LOCAL_STT_MODEL_PATH", "SHERPA_MODEL_PATH",
+        "KROKO_LANGUAGE", "LOCAL_TTS_BACKEND", "LOCAL_TTS_MODEL_PATH",
+        "KOKORO_VOICE", "KOKORO_MODEL_PATH", "LOCAL_LLM_MODEL_PATH"
+    ])
     
     if request.model_type == "stt":
         if request.backend:
@@ -274,25 +278,48 @@ async def switch_model(request: SwitchModelRequest):
                 # Fall back to restart
                 requires_restart = True
     
-    # Update .env file
+    # 2. Update .env file
     if env_updates:
         _update_env_file(env_file, env_updates)
     
-    # Restart container if needed
+    # 3. Restart container if needed
     if requires_restart:
         try:
             client = docker.from_env()
             container = client.containers.get("local_ai_server")
             container.restart(timeout=30)
+            
+            # 4. Wait for container to be healthy and verify model loaded
+            import time
+            time.sleep(5)  # Give container time to start
+            
+            # Check health
+            health_ok = await _verify_model_loaded(request.model_type, get_setting)
+            
+            if not health_ok:
+                # 5. Rollback on failure
+                _update_env_file(env_file, previous_env)
+                container.restart(timeout=30)
+                return SwitchModelResponse(
+                    success=False,
+                    message=f"Model failed to load. Rolled back to previous configuration.",
+                    requires_restart=True
+                )
+            
             return SwitchModelResponse(
                 success=True,
-                message=f"Model switched. Container restarting to apply changes.",
+                message=f"Model switched successfully.",
                 requires_restart=True
             )
         except Exception as e:
+            # Attempt rollback on any error
+            try:
+                _update_env_file(env_file, previous_env)
+            except Exception:
+                pass
             return SwitchModelResponse(
                 success=False,
-                message=f"Failed to restart container: {str(e)}",
+                message=f"Failed to restart container: {str(e)}. Attempted rollback.",
                 requires_restart=True
             )
     
@@ -301,6 +328,43 @@ async def switch_model(request: SwitchModelRequest):
         message="Model configuration updated",
         requires_restart=False
     )
+
+
+async def _verify_model_loaded(model_type: str, get_setting) -> bool:
+    """Verify that the specified model type is loaded after restart."""
+    ws_url = get_setting("HEALTH_CHECK_LOCAL_AI_URL", "ws://local_ai_server:8765")
+    try:
+        async with websockets.connect(ws_url, open_timeout=10) as ws:
+            await ws.send(json.dumps({"type": "status"}))
+            response = await asyncio.wait_for(ws.recv(), timeout=10)
+            data = json.loads(response)
+            
+            models = data.get("models", {})
+            if model_type == "stt":
+                return models.get("stt", {}).get("loaded", False)
+            elif model_type == "tts":
+                return models.get("tts", {}).get("loaded", False)
+            elif model_type == "llm":
+                return models.get("llm", {}).get("loaded", False)
+            return True
+    except Exception:
+        return False
+
+
+def _read_env_values(env_file: str, keys: list) -> Dict[str, str]:
+    """Read specific environment variable values from .env file."""
+    values = {}
+    if not os.path.exists(env_file):
+        return values
+    
+    with open(env_file, 'r') as f:
+        for line in f:
+            if '=' in line and not line.strip().startswith('#'):
+                key = line.split('=')[0].strip()
+                if key in keys:
+                    value = line.split('=', 1)[1].strip()
+                    values[key] = value
+    return values
 
 
 def _update_env_file(env_file: str, updates: Dict[str, str]):
