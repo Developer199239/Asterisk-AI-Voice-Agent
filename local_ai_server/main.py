@@ -2313,7 +2313,7 @@ class LocalAIServer:
                     },
                     "llm": {
                         "loaded": self.llm_model is not None,
-                        "path": self.llm_model_path,
+                        "path": os.path.basename(self.llm_model_path),
                         "config": {
                             "context": self.llm_context,
                             "threads": self.llm_threads,
