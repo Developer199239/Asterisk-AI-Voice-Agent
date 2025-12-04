@@ -75,13 +75,31 @@ class LocalProviderConfig(BaseModel):
     connect_timeout_sec: float = Field(default=5.0)
     response_timeout_sec: float = Field(default=5.0)
     chunk_ms: int = Field(default=200)
-    stt_model: Optional[str] = None
-    tts_voice: Optional[str] = None
     max_tokens: int = Field(default=150)
     greeting: Optional[str] = None
     instructions: Optional[str] = None
     # Mode for local_ai_server: "full" (STT+LLM+TTS), "stt" (STT only for hybrid pipelines)
     mode: str = Field(default="full")
+    
+    # STT Backend selection: vosk | kroko | sherpa
+    stt_backend: str = Field(default="vosk")
+    # Vosk STT model path
+    stt_model: Optional[str] = None
+    # Kroko STT settings
+    kroko_url: Optional[str] = Field(default="wss://app.kroko.ai/api/v1/transcripts/streaming")
+    kroko_api_key: Optional[str] = None
+    kroko_language: str = Field(default="en-US")
+    # Sherpa-ONNX STT model path
+    sherpa_model_path: Optional[str] = None
+    
+    # TTS Backend selection: piper | kokoro
+    tts_backend: str = Field(default="piper")
+    # Piper TTS voice/model path
+    tts_voice: Optional[str] = None
+    # Kokoro TTS settings
+    kokoro_voice: str = Field(default="af_heart")
+    kokoro_lang: str = Field(default="a")
+    kokoro_model_path: Optional[str] = None
     
     @property
     def effective_ws_url(self) -> str:
