@@ -357,10 +357,17 @@ async def switch_model(request: SwitchModelRequest):
             print(f"DEBUG: New container created: {new_container.id[:12]}")
             
             # 4. Wait for container to be healthy and verify model loaded
-            time.sleep(10)  # Give container time to start and load models
+            # Models can take 15-30 seconds to load (especially LLM and TTS)
+            time.sleep(20)
             
-            # Check health
-            health_ok = await _verify_model_loaded(request.model_type, get_setting)
+            # Check health - retry a few times
+            health_ok = False
+            for attempt in range(3):
+                print(f"DEBUG: Health check attempt {attempt + 1}/3")
+                health_ok = await _verify_model_loaded(request.model_type, get_setting)
+                if health_ok:
+                    break
+                time.sleep(5)  # Wait between retries
             
             if not health_ok:
                 # 5. Rollback on failure - recreate with old env
@@ -418,23 +425,43 @@ async def switch_model(request: SwitchModelRequest):
 
 async def _verify_model_loaded(model_type: str, get_setting) -> bool:
     """Verify that the specified model type is loaded after restart."""
-    ws_url = get_setting("HEALTH_CHECK_LOCAL_AI_URL", "ws://local_ai_server:8765")
-    try:
-        async with websockets.connect(ws_url, open_timeout=10) as ws:
-            await ws.send(json.dumps({"type": "status"}))
-            response = await asyncio.wait_for(ws.recv(), timeout=10)
-            data = json.loads(response)
-            
-            models = data.get("models", {})
-            if model_type == "stt":
-                return models.get("stt", {}).get("loaded", False)
-            elif model_type == "tts":
-                return models.get("tts", {}).get("loaded", False)
-            elif model_type == "llm":
-                return models.get("llm", {}).get("loaded", False)
-            return True
-    except Exception:
-        return False
+    # Try both localhost and container name
+    urls_to_try = [
+        "ws://127.0.0.1:8765",
+        "ws://local_ai_server:8765",
+        get_setting("HEALTH_CHECK_LOCAL_AI_URL", "ws://local_ai_server:8765")
+    ]
+    
+    for ws_url in urls_to_try:
+        try:
+            print(f"DEBUG _verify_model_loaded: trying {ws_url}")
+            async with websockets.connect(ws_url, open_timeout=5) as ws:
+                await ws.send(json.dumps({"type": "status"}))
+                response = await asyncio.wait_for(ws.recv(), timeout=10)
+                data = json.loads(response)
+                
+                print(f"DEBUG _verify_model_loaded: response={data}")
+                
+                models = data.get("models", {})
+                if model_type == "stt":
+                    loaded = models.get("stt", {}).get("loaded", False)
+                    print(f"DEBUG _verify_model_loaded: stt loaded={loaded}")
+                    return loaded
+                elif model_type == "tts":
+                    loaded = models.get("tts", {}).get("loaded", False)
+                    print(f"DEBUG _verify_model_loaded: tts loaded={loaded}")
+                    return loaded
+                elif model_type == "llm":
+                    loaded = models.get("llm", {}).get("loaded", False)
+                    print(f"DEBUG _verify_model_loaded: llm loaded={loaded}")
+                    return loaded
+                return True
+        except Exception as e:
+            print(f"DEBUG _verify_model_loaded: failed with {ws_url}: {e}")
+            continue
+    
+    print(f"DEBUG _verify_model_loaded: all URLs failed")
+    return False
 
 
 def _read_env_values(env_file: str, keys: list) -> Dict[str, str]:
