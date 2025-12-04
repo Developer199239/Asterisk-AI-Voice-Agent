@@ -337,7 +337,7 @@ class SherpaONNXSTTBackend:
                 decoder=decoder_file,
                 joiner=joiner_file,
                 num_threads=2,
-                sample_rate=float(self.sample_rate),
+                sample_rate=self.sample_rate,  # Must be int
                 enable_endpoint_detection=True,
                 decoding_method="greedy_search",
             )
