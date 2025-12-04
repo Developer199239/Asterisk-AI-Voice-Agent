@@ -2132,13 +2132,37 @@ class LocalAIServer:
             session.call_id = call_id
 
         audio_response = await self.process_tts(text)
-        await self._emit_tts_audio(
-            websocket,
-            audio_response,
-            session,
-            request_id,
-            source_mode=mode,
-        )
+        
+        # Check if this is a direct TTS request (expects tts_response with base64)
+        # vs streaming mode which uses binary frames
+        response_format = data.get("response_format", "json")  # "json" or "binary"
+        
+        if response_format == "json" or data.get("type") == "tts_request":
+            # Send JSON response with base64-encoded audio for direct TTS calls
+            # This is what LocalProvider.text_to_speech expects
+            audio_b64 = base64.b64encode(audio_response).decode("utf-8") if audio_response else ""
+            response = {
+                "type": "tts_response",
+                "text": text,
+                "call_id": session.call_id,
+                "audio_data": audio_b64,
+                "encoding": "mulaw",
+                "sample_rate_hz": ULAW_SAMPLE_RATE,
+                "byte_length": len(audio_response or b""),
+            }
+            if request_id:
+                response["request_id"] = request_id
+            await self._send_json(websocket, response)
+            logging.info("📢 TTS response sent call_id=%s audio_bytes=%d", session.call_id, len(audio_response or b""))
+        else:
+            # Legacy binary streaming mode
+            await self._emit_tts_audio(
+                websocket,
+                audio_response,
+                session,
+                request_id,
+                source_mode=mode,
+            )
 
     async def _handle_llm_request(
         self,
