@@ -1,7 +1,7 @@
 # --- Stage 1: Builder (Dependencies) ---
 # Pin to specific digest for reproducible builds and supply chain security
-# python:3.11 as of 2025-11-06
-FROM python:3.11@sha256:e8ab764baee5109566456913b42d7d4ad97c13385e4002973c896e1dd5f01146 as builder
+# python:3.11-slim as of 2025-12-04
+FROM python:3.11-slim@sha256:6ed5bff4d7d377e2a72a89db63fc6e75ad92c6ee2d35e5dc8f38df2a48a9d05b as builder
 
 WORKDIR /usr/src/app
 
@@ -16,13 +16,15 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # --- Stage 2: Final Runtime Image ---
-# Pin to same digest as builder for consistency
-FROM python:3.11@sha256:e8ab764baee5109566456913b42d7d4ad97c13385e4002973c896e1dd5f01146
+# Use slim image for smaller footprint
+FROM python:3.11-slim@sha256:6ed5bff4d7d377e2a72a89db63fc6e75ad92c6ee2d35e5dc8f38df2a48a9d05b
 
-# Install sox (audio), curl (downloads), unzip (model extraction)
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends sox curl unzip \
-    && rm -rf /var/lib/apt/lists/*
+# Optimization env vars
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+# Note: sox/curl/unzip removed - not needed at runtime
+# Audio processing uses Python audioop, downloads done in install.sh
 
 WORKDIR /app
 
