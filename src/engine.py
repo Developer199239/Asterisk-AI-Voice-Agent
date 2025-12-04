@@ -5888,31 +5888,41 @@ class Engine:
                                     context=transport.context,
                                     greeting_preview=greeting_to_apply[:50] + "...",
                                 )
-                            if context_config.prompt:
-                                # Try 'prompt' field first, then 'instructions' (OpenAI uses this)
-                                if hasattr(provider.config, 'prompt'):
-                                    setattr(provider.config, 'prompt', context_config.prompt)
-                                    logger.info(
-                                        "Applied context prompt to provider",
-                                        call_id=session.call_id,
-                                        context=transport.context,
-                                        prompt_length=len(context_config.prompt),
-                                    )
-                                elif hasattr(provider.config, 'instructions'):
-                                    setattr(provider.config, 'instructions', context_config.prompt)
-                                    logger.info(
-                                        "Applied context prompt to provider (as instructions)",
-                                        call_id=session.call_id,
-                                        context=transport.context,
-                                        prompt_length=len(context_config.prompt),
-                                    )
-                                else:
-                                    logger.debug(
-                                        "Provider config does not support prompt or instructions field",
-                                        call_id=session.call_id,
-                                        provider=provider_name,
-                                        context=transport.context,
-                                    )
+                        
+                        # Also update LocalProvider's _initial_greeting directly (for play_initial_greeting)
+                        if greeting_to_apply and hasattr(provider, 'set_initial_greeting'):
+                            provider.set_initial_greeting(greeting_to_apply)
+                            logger.debug(
+                                "Updated LocalProvider initial greeting",
+                                call_id=session.call_id,
+                                context=transport.context,
+                            )
+                        
+                        if context_config.prompt:
+                            # Try 'prompt' field first, then 'instructions' (OpenAI uses this)
+                            if hasattr(provider.config, 'prompt'):
+                                setattr(provider.config, 'prompt', context_config.prompt)
+                                logger.info(
+                                    "Applied context prompt to provider",
+                                    call_id=session.call_id,
+                                    context=transport.context,
+                                    prompt_length=len(context_config.prompt),
+                                )
+                            elif hasattr(provider.config, 'instructions'):
+                                setattr(provider.config, 'instructions', context_config.prompt)
+                                logger.info(
+                                    "Applied context prompt to provider (as instructions)",
+                                    call_id=session.call_id,
+                                    context=transport.context,
+                                    prompt_length=len(context_config.prompt),
+                                )
+                            else:
+                                logger.debug(
+                                    "Provider config does not support prompt or instructions field",
+                                    call_id=session.call_id,
+                                    provider=provider_name,
+                                    context=transport.context,
+                                )
                     except Exception as exc:
                         logger.error(
                             "Failed to apply context config to provider",
