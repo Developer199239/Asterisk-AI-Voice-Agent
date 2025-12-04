@@ -2275,23 +2275,30 @@ class LocalAIServer:
             stt_model_info = self.stt_model_path
             if self.stt_backend == "vosk":
                 stt_loaded = self.stt_model is not None
-                stt_model_info = self.stt_model_path
+                # Extract model name from path (e.g., vosk-model-en-us-0.22)
+                stt_model_info = os.path.basename(self.stt_model_path)
             elif self.stt_backend == "kroko":
                 stt_loaded = self.kroko_backend is not None
-                stt_model_info = self.kroko_url
+                # Show friendly name instead of URL
+                if self.kroko_embedded:
+                    stt_model_info = f"Kroko (embedded, port {self.kroko_port})"
+                else:
+                    stt_model_info = f"Kroko ({self.kroko_language})"
             elif self.stt_backend == "sherpa":
                 stt_loaded = self.sherpa_backend is not None
-                stt_model_info = self.sherpa_model_path
+                # Extract model name from path
+                stt_model_info = os.path.basename(self.sherpa_model_path)
             
             # Determine TTS loaded state based on active backend
             tts_loaded = False
             tts_model_info = self.tts_model_path
             if self.tts_backend == "piper":
                 tts_loaded = self.tts_model is not None
-                tts_model_info = self.tts_model_path
+                # Extract model name from path
+                tts_model_info = os.path.basename(self.tts_model_path)
             elif self.tts_backend == "kokoro":
                 tts_loaded = self.kokoro_backend is not None
-                tts_model_info = f"{self.kokoro_model_path} (voice: {self.kokoro_voice})"
+                tts_model_info = f"Kokoro ({self.kokoro_voice})"
             
             response = {
                 "type": "status_response",
