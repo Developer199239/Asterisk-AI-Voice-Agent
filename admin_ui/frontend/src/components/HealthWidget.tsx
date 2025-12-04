@@ -147,11 +147,11 @@ export const HealthWidget = () => {
             setPendingChanges({});
             
             // Wait for the switch API to complete (it handles restart internally)
-            // Add extra buffer time for model loading
+            // Add extra buffer time for model loading (can take up to 3 minutes)
             setTimeout(() => {
                 setRestarting(false);
                 setApplyingChanges(false);
-            }, 12000);
+            }, 30000);  // 30 seconds UI timeout (API handles the actual wait)
         } catch (err: any) {
             console.error('Failed to apply changes', err);
             alert(err.message || 'Failed to apply changes');

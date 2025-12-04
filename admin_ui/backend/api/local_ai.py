@@ -318,7 +318,7 @@ async def switch_model(request: SwitchModelRequest):
                 cwd=PROJECT_ROOT,
                 capture_output=True,
                 text=True,
-                timeout=60
+                timeout=180  # 3 minutes for slow builds
             )
             
             if result.returncode != 0:
