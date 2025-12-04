@@ -28,6 +28,7 @@ RUN apt-get update && apt-get install -y \
     libatomic1 \
     sox \
     wget \
+    espeak-ng \
     && rm -rf /var/lib/apt/lists/*
 
 # ─────────────────────────────────────────────────────────────────────────────

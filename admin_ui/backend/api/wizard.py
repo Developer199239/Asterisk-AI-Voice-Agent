@@ -511,6 +511,21 @@ MODEL_CATALOG = {
             "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_GB/amy/medium/en_GB-amy-medium.onnx.json",
             "recommended_ram_gb": 1,
             "requires_api_key": False
+        },
+        {
+            "id": "kokoro_82m",
+            "name": "Kokoro 82M",
+            "size_mb": 0,
+            "size_display": "82 MB (auto)",
+            "latency": "Excellent",
+            "description": "High-quality lightweight TTS, multi-voice",
+            "download_url": None,
+            "model_path": None,
+            "recommended_ram_gb": 2,
+            "requires_api_key": False,
+            "env_var": "LOCAL_TTS_BACKEND=kokoro",
+            "voices": ["af_heart", "af_bella", "am_adam", "am_michael"],
+            "note": "Model auto-downloads on first use"
         }
     ]
 }

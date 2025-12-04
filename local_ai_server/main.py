@@ -475,6 +475,103 @@ class SherpaONNXSTTBackend:
         logging.info("🛑 SHERPA - Recognizer shutdown")
 
 
+class KokoroTTSBackend:
+    """
+    Kokoro TTS backend using the kokoro package.
+    
+    Kokoro is a high-quality, lightweight TTS model (82M params) that delivers
+    comparable quality to larger models while being faster and more efficient.
+    
+    Requires: espeak-ng system package
+    Sample rate: 24000 Hz
+    """
+    
+    def __init__(self, voice: str = "af_heart", lang_code: str = "a"):
+        """
+        Initialize Kokoro TTS.
+        
+        Args:
+            voice: Voice name (e.g., 'af_heart', 'af_bella', 'am_adam')
+            lang_code: Language code ('a' for American English)
+        """
+        self.voice = voice
+        self.lang_code = lang_code
+        self.pipeline = None
+        self._initialized = False
+        self.sample_rate = 24000
+    
+    def initialize(self) -> bool:
+        """
+        Initialize the Kokoro pipeline.
+        
+        Returns:
+            True if initialization succeeded
+        """
+        try:
+            from kokoro import KPipeline
+            
+            logging.info("🎙️ KOKORO - Initializing TTS (voice=%s, lang=%s)", self.voice, self.lang_code)
+            self.pipeline = KPipeline(lang_code=self.lang_code)
+            self._initialized = True
+            logging.info("✅ KOKORO - TTS initialized successfully")
+            return True
+            
+        except ImportError:
+            logging.error("❌ KOKORO - kokoro package not installed")
+            return False
+        except Exception as exc:
+            logging.error("❌ KOKORO - Failed to initialize: %s", exc)
+            return False
+    
+    def synthesize(self, text: str) -> bytes:
+        """
+        Synthesize speech from text.
+        
+        Args:
+            text: Text to synthesize
+            
+        Returns:
+            Audio data as PCM16 bytes at 24kHz
+        """
+        if not self._initialized or not self.pipeline:
+            logging.error("❌ KOKORO - Not initialized")
+            return b""
+        
+        try:
+            import numpy as np
+            
+            # Generate audio using Kokoro pipeline
+            audio_chunks = []
+            generator = self.pipeline(text, voice=self.voice)
+            
+            for i, (gs, ps, audio) in enumerate(generator):
+                if audio is not None:
+                    audio_chunks.append(audio)
+            
+            if not audio_chunks:
+                logging.warning("⚠️ KOKORO - No audio generated")
+                return b""
+            
+            # Concatenate all chunks
+            full_audio = np.concatenate(audio_chunks)
+            
+            # Convert float32 to int16 PCM
+            audio_int16 = (full_audio * 32767).astype(np.int16)
+            
+            logging.debug("🎙️ KOKORO - Generated %d samples at %dHz", len(audio_int16), self.sample_rate)
+            return audio_int16.tobytes()
+            
+        except Exception as exc:
+            logging.error("❌ KOKORO - Synthesis failed: %s", exc)
+            return b""
+    
+    def shutdown(self) -> None:
+        """Shutdown the TTS pipeline."""
+        self.pipeline = None
+        self._initialized = False
+        logging.info("🛑 KOKORO - TTS shutdown")
+
+
 class AudioProcessor:
     """Handles audio format conversions for MVP uLaw 8kHz pipeline"""
 
@@ -617,6 +714,16 @@ class LocalAIServer:
         self.tts_model_path = os.getenv(
             "LOCAL_TTS_MODEL_PATH", "/app/models/tts/en_US-lessac-medium.onnx"
         )
+
+        # ─────────────────────────────────────────────────────────────────────
+        # TTS Backend Selection: piper (default) or kokoro
+        # ─────────────────────────────────────────────────────────────────────
+        self.tts_backend = os.getenv("LOCAL_TTS_BACKEND", "piper").lower()
+        
+        # Kokoro TTS settings (if using kokoro backend)
+        self.kokoro_backend: Optional[KokoroTTSBackend] = None
+        self.kokoro_voice = os.getenv("KOKORO_VOICE", "af_heart")
+        self.kokoro_lang = os.getenv("KOKORO_LANG", "a")  # 'a' = American English
 
         default_threads = max(1, min(16, os.cpu_count() or 1))
         self.llm_threads = int(os.getenv("LOCAL_LLM_THREADS", str(default_threads)))
@@ -881,15 +988,41 @@ class LocalAIServer:
             )
 
     async def _load_tts_model(self):
-        """Load TTS model (Piper) with 22kHz support"""
+        """Load TTS model based on configured backend (piper or kokoro)."""
+        if self.tts_backend == "kokoro":
+            await self._load_kokoro_backend()
+        else:
+            await self._load_piper_backend()
+
+    async def _load_piper_backend(self):
+        """Load Piper TTS model with 22kHz support."""
         try:
             if not os.path.exists(self.tts_model_path):
                 raise FileNotFoundError(f"TTS model not found at {self.tts_model_path}")
 
             self.tts_model = PiperVoice.load(self.tts_model_path)
-            logging.info("✅ TTS model loaded: %s (22kHz native)", self.tts_model_path)
+            logging.info("✅ TTS backend: Piper loaded from %s (22kHz native)", self.tts_model_path)
         except Exception as exc:
-            logging.error("❌ Failed to load TTS model: %s", exc)
+            logging.error("❌ Failed to load Piper TTS model: %s", exc)
+            raise
+
+    async def _load_kokoro_backend(self):
+        """Initialize Kokoro TTS backend."""
+        try:
+            logging.info("🎙️ TTS backend: Kokoro (voice=%s)", self.kokoro_voice)
+
+            self.kokoro_backend = KokoroTTSBackend(
+                voice=self.kokoro_voice,
+                lang_code=self.kokoro_lang,
+            )
+
+            if not self.kokoro_backend.initialize():
+                raise RuntimeError("Failed to initialize Kokoro TTS")
+
+            logging.info("✅ TTS backend: Kokoro initialized (24kHz native)")
+
+        except Exception as exc:
+            logging.error("❌ Failed to initialize Kokoro TTS backend: %s", exc)
             raise
 
     async def reload_models(self):
@@ -1110,10 +1243,17 @@ class LocalAIServer:
         return prompt_text, prompt_tokens, truncated, raw_tokens
 
     async def process_tts(self, text: str) -> bytes:
-        """Process TTS with 8kHz uLaw generation directly"""
+        """Process TTS with 8kHz uLaw generation - routes to appropriate backend."""
+        if self.tts_backend == "kokoro":
+            return await self._process_tts_kokoro(text)
+        else:
+            return await self._process_tts_piper(text)
+
+    async def _process_tts_piper(self, text: str) -> bytes:
+        """Process TTS using Piper backend (22kHz output)."""
         try:
             if not self.tts_model:
-                logging.error("TTS model not loaded")
+                logging.error("Piper TTS model not loaded")
                 return b""
 
             logging.debug("🔊 TTS INPUT - Generating 22kHz audio for: '%s'", text)
@@ -1148,11 +1288,51 @@ class LocalAIServer:
             ulaw_data = self.audio_processor.convert_to_ulaw_8k(wav_data, 22050)
             os.unlink(wav_path)
 
-            logging.info("🔊 TTS RESULT - Generated uLaw 8kHz audio: %s bytes", len(ulaw_data))
+            logging.info("🔊 TTS RESULT - Piper generated uLaw 8kHz audio: %s bytes", len(ulaw_data))
             return ulaw_data
 
         except Exception as exc:
-            logging.error("TTS processing failed: %s", exc, exc_info=True)
+            logging.error("Piper TTS processing failed: %s", exc, exc_info=True)
+            return b""
+
+    async def _process_tts_kokoro(self, text: str) -> bytes:
+        """Process TTS using Kokoro backend (24kHz output)."""
+        try:
+            if not self.kokoro_backend:
+                logging.error("Kokoro TTS backend not initialized")
+                return b""
+
+            logging.debug("🔊 TTS INPUT - Generating 24kHz audio for: '%s'", text)
+
+            # Get PCM16 audio at 24kHz from Kokoro
+            pcm16_data = self.kokoro_backend.synthesize(text)
+            
+            if not pcm16_data:
+                logging.warning("⚠️ Kokoro returned empty audio")
+                return b""
+
+            # Write to temp WAV file for conversion
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as wav_file:
+                wav_path = wav_file.name
+
+            with wave.open(wav_path, "wb") as wav_file:
+                wav_file.setnchannels(1)
+                wav_file.setsampwidth(2)
+                wav_file.setframerate(24000)
+                wav_file.writeframes(pcm16_data)
+
+            with open(wav_path, "rb") as wav_file:
+                wav_data = wav_file.read()
+
+            # Convert 24kHz WAV to 8kHz uLaw
+            ulaw_data = self.audio_processor.convert_to_ulaw_8k(wav_data, 24000)
+            os.unlink(wav_path)
+
+            logging.info("🔊 TTS RESULT - Kokoro generated uLaw 8kHz audio: %s bytes", len(ulaw_data))
+            return ulaw_data
+
+        except Exception as exc:
+            logging.error("Kokoro TTS processing failed: %s", exc, exc_info=True)
             return b""
 
     def _cancel_idle_timer(self, session: SessionContext) -> None:
