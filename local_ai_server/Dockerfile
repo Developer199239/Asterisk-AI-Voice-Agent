@@ -13,6 +13,9 @@ COPY requirements.txt .
 # Install dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Pre-install spacy model for Kokoro TTS (requires write access to venv)
+RUN python -m spacy download en_core_web_sm || true
+
 # --- Stage 2: Final Runtime Image ---
 FROM python:3.11-slim
 
