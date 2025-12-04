@@ -1,7 +1,6 @@
 # --- Stage 1: Builder (Dependencies) ---
-# Pin to specific digest for reproducible builds and supply chain security
-# python:3.11-slim as of 2025-12-04
-FROM python:3.11-slim@sha256:6ed5bff4d7d377e2a72a89db63fc6e75ad92c6ee2d35e5dc8f38df2a48a9d05b as builder
+# Use slim image for smaller build
+FROM python:3.11-slim as builder
 
 WORKDIR /usr/src/app
 
@@ -17,7 +16,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # --- Stage 2: Final Runtime Image ---
 # Use slim image for smaller footprint
-FROM python:3.11-slim@sha256:6ed5bff4d7d377e2a72a89db63fc6e75ad92c6ee2d35e5dc8f38df2a48a9d05b
+FROM python:3.11-slim
 
 # Optimization env vars
 ENV PYTHONDONTWRITEBYTECODE=1 \
