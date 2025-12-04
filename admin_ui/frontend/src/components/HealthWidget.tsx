@@ -108,40 +108,53 @@ export const HealthWidget = () => {
         if (!hasPendingChanges) return;
         
         setApplyingChanges(true);
+        setRestarting(true);
+        
         try {
-            // Apply each pending change
-            for (const [modelType, change] of Object.entries(pendingChanges)) {
+            // Apply each pending change (last one triggers the restart)
+            const changes = Object.entries(pendingChanges);
+            
+            for (let i = 0; i < changes.length; i++) {
+                const [modelType, change] = changes[i];
+                const isLast = i === changes.length - 1;
+                
                 if (modelType === 'stt' || modelType === 'tts') {
-                    await axios.post('/api/local-ai/switch', {
+                    const res = await axios.post('/api/local-ai/switch', {
                         model_type: modelType,
                         backend: change.backend,
                         model_path: change.modelPath,
                         voice: change.voice
                     });
+                    
+                    // Only check success on last change (which triggers restart)
+                    if (isLast && !res.data.success) {
+                        throw new Error(res.data.message || 'Failed to switch model');
+                    }
                 } else if (modelType === 'llm') {
-                    await axios.post('/api/local-ai/switch', {
+                    const res = await axios.post('/api/local-ai/switch', {
                         model_type: 'llm',
                         backend: '',
                         model_path: change.modelPath
                     });
+                    
+                    if (isLast && !res.data.success) {
+                        throw new Error(res.data.message || 'Failed to switch model');
+                    }
                 }
             }
             
             // Clear pending changes
             setPendingChanges({});
             
-            // Restart the container
-            setRestarting(true);
-            await axios.post('/api/system/containers/local_ai_server/restart');
-            
-            // Wait for restart to complete
+            // Wait for the switch API to complete (it handles restart internally)
+            // Add extra buffer time for model loading
             setTimeout(() => {
                 setRestarting(false);
                 setApplyingChanges(false);
-            }, 8000);
-        } catch (err) {
+            }, 12000);
+        } catch (err: any) {
             console.error('Failed to apply changes', err);
-            alert('Failed to apply changes');
+            alert(err.message || 'Failed to apply changes');
             setApplyingChanges(false);
             setRestarting(false);
         }

@@ -297,16 +297,27 @@ async def switch_model(request: SwitchModelRequest):
         for field, value in yaml_updates.items():
             update_yaml_provider_field("local", field, value)
     
-    # 3. Restart container if needed
+    # 3. Recreate container if needed (restart doesn't reload .env)
     if requires_restart:
         try:
-            client = docker.from_env()
-            container = client.containers.get("local_ai_server")
-            container.restart(timeout=30)
+            import subprocess
+            import time
+            
+            # Use docker compose to recreate with new .env values
+            # This is necessary because container.restart() doesn't reload env vars
+            result = subprocess.run(
+                ["docker", "compose", "up", "-d", "--force-recreate", "local_ai_server"],
+                cwd=PROJECT_ROOT,
+                capture_output=True,
+                text=True,
+                timeout=60
+            )
+            
+            if result.returncode != 0:
+                raise Exception(f"docker compose failed: {result.stderr}")
             
             # 4. Wait for container to be healthy and verify model loaded
-            import time
-            time.sleep(5)  # Give container time to start
+            time.sleep(8)  # Give container time to start and load models
             
             # Check health
             health_ok = await _verify_model_loaded(request.model_type, get_setting)
@@ -314,7 +325,12 @@ async def switch_model(request: SwitchModelRequest):
             if not health_ok:
                 # 5. Rollback on failure
                 _update_env_file(env_file, previous_env)
-                container.restart(timeout=30)
+                subprocess.run(
+                    ["docker", "compose", "up", "-d", "--force-recreate", "local_ai_server"],
+                    cwd=PROJECT_ROOT,
+                    capture_output=True,
+                    timeout=60
+                )
                 return SwitchModelResponse(
                     success=False,
                     message=f"Model failed to load. Rolled back to previous configuration.",
@@ -334,7 +350,7 @@ async def switch_model(request: SwitchModelRequest):
                 pass
             return SwitchModelResponse(
                 success=False,
-                message=f"Failed to restart container: {str(e)}. Attempted rollback.",
+                message=f"Failed to recreate container: {str(e)}. Attempted rollback.",
                 requires_restart=True
             )
     
