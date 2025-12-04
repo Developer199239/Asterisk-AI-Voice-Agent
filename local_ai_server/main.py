@@ -511,16 +511,34 @@ class KokoroTTSBackend:
         """
         try:
             from kokoro import KPipeline
+            from kokoro.model import KModel
             
             logging.info("🎙️ KOKORO - Initializing TTS (voice=%s, lang=%s)", self.voice, self.lang_code)
             
-            # If model_path provided, use local files
+            # If model_path provided, load from local files
             if self.model_path and os.path.isdir(self.model_path):
-                logging.info("🎙️ KOKORO - Using local model from %s", self.model_path)
-                self.pipeline = KPipeline(
-                    lang_code=self.lang_code,
-                    repo_id=self.model_path,  # Local path works as repo_id
-                )
+                config_path = os.path.join(self.model_path, "config.json")
+                model_path = os.path.join(self.model_path, "kokoro-v1_0.pth")
+                
+                if os.path.exists(config_path) and os.path.exists(model_path):
+                    logging.info("🎙️ KOKORO - Loading local model from %s", self.model_path)
+                    # Load model directly from local files
+                    kmodel = KModel(
+                        config=config_path,
+                        model=model_path,
+                        repo_id="hexgrad/Kokoro-82M",  # Suppress warning
+                    )
+                    self.pipeline = KPipeline(
+                        lang_code=self.lang_code,
+                        model=kmodel,
+                        repo_id="hexgrad/Kokoro-82M",  # For voice loading
+                    )
+                else:
+                    logging.warning("⚠️ KOKORO - Local model files not found, falling back to HuggingFace")
+                    self.pipeline = KPipeline(
+                        lang_code=self.lang_code,
+                        repo_id="hexgrad/Kokoro-82M",
+                    )
             else:
                 # Fallback to HuggingFace download
                 logging.info("🎙️ KOKORO - Using HuggingFace model (will download if needed)")
