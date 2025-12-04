@@ -135,6 +135,7 @@ class TransportOrchestrator:
                     greeting=context_dict.get('greeting'),
                     profile=context_dict.get('profile'),
                     provider=context_dict.get('provider'),
+                    pipeline=context_dict.get('pipeline'),  # Modular pipeline name (e.g., local_hybrid)
                     tools=context_dict.get('tools'),  # Extract tools for function calling
                     background_music=context_dict.get('background_music'),  # MOH class for background music
                 )
