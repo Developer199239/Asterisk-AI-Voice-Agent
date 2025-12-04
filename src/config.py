@@ -80,6 +80,8 @@ class LocalProviderConfig(BaseModel):
     max_tokens: int = Field(default=150)
     greeting: Optional[str] = None
     instructions: Optional[str] = None
+    # Mode for local_ai_server: "full" (STT+LLM+TTS), "stt" (STT only for hybrid pipelines)
+    mode: str = Field(default="full")
     
     @property
     def effective_ws_url(self) -> str:

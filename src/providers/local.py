@@ -32,6 +32,8 @@ class LocalProvider(AIProviderInterface):
         self._pending_tts_responses: Dict[str, asyncio.Future] = {}  # Track pending TTS responses
         # Initial greeting text provided by engine/config (optional)
         self._initial_greeting: Optional[str] = None
+        # Mode for local_ai_server: "full" or "stt" (for hybrid pipelines with cloud LLM)
+        self._mode: str = getattr(config, 'mode', 'full') or 'full'
 
     def set_initial_greeting(self, text: Optional[str]) -> None:
         try:
@@ -219,7 +221,8 @@ class LocalProvider(AIProviderInterface):
                     "data": base64.b64encode(pcm16k).decode('utf-8'),
                     "rate": 16000,
                     "format": "pcm16le",
-                    "call_id": self._active_call_id
+                    "call_id": self._active_call_id,
+                    "mode": self._mode  # "stt" for hybrid, "full" for all-local
                 })
                 try:
                     await self.websocket.send(msg)
