@@ -139,6 +139,13 @@ class LocalProvider(AIProviderInterface):
             if self.websocket and not self.websocket.closed:
                 logger.debug("WebSocket already connected, reusing connection", call_id=call_id)
                 self._active_call_id = call_id
+                # Ensure listener and sender tasks are running (may have crashed)
+                if self._listener_task is None or self._listener_task.done():
+                    logger.info("Restarting listener task for reused connection", call_id=call_id)
+                    self._listener_task = asyncio.create_task(self._receive_loop())
+                if self._sender_task is None or self._sender_task.done():
+                    logger.info("Restarting sender task for reused connection", call_id=call_id)
+                    self._sender_task = asyncio.create_task(self._send_loop())
                 return
             
             # If not connected, initialize first
