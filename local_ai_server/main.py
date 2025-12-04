@@ -444,7 +444,13 @@ class SherpaONNXSTTBackend:
                 self.recognizer.decode_stream(stream)
             
             result = self.recognizer.get_result(stream)
-            text = result.text.strip() if result.text else ""
+            # Result can be a string or object with .text attribute depending on version
+            if isinstance(result, str):
+                text = result.strip()
+            elif hasattr(result, 'text'):
+                text = result.text.strip() if result.text else ""
+            else:
+                text = str(result).strip() if result else ""
             
             if not text:
                 return None
