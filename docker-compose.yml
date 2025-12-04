@@ -90,6 +90,7 @@ services:
     volumes:
       - ./:/app/project
       - /var/run/docker.sock:/var/run/docker.sock
+      - /usr/bin/docker:/usr/bin/docker:ro
     environment:
       - PROJECT_ROOT=/app/project
       - UVICORN_PORT=3003
