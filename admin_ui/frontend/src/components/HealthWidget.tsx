@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
-import { Cpu, HardDrive, AlertCircle, CheckCircle2, XCircle, Activity, Layers, Box, RefreshCw, ExternalLink } from 'lucide-react';
+import { Cpu, HardDrive, AlertCircle, CheckCircle2, XCircle, Activity, Layers, Box, RefreshCw } from 'lucide-react';
 import { ConfigCard } from './ui/ConfigCard';
-import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 
 interface HealthInfo {
@@ -29,15 +28,20 @@ interface AvailableModels {
     llm: ModelInfo[];
 }
 
+interface PendingChanges {
+    stt?: { backend: string; modelPath?: string };
+    tts?: { backend: string; modelPath?: string; voice?: string };
+    llm?: { modelPath: string };
+}
+
 export const HealthWidget = () => {
-    const navigate = useNavigate();
     const [health, setHealth] = useState<HealthInfo | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [availableModels, setAvailableModels] = useState<AvailableModels | null>(null);
-    const [switching, setSwitching] = useState<string | null>(null);
-    const [restartRequired, setRestartRequired] = useState(false);
     const [restarting, setRestarting] = useState(false);
+    const [pendingChanges, setPendingChanges] = useState<PendingChanges>({});
+    const [applyingChanges, setApplyingChanges] = useState(false);
 
     useEffect(() => {
         const fetchHealth = async () => {
@@ -71,41 +75,83 @@ export const HealthWidget = () => {
         fetchModels();
     }, []);
 
-    const handleSwitchModel = async (modelType: string, backend: string, modelPath?: string, voice?: string) => {
-        setSwitching(modelType);
-        try {
-            const res = await axios.post('/api/local-ai/switch', {
-                model_type: modelType,
-                backend: backend,
-                model_path: modelPath,
-                voice: voice
-            });
-            if (res.data.requires_restart) {
-                setRestartRequired(true);
-            }
-        } catch (err) {
-            console.error('Failed to switch model', err);
-            alert('Failed to switch model');
-        } finally {
-            setSwitching(null);
-        }
+    // Queue a model change (doesn't apply until user confirms)
+    const queueChange = (modelType: 'stt' | 'tts' | 'llm', change: any) => {
+        setPendingChanges(prev => ({
+            ...prev,
+            [modelType]: change
+        }));
     };
 
-    const handleRestart = async () => {
-        setRestarting(true);
+    // Check if there are pending changes
+    const hasPendingChanges = Object.keys(pendingChanges).length > 0;
+
+    // Get the displayed value (pending or current)
+    const getDisplayedBackend = (modelType: 'stt' | 'tts') => {
+        if (pendingChanges[modelType]?.backend) {
+            return pendingChanges[modelType].backend;
+        }
+        return health?.local_ai_server.details.models?.[modelType]?.backend || 
+               health?.local_ai_server.details[`${modelType}_backend`] || 
+               (modelType === 'stt' ? 'vosk' : 'piper');
+    };
+
+    const getDisplayedLlmPath = () => {
+        if (pendingChanges.llm?.modelPath) {
+            return pendingChanges.llm.modelPath;
+        }
+        return health?.local_ai_server.details.models?.llm?.path || '';
+    };
+
+    // Apply all pending changes and restart
+    const applyChanges = async () => {
+        if (!hasPendingChanges) return;
+        
+        setApplyingChanges(true);
         try {
+            // Apply each pending change
+            for (const [modelType, change] of Object.entries(pendingChanges)) {
+                if (modelType === 'stt' || modelType === 'tts') {
+                    await axios.post('/api/local-ai/switch', {
+                        model_type: modelType,
+                        backend: change.backend,
+                        model_path: change.modelPath,
+                        voice: change.voice
+                    });
+                } else if (modelType === 'llm') {
+                    await axios.post('/api/local-ai/switch', {
+                        model_type: 'llm',
+                        backend: '',
+                        model_path: change.modelPath
+                    });
+                }
+            }
+            
+            // Clear pending changes
+            setPendingChanges({});
+            
+            // Restart the container
+            setRestarting(true);
             await axios.post('/api/system/containers/local_ai_server/restart');
-            setRestartRequired(false);
-            // Wait a bit for restart
+            
+            // Wait for restart to complete
             setTimeout(() => {
                 setRestarting(false);
-            }, 5000);
+                setApplyingChanges(false);
+            }, 8000);
         } catch (err) {
-            console.error('Failed to restart container', err);
-            alert('Failed to restart. Go to Docker Services to restart manually.');
+            console.error('Failed to apply changes', err);
+            alert('Failed to apply changes');
+            setApplyingChanges(false);
             setRestarting(false);
         }
     };
+
+    // Cancel pending changes
+    const cancelChanges = () => {
+        setPendingChanges({});
+    };
+
 
     if (loading) return <div className="animate-pulse h-48 bg-muted rounded-lg mb-6"></div>;
 
@@ -154,21 +200,37 @@ export const HealthWidget = () => {
                         <div className="space-y-2">
                             <div className="flex justify-between items-center text-sm">
                                 <span className="text-muted-foreground font-medium">STT</span>
-                                <span className={`px-2 py-1 rounded-md text-xs font-medium ${health.local_ai_server.details.models?.stt?.loaded ? "bg-green-500/10 text-green-500" : "bg-yellow-500/10 text-yellow-500"}`}>
-                                    {health.local_ai_server.details.models?.stt?.loaded ? "Loaded" : "Not Loaded"}
-                                </span>
+                                <div className="flex items-center gap-2">
+                                    {pendingChanges.stt && (
+                                        <span className="px-2 py-1 rounded-md text-xs font-medium bg-yellow-500/10 text-yellow-500">
+                                            Pending
+                                        </span>
+                                    )}
+                                    <span className={`px-2 py-1 rounded-md text-xs font-medium ${health.local_ai_server.details.models?.stt?.loaded ? "bg-green-500/10 text-green-500" : "bg-yellow-500/10 text-yellow-500"}`}>
+                                        {health.local_ai_server.details.models?.stt?.loaded ? "Loaded" : "Not Loaded"}
+                                    </span>
+                                </div>
                             </div>
                             <div className="flex gap-2">
                                 <select
-                                    className="flex-1 text-xs p-2 rounded border border-border bg-background"
-                                    value={health.local_ai_server.details.models?.stt?.backend || health.local_ai_server.details.stt_backend || 'vosk'}
+                                    className={`flex-1 text-xs p-2 rounded border bg-background ${pendingChanges.stt ? 'border-yellow-500' : 'border-border'}`}
+                                    value={getDisplayedBackend('stt')}
                                     onChange={(e) => {
                                         const backend = e.target.value;
-                                        const models = availableModels?.stt[backend] || [];
-                                        const firstModel = models[0];
-                                        handleSwitchModel('stt', backend, firstModel?.path);
+                                        const currentBackend = health?.local_ai_server.details.models?.stt?.backend || health?.local_ai_server.details.stt_backend;
+                                        if (backend !== currentBackend) {
+                                            const models = availableModels?.stt[backend] || [];
+                                            const firstModel = models[0];
+                                            queueChange('stt', { backend, modelPath: firstModel?.path });
+                                        } else {
+                                            // Remove pending change if reverting to current
+                                            setPendingChanges(prev => {
+                                                const { stt, ...rest } = prev;
+                                                return rest;
+                                            });
+                                        }
                                     }}
-                                    disabled={switching === 'stt'}
+                                    disabled={applyingChanges}
                                 >
                                     {availableModels?.stt && Object.entries(availableModels.stt).map(([backend, models]) => (
                                         models.length > 0 && (
@@ -188,15 +250,33 @@ export const HealthWidget = () => {
                         <div className="space-y-2">
                             <div className="flex justify-between items-center text-sm">
                                 <span className="text-muted-foreground font-medium">LLM</span>
-                                <span className={`px-2 py-1 rounded-md text-xs font-medium ${health.local_ai_server.details.models?.llm?.loaded ? "bg-green-500/10 text-green-500" : "bg-yellow-500/10 text-yellow-500"}`}>
-                                    {health.local_ai_server.details.models?.llm?.loaded ? "Loaded" : "Not Loaded"}
-                                </span>
+                                <div className="flex items-center gap-2">
+                                    {pendingChanges.llm && (
+                                        <span className="px-2 py-1 rounded-md text-xs font-medium bg-yellow-500/10 text-yellow-500">
+                                            Pending
+                                        </span>
+                                    )}
+                                    <span className={`px-2 py-1 rounded-md text-xs font-medium ${health.local_ai_server.details.models?.llm?.loaded ? "bg-green-500/10 text-green-500" : "bg-yellow-500/10 text-yellow-500"}`}>
+                                        {health.local_ai_server.details.models?.llm?.loaded ? "Loaded" : "Not Loaded"}
+                                    </span>
+                                </div>
                             </div>
                             <select
-                                className="w-full text-xs p-2 rounded border border-border bg-background"
-                                value={health.local_ai_server.details.models?.llm?.path || ''}
-                                onChange={(e) => handleSwitchModel('llm', '', e.target.value)}
-                                disabled={switching === 'llm'}
+                                className={`w-full text-xs p-2 rounded border bg-background ${pendingChanges.llm ? 'border-yellow-500' : 'border-border'}`}
+                                value={getDisplayedLlmPath()}
+                                onChange={(e) => {
+                                    const modelPath = e.target.value;
+                                    const currentPath = health?.local_ai_server.details.models?.llm?.path;
+                                    if (modelPath !== currentPath) {
+                                        queueChange('llm', { modelPath });
+                                    } else {
+                                        setPendingChanges(prev => {
+                                            const { llm, ...rest } = prev;
+                                            return rest;
+                                        });
+                                    }
+                                }}
+                                disabled={applyingChanges}
                             >
                                 {availableModels?.llm?.map((model) => (
                                     <option key={model.path} value={model.path}>
@@ -213,25 +293,40 @@ export const HealthWidget = () => {
                         <div className="space-y-2">
                             <div className="flex justify-between items-center text-sm">
                                 <span className="text-muted-foreground font-medium">TTS</span>
-                                <span className={`px-2 py-1 rounded-md text-xs font-medium ${health.local_ai_server.details.models?.tts?.loaded ? "bg-green-500/10 text-green-500" : "bg-yellow-500/10 text-yellow-500"}`}>
-                                    {health.local_ai_server.details.models?.tts?.loaded ? "Loaded" : "Not Loaded"}
-                                </span>
+                                <div className="flex items-center gap-2">
+                                    {pendingChanges.tts && (
+                                        <span className="px-2 py-1 rounded-md text-xs font-medium bg-yellow-500/10 text-yellow-500">
+                                            Pending
+                                        </span>
+                                    )}
+                                    <span className={`px-2 py-1 rounded-md text-xs font-medium ${health.local_ai_server.details.models?.tts?.loaded ? "bg-green-500/10 text-green-500" : "bg-yellow-500/10 text-yellow-500"}`}>
+                                        {health.local_ai_server.details.models?.tts?.loaded ? "Loaded" : "Not Loaded"}
+                                    </span>
+                                </div>
                             </div>
                             <div className="flex gap-2">
                                 <select
-                                    className="flex-1 text-xs p-2 rounded border border-border bg-background"
-                                    value={health.local_ai_server.details.models?.tts?.backend || health.local_ai_server.details.tts_backend || 'piper'}
+                                    className={`flex-1 text-xs p-2 rounded border bg-background ${pendingChanges.tts ? 'border-yellow-500' : 'border-border'}`}
+                                    value={getDisplayedBackend('tts')}
                                     onChange={(e) => {
                                         const backend = e.target.value;
-                                        const models = availableModels?.tts[backend] || [];
-                                        const firstModel = models[0];
-                                        if (backend === 'kokoro') {
-                                            handleSwitchModel('tts', backend, firstModel?.path, 'af_heart');
+                                        const currentBackend = health?.local_ai_server.details.models?.tts?.backend || health?.local_ai_server.details.tts_backend;
+                                        if (backend !== currentBackend) {
+                                            const models = availableModels?.tts[backend] || [];
+                                            const firstModel = models[0];
+                                            if (backend === 'kokoro') {
+                                                queueChange('tts', { backend, modelPath: firstModel?.path, voice: 'af_heart' });
+                                            } else {
+                                                queueChange('tts', { backend, modelPath: firstModel?.path });
+                                            }
                                         } else {
-                                            handleSwitchModel('tts', backend, firstModel?.path);
+                                            setPendingChanges(prev => {
+                                                const { tts, ...rest } = prev;
+                                                return rest;
+                                            });
                                         }
                                     }}
-                                    disabled={switching === 'tts'}
+                                    disabled={applyingChanges}
                                 >
                                     {availableModels?.tts && Object.entries(availableModels.tts).map(([backend, models]) => (
                                         models.length > 0 && (
@@ -247,39 +342,56 @@ export const HealthWidget = () => {
                             </div>
                         </div>
 
-                        {/* Restart Banner */}
-                        {restartRequired && (
-                            <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-3 space-y-2">
-                                <div className="flex items-center gap-2 text-yellow-600 dark:text-yellow-400 text-sm font-medium">
-                                    <AlertCircle className="w-4 h-4" />
-                                    Restart required to apply changes
+                        {/* Apply Changes Banner */}
+                        {(hasPendingChanges || restarting) && (
+                            <div className={`border rounded-lg p-3 space-y-2 ${restarting ? 'bg-blue-500/10 border-blue-500/30' : 'bg-yellow-500/10 border-yellow-500/30'}`}>
+                                <div className={`flex items-center gap-2 text-sm font-medium ${restarting ? 'text-blue-600 dark:text-blue-400' : 'text-yellow-600 dark:text-yellow-400'}`}>
+                                    {restarting ? (
+                                        <>
+                                            <RefreshCw className="w-4 h-4 animate-spin" />
+                                            Restarting Local AI Server...
+                                        </>
+                                    ) : (
+                                        <>
+                                            <AlertCircle className="w-4 h-4" />
+                                            {Object.keys(pendingChanges).length} change(s) pending
+                                        </>
+                                    )}
                                 </div>
-                                <div className="flex gap-2">
-                                    <button
-                                        onClick={handleRestart}
-                                        disabled={restarting}
-                                        className="flex-1 flex items-center justify-center gap-2 px-3 py-1.5 bg-yellow-500 text-white rounded text-xs font-medium hover:bg-yellow-600 disabled:opacity-50"
-                                    >
-                                        {restarting ? (
-                                            <>
-                                                <RefreshCw className="w-3 h-3 animate-spin" />
-                                                Restarting...
-                                            </>
-                                        ) : (
-                                            <>
-                                                <RefreshCw className="w-3 h-3" />
-                                                Restart Now
-                                            </>
-                                        )}
-                                    </button>
-                                    <button
-                                        onClick={() => navigate('/docker')}
-                                        className="flex items-center gap-1 px-3 py-1.5 bg-muted text-muted-foreground rounded text-xs font-medium hover:bg-muted/80"
-                                    >
-                                        <ExternalLink className="w-3 h-3" />
-                                        Docker Services
-                                    </button>
-                                </div>
+                                {!restarting && (
+                                    <div className="flex gap-2">
+                                        <button
+                                            onClick={applyChanges}
+                                            disabled={applyingChanges}
+                                            className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-green-600 text-white rounded text-sm font-medium hover:bg-green-700 disabled:opacity-50 transition-colors"
+                                        >
+                                            {applyingChanges ? (
+                                                <>
+                                                    <RefreshCw className="w-4 h-4 animate-spin" />
+                                                    Applying...
+                                                </>
+                                            ) : (
+                                                <>
+                                                    <CheckCircle2 className="w-4 h-4" />
+                                                    Apply & Restart
+                                                </>
+                                            )}
+                                        </button>
+                                        <button
+                                            onClick={cancelChanges}
+                                            disabled={applyingChanges}
+                                            className="flex items-center gap-1 px-3 py-2 bg-muted text-muted-foreground rounded text-sm font-medium hover:bg-muted/80 disabled:opacity-50 transition-colors"
+                                        >
+                                            <XCircle className="w-4 h-4" />
+                                            Cancel
+                                        </button>
+                                    </div>
+                                )}
+                                {restarting && (
+                                    <div className="text-xs text-muted-foreground">
+                                        Please wait, this may take 10-15 seconds...
+                                    </div>
+                                )}
                             </div>
                         )}
                     </div>
