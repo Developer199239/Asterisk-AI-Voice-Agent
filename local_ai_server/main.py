@@ -486,16 +486,18 @@ class KokoroTTSBackend:
     Sample rate: 24000 Hz
     """
     
-    def __init__(self, voice: str = "af_heart", lang_code: str = "a"):
+    def __init__(self, voice: str = "af_heart", lang_code: str = "a", model_path: str = None):
         """
         Initialize Kokoro TTS.
         
         Args:
             voice: Voice name (e.g., 'af_heart', 'af_bella', 'am_adam')
             lang_code: Language code ('a' for American English)
+            model_path: Path to local model directory (optional, uses HF cache if not provided)
         """
         self.voice = voice
         self.lang_code = lang_code
+        self.model_path = model_path
         self.pipeline = None
         self._initialized = False
         self.sample_rate = 24000
@@ -511,7 +513,22 @@ class KokoroTTSBackend:
             from kokoro import KPipeline
             
             logging.info("🎙️ KOKORO - Initializing TTS (voice=%s, lang=%s)", self.voice, self.lang_code)
-            self.pipeline = KPipeline(lang_code=self.lang_code)
+            
+            # If model_path provided, use local files
+            if self.model_path and os.path.isdir(self.model_path):
+                logging.info("🎙️ KOKORO - Using local model from %s", self.model_path)
+                self.pipeline = KPipeline(
+                    lang_code=self.lang_code,
+                    repo_id=self.model_path,  # Local path works as repo_id
+                )
+            else:
+                # Fallback to HuggingFace download
+                logging.info("🎙️ KOKORO - Using HuggingFace model (will download if needed)")
+                self.pipeline = KPipeline(
+                    lang_code=self.lang_code,
+                    repo_id="hexgrad/Kokoro-82M",
+                )
+            
             self._initialized = True
             logging.info("✅ KOKORO - TTS initialized successfully")
             return True
@@ -724,6 +741,7 @@ class LocalAIServer:
         self.kokoro_backend: Optional[KokoroTTSBackend] = None
         self.kokoro_voice = os.getenv("KOKORO_VOICE", "af_heart")
         self.kokoro_lang = os.getenv("KOKORO_LANG", "a")  # 'a' = American English
+        self.kokoro_model_path = os.getenv("KOKORO_MODEL_PATH", "/app/models/tts/kokoro")
 
         default_threads = max(1, min(16, os.cpu_count() or 1))
         self.llm_threads = int(os.getenv("LOCAL_LLM_THREADS", str(default_threads)))
@@ -1011,9 +1029,16 @@ class LocalAIServer:
         try:
             logging.info("🎙️ TTS backend: Kokoro (voice=%s)", self.kokoro_voice)
 
+            # Check if local model exists
+            model_path = None
+            if os.path.isdir(self.kokoro_model_path):
+                logging.info("📁 KOKORO - Found local model at %s", self.kokoro_model_path)
+                model_path = self.kokoro_model_path
+
             self.kokoro_backend = KokoroTTSBackend(
                 voice=self.kokoro_voice,
                 lang_code=self.kokoro_lang,
+                model_path=model_path,
             )
 
             if not self.kokoro_backend.initialize():

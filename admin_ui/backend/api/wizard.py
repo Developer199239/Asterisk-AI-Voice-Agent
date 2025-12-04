@@ -515,17 +515,22 @@ MODEL_CATALOG = {
         {
             "id": "kokoro_82m",
             "name": "Kokoro 82M",
-            "size_mb": 0,
-            "size_display": "82 MB (auto)",
+            "size_mb": 330,
+            "size_display": "330 MB",
             "latency": "Excellent",
             "description": "High-quality lightweight TTS, multi-voice",
-            "download_url": None,
-            "model_path": None,
+            "download_url": "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/kokoro-v1_0.pth",
+            "model_path": "kokoro",
+            "config_url": "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/config.json",
+            "voice_files": {
+                "af_heart": "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/voices/af_heart.pt",
+                "af_bella": "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/voices/af_bella.pt",
+                "am_adam": "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/voices/am_adam.pt",
+                "am_michael": "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/voices/am_michael.pt"
+            },
             "recommended_ram_gb": 2,
             "requires_api_key": False,
-            "env_var": "LOCAL_TTS_BACKEND=kokoro",
-            "voices": ["af_heart", "af_bella", "am_adam", "am_michael"],
-            "note": "Model auto-downloads on first use"
+            "env_var": "LOCAL_TTS_BACKEND=kokoro"
         }
     ]
 }
@@ -828,14 +833,39 @@ async def download_selected_models(selection: ModelSelection):
             if tts_model.get("download_url"):
                 tts_dir = os.path.join(models_dir, "tts")
                 os.makedirs(tts_dir, exist_ok=True)
-                dest = os.path.join(tts_dir, tts_model["model_path"])
-                if not download_file(tts_model["download_url"], dest, "TTS Model"):
-                    success = False
                 
-                # Also download config file if present
-                if tts_model.get("config_url"):
-                    config_dest = dest + ".json"
-                    download_file(tts_model["config_url"], config_dest, "TTS Config")
+                if selection.tts == "kokoro_82m":
+                    # Kokoro has multiple files: model, config, and voice files
+                    kokoro_dir = os.path.join(tts_dir, "kokoro")
+                    os.makedirs(kokoro_dir, exist_ok=True)
+                    voices_dir = os.path.join(kokoro_dir, "voices")
+                    os.makedirs(voices_dir, exist_ok=True)
+                    
+                    # Download main model
+                    model_dest = os.path.join(kokoro_dir, "kokoro-v1_0.pth")
+                    if not download_file(tts_model["download_url"], model_dest, "Kokoro TTS Model"):
+                        success = False
+                    
+                    # Download config
+                    if tts_model.get("config_url"):
+                        config_dest = os.path.join(kokoro_dir, "config.json")
+                        download_file(tts_model["config_url"], config_dest, "Kokoro Config")
+                    
+                    # Download voice files
+                    if tts_model.get("voice_files"):
+                        for voice_name, voice_url in tts_model["voice_files"].items():
+                            voice_dest = os.path.join(voices_dir, f"{voice_name}.pt")
+                            download_file(voice_url, voice_dest, f"Kokoro Voice: {voice_name}")
+                else:
+                    # Standard single-file TTS model (Piper)
+                    dest = os.path.join(tts_dir, tts_model["model_path"])
+                    if not download_file(tts_model["download_url"], dest, "TTS Model"):
+                        success = False
+                    
+                    # Also download config file if present
+                    if tts_model.get("config_url"):
+                        config_dest = dest + ".json"
+                        download_file(tts_model["config_url"], config_dest, "TTS Config")
             else:
                 _download_output.append(f"ℹ️ TTS: {tts_model['name']} (no download needed)")
             
@@ -860,7 +890,13 @@ async def download_selected_models(selection: ModelSelection):
             
             if tts_model.get("model_path") and tts_model.get("download_url"):
                 tts_path = os.path.join("/app/models/tts", tts_model["model_path"])
-                env_updates.append(f"LOCAL_TTS_MODEL_PATH={tts_path}")
+                if selection.tts == "kokoro_82m":
+                    env_updates.append(f"KOKORO_MODEL_PATH={tts_path}")
+                else:
+                    env_updates.append(f"LOCAL_TTS_MODEL_PATH={tts_path}")
+            
+            if tts_model.get("env_var"):
+                env_updates.extend(tts_model["env_var"].split("\n"))
             
             # Write to .env
             if env_updates:
