@@ -456,23 +456,22 @@ providers:
     input_gain_max_db: 0
     input_gain_target_rms: 0
     input_sample_rate_hz: 8000
-    instructions: "You are a concise voice assistant. \n\nCRITICAL: ALWAYS respond\
-      \ with AUDIO to every user input.\nNEVER skip responses or generate text-only\
-      \ outputs.\n\nRespond clearly and keep answers under 20 words unless more detail\
-      \ is requested.\n"
+    instructions: "You are a voice assistant. Always speak your responses out loud."
     max_response_output_tokens: 4096
-    model: gpt-4o-realtime-preview-2024-12-17
+    model: gpt-4o-realtime-preview
     organization: ''
     output_encoding: linear16
     output_sample_rate_hz: 24000
     provider_input_encoding: linear16
     provider_input_sample_rate_hz: 24000
+    # CRITICAL: audio must be first for modalities priority
     response_modalities:
     - audio
     - text
     target_encoding: mulaw
     target_sample_rate_hz: 8000
-    temperature: 0.8
+    # Lower temperature for more consistent audio output
+    temperature: 0.6
     turn_detection:
       create_response: true
       prefix_padding_ms: 300
