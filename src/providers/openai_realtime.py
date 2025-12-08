@@ -751,8 +751,20 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         # If not configured, DON'T SET IT - let OpenAI use optimized defaults
         # This prevents us from interfering with OpenAI's audio processing
 
+        # Build instructions with audio-forcing prefix
+        # CRITICAL: Per OpenAI community reports (Dec 2024), the Realtime API has a bug
+        # where modalities can get "stuck" on text-only after any text exchange.
+        # Adding explicit audio instructions helps force audio output.
+        audio_forcing_prefix = (
+            "IMPORTANT: You are a voice-based AI assistant. "
+            "ALWAYS respond with AUDIO speech, never text-only. "
+            "Every response MUST include spoken audio output. "
+        )
+        
         if self.config.instructions:
-            session["instructions"] = self.config.instructions
+            session["instructions"] = audio_forcing_prefix + self.config.instructions
+        else:
+            session["instructions"] = audio_forcing_prefix
 
         # Add tool calling configuration
         try:
