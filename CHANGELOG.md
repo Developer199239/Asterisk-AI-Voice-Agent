@@ -11,6 +11,97 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Additional provider integrations
 - Enhanced monitoring features
 
+## [4.4.2] - 2025-12-08
+
+### Added - Local AI Server Enhancements 🎯
+
+#### New STT Backends
+- **Kroko ASR Integration (AAVA-92)**: High-quality streaming ASR with 12+ languages
+  - Hosted API support (`wss://app.kroko.ai`)
+  - On-premise server support
+  - No hallucination - factual transcripts only
+  - Configure via `LOCAL_STT_BACKEND=kroko`
+- **Sherpa-ONNX STT (AAVA-95)**: Local streaming ASR using sherpa-onnx
+  - Low-latency streaming recognition
+  - Multiple model support (Zipformer, etc.)
+  - Configure via `LOCAL_STT_BACKEND=sherpa`
+
+#### New TTS Backends
+- **Kokoro TTS (AAVA-95)**: High-quality neural TTS
+  - Multiple voices: `af_heart`, `af_bella`, `am_michael`
+  - Natural prosody and intonation
+  - Configure via `LOCAL_TTS_BACKEND=kokoro`
+- **ElevenLabs TTS Adapter (AAVA-114)**: Cloud TTS for modular pipelines
+  - Factory pattern integration
+  - Premium voice quality
+
+#### Model Management System (AAVA-99, 101, 102, 103, 104)
+- **Dashboard Quick-Switch**: Change STT/TTS/LLM models directly from dashboard
+- **Model Enumeration API**: `GET /api/local-ai/models/available`
+- **Model Switch API**: `POST /api/local-ai/models/switch` with hot-reload
+- **2-Step UI Flow (AAVA-111)**: "Pending" badge + "Apply & Restart" button
+- **Error Handling (AAVA-108)**: Rollback on switch failure
+
+### Added - Admin UI Improvements
+
+- **Pipeline UI Backend Display (AAVA-116)**: Shows active STT/TTS backend for local components
+- **Directory Health Card (AAVA-93)**: Dashboard shows media directory permissions
+- **Pipeline Orchestrator Logging (AAVA-106)**: Logs active backends on startup
+- **YAML Config Sync (AAVA-107)**: Model selection synced to `ai-agent.yaml`
+
+### Added - DevOps & CI
+
+- **Optional Build Args (AAVA-112)**: Exclude unused backends from Docker build
+  - `INCLUDE_VOSK`, `INCLUDE_SHERPA`, `INCLUDE_PIPER`, `INCLUDE_KOKORO`, `INCLUDE_LLAMA`
+  - Default: all enabled (backward compatible)
+  - Reduces image size for specialized deployments
+- **CI Image Size Checks (AAVA-113)**: Size budgets in GitHub Actions
+  - ai-engine: 1.5GB budget
+  - local-ai-server: 4GB budget
+- **Enhanced Trivy Scanning (AAVA-113)**: Both images scanned for vulnerabilities
+- **Outdated Dependency Reporting**: Warning in CI for outdated packages
+
+### Added - Documentation
+
+- **LOCAL_ONLY_SETUP.md**: Comprehensive guide for fully local deployment
+  - Vosk, Sherpa-ONNX, Kroko STT options
+  - Piper, Kokoro TTS options
+  - Phi-3 LLM configuration
+  - Hardware recommendations
+- **Docker Build Troubleshooting (AAVA-119)**: DNS resolution, BuildKit issues
+  - Solutions for `docker-compose` vs `docker compose`
+  - Network configuration guides
+
+### Fixed
+
+- **Local Pipeline Validation (AAVA-118)**: Local components validate against websocket URLs
+  - Pipeline no longer disabled on validation failure
+  - Fixes "call drops after greeting" for local setups
+- **TTS Response Contract (AAVA-105)**: JSON with base64 audio instead of binary frames
+- **Docker Image Debloat (AAVA-109, 110)**: Removed unused dependencies
+- **Config Validation (AAVA-115)**: Capability/suffix mismatch detection
+- **Sherpa-ONNX API Handling**: Handle string return type from `get_result()`
+- **Container Restart Logic**: Fixed docker-compose commands in Admin UI
+
+### Changed
+
+- **Wizard Model Detection (AAVA-98)**: Detects Sherpa STT and Kokoro TTS models
+- **Status API (AAVA-96)**: Correctly reports kroko/sherpa/kokoro backends
+- **Friendly Model Names**: Status shows basename instead of full path
+
+### Technical Details
+
+- **Files Added**: 
+  - `docs/LOCAL_ONLY_SETUP.md`
+  - `local_ai_server/requirements-base.txt`
+- **Files Modified**:
+  - `local_ai_server/Dockerfile` (conditional backend installs)
+  - `local_ai_server/main.py` (Kroko, Sherpa, Kokoro backends)
+  - `.github/workflows/ci.yml` (image size checks)
+  - `.github/workflows/trivy.yml` (dual image scanning)
+  - `admin_ui/frontend/src/components/config/PipelineForm.tsx`
+  - `src/pipelines/base.py`, `src/pipelines/orchestrator.py`
+
 ## [4.4.1] - 2025-11-30
 
 ### Added - Admin UI v1.0 🎉
