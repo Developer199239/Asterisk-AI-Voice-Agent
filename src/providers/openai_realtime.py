@@ -815,9 +815,6 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             "type": "response.create",
             "event_id": f"resp-{uuid.uuid4()}",
             "response": {
-                # CRITICAL: Per OpenAI Dec 2024 docs - commit and cancel_previous
-                "commit": True,
-                "cancel_previous": True,
                 # Force audio+text modality for greeting
                 "modalities": output_modalities,
                 # Clear instructions to speak the greeting
@@ -828,9 +825,8 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         logger.info(
             "🎤 Sending greeting response.create",
             call_id=self._call_id,
-            commit=True,
-            cancel_previous=True,
             modalities=output_modalities,
+            greeting_preview=greeting[:50] + "..." if len(greeting) > 50 else greeting,
         )
 
         await self._send_json(response_payload)
