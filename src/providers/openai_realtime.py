@@ -2176,18 +2176,26 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                     self._pacer_underruns += 1
                     chunk = silence_factory(chunk_bytes)
 
-                if not self._first_output_chunk_logged:
-                    try:
-                        logger.info(
-                            "OpenAI Realtime first paced audio chunk",
-                            call_id=call_id,
-                            bytes=len(chunk),
-                            target_encoding=self.config.target_encoding,
-                        )
-                    except Exception:
-                        pass
-                    self._first_output_chunk_logged = True
-                self._in_audio_burst = True
+                # Track whether we're emitting real audio (not silence) for echo gating
+                is_real_audio = len(self._outbuf) > 0 or (chunk and self._pacer_underruns == 0)
+                
+                if is_real_audio:
+                    self._in_audio_burst = True
+                    if not self._first_output_chunk_logged:
+                        try:
+                            logger.info(
+                                "OpenAI Realtime first paced audio chunk",
+                                call_id=call_id,
+                                bytes=len(chunk),
+                                target_encoding=self.config.target_encoding,
+                            )
+                        except Exception:
+                            pass
+                        self._first_output_chunk_logged = True
+                else:
+                    # Emitting silence - agent is NOT actively speaking
+                    self._in_audio_burst = False
+                
                 try:
                     await self.on_event(
                         {
@@ -2208,6 +2216,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             logger.debug("Pacer loop error", call_id=call_id, exc_info=True)
         finally:
             self._pacer_running = False
+            self._in_audio_burst = False  # Always clear when pacer stops
 
     def _pacer_params(self) -> (int, Any):
         # Compute chunk size for 20 ms frames and a silence factory matching target encoding
