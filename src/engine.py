@@ -5368,6 +5368,66 @@ class Engine:
                                     if name in ["transfer"] and result.get("status") == "success":
                                         logger.info("Transfer successful, ending turn loop", tool=name)
                                         return
+                                    
+                                    # Handle non-terminal tools (e.g., request_transcript)
+                                    # Feed result back to LLM for continuation
+                                    if not result.get("will_hangup") and name not in ["transfer"]:
+                                        tool_result_msg = result.get("message", f"Tool {name} executed successfully.")
+                                        # Add tool result to conversation history
+                                        conversation_history.append({
+                                            "role": "assistant",
+                                            "content": None,
+                                            "tool_calls": [{"id": f"call_{name}", "type": "function", "function": {"name": name, "arguments": json.dumps(args)}}]
+                                        })
+                                        conversation_history.append({
+                                            "role": "tool",
+                                            "tool_call_id": f"call_{name}",
+                                            "content": tool_result_msg
+                                        })
+                                        logger.info("Tool result added to conversation, triggering LLM continuation", tool=name, call_id=call_id)
+                                        
+                                        # Trigger LLM to generate follow-up response
+                                        try:
+                                            llm_response = await pipeline.llm_adapter.chat(call_id, conversation_history, pipeline.llm_options)
+                                            if llm_response and llm_response.text:
+                                                response_text = llm_response.text.strip()
+                                                conversation_history.append({"role": "assistant", "content": response_text})
+                                                logger.info("LLM continuation response", preview=response_text[:80], call_id=call_id)
+                                                
+                                                # Synthesize and play TTS
+                                                tts_bytes = bytearray()
+                                                async for chunk in pipeline.tts_adapter.synthesize(call_id, response_text, pipeline.tts_options):
+                                                    if chunk:
+                                                        tts_bytes.extend(chunk)
+                                                if tts_bytes:
+                                                    await self.playback_manager.play_audio(call_id, bytes(tts_bytes), "pipeline-tts")
+                                                    duration_sec = len(tts_bytes) / 8000.0
+                                                    await asyncio.sleep(duration_sec + 0.3)
+                                                
+                                                # Check if LLM also wants to call tools (e.g., hangup_call after transcript)
+                                                if llm_response.tool_calls:
+                                                    for next_tc in llm_response.tool_calls:
+                                                        next_name = next_tc.get("name")
+                                                        next_args = next_tc.get("parameters") or {}
+                                                        next_tool = tool_registry.get(next_name)
+                                                        if next_tool:
+                                                            logger.info("Executing follow-up tool", tool=next_name, call_id=call_id)
+                                                            next_result = await next_tool.execute(next_args, tool_ctx)
+                                                            if next_result.get("will_hangup"):
+                                                                farewell = next_result.get("message", "Goodbye!")
+                                                                conversation_history.append({"role": "assistant", "content": farewell})
+                                                                session.conversation_history = list(conversation_history)
+                                                                await self.session_store.upsert_call(session)
+                                                                fw_bytes = bytearray()
+                                                                async for chunk in pipeline.tts_adapter.synthesize(call_id, farewell, pipeline.tts_options):
+                                                                    fw_bytes.extend(chunk)
+                                                                if fw_bytes:
+                                                                    await self.playback_manager.play_audio(call_id, bytes(fw_bytes), "pipeline-farewell")
+                                                                    await asyncio.sleep(len(fw_bytes) / 8000.0 + 0.5)
+                                                                await self.ari_client.hangup_channel(getattr(session, 'channel_id', call_id))
+                                                                return
+                                        except Exception as e:
+                                            logger.error("LLM continuation failed", error=str(e), exc_info=True)
                                 else:
                                     logger.warning("Tool not found", tool=name)
                             except Exception as e:
