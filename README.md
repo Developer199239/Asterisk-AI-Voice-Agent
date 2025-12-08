@@ -2,18 +2,43 @@
 
 # Asterisk AI Voice Agent
 
-![Version](https://img.shields.io/badge/version-4.4.1-blue.svg)
+![Version](https://img.shields.io/badge/version-4.4.2-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![Python](https://img.shields.io/badge/python-3.10+-blue.svg)
 ![Docker](https://img.shields.io/badge/docker-compose-blue.svg)
 ![Asterisk](https://img.shields.io/badge/asterisk-18+-orange.svg)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/hkjarral/Asterisk-AI-Voice-Agent)
-[![Discord](https://dcbadge.limes.pink/api/server/CAVACtaY)](https://discord.gg/QhPSju6aCh)
+[![Discord](https://dcbadge.limes.pink/api/server/QhPSju6aCh)](https://discord.gg/QhPSju6aCh)
 
 
 The most powerful, flexible open-source AI voice agent for Asterisk/FreePBX. Featuring a **modular pipeline architecture** that lets you mix and match STT, LLM, and TTS providers, plus **5 production-ready golden baselines** validated for enterprise deployment.
 
-## 🎉 What's New in v4.4.1
+## 🎉 What's New in v4.4.2
+
+* **🎤 New STT Backends**: Multiple speech-to-text options
+  - **Kroko ASR**: High-quality streaming with 12+ languages, no hallucinations
+  - **Sherpa-ONNX**: Low-latency local streaming ASR
+  - Configure via `LOCAL_STT_BACKEND=kroko|sherpa|vosk`
+
+* **🔊 Kokoro TTS**: High-quality neural text-to-speech
+  - Multiple voices: `af_heart`, `af_bella`, `am_michael`
+  - Natural prosody and intonation
+  - Configure via `LOCAL_TTS_BACKEND=kokoro|piper`
+
+* **🔄 Model Management**: Dynamic backend switching from Dashboard
+  - Quick-switch STT/TTS/LLM models without editing config files
+  - 2-step UI: Select model → Apply & Restart
+  - Hot-reload with automatic container recreation
+
+* **🔧 DevOps Improvements**:
+  - Optional build args to exclude unused backends (smaller images)
+  - CI image size checks and vulnerability scanning
+  - Pipeline UI shows active STT/TTS backend
+
+* **📚 Documentation**: New [LOCAL_ONLY_SETUP.md](docs/LOCAL_ONLY_SETUP.md) guide for fully local deployment
+
+<details>
+<summary><b>v4.4.1 - Admin UI v1.0</b></summary>
 
 * **🖥️ Admin UI v1.0**: Modern web interface for configuration and monitoring
   - Visual setup wizard replaces `agent quickstart` CLI
@@ -24,20 +49,15 @@ The most powerful, flexible open-source AI voice agent for Asterisk/FreePBX. Fea
   - Access at http://localhost:3003 after starting admin-ui container
   - See [Admin UI Setup Guide](admin_ui/UI_Setup_Guide.md) for details
 
-<div align="center">
-<img src="AVA-Admin-UI.jpg" alt="Asterisk AI Voice Agent Admin UI Dashboard" width="800"/>
-<p><em>Admin UI Dashboard - Real-time monitoring and configuration</em></p>
-</div>
-
 * **🎙️ ElevenLabs Conversational AI**: Premium voice quality provider
   - Full agent with WebSocket-based real-time conversations
   - Tool calling support (define in ElevenLabs dashboard, execute locally)
-  - See [ElevenLabs Setup Guide](docs/contributing/references/Provider-ElevenLabs-Implementation.md)
 
 * **🎵 Background Music**: Ambient music during AI calls
   - Configure per-context via Admin UI or YAML
   - Uses Asterisk Music On Hold (MOH) classes
-  - See [Background Music docs](admin_ui/UI_Setup_Guide.md#background-music-configuration)
+
+</details>
 
 <details>
 <summary><b>v4.3 - Complete Tool Support & Documentation</b></summary>
