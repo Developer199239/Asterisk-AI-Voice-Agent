@@ -808,24 +808,21 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         # Small delay to ensure VAD disable is processed
         await asyncio.sleep(0.1)
 
-        # Map config modalities - ensure audio is included
-        output_modalities = [m for m in (self.config.response_modalities or []) if m in ("audio", "text")] or ["audio", "text"]
-
+        # Use response.create with explicit instruction to speak ONLY the greeting
+        # The instruction must be crystal clear to avoid interpretation
         response_payload: Dict[str, Any] = {
             "type": "response.create",
             "event_id": f"resp-{uuid.uuid4()}",
             "response": {
-                # Force audio+text modality for greeting
-                "modalities": output_modalities,
-                # Clear instructions to speak the greeting
-                "instructions": f"Speak this greeting to the user: {greeting}",
+                "modalities": ["audio", "text"],
+                # Super explicit instruction - ONLY say this exact text
+                "instructions": f'Say ONLY this exact greeting, nothing more: "{greeting}"',
             },
         }
         
         logger.info(
             "🎤 Sending greeting response.create",
             call_id=self._call_id,
-            modalities=output_modalities,
             greeting_preview=greeting[:50] + "..." if len(greeting) > 50 else greeting,
         )
 
