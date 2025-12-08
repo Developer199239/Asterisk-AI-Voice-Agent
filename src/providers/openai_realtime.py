@@ -834,15 +834,22 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         # Small delay to ensure VAD disable is processed
         await asyncio.sleep(0.1)
 
-        # Use response.create with explicit instruction to speak ONLY the greeting
-        # The instruction must be crystal clear to avoid interpretation
+        # CRITICAL: OpenAI Realtime has a known bug where responses get stuck on text-only.
+        # Per community research (Dec 2024): The FIRST response MUST output audio,
+        # otherwise all subsequent responses may also be text-only.
+        # 
+        # Workaround: Include explicit audio-forcing instructions in the response.create
         response_payload: Dict[str, Any] = {
             "type": "response.create",
             "event_id": f"resp-{uuid.uuid4()}",
             "response": {
                 "modalities": ["audio", "text"],
-                # Super explicit instruction - ONLY say this exact text
-                "instructions": f'Say ONLY this exact greeting, nothing more: "{greeting}"',
+                # Explicit audio-forcing instruction - CRITICAL for modalities bug
+                "instructions": (
+                    "IMPORTANT: You MUST respond with spoken AUDIO output. "
+                    "Do NOT respond with text-only. Your response MUST include audio speech. "
+                    f'Now say exactly this greeting out loud: "{greeting}"'
+                ),
             },
         }
         
