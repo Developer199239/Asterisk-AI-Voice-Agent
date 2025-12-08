@@ -554,8 +554,9 @@ Keep this roadmap updated after each milestone to help any collaborator—or fut
 
 - ✅ Google Gemini - google_live provider with Gemini 2.5 Flash - IMPLEMENTED
 - ✅ ElevenLabs - elevenlabs_agent provider - IMPLEMENTED (v4.4.1)
-- 🔄 Azure Speech Services for STT/TTS (AAVA-64)
-- 🔄 Google Cloud Speech for STT/TTS (AAVA-65)
+- ✅ Google Cloud Speech - google_stt/google_tts adapters - IMPLEMENTED (src/pipelines/google.py)
+- ✅ ElevenLabs TTS adapter - elevenlabs_tts for pipelines - IMPLEMENTED (AAVA-114)
+- ⏳ Azure Speech Services for STT/TTS
 - ⏳ Anthropic Claude integration for LLM
 
 **Advanced Features**:
