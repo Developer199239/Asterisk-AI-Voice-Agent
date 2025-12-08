@@ -5389,8 +5389,14 @@ class Engine:
                                         
                                         # Trigger LLM to generate follow-up response
                                         try:
-                                            llm_response = await pipeline.llm_adapter.chat(call_id, conversation_history, pipeline.llm_options)
-                                            if llm_response and llm_response.text:
+                                            context_for_llm = {"prior_messages": list(conversation_history)}
+                                            llm_response = await pipeline.llm_adapter.generate(
+                                                call_id,
+                                                "",  # Empty transcript - tool result already in context
+                                                context_for_llm,
+                                                pipeline.llm_options
+                                            )
+                                            if llm_response and getattr(llm_response, 'text', None):
                                                 response_text = llm_response.text.strip()
                                                 conversation_history.append({"role": "assistant", "content": response_text})
                                                 logger.info("LLM continuation response", preview=response_text[:80], call_id=call_id)
@@ -5406,7 +5412,7 @@ class Engine:
                                                     await asyncio.sleep(duration_sec + 0.3)
                                                 
                                                 # Check if LLM also wants to call tools (e.g., hangup_call after transcript)
-                                                if llm_response.tool_calls:
+                                                if getattr(llm_response, 'tool_calls', None):
                                                     for next_tc in llm_response.tool_calls:
                                                         next_name = next_tc.get("name")
                                                         next_args = next_tc.get("parameters") or {}
