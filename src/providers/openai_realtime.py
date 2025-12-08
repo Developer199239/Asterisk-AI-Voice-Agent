@@ -859,6 +859,29 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             "🛡️  Greeting sent - will re-enable VAD after completion",
             call_id=self._call_id
         )
+        
+        # FALLBACK: Re-enable VAD after timeout in case response.done doesn't fire correctly
+        # This ensures two-way conversation can proceed even if greeting tracking fails
+        asyncio.create_task(self._greeting_vad_fallback())
+
+    async def _greeting_vad_fallback(self):
+        """Fallback to re-enable VAD if greeting completion detection fails."""
+        try:
+            # Wait for greeting to complete (typical greeting is 3-5 seconds)
+            await asyncio.sleep(5.0)
+            
+            # If VAD wasn't re-enabled yet, do it now
+            if not self._greeting_completed:
+                logger.warning(
+                    "⚠️ VAD fallback - greeting completion not detected, re-enabling VAD",
+                    call_id=self._call_id
+                )
+                self._greeting_completed = True
+                await self._re_enable_vad()
+        except asyncio.CancelledError:
+            pass  # Task cancelled on session stop
+        except Exception:
+            logger.debug("VAD fallback failed", call_id=self._call_id, exc_info=True)
 
     async def _re_enable_vad(self):
         """Re-enable turn_detection after greeting completes."""
