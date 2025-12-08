@@ -274,7 +274,7 @@ pipelines:
         streaming: true
       tts:
         mode: tts
-        response_timeout_sec: 15.0
+        response_timeout_sec: 30.0
         format:
           encoding: mulaw
           sample_rate: 8000
