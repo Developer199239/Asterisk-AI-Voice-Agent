@@ -1,8 +1,8 @@
 # OpenAI Realtime Golden Baseline
 
-**Validated**: November 17, 2025  
-**Version**: v4.3.1  
-**GitHub Commit**: `0d337b3`  
+**Validated**: December 8, 2025  
+**Version**: v4.3.2  
+**GitHub Commit**: `c8aa029`  
 **Status**: ✅ Production Ready (with API limitations documented)
 
 ## Overview
@@ -82,11 +82,11 @@ providers:
       - audio
       - text
     
-    # Turn detection (tuned for responsiveness)
+    # Turn detection (tuned for reliability)
     turn_detection:
       type: server_vad
-      threshold: 0.5                      # More sensitive (was 0.6)
-      silence_duration_ms: 600            # Faster response (was 700)
+      threshold: 0.5                      # Standard sensitivity (0.8 blocks user speech)
+      silence_duration_ms: 1000           # 1 second before responding
       prefix_padding_ms: 300
       create_response: true
     
@@ -384,14 +384,48 @@ instructions: |
 
 **Impact**: Reduced (but did not eliminate) silent responses.
 
-### 5. Known API Limitation
+### 5. Known API Limitation (Modalities Bug)
 
 **Important**: Even with optimal configuration, OpenAI Realtime API may occasionally:
-- Generate text-only responses
+- Generate text-only responses (no `response.audio.delta` events)
 - Skip audio generation entirely
 - Return `response.done` without audio
 
 **Mitigation**: 5-second timeout ensures call always ends, even when API skips audio.
+
+### 6. VAD Fallback Timer (Added December 2025)
+
+**Problem**: VAD (turn detection) was sometimes not re-enabled after greeting, blocking user speech.
+
+**Root Cause**: The greeting completion detection relied on response.done event which sometimes didn't fire correctly.
+
+**Solution**: Added 5-second fallback timer after greeting is sent:
+```python
+async def _greeting_vad_fallback(self):
+    await asyncio.sleep(5.0)
+    if not self._greeting_completed:
+        self._greeting_completed = True
+        await self._re_enable_vad()
+```
+
+**Impact**: Guarantees two-way conversation can proceed even if greeting detection fails.
+
+### 7. Echo Gating Fix (December 2025)
+
+**Problem**: Echo gating was checking `len(_outbuf) > 0` but the pacer fills `_outbuf` with silence indefinitely, blocking ALL user input.
+
+**Solution**: Check pacer underruns instead of buffer state:
+```python
+# Old (broken):
+if len(self._outbuf) > 0:  # Always true - pacer fills with silence
+    return  # Block forever
+
+# New (fixed):
+if self._in_audio_burst and self._pacer_underruns == 0:  # Only block during real audio
+    return
+```
+
+**Impact**: User audio flows correctly after agent finishes speaking.
 
 ## Performance Comparison
 
