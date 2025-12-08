@@ -476,8 +476,8 @@ providers:
     turn_detection:
       create_response: true
       prefix_padding_ms: 300
-      silence_duration_ms: 1000
-      threshold: 0.6
+      silence_duration_ms: 1500  # Increased for speakerphone - wait longer before response
+      threshold: 0.8  # Increased for speakerphone - ignore quieter echo
       type: server_vad
     type: openai_realtime
     voice: alloy

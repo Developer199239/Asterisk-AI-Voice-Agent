@@ -2135,6 +2135,20 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             return
         self._pacer_running = True
         self._pacer_start_ts = time.monotonic()
+        
+        # CRITICAL: Clear OpenAI's input audio buffer when we start outputting
+        # This prevents echo from being processed - any audio buffered before
+        # our local gating kicked in will be discarded by OpenAI
+        try:
+            clear_buffer_payload = {
+                "type": "input_audio_buffer.clear",
+                "event_id": f"clear-echo-{uuid.uuid4()}",
+            }
+            await self._send_json(clear_buffer_payload)
+            logger.debug("🔇 Cleared OpenAI input buffer for echo prevention", call_id=self._call_id)
+        except Exception:
+            logger.debug("Failed to clear input buffer", call_id=self._call_id, exc_info=True)
+        
         try:
             if self._pacer_task and not self._pacer_task.done():
                 self._pacer_task.cancel()
