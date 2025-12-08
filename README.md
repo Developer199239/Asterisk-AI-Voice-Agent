@@ -2,49 +2,62 @@
 
 # Asterisk AI Voice Agent
 
-![Version](https://img.shields.io/badge/version-4.4.1-blue.svg)
+![Version](https://img.shields.io/badge/version-4.4.2-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![Python](https://img.shields.io/badge/python-3.10+-blue.svg)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
-[![Docker](https://img.shields.io/badge/docker-compose-2496ED.svg?logo=docker&logoColor=white)](https://www.docker.com/)
-[![Asterisk](https://img.shields.io/badge/asterisk-18+-orange.svg)](https://www.asterisk.org/)
-[![Discord](https://img.shields.io/badge/Discord-Join%20Us-5865F2?style=flat&logo=discord&logoColor=white)](https://discord.gg/QhPSju6aCh)
+![Docker](https://img.shields.io/badge/docker-compose-blue.svg)
+![Asterisk](https://img.shields.io/badge/asterisk-18+-orange.svg)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/hkjarral/Asterisk-AI-Voice-Agent)
+[![Discord](https://dcbadge.limes.pink/api/server/QhPSju6aCh)](https://discord.gg/QhPSju6aCh)
 
-**A production-ready, modular voice agent platform integrating Asterisk with modern AI providers.**
-*Build intelligent, conversational voice experiences with ease.*
 
-[Features](#-features) • [Quick Start](#-quick-start) • [Configuration](#%EF%B8%8F-configuration) • [Documentation](#-documentation)
+The most powerful, flexible open-source AI voice agent for Asterisk/FreePBX. Featuring a **modular pipeline architecture** that lets you mix and match STT, LLM, and TTS providers, plus **5 production-ready golden baselines** validated for enterprise deployment.
 
-</div>
+## 🎉 What's New in v4.4.2
 
----
+* **🎤 New STT Backends**: Multiple speech-to-text options
+  - **Kroko ASR**: High-quality streaming with 12+ languages, no hallucinations
+  - **Sherpa-ONNX**: Low-latency local streaming ASR
+  - Configure via `LOCAL_STT_BACKEND=kroko|sherpa|vosk`
 
-## 🎉 What's New in v4.4.1
+* **🔊 Kokoro TTS**: High-quality neural text-to-speech
+  - Multiple voices: `af_heart`, `af_bella`, `am_michael`
+  - Natural prosody and intonation
+  - Configure via `LOCAL_TTS_BACKEND=kokoro|piper`
 
-### **🖥️ Admin UI v1.0**
-A modern web interface for complete system management.
-- **Visual Setup Wizard**: Replaces CLI for easier initialization.
-- **Real-time Dashboard**: Monitor system metrics and container status.
-- **Configuration Management**: Manage providers, pipelines, and contexts visually.
-- **Access**: http://localhost:3003 (Default: `admin`/`admin`)
-- [Admin UI Setup Guide](admin_ui/UI_Setup_Guide.md)
+* **🔄 Model Management**: Dynamic backend switching from Dashboard
+  - Quick-switch STT/TTS/LLM models without editing config files
+  - 2-step UI: Select model → Apply & Restart
+  - Hot-reload with automatic container recreation
 
-<div align="center">
-<img src="AVA-Admin-UI.jpg" alt="Asterisk AI Voice Agent Admin UI Dashboard" width="800"/>
-</div>
+* **🔧 DevOps Improvements**:
+  - Optional build args to exclude unused backends (smaller images)
+  - CI image size checks and vulnerability scanning
+  - Pipeline UI shows active STT/TTS backend
 
-### **🎙️ ElevenLabs Conversational AI**
-- Full agent support with WebSocket-based real-time conversations.
-- Native tool calling support.
-- [ElevenLabs Setup Guide](docs/contributing/references/Provider-ElevenLabs-Implementation.md)
+* **📚 Documentation**: New [LOCAL_ONLY_SETUP.md](docs/LOCAL_ONLY_SETUP.md) guide for fully local deployment
 
-### **🎵 Background Music**
-- Ambient music support during AI calls using Asterisk MOH.
-- Configurable per-context via Admin UI.
+<details>
+<summary><b>v4.4.1 - Admin UI v1.0</b></summary>
 
----
+* **🖥️ Admin UI v1.0**: Modern web interface for configuration and monitoring
+  - Visual setup wizard replaces `agent quickstart` CLI
+  - Real-time dashboard with system metrics and container status
+  - Complete configuration management (providers, pipelines, contexts)
+  - Live log streaming and YAML editor
+  - JWT authentication with default admin/admin credentials
+  - Access at http://localhost:3003 after starting admin-ui container
+  - See [Admin UI Setup Guide](admin_ui/UI_Setup_Guide.md) for details
+
+* **🎙️ ElevenLabs Conversational AI**: Premium voice quality provider
+  - Full agent with WebSocket-based real-time conversations
+  - Tool calling support (define in ElevenLabs dashboard, execute locally)
+
+* **🎵 Background Music**: Ambient music during AI calls
+  - Configure per-context via Admin UI or YAML
+  - Uses Asterisk Music On Hold (MOH) classes
+
+</details>
 
 <details>
 <summary><b>v4.3 - Complete Tool Support & Documentation</b></summary>
@@ -125,21 +138,16 @@ A modern web interface for complete system management.
 
 ### Technical Features
 
-#### Core Architecture
 * **Tool Calling System**: AI-powered actions (transfers, emails) work with any provider
-* **Dual Transport Support**: AudioSocket (full agents) or ExternalMedia RTP (pipelines)
-* **High-Performance**: Separate `ai-engine` and `local-ai-server` containers
-* **State Management**: SessionStore for centralized, typed call state
-
-#### AI Capabilities
+* **Agent CLI Tools**: `doctor`, `troubleshoot`, `demo`, `init` commands for operations
 * **Modular Pipeline System**: Independent STT, LLM, and TTS provider selection
-* **Barge-In Support**: Interrupt handling with configurable gating
-* **Customizable**: YAML configuration for greetings, personas, and behavior
-
-#### Management & Operations
-* **Agent CLI Tools**: `doctor`, `troubleshoot`, `demo`, `init` commands
+* **Dual Transport Support**: AudioSocket (full agents) and ExternalMedia RTP (pipelines)
+* **High-Performance Architecture**: Separate `ai-engine` and `local-ai-server` containers
 * **Enterprise Monitoring**: Prometheus + Grafana with 5 dashboards and 50+ metrics
+* **State Management**: SessionStore for centralized, typed call state
+* **Barge-In Support**: Interrupt handling with configurable gating
 * **Docker Deployment**: Simple two-service orchestration
+* **Customizable**: YAML configuration for greetings, personas, and behavior
 
 ### 🖥️ Admin UI v1.0
 
@@ -176,7 +184,7 @@ docker-compose up -d admin-ui
 
 ### 📞 Try it Live! (US Only)
 
-Experience all five production-ready configurations with a single phone call:
+Experience all four production-ready configurations with a single phone call:
 
 **Dial: (925) 736-6718**
 
@@ -184,9 +192,8 @@ Experience all five production-ready configurations with a single phone call:
 * **Press 6** → Deepgram Voice Agent (Enterprise cloud with Think stage)
 * **Press 7** → OpenAI Realtime API (Modern cloud AI, most natural)
 * **Press 8** → Local Hybrid Pipeline (Privacy-focused, audio stays local)
-* **Press 9** → ElevenLabs Agent (Premium voice quality, ultra-realistic speech)
 
-Each configuration uses the same Ava persona with full project knowledge. Compare response times, voice quality, and naturalness across providers!
+Each configuration uses the same Ava persona with full project knowledge. Compare response times, conversation quality, and naturalness across providers!
 
 **Try it out**: Ask the agent to "transfer me to support" or "email me a transcript"!
 
@@ -315,70 +322,86 @@ Supports Linux, macOS (Intel + Apple Silicon), and Windows. See [CLI Tools Guide
 
 ## 🚀 Quick Start
 
-Get up and running in **5 minutes**.
+Get up and running in **5 minutes** with our new interactive wizard:
 
-### Option A: Interactive Setup (Recommended)
-
-The easiest way to get started is using our new **Admin UI Wizard**.
-
-1.  **Clone & Install**
-    ```bash
-    git clone https://github.com/hkjarral/Asterisk-AI-Voice-Agent.git
-    cd Asterisk-AI-Voice-Agent
-    ./install.sh
-    ```
-
-2.  **Start the Admin UI**
-    ```bash
-    docker compose up -d admin-ui
-    ```
-
-3.  **Launch the Wizard**
-    *   Open **[http://localhost:3003](http://localhost:3003)**
-    *   Login with default credentials: `admin` / `admin`
-    *   Follow the visual setup guide to configure providers and Asterisk.
-
-### Option B: CLI Quickstart
-
-If you prefer the command line:
+### Option A: Interactive Quickstart (Recommended for First-Time Users)
 
 ```bash
-# Run the interactive CLI wizard
+# Clone repository
+git clone https://github.com/hkjarral/Asterisk-AI-Voice-Agent.git
+cd Asterisk-AI-Voice-Agent
+
+# Run installer (sets up Docker and offers CLI installation)
+./install.sh
+
+# After installation, run interactive setup wizard
 agent quickstart
 ```
 
 The wizard will:
-*   ✅ Guide you through provider selection
-*   ✅ Validate your API keys
-*   ✅ Test Asterisk ARI connection
-*   ✅ Generate dialplan configuration
+* ✅ Guide you through provider selection
+* ✅ Validate your API keys
+* ✅ Test Asterisk ARI connection
+* ✅ Generate dialplan configuration
+* ✅ Provide next steps
 
----
+### Option B: Manual Setup (Advanced Users)
 
-### 📞 Test Your Agent
+```bash
+git clone https://github.com/hkjarral/Asterisk-AI-Voice-Agent.git
+cd Asterisk-AI-Voice-Agent
+./install.sh
+```
 
-Once configured, you can test your agent immediately.
+The installer will:
+* Guide you through **3 simple configuration choices**
+* Prompt for required API keys (only what you need)
+* Set up Docker containers automatically
+* Offer CLI installation
 
-1.  **Configure Dialplan** (if not done by Wizard)
-    Add this to `extensions_custom.conf` in FreePBX:
-    ```asterisk
-    [from-ai-agent]
-    exten => s,1,NoOp(Asterisk AI Voice Agent)
-     same => n,Stasis(asterisk-ai-voice-agent)
-     same => n,Hangup()
-    ```
+**Choose Your Configuration:**
 
-2.  **Make a Call**
-    Route a number or extension to the `from-ai-agent` context and call it.
+* **[1] OpenAI Realtime** - Fastest setup, modern AI (requires `OPENAI_API_KEY`)
+* **[2] Deepgram Voice Agent** - Enterprise features (requires `DEEPGRAM_API_KEY` + `OPENAI_API_KEY`)
+* **[3] Local Hybrid** - Privacy-focused (requires `OPENAI_API_KEY`, 8GB+ RAM)
 
-3.  **Health Check**
-    ```bash
-    agent doctor
-    ```
+### 3. Configure Asterisk Dialplan
 
-For detailed setup, see the [Admin UI Setup Guide](admin_ui/UI_Setup_Guide.md) or [FreePBX Integration Guide](docs/FreePBX-Integration-Guide.md).
+**Option 1: Use the CLI helper:**
+```bash
+agent dialplan --provider openai_realtime
+```
 
----
+**Option 2: Manual configuration:**
+
+Add this to your FreePBX (Config Edit → extensions_custom.conf):
+
+```asterisk
+[from-ai-agent]
+exten => s,1,NoOp(Asterisk AI Voice Agent v4.3)
+ same => n,Stasis(asterisk-ai-voice-agent)
+ same => n,Hangup()
+```
+
+Then create a Custom Destination pointing to `from-ai-agent,s,1` and route calls to it.
+
+### 4. Test Your Agent
+
+Make a call to your configured destination and have a conversation!
+
+**Health check:**
+```bash
+agent doctor
+```
+
+**View logs:**
+```bash
+docker compose logs -f ai-engine
+```
+
+**That's it!** Your AI voice agent is ready. 🎉
+
+For detailed setup, see [CLI Tools Guide](cli/README.md) or [FreePBX Integration Guide](docs/FreePBX-Integration-Guide.md)
 
 ## ⚙️ Configuration
 
@@ -440,8 +463,6 @@ For advanced tuning, see:
 * [docs/Configuration-Reference.md](docs/Configuration-Reference.md) - Complete reference
 * [docs/Transport-Mode-Compatibility.md](docs/Transport-Mode-Compatibility.md) - Transport modes
 
----
-
 ## 🏗️ Project Architecture
 
 Two-container architecture for performance and scalability:
@@ -478,8 +499,6 @@ Two-container architecture for performance and scalability:
 * Transport flexibility - AudioSocket (legacy) or ExternalMedia RTP (modern)
 * Enterprise-ready - Monitoring, observability, production-hardened
 
----
-
 ## 📊 Requirements
 
 ### Minimum System Requirements
@@ -510,8 +529,6 @@ Two-container architecture for performance and scalability:
 | Deepgram Voice Agent | `DEEPGRAM_API_KEY` + `OPENAI_API_KEY` |
 | Local Hybrid | `OPENAI_API_KEY` |
 
----
-
 ## 🗺️ Documentation
 
 ### Getting Started
@@ -536,8 +553,6 @@ Two-container architecture for performance and scalability:
 * **[Contributing Guide](CONTRIBUTING.md)** - How to contribute
 * **[Changelog](CHANGELOG.md)** - Release history and changes
 
----
-
 ## 🤝 Contributing
 
 Contributions are welcome! Please see our [Contributing Guide](CONTRIBUTING.md) for more details on how to get involved.
@@ -550,8 +565,6 @@ If you want to contribute features (providers, tools, pipelines) or run the proj
 - [Developer Documentation](docs/contributing/README.md) – Complete developer guide and index
 - `AVA.mdc` – AVA, the project manager persona, for guidance via your AI-powered IDE
 
----
-
 ## 💬 Community
 
 Have questions or want to chat with other users? Join our community:
@@ -560,13 +573,9 @@ Have questions or want to chat with other users? Join our community:
 * [GitHub Issues](https://github.com/hkjarral/Asterisk-AI-Voice-Agent/issues) - Bug reports and feature requests
 * [GitHub Discussions](https://github.com/hkjarral/Asterisk-AI-Voice-Agent/discussions) - General discussions
 
----
-
 ## 📝 License
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
-
----
 
 ## 🙏 Show Your Support
 
