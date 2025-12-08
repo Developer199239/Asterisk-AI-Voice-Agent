@@ -100,7 +100,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         self._farewell_timeout_task: Optional[asyncio.Task] = None  # Timeout fallback for hangup
         self._in_audio_burst: bool = False
         self._response_audio_start_time: Optional[float] = None  # Track when audio started for interruption cooldown
-        self._min_response_time_before_interrupt: float = 1.5  # Minimum seconds of audio before allowing interruption
+        self._min_response_time_before_interrupt: float = 2.5  # Minimum seconds of audio before allowing interruption (increased for farewells)
         self._first_output_chunk_logged: bool = False
         self._closing: bool = False
         self._closed: bool = False
@@ -393,12 +393,17 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         await self._send_session_update()
         self._log_session_assumptions()
         
-        # CRITICAL: Wait for session.updated ACK BEFORE sending greeting
-        # Per OpenAI Dec 2024 docs, session config (voice, modalities, audio format)
-        # must be applied before response.create will generate audio correctly
+        # Start receive loop FIRST - this is required to receive ACK events!
+        # Previous bug: We waited for ACK but the receive loop wasn't running yet,
+        # so we always timed out. Now we start the loop first, then wait briefly.
+        self._receive_task = asyncio.create_task(self._receive_loop())
+        self._keepalive_task = asyncio.create_task(self._keepalive_loop())
+        
+        # Brief wait for session.updated ACK - now receive loop can process it
+        # Per OpenAI Dec 2024 docs, session config must be applied before response.create
         try:
             logger.debug("Waiting for OpenAI session.updated ACK before greeting...", call_id=call_id)
-            await asyncio.wait_for(self._session_ack_event.wait(), timeout=10.0)  # Increased timeout for slower connections
+            await asyncio.wait_for(self._session_ack_event.wait(), timeout=2.0)  # Short timeout - ACK arrives fast now
             logger.info(
                 "✅ OpenAI session.updated ACK received - session configured",
                 call_id=call_id,
@@ -410,7 +415,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             logger.warning(
                 "⚠️ OpenAI session.updated ACK timeout - proceeding anyway",
                 call_id=call_id,
-                note="Session may not be fully configured, greeting may be text-only"
+                note="Session may not be fully configured"
             )
         
         # NOW send greeting after session is configured
@@ -422,9 +427,6 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                 await self._ensure_response_request()
         except Exception:
             logger.debug("Initial response.create request failed", call_id=call_id, exc_info=True)
-
-        self._receive_task = asyncio.create_task(self._receive_loop())
-        self._keepalive_task = asyncio.create_task(self._keepalive_loop())
 
         # Reset egress pacer state at session start
         try:
@@ -501,13 +503,18 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             if not pcm16:
                 return
             
-            # IMPORTANT: For OpenAI Realtime with server-side VAD, DO NOT use client-side gating
-            # OpenAI handles turn detection and echo cancellation server-side
-            # Client-side gating fights OpenAI's server-side VAD and causes self-interruption
-            # See: OpenAI Realtime Golden Baseline (webrtc_aggressiveness: 1)
-            # The gate should stay OPEN and let OpenAI handle everything
+            # ECHO GATING for speakerphone support:
+            # While we're outputting audio (_in_audio_burst=True), don't send input audio
+            # to OpenAI. This prevents the agent from "hearing itself" on speakerphone calls
+            # where the speaker audio bleeds into the microphone.
+            # 
+            # Without this gating, OpenAI's VAD detects the echo as user speech,
+            # causing premature response cancellation and self-interruption.
+            if self._in_audio_burst:
+                # Agent is currently speaking - don't send this audio to avoid echo
+                return
             
-            # Send audio directly - no gating for continuous input with server-side VAD
+            # Send audio to OpenAI for processing
             await self._send_audio_to_openai(pcm16)
             
         except ConnectionClosedError:
