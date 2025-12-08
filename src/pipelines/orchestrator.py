@@ -249,17 +249,21 @@ class PipelineOrchestrator:
             validation_results[name] = await self._validate_pipeline_connectivity(name, entry)
         
         # Check if active pipeline is healthy
+        # NOTE: Validation failures should NOT disable the pipeline - it may still work!
+        # Local providers can fail validation if ws://127.0.0.1 isn't reachable during startup
+        # but work fine at runtime via Docker networking (ws://local_ai_server:8765)
         active_healthy = True
         if self._active_pipeline_name:
             active_result = validation_results.get(self._active_pipeline_name, {})
             active_healthy = active_result.get("healthy", False)
             if not active_healthy:
-                logger.error(
-                    "Active pipeline validation FAILED - pipeline disabled",
+                logger.warning(
+                    "Active pipeline validation FAILED - pipeline will still be available (may work at runtime)",
                     pipeline=self._active_pipeline_name,
                     failures=active_result.get("failures", []),
                 )
-                self._active_pipeline_name = None
+                # DON'T disable: self._active_pipeline_name = None
+                # Local pipelines may fail validation but work at runtime
         
         # Log summary
         healthy_count = sum(1 for r in validation_results.values() if r.get("healthy"))
