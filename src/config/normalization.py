@@ -257,3 +257,127 @@ def normalize_local_provider_tokens(config_data: Dict[str, Any]) -> None:
     except Exception:
         # Non-fatal; Pydantic may still coerce correctly
         pass
+
+
+class ConfigValidationError(Exception):
+    """Raised when configuration validation fails."""
+    pass
+
+
+# Known full-agent providers (multiple capabilities allowed)
+FULL_AGENT_PROVIDERS = frozenset({
+    "openai_realtime", "deepgram", "google_live", "local"
+})
+
+# Valid modular role suffixes
+VALID_ROLE_SUFFIXES = ("_stt", "_llm", "_tts")
+
+
+def validate_providers(config_data: Dict[str, Any]) -> None:
+    """
+    Validate provider configurations.
+    
+    Checks:
+    1. Provider suffix matches declared capability
+    2. Modular providers have single capability
+    3. No conflicting type/capability declarations
+    
+    Args:
+        config_data: Configuration dictionary to validate
+        
+    Raises:
+        ConfigValidationError: If validation fails
+    """
+    providers = config_data.get("providers", {})
+    if not isinstance(providers, dict):
+        return
+    
+    errors = []
+    
+    for name, cfg in providers.items():
+        if not isinstance(cfg, dict):
+            continue
+            
+        # Check if this is a modular provider (has role suffix)
+        is_modular = any(name.endswith(suffix) for suffix in VALID_ROLE_SUFFIXES)
+        
+        if is_modular:
+            # Extract expected role from suffix
+            expected_role = None
+            for suffix in VALID_ROLE_SUFFIXES:
+                if name.endswith(suffix):
+                    expected_role = suffix[1:]  # Remove leading underscore
+                    break
+            
+            # Get declared capabilities
+            capabilities = cfg.get("capabilities", [])
+            if isinstance(capabilities, str):
+                capabilities = [capabilities]
+            
+            # Validate: modular provider should have single capability matching suffix
+            if capabilities:
+                if len(capabilities) > 1:
+                    errors.append(
+                        f"Modular provider '{name}' has multiple capabilities {capabilities}. "
+                        f"Modular providers should have exactly one capability matching their suffix."
+                    )
+                elif expected_role and expected_role not in capabilities:
+                    errors.append(
+                        f"Provider '{name}' has suffix '_{expected_role}' but declares "
+                        f"capabilities {capabilities}. Suffix and capability must match."
+                    )
+            
+            # Validate type matches suffix if declared
+            ptype = cfg.get("type", "").lower()
+            if ptype and ptype in ("stt", "llm", "tts") and ptype != expected_role:
+                errors.append(
+                    f"Provider '{name}' has type '{ptype}' but suffix '_{expected_role}'. "
+                    f"Type and suffix must match."
+                )
+    
+    if errors:
+        raise ConfigValidationError(
+            "Provider configuration validation failed:\n" + "\n".join(f"  - {e}" for e in errors)
+        )
+
+
+def validate_pipelines(config_data: Dict[str, Any]) -> None:
+    """
+    Validate pipeline configurations.
+    
+    Checks that pipeline component references use valid suffix format.
+    
+    Args:
+        config_data: Configuration dictionary to validate
+        
+    Raises:
+        ConfigValidationError: If validation fails
+    """
+    pipelines = config_data.get("pipelines", {})
+    if not isinstance(pipelines, dict):
+        return
+    
+    errors = []
+    
+    for pipeline_name, pipeline_cfg in pipelines.items():
+        if not isinstance(pipeline_cfg, dict):
+            continue
+        
+        # Check each component reference
+        for role in ("stt", "llm", "tts"):
+            component = pipeline_cfg.get(role)
+            if not component or not isinstance(component, str):
+                continue
+            
+            # Component should end with _<role>
+            expected_suffix = f"_{role}"
+            if not component.endswith(expected_suffix):
+                errors.append(
+                    f"Pipeline '{pipeline_name}' {role.upper()} component '{component}' "
+                    f"must end with '{expected_suffix}'."
+                )
+    
+    if errors:
+        raise ConfigValidationError(
+            "Pipeline configuration validation failed:\n" + "\n".join(f"  - {e}" for e in errors)
+        )

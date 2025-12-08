@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from api import config, system, wizard, logs
+from api import config, system, wizard, logs, local_ai
 import auth
 import settings
 from dotenv import load_dotenv
@@ -31,6 +31,7 @@ app.include_router(config.router, prefix="/api/config", tags=["config"], depende
 app.include_router(system.router, prefix="/api/system", tags=["system"], dependencies=[Depends(auth.get_current_user)])
 app.include_router(wizard.router, prefix="/api/wizard", tags=["wizard"], dependencies=[Depends(auth.get_current_user)])
 app.include_router(logs.router, prefix="/api/logs", tags=["logs"], dependencies=[Depends(auth.get_current_user)])
+app.include_router(local_ai.router, prefix="/api/local-ai", tags=["local-ai"], dependencies=[Depends(auth.get_current_user)])
 
 @app.get("/health")
 async def health_check():

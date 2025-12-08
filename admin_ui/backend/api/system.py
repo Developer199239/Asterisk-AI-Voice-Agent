@@ -140,7 +140,7 @@ async def restart_container(container_id: str):
     try:
         # Step 1: Stop the container using docker directly (more reliable)
         stop_result = subprocess.run(
-            ["docker", "stop", container_name],
+            ["/usr/bin/docker", "stop", container_name],
             capture_output=True,
             text=True,
             timeout=60
@@ -149,16 +149,18 @@ async def restart_container(container_id: str):
         
         # Step 2: Force remove the container using docker directly
         rm_result = subprocess.run(
-            ["docker", "rm", "-f", container_name],
+            ["/usr/bin/docker", "rm", "-f", container_name],
             capture_output=True,
             text=True,
             timeout=30
         )
         print(f"DEBUG: docker rm returncode={rm_result.returncode}")
         
-        # Step 3: Bring the service back up
+        # Step 3: Bring the service back up using docker-compose
+        # -p: Use correct project name to match existing images
         up_result = subprocess.run(
-            ["docker", "compose", "up", "-d", service_name],
+            ["/usr/local/bin/docker-compose", "-p", "asterisk-ai-voice-agent",
+             "up", "-d", "--no-build", service_name],
             cwd=project_root,
             capture_output=True,
             text=True,
@@ -288,4 +290,223 @@ async def get_system_health():
     return {
         "local_ai_server": local_ai,
         "ai_engine": ai_engine
+    }
+
+
+@router.get("/directories")
+async def get_directory_health():
+    """
+    Check health of directories required for audio playback.
+    Returns status of media directory, symlink, and permissions.
+    """
+    project_root = os.getenv("PROJECT_ROOT", "/app/project")
+    ast_media_dir = os.getenv("AST_MEDIA_DIR", "")
+    
+    # Expected paths
+    host_media_dir = os.path.join(project_root, "asterisk_media", "ai-generated")
+    asterisk_sounds_link = "/var/lib/asterisk/sounds/ai-generated"
+    container_media_dir = "/mnt/asterisk_media/ai-generated"
+    
+    checks = {
+        "media_dir_configured": {
+            "status": "unknown",
+            "configured_path": ast_media_dir,
+            "expected_path": container_media_dir,
+            "message": ""
+        },
+        "host_directory": {
+            "status": "unknown",
+            "path": host_media_dir,
+            "exists": False,
+            "writable": False,
+            "message": ""
+        },
+        "asterisk_symlink": {
+            "status": "unknown",
+            "path": asterisk_sounds_link,
+            "exists": False,
+            "target": None,
+            "valid": False,
+            "message": ""
+        }
+    }
+    
+    # Check 1: AST_MEDIA_DIR configured
+    if ast_media_dir:
+        if "ai-generated" in ast_media_dir:
+            checks["media_dir_configured"]["status"] = "ok"
+            checks["media_dir_configured"]["message"] = "Correctly configured"
+        else:
+            checks["media_dir_configured"]["status"] = "warning"
+            checks["media_dir_configured"]["message"] = "Missing 'ai-generated' subdirectory in path"
+    else:
+        checks["media_dir_configured"]["status"] = "error"
+        checks["media_dir_configured"]["message"] = "AST_MEDIA_DIR not set in environment"
+    
+    # Check 2: Host directory exists and is writable
+    try:
+        if os.path.exists(host_media_dir):
+            checks["host_directory"]["exists"] = True
+            # Test write permission
+            test_file = os.path.join(host_media_dir, ".write_test")
+            try:
+                with open(test_file, "w") as f:
+                    f.write("test")
+                os.remove(test_file)
+                checks["host_directory"]["writable"] = True
+                checks["host_directory"]["status"] = "ok"
+                checks["host_directory"]["message"] = "Directory exists and is writable"
+            except PermissionError:
+                checks["host_directory"]["status"] = "error"
+                checks["host_directory"]["message"] = "Directory exists but not writable"
+        else:
+            checks["host_directory"]["status"] = "error"
+            checks["host_directory"]["message"] = "Directory does not exist"
+    except Exception as e:
+        checks["host_directory"]["status"] = "error"
+        checks["host_directory"]["message"] = f"Error checking directory: {str(e)}"
+    
+    # Check 3: Asterisk symlink
+    # Note: When running in Docker, we can't verify the symlink because
+    # /var/lib/asterisk/sounds is on the host and not mounted into the container.
+    # If the other checks pass, assume symlink is OK (user can verify with test call).
+    try:
+        in_docker = os.path.exists("/.dockerenv") or os.getenv("DOCKER_CONTAINER", "")
+        
+        if os.path.islink(asterisk_sounds_link):
+            checks["asterisk_symlink"]["exists"] = True
+            target = os.readlink(asterisk_sounds_link)
+            checks["asterisk_symlink"]["target"] = target
+            
+            # Check if target contains the project path or is correct
+            if host_media_dir in target or target == host_media_dir:
+                checks["asterisk_symlink"]["valid"] = True
+                checks["asterisk_symlink"]["status"] = "ok"
+                checks["asterisk_symlink"]["message"] = f"Symlink valid → {target}"
+            else:
+                checks["asterisk_symlink"]["status"] = "warning"
+                checks["asterisk_symlink"]["message"] = f"Symlink points to {target}, expected {host_media_dir}"
+        elif os.path.exists(asterisk_sounds_link):
+            checks["asterisk_symlink"]["exists"] = True
+            checks["asterisk_symlink"]["status"] = "warning"
+            checks["asterisk_symlink"]["message"] = "Path exists but is not a symlink"
+        elif in_docker:
+            # Running in Docker - can't verify symlink but if other checks pass, assume OK
+            checks["asterisk_symlink"]["status"] = "ok"
+            checks["asterisk_symlink"]["message"] = "Cannot verify from Docker (symlink is on host)"
+            checks["asterisk_symlink"]["docker_note"] = True
+        else:
+            checks["asterisk_symlink"]["status"] = "error"
+            checks["asterisk_symlink"]["message"] = "Symlink does not exist"
+    except Exception as e:
+        checks["asterisk_symlink"]["status"] = "error"
+        checks["asterisk_symlink"]["message"] = f"Error checking symlink: {str(e)}"
+    
+    # Calculate overall health
+    statuses = [c["status"] for c in checks.values()]
+    if all(s == "ok" for s in statuses):
+        overall = "healthy"
+    elif any(s == "error" for s in statuses):
+        overall = "error"
+    else:
+        overall = "warning"
+    
+    return {
+        "overall": overall,
+        "checks": checks
+    }
+
+
+@router.post("/directories/fix")
+async def fix_directory_issues():
+    """
+    Attempt to fix directory permission and symlink issues.
+    """
+    import subprocess
+    
+    project_root = os.getenv("PROJECT_ROOT", "/app/project")
+    host_media_dir = os.path.join(project_root, "asterisk_media", "ai-generated")
+    asterisk_sounds_link = "/var/lib/asterisk/sounds/ai-generated"
+    
+    fixes_applied = []
+    errors = []
+    
+    # Fix 1: Create directory if missing
+    try:
+        os.makedirs(host_media_dir, mode=0o777, exist_ok=True)
+        fixes_applied.append(f"Created directory: {host_media_dir}")
+    except Exception as e:
+        errors.append(f"Failed to create directory: {str(e)}")
+    
+    # Fix 2: Set permissions
+    try:
+        os.chmod(host_media_dir, 0o777)
+        parent_dir = os.path.dirname(host_media_dir)
+        os.chmod(parent_dir, 0o777)
+        fixes_applied.append(f"Set permissions 777 on {host_media_dir}")
+    except Exception as e:
+        errors.append(f"Failed to set permissions: {str(e)}")
+    
+    # Fix 3: Create/fix symlink
+    try:
+        # Remove existing symlink or file
+        if os.path.islink(asterisk_sounds_link):
+            os.unlink(asterisk_sounds_link)
+            fixes_applied.append(f"Removed old symlink: {asterisk_sounds_link}")
+        elif os.path.exists(asterisk_sounds_link):
+            errors.append(f"Cannot fix: {asterisk_sounds_link} exists and is not a symlink")
+        
+        # Create new symlink
+        if not os.path.exists(asterisk_sounds_link):
+            os.symlink(host_media_dir, asterisk_sounds_link)
+            fixes_applied.append(f"Created symlink: {asterisk_sounds_link} → {host_media_dir}")
+    except PermissionError:
+        # Try with sudo
+        try:
+            result = subprocess.run(
+                ["sudo", "ln", "-sf", host_media_dir, asterisk_sounds_link],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            if result.returncode == 0:
+                fixes_applied.append(f"Created symlink with sudo: {asterisk_sounds_link} → {host_media_dir}")
+            else:
+                errors.append(f"Failed to create symlink with sudo: {result.stderr}")
+        except Exception as e:
+            errors.append(f"Failed to create symlink: {str(e)}")
+    except Exception as e:
+        errors.append(f"Failed to manage symlink: {str(e)}")
+    
+    # Fix 4: Update .env if needed
+    env_file = os.path.join(project_root, ".env")
+    try:
+        env_content = ""
+        if os.path.exists(env_file):
+            with open(env_file, "r") as f:
+                env_content = f.read()
+        
+        if "AST_MEDIA_DIR=" not in env_content:
+            with open(env_file, "a") as f:
+                f.write(f"\nAST_MEDIA_DIR=/mnt/asterisk_media/ai-generated\n")
+            fixes_applied.append("Added AST_MEDIA_DIR to .env (requires container restart)")
+        elif "AST_MEDIA_DIR=/mnt/asterisk_media/ai-generated" not in env_content:
+            # Update existing value
+            import re
+            new_content = re.sub(
+                r"AST_MEDIA_DIR=.*", 
+                "AST_MEDIA_DIR=/mnt/asterisk_media/ai-generated", 
+                env_content
+            )
+            with open(env_file, "w") as f:
+                f.write(new_content)
+            fixes_applied.append("Updated AST_MEDIA_DIR in .env (requires container restart)")
+    except Exception as e:
+        errors.append(f"Failed to update .env: {str(e)}")
+    
+    return {
+        "success": len(errors) == 0,
+        "fixes_applied": fixes_applied,
+        "errors": errors,
+        "restart_required": any("restart" in f.lower() for f in fixes_applied)
     }

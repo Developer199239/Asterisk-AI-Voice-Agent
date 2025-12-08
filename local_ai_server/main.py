@@ -10,8 +10,10 @@ from dataclasses import dataclass, field
 from time import monotonic
 from typing import Any, Dict, List, Optional, Tuple
 
+import numpy as np
 from websockets.exceptions import ConnectionClosed
 from websockets.server import serve
+import websockets.client as ws_client
 from vosk import Model as VoskModel, KaldiRecognizer
 from llama_cpp import Llama
 from piper import PiperVoice
@@ -51,6 +53,564 @@ class SessionContext:
     last_final_at: float = 0.0
     llm_user_turns: List[str] = field(default_factory=list)
     audio_buffer: bytes = b""
+    # Kroko-specific session state
+    kroko_ws: Optional[Any] = None
+    kroko_connected: bool = False
+    # Sherpa-onnx session state
+    sherpa_stream: Optional[Any] = None
+
+
+class KrokoSTTBackend:
+    """
+    Kroko ASR streaming STT backend via WebSocket.
+    
+    Supports both:
+    - Hosted API: wss://app.kroko.ai/api/v1/transcripts/streaming
+    - On-premise: ws://localhost:6006 (Kroko ONNX server)
+    
+    Protocol based on official kroko-ai/integration-demos C module analysis.
+    Audio format: PCM 32-bit float, 16kHz, mono
+    Response format: {"type": "partial"|"final", "text": "...", "segment": N}
+    """
+
+    def __init__(
+        self,
+        url: str,
+        api_key: Optional[str] = None,
+        language: str = "en-US",
+        endpoints: bool = True,
+    ):
+        self.base_url = url
+        self.api_key = api_key
+        self.language = language
+        self.endpoints = endpoints
+        self._subprocess: Optional[asyncio.subprocess.Process] = None
+
+    def build_connection_url(self) -> str:
+        """Build WebSocket URL with query parameters."""
+        # Check if it's the hosted API or on-premise
+        if "app.kroko.ai" in self.base_url:
+            # Hosted API format
+            params = f"?languageCode={self.language}&endpoints={'true' if self.endpoints else 'false'}"
+            if self.api_key:
+                params += f"&apiKey={self.api_key}"
+            return f"{self.base_url}{params}"
+        else:
+            # On-premise server - no query params needed
+            return self.base_url
+
+    async def connect(self) -> Any:
+        """
+        Create and return a WebSocket connection to Kroko server.
+        
+        Returns the websocket object for use in session-specific operations.
+        """
+        url = self.build_connection_url()
+        logging.info("🎤 KROKO - Connecting to %s", url.split("?")[0])  # Don't log API key
+
+        try:
+            ws = await ws_client.connect(url)
+
+            # Wait for connected message (hosted API sends this)
+            if "app.kroko.ai" in self.base_url:
+                try:
+                    msg = await asyncio.wait_for(ws.recv(), timeout=5.0)
+                    data = json.loads(msg)
+                    if data.get("type") == "connected":
+                        logging.info("✅ KROKO - Connected to hosted API, session=%s", data.get("id"))
+                except asyncio.TimeoutError:
+                    logging.warning("⚠️ KROKO - No connected message received, continuing anyway")
+            else:
+                logging.info("✅ KROKO - Connected to on-premise server")
+
+            return ws
+
+        except Exception as exc:
+            logging.error("❌ KROKO - Connection failed: %s", exc)
+            raise
+
+    @staticmethod
+    def pcm16_to_float32(pcm16_audio: bytes) -> bytes:
+        """
+        Convert PCM16 audio to PCM32 float (IEEE-754) for Kroko.
+        
+        This matches the conversion in the official C module:
+        _float32[c] = ((float)_int16[c]) / 32768
+        """
+        samples = np.frombuffer(pcm16_audio, dtype=np.int16)
+        float_samples = samples.astype(np.float32) / 32768.0
+        return float_samples.tobytes()
+
+    async def send_audio(self, ws: Any, pcm16_audio: bytes) -> None:
+        """
+        Send PCM16 audio to Kroko, converting to float32 format.
+        
+        Args:
+            ws: WebSocket connection
+            pcm16_audio: Audio data in PCM16 format (16kHz, mono)
+        """
+        if ws is None:
+            logging.warning("🎤 KROKO - Cannot send audio, no WebSocket connection")
+            return
+
+        float32_audio = self.pcm16_to_float32(pcm16_audio)
+
+        try:
+            await ws.send(float32_audio)
+            if DEBUG_AUDIO_FLOW:
+                logging.debug(
+                    "🎤 KROKO - Sent %d bytes PCM16 → %d bytes float32",
+                    len(pcm16_audio),
+                    len(float32_audio),
+                )
+        except Exception as exc:
+            logging.error("❌ KROKO - Failed to send audio: %s", exc)
+            raise
+
+    async def receive_transcript(self, ws: Any, timeout: float = 0.1) -> Optional[Dict[str, Any]]:
+        """
+        Try to receive a transcript result from Kroko.
+        
+        Returns:
+            Dict with keys: type ("partial"|"final"), text, segment, startedAt
+            None if no message available within timeout
+        """
+        if ws is None:
+            return None
+
+        try:
+            msg = await asyncio.wait_for(ws.recv(), timeout=timeout)
+            data = json.loads(msg)
+
+            if DEBUG_AUDIO_FLOW:
+                logging.debug("🎤 KROKO - Received: %s", data)
+
+            return data
+
+        except asyncio.TimeoutError:
+            return None
+        except json.JSONDecodeError as exc:
+            logging.warning("⚠️ KROKO - Invalid JSON response: %s", exc)
+            return None
+        except ConnectionClosed:
+            logging.warning("⚠️ KROKO - Connection closed")
+            return None
+        except Exception as exc:
+            logging.error("❌ KROKO - Receive error: %s", exc)
+            return None
+
+    async def close(self, ws: Any) -> None:
+        """Close the WebSocket connection."""
+        if ws:
+            try:
+                await ws.close()
+                logging.info("🎤 KROKO - Connection closed")
+            except Exception as exc:
+                logging.debug("KROKO - Close error (ignored): %s", exc)
+
+    async def start_subprocess(self, model_path: str, port: int = 6006) -> bool:
+        """
+        Start the Kroko ONNX server as a subprocess (for embedded mode).
+        
+        Args:
+            model_path: Path to the Kroko ONNX model file
+            port: Port for the WebSocket server
+            
+        Returns:
+            True if subprocess started successfully
+        """
+        kroko_binary = "/usr/local/bin/kroko-server"
+
+        if not os.path.exists(kroko_binary):
+            logging.warning("⚠️ KROKO - Binary not found at %s, using external server", kroko_binary)
+            return False
+
+        if not os.path.exists(model_path):
+            logging.error("❌ KROKO - Model not found at %s", model_path)
+            return False
+
+        try:
+            logging.info("🚀 KROKO - Starting embedded server on port %d", port)
+
+            self._subprocess = await asyncio.create_subprocess_exec(
+                kroko_binary,
+                f"--model={model_path}",
+                f"--port={port}",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+
+            # Wait for server to start
+            await asyncio.sleep(2.0)
+
+            if self._subprocess.returncode is not None:
+                stderr = await self._subprocess.stderr.read()
+                logging.error("❌ KROKO - Subprocess failed: %s", stderr.decode())
+                return False
+
+            logging.info("✅ KROKO - Embedded server started (PID=%d)", self._subprocess.pid)
+            return True
+
+        except Exception as exc:
+            logging.error("❌ KROKO - Failed to start subprocess: %s", exc)
+            return False
+
+    async def stop_subprocess(self) -> None:
+        """Stop the Kroko ONNX server subprocess."""
+        if self._subprocess:
+            try:
+                self._subprocess.terminate()
+                await asyncio.wait_for(self._subprocess.wait(), timeout=5.0)
+                logging.info("🛑 KROKO - Subprocess stopped")
+            except asyncio.TimeoutError:
+                self._subprocess.kill()
+                logging.warning("⚠️ KROKO - Subprocess killed (timeout)")
+            except Exception as exc:
+                logging.error("❌ KROKO - Error stopping subprocess: %s", exc)
+            finally:
+                self._subprocess = None
+
+
+class SherpaONNXSTTBackend:
+    """
+    Local streaming STT backend using sherpa-onnx.
+    
+    Sherpa-onnx is the underlying library that Kroko ASR is built on.
+    This provides fully local ASR without needing a separate server process.
+    
+    Supports streaming (online) recognition with low latency.
+    """
+    
+    def __init__(self, model_path: str, sample_rate: int = 16000):
+        """
+        Initialize the sherpa-onnx recognizer.
+        
+        Args:
+            model_path: Path to the model directory or .onnx file
+            sample_rate: Audio sample rate (default 16000 Hz)
+        """
+        self.model_path = model_path
+        self.sample_rate = sample_rate
+        self.recognizer = None
+        self._initialized = False
+        
+    def initialize(self) -> bool:
+        """
+        Initialize the recognizer with the model.
+        
+        Returns:
+            True if initialization succeeded
+        """
+        try:
+            import sherpa_onnx
+            
+            # Check if model exists
+            if not os.path.exists(self.model_path):
+                logging.error("❌ SHERPA - Model not found at %s", self.model_path)
+                return False
+            
+            # Find model files (handles various naming conventions)
+            tokens_file = self._find_tokens_file()
+            encoder_file = self._find_encoder_file()
+            decoder_file = self._find_decoder_file()
+            joiner_file = self._find_joiner_file()
+            
+            if not all([tokens_file, encoder_file, decoder_file, joiner_file]):
+                missing = []
+                if not tokens_file: missing.append("tokens.txt")
+                if not encoder_file: missing.append("encoder*.onnx")
+                if not decoder_file: missing.append("decoder*.onnx")
+                if not joiner_file: missing.append("joiner*.onnx")
+                logging.error("❌ SHERPA - Missing model files: %s", ", ".join(missing))
+                return False
+            
+            logging.info("📁 SHERPA - Model files found:")
+            logging.info("   tokens: %s", tokens_file)
+            logging.info("   encoder: %s", encoder_file)
+            logging.info("   decoder: %s", decoder_file)
+            logging.info("   joiner: %s", joiner_file)
+            
+            # Create recognizer using from_transducer classmethod
+            self.recognizer = sherpa_onnx.OnlineRecognizer.from_transducer(
+                tokens=tokens_file,
+                encoder=encoder_file,
+                decoder=decoder_file,
+                joiner=joiner_file,
+                num_threads=2,
+                sample_rate=self.sample_rate,  # Must be int
+                enable_endpoint_detection=True,
+                decoding_method="greedy_search",
+            )
+            self._initialized = True
+            logging.info("✅ SHERPA - Recognizer initialized with model %s", self.model_path)
+            return True
+            
+        except ImportError:
+            logging.error("❌ SHERPA - sherpa-onnx not installed")
+            return False
+        except Exception as exc:
+            logging.error("❌ SHERPA - Failed to initialize: %s", exc)
+            return False
+    
+    def _find_file_by_pattern(self, directory: str, prefix: str, suffix: str = ".onnx") -> str:
+        """Find a file matching prefix*suffix in directory."""
+        if not os.path.isdir(directory):
+            return ""
+        for filename in os.listdir(directory):
+            if filename.startswith(prefix) and filename.endswith(suffix):
+                return os.path.join(directory, filename)
+        return ""
+    
+    def _find_tokens_file(self) -> str:
+        """Find tokens file in model directory."""
+        # If model_path is a directory
+        if os.path.isdir(self.model_path):
+            tokens_path = os.path.join(self.model_path, "tokens.txt")
+            if os.path.exists(tokens_path):
+                return tokens_path
+        # If model_path is a file, check its directory
+        model_dir = os.path.dirname(self.model_path)
+        tokens_path = os.path.join(model_dir, "tokens.txt")
+        if os.path.exists(tokens_path):
+            return tokens_path
+        return ""
+    
+    def _find_encoder_file(self) -> str:
+        """Find encoder model in directory."""
+        search_dir = self.model_path if os.path.isdir(self.model_path) else os.path.dirname(self.model_path)
+        # First try exact name
+        exact = os.path.join(search_dir, "encoder.onnx")
+        if os.path.exists(exact):
+            return exact
+        # Try pattern matching (prefer int8 for speed)
+        int8 = self._find_file_by_pattern(search_dir, "encoder", ".int8.onnx")
+        if int8:
+            return int8
+        return self._find_file_by_pattern(search_dir, "encoder", ".onnx")
+    
+    def _find_decoder_file(self) -> str:
+        """Find decoder model in directory."""
+        search_dir = self.model_path if os.path.isdir(self.model_path) else os.path.dirname(self.model_path)
+        exact = os.path.join(search_dir, "decoder.onnx")
+        if os.path.exists(exact):
+            return exact
+        int8 = self._find_file_by_pattern(search_dir, "decoder", ".int8.onnx")
+        if int8:
+            return int8
+        return self._find_file_by_pattern(search_dir, "decoder", ".onnx")
+    
+    def _find_joiner_file(self) -> str:
+        """Find joiner model in directory."""
+        search_dir = self.model_path if os.path.isdir(self.model_path) else os.path.dirname(self.model_path)
+        exact = os.path.join(search_dir, "joiner.onnx")
+        if os.path.exists(exact):
+            return exact
+        int8 = self._find_file_by_pattern(search_dir, "joiner", ".int8.onnx")
+        if int8:
+            return int8
+        return self._find_file_by_pattern(search_dir, "joiner", ".onnx")
+    
+    def create_stream(self) -> Any:
+        """Create a new recognition stream for a session."""
+        if not self._initialized or not self.recognizer:
+            return None
+        return self.recognizer.create_stream()
+    
+    def process_audio(self, stream: Any, pcm16_audio: bytes) -> Optional[Dict[str, Any]]:
+        """
+        Process PCM16 audio and return transcript if available.
+        
+        Args:
+            stream: Recognition stream from create_stream()
+            pcm16_audio: Audio in PCM16 format, 16kHz mono
+            
+        Returns:
+            Dict with keys: type ("partial"|"final"), text
+            None if no result yet
+        """
+        if stream is None or not self._initialized:
+            return None
+        
+        try:
+            # Convert PCM16 bytes to float32 samples
+            samples = np.frombuffer(pcm16_audio, dtype=np.int16)
+            float_samples = samples.astype(np.float32) / 32768.0
+            
+            # Feed audio to recognizer
+            stream.accept_waveform(self.sample_rate, float_samples)
+            
+            # Check if we have results
+            if self.recognizer.is_ready(stream):
+                self.recognizer.decode_stream(stream)
+            
+            result = self.recognizer.get_result(stream)
+            # Result can be a string or object with .text attribute depending on version
+            if isinstance(result, str):
+                text = result.strip()
+            elif hasattr(result, 'text'):
+                text = result.text.strip() if result.text else ""
+            else:
+                text = str(result).strip() if result else ""
+            
+            if not text:
+                return None
+            
+            # Check if this is a final result (endpoint detected)
+            is_final = self.recognizer.is_endpoint(stream)
+            
+            if is_final:
+                # Reset stream for next utterance
+                self.recognizer.reset(stream)
+                return {"type": "final", "text": text}
+            else:
+                return {"type": "partial", "text": text}
+                
+        except Exception as exc:
+            logging.error("❌ SHERPA - Process error: %s", exc)
+            return None
+    
+    def close_stream(self, stream: Any) -> None:
+        """Close a recognition stream."""
+        # Sherpa streams don't need explicit cleanup
+        pass
+    
+    def shutdown(self) -> None:
+        """Shutdown the recognizer."""
+        self.recognizer = None
+        self._initialized = False
+        logging.info("🛑 SHERPA - Recognizer shutdown")
+
+
+class KokoroTTSBackend:
+    """
+    Kokoro TTS backend using the kokoro package.
+    
+    Kokoro is a high-quality, lightweight TTS model (82M params) that delivers
+    comparable quality to larger models while being faster and more efficient.
+    
+    Requires: espeak-ng system package
+    Sample rate: 24000 Hz
+    """
+    
+    def __init__(self, voice: str = "af_heart", lang_code: str = "a", model_path: str = None):
+        """
+        Initialize Kokoro TTS.
+        
+        Args:
+            voice: Voice name (e.g., 'af_heart', 'af_bella', 'am_adam')
+            lang_code: Language code ('a' for American English)
+            model_path: Path to local model directory (optional, uses HF cache if not provided)
+        """
+        self.voice = voice
+        self.lang_code = lang_code
+        self.model_path = model_path
+        self.pipeline = None
+        self._initialized = False
+        self.sample_rate = 24000
+    
+    def initialize(self) -> bool:
+        """
+        Initialize the Kokoro pipeline.
+        
+        Returns:
+            True if initialization succeeded
+        """
+        try:
+            from kokoro import KPipeline
+            from kokoro.model import KModel
+            
+            logging.info("🎙️ KOKORO - Initializing TTS (voice=%s, lang=%s)", self.voice, self.lang_code)
+            
+            # If model_path provided, load from local files
+            if self.model_path and os.path.isdir(self.model_path):
+                config_path = os.path.join(self.model_path, "config.json")
+                model_path = os.path.join(self.model_path, "kokoro-v1_0.pth")
+                
+                if os.path.exists(config_path) and os.path.exists(model_path):
+                    logging.info("🎙️ KOKORO - Loading local model from %s", self.model_path)
+                    # Load model directly from local files
+                    kmodel = KModel(
+                        config=config_path,
+                        model=model_path,
+                        repo_id="hexgrad/Kokoro-82M",  # Suppress warning
+                    )
+                    self.pipeline = KPipeline(
+                        lang_code=self.lang_code,
+                        model=kmodel,
+                        repo_id="hexgrad/Kokoro-82M",  # For voice loading
+                    )
+                else:
+                    logging.warning("⚠️ KOKORO - Local model files not found, falling back to HuggingFace")
+                    self.pipeline = KPipeline(
+                        lang_code=self.lang_code,
+                        repo_id="hexgrad/Kokoro-82M",
+                    )
+            else:
+                # Fallback to HuggingFace download
+                logging.info("🎙️ KOKORO - Using HuggingFace model (will download if needed)")
+                self.pipeline = KPipeline(
+                    lang_code=self.lang_code,
+                    repo_id="hexgrad/Kokoro-82M",
+                )
+            
+            self._initialized = True
+            logging.info("✅ KOKORO - TTS initialized successfully")
+            return True
+            
+        except ImportError:
+            logging.error("❌ KOKORO - kokoro package not installed")
+            return False
+        except Exception as exc:
+            logging.error("❌ KOKORO - Failed to initialize: %s", exc)
+            return False
+    
+    def synthesize(self, text: str) -> bytes:
+        """
+        Synthesize speech from text.
+        
+        Args:
+            text: Text to synthesize
+            
+        Returns:
+            Audio data as PCM16 bytes at 24kHz
+        """
+        if not self._initialized or not self.pipeline:
+            logging.error("❌ KOKORO - Not initialized")
+            return b""
+        
+        try:
+            import numpy as np
+            
+            # Generate audio using Kokoro pipeline
+            audio_chunks = []
+            generator = self.pipeline(text, voice=self.voice)
+            
+            for i, (gs, ps, audio) in enumerate(generator):
+                if audio is not None:
+                    audio_chunks.append(audio)
+            
+            if not audio_chunks:
+                logging.warning("⚠️ KOKORO - No audio generated")
+                return b""
+            
+            # Concatenate all chunks
+            full_audio = np.concatenate(audio_chunks)
+            
+            # Convert float32 to int16 PCM
+            audio_int16 = (full_audio * 32767).astype(np.int16)
+            
+            logging.debug("🎙️ KOKORO - Generated %d samples at %dHz", len(audio_int16), self.sample_rate)
+            return audio_int16.tobytes()
+            
+        except Exception as exc:
+            logging.error("❌ KOKORO - Synthesis failed: %s", exc)
+            return b""
+    
+    def shutdown(self) -> None:
+        """Shutdown the TTS pipeline."""
+        self.pipeline = None
+        self._initialized = False
+        logging.info("🛑 KOKORO - TTS shutdown")
 
 
 class AudioProcessor:
@@ -160,6 +720,31 @@ class LocalAIServer:
         # Lock to serialize LLM inference (llama-cpp is NOT thread-safe)
         self._llm_lock = asyncio.Lock()
 
+        # ─────────────────────────────────────────────────────────────────────
+        # STT Backend Selection: vosk (default), kroko, or sherpa
+        # ─────────────────────────────────────────────────────────────────────
+        self.stt_backend = os.getenv("LOCAL_STT_BACKEND", "vosk").lower()
+        
+        # Kroko STT settings (if using kroko backend)
+        self.kroko_backend: Optional[KrokoSTTBackend] = None
+        
+        # Sherpa-onnx STT settings (if using sherpa backend for local streaming ASR)
+        self.sherpa_backend: Optional[SherpaONNXSTTBackend] = None
+        self.sherpa_model_path = os.getenv(
+            "SHERPA_MODEL_PATH", "/app/models/stt/sherpa"
+        )
+        self.kroko_url = os.getenv(
+            "KROKO_URL",
+            "wss://app.kroko.ai/api/v1/transcripts/streaming"  # Default to hosted API
+        )
+        self.kroko_api_key = os.getenv("KROKO_API_KEY", "")
+        self.kroko_language = os.getenv("KROKO_LANGUAGE", "en-US")
+        self.kroko_model_path = os.getenv(
+            "KROKO_MODEL_PATH", "/app/models/kroko/kroko-en-v1.0.onnx"
+        )
+        self.kroko_embedded = os.getenv("KROKO_EMBEDDED", "0") == "1"
+        self.kroko_port = int(os.getenv("KROKO_PORT", "6006"))
+
         # Model paths
         self.stt_model_path = os.getenv(
             "LOCAL_STT_MODEL_PATH", "/app/models/stt/vosk-model-small-en-us-0.15"
@@ -170,6 +755,17 @@ class LocalAIServer:
         self.tts_model_path = os.getenv(
             "LOCAL_TTS_MODEL_PATH", "/app/models/tts/en_US-lessac-medium.onnx"
         )
+
+        # ─────────────────────────────────────────────────────────────────────
+        # TTS Backend Selection: piper (default) or kokoro
+        # ─────────────────────────────────────────────────────────────────────
+        self.tts_backend = os.getenv("LOCAL_TTS_BACKEND", "piper").lower()
+        
+        # Kokoro TTS settings (if using kokoro backend)
+        self.kokoro_backend: Optional[KokoroTTSBackend] = None
+        self.kokoro_voice = os.getenv("KOKORO_VOICE", "af_heart")
+        self.kokoro_lang = os.getenv("KOKORO_LANG", "a")  # 'a' = American English
+        self.kokoro_model_path = os.getenv("KOKORO_MODEL_PATH", "/app/models/tts/kokoro")
 
         default_threads = max(1, min(16, os.cpu_count() or 1))
         self.llm_threads = int(os.getenv("LOCAL_LLM_THREADS", str(default_threads)))
@@ -232,7 +828,16 @@ class LocalAIServer:
         logging.info("✅ All models loaded successfully for MVP pipeline")
 
     async def _load_stt_model(self):
-        """Load STT model with 16kHz support"""
+        """Load STT model based on configured backend (vosk, kroko, or sherpa)."""
+        if self.stt_backend == "kroko":
+            await self._load_kroko_backend()
+        elif self.stt_backend == "sherpa":
+            await self._load_sherpa_backend()
+        else:
+            await self._load_vosk_backend()
+
+    async def _load_vosk_backend(self):
+        """Load Vosk STT model with 16kHz support."""
         try:
             # Resolve nested model directory if needed
             resolved_path = self._resolve_vosk_model_path(self.stt_model_path)
@@ -253,9 +858,69 @@ class LocalAIServer:
             self.stt_model = VoskModel(resolved_path)
             # Keep the resolved path for reference
             self.stt_model_path = resolved_path
-            logging.info("✅ STT model loaded: %s (16kHz native)", self.stt_model_path)
+            logging.info("✅ STT backend: Vosk loaded from %s (16kHz native)", self.stt_model_path)
         except Exception as exc:
-            logging.error("❌ Failed to load STT model: %s", exc)
+            logging.error("❌ Failed to load Vosk STT model: %s", exc)
+            raise
+
+    async def _load_kroko_backend(self):
+        """Initialize Kroko STT backend."""
+        try:
+            logging.info("🎤 STT backend: Kroko (language=%s)", self.kroko_language)
+
+            # Initialize Kroko backend
+            self.kroko_backend = KrokoSTTBackend(
+                url=self.kroko_url,
+                api_key=self.kroko_api_key if self.kroko_api_key else None,
+                language=self.kroko_language,
+                endpoints=True,
+            )
+
+            # If embedded mode, start the Kroko ONNX server subprocess
+            if self.kroko_embedded:
+                # Update URL to local server
+                self.kroko_url = f"ws://127.0.0.1:{self.kroko_port}"
+                self.kroko_backend.base_url = self.kroko_url
+
+                success = await self.kroko_backend.start_subprocess(
+                    self.kroko_model_path, self.kroko_port
+                )
+                if not success:
+                    raise RuntimeError("Failed to start embedded Kroko server")
+                logging.info("✅ STT backend: Kroko embedded server started on port %d", self.kroko_port)
+            else:
+                # Test connection to external server
+                try:
+                    test_ws = await self.kroko_backend.connect()
+                    await self.kroko_backend.close(test_ws)
+                    logging.info("✅ STT backend: Kroko connected to %s", self.kroko_url.split("?")[0])
+                except Exception as conn_exc:
+                    logging.warning(
+                        "⚠️ STT backend: Kroko connection test failed (%s), will retry on first request",
+                        conn_exc
+                    )
+
+        except Exception as exc:
+            logging.error("❌ Failed to initialize Kroko STT backend: %s", exc)
+            raise
+
+    async def _load_sherpa_backend(self):
+        """Initialize Sherpa-onnx STT backend for local streaming ASR."""
+        try:
+            logging.info("🎤 STT backend: Sherpa-onnx (local streaming ASR)")
+
+            self.sherpa_backend = SherpaONNXSTTBackend(
+                model_path=self.sherpa_model_path,
+                sample_rate=PCM16_TARGET_RATE,
+            )
+
+            if not self.sherpa_backend.initialize():
+                raise RuntimeError("Failed to initialize Sherpa-onnx recognizer")
+
+            logging.info("✅ STT backend: Sherpa-onnx initialized with model %s", self.sherpa_model_path)
+
+        except Exception as exc:
+            logging.error("❌ Failed to initialize Sherpa STT backend: %s", exc)
             raise
 
     async def _load_llm_model(self):
@@ -365,15 +1030,48 @@ class LocalAIServer:
             )
 
     async def _load_tts_model(self):
-        """Load TTS model (Piper) with 22kHz support"""
+        """Load TTS model based on configured backend (piper or kokoro)."""
+        if self.tts_backend == "kokoro":
+            await self._load_kokoro_backend()
+        else:
+            await self._load_piper_backend()
+
+    async def _load_piper_backend(self):
+        """Load Piper TTS model with 22kHz support."""
         try:
             if not os.path.exists(self.tts_model_path):
                 raise FileNotFoundError(f"TTS model not found at {self.tts_model_path}")
 
             self.tts_model = PiperVoice.load(self.tts_model_path)
-            logging.info("✅ TTS model loaded: %s (22kHz native)", self.tts_model_path)
+            logging.info("✅ TTS backend: Piper loaded from %s (22kHz native)", self.tts_model_path)
         except Exception as exc:
-            logging.error("❌ Failed to load TTS model: %s", exc)
+            logging.error("❌ Failed to load Piper TTS model: %s", exc)
+            raise
+
+    async def _load_kokoro_backend(self):
+        """Initialize Kokoro TTS backend."""
+        try:
+            logging.info("🎙️ TTS backend: Kokoro (voice=%s)", self.kokoro_voice)
+
+            # Check if local model exists
+            model_path = None
+            if os.path.isdir(self.kokoro_model_path):
+                logging.info("📁 KOKORO - Found local model at %s", self.kokoro_model_path)
+                model_path = self.kokoro_model_path
+
+            self.kokoro_backend = KokoroTTSBackend(
+                voice=self.kokoro_voice,
+                lang_code=self.kokoro_lang,
+                model_path=model_path,
+            )
+
+            if not self.kokoro_backend.initialize():
+                raise RuntimeError("Failed to initialize Kokoro TTS")
+
+            logging.info("✅ TTS backend: Kokoro initialized (24kHz native)")
+
+        except Exception as exc:
+            logging.error("❌ Failed to initialize Kokoro TTS backend: %s", exc)
             raise
 
     async def reload_models(self):
@@ -594,10 +1292,17 @@ class LocalAIServer:
         return prompt_text, prompt_tokens, truncated, raw_tokens
 
     async def process_tts(self, text: str) -> bytes:
-        """Process TTS with 8kHz uLaw generation directly"""
+        """Process TTS with 8kHz uLaw generation - routes to appropriate backend."""
+        if self.tts_backend == "kokoro":
+            return await self._process_tts_kokoro(text)
+        else:
+            return await self._process_tts_piper(text)
+
+    async def _process_tts_piper(self, text: str) -> bytes:
+        """Process TTS using Piper backend (22kHz output)."""
         try:
             if not self.tts_model:
-                logging.error("TTS model not loaded")
+                logging.error("Piper TTS model not loaded")
                 return b""
 
             logging.debug("🔊 TTS INPUT - Generating 22kHz audio for: '%s'", text)
@@ -632,11 +1337,51 @@ class LocalAIServer:
             ulaw_data = self.audio_processor.convert_to_ulaw_8k(wav_data, 22050)
             os.unlink(wav_path)
 
-            logging.info("🔊 TTS RESULT - Generated uLaw 8kHz audio: %s bytes", len(ulaw_data))
+            logging.info("🔊 TTS RESULT - Piper generated uLaw 8kHz audio: %s bytes", len(ulaw_data))
             return ulaw_data
 
         except Exception as exc:
-            logging.error("TTS processing failed: %s", exc, exc_info=True)
+            logging.error("Piper TTS processing failed: %s", exc, exc_info=True)
+            return b""
+
+    async def _process_tts_kokoro(self, text: str) -> bytes:
+        """Process TTS using Kokoro backend (24kHz output)."""
+        try:
+            if not self.kokoro_backend:
+                logging.error("Kokoro TTS backend not initialized")
+                return b""
+
+            logging.debug("🔊 TTS INPUT - Generating 24kHz audio for: '%s'", text)
+
+            # Get PCM16 audio at 24kHz from Kokoro
+            pcm16_data = self.kokoro_backend.synthesize(text)
+            
+            if not pcm16_data:
+                logging.warning("⚠️ Kokoro returned empty audio")
+                return b""
+
+            # Write to temp WAV file for conversion
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as wav_file:
+                wav_path = wav_file.name
+
+            with wave.open(wav_path, "wb") as wav_file:
+                wav_file.setnchannels(1)
+                wav_file.setsampwidth(2)
+                wav_file.setframerate(24000)
+                wav_file.writeframes(pcm16_data)
+
+            with open(wav_path, "rb") as wav_file:
+                wav_data = wav_file.read()
+
+            # Convert 24kHz WAV to 8kHz uLaw
+            ulaw_data = self.audio_processor.convert_to_ulaw_8k(wav_data, 24000)
+            os.unlink(wav_path)
+
+            logging.info("🔊 TTS RESULT - Kokoro generated uLaw 8kHz audio: %s bytes", len(ulaw_data))
+            return ulaw_data
+
+        except Exception as exc:
+            logging.error("Kokoro TTS processing failed: %s", exc, exc_info=True)
             return b""
 
     def _cancel_idle_timer(self, session: SessionContext) -> None:
@@ -660,6 +1405,14 @@ class LocalAIServer:
         session.last_final_text = last_text
         session.last_final_norm = _normalize_text(last_text)
         session.last_final_at = monotonic()
+        # Note: Kroko WebSocket is kept open for session reuse, closed on disconnect
+
+    async def _close_kroko_session(self, session: SessionContext) -> None:
+        """Close Kroko WebSocket connection for a session."""
+        if session.kroko_ws and self.kroko_backend:
+            await self.kroko_backend.close(session.kroko_ws)
+            session.kroko_ws = None
+            session.kroko_connected = False
 
     def _ensure_stt_recognizer(self, session: SessionContext) -> Optional[KaldiRecognizer]:
         if not self.stt_model:
@@ -679,6 +1432,156 @@ class LocalAIServer:
         input_rate: int,
     ) -> List[Dict[str, Any]]:
         """Feed audio into the session recognizer and return transcript updates."""
+        # Route to appropriate backend
+        if self.stt_backend == "kroko":
+            return await self._process_stt_stream_kroko(session, audio_data, input_rate)
+        elif self.stt_backend == "sherpa":
+            return await self._process_stt_stream_sherpa(session, audio_data, input_rate)
+        else:
+            return await self._process_stt_stream_vosk(session, audio_data, input_rate)
+
+    async def _process_stt_stream_kroko(
+        self,
+        session: SessionContext,
+        audio_data: bytes,
+        input_rate: int,
+    ) -> List[Dict[str, Any]]:
+        """Feed audio into Kroko ASR and return transcript updates."""
+        if not self.kroko_backend:
+            logging.error("Kroko backend not initialized")
+            return []
+
+        # Resample to 16kHz if needed
+        if input_rate != PCM16_TARGET_RATE:
+            audio_bytes = self.audio_processor.resample_audio(
+                audio_data, input_rate, PCM16_TARGET_RATE, "raw", "raw"
+            )
+        else:
+            audio_bytes = audio_data
+
+        updates: List[Dict[str, Any]] = []
+
+        try:
+            session.last_audio_at = asyncio.get_running_loop().time()
+        except RuntimeError:
+            session.last_audio_at = 0.0
+
+        # Ensure Kroko WebSocket connection exists for this session
+        if not session.kroko_connected or session.kroko_ws is None:
+            try:
+                session.kroko_ws = await self.kroko_backend.connect()
+                session.kroko_connected = True
+            except Exception as exc:
+                logging.error("❌ KROKO - Failed to connect: %s", exc)
+                return []
+
+        # Send audio to Kroko
+        try:
+            await self.kroko_backend.send_audio(session.kroko_ws, audio_bytes)
+        except Exception as exc:
+            logging.error("❌ KROKO - Failed to send audio: %s", exc)
+            session.kroko_connected = False
+            return []
+
+        # Try to receive transcript results (non-blocking)
+        while True:
+            result = await self.kroko_backend.receive_transcript(session.kroko_ws, timeout=0.05)
+            if result is None:
+                break
+
+            result_type = result.get("type", "")
+            text = (result.get("text") or "").strip()
+
+            if result_type == "final":
+                logging.info("📝 STT RESULT - Kroko final transcript: '%s'", text)
+                updates.append({
+                    "text": text,
+                    "is_final": True,
+                    "is_partial": False,
+                    "confidence": None,
+                })
+            elif result_type == "partial":
+                if text != session.last_partial:
+                    session.last_partial = text
+                    logging.debug("📝 STT PARTIAL - Kroko: '%s'", text)
+                    updates.append({
+                        "text": text,
+                        "is_final": False,
+                        "is_partial": True,
+                        "confidence": None,
+                    })
+
+        return updates
+
+    async def _process_stt_stream_sherpa(
+        self,
+        session: SessionContext,
+        audio_data: bytes,
+        input_rate: int,
+    ) -> List[Dict[str, Any]]:
+        """Feed audio into Sherpa-onnx and return transcript updates."""
+        if not self.sherpa_backend:
+            logging.error("Sherpa backend not initialized")
+            return []
+
+        # Resample to 16kHz if needed
+        if input_rate != PCM16_TARGET_RATE:
+            audio_bytes = self.audio_processor.resample_audio(
+                audio_data, input_rate, PCM16_TARGET_RATE, "raw", "raw"
+            )
+        else:
+            audio_bytes = audio_data
+
+        updates: List[Dict[str, Any]] = []
+
+        try:
+            session.last_audio_at = asyncio.get_running_loop().time()
+        except RuntimeError:
+            session.last_audio_at = 0.0
+
+        # Ensure sherpa stream exists for this session
+        if session.sherpa_stream is None:
+            session.sherpa_stream = self.sherpa_backend.create_stream()
+            if session.sherpa_stream is None:
+                logging.error("❌ SHERPA - Failed to create stream")
+                return []
+
+        # Process audio and get results
+        result = self.sherpa_backend.process_audio(session.sherpa_stream, audio_bytes)
+        
+        if result:
+            result_type = result.get("type", "")
+            text = (result.get("text") or "").strip()
+
+            if result_type == "final":
+                logging.info("📝 STT RESULT - Sherpa final transcript: '%s'", text)
+                updates.append({
+                    "text": text,
+                    "is_final": True,
+                    "is_partial": False,
+                    "confidence": None,
+                })
+                session.last_partial = ""
+            elif result_type == "partial":
+                if text != session.last_partial:
+                    session.last_partial = text
+                    logging.debug("📝 STT PARTIAL - Sherpa: '%s'", text)
+                    updates.append({
+                        "text": text,
+                        "is_final": False,
+                        "is_partial": True,
+                        "confidence": None,
+                    })
+
+        return updates
+
+    async def _process_stt_stream_vosk(
+        self,
+        session: SessionContext,
+        audio_data: bytes,
+        input_rate: int,
+    ) -> List[Dict[str, Any]]:
+        """Feed audio into Vosk recognizer and return transcript updates."""
         recognizer = self._ensure_stt_recognizer(session)
         if not recognizer:
             return []
@@ -1235,13 +2138,37 @@ class LocalAIServer:
             session.call_id = call_id
 
         audio_response = await self.process_tts(text)
-        await self._emit_tts_audio(
-            websocket,
-            audio_response,
-            session,
-            request_id,
-            source_mode=mode,
-        )
+        
+        # Check if this is a direct TTS request (expects tts_response with base64)
+        # vs streaming mode which uses binary frames
+        response_format = data.get("response_format", "json")  # "json" or "binary"
+        
+        if response_format == "json" or data.get("type") == "tts_request":
+            # Send JSON response with base64-encoded audio for direct TTS calls
+            # This is what LocalProvider.text_to_speech expects
+            audio_b64 = base64.b64encode(audio_response).decode("utf-8") if audio_response else ""
+            response = {
+                "type": "tts_response",
+                "text": text,
+                "call_id": session.call_id,
+                "audio_data": audio_b64,
+                "encoding": "mulaw",
+                "sample_rate_hz": ULAW_SAMPLE_RATE,
+                "byte_length": len(audio_response or b""),
+            }
+            if request_id:
+                response["request_id"] = request_id
+            await self._send_json(websocket, response)
+            logging.info("📢 TTS response sent call_id=%s audio_bytes=%d", session.call_id, len(audio_response or b""))
+        else:
+            # Legacy binary streaming mode
+            await self._emit_tts_audio(
+                websocket,
+                audio_response,
+                session,
+                request_id,
+                source_mode=mode,
+            )
 
     async def _handle_llm_request(
         self,
@@ -1373,17 +2300,50 @@ class LocalAIServer:
             return
 
         if msg_type == "status":
+            # Determine STT loaded state based on active backend
+            stt_loaded = False
+            stt_model_info = self.stt_model_path
+            if self.stt_backend == "vosk":
+                stt_loaded = self.stt_model is not None
+                # Extract model name from path (e.g., vosk-model-en-us-0.22)
+                stt_model_info = os.path.basename(self.stt_model_path)
+            elif self.stt_backend == "kroko":
+                stt_loaded = self.kroko_backend is not None
+                # Show friendly name instead of URL
+                if self.kroko_embedded:
+                    stt_model_info = f"Kroko (embedded, port {self.kroko_port})"
+                else:
+                    stt_model_info = f"Kroko ({self.kroko_language})"
+            elif self.stt_backend == "sherpa":
+                stt_loaded = self.sherpa_backend is not None
+                # Extract model name from path
+                stt_model_info = os.path.basename(self.sherpa_model_path)
+            
+            # Determine TTS loaded state based on active backend
+            tts_loaded = False
+            tts_model_info = self.tts_model_path
+            if self.tts_backend == "piper":
+                tts_loaded = self.tts_model is not None
+                # Extract model name from path
+                tts_model_info = os.path.basename(self.tts_model_path)
+            elif self.tts_backend == "kokoro":
+                tts_loaded = self.kokoro_backend is not None
+                tts_model_info = f"Kokoro ({self.kokoro_voice})"
+            
             response = {
                 "type": "status_response",
                 "status": "ok",
+                "stt_backend": self.stt_backend,
+                "tts_backend": self.tts_backend,
                 "models": {
                     "stt": {
-                        "loaded": self.stt_model is not None,
-                        "path": self.stt_model_path,
+                        "backend": self.stt_backend,
+                        "loaded": stt_loaded,
+                        "path": stt_model_info,
                     },
                     "llm": {
                         "loaded": self.llm_model is not None,
-                        "path": self.llm_model_path,
+                        "path": os.path.basename(self.llm_model_path),
                         "config": {
                             "context": self.llm_context,
                             "threads": self.llm_threads,
@@ -1391,8 +2351,9 @@ class LocalAIServer:
                         }
                     },
                     "tts": {
-                        "loaded": self.tts_model is not None,
-                        "path": self.tts_model_path,
+                        "backend": self.tts_backend,
+                        "loaded": tts_loaded,
+                        "path": tts_model_info,
                     }
                 },
                 "config": {

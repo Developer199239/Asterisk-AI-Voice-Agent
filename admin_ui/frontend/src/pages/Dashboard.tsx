@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Activity, Cpu, HardDrive, RefreshCw } from 'lucide-react';
+import { Activity, Cpu, HardDrive, RefreshCw, FolderCheck, AlertTriangle, CheckCircle, XCircle, Wrench } from 'lucide-react';
 import axios from 'axios';
 import { HealthWidget } from '../components/HealthWidget';
 
@@ -28,11 +28,28 @@ interface SystemMetrics {
     };
 }
 
+interface DirectoryCheck {
+    status: string;
+    message: string;
+    [key: string]: any;
+}
+
+interface DirectoryHealth {
+    overall: 'healthy' | 'warning' | 'error';
+    checks: {
+        media_dir_configured: DirectoryCheck;
+        host_directory: DirectoryCheck;
+        asterisk_symlink: DirectoryCheck;
+    };
+}
+
 const Dashboard = () => {
     const [containers, setContainers] = useState<Container[]>([]);
     const [metrics, setMetrics] = useState<SystemMetrics | null>(null);
+    const [directoryHealth, setDirectoryHealth] = useState<DirectoryHealth | null>(null);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
+    const [fixingDirectories, setFixingDirectories] = useState(false);
 
     const [error, setError] = useState<string | null>(null);
     const [errorDetails, setErrorDetails] = useState<string | null>(null);
@@ -41,12 +58,14 @@ const Dashboard = () => {
         try {
             setError(null);
             setErrorDetails(null);
-            const [containersRes, metricsRes] = await Promise.all([
+            const [containersRes, metricsRes, dirHealthRes] = await Promise.all([
                 axios.get('/api/system/containers'),
-                axios.get('/api/system/metrics')
+                axios.get('/api/system/metrics'),
+                axios.get('/api/system/directories').catch(() => ({ data: null }))
             ]);
             setContainers(containersRes.data);
             setMetrics(metricsRes.data);
+            setDirectoryHealth(dirHealthRes.data);
         } catch (err: any) {
             console.error('Failed to fetch dashboard data:', err);
             setError('Failed to connect to backend system API. Ensure the backend is running and Docker socket is reachable.');
@@ -54,6 +73,27 @@ const Dashboard = () => {
         } finally {
             setLoading(false);
             setRefreshing(false);
+        }
+    };
+
+    const handleFixDirectories = async () => {
+        setFixingDirectories(true);
+        try {
+            const res = await axios.post('/api/system/directories/fix');
+            if (res.data.success) {
+                // Refresh directory health
+                const dirHealthRes = await axios.get('/api/system/directories');
+                setDirectoryHealth(dirHealthRes.data);
+                if (res.data.restart_required) {
+                    alert('Fixes applied! Container restart may be required for changes to take effect.');
+                }
+            } else {
+                alert(`Some fixes failed: ${res.data.errors.join(', ')}`);
+            }
+        } catch (err: any) {
+            alert(`Failed to fix directories: ${err?.message || 'Unknown error'}`);
+        } finally {
+            setFixingDirectories(false);
         }
     };
 
@@ -81,6 +121,88 @@ const Dashboard = () => {
             {subValue && <p className="text-xs text-muted-foreground mt-1">{subValue}</p>}
         </div>
     );
+
+    const StatusIcon = ({ status }: { status: string }) => {
+        if (status === 'ok') return <CheckCircle className="w-4 h-4 text-green-500" />;
+        if (status === 'warning') return <AlertTriangle className="w-4 h-4 text-yellow-500" />;
+        return <XCircle className="w-4 h-4 text-red-500" />;
+    };
+
+    const DirectoryHealthCard = () => {
+        if (!directoryHealth) {
+            return (
+                <div className="p-6 rounded-lg border border-border bg-card text-card-foreground shadow-sm">
+                    <div className="flex items-center justify-between mb-4">
+                        <h3 className="text-sm font-medium text-muted-foreground">Audio Directories</h3>
+                        <FolderCheck className="w-4 h-4 text-muted-foreground" />
+                    </div>
+                    <div className="text-sm text-muted-foreground">Loading...</div>
+                </div>
+            );
+        }
+
+        const overallColor = directoryHealth.overall === 'healthy' 
+            ? 'text-green-500' 
+            : directoryHealth.overall === 'warning' 
+                ? 'text-yellow-500' 
+                : 'text-red-500';
+
+        const checks = directoryHealth.checks;
+        const hasIssues = directoryHealth.overall !== 'healthy';
+
+        return (
+            <div className="p-6 rounded-lg border border-border bg-card text-card-foreground shadow-sm">
+                <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-sm font-medium text-muted-foreground">Audio Directories</h3>
+                    <FolderCheck className={`w-4 h-4 ${overallColor}`} />
+                </div>
+                <div className={`text-2xl font-bold ${overallColor} capitalize`}>
+                    {directoryHealth.overall}
+                </div>
+                
+                <div className="mt-3 space-y-3">
+                    <div className="text-xs">
+                        <div className="flex items-center gap-2">
+                            <StatusIcon status={checks.media_dir_configured.status} />
+                            <span className="text-muted-foreground font-medium">Media Dir Config</span>
+                        </div>
+                        <div className="ml-6 text-[10px] text-muted-foreground/70 truncate" title={checks.media_dir_configured.configured_path || checks.media_dir_configured.expected_path}>
+                            {checks.media_dir_configured.configured_path || checks.media_dir_configured.expected_path || 'Not set'}
+                        </div>
+                    </div>
+                    <div className="text-xs">
+                        <div className="flex items-center gap-2">
+                            <StatusIcon status={checks.host_directory.status} />
+                            <span className="text-muted-foreground font-medium">Host Directory</span>
+                        </div>
+                        <div className="ml-6 text-[10px] text-muted-foreground/70 truncate" title={checks.host_directory.path}>
+                            {checks.host_directory.path || 'Unknown'}
+                        </div>
+                    </div>
+                    <div className="text-xs">
+                        <div className="flex items-center gap-2">
+                            <StatusIcon status={checks.asterisk_symlink.status} />
+                            <span className="text-muted-foreground font-medium">Asterisk Symlink</span>
+                        </div>
+                        <div className="ml-6 text-[10px] text-muted-foreground/70 truncate" title={checks.asterisk_symlink.message}>
+                            {checks.asterisk_symlink.target || checks.asterisk_symlink.path || checks.asterisk_symlink.message}
+                        </div>
+                    </div>
+                </div>
+
+                {hasIssues && (
+                    <button
+                        onClick={handleFixDirectories}
+                        disabled={fixingDirectories}
+                        className="mt-4 w-full flex items-center justify-center gap-2 px-3 py-2 text-xs rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                    >
+                        <Wrench className="w-3 h-3" />
+                        {fixingDirectories ? 'Fixing...' : 'Auto-Fix Issues'}
+                    </button>
+                )}
+            </div>
+        );
+    };
 
     if (loading) {
         return (
@@ -126,7 +248,7 @@ const Dashboard = () => {
             <HealthWidget />
 
             {/* System Metrics */}
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
                 <MetricCard
                     title="CPU Usage"
                     value={`${metrics?.cpu.percent.toFixed(1)}%`}
@@ -148,6 +270,7 @@ const Dashboard = () => {
                     icon={HardDrive}
                     color="text-orange-500"
                 />
+                <DirectoryHealthCard />
             </div>
         </div>
     );

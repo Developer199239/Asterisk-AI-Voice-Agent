@@ -32,6 +32,8 @@ class LocalProvider(AIProviderInterface):
         self._pending_tts_responses: Dict[str, asyncio.Future] = {}  # Track pending TTS responses
         # Initial greeting text provided by engine/config (optional)
         self._initial_greeting: Optional[str] = None
+        # Mode for local_ai_server: "full" or "stt" (for hybrid pipelines with cloud LLM)
+        self._mode: str = getattr(config, 'mode', 'full') or 'full'
 
     def set_initial_greeting(self, text: Optional[str]) -> None:
         try:
@@ -81,11 +83,17 @@ class LocalProvider(AIProviderInterface):
                 self.websocket = await self._connect_ws()
                 logger.info("✅ Connected to Local AI Server", elapsed=f"{total_elapsed}s")
                 
-                # Restart listener and sender loops
-                if self._listener_task is None or self._listener_task.done():
-                    self._listener_task = asyncio.create_task(self._receive_loop())
-                if self._sender_task is None or self._sender_task.done():
-                    self._sender_task = asyncio.create_task(self._send_loop())
+                # Cancel old tasks and restart listener/sender loops on new connection
+                if self._listener_task and not self._listener_task.done():
+                    self._listener_task.cancel()
+                    logger.debug("Cancelled old listener task before restart")
+                if self._sender_task and not self._sender_task.done():
+                    self._sender_task.cancel()
+                    logger.debug("Cancelled old sender task before restart")
+                
+                self._listener_task = asyncio.create_task(self._receive_loop())
+                self._sender_task = asyncio.create_task(self._send_loop())
+                logger.info("✅ Reconnected to Local AI Server, restarting receive loop")
                 return True
                 
             except (ConnectionRefusedError, OSError) as e:
@@ -139,6 +147,13 @@ class LocalProvider(AIProviderInterface):
             if self.websocket and not self.websocket.closed:
                 logger.debug("WebSocket already connected, reusing connection", call_id=call_id)
                 self._active_call_id = call_id
+                # Ensure listener and sender tasks are running (may have crashed)
+                if self._listener_task is None or self._listener_task.done():
+                    logger.info("Restarting listener task for reused connection", call_id=call_id)
+                    self._listener_task = asyncio.create_task(self._receive_loop())
+                if self._sender_task is None or self._sender_task.done():
+                    logger.info("Restarting sender task for reused connection", call_id=call_id)
+                    self._sender_task = asyncio.create_task(self._send_loop())
                 return
             
             # If not connected, initialize first
@@ -206,7 +221,8 @@ class LocalProvider(AIProviderInterface):
                     "data": base64.b64encode(pcm16k).decode('utf-8'),
                     "rate": 16000,
                     "format": "pcm16le",
-                    "call_id": self._active_call_id
+                    "call_id": self._active_call_id,
+                    "mode": self._mode  # "stt" for hybrid, "full" for all-local
                 })
                 try:
                     await self.websocket.send(msg)

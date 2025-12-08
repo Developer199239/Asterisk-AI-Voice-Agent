@@ -201,13 +201,17 @@ class Component(ABC):
             - error: str - Error message if unhealthy
             - details: Dict[str, Any] - Additional diagnostic info
         """
-        # 1. Extract base URL from options
-        base_url = self._extract_base_url(options)
         component_key = getattr(self, "component_key", "")
         
-        # Local components default to localhost websocket
-        if component_key.startswith("local_") and not base_url:
-            base_url = "ws://127.0.0.1:8765/ws"
+        # Local components ALWAYS use local websocket - ignore any cloud URLs in options
+        # This prevents local_llm from being validated against OpenAI when pipeline
+        # options contain base_url for cloud providers
+        if component_key.startswith("local_"):
+            base_url = options.get("ws_url") or "ws://127.0.0.1:8765/ws"
+            return await self._test_websocket_connection(base_url, api_key=None)
+        
+        # 1. Extract base URL from options for non-local components
+        base_url = self._extract_base_url(options)
         
         if not base_url:
             return {"healthy": False, "error": "No base_url/ws_url configured in options", "details": {"checked_keys": ["base_url", "ws_url", "url", "endpoint"]}}

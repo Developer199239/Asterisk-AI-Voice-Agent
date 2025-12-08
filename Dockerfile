@@ -1,9 +1,13 @@
 # --- Stage 1: Builder (Dependencies) ---
-# Pin to specific digest for reproducible builds and supply chain security
-# python:3.11 as of 2025-11-06
-FROM python:3.11@sha256:e8ab764baee5109566456913b42d7d4ad97c13385e4002973c896e1dd5f01146 as builder
+# Use slim image for smaller build
+FROM python:3.11-slim as builder
 
 WORKDIR /usr/src/app
+
+# Install build dependencies for packages like webrtcvad that need compilation
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
 
 # Create virtual environment
 RUN python -m venv /opt/venv
@@ -16,13 +20,15 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # --- Stage 2: Final Runtime Image ---
-# Pin to same digest as builder for consistency
-FROM python:3.11@sha256:e8ab764baee5109566456913b42d7d4ad97c13385e4002973c896e1dd5f01146
+# Use slim image for smaller footprint
+FROM python:3.11-slim
 
-# Install sox (audio), curl (downloads), unzip (model extraction)
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends sox curl unzip \
-    && rm -rf /var/lib/apt/lists/*
+# Optimization env vars
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+# Note: sox/curl/unzip removed - not needed at runtime
+# Audio processing uses Python audioop, downloads done in install.sh
 
 WORKDIR /app
 

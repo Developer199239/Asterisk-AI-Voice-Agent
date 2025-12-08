@@ -44,6 +44,7 @@ class ContextConfig:
     greeting: Optional[str] = None
     profile: Optional[str] = None
     provider: Optional[str] = None
+    pipeline: Optional[str] = None  # Pipeline name for modular STT/LLM/TTS (e.g., local_hybrid)
     tools: Optional[list] = None  # Tool names for function calling
     background_music: Optional[str] = None  # MOH class name for background music during calls
 
@@ -134,6 +135,7 @@ class TransportOrchestrator:
                     greeting=context_dict.get('greeting'),
                     profile=context_dict.get('profile'),
                     provider=context_dict.get('provider'),
+                    pipeline=context_dict.get('pipeline'),  # Modular pipeline name (e.g., local_hybrid)
                     tools=context_dict.get('tools'),  # Extract tools for function calling
                     background_music=context_dict.get('background_music'),  # MOH class for background music
                 )

@@ -2,22 +2,24 @@
 FROM node:20-slim AS frontend-builder
 WORKDIR /app/frontend
 COPY frontend/package.json frontend/package-lock.json* ./
-RUN npm install
+# Install all deps including devDependencies for build (vite, typescript, etc.)
+RUN npm ci || npm install
 COPY frontend/ .
 RUN npm run build
+# Note: devDependencies are only in builder stage, not in final image
 
 # Stage 2: Backend + Runtime
 FROM python:3.10-slim
 WORKDIR /app
 
-# Install system dependencies (unzip for model extraction, docker CLI for container management)
-RUN apt-get update && apt-get install -y curl gcc unzip gnupg lsb-release \
-    && curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg \
-    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/debian $(lsb_release -cs) stable" > /etc/apt/sources.list.d/docker.list \
-    && apt-get update && apt-get install -y docker-ce-cli docker-compose-plugin \
-    && rm -rf /var/lib/apt/lists/*
+# Optimization env vars
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
 
-# Install Python dependencies
+# Note: docker-ce-cli removed - using docker Python SDK instead
+# This saves ~100MB+ in image size
+
+# Install Python dependencies (bcrypt has manylinux wheels, no gcc needed)
 COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 

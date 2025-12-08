@@ -1177,6 +1177,99 @@ See: [docs/PRODUCTION_DEPLOYMENT.md](PRODUCTION_DEPLOYMENT.md) section 3.1
 
 ---
 
+## Docker Build Issues
+
+### DNS Resolution Failure During Build
+
+**Symptom:** Docker build fails with DNS resolution errors:
+```
+Failed to establish a new connection: [Errno -3] Temporary failure in name resolution
+ERROR: Could not find a version that satisfies the requirement websockets
+```
+
+**Root Cause:** Docker BuildKit networking can't resolve DNS on some networks/systems.
+
+**Solutions:**
+
+#### Solution 1: Disable BuildKit (Simplest)
+```bash
+DOCKER_BUILDKIT=0 docker compose build
+```
+
+#### Solution 2: Use Host Network for Build
+```bash
+docker build --network=host -t asterisk-ai-voice-agent-ai-engine ./
+docker build --network=host -t asterisk-ai-voice-agent-local-ai-server ./local_ai_server
+```
+
+#### Solution 3: Configure Docker DNS
+```bash
+# Edit Docker daemon config
+sudo nano /etc/docker/daemon.json
+```
+
+Add:
+```json
+{
+  "dns": ["8.8.8.8", "8.8.4.4"]
+}
+```
+
+Then restart Docker:
+```bash
+sudo systemctl restart docker
+```
+
+#### Solution 4: Check System DNS
+```bash
+# Verify DNS resolution works
+nslookup pypi.org
+
+# If not, fix system DNS
+sudo nano /etc/resolv.conf
+# Add: nameserver 8.8.8.8
+```
+
+### Build Timeout or Slow Download
+
+**Symptom:** Build hangs or times out downloading packages.
+
+**Solutions:**
+
+1. **Use pip mirror:**
+   ```bash
+   # In Dockerfile, change pip install to:
+   RUN pip install --no-cache-dir -i https://pypi.org/simple/ -r requirements.txt
+   ```
+
+2. **Increase Docker timeout:**
+   ```bash
+   COMPOSE_HTTP_TIMEOUT=200 docker compose build
+   ```
+
+3. **Build with verbose output:**
+   ```bash
+   docker compose build --progress=plain
+   ```
+
+### docker-compose vs docker compose
+
+**Symptom:** `docker: 'compose' is not a docker command`
+
+**Root Cause:** Older Docker installations (Debian/Ubuntu packages) use `docker-compose` (v1) not `docker compose` (v2).
+
+**Solution:**
+```bash
+# Use docker-compose instead
+docker-compose up -d ai-engine admin-ui
+
+# Or install Docker Compose v2
+sudo apt-get update
+sudo apt-get install docker-compose-plugin
+```
+
+---
+
 ## Getting Help
 
 ### 1. Collect Diagnostics

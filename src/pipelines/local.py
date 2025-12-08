@@ -74,10 +74,16 @@ class _LocalAdapterBase:
         self._closed = False
 
     async def start(self) -> None:
+        # Log backend info from provider config
+        stt_backend = getattr(self._provider_config, 'stt_backend', 'vosk')
+        tts_backend = getattr(self._provider_config, 'tts_backend', 'piper')
+        
         logger.debug(
             "Local adapter initialized",
             component=self.component_key,
             default_mode=self._default_mode,
+            stt_backend=stt_backend,
+            tts_backend=tts_backend,
         )
 
     async def stop(self) -> None:
