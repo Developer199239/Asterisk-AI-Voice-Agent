@@ -39,50 +39,53 @@ The most powerful, flexible open-source AI voice agent for Asterisk/FreePBX. Fea
 
 ## 🚀 Quick Start
 
-Get up and running in **5 minutes** with our new interactive wizard.
+Get up and running in **2 minutes** with the Admin UI.
 
-### Option A: Interactive Quickstart (Recommended)
+### 1. Start the Admin UI
 
 ```bash
-# 1. Clone repository
+# Clone repository
 git clone https://github.com/hkjarral/Asterisk-AI-Voice-Agent.git
 cd Asterisk-AI-Voice-Agent
 
-# 2. Run installer (sets up Docker and offers CLI installation)
-./install.sh
+# Start the Admin UI container
+docker-compose up -d admin-ui
+```
 
-# 3. After installation, run interactive setup wizard
+### 2. Access the Dashboard
+
+Open **[http://localhost:3003](http://localhost:3003)** in your browser.
+
+- **Login**: `admin` / `admin` (Please change this immediately!)
+- Follow the **Setup Wizard** to configure your providers and pipelines.
+
+### 3. Connect Asterisk
+
+The wizard will generate the necessary dialplan configuration for your Asterisk server.
+
+---
+
+## 🔧 Advanced Setup (CLI)
+
+For users who prefer the command line or need headless setup.
+
+### Option A: Interactive CLI
+```bash
+./install.sh
 agent quickstart
 ```
 
-The wizard will:
-- ✅ Guide you through provider selection
-- ✅ Validate your API keys
-- ✅ Test Asterisk ARI connection
-- ✅ Generate dialplan configuration
-- ✅ Provide next steps
-
-### Option B: Manual Setup (Advanced)
-
+### Option B: Manual Setup
 ```bash
-git clone https://github.com/hkjarral/Asterisk-AI-Voice-Agent.git
-cd Asterisk-AI-Voice-Agent
-./install.sh
+# Configure environment
+cp .env.example .env
+# Edit .env with your API keys
+
+# Start services
+docker-compose up -d
 ```
 
-**Choose Your Configuration:**
-1. **OpenAI Realtime** - Fastest setup, modern AI (requires `OPENAI_API_KEY`)
-2. **Deepgram Voice Agent** - Enterprise features (requires `DEEPGRAM_API_KEY` + `OPENAI_API_KEY`)
-3. **Local Hybrid** - Privacy-focused (requires `OPENAI_API_KEY`, 8GB+ RAM)
-
-### 3. Configure Asterisk Dialplan
-
-**Option 1: Use the CLI helper**
-```bash
-agent dialplan --provider openai_realtime
-```
-
-**Option 2: Manual configuration**
+### Configure Asterisk Dialplan
 Add this to your FreePBX (`extensions_custom.conf`):
 ```asterisk
 [from-ai-agent]
@@ -91,9 +94,7 @@ exten => s,1,NoOp(Asterisk AI Voice Agent v4.3)
  same => n,Hangup()
 ```
 
-### 4. Test Your Agent
-Make a call to your configured destination and have a conversation!
-
+### Test Your Agent
 **Health check:**
 ```bash
 agent doctor
