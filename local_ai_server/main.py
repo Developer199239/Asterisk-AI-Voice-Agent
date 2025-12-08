@@ -2385,6 +2385,12 @@ class LocalAIServer:
                     await self._handle_binary_message(websocket, session, message)
                 else:
                     await self._handle_json_message(websocket, session, message)
+        except websockets.exceptions.ConnectionClosedError:
+            # Expected when client disconnects without close frame (call ended)
+            logging.debug("🔌 Client disconnected (no close frame)")
+        except websockets.exceptions.ConnectionClosedOK:
+            # Normal close
+            logging.debug("🔌 Client disconnected normally")
         except Exception as exc:
             logging.error("❌ WebSocket handler error: %s", exc, exc_info=True)
         finally:
