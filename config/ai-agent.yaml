@@ -261,7 +261,7 @@ llm:
   prompt: Voice assistant. Answer in 5-8 words. Be direct. Expand only if asked.
 pipelines:
   local_hybrid:
-    llm: openai
+    llm: openai_llm
     options:
       llm:
         base_url: https://api.openai.com/v1
@@ -277,7 +277,7 @@ pipelines:
         format:
           encoding: mulaw
           sample_rate: 8000
-    stt: local
+    stt: local_stt
     tools:
     - transfer
     - cancel_transfer
@@ -285,7 +285,7 @@ pipelines:
     - leave_voicemail
     - send_email_summary
     - request_transcript
-    tts: local
+    tts: local_tts
 profiles:
   default: telephony_responsive
   openai_realtime_24k:
