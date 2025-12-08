@@ -834,24 +834,18 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         # Small delay to ensure VAD disable is processed
         await asyncio.sleep(0.1)
 
-        # CRITICAL: OpenAI Realtime has a known bug where responses get stuck on text-only.
-        # Per community research (Dec 2024): The FIRST response MUST output audio,
-        # otherwise all subsequent responses may also be text-only.
-        # 
-        # Workaround: Include voice parameter and put "audio" FIRST in modalities
+        # REVERT TO WORKING FORMAT - voice is a SESSION parameter, NOT response parameter
+        # The working version used simpler instructions without voice in response.create
+        output_modalities = [m for m in (self.config.response_modalities or []) if m in ("audio", "text")] or ["audio"]
+        
         response_payload: Dict[str, Any] = {
             "type": "response.create",
             "event_id": f"resp-{uuid.uuid4()}",
             "response": {
-                # CRITICAL: "audio" must be FIRST - this tells OpenAI to prioritize audio output
-                "modalities": ["audio", "text"],
-                # Include voice to ensure audio TTS is triggered
-                "voice": self.config.voice or "alloy",
-                # Explicit audio-forcing instruction - CRITICAL for modalities bug
-                "instructions": (
-                    "You are a voice assistant. Respond by SPEAKING out loud using your voice. "
-                    f'Say this greeting: "{greeting}"'
-                ),
+                "modalities": output_modalities,
+                # Simple instruction that was working before
+                "instructions": f"Please greet the user with the following: {greeting}",
+                "input": [],  # Empty input to avoid distractions
             },
         }
         
