@@ -504,15 +504,20 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                 return
             
             # ECHO GATING for speakerphone support:
-            # While we're outputting audio (_in_audio_burst=True), don't send input audio
-            # to OpenAI. This prevents the agent from "hearing itself" on speakerphone calls
-            # where the speaker audio bleeds into the microphone.
+            # Only gate input while we have actual audio to output (not just silence).
+            # Check if there's buffered audio waiting to be played - if so, gate input.
+            # This prevents the agent from "hearing itself" on speakerphone calls.
             # 
-            # Without this gating, OpenAI's VAD detects the echo as user speech,
-            # causing premature response cancellation and self-interruption.
-            if self._in_audio_burst:
-                # Agent is currently speaking - don't send this audio to avoid echo
-                return
+            # We use buffer state instead of _in_audio_burst because:
+            # 1. _in_audio_burst stays True until response.audio.done (for AgentAudioDone)
+            # 2. But once buffer is empty, agent is just emitting silence - allow input
+            try:
+                has_buffered_audio = len(self._outbuf) > 0
+                if has_buffered_audio:
+                    # Agent has audio to play - gate input to prevent echo
+                    return
+            except Exception:
+                pass  # If we can't check buffer, allow input
             
             # Send audio to OpenAI for processing
             await self._send_audio_to_openai(pcm16)
@@ -2191,9 +2196,14 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                     chunk = silence_factory(chunk_bytes)
 
                 # Track whether we're emitting real audio (not silence) for echo gating
-                is_real_audio = len(self._outbuf) > 0 or (chunk and self._pacer_underruns == 0)
+                # NOTE: We do NOT set _in_audio_burst=False during silence here!
+                # The burst flag must remain True until response.audio.done fires,
+                # otherwise AgentAudioDone won't be emitted and the stream queue
+                # won't be cleared for the next response.
+                has_buffered_audio = len(self._outbuf) > 0
+                is_first_real_chunk = chunk and self._pacer_underruns == 0
                 
-                if is_real_audio:
+                if has_buffered_audio or is_first_real_chunk:
                     self._in_audio_burst = True
                     if not self._first_output_chunk_logged:
                         try:
@@ -2206,9 +2216,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                         except Exception:
                             pass
                         self._first_output_chunk_logged = True
-                else:
-                    # Emitting silence - agent is NOT actively speaking
-                    self._in_audio_burst = False
+                # Don't clear _in_audio_burst during silence - let response.audio.done handle it
                 
                 try:
                     await self.on_event(
