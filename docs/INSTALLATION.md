@@ -1,6 +1,6 @@
-# Asterisk AI Voice Agent - Installation Guide (v4.4)
+# Asterisk AI Voice Agent - Installation Guide (v4.4.2)
 
-This guide provides detailed instructions for setting up the Asterisk AI Voice Agent v4.4 on your server.
+This guide provides detailed instructions for setting up the Asterisk AI Voice Agent v4.4.2 on your server.
 
 ## Three Setup Paths
 

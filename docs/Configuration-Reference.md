@@ -2,7 +2,7 @@
 
 This document explains every major option in `config/ai-agent.yaml`, the precedence model for greeting/persona, and the impact of fine‑tuning parameters across AudioSocket/ExternalMedia, VAD, Barge‑In, Streaming, and Providers.
 
-## Configuration Architecture (v4.0)
+## Configuration Architecture (v4.4)
 
 v4.0 introduces a **modular pipeline architecture** alongside monolithic provider support:
 
@@ -25,6 +25,26 @@ See the 3 validated configurations in `config/`:
 - `ai-agent.golden-local-hybrid.yaml` - Local Hybrid (pipeline, privacy-focused)
 
 For comprehensive inline documentation, refer to the golden baseline YAML files directly.
+
+### Local AI Server Backends (v4.4.2+)
+
+Environment variables for selecting local STT/TTS backends:
+
+| Variable | Options | Default | Description |
+|----------|---------|---------|-------------|
+| `LOCAL_STT_BACKEND` | `vosk`, `sherpa`, `kroko` | `vosk` | Speech-to-text engine |
+| `LOCAL_TTS_BACKEND` | `piper`, `kokoro` | `piper` | Text-to-speech engine |
+
+**STT Backends**:
+- **Vosk**: Offline ASR with good accuracy, multiple language models
+- **Sherpa-ONNX**: Low-latency streaming ASR using ONNX runtime
+- **Kroko**: High-quality streaming ASR with 12+ languages (requires API key for hosted mode)
+
+**TTS Backends**:
+- **Piper**: Fast local TTS with multiple voices
+- **Kokoro**: High-quality neural TTS with natural prosody (voices: af_heart, af_bella, am_michael)
+
+See [LOCAL_ONLY_SETUP.md](LOCAL_ONLY_SETUP.md) for detailed configuration.
 
 ---
 

@@ -448,7 +448,90 @@ Keep this roadmap updated after each milestone to help any collaborator—or fut
 
 ---
 
-### v4.4 Planning (Q1 2026)
+### v4.4.2 (December 2025) - Local AI Enhancements
+
+**Release Date**: December 8, 2025  
+**Focus**: New STT/TTS backends, model management, DevOps improvements
+
+**New STT Backends**:
+
+- **Kroko ASR** (AAVA-92): High-quality streaming ASR with 12+ languages, no hallucinations
+- **Sherpa-ONNX** (AAVA-95): Low-latency local streaming ASR using sherpa-onnx
+- Configure via `LOCAL_STT_BACKEND=kroko|sherpa|vosk`
+
+**New TTS Backends**:
+
+- **Kokoro TTS** (AAVA-95): High-quality neural TTS with multiple voices (af_heart, af_bella, am_michael)
+- **ElevenLabs TTS Adapter** (AAVA-114): Cloud TTS for modular pipelines
+- Configure via `LOCAL_TTS_BACKEND=kokoro|piper`
+
+**Model Management System** (AAVA-99, 101-104, 108):
+
+- Dashboard quick-switch for STT/TTS/LLM models
+- Model enumeration API: `GET /api/local-ai/models/available`
+- Model switch API: `POST /api/local-ai/models/switch` with hot-reload
+- 2-step UI flow: "Pending" badge + "Apply & Restart" button
+- Error handling with rollback on switch failure
+
+**Admin UI Improvements**:
+
+- **Pipeline UI Backend Display** (AAVA-116): Shows active STT/TTS backend for local components
+- **Directory Health Card** (AAVA-93): Dashboard shows media directory permissions
+
+**DevOps & CI** (AAVA-112, 113):
+
+- Optional build args to exclude unused backends (smaller images)
+- CI image size checks with budgets (ai-engine: 1.5GB, local-ai-server: 4GB)
+- Enhanced Trivy vulnerability scanning for both images
+- Outdated dependency reporting
+
+**Bug Fixes**:
+
+- Local pipeline validation fix (AAVA-118): Pipelines no longer disabled on validation failure
+- Docker DNS troubleshooting docs (AAVA-119)
+- Config capability validation (AAVA-115)
+
+**Documentation**:
+
+- New `LOCAL_ONLY_SETUP.md` guide for fully local deployment
+
+---
+
+### v4.4.1 (November 2025) - Admin UI v1.0
+
+**Release Date**: November 30, 2025  
+**Focus**: Web-based administration interface
+
+**Admin UI v1.0**:
+
+- **Setup Wizard**: Visual provider configuration with API key validation
+- **Real-time Dashboard**: System metrics, container status, CPU/memory/disk
+- **Configuration Management**: Full CRUD for providers, pipelines, contexts, audio profiles
+- **Live Log Streaming**: WebSocket-based log viewer from ai-engine
+- **Raw YAML Editor**: Monaco-based editor with syntax validation
+- **Environment Manager**: Visual editor for `.env` variables
+- **Container Control**: Start/stop/restart containers from UI
+- **JWT Authentication**: Token-based auth with 24-hour expiry, default admin/admin
+
+**ElevenLabs Conversational AI** (AAVA-90):
+
+- Full agent provider with WebSocket-based real-time conversations
+- Premium voice quality with natural conversation flow
+- Tool calling support (define in ElevenLabs dashboard, execute locally)
+
+**Background Music** (AAVA-89):
+
+- In-call ambient music using Asterisk Music On Hold
+- Configurable per-context via Admin UI or YAML
+
+**Provider Registration System**:
+
+- Explicit validation of supported provider types
+- Full agent vs modular provider classification
+
+---
+
+### v4.5 Planning (Q1 2026)
 
 **Testing & Quality**:
 
@@ -458,7 +541,7 @@ Keep this roadmap updated after each milestone to help any collaborator—or fut
 - 🎯 Increase CI coverage threshold to 30% then 40% (currently 27%)
 - ⏳ Automated regression test suite (foundation in place)
 
-**Additional Tool Categories** (In Progress):
+**Additional Tool Categories** (Planned):
 
 - 🔄 Queue management tools - Transfer to queue, queue status (AAVA-63)
 - 🔄 Calendar appointment tool - Book/check availability (AAVA-66)
@@ -466,7 +549,7 @@ Keep this roadmap updated after each milestone to help any collaborator—or fut
 - ⏳ Conference bridge tools (create, manage participants)
 - ⏳ SMS/MMS tools (send text messages to caller)
 
-**Additional Providers** (In Progress):
+**Additional Providers** (Planned):
 
 - 🔄 Azure Speech Services for STT/TTS (AAVA-64)
 - 🔄 Google Cloud Speech for STT/TTS (AAVA-65)
@@ -615,5 +698,5 @@ For detailed implementation plans and specifications:
 
 ---
 
-**Last Updated**: November 19, 2025  
-**Roadmap Version**: 2.4 (Corrected v4.3.0 release alignment, updated future planning to v4.4)
+**Last Updated**: December 8, 2025  
+**Roadmap Version**: 2.5 (Added v4.4.1 Admin UI, v4.4.2 Local AI Enhancements)

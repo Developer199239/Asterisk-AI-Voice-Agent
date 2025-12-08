@@ -1,10 +1,12 @@
 # Hardware Requirements
 
-System specifications and performance characteristics for Asterisk AI Voice Agent v4.0.
+System specifications and performance characteristics for Asterisk AI Voice Agent v4.4.
 
 ## Overview
 
 Hardware requirements vary significantly based on your chosen configuration. This guide provides validated specifications for each of the 3 golden baseline configurations.
+
+> **Note**: For fully local deployment (no cloud APIs), see [LOCAL_ONLY_SETUP.md](LOCAL_ONLY_SETUP.md) for detailed requirements including Sherpa-ONNX STT, Kokoro TTS, and local LLM options.
 
 ## Quick Reference
 
