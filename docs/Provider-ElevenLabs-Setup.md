@@ -221,6 +221,26 @@ contexts:
 
 **Important**: Unlike other providers, the greeting and system prompt are configured in the ElevenLabs dashboard, not in YAML.
 
+### System Prompt Best Practice
+
+Add a **CALL ENDING PROTOCOL** at the TOP of your system prompt to ensure transcript is offered before hangup:
+
+```
+CALL ENDING PROTOCOL (MUST FOLLOW EXACTLY):
+When the caller indicates they're done (goodbye, thanks, that's all, etc.):
+1. FIRST ask: "Before you go, would you like me to email you a transcript of our conversation?"
+2. If they say YES:
+   - Ask for their email address
+   - Read it back and spell it out for confirmation
+   - Use request_transcript tool
+   - THEN use hangup_call with a warm farewell
+3. If they say NO:
+   - Use hangup_call tool with a warm farewell
+4. NEVER skip the transcript offer - always ask before hanging up
+```
+
+**Tip**: Place important behavioral instructions at the TOP of the system prompt for highest priority.
+
 ## Troubleshooting
 
 ### Issue: "No Audio" or "Silence"
