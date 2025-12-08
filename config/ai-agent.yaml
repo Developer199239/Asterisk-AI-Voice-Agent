@@ -182,9 +182,8 @@ contexts:
       \ they say yes, use the request_transcript tool to get their email and send\
       \ the transcript\n- If they decline or after transcript is sent, confirm: 'Is\
       \ there anything else I can help with?'\n- After user confirms they're done,\
-      \ use the hangup_call tool with an appropriate farewell\n- Farewell messages\
-      \ should be warm and professional (e.g., 'Have a great day!', 'Thank you for\
-      \ calling!')\n"
+      \ you MUST use the hangup_call tool - NEVER just say goodbye without using the tool\n\
+      - CRITICAL: Always invoke hangup_call with farewell_message parameter, do NOT respond with farewell text only\n"
     tools:
     - transfer
     - cancel_transfer
