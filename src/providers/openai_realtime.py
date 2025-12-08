@@ -818,8 +818,12 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             "type": "response.create",
             "event_id": f"resp-{uuid.uuid4()}",
             "response": {
-                # Force audio modality for greeting at response level (optional)
+                # Force audio modality for greeting at response level
                 "modalities": output_modalities,
+                # CRITICAL: Explicitly set voice and output format at response level
+                # This ensures audio is generated even if session config has issues
+                "voice": self.config.voice or "alloy",
+                "output_audio_format": "pcm16",
                 # Be explicit to ensure the model speaks immediately
                 "instructions": f"Please greet the user with the following: {greeting}",
                 "metadata": {"call_id": self._call_id, "purpose": "initial_greeting"},
@@ -827,6 +831,13 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                 "input": [],
             },
         }
+        
+        logger.info(
+            "🎤 Sending greeting response.create with explicit voice config",
+            call_id=self._call_id,
+            voice=self.config.voice or "alloy",
+            modalities=output_modalities,
+        )
 
         await self._send_json(response_payload)
         self._pending_response = True
@@ -1317,10 +1328,19 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             # This prevents premature hangup when tool responses complete (no audio yet)
             # The farewell response will emit audio_done when IT completes with audio
             if event_type in ("response.completed", "response.done") and not had_audio_burst:
-                logger.debug(
-                    "Response completed without audio output - no AgentAudioDone",
+                # DEBUG: Log response details to understand why no audio
+                response_data = event.get("response", {})
+                output_items = response_data.get("output", [])
+                status = response_data.get("status")
+                status_details = response_data.get("status_details")
+                logger.warning(
+                    "⚠️ Response completed without audio output - investigating",
                     call_id=self._call_id,
-                    event_type=event_type
+                    event_type=event_type,
+                    response_status=status,
+                    status_details=status_details,
+                    output_items_count=len(output_items),
+                    output_types=[item.get("type") for item in output_items] if output_items else [],
                 )
             
             if event_type == "response.error":
