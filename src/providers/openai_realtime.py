@@ -398,7 +398,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         # must be applied before response.create will generate audio correctly
         try:
             logger.debug("Waiting for OpenAI session.updated ACK before greeting...", call_id=call_id)
-            await asyncio.wait_for(self._session_ack_event.wait(), timeout=5.0)  # Increased timeout
+            await asyncio.wait_for(self._session_ack_event.wait(), timeout=10.0)  # Increased timeout for slower connections
             logger.info(
                 "✅ OpenAI session.updated ACK received - session configured",
                 call_id=call_id,
