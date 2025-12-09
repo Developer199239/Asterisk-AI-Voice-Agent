@@ -1,13 +1,15 @@
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import { RefreshCw, Pause, Play, Terminal } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
 import { parseAnsi } from '../../utils/ansi';
 
 const LogsPage = () => {
+    const [searchParams, setSearchParams] = useSearchParams();
     const [logs, setLogs] = useState('');
     const [loading, setLoading] = useState(false);
     const [autoRefresh, setAutoRefresh] = useState(true);
-    const [container, setContainer] = useState('ai_engine');
+    const [container, setContainer] = useState(searchParams.get('container') || 'ai_engine');
     const logsEndRef = useRef<HTMLDivElement>(null);
 
     const fetchLogs = async () => {
@@ -52,7 +54,10 @@ const LogsPage = () => {
                     <select
                         className="h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                         value={container}
-                        onChange={e => setContainer(e.target.value)}
+                        onChange={e => {
+                            setContainer(e.target.value);
+                            setSearchParams({ container: e.target.value });
+                        }}
                     >
                         <option value="ai_engine">AI Engine</option>
                         <option value="local_ai_server">Local AI Server</option>

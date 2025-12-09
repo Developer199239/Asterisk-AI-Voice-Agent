@@ -235,14 +235,13 @@ export const HealthWidget = () => {
                         >
                             <RefreshCw className={`w-4 h-4 ${restarting ? 'animate-spin' : ''}`} />
                         </button>
-                        <button
-                            type="button"
-                            onClick={() => window.open('/api/system/logs/local-ai-server', '_blank')}
-                            className="p-2 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+                        <Link
+                            to="/logs?container=local_ai_server"
+                            className="p-2 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground transition-colors cursor-pointer inline-flex items-center justify-center"
                             title="View Logs"
                         >
                             <Terminal className="w-4 h-4" />
-                        </button>
+                        </Link>
                     </div>
                 </div>
 
