@@ -36,7 +36,20 @@ class AvailableModels(BaseModel):
     llm: List[ModelInfo]
 
 
-# ... (Skip SwitchModelRequest/Response classes as they are unchanged) ...
+class SwitchModelRequest(BaseModel):
+    """Request to switch model."""
+    model_type: str  # stt, tts, llm
+    backend: Optional[str] = None  # For STT/TTS: vosk, sherpa, kroko, piper, kokoro
+    model_path: Optional[str] = None  # For models with paths
+    voice: Optional[str] = None  # For Kokoro TTS
+    language: Optional[str] = None  # For Kroko STT
+
+
+class SwitchModelResponse(BaseModel):
+    """Response from model switch."""
+    success: bool
+    message: str
+    requires_restart: bool = False
 
 
 @router.get("/models", response_model=AvailableModels)
