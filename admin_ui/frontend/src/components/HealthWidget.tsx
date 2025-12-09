@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Cpu, HardDrive, AlertCircle, CheckCircle2, XCircle, Activity, Layers, Box, RefreshCw } from 'lucide-react';
+import { Cpu, HardDrive, AlertCircle, CheckCircle2, XCircle, Activity, Layers, Box, RefreshCw, Settings, Terminal } from 'lucide-react';
 import { ConfigCard } from './ui/ConfigCard';
 import axios from 'axios';
 
@@ -91,9 +91,9 @@ export const HealthWidget = () => {
         if (pendingChanges[modelType]?.backend) {
             return pendingChanges[modelType].backend;
         }
-        return health?.local_ai_server.details.models?.[modelType]?.backend || 
-               health?.local_ai_server.details[`${modelType}_backend`] || 
-               (modelType === 'stt' ? 'vosk' : 'piper');
+        return health?.local_ai_server.details.models?.[modelType]?.backend ||
+            health?.local_ai_server.details[`${modelType}_backend`] ||
+            (modelType === 'stt' ? 'vosk' : 'piper');
     };
 
     const getDisplayedLlmPath = () => {
@@ -106,18 +106,18 @@ export const HealthWidget = () => {
     // Apply all pending changes and restart
     const applyChanges = async () => {
         if (!hasPendingChanges) return;
-        
+
         setApplyingChanges(true);
         setRestarting(true);
-        
+
         try {
             // Apply each pending change (last one triggers the restart)
             const changes = Object.entries(pendingChanges);
-            
+
             for (let i = 0; i < changes.length; i++) {
                 const [modelType, change] = changes[i];
                 const isLast = i === changes.length - 1;
-                
+
                 if (modelType === 'stt' || modelType === 'tts') {
                     const res = await axios.post('/api/local-ai/switch', {
                         model_type: modelType,
@@ -125,7 +125,7 @@ export const HealthWidget = () => {
                         model_path: change.modelPath,
                         voice: change.voice
                     });
-                    
+
                     // Only check success on last change (which triggers restart)
                     if (isLast && !res.data.success) {
                         throw new Error(res.data.message || 'Failed to switch model');
@@ -136,16 +136,16 @@ export const HealthWidget = () => {
                         backend: '',
                         model_path: change.modelPath
                     });
-                    
+
                     if (isLast && !res.data.success) {
                         throw new Error(res.data.message || 'Failed to switch model');
                     }
                 }
             }
-            
+
             // Clear pending changes
             setPendingChanges({});
-            
+
             // Wait for the switch API to complete (it handles restart internally)
             // Add extra buffer time for model loading (can take up to 3 minutes)
             setTimeout(() => {
@@ -205,6 +205,40 @@ export const HealthWidget = () => {
                             <div className="mt-1">{renderStatus(health.local_ai_server.status)}</div>
                         </div>
                     </div>
+                    <div className="flex gap-2">
+                        <button
+                            onClick={() => window.location.href = '/system/env'}
+                            className="p-2 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground"
+                            title="Configure"
+                        >
+                            <Settings className="w-4 h-4" />
+                        </button>
+                        <button
+                            onClick={async () => {
+                                if (!confirm('Are you sure you want to restart the Local AI Server?')) return;
+                                setRestarting(true);
+                                try {
+                                    await axios.post('/api/system/restart', { container: 'local-ai-server' });
+                                    // Poll for health
+                                    setTimeout(() => setRestarting(false), 5000);
+                                } catch (err) {
+                                    console.error('Failed to restart', err);
+                                    setRestarting(false);
+                                }
+                            }}
+                            className="p-2 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground"
+                            title="Restart"
+                        >
+                            <RefreshCw className={`w-4 h-4 ${restarting ? 'animate-spin' : ''}`} />
+                        </button>
+                        <button
+                            onClick={() => window.open('/api/system/logs/local-ai-server', '_blank')}
+                            className="p-2 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground"
+                            title="View Logs"
+                        >
+                            <Terminal className="w-4 h-4" />
+                        </button>
+                    </div>
                 </div>
 
                 {health.local_ai_server.status === 'connected' && (
@@ -254,8 +288,13 @@ export const HealthWidget = () => {
                                     ))}
                                 </select>
                             </div>
-                            <div className="text-xs text-muted-foreground bg-muted/50 p-2 rounded border border-border/50 truncate">
-                                {getModelName(health.local_ai_server.details.models?.stt?.path || 'Not configured')}
+                            <div className="text-xs text-muted-foreground bg-muted/50 p-2 rounded border border-border/50 truncate flex justify-between">
+                                <span>{getModelName(health.local_ai_server.details.models?.stt?.path || 'Not configured')}</span>
+                                {health.local_ai_server.details.stt_backend === 'kroko' && (
+                                    <span className="opacity-75">
+                                        {health.local_ai_server.details.kroko_embedded ? `Embedded (Port ${health.local_ai_server.details.kroko_port || 6006})` : 'Cloud API'}
+                                    </span>
+                                )}
                             </div>
                         </div>
 
@@ -350,8 +389,11 @@ export const HealthWidget = () => {
                                     ))}
                                 </select>
                             </div>
-                            <div className="text-xs text-muted-foreground bg-muted/50 p-2 rounded border border-border/50 truncate">
-                                {getModelName(health.local_ai_server.details.models?.tts?.path || 'Not configured')}
+                            <div className="text-xs text-muted-foreground bg-muted/50 p-2 rounded border border-border/50 truncate flex justify-between">
+                                <span>{getModelName(health.local_ai_server.details.models?.tts?.path || 'Not configured')}</span>
+                                {health.local_ai_server.details.tts_backend === 'kokoro' && health.local_ai_server.details.kokoro_voice && (
+                                    <span className="opacity-75">Voice: {health.local_ai_server.details.kokoro_voice}</span>
+                                )}
                             </div>
                         </div>
 

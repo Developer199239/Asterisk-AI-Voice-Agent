@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import yaml from 'js-yaml';
-import { Plus, Settings, Trash2, ArrowRight, Workflow } from 'lucide-react';
+import { Plus, Settings, Trash2, ArrowRight, Workflow, AlertTriangle } from 'lucide-react';
 import { ConfigSection } from '../components/ui/ConfigSection';
 import { ConfigCard } from '../components/ui/ConfigCard';
 import { Modal } from '../components/ui/Modal';
@@ -213,6 +213,12 @@ const PipelinesPage = () => {
                                         <Workflow className="w-5 h-5 text-primary" />
                                     </div>
                                     <h4 className="font-semibold text-lg">{name}</h4>
+                                    {config.active_pipeline === name && (
+                                        <span className="ml-2 px-2 py-0.5 rounded-full text-xs font-medium bg-green-500/10 text-green-500 flex items-center gap-1">
+                                            <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></div>
+                                            Active
+                                        </span>
+                                    )}
                                 </div>
                                 <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                                     <button
@@ -262,6 +268,16 @@ const PipelinesPage = () => {
                                     </span>
                                 </div>
                             </div>
+
+                            {name === 'local_only' && (
+                                <div className="mt-3 p-2 bg-yellow-500/10 border border-yellow-500/20 rounded text-xs text-yellow-600 dark:text-yellow-400 flex items-start gap-2">
+                                    <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                                    <div>
+                                        <strong>Hardware Warning:</strong> This pipeline runs entirely on your local machine.
+                                        Ensure you have sufficient RAM (8GB+) and CPU/GPU resources.
+                                    </div>
+                                </div>
+                            )}
                         </ConfigCard>
                     ))}
                     {Object.keys(config.pipelines || {}).length === 0 && (
@@ -270,7 +286,7 @@ const PipelinesPage = () => {
                         </div>
                     )}
                 </div>
-            </ConfigSection>
+            </ConfigSection >
 
             <Modal
                 isOpen={!!editingPipeline}
@@ -301,7 +317,7 @@ const PipelinesPage = () => {
                     isNew={isNewPipeline}
                 />
             </Modal>
-        </div>
+        </div >
     );
 };
 
