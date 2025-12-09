@@ -4,6 +4,7 @@ WORKDIR /app/frontend
 COPY frontend/package.json frontend/package-lock.json* ./
 # Install all deps including devDependencies for build (vite, typescript, etc.)
 RUN npm ci || npm install
+ARG CACHEBUST=1
 COPY frontend/ .
 RUN npm run build
 # Note: devDependencies are only in builder stage, not in final image
