@@ -228,6 +228,7 @@ const ProvidersPage: React.FC = () => {
             case 'openai':
                 return <OpenAIProviderForm config={providerForm} onChange={updateForm} />;
             case 'elevenlabs_agent':
+            case 'elevenlabs':
                 return <ElevenLabsProviderForm config={providerForm} onChange={updateForm} />;
             default:
                 return <GenericProviderForm config={providerForm} onChange={updateForm} isNew={isNewProvider} />;
