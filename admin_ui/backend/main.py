@@ -54,7 +54,11 @@ if os.path.exists(static_dir):
             raise HTTPException(status_code=404, detail="Not found")
             
         # Serve index.html for all other routes (SPA)
-        return FileResponse(os.path.join(static_dir, "index.html"))
+        response = FileResponse(os.path.join(static_dir, "index.html"))
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        return response
 
 if __name__ == "__main__":
     import uvicorn
