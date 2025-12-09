@@ -52,6 +52,28 @@ class SwitchModelResponse(BaseModel):
     requires_restart: bool = False
 
 
+def get_dir_size_mb(path: str) -> float:
+    """Get directory size in MB."""
+    total = 0
+    try:
+        for dirpath, dirnames, filenames in os.walk(path):
+            for f in filenames:
+                fp = os.path.join(dirpath, f)
+                if os.path.exists(fp):
+                    total += os.path.getsize(fp)
+    except Exception:
+        pass
+    return round(total / (1024 * 1024), 2)
+
+
+def get_file_size_mb(path: str) -> float:
+    """Get file size in MB."""
+    try:
+        return round(os.path.getsize(path) / (1024 * 1024), 2)
+    except Exception:
+        return 0
+
+
 @router.get("/models", response_model=AvailableModels)
 async def list_available_models():
     """
