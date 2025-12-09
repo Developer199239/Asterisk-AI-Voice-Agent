@@ -4688,6 +4688,54 @@ class Engine:
                         exc_info=True,
                     )
             
+            elif etype == "ToolCall":
+                # Handle tool calls from local LLM (parsed from text response)
+                tool_calls = event.get("tool_calls", [])
+                text_response = event.get("text")
+                
+                logger.info(
+                    "🔧 Tool calls parsed from local LLM",
+                    call_id=call_id,
+                    tools=[tc.get("name") for tc in tool_calls],
+                    has_text=bool(text_response),
+                )
+                
+                # Execute each tool call
+                for tool_call in tool_calls:
+                    tool_name = tool_call.get("name")
+                    parameters = tool_call.get("parameters", {})
+                    
+                    try:
+                        result = await self._execute_provider_tool(
+                            call_id=call_id,
+                            function_name=tool_name,
+                            function_call_id=f"local-{tool_name}",
+                            parameters=parameters,
+                            session=session,
+                        )
+                        logger.info(
+                            "✅ Local tool execution complete",
+                            call_id=call_id,
+                            tool_name=tool_name,
+                            status=result.get("status"),
+                        )
+                        
+                        # Handle terminal tools (hangup, transfer)
+                        if result.get("will_hangup"):
+                            # Farewell already handled by _execute_provider_tool
+                            break
+                        elif result.get("transferred"):
+                            # Transfer already handled
+                            break
+                    except Exception as e:
+                        logger.error(
+                            "❌ Local tool execution failed",
+                            call_id=call_id,
+                            tool_name=tool_name,
+                            error=str(e),
+                            exc_info=True,
+                        )
+            
             elif etype == "transcript":
                 # User speech transcript from provider (ElevenLabs, etc.)
                 text = event.get("text", "").strip()

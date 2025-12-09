@@ -71,6 +71,7 @@ services:
       - LOCAL_STT_MODEL_PATH=${LOCAL_STT_MODEL_PATH:-/app/models/stt/vosk-model-en-us-0.22}
       - LOCAL_TTS_MODEL_PATH=${LOCAL_TTS_MODEL_PATH:-/app/models/tts/en_US-lessac-medium.onnx}
       - LOCAL_LLM_USE_MLOCK=${LOCAL_LLM_USE_MLOCK:-0}
+      - LOCAL_LLM_SYSTEM_PROMPT=${LOCAL_LLM_SYSTEM_PROMPT:-You are a helpful AI voice assistant. When the caller wants to end the call or says goodbye, output <tool_call>{"name":"hangup_call","arguments":{"farewell":"Goodbye, have a great day!"}}</tool_call> and say a brief farewell. When the caller asks to email the transcript, output <tool_call>{"name":"request_transcript","arguments":{"email":"caller@example.com"}}</tool_call>. Always provide a spoken response.}
     tty: true
     stdin_open: true
     restart: unless-stopped

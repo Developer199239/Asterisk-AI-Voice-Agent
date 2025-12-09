@@ -8,6 +8,7 @@ from structlog import get_logger
 
 from ..config import LocalProviderConfig
 from .base import AIProviderInterface
+from ..tools.parser import parse_response_with_tools
 
 logger = get_logger(__name__)
 
@@ -382,6 +383,34 @@ class LocalProvider(AIProviderInterface):
                                             logger.error("Failed to emit AgentAudio(/Done) for tts_response", exc_info=True)
                                     else:
                                         logger.debug("Dropping TTS audio - no active call to attribute", size=len(audio_bytes))
+                        elif data.get("type") == "llm_response":
+                            # Handle LLM response - parse for tool calls
+                            llm_text = data.get("text", "")
+                            call_id = data.get("call_id") or self._active_call_id
+                            
+                            # Parse the response for tool calls
+                            clean_text, tool_calls = parse_response_with_tools(llm_text)
+                            
+                            if tool_calls:
+                                logger.info(
+                                    "🔧 Tool calls detected in local LLM response",
+                                    call_id=call_id,
+                                    tools=[tc.get("name") for tc in tool_calls]
+                                )
+                                # Emit tool call event for engine to handle
+                                if self.on_event:
+                                    await self.on_event({
+                                        "type": "ToolCall",
+                                        "call_id": call_id,
+                                        "tool_calls": tool_calls,
+                                        "text": clean_text,  # Text to speak (if any)
+                                    })
+                            else:
+                                logger.debug(
+                                    "LLM response received (no tools)",
+                                    call_id=call_id,
+                                    preview=llm_text[:80] if llm_text else "(empty)"
+                                )
                         else:
                             logger.debug("Received JSON message from Local AI Server", message=data)
                     except json.JSONDecodeError:
