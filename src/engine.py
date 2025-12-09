@@ -4501,6 +4501,13 @@ class Engine:
                     else:
                         logger.debug("AgentAudioDone with no active stream queue", call_id=call_id)
                     self._provider_stream_formats.pop(call_id, None)
+                
+                # Signal farewell done event if we're waiting for hangup
+                farewell_key = f"farewell_done_{call_id}"
+                if hasattr(self, '_farewell_done_events') and farewell_key in self._farewell_done_events:
+                    self._farewell_done_events[farewell_key].set()
+                    logger.info("✅ Farewell audio done - signaling hangup", call_id=call_id)
+                
                 # Log provider segment wall duration
                 try:
                     start_ts = self._provider_segment_start_ts.pop(call_id, None)
@@ -4736,26 +4743,44 @@ class Engine:
                             )
                             
                             # The LLM response already contains spoken farewell text that's being TTS'd
-                            # Don't send a separate farewell TTS - just wait for the existing TTS to complete
-                            # and then hang up
+                            # Wait for the actual audio to be received before hanging up
                             
-                            farewell_timeout = 30.0  # Max wait for TTS stream to complete
+                            farewell_timeout = 90.0  # Max wait - slow hardware may need this
                             try:
                                 local_config = self.config.providers.get("local")
                                 if local_config:
-                                    farewell_timeout = float(getattr(local_config, 'farewell_timeout_sec', 30.0) or 30.0)
+                                    farewell_timeout = float(getattr(local_config, 'farewell_timeout_sec', 90.0) or 90.0)
                             except Exception:
                                 pass
                             
+                            # Create event to wait for farewell audio
+                            farewell_done = asyncio.Event()
+                            farewell_key = f"farewell_done_{call_id}"
+                            if not hasattr(self, '_farewell_done_events'):
+                                self._farewell_done_events = {}
+                            self._farewell_done_events[farewell_key] = farewell_done
+                            
                             logger.info(
-                                "⏳ Waiting for LLM response TTS to complete before hangup",
+                                "⏳ Waiting for farewell audio to complete",
                                 call_id=call_id,
-                                timeout_sec=farewell_timeout,
+                                max_timeout_sec=farewell_timeout,
                             )
                             
-                            # Wait for the streaming TTS to complete
-                            # The TTS audio is already being streamed from the LLM response
-                            await asyncio.sleep(farewell_timeout)
+                            try:
+                                # Wait for AgentAudioDone event (handled below) or timeout
+                                await asyncio.wait_for(farewell_done.wait(), timeout=farewell_timeout)
+                                logger.info("✅ Farewell audio received", call_id=call_id)
+                                # Wait a bit more for audio to actually play
+                                await asyncio.sleep(5.0)
+                            except asyncio.TimeoutError:
+                                logger.warning(
+                                    "⚠️ Farewell timeout - proceeding with hangup",
+                                    call_id=call_id,
+                                    timeout_sec=farewell_timeout,
+                                )
+                            finally:
+                                self._farewell_done_events.pop(farewell_key, None)
+                            
                             logger.info("✅ Farewell wait complete", call_id=call_id)
                             
                             # Explicitly hang up after farewell TTS
