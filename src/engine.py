@@ -4742,8 +4742,11 @@ class Engine:
                                     farewell=farewell,
                                 )
                                 try:
-                                    # Request TTS from local-ai-server
-                                    tts_audio = await local_provider.text_to_speech(farewell)
+                                    # Request TTS from local-ai-server with longer timeout
+                                    tts_audio = await asyncio.wait_for(
+                                        local_provider.text_to_speech(farewell),
+                                        timeout=15.0  # Allow up to 15 seconds for TTS
+                                    )
                                     logger.info(
                                         "📢 TTS result",
                                         call_id=call_id,
@@ -4754,9 +4757,12 @@ class Engine:
                                         await self.playback_manager.play_audio(
                                             call_id, tts_audio, "local-farewell"
                                         )
-                                        logger.info("✅ Farewell audio played", call_id=call_id)
-                                    else:
-                                        logger.warning("TTS returned no audio", call_id=call_id)
+                                        # Wait for audio to play (mulaw 8kHz = 8000 bytes/sec)
+                                        play_duration = len(tts_audio) / 8000.0
+                                        await asyncio.sleep(play_duration + 0.3)
+                                        logger.info("✅ Farewell audio played", call_id=call_id, duration_sec=play_duration)
+                                except asyncio.TimeoutError:
+                                    logger.warning("TTS request timed out for farewell", call_id=call_id)
                                 except Exception as tts_err:
                                     logger.error(
                                         "❌ Failed to play farewell TTS",
@@ -4764,6 +4770,13 @@ class Engine:
                                         error=str(tts_err),
                                         exc_info=True,
                                     )
+                                
+                                # Explicitly hang up after farewell TTS (don't rely on delayed hangup)
+                                try:
+                                    await self.ari_client.hangup_channel(session.caller_channel_id)
+                                    logger.info("✅ Call hung up after farewell TTS", call_id=call_id)
+                                except Exception:
+                                    logger.debug("Hangup after farewell failed (may already be hung up)", call_id=call_id)
                             else:
                                 logger.warning(
                                     "⚠️ Skipping farewell TTS - provider not available or no TTS method",
@@ -7281,22 +7294,26 @@ class Engine:
                 
                 # Handle special tools
                 if function_name == "hangup_call" and result.get("will_hangup"):
-                    # For full agent providers like ElevenLabs, they manage their own TTS
-                    # so we should hangup after a short delay for the farewell to play
-                    logger.info("Hangup requested - scheduling delayed hangup", call_id=call_id)
-                    
-                    # Schedule hangup after delay to let farewell audio play
-                    async def delayed_hangup():
-                        await asyncio.sleep(3.0)  # Wait for farewell TTS
-                        try:
-                            current_session = await self.session_store.get_by_call_id(call_id)
-                            if current_session:
-                                await self.ari_client.hangup_channel(current_session.caller_channel_id)
-                                logger.info("✅ Call hung up after farewell", call_id=call_id)
-                        except Exception as e:
-                            logger.debug(f"Delayed hangup failed (may already be hung up): {e}", call_id=call_id)
-                    
-                    asyncio.create_task(delayed_hangup())
+                    # Skip delayed hangup for local provider - ToolCall handler manages TTS and hangup
+                    if provider_name == "local":
+                        logger.info("Hangup requested - local provider will handle TTS and hangup", call_id=call_id)
+                    else:
+                        # For full agent providers like ElevenLabs, they manage their own TTS
+                        # so we should hangup after a short delay for the farewell to play
+                        logger.info("Hangup requested - scheduling delayed hangup", call_id=call_id)
+                        
+                        # Schedule hangup after delay to let farewell audio play
+                        async def delayed_hangup():
+                            await asyncio.sleep(3.0)  # Wait for farewell TTS
+                            try:
+                                current_session = await self.session_store.get_by_call_id(call_id)
+                                if current_session:
+                                    await self.ari_client.hangup_channel(current_session.caller_channel_id)
+                                    logger.info("✅ Call hung up after farewell", call_id=call_id)
+                            except Exception as e:
+                                logger.debug(f"Delayed hangup failed (may already be hung up): {e}", call_id=call_id)
+                        
+                        asyncio.create_task(delayed_hangup())
             else:
                 logger.warning(
                     "Tool not found in registry",
