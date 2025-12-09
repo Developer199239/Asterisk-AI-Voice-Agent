@@ -30,8 +30,8 @@ interface AvailableModels {
 }
 
 interface PendingChanges {
-    stt?: { backend: string; modelPath?: string };
-    tts?: { backend: string; modelPath?: string; voice?: string };
+    stt?: { backend: string; modelPath?: string; embedded?: boolean };
+    tts?: { backend: string; modelPath?: string; voice?: string; mode?: string };
     llm?: { modelPath: string };
 }
 
@@ -89,12 +89,32 @@ export const HealthWidget = () => {
 
     // Get the displayed value (pending or current)
     const getDisplayedBackend = (modelType: 'stt' | 'tts') => {
-        if (pendingChanges[modelType]?.backend) {
-            return pendingChanges[modelType].backend;
+        if (modelType === 'stt') {
+            if (pendingChanges.stt?.backend) {
+                if (pendingChanges.stt.backend === 'kroko') {
+                    return pendingChanges.stt.embedded ? 'kroko_embedded' : 'kroko_cloud';
+                }
+                return pendingChanges.stt.backend;
+            }
+            const currentBackend = health?.local_ai_server.details.models?.stt?.backend || health?.local_ai_server.details.stt_backend || 'vosk';
+            if (currentBackend === 'kroko') {
+                return health?.local_ai_server.details.kroko_embedded ? 'kroko_embedded' : 'kroko_cloud';
+            }
+            return currentBackend;
+        } else {
+            // TTS
+            if (pendingChanges.tts?.backend) {
+                if (pendingChanges.tts.backend === 'kokoro') {
+                    return pendingChanges.tts.mode === 'local' ? 'kokoro_local' : 'kokoro_cloud';
+                }
+                return pendingChanges.tts.backend;
+            }
+            const currentBackend = health?.local_ai_server.details.models?.tts?.backend || health?.local_ai_server.details.tts_backend || 'piper';
+            if (currentBackend === 'kokoro') {
+                return health?.local_ai_server.details.kokoro_mode === 'local' ? 'kokoro_local' : 'kokoro_cloud';
+            }
+            return currentBackend;
         }
-        return health?.local_ai_server.details.models?.[modelType]?.backend ||
-            health?.local_ai_server.details[`${modelType}_backend`] ||
-            (modelType === 'stt' ? 'vosk' : 'piper');
     };
 
     const getDisplayedLlmPath = () => {
@@ -120,12 +140,22 @@ export const HealthWidget = () => {
                 const isLast = i === changes.length - 1;
 
                 if (modelType === 'stt' || modelType === 'tts') {
-                    const res = await axios.post('/api/local-ai/switch', {
+                    const payload: any = {
                         model_type: modelType,
                         backend: change.backend,
                         model_path: change.modelPath,
                         voice: change.voice
-                    });
+                    };
+
+                    // Add mode params if applicable
+                    if (modelType === 'stt' && change.backend === 'kroko') {
+                        payload.kroko_embedded = change.embedded;
+                    }
+                    if (modelType === 'tts' && change.backend === 'kokoro') {
+                        payload.kokoro_mode = change.mode;
+                    }
+
+                    const res = await axios.post('/api/local-ai/switch', payload);
 
                     // Only check success on last change (which triggers restart)
                     if (isLast && !res.data.success) {
@@ -267,14 +297,30 @@ export const HealthWidget = () => {
                                     className={`flex-1 text-xs p-2 rounded border bg-background ${pendingChanges.stt ? 'border-yellow-500' : 'border-border'}`}
                                     value={getDisplayedBackend('stt')}
                                     onChange={(e) => {
-                                        const backend = e.target.value;
+                                        const val = e.target.value;
+                                        let backend = val;
+                                        let embedded = false;
+
+                                        if (val === 'kroko_embedded') {
+                                            backend = 'kroko';
+                                            embedded = true;
+                                        } else if (val === 'kroko_cloud') {
+                                            backend = 'kroko';
+                                            embedded = false;
+                                        }
+
                                         const currentBackend = health?.local_ai_server.details.models?.stt?.backend || health?.local_ai_server.details.stt_backend;
-                                        if (backend !== currentBackend) {
+                                        const currentEmbedded = health?.local_ai_server.details.kroko_embedded;
+
+                                        // Check if changed
+                                        const isBackendChanged = backend !== currentBackend;
+                                        const isModeChanged = backend === 'kroko' && embedded !== currentEmbedded;
+
+                                        if (isBackendChanged || isModeChanged) {
                                             const models = availableModels?.stt[backend] || [];
                                             const firstModel = models[0];
-                                            queueChange('stt', { backend, modelPath: firstModel?.path });
+                                            queueChange('stt', { backend, modelPath: firstModel?.path, embedded });
                                         } else {
-                                            // Remove pending change if reverting to current
                                             setPendingChanges(prev => {
                                                 const { stt, ...rest } = prev;
                                                 return rest;
@@ -283,13 +329,21 @@ export const HealthWidget = () => {
                                     }}
                                     disabled={applyingChanges}
                                 >
-                                    {availableModels?.stt && Object.entries(availableModels.stt).map(([backend, models]) => (
-                                        models.length > 0 && (
+                                    {availableModels?.stt && Object.entries(availableModels.stt).map(([backend, models]) => {
+                                        if (backend === 'kroko') {
+                                            return (
+                                                <>
+                                                    <option key="kroko_embedded" value="kroko_embedded">Kroko (Embedded)</option>
+                                                    <option key="kroko_cloud" value="kroko_cloud">Kroko (Cloud)</option>
+                                                </>
+                                            );
+                                        }
+                                        return models.length > 0 && (
                                             <option key={backend} value={backend}>
                                                 {backend.charAt(0).toUpperCase() + backend.slice(1)} ({models.length})
                                             </option>
-                                        )
-                                    ))}
+                                        );
+                                    })}
                                 </select>
                             </div>
                             <div className="text-xs text-muted-foreground bg-muted/50 p-2 rounded border border-border/50 truncate flex justify-between">
@@ -365,16 +419,33 @@ export const HealthWidget = () => {
                                     className={`flex-1 text-xs p-2 rounded border bg-background ${pendingChanges.tts ? 'border-yellow-500' : 'border-border'}`}
                                     value={getDisplayedBackend('tts')}
                                     onChange={(e) => {
-                                        const backend = e.target.value;
+                                        const val = e.target.value;
+                                        let backend = val;
+                                        let mode = 'local';
+
+                                        if (val === 'kokoro_local') {
+                                            backend = 'kokoro';
+                                            mode = 'local';
+                                        } else if (val === 'kokoro_cloud') {
+                                            backend = 'kokoro';
+                                            mode = 'api';
+                                        }
+
                                         const currentBackend = health?.local_ai_server.details.models?.tts?.backend || health?.local_ai_server.details.tts_backend;
-                                        if (backend !== currentBackend) {
+                                        const currentMode = health?.local_ai_server.details.kokoro_mode;
+
+                                        const isBackendChanged = backend !== currentBackend;
+                                        const isModeChanged = backend === 'kokoro' && mode !== currentMode;
+
+                                        if (isBackendChanged || isModeChanged) {
                                             const models = availableModels?.tts[backend] || [];
                                             const firstModel = models[0];
+                                            const change: any = { backend, modelPath: firstModel?.path };
                                             if (backend === 'kokoro') {
-                                                queueChange('tts', { backend, modelPath: firstModel?.path, voice: 'af_heart' });
-                                            } else {
-                                                queueChange('tts', { backend, modelPath: firstModel?.path });
+                                                change.voice = 'af_heart';
+                                                change.mode = mode;
                                             }
+                                            queueChange('tts', change);
                                         } else {
                                             setPendingChanges(prev => {
                                                 const { tts, ...rest } = prev;
@@ -384,13 +455,21 @@ export const HealthWidget = () => {
                                     }}
                                     disabled={applyingChanges}
                                 >
-                                    {availableModels?.tts && Object.entries(availableModels.tts).map(([backend, models]) => (
-                                        models.length > 0 && (
+                                    {availableModels?.tts && Object.entries(availableModels.tts).map(([backend, models]) => {
+                                        if (backend === 'kokoro') {
+                                            return (
+                                                <>
+                                                    <option key="kokoro_local" value="kokoro_local">Kokoro (Local)</option>
+                                                    <option key="kokoro_cloud" value="kokoro_cloud">Kokoro (Cloud/API)</option>
+                                                </>
+                                            );
+                                        }
+                                        return models.length > 0 && (
                                             <option key={backend} value={backend}>
                                                 {backend.charAt(0).toUpperCase() + backend.slice(1)} ({models.length})
                                             </option>
-                                        )
-                                    ))}
+                                        );
+                                    })}
                                 </select>
                             </div>
                             <div className="text-xs text-muted-foreground bg-muted/50 p-2 rounded border border-border/50 truncate flex justify-between">

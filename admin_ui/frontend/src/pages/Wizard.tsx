@@ -575,27 +575,27 @@ const Wizard = () => {
                                                     <label className="text-sm font-medium">Backend</label>
                                                     <select
                                                         className="w-full p-2 rounded-md border border-input bg-background mt-1"
-                                                        value={config.local_tts_backend}
-                                                        onChange={e => setConfig({ ...config, local_tts_backend: e.target.value })}
+                                                        value={
+                                                            config.local_tts_backend === 'kokoro'
+                                                                ? (config.kokoro_mode === 'local' ? 'kokoro_local' : 'kokoro_cloud')
+                                                                : config.local_tts_backend
+                                                        }
+                                                        onChange={e => {
+                                                            const val = e.target.value;
+                                                            if (val === 'kokoro_local') {
+                                                                setConfig({ ...config, local_tts_backend: 'kokoro', kokoro_mode: 'local' });
+                                                            } else if (val === 'kokoro_cloud') {
+                                                                setConfig({ ...config, local_tts_backend: 'kokoro', kokoro_mode: 'api' });
+                                                            } else {
+                                                                setConfig({ ...config, local_tts_backend: val });
+                                                            }
+                                                        }}
                                                     >
                                                         <option value="piper">Piper (Local)</option>
-                                                        <option value="kokoro">Kokoro (Premium)</option>
+                                                        <option value="kokoro_local">Kokoro (Local)</option>
+                                                        <option value="kokoro_cloud">Kokoro (Cloud/API)</option>
                                                     </select>
-                                                </div>
-                                                {config.local_tts_backend === 'kokoro' && (
-                                                    <div>
-                                                        <label className="text-sm font-medium">Mode</label>
-                                                        <select
-                                                            className="w-full p-2 rounded-md border border-input bg-background mt-1"
-                                                            value={config.kokoro_mode}
-                                                            onChange={e => setConfig({ ...config, kokoro_mode: e.target.value })}
-                                                        >
-                                                            <option value="local">Local (On-Premise)</option>
-                                                            <option value="api">Cloud API</option>
-                                                        </select>
-                                                    </div>
-                                                )}
-                                            </div>
+                                                </div></div>
                                             {config.local_tts_backend === 'kokoro' && config.kokoro_mode === 'api' && (
                                                 <div>
                                                     <label className="text-sm font-medium">Kokoro API Key</label>
@@ -858,27 +858,28 @@ const Wizard = () => {
                                                 <label className="text-sm font-medium">Backend</label>
                                                 <select
                                                     className="w-full p-2 rounded-md border border-input bg-background mt-1"
-                                                    value={config.local_stt_backend}
-                                                    onChange={e => setConfig({ ...config, local_stt_backend: e.target.value })}
+                                                    value={
+                                                        config.local_stt_backend === 'kroko'
+                                                            ? (config.kroko_embedded ? 'kroko_embedded' : 'kroko_cloud')
+                                                            : config.local_stt_backend
+                                                    }
+                                                    onChange={e => {
+                                                        const val = e.target.value;
+                                                        if (val === 'kroko_embedded') {
+                                                            setConfig({ ...config, local_stt_backend: 'kroko', kroko_embedded: true });
+                                                        } else if (val === 'kroko_cloud') {
+                                                            setConfig({ ...config, local_stt_backend: 'kroko', kroko_embedded: false });
+                                                        } else {
+                                                            setConfig({ ...config, local_stt_backend: val });
+                                                        }
+                                                    }}
                                                 >
                                                     <option value="vosk">Vosk (Local)</option>
-                                                    <option value="kroko">Kroko (Local/Cloud)</option>
+                                                    <option value="kroko_embedded">Kroko (Embedded)</option>
+                                                    <option value="kroko_cloud">Kroko (Cloud)</option>
                                                     <option value="sherpa">Sherpa (Local)</option>
                                                 </select>
                                             </div>
-                                            {config.local_stt_backend === 'kroko' && (
-                                                <div className="flex items-center pt-6">
-                                                    <label className="flex items-center space-x-2 cursor-pointer">
-                                                        <input
-                                                            type="checkbox"
-                                                            checked={config.kroko_embedded}
-                                                            onChange={e => setConfig({ ...config, kroko_embedded: e.target.checked })}
-                                                            className="rounded border-gray-300"
-                                                        />
-                                                        <span className="text-sm">Embedded Mode (Local)</span>
-                                                    </label>
-                                                </div>
-                                            )}
                                         </div>
                                         {config.local_stt_backend === 'kroko' && !config.kroko_embedded && (
                                             <div>
