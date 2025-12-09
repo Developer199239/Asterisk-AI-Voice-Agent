@@ -15,12 +15,24 @@ const LocalProviderForm: React.FC<LocalProviderFormProps> = ({ config, onChange 
     useEffect(() => {
         const fetchModels = async () => {
             try {
-                // Fetch catalog from the wizard endpoint which already exists
-                const res = await axios.get('/api/local/available-models');
-                setModelCatalog(res.data.catalog);
+                // Fetch installed models from local_ai API
+                const res = await axios.get('/api/local-ai/models');
+                const data = res.data;
+
+                // Flatten STT models (Dict[backend, List[Model]]) -> List[Model]
+                const sttModels = Object.values(data.stt || {}).flat();
+
+                // Flatten TTS models (Dict[backend, List[Model]])
+                const ttsModels = Object.values(data.tts || {}).flat();
+
+                setModelCatalog({
+                    stt: sttModels,
+                    llm: data.llm || [],
+                    tts: ttsModels
+                });
             } catch (err) {
                 console.error("Failed to fetch local models", err);
-                setFetchError("Could not load model catalog. Options may be limited.");
+                setFetchError("Could not load installed models. Ensure AI Engine is running.");
             } finally {
                 setLoading(false);
             }

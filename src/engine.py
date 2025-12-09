@@ -4724,7 +4724,17 @@ class Engine:
                         if result.get("will_hangup"):
                             # For local provider, we need to synthesize farewell via TTS
                             farewell = "Goodbye"  # Keep it simple and short
-                            local_provider = self.providers.get(session.provider_name)
+                            provider_name = getattr(session, 'provider_name', None)
+                            local_provider = self.providers.get(provider_name) if provider_name else None
+                            
+                            logger.info(
+                                "🎤 Preparing farewell TTS",
+                                call_id=call_id,
+                                provider_name=provider_name,
+                                has_provider=bool(local_provider),
+                                has_tts_method=hasattr(local_provider, 'text_to_speech') if local_provider else False,
+                            )
+                            
                             if local_provider and hasattr(local_provider, 'text_to_speech'):
                                 logger.info(
                                     "🎤 Playing farewell via local TTS",
@@ -4734,18 +4744,32 @@ class Engine:
                                 try:
                                     # Request TTS from local-ai-server
                                     tts_audio = await local_provider.text_to_speech(farewell)
+                                    logger.info(
+                                        "📢 TTS result",
+                                        call_id=call_id,
+                                        audio_size=len(tts_audio) if tts_audio else 0,
+                                    )
                                     if tts_audio:
                                         # Play the farewell audio
                                         await self.playback_manager.play_audio(
                                             call_id, tts_audio, "local-farewell"
                                         )
                                         logger.info("✅ Farewell audio played", call_id=call_id)
+                                    else:
+                                        logger.warning("TTS returned no audio", call_id=call_id)
                                 except Exception as tts_err:
-                                    logger.warning(
-                                        "Failed to play farewell TTS",
+                                    logger.error(
+                                        "❌ Failed to play farewell TTS",
                                         call_id=call_id,
                                         error=str(tts_err),
+                                        exc_info=True,
                                     )
+                            else:
+                                logger.warning(
+                                    "⚠️ Skipping farewell TTS - provider not available or no TTS method",
+                                    call_id=call_id,
+                                    provider_name=provider_name,
+                                )
                             break
                         elif result.get("transferred"):
                             # Transfer already handled
