@@ -62,9 +62,9 @@ def parse_tool_calls(response: str) -> List[Dict[str, Any]]:
                     "parameters": tool_data.get("arguments", tool_data.get("parameters", {}))
                 })
                 logger.debug(
-                    "Parsed tool call (primary format)",
-                    tool=tool_data["name"],
-                    params=tool_data.get("arguments", {})
+                    "Parsed tool call (primary format): tool=%s params=%s",
+                    tool_data["name"],
+                    tool_data.get("arguments", {})
                 )
         except json.JSONDecodeError as e:
             logger.warning("Failed to parse tool call JSON: %s", e)
