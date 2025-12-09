@@ -4735,87 +4735,35 @@ class Engine:
                                 has_tts_method=hasattr(local_provider, 'text_to_speech') if local_provider else False,
                             )
                             
-                            if local_provider and hasattr(local_provider, 'websocket'):
-                                logger.info(
-                                    "🎤 Sending farewell TTS request",
-                                    call_id=call_id,
-                                    farewell=farewell,
-                                )
-                                try:
-                                    # Send TTS request - audio will play via AgentAudio events
-                                    # (the _receive_loop emits AgentAudio when tts_response arrives)
-                                    import json
-                                    tts_message = {
-                                        "type": "tts_request",
-                                        "text": farewell,
-                                        "call_id": call_id,
-                                    }
-                                    if local_provider.websocket and not local_provider.websocket.closed:
-                                        await local_provider.websocket.send(json.dumps(tts_message))
-                                        logger.info("📢 Farewell TTS request sent", call_id=call_id)
-                                        
-                                        # Wait for TTS response using event-based approach
-                                        farewell_timeout = 60.0  # Max wait (should arrive much sooner)
-                                        try:
-                                            local_config = self.config.providers.get("local")
-                                            if local_config:
-                                                farewell_timeout = float(getattr(local_config, 'farewell_timeout_sec', 60.0) or 60.0)
-                                        except Exception:
-                                            pass
-                                        
-                                        # Create an event to signal when farewell TTS is received
-                                        farewell_event = asyncio.Event()
-                                        farewell_key = f"farewell_tts_{call_id}"
-                                        
-                                        # Register callback for farewell TTS
-                                        if not hasattr(self, '_farewell_events'):
-                                            self._farewell_events = {}
-                                        self._farewell_events[farewell_key] = farewell_event
-                                        
-                                        logger.info(
-                                            "⏳ Waiting for farewell TTS response",
-                                            call_id=call_id,
-                                            max_timeout_sec=farewell_timeout,
-                                        )
-                                        
-                                        try:
-                                            # Wait for either the event or timeout
-                                            await asyncio.wait_for(farewell_event.wait(), timeout=farewell_timeout)
-                                            logger.info("✅ Farewell TTS received", call_id=call_id)
-                                            # Wait for audio to play (12200 bytes at 8kHz = ~1.5s)
-                                            await asyncio.sleep(2.0)
-                                        except asyncio.TimeoutError:
-                                            logger.warning(
-                                                "⚠️ Farewell TTS timeout - proceeding with hangup",
-                                                call_id=call_id,
-                                                timeout_sec=farewell_timeout,
-                                            )
-                                        finally:
-                                            self._farewell_events.pop(farewell_key, None)
-                                        
-                                        logger.info("✅ Farewell playback wait complete", call_id=call_id)
-                                    else:
-                                        logger.warning("WebSocket not connected for farewell TTS", call_id=call_id)
-                                except Exception as tts_err:
-                                    logger.error(
-                                        "❌ Failed to send farewell TTS",
-                                        call_id=call_id,
-                                        error=str(tts_err),
-                                        exc_info=True,
-                                    )
-                                
-                                # Explicitly hang up after farewell TTS
-                                try:
-                                    await self.ari_client.hangup_channel(session.caller_channel_id)
-                                    logger.info("✅ Call hung up after farewell TTS", call_id=call_id)
-                                except Exception:
-                                    logger.debug("Hangup after farewell failed (may already be hung up)", call_id=call_id)
-                            else:
-                                logger.warning(
-                                    "⚠️ Skipping farewell TTS - provider not available or no TTS method",
-                                    call_id=call_id,
-                                    provider_name=provider_name,
-                                )
+                            # The LLM response already contains spoken farewell text that's being TTS'd
+                            # Don't send a separate farewell TTS - just wait for the existing TTS to complete
+                            # and then hang up
+                            
+                            farewell_timeout = 30.0  # Max wait for TTS stream to complete
+                            try:
+                                local_config = self.config.providers.get("local")
+                                if local_config:
+                                    farewell_timeout = float(getattr(local_config, 'farewell_timeout_sec', 30.0) or 30.0)
+                            except Exception:
+                                pass
+                            
+                            logger.info(
+                                "⏳ Waiting for LLM response TTS to complete before hangup",
+                                call_id=call_id,
+                                timeout_sec=farewell_timeout,
+                            )
+                            
+                            # Wait for the streaming TTS to complete
+                            # The TTS audio is already being streamed from the LLM response
+                            await asyncio.sleep(farewell_timeout)
+                            logger.info("✅ Farewell wait complete", call_id=call_id)
+                            
+                            # Explicitly hang up after farewell TTS
+                            try:
+                                await self.ari_client.hangup_channel(session.caller_channel_id)
+                                logger.info("✅ Call hung up after farewell", call_id=call_id)
+                            except Exception:
+                                logger.debug("Hangup after farewell failed (may already be hung up)", call_id=call_id)
                             break
                         elif result.get("transferred"):
                             # Transfer already handled
@@ -4828,15 +4776,6 @@ class Engine:
                             error=str(e),
                             exc_info=True,
                         )
-            
-            elif etype == "FarewellTTSReceived":
-                # Signal the farewell event for hangup coordination
-                farewell_key = f"farewell_tts_{call_id}"
-                if hasattr(self, '_farewell_events') and farewell_key in self._farewell_events:
-                    self._farewell_events[farewell_key].set()
-                    logger.info("✅ Farewell TTS event signaled", call_id=call_id)
-                else:
-                    logger.debug("FarewellTTSReceived but no waiting handler", call_id=call_id)
             
             elif etype == "transcript":
                 # User speech transcript from provider (ElevenLabs, etc.)
