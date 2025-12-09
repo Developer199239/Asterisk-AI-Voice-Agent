@@ -383,6 +383,19 @@ class LocalProvider(AIProviderInterface):
                                             logger.error("Failed to emit AgentAudio(/Done) for tts_response", exc_info=True)
                                     else:
                                         logger.debug("Dropping TTS audio - no active call to attribute", size=len(audio_bytes))
+                        elif data.get("type") == "stt_result":
+                            # Handle STT result - emit as transcript for conversation history
+                            text = data.get("text", "").strip()
+                            call_id = data.get("call_id") or self._active_call_id
+                            is_final = data.get("is_final", True)
+                            
+                            if text and is_final and self.on_event:
+                                await self.on_event({
+                                    "type": "transcript",
+                                    "call_id": call_id,
+                                    "text": text,
+                                })
+                                logger.debug("Emitted user transcript for history", call_id=call_id, text=text[:50])
                         elif data.get("type") == "llm_response":
                             # Handle LLM response - parse for tool calls
                             llm_text = data.get("text", "")
@@ -390,6 +403,16 @@ class LocalProvider(AIProviderInterface):
                             
                             # Parse the response for tool calls
                             clean_text, tool_calls = parse_response_with_tools(llm_text)
+                            
+                            # Emit agent transcript for conversation history (use clean text)
+                            response_text = clean_text if clean_text else llm_text
+                            if response_text and self.on_event:
+                                await self.on_event({
+                                    "type": "agent_transcript",
+                                    "call_id": call_id,
+                                    "text": response_text,
+                                })
+                                logger.debug("Emitted agent transcript for history", call_id=call_id, text=response_text[:50])
                             
                             if tool_calls:
                                 logger.info(

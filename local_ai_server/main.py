@@ -11,7 +11,7 @@ from time import monotonic
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
-from websockets.exceptions import ConnectionClosed
+from websockets.exceptions import ConnectionClosed, ConnectionClosedError, ConnectionClosedOK
 from websockets.server import serve
 import websockets.client as ws_client
 from vosk import Model as VoskModel, KaldiRecognizer
@@ -2385,10 +2385,10 @@ class LocalAIServer:
                     await self._handle_binary_message(websocket, session, message)
                 else:
                     await self._handle_json_message(websocket, session, message)
-        except websockets.exceptions.ConnectionClosedError:
+        except ConnectionClosedError:
             # Expected when client disconnects without close frame (call ended)
             logging.debug("🔌 Client disconnected (no close frame)")
-        except websockets.exceptions.ConnectionClosedOK:
+        except ConnectionClosedOK:
             # Normal close
             logging.debug("🔌 Client disconnected normally")
         except Exception as exc:
@@ -2407,8 +2407,8 @@ async def main():
         server.handler,
         "0.0.0.0",
         8765,
-        ping_interval=30,
-        ping_timeout=30,
+        ping_interval=60,
+        ping_timeout=120,
         max_size=None,
         origins=None,  # Allow connections from other containers/browsers
     ):
