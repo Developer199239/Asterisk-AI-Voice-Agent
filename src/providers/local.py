@@ -284,6 +284,15 @@ class LocalProvider(AIProviderInterface):
 
             await self.websocket.send(json.dumps(tts_message))
             logger.info("Sent greeting TTS request to Local AI Server", call_id=call_id)
+            
+            # Record greeting in conversation history
+            if self.on_event:
+                await self.on_event({
+                    "type": "agent_transcript",
+                    "call_id": call_id,
+                    "text": greeting_text,
+                })
+                logger.debug("Recorded greeting in conversation history", call_id=call_id)
         except Exception as e:
             logger.error("Failed to send greeting message", call_id=call_id, error=str(e), exc_info=True)
 
