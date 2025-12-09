@@ -105,6 +105,18 @@ const LocalProviderForm: React.FC<LocalProviderFormProps> = ({ config, onChange 
                             Initial greeting message spoken when a call starts.
                         </p>
                     </div>
+                    <div className="space-y-2 mt-4">
+                        <label className="text-sm font-medium">Instructions (System Prompt)</label>
+                        <textarea
+                            className="w-full p-2 rounded border border-input bg-background min-h-[80px]"
+                            value={config.instructions || ''}
+                            onChange={(e) => handleChange('instructions', e.target.value)}
+                            placeholder="You are a helpful voice assistant. Be concise and friendly."
+                        />
+                        <p className="text-xs text-muted-foreground">
+                            System prompt that defines the AI's behavior and personality.
+                        </p>
+                    </div>
                 </div>
             )}
 

@@ -85,6 +85,8 @@ class LocalProviderConfig(BaseModel):
     farewell_timeout_sec: float = Field(default=30.0)
     chunk_ms: int = Field(default=200)
     max_tokens: int = Field(default=150)
+    temperature: float = Field(default=0.4)
+    llm_model: Optional[str] = None
     greeting: Optional[str] = None
     instructions: Optional[str] = None
     # Mode for local_ai_server: "full" (STT+LLM+TTS), "stt" (STT only for hybrid pipelines)
