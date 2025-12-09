@@ -1499,6 +1499,10 @@ async def save_setup_config(config: SetupConfig):
                 yaml_config.setdefault("providers", {})
                 yaml_config["providers"].setdefault("google_live", {})["enabled"] = True
                 yaml_config["providers"]["google_live"]["greeting"] = config.greeting
+                # CRITICAL: Set correct model for Google Live API
+                # gemini-2.0-flash-live-001 is the only model that supports bidiGenerateContent
+                # gemini-1.5-pro does NOT support Live API
+                yaml_config["providers"]["google_live"]["llm_model"] = "gemini-2.0-flash-live-001"
                 yaml_config["providers"].setdefault("openai_realtime", {})["enabled"] = False
                 yaml_config["providers"].setdefault("deepgram", {})["enabled"] = False
                 yaml_config["providers"].setdefault("local", {})["enabled"] = False

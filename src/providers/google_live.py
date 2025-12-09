@@ -308,9 +308,14 @@ class GoogleLiveProvider(AIProviderInterface):
                 logger.warning(f"Failed to configure tools: {e}", call_id=self._call_id, exc_info=True)
 
         # Setup message
+        # Strip any accidental "models/" prefix from config to avoid models/models/...
+        model_name = self.config.llm_model
+        if model_name.startswith("models/"):
+            model_name = model_name[7:]  # Remove "models/" prefix
+        
         setup_msg = {
             "setup": {
-                "model": f"models/{self.config.llm_model}",
+                "model": f"models/{model_name}",
                 "generation_config": generation_config,
             }
         }
