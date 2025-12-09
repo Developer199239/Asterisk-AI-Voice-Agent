@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { Cpu, HardDrive, AlertCircle, CheckCircle2, XCircle, Activity, Layers, Box, RefreshCw, Settings, Terminal } from 'lucide-react';
+import { useNavigate, Link } from 'react-router-dom';
+import { Activity, CheckCircle2, Cpu, RefreshCw, Settings, Terminal, XCircle, HardDrive, AlertCircle, Layers, Box } from 'lucide-react';
 import { ConfigCard } from './ui/ConfigCard';
 import axios from 'axios';
 
@@ -191,6 +192,8 @@ export const HealthWidget = () => {
         return parts[parts.length - 1];
     };
 
+    const navigate = useNavigate();
+
     return (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
             {/* Local AI Server Card */}
@@ -206,16 +209,17 @@ export const HealthWidget = () => {
                         </div>
                     </div>
                     <div className="flex gap-2">
-                        <button
-                            onClick={() => window.location.href = '/system/env'}
-                            className="p-2 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground"
+                        <Link
+                            to="/system/env"
+                            className="p-2 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground transition-colors cursor-pointer inline-flex items-center justify-center"
                             title="Configure"
                         >
                             <Settings className="w-4 h-4" />
-                        </button>
+                        </Link>
                         <button
+                            type="button"
                             onClick={async () => {
-                                if (!confirm('Are you sure you want to restart the Local AI Server?')) return;
+                                if (!window.confirm('Are you sure you want to restart the Local AI Server?')) return;
                                 setRestarting(true);
                                 try {
                                     await axios.post('/api/system/restart', { container: 'local-ai-server' });
@@ -226,14 +230,15 @@ export const HealthWidget = () => {
                                     setRestarting(false);
                                 }
                             }}
-                            className="p-2 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground"
+                            className="p-2 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
                             title="Restart"
                         >
                             <RefreshCw className={`w-4 h-4 ${restarting ? 'animate-spin' : ''}`} />
                         </button>
                         <button
+                            type="button"
                             onClick={() => window.open('/api/system/logs/local-ai-server', '_blank')}
-                            className="p-2 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground"
+                            className="p-2 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
                             title="View Logs"
                         >
                             <Terminal className="w-4 h-4" />
