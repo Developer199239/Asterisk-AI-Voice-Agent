@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { Activity, CheckCircle2, Cpu, RefreshCw, Settings, Terminal, XCircle, HardDrive, AlertCircle, Layers, Box } from 'lucide-react';
 import { ConfigCard } from './ui/ConfigCard';
 import axios from 'axios';
@@ -192,7 +192,7 @@ export const HealthWidget = () => {
         return parts[parts.length - 1];
     };
 
-    const navigate = useNavigate();
+
 
     return (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
