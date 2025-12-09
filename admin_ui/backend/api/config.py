@@ -380,6 +380,8 @@ def update_yaml_provider_field(provider_name: str, field: str, value: Any) -> bo
         
         return True
     except Exception as e:
+        print(f"Error updating YAML provider field: {e}")
+        return False
 
 @router.get("/options/{provider_type}")
 async def get_provider_options(provider_type: str):
