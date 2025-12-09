@@ -1733,6 +1733,31 @@ class LocalAIServer:
             payload["request_id"] = request_id
         return await self._send_json(websocket, payload)
 
+    def _strip_tool_calls_for_tts(self, text: str) -> str:
+        """
+        Strip tool call markup from text before TTS to avoid speaking tags.
+        Returns the clean spoken text without <tool_call>...</tool_call> blocks.
+        """
+        import re
+        if not text:
+            return ""
+        
+        # Remove <tool_call>...</tool_call> blocks (including newlines inside)
+        clean = re.sub(r'<tool_call>.*?</tool_call>', '', text, flags=re.DOTALL | re.IGNORECASE)
+        
+        # Also handle potential JSON tool calls without tags
+        # e.g., {"name": "hangup_call", ...}
+        clean = re.sub(r'\{["\']name["\']\s*:\s*["\'](?:hangup_call|transfer|request_transcript)["\'].*?\}', '', clean, flags=re.DOTALL)
+        
+        # Clean up extra whitespace
+        clean = re.sub(r'\s+', ' ', clean).strip()
+        
+        if clean != text.strip():
+            logging.info("🔇 TTS - Stripped tool call markup: original=%d chars, clean=%d chars", 
+                        len(text), len(clean))
+        
+        return clean
+
     async def _emit_llm_response(
         self,
         websocket,
@@ -1945,7 +1970,12 @@ class LocalAIServer:
             return
 
         if mode == "full" and llm_response:
-            audio_response = await self.process_tts(llm_response)
+            # Strip tool call markup before TTS to avoid speaking <tool_call>...</tool_call>
+            tts_text = self._strip_tool_calls_for_tts(llm_response)
+            if tts_text:
+                audio_response = await self.process_tts(tts_text)
+            else:
+                audio_response = b""  # No spoken text, just tool call
             await self._emit_tts_audio(
                 websocket,
                 audio_response,
