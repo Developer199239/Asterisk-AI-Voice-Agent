@@ -74,6 +74,10 @@ class LocalProviderConfig(BaseModel):
     ws_url: Optional[str] = Field(default="ws://127.0.0.1:8765")
     connect_timeout_sec: float = Field(default=5.0)
     response_timeout_sec: float = Field(default=5.0)
+    # Farewell TTS timeout - how long to wait for goodbye TTS before hanging up
+    # Set based on your hardware speed (see LLM warmup time in logs)
+    # Fast hardware: 5-10s, Slow hardware: 30-60s
+    farewell_timeout_sec: float = Field(default=30.0)
     chunk_ms: int = Field(default=200)
     max_tokens: int = Field(default=150)
     greeting: Optional[str] = None

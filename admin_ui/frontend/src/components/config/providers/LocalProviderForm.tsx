@@ -152,6 +152,19 @@ const LocalProviderForm: React.FC<LocalProviderFormProps> = ({ config, onChange 
                         />
                     </div>
                     <div className="space-y-2">
+                        <label className="text-sm font-medium">Farewell Timeout (s)</label>
+                        <input
+                            type="number"
+                            step="1"
+                            className="w-full p-2 rounded border border-input bg-background"
+                            value={config.farewell_timeout_sec || 30.0}
+                            onChange={(e) => handleChange('farewell_timeout_sec', parseFloat(e.target.value))}
+                        />
+                        <p className="text-xs text-muted-foreground">
+                            Time to wait for goodbye TTS. Set based on LLM warmup time (check logs).
+                        </p>
+                    </div>
+                    <div className="space-y-2">
                         <label className="text-sm font-medium">Chunk Size (ms)</label>
                         <input
                             type="number"

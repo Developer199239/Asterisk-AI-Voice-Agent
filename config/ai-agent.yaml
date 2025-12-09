@@ -397,6 +397,9 @@ providers:
     connect_timeout_sec: ${LOCAL_WS_CONNECT_TIMEOUT:=2.0}
     continuous_input: true
     enabled: true
+    # Farewell timeout: how long to wait for goodbye TTS before hanging up
+    # Set based on LLM warmup time shown in logs (e.g., if warmup is 20s, set to 25-30s)
+    farewell_timeout_sec: ${LOCAL_FAREWELL_TIMEOUT:=30.0}
     greeting: Hello! I'm your local AI assistant running entirely on-premises.
     instructions: You are a helpful voice assistant running locally. Be concise and friendly.
     llm_model: models/llm/phi-3-mini-4k-instruct.Q4_K_M.gguf

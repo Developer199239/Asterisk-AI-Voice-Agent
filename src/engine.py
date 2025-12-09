@@ -4754,9 +4754,22 @@ class Engine:
                                         await local_provider.websocket.send(json.dumps(tts_message))
                                         logger.info("📢 Farewell TTS request sent", call_id=call_id)
                                         
-                                        # Wait for TTS to generate and play (~2-3 seconds for "Goodbye")
-                                        # This is a simple fixed wait - audio plays via AgentAudio events
-                                        await asyncio.sleep(3.0)
+                                        # Wait for TTS to generate and play
+                                        # Use configurable timeout based on user's hardware speed
+                                        farewell_timeout = 30.0  # Default
+                                        try:
+                                            local_config = self.config.providers.get("local")
+                                            if local_config:
+                                                farewell_timeout = float(getattr(local_config, 'farewell_timeout_sec', 30.0) or 30.0)
+                                        except Exception:
+                                            pass
+                                        
+                                        logger.info(
+                                            "⏳ Waiting for farewell TTS",
+                                            call_id=call_id,
+                                            timeout_sec=farewell_timeout,
+                                        )
+                                        await asyncio.sleep(farewell_timeout)
                                         logger.info("✅ Farewell playback wait complete", call_id=call_id)
                                     else:
                                         logger.warning("WebSocket not connected for farewell TTS", call_id=call_id)
