@@ -4735,43 +4735,40 @@ class Engine:
                                 has_tts_method=hasattr(local_provider, 'text_to_speech') if local_provider else False,
                             )
                             
-                            if local_provider and hasattr(local_provider, 'text_to_speech'):
+                            if local_provider and hasattr(local_provider, 'websocket'):
                                 logger.info(
-                                    "🎤 Playing farewell via local TTS",
+                                    "🎤 Sending farewell TTS request",
                                     call_id=call_id,
                                     farewell=farewell,
                                 )
                                 try:
-                                    # Request TTS from local-ai-server with longer timeout
-                                    tts_audio = await asyncio.wait_for(
-                                        local_provider.text_to_speech(farewell),
-                                        timeout=15.0  # Allow up to 15 seconds for TTS
-                                    )
-                                    logger.info(
-                                        "📢 TTS result",
-                                        call_id=call_id,
-                                        audio_size=len(tts_audio) if tts_audio else 0,
-                                    )
-                                    if tts_audio:
-                                        # Play the farewell audio
-                                        await self.playback_manager.play_audio(
-                                            call_id, tts_audio, "local-farewell"
-                                        )
-                                        # Wait for audio to play (mulaw 8kHz = 8000 bytes/sec)
-                                        play_duration = len(tts_audio) / 8000.0
-                                        await asyncio.sleep(play_duration + 0.3)
-                                        logger.info("✅ Farewell audio played", call_id=call_id, duration_sec=play_duration)
-                                except asyncio.TimeoutError:
-                                    logger.warning("TTS request timed out for farewell", call_id=call_id)
+                                    # Send TTS request - audio will play via AgentAudio events
+                                    # (the _receive_loop emits AgentAudio when tts_response arrives)
+                                    import json
+                                    tts_message = {
+                                        "type": "tts_request",
+                                        "text": farewell,
+                                        "call_id": call_id,
+                                    }
+                                    if local_provider.websocket and not local_provider.websocket.closed:
+                                        await local_provider.websocket.send(json.dumps(tts_message))
+                                        logger.info("📢 Farewell TTS request sent", call_id=call_id)
+                                        
+                                        # Wait for TTS to generate and play (~2-3 seconds for "Goodbye")
+                                        # This is a simple fixed wait - audio plays via AgentAudio events
+                                        await asyncio.sleep(3.0)
+                                        logger.info("✅ Farewell playback wait complete", call_id=call_id)
+                                    else:
+                                        logger.warning("WebSocket not connected for farewell TTS", call_id=call_id)
                                 except Exception as tts_err:
                                     logger.error(
-                                        "❌ Failed to play farewell TTS",
+                                        "❌ Failed to send farewell TTS",
                                         call_id=call_id,
                                         error=str(tts_err),
                                         exc_info=True,
                                     )
                                 
-                                # Explicitly hang up after farewell TTS (don't rely on delayed hangup)
+                                # Explicitly hang up after farewell TTS
                                 try:
                                     await self.ari_client.hangup_channel(session.caller_channel_id)
                                     logger.info("✅ Call hung up after farewell TTS", call_id=call_id)
