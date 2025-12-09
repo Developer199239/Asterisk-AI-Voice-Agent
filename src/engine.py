@@ -4742,44 +4742,31 @@ class Engine:
                                 has_tts_method=hasattr(local_provider, 'text_to_speech') if local_provider else False,
                             )
                             
-                            # The LLM response already contains spoken farewell text that's being TTS'd
-                            # Wait for the actual audio to be received before hanging up
-                            
-                            farewell_timeout = 90.0  # Max wait - slow hardware may need this
-                            try:
-                                local_config = self.config.providers.get("local")
-                                if local_config:
-                                    farewell_timeout = float(getattr(local_config, 'farewell_timeout_sec', 90.0) or 90.0)
-                            except Exception:
-                                pass
-                            
-                            # Create event to wait for farewell audio
-                            farewell_done = asyncio.Event()
-                            farewell_key = f"farewell_done_{call_id}"
-                            if not hasattr(self, '_farewell_done_events'):
-                                self._farewell_done_events = {}
-                            self._farewell_done_events[farewell_key] = farewell_done
-                            
+                            # On slow hardware, TTS takes too long. Use Asterisk's built-in
+                            # goodbye sound for immediate playback, then hang up.
                             logger.info(
-                                "⏳ Waiting for farewell audio to complete",
+                                "🔊 Playing Asterisk goodbye sound",
                                 call_id=call_id,
-                                max_timeout_sec=farewell_timeout,
                             )
                             
                             try:
-                                # Wait for AgentAudioDone event (handled below) or timeout
-                                await asyncio.wait_for(farewell_done.wait(), timeout=farewell_timeout)
-                                logger.info("✅ Farewell audio received", call_id=call_id)
-                                # Wait a bit more for audio to actually play
-                                await asyncio.sleep(5.0)
-                            except asyncio.TimeoutError:
-                                logger.warning(
-                                    "⚠️ Farewell timeout - proceeding with hangup",
-                                    call_id=call_id,
-                                    timeout_sec=farewell_timeout,
+                                # Play Asterisk's built-in goodbye sound via ARI
+                                # This bypasses the slow local-ai-server queue
+                                await self.ari_client.play_media(
+                                    session.caller_channel_id,
+                                    "sound:goodbye"
                                 )
-                            finally:
-                                self._farewell_done_events.pop(farewell_key, None)
+                                # Wait for the sound to play (~2 seconds)
+                                await asyncio.sleep(3.0)
+                                logger.info("✅ Goodbye sound played", call_id=call_id)
+                            except Exception as sound_err:
+                                logger.warning(
+                                    "⚠️ Failed to play goodbye sound",
+                                    call_id=call_id,
+                                    error=str(sound_err),
+                                )
+                                # Fall back to short wait
+                                await asyncio.sleep(1.0)
                             
                             logger.info("✅ Farewell wait complete", call_id=call_id)
                             
