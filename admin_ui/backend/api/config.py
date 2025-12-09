@@ -380,5 +380,73 @@ def update_yaml_provider_field(provider_name: str, field: str, value: Any) -> bo
         
         return True
     except Exception as e:
-        print(f"Error updating YAML provider field: {e}")
-        return False
+
+@router.get("/options/{provider_type}")
+async def get_provider_options(provider_type: str):
+    """Get available options (models, voices) for a specific provider."""
+    
+    # Common catalogs
+    DEEPGRAM_MODELS = [
+        {"id": "nova-2", "name": "Nova 2 (General)", "cost": "Low", "latency": "Ultra Low"},
+        {"id": "nova-2-phonecall", "name": "Nova 2 (Phonecall)", "cost": "Low", "latency": "Ultra Low"},
+        {"id": "nova-2-medical", "name": "Nova 2 (Medical)", "cost": "Low", "latency": "Ultra Low"},
+        {"id": "nova-2-meeting", "name": "Nova 2 (Meeting)", "cost": "Low", "latency": "Ultra Low"},
+        {"id": "nova-2-general", "name": "Nova 2 (General Legacy)", "cost": "Low", "latency": "Ultra Low"},
+        {"id": "listen", "name": "General (Listen)", "cost": "Medium", "latency": "Low"},
+    ]
+    
+    OPENAI_LLM_MODELS = [
+        {"id": "gpt-4o", "name": "GPT-4o (Omni)", "description": "Most capable"},
+        {"id": "gpt-4o-mini", "name": "GPT-4o Mini", "description": "Fast & Cheap"},
+        {"id": "gpt-4-turbo", "name": "GPT-4 Turbo", "description": "High intelligence"},
+        {"id": "gpt-3.5-turbo", "name": "GPT-3.5 Turbo", "description": "Legacy fast"},
+    ]
+    
+    OPENAI_STT_MODELS = [
+        {"id": "whisper-1", "name": "Whisper V1"}
+    ]
+    
+    GOOGLE_MODELS = [
+        {"id": "gemini-1.5-flash", "name": "Gemini 1.5 Flash (Fastest)"},
+        {"id": "gemini-1.5-pro", "name": "Gemini 1.5 Pro (Best Quality)"},
+    ]
+
+    GOOGLE_VOICES = [
+        {"id": "en-US-Standard-A", "name": "US Female Standard"},
+        {"id": "en-US-Standard-B", "name": "US Male Standard"},
+        {"id": "en-US-Neural2-A", "name": "US Female Neural"},
+        {"id": "en-US-Neural2-C", "name": "US Male Neural"},
+        {"id": "en-US-Studio-O", "name": "US Female Studio"},
+        {"id": "en-US-Studio-Q", "name": "US Male Studio"},
+    ]
+
+    # Return options based on provider
+    if provider_type == "deepgram":
+        return {"models": DEEPGRAM_MODELS}
+        
+    elif provider_type == "openai":
+        return {
+            "stt_models": OPENAI_STT_MODELS,
+            "llm_models": OPENAI_LLM_MODELS,
+            "tts_models": [{"id": "tts-1", "name": "TTS-1"}, {"id": "tts-1-hd", "name": "TTS-1 HD"}]
+        }
+        
+    elif provider_type == "google":
+        return {
+            "models": GOOGLE_MODELS,
+            "voices": GOOGLE_VOICES
+        }
+        
+    elif provider_type == "elevenlabs":
+        return {
+            "models": [
+                {"id": "eleven_turbo_v2_5", "name": "Turbo v2.5"},
+                {"id": "eleven_multilingual_v2", "name": "Multilingual v2"},
+                {"id": "eleven_monolingual_v1", "name": "Monolingual v1"}
+            ]
+        }
+        
+    elif provider_type == "local":
+        return {"message": "Use /api/local-ai/models for dynamic local models"}
+        
+    return {"error": "Unknown provider type"}
