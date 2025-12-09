@@ -5396,22 +5396,25 @@ class Engine:
                                                 context_for_llm,
                                                 pipeline.llm_options
                                             )
-                                            if llm_response and getattr(llm_response, 'text', None):
-                                                response_text = llm_response.text.strip()
-                                                conversation_history.append({"role": "assistant", "content": response_text})
-                                                logger.info("LLM continuation response", preview=response_text[:80], call_id=call_id)
+                                            if llm_response:
+                                                # Handle text response if present
+                                                if getattr(llm_response, 'text', None):
+                                                    response_text = llm_response.text.strip()
+                                                    if response_text:
+                                                        conversation_history.append({"role": "assistant", "content": response_text})
+                                                        logger.info("LLM continuation response", preview=response_text[:80], call_id=call_id)
+                                                        
+                                                        # Synthesize and play TTS
+                                                        tts_bytes = bytearray()
+                                                        async for chunk in pipeline.tts_adapter.synthesize(call_id, response_text, pipeline.tts_options):
+                                                            if chunk:
+                                                                tts_bytes.extend(chunk)
+                                                        if tts_bytes:
+                                                            await self.playback_manager.play_audio(call_id, bytes(tts_bytes), "pipeline-tts")
+                                                            duration_sec = len(tts_bytes) / 8000.0
+                                                            await asyncio.sleep(duration_sec + 0.3)
                                                 
-                                                # Synthesize and play TTS
-                                                tts_bytes = bytearray()
-                                                async for chunk in pipeline.tts_adapter.synthesize(call_id, response_text, pipeline.tts_options):
-                                                    if chunk:
-                                                        tts_bytes.extend(chunk)
-                                                if tts_bytes:
-                                                    await self.playback_manager.play_audio(call_id, bytes(tts_bytes), "pipeline-tts")
-                                                    duration_sec = len(tts_bytes) / 8000.0
-                                                    await asyncio.sleep(duration_sec + 0.3)
-                                                
-                                                # Check if LLM also wants to call tools (e.g., hangup_call after transcript)
+                                                # Handle tool calls (with or without text)
                                                 if getattr(llm_response, 'tool_calls', None):
                                                     for next_tc in llm_response.tool_calls:
                                                         next_name = next_tc.get("name")
