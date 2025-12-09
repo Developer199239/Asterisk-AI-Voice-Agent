@@ -210,7 +210,7 @@ export const HealthWidget = () => {
                     </div>
                     <div className="flex gap-2">
                         <Link
-                            to="/system/env"
+                            to="/env"
                             className="p-2 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground transition-colors cursor-pointer inline-flex items-center justify-center"
                             title="Configure"
                         >
