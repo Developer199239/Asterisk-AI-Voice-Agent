@@ -110,7 +110,7 @@ EMAIL_TEMPLATE = """
     {% endif %}
     
     <div class="footer">
-      <p><em>Powered by AI Voice Agent v4.1</em></p>
+      <p><em>Powered by AI Voice Agent v4.4</em></p>
     </div>
   </div>
 </body>
