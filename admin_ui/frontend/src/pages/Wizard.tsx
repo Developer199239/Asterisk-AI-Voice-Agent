@@ -1141,7 +1141,10 @@ const Wizard = () => {
                                                             tts: config.local_tts_backend,
                                                             kroko_embedded: config.kroko_embedded,
                                                             kokoro_mode: config.kokoro_mode,
-                                                            language: selectedLanguage
+                                                            language: selectedLanguage,
+                                                            // Send exact model IDs to download the specific model selected
+                                                            stt_model_id: config.local_stt_model,
+                                                            tts_model_id: config.local_tts_model
                                                         });
                                                         const pollProgress = async () => {
                                                             try {
