@@ -51,6 +51,29 @@ const LogsPage = () => {
                     </p>
                 </div>
                 <div className="flex space-x-2 items-center">
+                    <button
+                        onClick={async () => {
+                            try {
+                                const response = await axios.get('/api/config/export-logs', { responseType: 'blob' });
+                                const url = window.URL.createObjectURL(new Blob([response.data]));
+                                const link = document.createElement('a');
+                                link.href = url;
+                                link.setAttribute('download', `debug-logs-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.zip`);
+                                document.body.appendChild(link);
+                                link.click();
+                                link.remove();
+                            } catch (err) {
+                                console.error('Failed to export logs', err);
+                                alert('Failed to export logs');
+                            }
+                        }}
+                        className="inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 border border-input bg-background shadow-sm hover:bg-accent hover:text-accent-foreground h-9 px-3"
+                        title="Export Logs & Config for Debugging"
+                    >
+                        <span className="mr-2">Export</span>
+                        <Terminal className="w-4 h-4" />
+                    </button>
+
                     <select
                         className="h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                         value={container}

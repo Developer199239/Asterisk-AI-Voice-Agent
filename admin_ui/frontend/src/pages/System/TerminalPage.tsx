@@ -1,45 +1,91 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Terminal as TerminalIcon, Play } from 'lucide-react';
+import { Terminal as TerminalIcon, Send } from 'lucide-react';
+import axios from 'axios';
 
 const TerminalPage = () => {
     const [history, setHistory] = useState<string[]>(['Welcome to Asterisk AI Admin Terminal', 'Type "help" for available commands.']);
     const [input, setInput] = useState('');
+    const [loading, setLoading] = useState(false);
     const endRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
         endRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [history]);
 
-    const handleCommand = (e: React.FormEvent) => {
+    const executeCommand = async (cmd: string) => {
+        const parts = cmd.trim().split(' ');
+        const command = parts[0].toLowerCase();
+        const args = parts.slice(1);
+
+        try {
+            switch (command) {
+                case 'help':
+                    return [
+                        'Available commands:',
+                        '  status       - Check system health',
+                        '  restart      - Restart services (usage: restart <service>)',
+                        '  logs         - View recent logs (usage: logs <container> <lines>)',
+                        '  version      - Show system version',
+                        '  clear        - Clear terminal output'
+                    ];
+
+                case 'status':
+                    const health = await axios.get('/api/health');
+                    return [
+                        'System Health Status:',
+                        JSON.stringify(health.data, null, 2)
+                    ];
+
+                case 'restart':
+                    if (args.length === 0) return ['Usage: restart <service> (e.g., ai_engine, all)'];
+                    await axios.post(`/api/system/restart?service=${args[0]}`);
+                    return [`Command sent: Restarting ${args[0]}...`];
+
+                case 'logs':
+                    const container = args[0] || 'ai_engine';
+                    const lines = args[1] || '20';
+                    const logRes = await axios.get(`/api/logs/${container}?tail=${lines}`);
+                    return [
+                        `--- Logs for ${container} (last ${lines} lines) ---`,
+                        logRes.data.logs || 'No logs found.'
+                    ];
+
+                case 'version':
+                    return ['Asterisk AI Agent v1.0.0 (Admin UI)'];
+
+                case 'clear':
+                    setHistory([]);
+                    return [];
+
+                default:
+                    return [`Command not found: ${command}. Type "help" for list.`];
+            }
+        } catch (err: any) {
+            return [`Error executing command: ${err.message || String(err)}`];
+        }
+    };
+
+    const handleCommand = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!input.trim()) return;
+        if (!input.trim() || loading) return;
 
         const cmd = input.trim();
-        const newHistory = [...history, `$ ${cmd}`];
+        setHistory(prev => [...prev, `$ ${cmd}`]);
+        setInput('');
+        setLoading(true);
 
-        // Mock command processing
-        switch (cmd) {
-            case 'help':
-                newHistory.push('Available commands: help, status, version, clear');
-                break;
-            case 'status':
-                newHistory.push('System Status: NORMAL');
-                newHistory.push('Active Calls: 0');
-                newHistory.push('Uptime: 2d 4h 12m');
-                break;
-            case 'version':
-                newHistory.push('Asterisk AI Agent v1.0.0');
-                break;
-            case 'clear':
-                setHistory([]);
-                setInput('');
-                return;
-            default:
-                newHistory.push(`Command not found: ${cmd}`);
+        // Process locally
+        if (cmd === 'clear') {
+            setHistory([]);
+            setLoading(false);
+            return;
         }
 
-        setHistory(newHistory);
-        setInput('');
+        const output = await executeCommand(cmd);
+        if (output && output.length > 0) {
+            setHistory(prev => [...prev, ...output]);
+        }
+        setLoading(false);
     };
 
     return (
@@ -48,7 +94,7 @@ const TerminalPage = () => {
                 <div>
                     <h1 className="text-3xl font-bold tracking-tight">Web Terminal</h1>
                     <p className="text-muted-foreground mt-1">
-                        Direct command-line access to the AI engine.
+                        Direct command-line access to the AI engine APIs.
                     </p>
                 </div>
             </div>
@@ -56,10 +102,11 @@ const TerminalPage = () => {
             <div className="flex-1 bg-[#09090b] border border-border rounded-lg shadow-inner flex flex-col overflow-hidden font-mono text-sm">
                 <div className="flex-1 p-4 overflow-auto space-y-1">
                     {history.map((line, i) => (
-                        <div key={i} className={`${line.startsWith('$') ? 'text-blue-400' : 'text-gray-300'}`}>
+                        <div key={i} className={`${line.startsWith('$') ? 'text-blue-400 font-bold' : 'text-gray-300'} whitespace-pre-wrap`}>
                             {line}
                         </div>
                     ))}
+                    {loading && <div className="text-yellow-500 animate-pulse">Processing...</div>}
                     <div ref={endRef} />
                 </div>
 
@@ -70,9 +117,13 @@ const TerminalPage = () => {
                         className="flex-1 bg-transparent border-none outline-none text-foreground placeholder:text-muted-foreground/50"
                         value={input}
                         onChange={(e) => setInput(e.target.value)}
-                        placeholder="Enter command..."
+                        placeholder="Enter command (e.g., help, status, logs ai_engine)..."
                         autoFocus
+                        disabled={loading}
                     />
+                    <button type="submit" disabled={loading || !input} className="p-1 hover:text-primary transition-colors">
+                        <Send className="w-4 h-4" />
+                    </button>
                 </form>
             </div>
         </div>

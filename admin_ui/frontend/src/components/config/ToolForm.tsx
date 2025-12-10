@@ -78,19 +78,19 @@ const ToolForm = ({ config, onChange }: ToolFormProps) => {
                         onChange={(e) => updateNestedConfig('ai_identity', 'number', e.target.value)}
                         tooltip="The virtual extension number used by the AI agent."
                     />
-                <FormInput
-                    label="Default Action Timeout (s)"
-                    type="number"
-                    value={config.default_action_timeout || 30}
-                    onChange={(e) => updateConfig('default_action_timeout', parseInt(e.target.value))}
-                    tooltip="Time to wait for tool execution before timing out."
-                />
-                {config.extensions && (
-                    <div className="text-sm text-muted-foreground">
-                        Extensions (read-only): {Object.keys(config.extensions.internal || {}).length} configured. Edit via YAML for now.
-                    </div>
-                )}
-            </div>
+                    <FormInput
+                        label="Default Action Timeout (s)"
+                        type="number"
+                        value={config.default_action_timeout || 30}
+                        onChange={(e) => updateConfig('default_action_timeout', parseInt(e.target.value))}
+                        tooltip="Time to wait for tool execution before timing out."
+                    />
+                    {config.extensions && (
+                        <div className="text-sm text-muted-foreground">
+                            Extensions (read-only): {Object.keys(config.extensions.internal || {}).length} configured. Edit via YAML for now.
+                        </div>
+                    )}
+                </div>
             </div>
 
             {/* Telephony Tools */}
@@ -227,63 +227,81 @@ const ToolForm = ({ config, onChange }: ToolFormProps) => {
                     </div>
                     <div className="space-y-2">
                         {Object.entries(config.extensions?.internal || {}).map(([key, ext]: [string, any]) => (
-                            <div key={key} className="flex flex-col md:flex-row md:items-center gap-2 p-2 border rounded bg-background/50">
-                                <input
-                                    className="flex-1 border rounded px-2 py-1 text-sm"
-                                    placeholder="Key"
-                                    value={key}
-                                    disabled
-                                />
-                                <input
-                                    className="flex-1 border rounded px-2 py-1 text-sm"
-                                    placeholder="Name"
-                                    value={ext.name || ''}
-                                    onChange={(e) => {
-                                        const updated = { ...(config.extensions?.internal || {}) };
-                                        updated[key] = { ...ext, name: e.target.value };
-                                        updateNestedConfig('extensions', 'internal', updated);
-                                    }}
-                                />
-                                <input
-                                    className="flex-1 border rounded px-2 py-1 text-sm"
-                                    placeholder="Dial String"
-                                    value={ext.dial_string || ''}
-                                    onChange={(e) => {
-                                        const updated = { ...(config.extensions?.internal || {}) };
-                                        updated[key] = { ...ext, dial_string: e.target.value };
-                                        updateNestedConfig('extensions', 'internal', updated);
-                                    }}
-                                />
-                                <input
-                                    className="flex-1 border rounded px-2 py-1 text-sm"
-                                    placeholder="Description"
-                                    value={ext.description || ''}
-                                    onChange={(e) => {
-                                        const updated = { ...(config.extensions?.internal || {}) };
-                                        updated[key] = { ...ext, description: e.target.value };
-                                        updateNestedConfig('extensions', 'internal', updated);
-                                    }}
-                                />
-                                <FormSwitch
-                                    label="Transfer"
-                                    checked={ext.transfer ?? true}
-                                    onChange={(e) => {
-                                        const updated = { ...(config.extensions?.internal || {}) };
-                                        updated[key] = { ...ext, transfer: e.target.checked };
-                                        updateNestedConfig('extensions', 'internal', updated);
-                                    }}
-                                    className="mb-0"
-                                />
-                                <button
-                                    onClick={() => {
-                                        const updated = { ...(config.extensions?.internal || {}) };
-                                        delete updated[key];
-                                        updateNestedConfig('extensions', 'internal', updated);
-                                    }}
-                                    className="p-2 text-destructive hover:bg-destructive/10 rounded"
-                                >
-                                    <Trash2 className="w-4 h-4" />
-                                </button>
+                            <div key={key} className="grid grid-cols-1 md:grid-cols-12 gap-2 p-3 border rounded bg-background/50 items-center">
+                                <div className="md:col-span-2">
+                                    <input
+                                        className="w-full border rounded px-2 py-1 text-sm bg-muted"
+                                        placeholder="Key"
+                                        value={key}
+                                        disabled
+                                        title="Extension Key"
+                                    />
+                                </div>
+                                <div className="md:col-span-2">
+                                    <input
+                                        className="w-full border rounded px-2 py-1 text-sm"
+                                        placeholder="Name"
+                                        value={ext.name || ''}
+                                        onChange={(e) => {
+                                            const updated = { ...(config.extensions?.internal || {}) };
+                                            updated[key] = { ...ext, name: e.target.value };
+                                            updateNestedConfig('extensions', 'internal', updated);
+                                        }}
+                                        title="Agent Name"
+                                    />
+                                </div>
+                                <div className="md:col-span-3">
+                                    <input
+                                        className="w-full border rounded px-2 py-1 text-sm"
+                                        placeholder="Dial String"
+                                        value={ext.dial_string || ''}
+                                        onChange={(e) => {
+                                            const updated = { ...(config.extensions?.internal || {}) };
+                                            updated[key] = { ...ext, dial_string: e.target.value };
+                                            updateNestedConfig('extensions', 'internal', updated);
+                                        }}
+                                        title="PJSIP/..."
+                                    />
+                                </div>
+                                <div className="md:col-span-3">
+                                    <input
+                                        className="w-full border rounded px-2 py-1 text-sm"
+                                        placeholder="Description"
+                                        value={ext.description || ''}
+                                        onChange={(e) => {
+                                            const updated = { ...(config.extensions?.internal || {}) };
+                                            updated[key] = { ...ext, description: e.target.value };
+                                            updateNestedConfig('extensions', 'internal', updated);
+                                        }}
+                                        title="Description"
+                                    />
+                                </div>
+                                <div className="md:col-span-1 flex justify-center">
+                                    <FormSwitch
+                                        checked={ext.transfer ?? true}
+                                        onChange={(e) => {
+                                            const updated = { ...(config.extensions?.internal || {}) };
+                                            updated[key] = { ...ext, transfer: e.target.checked };
+                                            updateNestedConfig('extensions', 'internal', updated);
+                                        }}
+                                        className="mb-0"
+                                        label=""
+                                        description=""
+                                    />
+                                </div>
+                                <div className="md:col-span-1 flex justify-end">
+                                    <button
+                                        onClick={() => {
+                                            const updated = { ...(config.extensions?.internal || {}) };
+                                            delete updated[key];
+                                            updateNestedConfig('extensions', 'internal', updated);
+                                        }}
+                                        className="p-2 text-destructive hover:bg-destructive/10 rounded"
+                                        title="Delete Extension"
+                                    >
+                                        <Trash2 className="w-4 h-4" />
+                                    </button>
+                                </div>
                             </div>
                         ))}
                         {Object.keys(config.extensions?.internal || {}).length === 0 && (
