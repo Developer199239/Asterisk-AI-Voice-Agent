@@ -513,6 +513,7 @@ async def detect_local_tier():
 _download_process = None
 _download_output = []
 _download_status = {"running": False, "completed": False, "error": None}
+_download_progress = {"bytes_downloaded": 0, "total_bytes": 0, "percent": 0, "speed_bps": 0, "eta_seconds": None, "start_time": None}
 
 @router.post("/local/download-models")
 async def download_local_models(tier: str = "auto"):
@@ -578,13 +579,20 @@ async def download_local_models(tier: str = "auto"):
 @router.get("/local/download-progress")
 async def get_download_progress():
     """Get current download progress and output."""
-    global _download_output, _download_status
+    global _download_output, _download_status, _download_progress
     
     return {
         "running": _download_status.get("running", False),
         "completed": _download_status.get("completed", False),
         "error": _download_status.get("error"),
-        "output": _download_output[-20:] if _download_output else []  # Last 20 lines
+        "output": _download_output[-20:] if _download_output else [],  # Last 20 lines
+        # Detailed progress info
+        "bytes_downloaded": _download_progress.get("bytes_downloaded", 0),
+        "total_bytes": _download_progress.get("total_bytes", 0),
+        "percent": _download_progress.get("percent", 0),
+        "speed_bps": _download_progress.get("speed_bps", 0),
+        "eta_seconds": _download_progress.get("eta_seconds"),
+        "current_file": _download_progress.get("current_file", "")
     }
 
 
@@ -603,13 +611,15 @@ async def download_single_model(request: SingleModelDownload):
     import zipfile
     import tarfile
     import shutil
+    import time
     from settings import PROJECT_ROOT
     
-    global _download_output, _download_status
+    global _download_output, _download_status, _download_progress
     
     # Reset state
     _download_output = []
     _download_status = {"running": True, "completed": False, "error": None}
+    _download_progress = {"bytes_downloaded": 0, "total_bytes": 0, "percent": 0, "speed_bps": 0, "eta_seconds": None, "start_time": time.time(), "current_file": request.model_id}
     
     # Determine target directory based on type
     if request.type == "stt":
@@ -625,7 +635,7 @@ async def download_single_model(request: SingleModelDownload):
     os.makedirs(target_dir, exist_ok=True)
     
     def download_worker():
-        global _download_output, _download_status
+        global _download_output, _download_status, _download_progress
         try:
             _download_output.append(f"📥 Starting download: {request.model_id}")
             _download_output.append(f"   URL: {request.download_url}")
@@ -638,6 +648,9 @@ async def download_single_model(request: SingleModelDownload):
             elif '.tar.gz' in url_lower or '.tgz' in url_lower:
                 ext = '.tar.gz'
                 is_archive = True
+            elif '.tar.bz2' in url_lower:
+                ext = '.tar.bz2'
+                is_archive = True
             elif '.tar' in url_lower:
                 ext = '.tar'
                 is_archive = True
@@ -648,17 +661,43 @@ async def download_single_model(request: SingleModelDownload):
             
             # Download to temp file
             temp_file = os.path.join(target_dir, f"temp_download{ext}")
+            start_time = time.time()
+            last_update_time = start_time
             
             def progress_hook(block_num, block_size, total_size):
+                nonlocal last_update_time
+                global _download_progress, _download_output
+                
+                bytes_downloaded = block_num * block_size
+                current_time = time.time()
+                elapsed = current_time - start_time
+                
                 if total_size > 0:
-                    percent = min(100, (block_num * block_size * 100) // total_size)
-                    if block_num % 100 == 0:  # Update every 100 blocks
-                        _download_output.append(f"   Progress: {percent}%")
+                    percent = min(100, (bytes_downloaded * 100) // total_size)
+                    speed_bps = bytes_downloaded / elapsed if elapsed > 0 else 0
+                    remaining_bytes = total_size - bytes_downloaded
+                    eta_seconds = remaining_bytes / speed_bps if speed_bps > 0 else None
+                    
+                    _download_progress["bytes_downloaded"] = bytes_downloaded
+                    _download_progress["total_bytes"] = total_size
+                    _download_progress["percent"] = percent
+                    _download_progress["speed_bps"] = int(speed_bps)
+                    _download_progress["eta_seconds"] = int(eta_seconds) if eta_seconds else None
+                    
+                    # Update output every 2 seconds
+                    if current_time - last_update_time >= 2:
+                        last_update_time = current_time
+                        mb_done = bytes_downloaded / (1024 * 1024)
+                        mb_total = total_size / (1024 * 1024)
+                        speed_mbps = speed_bps / (1024 * 1024)
+                        eta_str = f"{int(eta_seconds // 60)}m {int(eta_seconds % 60)}s" if eta_seconds else "calculating..."
+                        _download_output.append(f"   {mb_done:.1f}/{mb_total:.1f} MB ({percent}%) - {speed_mbps:.2f} MB/s - ETA: {eta_str}")
                         if len(_download_output) > 50:
                             _download_output.pop(0)
             
             urllib.request.urlretrieve(request.download_url, temp_file, progress_hook)
             _download_output.append("✅ Download complete, extracting...")
+            _download_progress["percent"] = 100
             
             if is_archive:
                 # Extract archive
@@ -669,15 +708,16 @@ async def download_single_model(request: SingleModelDownload):
                         root_folder = names[0].split('/')[0] if names else None
                         zf.extractall(target_dir)
                         _download_output.append(f"✅ Extracted to {target_dir}/{root_folder}")
-                elif ext in ['.tar.gz', '.tar', '.tgz']:
+                elif ext in ['.tar.gz', '.tar', '.tgz', '.tar.bz2']:
                     with tarfile.open(temp_file, 'r:*') as tf:
                         names = tf.getnames()
                         root_folder = names[0].split('/')[0] if names else None
                         tf.extractall(target_dir)
                         _download_output.append(f"✅ Extracted to {target_dir}/{root_folder}")
                 
-                # Clean up temp file
+                # Clean up archive file after extraction
                 os.remove(temp_file)
+                _download_output.append("🧹 Cleaned up archive file")
             else:
                 # Single file - rename to model_path or keep original name
                 if request.model_path:
@@ -697,6 +737,12 @@ async def download_single_model(request: SingleModelDownload):
             _download_status["running"] = False
             _download_status["error"] = str(e)
             _download_output.append(f"❌ Error: {str(e)}")
+            # Clean up partial download on error
+            if os.path.exists(temp_file):
+                try:
+                    os.remove(temp_file)
+                except:
+                    pass
     
     # Start download thread
     thread = threading.Thread(target=download_worker, daemon=True)
