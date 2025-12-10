@@ -186,14 +186,31 @@ check_compose() {
     elif command -v docker-compose &>/dev/null; then
         COMPOSE_CMD="docker-compose"
         COMPOSE_VER=$(docker-compose version --short 2>/dev/null | sed 's/^v//')
-        # Compose v1 is HARD FAIL
+        # Compose v1 is HARD FAIL - offer to upgrade
         log_fail "Docker Compose v1 detected - EOL July 2023, security risk"
         log_info "  Upgrade: https://docs.docker.com/compose/install/"
+        
+        # Offer auto-upgrade on supported systems
+        if [ "$OS_FAMILY" = "debian" ]; then
+            FIX_CMDS+=("sudo apt-get update && sudo apt-get install -y docker-compose-plugin")
+            log_info "  Auto-fix available: will install docker-compose-plugin"
+        elif [ "$OS_FAMILY" = "rhel" ]; then
+            FIX_CMDS+=("sudo dnf install -y docker-compose-plugin || sudo yum install -y docker-compose-plugin")
+            log_info "  Auto-fix available: will install docker-compose-plugin"
+        fi
         return 1
     fi
     
     if [ -z "$COMPOSE_CMD" ]; then
         log_fail "Docker Compose not found"
+        # Offer to install on supported systems
+        if [ "$OS_FAMILY" = "debian" ]; then
+            FIX_CMDS+=("sudo apt-get update && sudo apt-get install -y docker-compose-plugin")
+            log_info "  Auto-fix available: will install docker-compose-plugin"
+        elif [ "$OS_FAMILY" = "rhel" ]; then
+            FIX_CMDS+=("sudo dnf install -y docker-compose-plugin || sudo yum install -y docker-compose-plugin")
+            log_info "  Auto-fix available: will install docker-compose-plugin"
+        fi
         return 1
     fi
     
@@ -266,15 +283,18 @@ check_selinux() {
 check_env() {
     if [ -f "$SCRIPT_DIR/.env" ]; then
         log_ok ".env file exists"
+        log_info "  Tip: For local_only pipeline, no API keys needed!"
     elif [ -f "$SCRIPT_DIR/.env.example" ]; then
         if [ "$APPLY_FIXES" = true ]; then
             cp "$SCRIPT_DIR/.env.example" "$SCRIPT_DIR/.env"
             log_ok "Created .env from .env.example"
+            log_info "  Tip: For local_only pipeline, no API keys needed!"
+            log_info "  For cloud providers, edit .env to add your API keys"
         else
             log_warn ".env file missing"
             FIX_CMDS+=("cp $SCRIPT_DIR/.env.example $SCRIPT_DIR/.env")
+            log_info "  Tip: For local_only pipeline, no API keys needed!"
         fi
-        log_warn "  Edit .env to add your API keys"
     else
         log_warn ".env.example not found"
     fi
@@ -384,14 +404,34 @@ apply_fixes() {
     echo ""
     echo -e "${YELLOW}Applying fixes...${NC}"
     
+    local all_success=true
     for cmd in "${FIX_CMDS[@]}"; do
         echo "  Running: $cmd"
         if eval "$cmd" 2>/dev/null; then
             echo -e "    ${GREEN}✓${NC} Success"
         else
             echo -e "    ${RED}✗${NC} Failed (may need sudo)"
+            all_success=false
         fi
     done
+    
+    # Re-validate after applying fixes
+    if [ "$all_success" = true ]; then
+        echo ""
+        echo -e "${BLUE}Re-validating after fixes...${NC}"
+        
+        # Clear arrays and re-run checks
+        WARNINGS=()
+        FAILURES=()
+        FIX_CMDS=()
+        
+        # Re-run the checks silently first, then show summary
+        check_docker >/dev/null 2>&1
+        check_compose >/dev/null 2>&1
+        check_directories >/dev/null 2>&1
+        check_selinux >/dev/null 2>&1
+        check_env >/dev/null 2>&1
+    fi
 }
 
 # ============================================================================
