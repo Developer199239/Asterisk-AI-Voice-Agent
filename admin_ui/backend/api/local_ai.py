@@ -395,6 +395,11 @@ async def delete_model(request: DeleteModelRequest):
     model_path = request.model_path
     model_type = request.type
     
+    # Handle path mapping: local_ai_server returns /app/models/...
+    # but admin_ui has models at /app/project/models/...
+    if model_path.startswith('/app/models/'):
+        model_path = model_path.replace('/app/models/', f'{PROJECT_ROOT}/models/')
+    
     # Security: Ensure path is within the models directory
     models_base = os.path.join(PROJECT_ROOT, "models")
     
