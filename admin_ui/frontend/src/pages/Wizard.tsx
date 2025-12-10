@@ -22,9 +22,11 @@ interface SetupConfig {
     ai_role: string;
     // Local AI Config
     local_stt_backend?: string;
+    local_stt_model?: string;
     kroko_embedded?: boolean;
     kroko_api_key?: string;
     local_tts_backend?: string;
+    local_tts_model?: string;
     kokoro_mode?: string;
     kokoro_voice?: string;
     kokoro_api_key?: string;
@@ -53,8 +55,10 @@ const Wizard = () => {
         ai_role: 'Helpful Assistant',
         // Defaults
         local_stt_backend: 'vosk',
+        local_stt_model: '',
         kroko_embedded: true,
         local_tts_backend: 'piper',
+        local_tts_model: '',
         kokoro_mode: 'local',
         kokoro_voice: 'af_heart',
         local_llm_model: 'phi-3-mini'
@@ -164,6 +168,36 @@ const Wizard = () => {
             loadModelsAndLanguages();
         }
     }, [step]);
+
+    // Auto-select first available model when language changes
+    useEffect(() => {
+        if (modelCatalog?.stt?.length > 0) {
+            const sttModels = modelCatalog.stt.filter((m: any) => 
+                m.language === selectedLanguage || m.language === 'multi'
+            );
+            const ttsModels = modelCatalog.tts.filter((m: any) => 
+                m.language === selectedLanguage || m.language === 'multi'
+            );
+            
+            // Auto-select first STT model for the language
+            if (sttModels.length > 0 && !sttModels.find((m: any) => m.id === config.local_stt_model)) {
+                setConfig(prev => ({
+                    ...prev,
+                    local_stt_model: sttModels[0].id,
+                    local_stt_backend: sttModels[0].backend
+                }));
+            }
+            
+            // Auto-select first TTS model for the language
+            if (ttsModels.length > 0 && !ttsModels.find((m: any) => m.id === config.local_tts_model)) {
+                setConfig(prev => ({
+                    ...prev,
+                    local_tts_model: ttsModels[0].id,
+                    local_tts_backend: ttsModels[0].backend
+                }));
+            }
+        }
+    }, [selectedLanguage, modelCatalog]);
 
     const handleSkip = () => {
         setShowSkipConfirm(true);
@@ -954,30 +988,46 @@ const Wizard = () => {
                                         <h4 className="font-medium text-sm text-muted-foreground uppercase tracking-wider">Speech-to-Text (STT)</h4>
                                         <div className="grid grid-cols-2 gap-4">
                                             <div>
-                                                <label className="text-sm font-medium">Backend</label>
+                                                <label className="text-sm font-medium">Model</label>
                                                 <select
                                                     className="w-full p-2 rounded-md border border-input bg-background mt-1"
-                                                    value={
-                                                        config.local_stt_backend === 'kroko'
-                                                            ? (config.kroko_embedded ? 'kroko_embedded' : 'kroko_cloud')
-                                                            : config.local_stt_backend
-                                                    }
+                                                    value={config.local_stt_model || config.local_stt_backend}
                                                     onChange={e => {
                                                         const val = e.target.value;
-                                                        if (val === 'kroko_embedded') {
-                                                            setConfig({ ...config, local_stt_backend: 'kroko', kroko_embedded: true });
+                                                        const model = modelCatalog?.stt?.find((m: any) => m.id === val);
+                                                        if (model) {
+                                                            setConfig({ 
+                                                                ...config, 
+                                                                local_stt_backend: model.backend,
+                                                                local_stt_model: model.id,
+                                                                kroko_embedded: model.backend === 'kroko' && model.id.includes('embedded')
+                                                            });
                                                         } else if (val === 'kroko_cloud') {
-                                                            setConfig({ ...config, local_stt_backend: 'kroko', kroko_embedded: false });
-                                                        } else {
-                                                            setConfig({ ...config, local_stt_backend: val });
+                                                            setConfig({ ...config, local_stt_backend: 'kroko', local_stt_model: val, kroko_embedded: false });
                                                         }
                                                     }}
                                                 >
-                                                    <option value="vosk">Vosk (Local)</option>
-                                                    <option value="kroko_embedded">Kroko (Embedded)</option>
-                                                    <option value="kroko_cloud">Kroko (Cloud)</option>
-                                                    <option value="sherpa">Sherpa (Local)</option>
+                                                    {/* Language-specific models */}
+                                                    {modelCatalog?.stt?.filter((m: any) => 
+                                                        m.language === selectedLanguage || m.language === 'multi'
+                                                    ).map((model: any) => (
+                                                        <option key={model.id} value={model.id}>
+                                                            {model.name} ({model.backend}) - {model.size_display}
+                                                        </option>
+                                                    ))}
+                                                    {/* Fallback if no models for language */}
+                                                    {(!modelCatalog?.stt || modelCatalog.stt.filter((m: any) => 
+                                                        m.language === selectedLanguage || m.language === 'multi'
+                                                    ).length === 0) && (
+                                                        <>
+                                                            <option value="vosk">Vosk (Local)</option>
+                                                            <option value="kroko_cloud">Kroko (Cloud)</option>
+                                                        </>
+                                                    )}
                                                 </select>
+                                                <p className="text-xs text-muted-foreground mt-1">
+                                                    Models filtered for {availableLanguages.language_names?.[selectedLanguage] || selectedLanguage}
+                                                </p>
                                             </div>
                                         </div>
                                         {config.local_stt_backend === 'kroko' && !config.kroko_embedded && (
@@ -999,29 +1049,45 @@ const Wizard = () => {
                                         <h4 className="font-medium text-sm text-muted-foreground uppercase tracking-wider">Text-to-Speech (TTS)</h4>
                                         <div className="grid grid-cols-2 gap-4">
                                             <div>
-                                                <label className="text-sm font-medium">Backend</label>
+                                                <label className="text-sm font-medium">Voice</label>
                                                 <select
                                                     className="w-full p-2 rounded-md border border-input bg-background mt-1"
-                                                    value={config.local_tts_backend}
-                                                    onChange={e => setConfig({ ...config, local_tts_backend: e.target.value })}
+                                                    value={config.local_tts_model || config.local_tts_backend}
+                                                    onChange={e => {
+                                                        const val = e.target.value;
+                                                        const model = modelCatalog?.tts?.find((m: any) => m.id === val);
+                                                        if (model) {
+                                                            setConfig({ 
+                                                                ...config, 
+                                                                local_tts_backend: model.backend,
+                                                                local_tts_model: model.id,
+                                                                kokoro_mode: model.backend === 'kokoro' ? 'local' : config.kokoro_mode
+                                                            });
+                                                        }
+                                                    }}
                                                 >
-                                                    <option value="piper">Piper (Local)</option>
-                                                    <option value="kokoro">Kokoro (Premium)</option>
+                                                    {/* Language-specific voices */}
+                                                    {modelCatalog?.tts?.filter((m: any) => 
+                                                        m.language === selectedLanguage || m.language === 'multi'
+                                                    ).map((model: any) => (
+                                                        <option key={model.id} value={model.id}>
+                                                            {model.name} ({model.backend}) - {model.size_display}
+                                                        </option>
+                                                    ))}
+                                                    {/* Fallback if no models for language */}
+                                                    {(!modelCatalog?.tts || modelCatalog.tts.filter((m: any) => 
+                                                        m.language === selectedLanguage || m.language === 'multi'
+                                                    ).length === 0) && (
+                                                        <>
+                                                            <option value="piper">Piper (Local)</option>
+                                                            <option value="kokoro">Kokoro (Premium)</option>
+                                                        </>
+                                                    )}
                                                 </select>
+                                                <p className="text-xs text-muted-foreground mt-1">
+                                                    Voices filtered for {availableLanguages.language_names?.[selectedLanguage] || selectedLanguage}
+                                                </p>
                                             </div>
-                                            {config.local_tts_backend === 'kokoro' && (
-                                                <div>
-                                                    <label className="text-sm font-medium">Mode</label>
-                                                    <select
-                                                        className="w-full p-2 rounded-md border border-input bg-background mt-1"
-                                                        value={config.kokoro_mode}
-                                                        onChange={e => setConfig({ ...config, kokoro_mode: e.target.value })}
-                                                    >
-                                                        <option value="local">Local (On-Premise)</option>
-                                                        <option value="api">Cloud API</option>
-                                                    </select>
-                                                </div>
-                                            )}
                                         </div>
                                         {config.local_tts_backend === 'kokoro' && config.kokoro_mode === 'api' && (
                                             <div>
@@ -1033,22 +1099,6 @@ const Wizard = () => {
                                                     onChange={e => setConfig({ ...config, kokoro_api_key: e.target.value })}
                                                     placeholder="Kokoro API Key"
                                                 />
-                                            </div>
-                                        )}
-                                        {config.local_tts_backend === 'kokoro' && config.kokoro_mode === 'local' && (
-                                            <div>
-                                                <label className="text-sm font-medium">Voice</label>
-                                                <select
-                                                    className="w-full p-2 rounded-md border border-input bg-background mt-1"
-                                                    value={config.kokoro_voice}
-                                                    onChange={e => setConfig({ ...config, kokoro_voice: e.target.value })}
-                                                >
-                                                    <option value="af_heart">Heart (Female, US)</option>
-                                                    <option value="af_bella">Bella (Female, US)</option>
-                                                    <option value="af_nicole">Nicole (Female, US)</option>
-                                                    <option value="am_adam">Adam (Male, US)</option>
-                                                    <option value="bf_emma">Emma (Female, UK)</option>
-                                                </select>
                                             </div>
                                         )}
                                     </div>
