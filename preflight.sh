@@ -70,20 +70,27 @@ done
 # OS Detection
 # ============================================================================
 detect_os() {
+    IS_SANGOMA=false
+    
+    # Check for Sangoma/FreePBX first (it's Debian-based but customized)
+    if [ -f /etc/sangoma/pbx ] || [ -f /etc/freepbx.conf ]; then
+        IS_SANGOMA=true
+        OS_ID="sangoma"
+        OS_FAMILY="debian"
+    fi
+    
     if [ -f /etc/os-release ]; then
         . /etc/os-release
-        OS_ID="$ID"
+        if [ "$IS_SANGOMA" = false ]; then
+            OS_ID="$ID"
+        fi
         OS_VERSION="${VERSION_ID:-unknown}"
-        case "$ID" in
-            ubuntu|debian|linuxmint) OS_FAMILY="debian" ;;
-            centos|rhel|rocky|almalinux|fedora) OS_FAMILY="rhel" ;;
-            *) 
-                if [ -f /etc/sangoma/pbx ] || [ -f /etc/freepbx.conf ]; then
-                    OS_FAMILY="rhel"
-                    OS_ID="sangoma"
-                fi
-                ;;
-        esac
+        if [ "$IS_SANGOMA" = false ]; then
+            case "$ID" in
+                ubuntu|debian|linuxmint) OS_FAMILY="debian" ;;
+                centos|rhel|rocky|almalinux|fedora) OS_FAMILY="rhel" ;;
+            esac
+        fi
     fi
     
     # Check architecture (HARD FAIL for non-x86_64)
@@ -188,29 +195,28 @@ check_compose() {
         COMPOSE_VER=$(docker-compose version --short 2>/dev/null | sed 's/^v//')
         # Compose v1 is HARD FAIL - offer to upgrade
         log_fail "Docker Compose v1 detected - EOL July 2023, security risk"
-        log_info "  Upgrade: https://docs.docker.com/compose/install/"
         
-        # Offer auto-upgrade on supported systems
-        if [ "$OS_FAMILY" = "debian" ]; then
-            FIX_CMDS+=("sudo apt-get update && sudo apt-get install -y docker-compose-plugin")
-            log_info "  Auto-fix available: will install docker-compose-plugin"
-        elif [ "$OS_FAMILY" = "rhel" ]; then
-            FIX_CMDS+=("sudo dnf install -y docker-compose-plugin || sudo yum install -y docker-compose-plugin")
-            log_info "  Auto-fix available: will install docker-compose-plugin"
-        fi
+        # Manual install works on all distros (including Sangoma/FreePBX)
+        log_info "  Fix: Install Docker Compose v2 manually:"
+        log_info "    sudo curl -L 'https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64' -o /usr/local/bin/docker-compose"
+        log_info "    sudo chmod +x /usr/local/bin/docker-compose"
+        log_info "    sudo mkdir -p /usr/local/lib/docker/cli-plugins"
+        log_info "    sudo ln -sf /usr/local/bin/docker-compose /usr/local/lib/docker/cli-plugins/docker-compose"
+        
+        # Add to FIX_CMDS for --apply-fixes
+        FIX_CMDS+=("sudo curl -L 'https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64' -o /usr/local/bin/docker-compose && sudo chmod +x /usr/local/bin/docker-compose && sudo mkdir -p /usr/local/lib/docker/cli-plugins && sudo ln -sf /usr/local/bin/docker-compose /usr/local/lib/docker/cli-plugins/docker-compose")
         return 1
     fi
     
     if [ -z "$COMPOSE_CMD" ]; then
         log_fail "Docker Compose not found"
-        # Offer to install on supported systems
-        if [ "$OS_FAMILY" = "debian" ]; then
-            FIX_CMDS+=("sudo apt-get update && sudo apt-get install -y docker-compose-plugin")
-            log_info "  Auto-fix available: will install docker-compose-plugin"
-        elif [ "$OS_FAMILY" = "rhel" ]; then
-            FIX_CMDS+=("sudo dnf install -y docker-compose-plugin || sudo yum install -y docker-compose-plugin")
-            log_info "  Auto-fix available: will install docker-compose-plugin"
-        fi
+        log_info "  Fix: Install Docker Compose v2 manually:"
+        log_info "    sudo curl -L 'https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64' -o /usr/local/bin/docker-compose"
+        log_info "    sudo chmod +x /usr/local/bin/docker-compose"
+        log_info "    sudo mkdir -p /usr/local/lib/docker/cli-plugins"
+        log_info "    sudo ln -sf /usr/local/bin/docker-compose /usr/local/lib/docker/cli-plugins/docker-compose"
+        
+        FIX_CMDS+=("sudo curl -L 'https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64' -o /usr/local/bin/docker-compose && sudo chmod +x /usr/local/bin/docker-compose && sudo mkdir -p /usr/local/lib/docker/cli-plugins && sudo ln -sf /usr/local/bin/docker-compose /usr/local/lib/docker/cli-plugins/docker-compose")
         return 1
     fi
     
@@ -471,20 +477,32 @@ print_summary() {
         touch "$SCRIPT_DIR/.preflight-ok"
         echo -e "${GREEN}✓ All checks passed!${NC}"
         echo ""
-        echo "Start the Admin UI:"
-        echo "  ${COMPOSE_CMD:-docker compose} up -d"
+        echo "Next steps:"
         echo ""
-        echo "Then open: http://localhost:3003"
+        echo "  1. Start the Admin UI:"
+        echo "     ${COMPOSE_CMD:-docker compose} up -d admin-ui"
+        echo ""
+        echo "  2. Open: http://localhost:3003"
+        echo ""
+        echo "  3. For local_only pipeline, also start:"
+        echo "     ${COMPOSE_CMD:-docker compose} up -d local-ai-server"
+        echo ""
     elif [ ${#FAILURES[@]} -eq 0 ]; then
         touch "$SCRIPT_DIR/.preflight-ok"
         echo -e "${YELLOW}Checks passed with warnings.${NC}"
         echo ""
         echo "You can proceed, but consider addressing the warnings above."
         echo ""
-        echo "Start the Admin UI:"
-        echo "  ${COMPOSE_CMD:-docker compose} up -d"
+        echo "Next steps:"
         echo ""
-        echo "Then open: http://localhost:3003"
+        echo "  1. Start the Admin UI:"
+        echo "     ${COMPOSE_CMD:-docker compose} up -d admin-ui"
+        echo ""
+        echo "  2. Open: http://localhost:3003"
+        echo ""
+        echo "  3. For local_only pipeline, also start:"
+        echo "     ${COMPOSE_CMD:-docker compose} up -d local-ai-server"
+        echo ""
     else
         echo -e "${RED}Cannot proceed - fix failures above first.${NC}"
     fi
