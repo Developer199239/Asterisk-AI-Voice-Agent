@@ -1,11 +1,19 @@
 from fastapi import APIRouter, HTTPException, UploadFile, File
 import yaml
 import os
+import re
 from pydantic import BaseModel
 from typing import Dict, Any
 import settings
 
 router = APIRouter()
+
+# Regex to strip ANSI escape codes from logs
+ANSI_ESCAPE = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+
+def strip_ansi_codes(text: str) -> str:
+    """Remove ANSI escape codes from text for clean log files."""
+    return ANSI_ESCAPE.sub('', text)
 
 class ConfigUpdate(BaseModel):
     content: str
@@ -367,19 +375,30 @@ async def export_logs():
                             env_keys.append(f"{key}=[REDACTED]")
                 zip_file.writestr('.env.sanitized', '\n'.join(env_keys))
             
-            # 3. Logs
-            # Assuming logs are in /app/logs or similar. If not, try to find them.
-            # Local dev might be different from Docker.
-            log_dirs = ['/app/logs', './logs', '../logs']
-            found_logs = False
-            for log_dir in log_dirs:
-                if os.path.exists(log_dir):
-                    for log_file in glob.glob(os.path.join(log_dir, "*.log")):
-                        zip_file.write(log_file, os.path.basename(log_file))
-                        found_logs = True
-            
-            if not found_logs:
-                zip_file.writestr('logs_info.txt', 'No log files found in default locations.')
+            # 3. Logs from Docker Containers
+            try:
+                import docker
+                client = docker.from_env()
+                containers_to_log = ['ai_engine', 'local_ai_server', 'admin_ui']
+                
+                found_logs = False
+                for container_name in containers_to_log:
+                    try:
+                        container = client.containers.get(container_name)
+                        logs = container.logs(tail=2000).decode('utf-8', errors='replace')
+                        if logs:
+                            # Strip ANSI escape codes for clean log files
+                            clean_logs = strip_ansi_codes(logs)
+                            zip_file.writestr(f'{container_name}.log', clean_logs)
+                            found_logs = True
+                    except Exception as e:
+                        zip_file.writestr(f'{container_name}_error.txt', f"Could not fetch logs: {str(e)}")
+                
+                if not found_logs:
+                    zip_file.writestr('logs_info.txt', 'No logs retrieved from containers.')
+
+            except Exception as e:
+                 zip_file.writestr('docker_error.txt', f"Failed to connect to Docker API: {str(e)}")
 
             # Add timestamp
             timestamp = datetime.now().isoformat()
