@@ -30,6 +30,7 @@ import EnvPage from './pages/System/EnvPage';
 import DockerPage from './pages/System/DockerPage';
 import LogsPage from './pages/System/LogsPage';
 import TerminalPage from './pages/System/TerminalPage';
+import ModelsPage from './pages/System/ModelsPage';
 
 // Wizard
 import Wizard from './pages/Wizard';
@@ -141,6 +142,7 @@ function App() {
                                         <Route path="/docker" element={<DockerPage />} />
                                         <Route path="/logs" element={<LogsPage />} />
                                         <Route path="/terminal" element={<TerminalPage />} />
+                                        <Route path="/models" element={<ModelsPage />} />
 
                                         {/* Help */}
                                         <Route path="/help" element={<HelpPage />} />

@@ -77,7 +77,17 @@ const Wizard = () => {
     const [startingEngine, setStartingEngine] = useState(false);
 
     // Model selection state
-
+    const [selectedLanguage, setSelectedLanguage] = useState<string>('en-US');
+    const [availableLanguages, setAvailableLanguages] = useState<{
+        languages: Record<string, { stt: string[]; tts: string[]; region: string }>;
+        language_names: Record<string, string>;
+        region_names: Record<string, string>;
+    }>({ languages: {}, language_names: {}, region_names: {} });
+    const [modelCatalog, setModelCatalog] = useState<{
+        stt: any[];
+        tts: any[];
+        llm: any[];
+    }>({ stt: [], tts: [], llm: [] });
 
     // Local AI Server state
     const [localAIStatus, setLocalAIStatus] = useState<{
@@ -132,6 +142,28 @@ const Wizard = () => {
         };
         loadExistingConfig();
     }, []);
+
+    // Load available languages and models when reaching local AI step
+    useEffect(() => {
+        const loadModelsAndLanguages = async () => {
+            try {
+                const res = await axios.get('/api/wizard/local/available-models');
+                if (res.data) {
+                    setModelCatalog(res.data.catalog);
+                    setAvailableLanguages({
+                        languages: res.data.languages,
+                        language_names: res.data.language_names,
+                        region_names: res.data.region_names
+                    });
+                }
+            } catch (err) {
+                console.log('Failed to load model catalog');
+            }
+        };
+        if (step === 3) {
+            loadModelsAndLanguages();
+        }
+    }, [step]);
 
     const handleSkip = () => {
         setShowSkipConfirm(true);
@@ -850,6 +882,73 @@ const Wizard = () => {
                                 <div className="space-y-6 border-t pt-6">
                                     <h3 className="font-medium text-lg">Local AI Configuration</h3>
 
+                                    {/* Language Selection */}
+                                    <div className="space-y-3 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
+                                        <h4 className="font-medium text-sm text-blue-700 dark:text-blue-300 uppercase tracking-wider flex items-center gap-2">
+                                            🌍 Language Selection
+                                        </h4>
+                                        <p className="text-sm text-muted-foreground">
+                                            Choose your preferred language. STT and TTS models will be filtered accordingly.
+                                        </p>
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <div>
+                                                <label className="text-sm font-medium">Primary Language</label>
+                                                <select
+                                                    className="w-full p-2 rounded-md border border-input bg-background mt-1"
+                                                    value={selectedLanguage}
+                                                    onChange={e => setSelectedLanguage(e.target.value)}
+                                                >
+                                                    <optgroup label="🌟 Popular">
+                                                        <option value="en-US">English (US)</option>
+                                                        <option value="en-GB">English (UK)</option>
+                                                        <option value="es-ES">Spanish</option>
+                                                        <option value="fr-FR">French</option>
+                                                        <option value="de-DE">German</option>
+                                                    </optgroup>
+                                                    <optgroup label="🇪🇺 European">
+                                                        <option value="it-IT">Italian</option>
+                                                        <option value="pt-BR">Portuguese (Brazil)</option>
+                                                        <option value="nl-NL">Dutch</option>
+                                                        <option value="ru-RU">Russian</option>
+                                                        <option value="pl-PL">Polish</option>
+                                                        <option value="uk-UA">Ukrainian</option>
+                                                        <option value="cs-CZ">Czech</option>
+                                                        <option value="sv-SE">Swedish</option>
+                                                        <option value="el-GR">Greek</option>
+                                                        <option value="tr-TR">Turkish</option>
+                                                        <option value="da-DK">Danish</option>
+                                                        <option value="fi-FI">Finnish</option>
+                                                        <option value="hu-HU">Hungarian</option>
+                                                        <option value="no-NO">Norwegian</option>
+                                                    </optgroup>
+                                                    <optgroup label="🌏 Asian">
+                                                        <option value="zh-CN">Chinese (Mandarin)</option>
+                                                        <option value="ja-JP">Japanese</option>
+                                                        <option value="ko-KR">Korean</option>
+                                                        <option value="hi-IN">Hindi</option>
+                                                        <option value="vi-VN">Vietnamese</option>
+                                                    </optgroup>
+                                                    <optgroup label="🌍 Other">
+                                                        <option value="ar">Arabic</option>
+                                                        <option value="fa-IR">Farsi/Persian</option>
+                                                        <option value="sw">Swahili</option>
+                                                    </optgroup>
+                                                </select>
+                                            </div>
+                                            <div className="flex items-end">
+                                                <p className="text-xs text-muted-foreground">
+                                                    {availableLanguages.languages[selectedLanguage] ? (
+                                                        <>
+                                                            <span className="text-green-600 dark:text-green-400">✓</span> {availableLanguages.languages[selectedLanguage]?.stt?.length || 0} STT models, {availableLanguages.languages[selectedLanguage]?.tts?.length || 0} TTS voices available
+                                                        </>
+                                                    ) : (
+                                                        'Loading...'
+                                                    )}
+                                                </p>
+                                            </div>
+                                        </div>
+                                    </div>
+
                                     {/* STT Config */}
                                     <div className="space-y-3 p-4 bg-muted/30 rounded-lg border">
                                         <h4 className="font-medium text-sm text-muted-foreground uppercase tracking-wider">Speech-to-Text (STT)</h4>
@@ -991,7 +1090,8 @@ const Wizard = () => {
                                                             llm: config.local_llm_model,
                                                             tts: config.local_tts_backend,
                                                             kroko_embedded: config.kroko_embedded,
-                                                            kokoro_mode: config.kokoro_mode
+                                                            kokoro_mode: config.kokoro_mode,
+                                                            language: selectedLanguage
                                                         });
                                                         const pollProgress = async () => {
                                                             try {
@@ -1071,6 +1171,10 @@ const Wizard = () => {
                                 </p>
                                 <p className="text-sm text-green-700 dark:text-green-400 mt-1">
                                     Click Next to continue with the setup.
+                                </p>
+                                <p className="text-sm text-blue-600 dark:text-blue-400 mt-2 bg-blue-50 dark:bg-blue-900/20 p-2 rounded">
+                                    💡 <strong>Tip:</strong> You can download additional models and voices later from{' '}
+                                    <span className="font-semibold">System → Models</span> in the Admin UI.
                                 </p>
                             </div>
                         )}
