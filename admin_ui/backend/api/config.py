@@ -187,18 +187,20 @@ async def test_provider_connection(request: ProviderTestRequest):
         elif 'ws_url' in provider_config:
             # Local provider (WebSocket)
             ws_url = provider_config.get('ws_url', '')
-            # Convert ws:// to http:// for health check
-            http_url = ws_url.replace('ws://', 'http://').replace('wss://', 'https://')
-            if '/ws' in http_url:
-                http_url = http_url.replace('/ws', '')
-            async with httpx.AsyncClient() as client:
-                try:
-                    response = await client.get(f"{http_url}/health", timeout=5.0)
-                    if response.status_code == 200:
-                        return {"success": True, "message": "Local AI server is reachable"}
-                except:
-                    pass
-                return {"success": False, "message": "Cannot reach local AI server"}
+            if not ws_url:
+                 return {"success": False, "message": "No WebSocket URL provided"}
+            
+            try:
+                import websockets
+                # Try connecting to the WebSocket
+                async with websockets.connect(ws_url, open_timeout=5.0) as ws:
+                    await ws.close()
+                return {"success": True, "message": "Local AI server is reachable via WebSocket"}
+            except ImportError:
+                 return {"success": False, "message": "websockets library not installed"}
+            except Exception as e:
+                # If local-ai-server is on host network, ensure we use host.docker.internal or host networking properties
+                return {"success": False, "message": f"Cannot reach local AI server at {ws_url}. Error: {str(e)}"}
                 
         elif 'model' in provider_config or 'stt_model' in provider_config:
             # Check if it's Deepgram or OpenAI standard
