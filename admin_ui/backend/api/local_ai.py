@@ -133,15 +133,8 @@ async def list_available_models():
                         size_mb=get_dir_size_mb(item_path)
                     ))
     
-    # Kroko Cloud API (Always available)
-    stt_models["kroko"].append(ModelInfo(
-        id="kroko_cloud",
-        name="Kroko Cloud API",
-        path="wss://app.kroko.ai/api/v1/transcripts/streaming",
-        type="stt",
-        backend="kroko",
-        size_mb=0
-    ))
+    # Note: Kroko Cloud API is not added here since it's a cloud service, not an installed model
+    # It's available through the catalog but shouldn't appear in "installed" models list
     
     # Scan TTS models
     tts_dir = os.path.join(models_dir, "tts")
