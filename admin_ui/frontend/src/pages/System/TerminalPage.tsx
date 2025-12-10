@@ -30,7 +30,7 @@ const TerminalPage = () => {
                     ];
 
                 case 'status':
-                    const health = await axios.get('/api/health');
+                    const health = await axios.get('/api/system/health');
                     return [
                         'System Health Status:',
                         JSON.stringify(health.data, null, 2)

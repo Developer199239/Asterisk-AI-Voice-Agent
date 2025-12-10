@@ -151,7 +151,38 @@ async def test_provider_connection(request: ProviderTestRequest):
                             return line.split('=', 1)[1].strip()
             return ''
         
-        provider_config = request.config
+        # Helper to substitute environment variables in config values
+        def substitute_env_vars(item):
+            import re
+            if isinstance(item, dict):
+                return {k: substitute_env_vars(v) for k, v in item.items()}
+            elif isinstance(item, list):
+                return [substitute_env_vars(i) for i in item]
+            elif isinstance(item, str):
+                # Match ${VAR} or ${VAR:-default} or ${VAR:=default}
+                # Capture group 1: Var name, Group 2: Default value (optional)
+                pattern = r'\$\{([a-zA-Z_][a-zA-Z0-9_]*)(?:[:=-]([^}]*))?\}'
+                
+                def replace(match):
+                    var_name = match.group(1)
+                    default_value = match.group(2)
+                    # Check env var first
+                    val = os.getenv(var_name)
+                    if val is not None:
+                        return val
+                    # Then check if we have a default value
+                    if default_value is not None:
+                        return default_value
+                    # If neither, keep original string (or empty?)
+                    # Keeping original helps debug missing vars, but might break URLs.
+                    # Standard behavior would be empty string if no default.
+                    return "" 
+                
+                return re.sub(pattern, replace, item)
+            return item
+
+        # Apply substitution to the config
+        provider_config = substitute_env_vars(request.config)
         provider_name = request.name
         
         # Determine provider type based on config structure
@@ -202,8 +233,9 @@ async def test_provider_connection(request: ProviderTestRequest):
                 # If local-ai-server is on host network, ensure we use host.docker.internal or host networking properties
                 return {"success": False, "message": f"Cannot reach local AI server at {ws_url}. Error: {str(e)}"}
                 
-        elif 'model' in provider_config or 'stt_model' in provider_config:
+        elif 'model' in provider_config or 'stt_model' in provider_config or 'chat_model' in provider_config or 'tts_model' in provider_config:
             # Check if it's Deepgram or OpenAI standard
+            # Deepgram often has 'deepgram' in name or model names like 'nova'
             if provider_config.get('model', '').startswith('nova') or 'deepgram' in provider_name.lower():
                 # Deepgram
                 api_key = get_env_key('DEEPGRAM_API_KEY')
@@ -315,7 +347,7 @@ async def export_logs():
         
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
             # 1. Sanitized YAML
-            if settings.CONFIG_PATH.exists():
+            if os.path.exists(settings.CONFIG_PATH):
                 with open(settings.CONFIG_PATH, 'r') as f:
                     content = f.read()
                 # Simple sanitization (redact known key patterns if needed, but for now just raw or basic redaction)
@@ -326,7 +358,7 @@ async def export_logs():
                 zip_file.writestr('ai-agent-sanitized.yaml', content)
             
             # 2. Sanitized ENV (Just keys, no values)
-            if settings.ENV_PATH.exists():
+            if os.path.exists(settings.ENV_PATH):
                 env_keys = []
                 with open(settings.ENV_PATH, 'r') as f:
                     for line in f:
