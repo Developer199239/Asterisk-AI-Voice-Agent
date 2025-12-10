@@ -156,15 +156,15 @@ const ModelsPage = () => {
             const pollDownload = async () => {
                 try {
                     const res = await axios.get('/api/wizard/local/download-progress');
-                    // Update progress state
-                    if (res.data.bytes_downloaded > 0 || res.data.total_bytes > 0) {
+                    // Update progress state - always set if running to show progress bar
+                    if (res.data.running) {
                         setDownloadProgress({
-                            bytes_downloaded: res.data.bytes_downloaded,
-                            total_bytes: res.data.total_bytes,
-                            percent: res.data.percent,
-                            speed_bps: res.data.speed_bps,
+                            bytes_downloaded: res.data.bytes_downloaded || 0,
+                            total_bytes: res.data.total_bytes || 0,
+                            percent: res.data.percent || 0,
+                            speed_bps: res.data.speed_bps || 0,
                             eta_seconds: res.data.eta_seconds,
-                            current_file: res.data.current_file
+                            current_file: res.data.current_file || ''
                         });
                     }
                     
@@ -343,22 +343,27 @@ const ModelsPage = () => {
                                 Downloading: {downloadProgress.current_file || downloadingModel}
                             </span>
                             <span className="text-sm text-blue-600 dark:text-blue-400">
-                                {downloadProgress.percent}%
+                                {downloadProgress.total_bytes > 0 ? `${downloadProgress.percent}%` : 'Downloading...'}
                             </span>
                         </div>
-                        <div className="w-full bg-blue-200 dark:bg-blue-800 rounded-full h-2 mb-2">
-                            <div 
-                                className="bg-blue-600 dark:bg-blue-400 h-2 rounded-full transition-all duration-300"
-                                style={{ width: `${downloadProgress.percent}%` }}
-                            />
+                        <div className="w-full bg-blue-200 dark:bg-blue-800 rounded-full h-2 mb-2 overflow-hidden">
+                            {downloadProgress.total_bytes > 0 ? (
+                                <div 
+                                    className="bg-blue-600 dark:bg-blue-400 h-2 rounded-full transition-all duration-300"
+                                    style={{ width: `${downloadProgress.percent}%` }}
+                                />
+                            ) : (
+                                <div className="bg-blue-600 dark:bg-blue-400 h-2 rounded-full animate-pulse w-full opacity-50" />
+                            )}
                         </div>
                         <div className="flex justify-between text-xs text-blue-600 dark:text-blue-400">
                             <span>
-                                {(downloadProgress.bytes_downloaded / (1024 * 1024)).toFixed(1)} / {(downloadProgress.total_bytes / (1024 * 1024)).toFixed(1)} MB
+                                {(downloadProgress.bytes_downloaded / (1024 * 1024)).toFixed(1)} MB
+                                {downloadProgress.total_bytes > 0 && ` / ${(downloadProgress.total_bytes / (1024 * 1024)).toFixed(1)} MB`}
                             </span>
                             <span>
-                                {(downloadProgress.speed_bps / (1024 * 1024)).toFixed(2)} MB/s
-                                {downloadProgress.eta_seconds !== null && (
+                                {downloadProgress.speed_bps > 0 && `${(downloadProgress.speed_bps / (1024 * 1024)).toFixed(2)} MB/s`}
+                                {downloadProgress.eta_seconds !== null && downloadProgress.eta_seconds > 0 && (
                                     <> • ETA: {Math.floor(downloadProgress.eta_seconds / 60)}m {downloadProgress.eta_seconds % 60}s</>
                                 )}
                             </span>
