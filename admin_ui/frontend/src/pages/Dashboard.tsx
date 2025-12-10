@@ -255,22 +255,22 @@ const Dashboard = () => {
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
                 <MetricCard
                     title="CPU Usage"
-                    value={`${metrics?.cpu.percent.toFixed(1)}%`}
-                    subValue={`${metrics?.cpu.count} Cores`}
+                    value={metrics?.cpu?.percent != null ? `${metrics.cpu.percent.toFixed(1)}%` : '--'}
+                    subValue={metrics?.cpu?.count != null ? `${metrics.cpu.count} Cores` : '--'}
                     icon={Cpu}
                     color="text-blue-500"
                 />
                 <MetricCard
                     title="Memory Usage"
-                    value={`${metrics?.memory.percent.toFixed(1)}%`}
-                    subValue={`${formatBytes(metrics?.memory.used || 0)} / ${formatBytes(metrics?.memory.total || 0)}`}
+                    value={metrics?.memory?.percent != null ? `${metrics.memory.percent.toFixed(1)}%` : '--'}
+                    subValue={`${formatBytes(metrics?.memory?.used ?? 0)} / ${formatBytes(metrics?.memory?.total ?? 0)}`}
                     icon={Activity}
                     color="text-green-500"
                 />
                 <MetricCard
                     title="Disk Usage"
-                    value={`${metrics?.disk.percent.toFixed(1)}%`}
-                    subValue={`${formatBytes(metrics?.disk.free || 0)} Free`}
+                    value={metrics?.disk?.percent != null ? `${metrics.disk.percent.toFixed(1)}%` : '--'}
+                    subValue={`${formatBytes(metrics?.disk?.free ?? 0)} Free`}
                     icon={HardDrive}
                     color="text-orange-500"
                 />

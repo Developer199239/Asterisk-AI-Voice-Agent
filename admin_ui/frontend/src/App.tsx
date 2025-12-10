@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, Suspense, lazy } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import AppShell from './components/layout/AppShell';
 import Dashboard from './pages/Dashboard';
@@ -23,20 +23,27 @@ import StreamingPage from './pages/Advanced/StreamingPage';
 import LLMPage from './pages/Advanced/LLMPage';
 import TransportPage from './pages/Advanced/TransportPage';
 import BargeInPage from './pages/Advanced/BargeInPage';
-import RawYamlPage from './pages/Advanced/RawYamlPage';
 
-// System Pages
+// System Pages (eagerly loaded)
 import EnvPage from './pages/System/EnvPage';
 import DockerPage from './pages/System/DockerPage';
-import LogsPage from './pages/System/LogsPage';
-import TerminalPage from './pages/System/TerminalPage';
-import ModelsPage from './pages/System/ModelsPage';
-
-// Wizard
-import Wizard from './pages/Wizard';
 
 // Help
 import HelpPage from './pages/HelpPage';
+
+// Lazy-loaded heavy pages (code-splitting for better initial load)
+const Wizard = lazy(() => import('./pages/Wizard'));
+const RawYamlPage = lazy(() => import('./pages/Advanced/RawYamlPage'));
+const LogsPage = lazy(() => import('./pages/System/LogsPage'));
+const TerminalPage = lazy(() => import('./pages/System/TerminalPage'));
+const ModelsPage = lazy(() => import('./pages/System/ModelsPage'));
+
+// Loading fallback for lazy-loaded pages
+const PageLoader = () => (
+    <div className="flex items-center justify-center min-h-[400px]">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+    </div>
+);
 
 // Auth/Setup Guard
 const SetupGuard = ({ children }: { children: React.ReactNode }) => {
@@ -113,44 +120,46 @@ function App() {
                     <Route path="*" element={
                         <RequireAuth>
                             <SetupGuard>
-                                <Routes>
-                                    {/* Setup Wizard Route */}
-                                    <Route path="/wizard" element={<Wizard />} />
+                                <Suspense fallback={<PageLoader />}>
+                                    <Routes>
+                                        {/* Setup Wizard Route (lazy) */}
+                                        <Route path="/wizard" element={<Wizard />} />
 
-                                    {/* Main Application Layout */}
-                                    <Route element={<AppShell />}>
-                                        <Route path="/" element={<Dashboard />} />
-                                        <Route path="/history" element={<CallHistoryPage />} />
+                                        {/* Main Application Layout */}
+                                        <Route element={<AppShell />}>
+                                            <Route path="/" element={<Dashboard />} />
+                                            <Route path="/history" element={<CallHistoryPage />} />
 
-                                        {/* Core Configuration */}
-                                        <Route path="/providers" element={<ProvidersPage />} />
-                                        <Route path="/pipelines" element={<PipelinesPage />} />
-                                        <Route path="/contexts" element={<ContextsPage />} />
-                                        <Route path="/profiles" element={<ProfilesPage />} />
-                                        <Route path="/tools" element={<ToolsPage />} />
+                                            {/* Core Configuration */}
+                                            <Route path="/providers" element={<ProvidersPage />} />
+                                            <Route path="/pipelines" element={<PipelinesPage />} />
+                                            <Route path="/contexts" element={<ContextsPage />} />
+                                            <Route path="/profiles" element={<ProfilesPage />} />
+                                            <Route path="/tools" element={<ToolsPage />} />
 
-                                        {/* Advanced Settings */}
-                                        <Route path="/vad" element={<VADPage />} />
-                                        <Route path="/streaming" element={<StreamingPage />} />
-                                        <Route path="/llm" element={<LLMPage />} />
-                                        <Route path="/transport" element={<TransportPage />} />
-                                        <Route path="/barge-in" element={<BargeInPage />} />
-                                        <Route path="/yaml" element={<RawYamlPage />} />
+                                            {/* Advanced Settings */}
+                                            <Route path="/vad" element={<VADPage />} />
+                                            <Route path="/streaming" element={<StreamingPage />} />
+                                            <Route path="/llm" element={<LLMPage />} />
+                                            <Route path="/transport" element={<TransportPage />} />
+                                            <Route path="/barge-in" element={<BargeInPage />} />
+                                            <Route path="/yaml" element={<RawYamlPage />} />
 
-                                        {/* System Management */}
-                                        <Route path="/env" element={<EnvPage />} />
-                                        <Route path="/docker" element={<DockerPage />} />
-                                        <Route path="/logs" element={<LogsPage />} />
-                                        <Route path="/terminal" element={<TerminalPage />} />
-                                        <Route path="/models" element={<ModelsPage />} />
+                                            {/* System Management */}
+                                            <Route path="/env" element={<EnvPage />} />
+                                            <Route path="/docker" element={<DockerPage />} />
+                                            <Route path="/logs" element={<LogsPage />} />
+                                            <Route path="/terminal" element={<TerminalPage />} />
+                                            <Route path="/models" element={<ModelsPage />} />
 
-                                        {/* Help */}
-                                        <Route path="/help" element={<HelpPage />} />
+                                            {/* Help */}
+                                            <Route path="/help" element={<HelpPage />} />
 
-                                        {/* Fallback */}
-                                        <Route path="*" element={<Navigate to="/" replace />} />
-                                    </Route>
-                                </Routes>
+                                            {/* Fallback */}
+                                            <Route path="*" element={<Navigate to="/" replace />} />
+                                        </Route>
+                                    </Routes>
+                                </Suspense>
                             </SetupGuard>
                         </RequireAuth>
                     } />
