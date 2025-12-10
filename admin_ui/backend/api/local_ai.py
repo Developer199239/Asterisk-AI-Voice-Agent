@@ -20,12 +20,14 @@ router = APIRouter()
 
 class ModelInfo(BaseModel):
     """Information about a single model."""
+    id: str
     name: str
     path: str
     type: str  # stt, tts, llm
     backend: Optional[str] = None  # vosk, sherpa, kroko, piper, kokoro
     size_mb: Optional[float] = None
-    
+    voice_files: Optional[Dict[str, str]] = None  # For Kokoro voices
+
 
 class AvailableModels(BaseModel):
     """All available models grouped by type."""
@@ -78,7 +80,7 @@ async def list_available_models():
     List all available models from the models directory.
     
     Scans:
-    - models/stt/ for Vosk and Sherpa models
+    - models/stt/ for Vosk, Sherpa, and Kroko models
     - models/tts/ for Piper and Kokoro models
     - models/llm/ for GGUF models
     """
@@ -105,6 +107,7 @@ async def list_available_models():
             if os.path.isdir(item_path):
                 if item.startswith("vosk-model"):
                     stt_models["vosk"].append(ModelInfo(
+                        id="vosk",  # Frontend expects 'vosk' for the default model
                         name=item,
                         path=f"/app/models/stt/{item}",
                         type="stt",
@@ -113,15 +116,26 @@ async def list_available_models():
                     ))
                 elif "sherpa" in item.lower():
                     stt_models["sherpa"].append(ModelInfo(
+                        id=f"sherpa_{item}",
                         name=item,
                         path=f"/app/models/stt/{item}",
                         type="stt",
                         backend="sherpa",
                         size_mb=get_dir_size_mb(item_path)
                     ))
+                elif "kroko" in item.lower():
+                    stt_models["kroko"].append(ModelInfo(
+                        id="kroko_embedded",
+                        name=f"Kroko Embedded ({item})",
+                        path=f"/app/models/stt/{item}",
+                        type="stt",
+                        backend="kroko",
+                        size_mb=get_dir_size_mb(item_path)
+                    ))
     
-    # Kroko is cloud-based, add placeholder
+    # Kroko Cloud API (Always available)
     stt_models["kroko"].append(ModelInfo(
+        id="kroko_cloud",
         name="Kroko Cloud API",
         path="wss://app.kroko.ai/api/v1/transcripts/streaming",
         type="stt",
@@ -135,8 +149,10 @@ async def list_available_models():
         for item in os.listdir(tts_dir):
             item_path = os.path.join(tts_dir, item)
             if item.endswith(".onnx"):
+                name = item.replace(".onnx", "")
                 tts_models["piper"].append(ModelInfo(
-                    name=item.replace(".onnx", ""),
+                    id=f"piper_{name}",
+                    name=name,
                     path=f"/app/models/tts/{item}",
                     type="tts",
                     backend="piper",
@@ -145,17 +161,22 @@ async def list_available_models():
             elif item == "kokoro" and os.path.isdir(item_path):
                 # Get available Kokoro voices
                 voices_dir = os.path.join(item_path, "voices")
+                voice_files = {}
                 if os.path.exists(voices_dir):
                     for voice in os.listdir(voices_dir):
                         if voice.endswith(".pt"):
                             voice_name = voice.replace(".pt", "")
-                            tts_models["kokoro"].append(ModelInfo(
-                                name=f"Kokoro - {voice_name}",
-                                path=f"/app/models/tts/kokoro",
-                                type="tts",
-                                backend="kokoro",
-                                size_mb=get_file_size_mb(os.path.join(voices_dir, voice))
-                            ))
+                            voice_files[voice_name] = voice
+                            
+                tts_models["kokoro"].append(ModelInfo(
+                    id="kokoro_82m",
+                    name="Kokoro v0.19 (82M)",
+                    path="/app/models/tts/kokoro",
+                    type="tts",
+                    backend="kokoro",
+                    size_mb=get_dir_size_mb(item_path),
+                    voice_files=voice_files
+                ))
     
     # Scan LLM models
     llm_dir = os.path.join(models_dir, "llm")
@@ -164,6 +185,7 @@ async def list_available_models():
             if item.endswith(".gguf"):
                 item_path = os.path.join(llm_dir, item)
                 llm_models.append(ModelInfo(
+                    id=item.replace(".gguf", ""),
                     name=item.replace(".gguf", ""),
                     path=f"/app/models/llm/{item}",
                     type="llm",
@@ -242,6 +264,10 @@ async def switch_model(request: SwitchModelRequest):
                 if request.language:
                     env_updates["KROKO_LANGUAGE"] = request.language
                     yaml_updates["kroko_language"] = request.language
+                if request.model_path:
+                    # Support for local/embedded Kroko
+                    env_updates["LOCAL_STT_MODEL_PATH"] = request.model_path
+                    yaml_updates["stt_model"] = request.model_path
             elif request.backend == "sherpa" and request.model_path:
                 env_updates["SHERPA_MODEL_PATH"] = request.model_path
                 yaml_updates["sherpa_model_path"] = request.model_path
@@ -302,30 +328,32 @@ async def switch_model(request: SwitchModelRequest):
         try:
             import subprocess
             
-            # Use docker compose to properly recreate container with new .env values
-            # First, stop and remove the existing container
-            client = docker.from_env()
-            try:
-                container = client.containers.get("local_ai_server")
-                container.stop(timeout=10)
-                container.remove(force=True)
-            except Exception:
-                pass  # Container might not exist
+            # Use docker compose down/up to properly recreate with new .env values
+            # down: removes container completely (clears env cache)
+            # up: creates fresh container reading new .env values
             
-            # Let docker-compose create a fresh container with the new .env values
-            # -p: Use correct project name (matches image name prefix)
-            # --no-build: Use existing image, don't rebuild (models are in mounted volume)
-            result = subprocess.run(
+            # Step 1: Stop and remove the container
+            down_result = subprocess.run(
+                ["/usr/local/bin/docker-compose", "-p", "asterisk-ai-voice-agent", 
+                 "down", "local-ai-server"],
+                cwd=PROJECT_ROOT,
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            
+            # Step 2: Create and start fresh container with new env
+            up_result = subprocess.run(
                 ["/usr/local/bin/docker-compose", "-p", "asterisk-ai-voice-agent", 
                  "up", "-d", "--no-build", "local-ai-server"],
                 cwd=PROJECT_ROOT,
                 capture_output=True,
                 text=True,
-                timeout=30  # Should be fast with --no-build
+                timeout=60  # May take longer to start
             )
             
-            if result.returncode != 0:
-                raise Exception(f"docker-compose failed: {result.stderr}")
+            if up_result.returncode != 0:
+                raise Exception(f"docker-compose up failed: {up_result.stderr}")
             
             return SwitchModelResponse(
                 success=True,
@@ -349,6 +377,72 @@ async def switch_model(request: SwitchModelRequest):
         message="Model configuration updated",
         requires_restart=False
     )
+
+
+class DeleteModelRequest(BaseModel):
+    model_path: str
+    type: str  # stt, tts, llm
+
+
+@router.delete("/models")
+async def delete_model(request: DeleteModelRequest):
+    """
+    Delete an installed model from the filesystem.
+    """
+    import shutil
+    from settings import PROJECT_ROOT
+    
+    model_path = request.model_path
+    model_type = request.type
+    
+    # Handle path mapping: local_ai_server returns /app/models/...
+    # but admin_ui has models at /app/project/models/...
+    if model_path.startswith('/app/models/'):
+        model_path = model_path.replace('/app/models/', f'{PROJECT_ROOT}/models/')
+    
+    # Security: Ensure path is within the models directory
+    models_base = os.path.join(PROJECT_ROOT, "models")
+    
+    # Normalize paths for comparison
+    abs_model_path = os.path.abspath(model_path)
+    abs_models_base = os.path.abspath(models_base)
+    
+    if not abs_model_path.startswith(abs_models_base):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid model path: must be within {models_base}"
+        )
+    
+    if not os.path.exists(abs_model_path):
+        raise HTTPException(
+            status_code=404,
+            detail=f"Model not found: {model_path}"
+        )
+    
+    try:
+        if os.path.isdir(abs_model_path):
+            shutil.rmtree(abs_model_path)
+        else:
+            os.remove(abs_model_path)
+            # Also remove .json config file if exists (for Piper models)
+            json_path = abs_model_path.replace('.onnx', '.onnx.json')
+            if os.path.exists(json_path):
+                os.remove(json_path)
+        
+        return {
+            "success": True,
+            "message": f"Model deleted: {os.path.basename(abs_model_path)}"
+        }
+    except PermissionError:
+        raise HTTPException(
+            status_code=403,
+            detail="Permission denied: cannot delete model"
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to delete model: {str(e)}"
+        )
 
 
 async def _verify_model_loaded(model_type: str, get_setting) -> bool:

@@ -1,0 +1,506 @@
+"""
+Multi-language Model Catalog for Local AI Server (AAVA-127)
+
+This catalog contains all available STT (Vosk, Sherpa, Kroko) and TTS (Piper, Kokoro) 
+models organized by language and region.
+"""
+
+# ============== STT Models (Speech-to-Text) ==============
+
+VOSK_STT_MODELS = [
+    # === Popular / Global ===
+    {"id": "vosk_en_us", "name": "English (US)", "language": "en-US", "region": "global", "backend": "vosk",
+     "size_mb": 1800, "size_display": "1.8 GB", "model_path": "vosk-model-en-us-0.22",
+     "download_url": "https://alphacephei.com/vosk/models/vosk-model-en-us-0.22.zip",
+     "recommended": True, "is_archive": True, "archive_type": "zip"},
+    {"id": "vosk_en_us_small", "name": "English (US) Small", "language": "en-US", "region": "global", "backend": "vosk",
+     "size_mb": 40, "size_display": "40 MB", "model_path": "vosk-model-small-en-us-0.15",
+     "download_url": "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip",
+     "is_archive": True, "archive_type": "zip"},
+    {"id": "vosk_en_in", "name": "English (India)", "language": "en-IN", "region": "asia", "backend": "vosk",
+     "size_mb": 1000, "size_display": "1 GB", "model_path": "vosk-model-en-in-0.5",
+     "download_url": "https://alphacephei.com/vosk/models/vosk-model-en-in-0.5.zip",
+     "is_archive": True, "archive_type": "zip"},
+    
+    # === European Languages ===
+    {"id": "vosk_fr", "name": "French", "language": "fr-FR", "region": "europe", "backend": "vosk",
+     "size_mb": 1400, "size_display": "1.4 GB", "model_path": "vosk-model-fr-0.22",
+     "download_url": "https://alphacephei.com/vosk/models/vosk-model-fr-0.22.zip",
+     "is_archive": True, "archive_type": "zip"},
+    {"id": "vosk_fr_small", "name": "French Small", "language": "fr-FR", "region": "europe", "backend": "vosk",
+     "size_mb": 41, "size_display": "41 MB", "model_path": "vosk-model-small-fr-0.22",
+     "download_url": "https://alphacephei.com/vosk/models/vosk-model-small-fr-0.22.zip",
+     "is_archive": True, "archive_type": "zip"},
+    {"id": "vosk_de", "name": "German", "language": "de-DE", "region": "europe", "backend": "vosk",
+     "size_mb": 1900, "size_display": "1.9 GB", "model_path": "vosk-model-de-0.21",
+     "download_url": "https://alphacephei.com/vosk/models/vosk-model-de-0.21.zip",
+     "is_archive": True, "archive_type": "zip"},
+    {"id": "vosk_de_small", "name": "German Small", "language": "de-DE", "region": "europe", "backend": "vosk",
+     "size_mb": 45, "size_display": "45 MB", "model_path": "vosk-model-small-de-0.15",
+     "download_url": "https://alphacephei.com/vosk/models/vosk-model-small-de-0.15.zip",
+     "is_archive": True, "archive_type": "zip"},
+    {"id": "vosk_es", "name": "Spanish", "language": "es-ES", "region": "europe", "backend": "vosk",
+     "size_mb": 1500, "size_display": "1.5 GB", "model_path": "vosk-model-es-0.42",
+     "download_url": "https://alphacephei.com/vosk/models/vosk-model-es-0.42.zip",
+     "is_archive": True, "archive_type": "zip"},
+    {"id": "vosk_es_small", "name": "Spanish Small", "language": "es-ES", "region": "europe", "backend": "vosk",
+     "size_mb": 39, "size_display": "39 MB", "model_path": "vosk-model-small-es-0.42",
+     "download_url": "https://alphacephei.com/vosk/models/vosk-model-small-es-0.42.zip",
+     "is_archive": True, "archive_type": "zip"},
+    {"id": "vosk_it", "name": "Italian", "language": "it-IT", "region": "europe", "backend": "vosk",
+     "size_mb": 1200, "size_display": "1.2 GB", "model_path": "vosk-model-it-0.22",
+     "download_url": "https://alphacephei.com/vosk/models/vosk-model-it-0.22.zip",
+     "is_archive": True, "archive_type": "zip"},
+    {"id": "vosk_it_small", "name": "Italian Small", "language": "it-IT", "region": "europe", "backend": "vosk",
+     "size_mb": 48, "size_display": "48 MB", "model_path": "vosk-model-small-it-0.22",
+     "download_url": "https://alphacephei.com/vosk/models/vosk-model-small-it-0.22.zip",
+     "is_archive": True, "archive_type": "zip"},
+    {"id": "vosk_pt", "name": "Portuguese (BR)", "language": "pt-BR", "region": "europe", "backend": "vosk",
+     "size_mb": 1600, "size_display": "1.6 GB", "model_path": "vosk-model-pt-fb-v0.1.1-20220516_2113",
+     "download_url": "https://alphacephei.com/vosk/models/vosk-model-pt-fb-v0.1.1-20220516_2113.zip",
+     "is_archive": True, "archive_type": "zip"},
+    {"id": "vosk_pt_small", "name": "Portuguese Small", "language": "pt-PT", "region": "europe", "backend": "vosk",
+     "size_mb": 31, "size_display": "31 MB", "model_path": "vosk-model-small-pt-0.3",
+     "download_url": "https://alphacephei.com/vosk/models/vosk-model-small-pt-0.3.zip",
+     "is_archive": True, "archive_type": "zip"},
+    {"id": "vosk_nl", "name": "Dutch", "language": "nl-NL", "region": "europe", "backend": "vosk",
+     "size_mb": 1000, "size_display": "1 GB", "model_path": "vosk-model-nl-spraakherkenning-0.6",
+     "download_url": "https://alphacephei.com/vosk/models/vosk-model-nl-spraakherkenning-0.6.zip",
+     "is_archive": True, "archive_type": "zip"},
+    {"id": "vosk_nl_small", "name": "Dutch Small", "language": "nl-NL", "region": "europe", "backend": "vosk",
+     "size_mb": 39, "size_display": "39 MB", "model_path": "vosk-model-small-nl-0.22",
+     "download_url": "https://alphacephei.com/vosk/models/vosk-model-small-nl-0.22.zip",
+     "is_archive": True, "archive_type": "zip"},
+    {"id": "vosk_ru", "name": "Russian", "language": "ru-RU", "region": "europe", "backend": "vosk",
+     "size_mb": 1800, "size_display": "1.8 GB", "model_path": "vosk-model-ru-0.42",
+     "download_url": "https://alphacephei.com/vosk/models/vosk-model-ru-0.42.zip",
+     "is_archive": True, "archive_type": "zip"},
+    {"id": "vosk_ru_small", "name": "Russian Small", "language": "ru-RU", "region": "europe", "backend": "vosk",
+     "size_mb": 45, "size_display": "45 MB", "model_path": "vosk-model-small-ru-0.22",
+     "download_url": "https://alphacephei.com/vosk/models/vosk-model-small-ru-0.22.zip",
+     "is_archive": True, "archive_type": "zip"},
+    {"id": "vosk_uk", "name": "Ukrainian", "language": "uk-UA", "region": "europe", "backend": "vosk",
+     "size_mb": 343, "size_display": "343 MB", "model_path": "vosk-model-uk-v3",
+     "download_url": "https://alphacephei.com/vosk/models/vosk-model-uk-v3.zip",
+     "is_archive": True, "archive_type": "zip"},
+    {"id": "vosk_pl", "name": "Polish", "language": "pl-PL", "region": "europe", "backend": "vosk",
+     "size_mb": 50, "size_display": "50 MB", "model_path": "vosk-model-small-pl-0.22",
+     "download_url": "https://alphacephei.com/vosk/models/vosk-model-small-pl-0.22.zip",
+     "is_archive": True, "archive_type": "zip"},
+    {"id": "vosk_cs", "name": "Czech", "language": "cs-CZ", "region": "europe", "backend": "vosk",
+     "size_mb": 44, "size_display": "44 MB", "model_path": "vosk-model-small-cs-0.4-rhasspy",
+     "download_url": "https://alphacephei.com/vosk/models/vosk-model-small-cs-0.4-rhasspy.zip",
+     "is_archive": True, "archive_type": "zip"},
+    {"id": "vosk_el", "name": "Greek", "language": "el-GR", "region": "europe", "backend": "vosk",
+     "size_mb": 1100, "size_display": "1.1 GB", "model_path": "vosk-model-el-gr-0.7",
+     "download_url": "https://alphacephei.com/vosk/models/vosk-model-el-gr-0.7.zip",
+     "is_archive": True, "archive_type": "zip"},
+    {"id": "vosk_sv", "name": "Swedish", "language": "sv-SE", "region": "europe", "backend": "vosk",
+     "size_mb": 289, "size_display": "289 MB", "model_path": "vosk-model-small-sv-rhasspy-0.15",
+     "download_url": "https://alphacephei.com/vosk/models/vosk-model-small-sv-rhasspy-0.15.zip",
+     "is_archive": True, "archive_type": "zip"},
+    {"id": "vosk_tr", "name": "Turkish", "language": "tr-TR", "region": "europe", "backend": "vosk",
+     "size_mb": 35, "size_display": "35 MB", "model_path": "vosk-model-small-tr-0.3",
+     "download_url": "https://alphacephei.com/vosk/models/vosk-model-small-tr-0.3.zip",
+     "is_archive": True, "archive_type": "zip"},
+    {"id": "vosk_ca", "name": "Catalan", "language": "ca-ES", "region": "europe", "backend": "vosk",
+     "size_mb": 42, "size_display": "42 MB", "model_path": "vosk-model-small-ca-0.4",
+     "download_url": "https://alphacephei.com/vosk/models/vosk-model-small-ca-0.4.zip",
+     "is_archive": True, "archive_type": "zip"},
+    
+    # === Asian Languages ===
+    {"id": "vosk_zh", "name": "Chinese", "language": "zh-CN", "region": "asia", "backend": "vosk",
+     "size_mb": 1300, "size_display": "1.3 GB", "model_path": "vosk-model-cn-0.22",
+     "download_url": "https://alphacephei.com/vosk/models/vosk-model-cn-0.22.zip",
+     "is_archive": True, "archive_type": "zip"},
+    {"id": "vosk_zh_small", "name": "Chinese Small", "language": "zh-CN", "region": "asia", "backend": "vosk",
+     "size_mb": 42, "size_display": "42 MB", "model_path": "vosk-model-small-cn-0.22",
+     "download_url": "https://alphacephei.com/vosk/models/vosk-model-small-cn-0.22.zip",
+     "is_archive": True, "archive_type": "zip"},
+    {"id": "vosk_ja", "name": "Japanese", "language": "ja-JP", "region": "asia", "backend": "vosk",
+     "size_mb": 1000, "size_display": "1 GB", "model_path": "vosk-model-ja-0.22",
+     "download_url": "https://alphacephei.com/vosk/models/vosk-model-ja-0.22.zip",
+     "is_archive": True, "archive_type": "zip"},
+    {"id": "vosk_ja_small", "name": "Japanese Small", "language": "ja-JP", "region": "asia", "backend": "vosk",
+     "size_mb": 48, "size_display": "48 MB", "model_path": "vosk-model-small-ja-0.22",
+     "download_url": "https://alphacephei.com/vosk/models/vosk-model-small-ja-0.22.zip",
+     "is_archive": True, "archive_type": "zip"},
+    {"id": "vosk_ko", "name": "Korean", "language": "ko-KR", "region": "asia", "backend": "vosk",
+     "size_mb": 82, "size_display": "82 MB", "model_path": "vosk-model-small-ko-0.22",
+     "download_url": "https://alphacephei.com/vosk/models/vosk-model-small-ko-0.22.zip",
+     "is_archive": True, "archive_type": "zip"},
+    {"id": "vosk_hi", "name": "Hindi", "language": "hi-IN", "region": "asia", "backend": "vosk",
+     "size_mb": 1500, "size_display": "1.5 GB", "model_path": "vosk-model-hi-0.22",
+     "download_url": "https://alphacephei.com/vosk/models/vosk-model-hi-0.22.zip",
+     "is_archive": True, "archive_type": "zip"},
+    {"id": "vosk_hi_small", "name": "Hindi Small", "language": "hi-IN", "region": "asia", "backend": "vosk",
+     "size_mb": 42, "size_display": "42 MB", "model_path": "vosk-model-small-hi-0.22",
+     "download_url": "https://alphacephei.com/vosk/models/vosk-model-small-hi-0.22.zip",
+     "is_archive": True, "archive_type": "zip"},
+    {"id": "vosk_vi", "name": "Vietnamese", "language": "vi-VN", "region": "asia", "backend": "vosk",
+     "size_mb": 78, "size_display": "78 MB", "model_path": "vosk-model-vn-0.4",
+     "download_url": "https://alphacephei.com/vosk/models/vosk-model-vn-0.4.zip",
+     "is_archive": True, "archive_type": "zip"},
+    {"id": "vosk_tl", "name": "Filipino/Tagalog", "language": "tl-PH", "region": "asia", "backend": "vosk",
+     "size_mb": 320, "size_display": "320 MB", "model_path": "vosk-model-tl-ph-generic-0.6",
+     "download_url": "https://alphacephei.com/vosk/models/vosk-model-tl-ph-generic-0.6.zip",
+     "is_archive": True, "archive_type": "zip"},
+    {"id": "vosk_gu", "name": "Gujarati", "language": "gu-IN", "region": "asia", "backend": "vosk",
+     "size_mb": 136, "size_display": "136 MB", "model_path": "vosk-model-gu-0.42",
+     "download_url": "https://alphacephei.com/vosk/models/vosk-model-gu-0.42.zip",
+     "is_archive": True, "archive_type": "zip"},
+    {"id": "vosk_te", "name": "Telugu", "language": "te-IN", "region": "asia", "backend": "vosk",
+     "size_mb": 33, "size_display": "33 MB", "model_path": "vosk-model-small-te-0.42",
+     "download_url": "https://alphacephei.com/vosk/models/vosk-model-small-te-0.42.zip",
+     "is_archive": True, "archive_type": "zip"},
+    
+    # === Middle East / Central Asia ===
+    {"id": "vosk_ar", "name": "Arabic", "language": "ar", "region": "middle_east", "backend": "vosk",
+     "size_mb": 1300, "size_display": "1.3 GB", "model_path": "vosk-model-ar-0.22-linto-1.1.0",
+     "download_url": "https://alphacephei.com/vosk/models/vosk-model-ar-0.22-linto-1.1.0.zip",
+     "is_archive": True, "archive_type": "zip"},
+    {"id": "vosk_fa", "name": "Farsi/Persian", "language": "fa-IR", "region": "middle_east", "backend": "vosk",
+     "size_mb": 1000, "size_display": "1 GB", "model_path": "vosk-model-fa-0.5",
+     "download_url": "https://alphacephei.com/vosk/models/vosk-model-fa-0.5.zip",
+     "is_archive": True, "archive_type": "zip"},
+    {"id": "vosk_kz", "name": "Kazakh", "language": "kk-KZ", "region": "central_asia", "backend": "vosk",
+     "size_mb": 378, "size_display": "378 MB", "model_path": "vosk-model-kz-0.42",
+     "download_url": "https://alphacephei.com/vosk/models/vosk-model-kz-0.42.zip",
+     "is_archive": True, "archive_type": "zip"},
+    {"id": "vosk_uz", "name": "Uzbek", "language": "uz-UZ", "region": "central_asia", "backend": "vosk",
+     "size_mb": 49, "size_display": "49 MB", "model_path": "vosk-model-small-uz-0.22",
+     "download_url": "https://alphacephei.com/vosk/models/vosk-model-small-uz-0.22.zip",
+     "is_archive": True, "archive_type": "zip"},
+    {"id": "vosk_tg", "name": "Tajik", "language": "tg-TJ", "region": "central_asia", "backend": "vosk",
+     "size_mb": 337, "size_display": "337 MB", "model_path": "vosk-model-tg-0.22",
+     "download_url": "https://alphacephei.com/vosk/models/vosk-model-tg-0.22.zip",
+     "is_archive": True, "archive_type": "zip"},
+    {"id": "vosk_ky", "name": "Kyrgyz", "language": "ky-KG", "region": "central_asia", "backend": "vosk",
+     "size_mb": 190, "size_display": "190 MB", "model_path": "vosk-model-ky-0.42",
+     "download_url": "https://alphacephei.com/vosk/models/vosk-model-ky-0.42.zip",
+     "is_archive": True, "archive_type": "zip"},
+    
+    # === Other ===
+    {"id": "vosk_eo", "name": "Esperanto", "language": "eo", "region": "other", "backend": "vosk",
+     "size_mb": 42, "size_display": "42 MB", "model_path": "vosk-model-small-eo-0.42",
+     "download_url": "https://alphacephei.com/vosk/models/vosk-model-small-eo-0.42.zip",
+     "is_archive": True, "archive_type": "zip"},
+    {"id": "vosk_br", "name": "Breton", "language": "br", "region": "europe", "backend": "vosk",
+     "size_mb": 489, "size_display": "489 MB", "model_path": "vosk-model-br-0.8",
+     "download_url": "https://alphacephei.com/vosk/models/vosk-model-br-0.8.zip",
+     "is_archive": True, "archive_type": "zip"},
+]
+
+SHERPA_STT_MODELS = [
+    {"id": "sherpa_en", "name": "English (Streaming)", "language": "en-US", "region": "global", "backend": "sherpa",
+     "size_mb": 100, "size_display": "100 MB", "model_path": "sherpa-onnx-streaming-zipformer-en-2023-06-26",
+     "download_url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-en-2023-06-26.tar.bz2",
+     "recommended": True, "is_archive": True, "archive_type": "tar.bz2"},
+    {"id": "sherpa_zh", "name": "Chinese (Streaming)", "language": "zh-CN", "region": "asia", "backend": "sherpa",
+     "size_mb": 120, "size_display": "120 MB", "model_path": "sherpa-onnx-streaming-zipformer-zh-2023-06-26",
+     "download_url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-zh-2023-06-26.tar.bz2",
+     "is_archive": True, "archive_type": "tar.bz2"},
+]
+
+KROKO_STT_MODELS = [
+    {"id": "kroko_cloud", "name": "Kroko Cloud API (12 languages)", "language": "multi", "region": "global", "backend": "kroko",
+     "size_mb": 0, "size_display": "0 (Cloud)", "model_path": None,
+     "download_url": None, "requires_api_key": True, "api_key_name": "KROKO_API_KEY",
+     "supported_languages": ["en-US", "nl-NL", "fr-FR", "de-DE", "es-ES", "it-IT", "pt-PT", "bg-BG", "sv-SE", "tr-TR", "he-IL"]},
+]
+
+# ============== TTS Models (Text-to-Speech) ==============
+
+PIPER_TTS_MODELS = [
+    # === English ===
+    {"id": "piper_en_us_lessac_medium", "name": "Lessac (en-US, Male)", "language": "en-US", "region": "global", "backend": "piper",
+     "gender": "male", "quality": "medium", "size_mb": 100, "size_display": "100 MB",
+     "model_path": "en_US-lessac-medium.onnx", "recommended": True,
+     "download_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/lessac/medium/en_US-lessac-medium.onnx",
+     "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json"},
+    {"id": "piper_en_us_lessac_high", "name": "Lessac High (en-US, Male)", "language": "en-US", "region": "global", "backend": "piper",
+     "gender": "male", "quality": "high", "size_mb": 200, "size_display": "200 MB",
+     "model_path": "en_US-lessac-high.onnx",
+     "download_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/lessac/high/en_US-lessac-high.onnx",
+     "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/lessac/high/en_US-lessac-high.onnx.json"},
+    {"id": "piper_en_gb_amy_medium", "name": "Amy (en-GB, Female)", "language": "en-GB", "region": "europe", "backend": "piper",
+     "gender": "female", "quality": "medium", "size_mb": 100, "size_display": "100 MB",
+     "model_path": "en_GB-amy-medium.onnx",
+     "download_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_GB/amy/medium/en_GB-amy-medium.onnx",
+     "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_GB/amy/medium/en_GB-amy-medium.onnx.json"},
+    
+    # === European Languages ===
+    {"id": "piper_de_thorsten_medium", "name": "Thorsten (de-DE, Male)", "language": "de-DE", "region": "europe", "backend": "piper",
+     "gender": "male", "quality": "medium", "size_mb": 100, "size_display": "100 MB",
+     "model_path": "de_DE-thorsten-medium.onnx",
+     "download_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/de/de_DE/thorsten/medium/de_DE-thorsten-medium.onnx",
+     "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/de/de_DE/thorsten/medium/de_DE-thorsten-medium.onnx.json"},
+    {"id": "piper_es_davefx_medium", "name": "Davefx (es-ES, Male)", "language": "es-ES", "region": "europe", "backend": "piper",
+     "gender": "male", "quality": "medium", "size_mb": 100, "size_display": "100 MB",
+     "model_path": "es_ES-davefx-medium.onnx",
+     "download_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/es/es_ES/davefx/medium/es_ES-davefx-medium.onnx",
+     "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/es/es_ES/davefx/medium/es_ES-davefx-medium.onnx.json"},
+    {"id": "piper_es_mx_ald_medium", "name": "Ald (es-MX, Male)", "language": "es-MX", "region": "americas", "backend": "piper",
+     "gender": "male", "quality": "medium", "size_mb": 100, "size_display": "100 MB",
+     "model_path": "es_MX-ald-medium.onnx",
+     "download_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/es/es_MX/ald/medium/es_MX-ald-medium.onnx",
+     "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/es/es_MX/ald/medium/es_MX-ald-medium.onnx.json"},
+    {"id": "piper_fr_siwis_medium", "name": "Siwis (fr-FR, Female)", "language": "fr-FR", "region": "europe", "backend": "piper",
+     "gender": "female", "quality": "medium", "size_mb": 100, "size_display": "100 MB",
+     "model_path": "fr_FR-siwis-medium.onnx",
+     "download_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/fr/fr_FR/siwis/medium/fr_FR-siwis-medium.onnx",
+     "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/fr/fr_FR/siwis/medium/fr_FR-siwis-medium.onnx.json"},
+    {"id": "piper_it_riccardo_x_low", "name": "Riccardo (it-IT, Male)", "language": "it-IT", "region": "europe", "backend": "piper",
+     "gender": "male", "quality": "x_low", "size_mb": 30, "size_display": "30 MB",
+     "model_path": "it_IT-riccardo-x_low.onnx",
+     "download_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/it/it_IT/riccardo/x_low/it_IT-riccardo-x_low.onnx",
+     "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/it/it_IT/riccardo/x_low/it_IT-riccardo-x_low.onnx.json"},
+    {"id": "piper_pt_br_faber_medium", "name": "Faber (pt-BR, Male)", "language": "pt-BR", "region": "americas", "backend": "piper",
+     "gender": "male", "quality": "medium", "size_mb": 100, "size_display": "100 MB",
+     "model_path": "pt_BR-faber-medium.onnx",
+     "download_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/pt/pt_BR/faber/medium/pt_BR-faber-medium.onnx",
+     "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/pt/pt_BR/faber/medium/pt_BR-faber-medium.onnx.json"},
+    {"id": "piper_nl_mls_medium", "name": "MLS (nl-NL, Multi)", "language": "nl-NL", "region": "europe", "backend": "piper",
+     "gender": "multi", "quality": "medium", "size_mb": 100, "size_display": "100 MB",
+     "model_path": "nl_NL-mls-medium.onnx",
+     "download_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/nl/nl_NL/mls/medium/nl_NL-mls-medium.onnx",
+     "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/nl/nl_NL/mls/medium/nl_NL-mls-medium.onnx.json"},
+    {"id": "piper_ru_irina_medium", "name": "Irina (ru-RU, Female)", "language": "ru-RU", "region": "europe", "backend": "piper",
+     "gender": "female", "quality": "medium", "size_mb": 100, "size_display": "100 MB",
+     "model_path": "ru_RU-irina-medium.onnx",
+     "download_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/ru/ru_RU/irina/medium/ru_RU-irina-medium.onnx",
+     "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/ru/ru_RU/irina/medium/ru_RU-irina-medium.onnx.json"},
+    {"id": "piper_uk_lada_x_low", "name": "Lada (uk-UA, Female)", "language": "uk-UA", "region": "europe", "backend": "piper",
+     "gender": "female", "quality": "x_low", "size_mb": 30, "size_display": "30 MB",
+     "model_path": "uk_UA-lada-x_low.onnx",
+     "download_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/uk/uk_UA/lada/x_low/uk_UA-lada-x_low.onnx",
+     "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/uk/uk_UA/lada/x_low/uk_UA-lada-x_low.onnx.json"},
+    {"id": "piper_pl_mls_medium", "name": "MLS (pl-PL, Multi)", "language": "pl-PL", "region": "europe", "backend": "piper",
+     "gender": "multi", "quality": "medium", "size_mb": 100, "size_display": "100 MB",
+     "model_path": "pl_PL-mls-medium.onnx",
+     "download_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/pl/pl_PL/mls/medium/pl_PL-mls-medium.onnx",
+     "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/pl/pl_PL/mls/medium/pl_PL-mls-medium.onnx.json"},
+    {"id": "piper_cs_jirka_medium", "name": "Jirka (cs-CZ, Male)", "language": "cs-CZ", "region": "europe", "backend": "piper",
+     "gender": "male", "quality": "medium", "size_mb": 100, "size_display": "100 MB",
+     "model_path": "cs_CZ-jirka-medium.onnx",
+     "download_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/cs/cs_CZ/jirka/medium/cs_CZ-jirka-medium.onnx",
+     "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/cs/cs_CZ/jirka/medium/cs_CZ-jirka-medium.onnx.json"},
+    {"id": "piper_el_rapunzelina_low", "name": "Rapunzelina (el-GR, Female)", "language": "el-GR", "region": "europe", "backend": "piper",
+     "gender": "female", "quality": "low", "size_mb": 50, "size_display": "50 MB",
+     "model_path": "el_GR-rapunzelina-low.onnx",
+     "download_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/el/el_GR/rapunzelina/low/el_GR-rapunzelina-low.onnx",
+     "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/el/el_GR/rapunzelina/low/el_GR-rapunzelina-low.onnx.json"},
+    {"id": "piper_sv_nst_medium", "name": "NST (sv-SE, Female)", "language": "sv-SE", "region": "europe", "backend": "piper",
+     "gender": "female", "quality": "medium", "size_mb": 100, "size_display": "100 MB",
+     "model_path": "sv_SE-nst-medium.onnx",
+     "download_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/sv/sv_SE/nst/medium/sv_SE-nst-medium.onnx",
+     "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/sv/sv_SE/nst/medium/sv_SE-nst-medium.onnx.json"},
+    {"id": "piper_tr_dfki_medium", "name": "DFKI (tr-TR, Male)", "language": "tr-TR", "region": "europe", "backend": "piper",
+     "gender": "male", "quality": "medium", "size_mb": 100, "size_display": "100 MB",
+     "model_path": "tr_TR-dfki-medium.onnx",
+     "download_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/tr/tr_TR/dfki/medium/tr_TR-dfki-medium.onnx",
+     "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/tr/tr_TR/dfki/medium/tr_TR-dfki-medium.onnx.json"},
+    {"id": "piper_ca_upc_medium", "name": "UPC (ca-ES, Multi)", "language": "ca-ES", "region": "europe", "backend": "piper",
+     "gender": "multi", "quality": "medium", "size_mb": 100, "size_display": "100 MB",
+     "model_path": "ca_ES-upc_ona-medium.onnx",
+     "download_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/ca/ca_ES/upc_ona/medium/ca_ES-upc_ona-medium.onnx",
+     "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/ca/ca_ES/upc_ona/medium/ca_ES-upc_ona-medium.onnx.json"},
+    {"id": "piper_da_talesyntese_medium", "name": "Talesyntese (da-DK, Female)", "language": "da-DK", "region": "europe", "backend": "piper",
+     "gender": "female", "quality": "medium", "size_mb": 100, "size_display": "100 MB",
+     "model_path": "da_DK-talesyntese-medium.onnx",
+     "download_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/da/da_DK/talesyntese/medium/da_DK-talesyntese-medium.onnx",
+     "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/da/da_DK/talesyntese/medium/da_DK-talesyntese-medium.onnx.json"},
+    {"id": "piper_fi_harri_medium", "name": "Harri (fi-FI, Male)", "language": "fi-FI", "region": "europe", "backend": "piper",
+     "gender": "male", "quality": "medium", "size_mb": 100, "size_display": "100 MB",
+     "model_path": "fi_FI-harri-medium.onnx",
+     "download_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/fi/fi_FI/harri/medium/fi_FI-harri-medium.onnx",
+     "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/fi/fi_FI/harri/medium/fi_FI-harri-medium.onnx.json"},
+    {"id": "piper_hu_anna_medium", "name": "Anna (hu-HU, Female)", "language": "hu-HU", "region": "europe", "backend": "piper",
+     "gender": "female", "quality": "medium", "size_mb": 100, "size_display": "100 MB",
+     "model_path": "hu_HU-anna-medium.onnx",
+     "download_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/hu/hu_HU/anna/medium/hu_HU-anna-medium.onnx",
+     "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/hu/hu_HU/anna/medium/hu_HU-anna-medium.onnx.json"},
+    {"id": "piper_no_talesyntese_medium", "name": "Talesyntese (no-NO, Female)", "language": "no-NO", "region": "europe", "backend": "piper",
+     "gender": "female", "quality": "medium", "size_mb": 100, "size_display": "100 MB",
+     "model_path": "no_NO-talesyntese-medium.onnx",
+     "download_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/no/no_NO/talesyntese/medium/no_NO-talesyntese-medium.onnx",
+     "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/no/no_NO/talesyntese/medium/no_NO-talesyntese-medium.onnx.json"},
+    {"id": "piper_sr_serbski_medium", "name": "Serbski (sr-RS, Male)", "language": "sr-RS", "region": "europe", "backend": "piper",
+     "gender": "male", "quality": "medium", "size_mb": 100, "size_display": "100 MB",
+     "model_path": "sr_RS-serbski_institut-medium.onnx",
+     "download_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/sr/sr_RS/serbski_institut/medium/sr_RS-serbski_institut-medium.onnx",
+     "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/sr/sr_RS/serbski_institut/medium/sr_RS-serbski_institut-medium.onnx.json"},
+    
+    # === Asian Languages ===
+    {"id": "piper_zh_huayan_medium", "name": "Huayan (zh-CN, Female)", "language": "zh-CN", "region": "asia", "backend": "piper",
+     "gender": "female", "quality": "medium", "size_mb": 100, "size_display": "100 MB",
+     "model_path": "zh_CN-huayan-medium.onnx",
+     "download_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/zh/zh_CN/huayan/medium/zh_CN-huayan-medium.onnx",
+     "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/zh/zh_CN/huayan/medium/zh_CN-huayan-medium.onnx.json"},
+    {"id": "piper_vi_vivos_x_low", "name": "Vivos (vi-VN, Multi)", "language": "vi-VN", "region": "asia", "backend": "piper",
+     "gender": "multi", "quality": "x_low", "size_mb": 30, "size_display": "30 MB",
+     "model_path": "vi_VN-vivos-x_low.onnx",
+     "download_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/vi/vi_VN/vivos/x_low/vi_VN-vivos-x_low.onnx",
+     "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/vi/vi_VN/vivos/x_low/vi_VN-vivos-x_low.onnx.json"},
+    {"id": "piper_ne_google_medium", "name": "Google (ne-NP, Multi)", "language": "ne-NP", "region": "asia", "backend": "piper",
+     "gender": "multi", "quality": "medium", "size_mb": 100, "size_display": "100 MB",
+     "model_path": "ne_NP-google-medium.onnx",
+     "download_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/ne/ne_NP/google/medium/ne_NP-google-medium.onnx",
+     "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/ne/ne_NP/google/medium/ne_NP-google-medium.onnx.json"},
+    {"id": "piper_kk_iseke_x_low", "name": "Iseke (kk-KZ, Male)", "language": "kk-KZ", "region": "central_asia", "backend": "piper",
+     "gender": "male", "quality": "x_low", "size_mb": 30, "size_display": "30 MB",
+     "model_path": "kk_KZ-iseke-x_low.onnx",
+     "download_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/kk/kk_KZ/iseke/x_low/kk_KZ-iseke-x_low.onnx",
+     "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/kk/kk_KZ/iseke/x_low/kk_KZ-iseke-x_low.onnx.json"},
+    
+    # === Middle East ===
+    {"id": "piper_ar_kareem_medium", "name": "Kareem (ar, Male)", "language": "ar", "region": "middle_east", "backend": "piper",
+     "gender": "male", "quality": "medium", "size_mb": 100, "size_display": "100 MB",
+     "model_path": "ar_JO-kareem-medium.onnx",
+     "download_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/ar/ar_JO/kareem/medium/ar_JO-kareem-medium.onnx",
+     "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/ar/ar_JO/kareem/medium/ar_JO-kareem-medium.onnx.json"},
+    
+    # === Africa ===
+    {"id": "piper_sw_lanfrica_medium", "name": "Lanfrica (sw, Male)", "language": "sw", "region": "africa", "backend": "piper",
+     "gender": "male", "quality": "medium", "size_mb": 100, "size_display": "100 MB",
+     "model_path": "sw-lanfrica-medium.onnx",
+     "download_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/sw/lanfrica/medium/sw-lanfrica-medium.onnx",
+     "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/sw/lanfrica/medium/sw-lanfrica-medium.onnx.json"},
+]
+
+KOKORO_TTS_MODELS = [
+    {"id": "kokoro_82m", "name": "Kokoro 82M (Multi-language)", "language": "multi", "region": "global", "backend": "kokoro",
+     "size_mb": 330, "size_display": "330 MB", "model_path": "kokoro",
+     "download_url": "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/kokoro-v1_0.pth",
+     "config_url": "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/config.json",
+     "supported_languages": ["en-US", "en-GB", "ja-JP", "zh-CN", "es-ES", "fr-FR", "hi-IN", "it-IT", "pt-BR"],
+     "voice_files": {
+         "af_heart": "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/voices/af_heart.pt",
+         "af_bella": "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/voices/af_bella.pt",
+         "am_adam": "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/voices/am_adam.pt",
+         "am_michael": "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/voices/am_michael.pt"
+     }},
+]
+
+# ============== LLM Models ==============
+
+LLM_MODELS = [
+    {"id": "phi3_mini", "name": "Phi-3-mini-4K", "size_mb": 2500, "size_display": "2.5 GB",
+     "description": "Good quality, optimized for 4K context", "recommended": True,
+     "download_url": "https://huggingface.co/microsoft/Phi-3-mini-4k-instruct-gguf/resolve/main/Phi-3-mini-4k-instruct-q4.gguf",
+     "model_path": "phi-3-mini-4k-instruct.Q4_K_M.gguf", "recommended_ram_gb": 8},
+    {"id": "tinyllama", "name": "TinyLlama 1.1B", "size_mb": 700, "size_display": "700 MB",
+     "description": "Lightweight, for low-resource systems",
+     "download_url": "https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
+     "model_path": "tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf", "recommended_ram_gb": 4},
+    {"id": "llama32_3b", "name": "Llama-3.2-3B", "size_mb": 2000, "size_display": "2 GB",
+     "description": "Balanced performance and quality",
+     "download_url": "https://huggingface.co/lmstudio-community/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+     "model_path": "Llama-3.2-3B-Instruct-Q4_K_M.gguf", "recommended_ram_gb": 8},
+    {"id": "openai_cloud", "name": "OpenAI Cloud", "size_mb": 0, "size_display": "0 (Cloud)",
+     "description": "Best quality, requires API key",
+     "download_url": None, "model_path": None, "requires_api_key": True, "api_key_name": "OPENAI_API_KEY"},
+]
+
+# ============== Combined Catalog ==============
+
+def get_full_catalog():
+    """Get the complete model catalog organized by type."""
+    return {
+        "stt": VOSK_STT_MODELS + SHERPA_STT_MODELS + KROKO_STT_MODELS,
+        "tts": PIPER_TTS_MODELS + KOKORO_TTS_MODELS,
+        "llm": LLM_MODELS,
+    }
+
+def get_models_by_language(language_code: str):
+    """Get all models available for a specific language."""
+    catalog = get_full_catalog()
+    result = {"stt": [], "tts": []}
+    
+    for stt in catalog["stt"]:
+        if stt.get("language") == language_code or stt.get("language") == "multi":
+            result["stt"].append(stt)
+    
+    for tts in catalog["tts"]:
+        if tts.get("language") == language_code or tts.get("language") == "multi":
+            result["tts"].append(tts)
+    
+    return result
+
+def get_available_languages():
+    """Get list of all available languages with their support status."""
+    catalog = get_full_catalog()
+    languages = {}
+    
+    for stt in catalog["stt"]:
+        lang = stt.get("language")
+        if lang and lang != "multi":
+            if lang not in languages:
+                languages[lang] = {"stt": [], "tts": [], "region": stt.get("region", "other")}
+            languages[lang]["stt"].append(stt["id"])
+    
+    for tts in catalog["tts"]:
+        lang = tts.get("language")
+        if lang and lang != "multi":
+            if lang not in languages:
+                languages[lang] = {"stt": [], "tts": [], "region": tts.get("region", "other")}
+            languages[lang]["tts"].append(tts["id"])
+    
+    return languages
+
+# Language display names for UI
+LANGUAGE_NAMES = {
+    "en-US": "English (US)",
+    "en-GB": "English (UK)",
+    "en-IN": "English (India)",
+    "fr-FR": "French",
+    "de-DE": "German",
+    "es-ES": "Spanish (Spain)",
+    "es-MX": "Spanish (Mexico)",
+    "it-IT": "Italian",
+    "pt-BR": "Portuguese (Brazil)",
+    "pt-PT": "Portuguese",
+    "nl-NL": "Dutch",
+    "ru-RU": "Russian",
+    "uk-UA": "Ukrainian",
+    "pl-PL": "Polish",
+    "cs-CZ": "Czech",
+    "el-GR": "Greek",
+    "sv-SE": "Swedish",
+    "tr-TR": "Turkish",
+    "ca-ES": "Catalan",
+    "da-DK": "Danish",
+    "fi-FI": "Finnish",
+    "hu-HU": "Hungarian",
+    "no-NO": "Norwegian",
+    "sr-RS": "Serbian",
+    "zh-CN": "Chinese (Mandarin)",
+    "ja-JP": "Japanese",
+    "ko-KR": "Korean",
+    "hi-IN": "Hindi",
+    "vi-VN": "Vietnamese",
+    "tl-PH": "Filipino/Tagalog",
+    "gu-IN": "Gujarati",
+    "te-IN": "Telugu",
+    "ne-NP": "Nepali",
+    "ar": "Arabic",
+    "fa-IR": "Farsi/Persian",
+    "kk-KZ": "Kazakh",
+    "uz-UZ": "Uzbek",
+    "tg-TJ": "Tajik",
+    "ky-KG": "Kyrgyz",
+    "sw": "Swahili",
+    "eo": "Esperanto",
+    "br": "Breton",
+}
+
+REGION_NAMES = {
+    "global": "Global",
+    "europe": "Europe",
+    "asia": "Asia",
+    "americas": "Americas",
+    "middle_east": "Middle East",
+    "central_asia": "Central Asia",
+    "africa": "Africa",
+    "other": "Other",
+}

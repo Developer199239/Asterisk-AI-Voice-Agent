@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { Cpu, HardDrive, AlertCircle, CheckCircle2, XCircle, Activity, Layers, Box, RefreshCw } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Activity, CheckCircle2, Cpu, RefreshCw, Settings, Terminal, XCircle, HardDrive, AlertCircle, Layers, Box } from 'lucide-react';
 import { ConfigCard } from './ui/ConfigCard';
 import axios from 'axios';
 
@@ -29,8 +30,8 @@ interface AvailableModels {
 }
 
 interface PendingChanges {
-    stt?: { backend: string; modelPath?: string };
-    tts?: { backend: string; modelPath?: string; voice?: string };
+    stt?: { backend: string; modelPath?: string; embedded?: boolean };
+    tts?: { backend: string; modelPath?: string; voice?: string; mode?: string };
     llm?: { modelPath: string };
 }
 
@@ -86,14 +87,52 @@ export const HealthWidget = () => {
     // Check if there are pending changes
     const hasPendingChanges = Object.keys(pendingChanges).length > 0;
 
-    // Get the displayed value (pending or current)
+    // Get the displayed value (pending or current) - returns backend:path format for model selection
     const getDisplayedBackend = (modelType: 'stt' | 'tts') => {
-        if (pendingChanges[modelType]?.backend) {
-            return pendingChanges[modelType].backend;
+        if (modelType === 'stt') {
+            if (pendingChanges.stt?.backend) {
+                if (pendingChanges.stt.backend === 'kroko') {
+                    return pendingChanges.stt.embedded ? 'kroko_embedded' : 'kroko_cloud';
+                }
+                // Return backend:path format for specific model
+                if (pendingChanges.stt.modelPath) {
+                    return `${pendingChanges.stt.backend}:${pendingChanges.stt.modelPath}`;
+                }
+                return pendingChanges.stt.backend;
+            }
+            const currentBackend = health?.local_ai_server.details.models?.stt?.backend || health?.local_ai_server.details.stt_backend || 'vosk';
+            const currentPath = health?.local_ai_server.details.models?.stt?.path;
+            if (currentBackend === 'kroko') {
+                return health?.local_ai_server.details.kroko_embedded ? 'kroko_embedded' : 'kroko_cloud';
+            }
+            // Return backend:path format to match selected model
+            if (currentPath) {
+                return `${currentBackend}:${currentPath}`;
+            }
+            return currentBackend;
+        } else {
+            // TTS
+            if (pendingChanges.tts?.backend) {
+                if (pendingChanges.tts.backend === 'kokoro') {
+                    return pendingChanges.tts.mode === 'local' ? 'kokoro_local' : 'kokoro_cloud';
+                }
+                // Return backend:path format for specific model
+                if (pendingChanges.tts.modelPath) {
+                    return `${pendingChanges.tts.backend}:${pendingChanges.tts.modelPath}`;
+                }
+                return pendingChanges.tts.backend;
+            }
+            const currentBackend = health?.local_ai_server.details.models?.tts?.backend || health?.local_ai_server.details.tts_backend || 'piper';
+            const currentPath = health?.local_ai_server.details.models?.tts?.path;
+            if (currentBackend === 'kokoro') {
+                return health?.local_ai_server.details.kokoro_mode === 'local' ? 'kokoro_local' : 'kokoro_cloud';
+            }
+            // Return backend:path format to match selected model
+            if (currentPath) {
+                return `${currentBackend}:${currentPath}`;
+            }
+            return currentBackend;
         }
-        return health?.local_ai_server.details.models?.[modelType]?.backend || 
-               health?.local_ai_server.details[`${modelType}_backend`] || 
-               (modelType === 'stt' ? 'vosk' : 'piper');
     };
 
     const getDisplayedLlmPath = () => {
@@ -106,26 +145,36 @@ export const HealthWidget = () => {
     // Apply all pending changes and restart
     const applyChanges = async () => {
         if (!hasPendingChanges) return;
-        
+
         setApplyingChanges(true);
         setRestarting(true);
-        
+
         try {
             // Apply each pending change (last one triggers the restart)
             const changes = Object.entries(pendingChanges);
-            
+
             for (let i = 0; i < changes.length; i++) {
                 const [modelType, change] = changes[i];
                 const isLast = i === changes.length - 1;
-                
+
                 if (modelType === 'stt' || modelType === 'tts') {
-                    const res = await axios.post('/api/local-ai/switch', {
+                    const payload: any = {
                         model_type: modelType,
                         backend: change.backend,
                         model_path: change.modelPath,
                         voice: change.voice
-                    });
-                    
+                    };
+
+                    // Add mode params if applicable
+                    if (modelType === 'stt' && change.backend === 'kroko') {
+                        payload.kroko_embedded = change.embedded;
+                    }
+                    if (modelType === 'tts' && change.backend === 'kokoro') {
+                        payload.kokoro_mode = change.mode;
+                    }
+
+                    const res = await axios.post('/api/local-ai/switch', payload);
+
                     // Only check success on last change (which triggers restart)
                     if (isLast && !res.data.success) {
                         throw new Error(res.data.message || 'Failed to switch model');
@@ -136,16 +185,16 @@ export const HealthWidget = () => {
                         backend: '',
                         model_path: change.modelPath
                     });
-                    
+
                     if (isLast && !res.data.success) {
                         throw new Error(res.data.message || 'Failed to switch model');
                     }
                 }
             }
-            
+
             // Clear pending changes
             setPendingChanges({});
-            
+
             // Wait for the switch API to complete (it handles restart internally)
             // Add extra buffer time for model loading (can take up to 3 minutes)
             setTimeout(() => {
@@ -191,6 +240,8 @@ export const HealthWidget = () => {
         return parts[parts.length - 1];
     };
 
+
+
     return (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
             {/* Local AI Server Card */}
@@ -204,6 +255,41 @@ export const HealthWidget = () => {
                             <h3 className="font-semibold text-lg">Local AI Server</h3>
                             <div className="mt-1">{renderStatus(health.local_ai_server.status)}</div>
                         </div>
+                    </div>
+                    <div className="flex gap-2">
+                        <Link
+                            to="/env"
+                            className="p-2 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground transition-colors cursor-pointer inline-flex items-center justify-center"
+                            title="Configure"
+                        >
+                            <Settings className="w-4 h-4" />
+                        </Link>
+                        <button
+                            type="button"
+                            onClick={async () => {
+                                if (!window.confirm('Are you sure you want to restart the Local AI Server?')) return;
+                                setRestarting(true);
+                                try {
+                                    await axios.post('/api/system/restart', { container: 'local-ai-server' });
+                                    // Poll for health
+                                    setTimeout(() => setRestarting(false), 5000);
+                                } catch (err) {
+                                    console.error('Failed to restart', err);
+                                    setRestarting(false);
+                                }
+                            }}
+                            className="p-2 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+                            title="Restart"
+                        >
+                            <RefreshCw className={`w-4 h-4 ${restarting ? 'animate-spin' : ''}`} />
+                        </button>
+                        <Link
+                            to="/logs?container=local_ai_server"
+                            className="p-2 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground transition-colors cursor-pointer inline-flex items-center justify-center"
+                            title="View Logs"
+                        >
+                            <Terminal className="w-4 h-4" />
+                        </Link>
                     </div>
                 </div>
 
@@ -229,14 +315,38 @@ export const HealthWidget = () => {
                                     className={`flex-1 text-xs p-2 rounded border bg-background ${pendingChanges.stt ? 'border-yellow-500' : 'border-border'}`}
                                     value={getDisplayedBackend('stt')}
                                     onChange={(e) => {
-                                        const backend = e.target.value;
-                                        const currentBackend = health?.local_ai_server.details.models?.stt?.backend || health?.local_ai_server.details.stt_backend;
-                                        if (backend !== currentBackend) {
-                                            const models = availableModels?.stt[backend] || [];
-                                            const firstModel = models[0];
-                                            queueChange('stt', { backend, modelPath: firstModel?.path });
+                                        const val = e.target.value;
+                                        let backend = '';
+                                        let modelPath = '';
+                                        let embedded = false;
+
+                                        if (val === 'kroko_embedded') {
+                                            backend = 'kroko';
+                                            embedded = true;
+                                        } else if (val === 'kroko_cloud') {
+                                            backend = 'kroko';
+                                            embedded = false;
+                                        } else if (val.includes(':')) {
+                                            // Format: backend:path (e.g., "vosk:/app/models/stt/vosk-model-hi-0.22")
+                                            const parts = val.split(':');
+                                            backend = parts[0];
+                                            modelPath = parts.slice(1).join(':'); // Handle paths with colons
                                         } else {
-                                            // Remove pending change if reverting to current
+                                            backend = val;
+                                        }
+
+                                        const currentBackend = health?.local_ai_server.details.models?.stt?.backend || health?.local_ai_server.details.stt_backend;
+                                        const currentPath = health?.local_ai_server.details.models?.stt?.path;
+                                        const currentEmbedded = health?.local_ai_server.details.kroko_embedded;
+
+                                        // Check if changed
+                                        const isBackendChanged = backend !== currentBackend;
+                                        const isPathChanged = modelPath && modelPath !== currentPath;
+                                        const isModeChanged = backend === 'kroko' && embedded !== currentEmbedded;
+
+                                        if (isBackendChanged || isPathChanged || isModeChanged) {
+                                            queueChange('stt', { backend, modelPath: modelPath || undefined, embedded });
+                                        } else {
                                             setPendingChanges(prev => {
                                                 const { stt, ...rest } = prev;
                                                 return rest;
@@ -245,17 +355,35 @@ export const HealthWidget = () => {
                                     }}
                                     disabled={applyingChanges}
                                 >
-                                    {availableModels?.stt && Object.entries(availableModels.stt).map(([backend, models]) => (
-                                        models.length > 0 && (
-                                            <option key={backend} value={backend}>
-                                                {backend.charAt(0).toUpperCase() + backend.slice(1)} ({models.length})
-                                            </option>
-                                        )
-                                    ))}
+                                    {availableModels?.stt && Object.entries(availableModels.stt).map(([backend, models]) => {
+                                        if (backend === 'kroko') {
+                                            return (
+                                                <optgroup key="kroko" label="Kroko">
+                                                    <option key="kroko_embedded" value="kroko_embedded">Kroko (Embedded)</option>
+                                                    <option key="kroko_cloud" value="kroko_cloud">Kroko (Cloud)</option>
+                                                </optgroup>
+                                            );
+                                        }
+                                        // Show individual models in optgroup by backend
+                                        return models.length > 0 && (
+                                            <optgroup key={backend} label={backend.charAt(0).toUpperCase() + backend.slice(1)}>
+                                                {models.map((model: any) => (
+                                                    <option key={model.id || model.path} value={`${backend}:${model.path}`}>
+                                                        {model.name}
+                                                    </option>
+                                                ))}
+                                            </optgroup>
+                                        );
+                                    })}
                                 </select>
                             </div>
-                            <div className="text-xs text-muted-foreground bg-muted/50 p-2 rounded border border-border/50 truncate">
-                                {getModelName(health.local_ai_server.details.models?.stt?.path || 'Not configured')}
+                            <div className="text-xs text-muted-foreground bg-muted/50 p-2 rounded border border-border/50 truncate flex justify-between">
+                                <span>{getModelName(health.local_ai_server.details.models?.stt?.path || 'Not configured')}</span>
+                                {health.local_ai_server.details.stt_backend === 'kroko' && (
+                                    <span className="opacity-75">
+                                        {health.local_ai_server.details.kroko_embedded ? `Embedded (Port ${health.local_ai_server.details.kroko_port || 6006})` : 'Cloud API'}
+                                    </span>
+                                )}
                             </div>
                         </div>
 
@@ -322,16 +450,41 @@ export const HealthWidget = () => {
                                     className={`flex-1 text-xs p-2 rounded border bg-background ${pendingChanges.tts ? 'border-yellow-500' : 'border-border'}`}
                                     value={getDisplayedBackend('tts')}
                                     onChange={(e) => {
-                                        const backend = e.target.value;
+                                        const val = e.target.value;
+                                        let backend = '';
+                                        let modelPath = '';
+                                        let mode = 'local';
+
+                                        if (val === 'kokoro_local') {
+                                            backend = 'kokoro';
+                                            mode = 'local';
+                                        } else if (val === 'kokoro_cloud') {
+                                            backend = 'kokoro';
+                                            mode = 'api';
+                                        } else if (val.includes(':')) {
+                                            // Format: backend:path (e.g., "piper:/app/models/tts/en_US-lessac-medium.onnx")
+                                            const parts = val.split(':');
+                                            backend = parts[0];
+                                            modelPath = parts.slice(1).join(':');
+                                        } else {
+                                            backend = val;
+                                        }
+
                                         const currentBackend = health?.local_ai_server.details.models?.tts?.backend || health?.local_ai_server.details.tts_backend;
-                                        if (backend !== currentBackend) {
-                                            const models = availableModels?.tts[backend] || [];
-                                            const firstModel = models[0];
+                                        const currentPath = health?.local_ai_server.details.models?.tts?.path;
+                                        const currentMode = health?.local_ai_server.details.kokoro_mode;
+
+                                        const isBackendChanged = backend !== currentBackend;
+                                        const isPathChanged = modelPath && modelPath !== currentPath;
+                                        const isModeChanged = backend === 'kokoro' && mode !== currentMode;
+
+                                        if (isBackendChanged || isPathChanged || isModeChanged) {
+                                            const change: any = { backend, modelPath: modelPath || undefined };
                                             if (backend === 'kokoro') {
-                                                queueChange('tts', { backend, modelPath: firstModel?.path, voice: 'af_heart' });
-                                            } else {
-                                                queueChange('tts', { backend, modelPath: firstModel?.path });
+                                                change.voice = 'af_heart';
+                                                change.mode = mode;
                                             }
+                                            queueChange('tts', change);
                                         } else {
                                             setPendingChanges(prev => {
                                                 const { tts, ...rest } = prev;
@@ -341,17 +494,33 @@ export const HealthWidget = () => {
                                     }}
                                     disabled={applyingChanges}
                                 >
-                                    {availableModels?.tts && Object.entries(availableModels.tts).map(([backend, models]) => (
-                                        models.length > 0 && (
-                                            <option key={backend} value={backend}>
-                                                {backend.charAt(0).toUpperCase() + backend.slice(1)} ({models.length})
-                                            </option>
-                                        )
-                                    ))}
+                                    {availableModels?.tts && Object.entries(availableModels.tts).map(([backend, models]) => {
+                                        if (backend === 'kokoro') {
+                                            return (
+                                                <optgroup key="kokoro" label="Kokoro">
+                                                    <option key="kokoro_local" value="kokoro_local">Kokoro (Local)</option>
+                                                    <option key="kokoro_cloud" value="kokoro_cloud">Kokoro (Cloud/API)</option>
+                                                </optgroup>
+                                            );
+                                        }
+                                        // Show individual models in optgroup by backend
+                                        return models.length > 0 && (
+                                            <optgroup key={backend} label={backend.charAt(0).toUpperCase() + backend.slice(1)}>
+                                                {models.map((model: any) => (
+                                                    <option key={model.id || model.path} value={`${backend}:${model.path}`}>
+                                                        {model.name}
+                                                    </option>
+                                                ))}
+                                            </optgroup>
+                                        );
+                                    })}
                                 </select>
                             </div>
-                            <div className="text-xs text-muted-foreground bg-muted/50 p-2 rounded border border-border/50 truncate">
-                                {getModelName(health.local_ai_server.details.models?.tts?.path || 'Not configured')}
+                            <div className="text-xs text-muted-foreground bg-muted/50 p-2 rounded border border-border/50 truncate flex justify-between">
+                                <span>{getModelName(health.local_ai_server.details.models?.tts?.path || 'Not configured')}</span>
+                                {health.local_ai_server.details.tts_backend === 'kokoro' && health.local_ai_server.details.kokoro_voice && (
+                                    <span className="opacity-75">Voice: {health.local_ai_server.details.kokoro_voice}</span>
+                                )}
                             </div>
                         </div>
 

@@ -441,25 +441,50 @@ const EnvPage = () => {
                                 { value: 'sherpa', label: 'Sherpa-ONNX (Local)' },
                             ]}
                         />
-                        
+
                         {/* Vosk Settings */}
                         {(env['LOCAL_STT_BACKEND'] || 'vosk') === 'vosk' && (
                             <FormInput
                                 label="Vosk Model Path"
-                                value={env['LOCAL_STT_MODEL_PATH'] || '/app/models/stt/vosk-model-en-us-0.22'}
-                                onChange={(e) => updateEnv('LOCAL_STT_MODEL_PATH', e.target.value)}
+                                value={env['VOSK_MODEL_PATH'] || '/app/models/stt/vosk-model-en-us-0.22'}
+                                onChange={(e) => updateEnv('VOSK_MODEL_PATH', e.target.value)}
                             />
                         )}
-                        
+
                         {/* Kroko Settings */}
                         {env['LOCAL_STT_BACKEND'] === 'kroko' && (
                             <>
-                                <FormInput
-                                    label="Kroko URL"
-                                    value={env['KROKO_URL'] || 'wss://app.kroko.ai/api/v1/transcripts/streaming'}
-                                    onChange={(e) => updateEnv('KROKO_URL', e.target.value)}
+                                <FormSwitch
+                                    id="kroko-embedded"
+                                    label="Embedded Mode"
+                                    description="Run Kroko locally (requires model download)."
+                                    checked={isTrue(env['KROKO_EMBEDDED'])}
+                                    onChange={(e) => updateEnv('KROKO_EMBEDDED', String(e.target.checked))}
                                 />
-                                <SecretInput label="Kroko API Key" name="KROKO_API_KEY" placeholder="Your Kroko API key" />
+                                {isTrue(env['KROKO_EMBEDDED']) ? (
+                                    <>
+                                        <FormInput
+                                            label="Kroko Model Path"
+                                            value={env['KROKO_MODEL_PATH'] || '/app/models/stt/kroko'}
+                                            onChange={(e) => updateEnv('KROKO_MODEL_PATH', e.target.value)}
+                                        />
+                                        <FormInput
+                                            label="Kroko Port"
+                                            type="number"
+                                            value={env['KROKO_PORT'] || '6006'}
+                                            onChange={(e) => updateEnv('KROKO_PORT', e.target.value)}
+                                        />
+                                    </>
+                                ) : (
+                                    <>
+                                        <FormInput
+                                            label="Kroko URL"
+                                            value={env['KROKO_URL'] || 'wss://app.kroko.ai/api/v1/transcripts/streaming'}
+                                            onChange={(e) => updateEnv('KROKO_URL', e.target.value)}
+                                        />
+                                        <SecretInput label="Kroko API Key" name="KROKO_API_KEY" placeholder="Your Kroko API key" />
+                                    </>
+                                )}
                                 <FormSelect
                                     label="Language"
                                     value={env['KROKO_LANGUAGE'] || 'en-US'}
@@ -474,7 +499,7 @@ const EnvPage = () => {
                                 />
                             </>
                         )}
-                        
+
                         {/* Sherpa Settings */}
                         {env['LOCAL_STT_BACKEND'] === 'sherpa' && (
                             <FormInput
@@ -499,19 +524,28 @@ const EnvPage = () => {
                                 { value: 'kokoro', label: 'Kokoro (Local, Premium)' },
                             ]}
                         />
-                        
+
                         {/* Piper Settings */}
                         {(env['LOCAL_TTS_BACKEND'] || 'piper') === 'piper' && (
                             <FormInput
                                 label="Piper Model Path"
-                                value={env['LOCAL_TTS_MODEL_PATH'] || '/app/models/tts/en_US-lessac-medium.onnx'}
-                                onChange={(e) => updateEnv('LOCAL_TTS_MODEL_PATH', e.target.value)}
+                                value={env['PIPER_MODEL_PATH'] || '/app/models/tts/en_US-lessac-medium.onnx'}
+                                onChange={(e) => updateEnv('PIPER_MODEL_PATH', e.target.value)}
                             />
                         )}
-                        
+
                         {/* Kokoro Settings */}
                         {env['LOCAL_TTS_BACKEND'] === 'kokoro' && (
                             <>
+                                <FormSelect
+                                    label="Mode"
+                                    value={env['KOKORO_MODE'] || 'local'}
+                                    onChange={(e) => updateEnv('KOKORO_MODE', e.target.value)}
+                                    options={[
+                                        { value: 'local', label: 'Local (On-Premise)' },
+                                        { value: 'api', label: 'Cloud API' },
+                                    ]}
+                                />
                                 <FormSelect
                                     label="Voice"
                                     value={env['KOKORO_VOICE'] || 'af_heart'}
@@ -530,11 +564,15 @@ const EnvPage = () => {
                                         { value: 'bm_lewis', label: 'Lewis (Male, British)' },
                                     ]}
                                 />
-                                <FormInput
-                                    label="Model Path"
-                                    value={env['KOKORO_MODEL_PATH'] || '/app/models/tts/kokoro'}
-                                    onChange={(e) => updateEnv('KOKORO_MODEL_PATH', e.target.value)}
-                                />
+                                {env['KOKORO_MODE'] === 'api' ? (
+                                    <SecretInput label="Kokoro API Key" name="KOKORO_API_KEY" placeholder="Your Kokoro API key" />
+                                ) : (
+                                    <FormInput
+                                        label="Model Path"
+                                        value={env['KOKORO_MODEL_PATH'] || '/app/models/tts/kokoro'}
+                                        onChange={(e) => updateEnv('KOKORO_MODEL_PATH', e.target.value)}
+                                    />
+                                )}
                             </>
                         )}
                     </div>
@@ -547,8 +585,8 @@ const EnvPage = () => {
                         <div className="col-span-full">
                             <FormInput
                                 label="LLM Model Path"
-                                value={env['LOCAL_LLM_MODEL_PATH'] || '/app/models/llm/phi-3-mini-4k-instruct.Q4_K_M.gguf'}
-                                onChange={(e) => updateEnv('LOCAL_LLM_MODEL_PATH', e.target.value)}
+                                value={env['LOCAL_LLM_MODEL'] || '/app/models/llm/phi-3-mini-4k-instruct.Q4_K_M.gguf'}
+                                onChange={(e) => updateEnv('LOCAL_LLM_MODEL', e.target.value)}
                             />
                         </div>
                         <FormInput

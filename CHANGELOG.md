@@ -11,6 +11,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Additional provider integrations
 - Enhanced monitoring features
 
+## [4.4.3] - 2025-12-10
+
+### Fixed - Admin UI Bug Fixes 🔧
+
+#### Models Page
+- **Installed Models Display**: Fixed parsing of nested API response structure
+- **Model Delete**: Added `DELETE /api/local-ai/models` endpoint with path mapping
+- **Error Messages**: Properly extract and display API error details (not generic "Request failed")
+
+#### Dashboard
+- **STT/TTS Dropdowns**: Show individual model names in optgroups instead of counts (e.g., "vosk-model-en" instead of "Vosk (2)")
+- **Metrics Display**: Added null guards to prevent "NaN%" when backend is unavailable
+
+#### Providers Page
+- **Local Provider Form**: Fixed form visibility for full agent mode local providers
+- **Currently Loaded Section**: Added live display of STT/LLM/TTS model status
+- **Test Connection - Local**: Now tests actual local_ai_server WebSocket connection and verifies all 3 models are loaded
+- **Test Connection - ElevenLabs**: Fixed validation using `/v1/voices` endpoint (was using `/v1/user` which requires special permissions)
+
+#### Health Widget
+- **Kroko/Kokoro Mode Detection**: Correctly parses embedded/local mode from health response paths
+
+#### Model Switching
+- **Container Restart**: Uses `docker-compose down/up` instead of Docker SDK to properly reload environment variables
+
+### Added - Cross-Platform Support (AAVA-126) 🌍
+
+#### Pre-flight Script (`preflight.sh`)
+- **Comprehensive System Checks**: OS detection, Docker version, Compose version, architecture verification
+- **Auto-fix Mode**: Run with `--apply-fixes` to automatically resolve fixable issues
+- **Multi-distro Support**: Ubuntu, Debian, CentOS, RHEL, Rocky, Alma, Fedora, Sangoma/FreePBX
+- **Rootless Docker Detection**: Proper handling for rootless Docker installations
+- **SELinux Handling**: Automatic context fix commands for RHEL-family systems
+- **Asterisk Detection**: Finds Asterisk config directory and FreePBX installations
+- **Port Availability Check**: Verifies Admin UI port (3003) is available
+- **Environment Setup**: Creates `.env` from `.env.example` if missing
+
+#### Admin UI Integration
+- **System Status Widget**: Dashboard displays preflight check results
+- **Platform API**: `GET /api/system/platform` returns system compatibility info
+- **Preflight API**: `POST /api/system/preflight` triggers fresh system check
+
+### Added - Developer Experience 🛠️
+
+- **React.lazy Code Splitting**: Heavy pages (Wizard, RawYaml, Terminal, Logs, Models) now lazy-loaded for faster initial bundle
+- **ESLint + Prettier**: Added configuration with lint/format/audit npm scripts
+- **Frontend README**: Documentation for setup, build, and available scripts
+
 ## [4.4.2] - 2025-12-08
 
 ### Added - Local AI Server Enhancements 🎯

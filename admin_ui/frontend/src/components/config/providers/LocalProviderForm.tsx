@@ -1,21 +1,94 @@
+import React, { useState, useEffect } from 'react';
+import axios from 'axios';
+import { AlertCircle } from 'lucide-react';
+
 interface LocalProviderFormProps {
     config: any;
     onChange: (newConfig: any) => void;
 }
 
 const LocalProviderForm: React.FC<LocalProviderFormProps> = ({ config, onChange }) => {
+    // Store raw data for backend discovery
+    const [rawModelData, setRawModelData] = useState<any>({ stt: {}, tts: {}, llm: [] });
+    // Flattened catalog for easy model lookup
+    const [modelCatalog, setModelCatalog] = useState<any>({ stt: [], llm: [], tts: [] });
+    const [loading, setLoading] = useState(true);
+    const [fetchError, setFetchError] = useState<string | null>(null);
+    
+    // Current status from Local AI Server
+    const [currentStatus, setCurrentStatus] = useState<any>(null);
+    const [statusLoading, setStatusLoading] = useState(true);
+
+    useEffect(() => {
+        const fetchModels = async () => {
+            try {
+                // Fetch installed models from local_ai API
+                const res = await axios.get('/api/local-ai/models');
+                const data = res.data;
+                setRawModelData(data);
+
+                // Flatten STT models (Dict[backend, List[Model]]) -> List[Model]
+                const sttModels = Object.values(data.stt || {}).flat();
+
+                // Flatten TTS models (Dict[backend, List[Model]])
+                const ttsModels = Object.values(data.tts || {}).flat();
+
+                setModelCatalog({
+                    stt: sttModels,
+                    llm: data.llm || [],
+                    tts: ttsModels
+                });
+            } catch (err) {
+                console.error("Failed to fetch local models", err);
+                setFetchError("Could not load installed models. Ensure AI Engine is running.");
+            } finally {
+                setLoading(false);
+            }
+        };
+        
+        const fetchCurrentStatus = async () => {
+            try {
+                const res = await axios.get('/api/system/health');
+                if (res.data?.local_ai_server?.status === 'connected') {
+                    setCurrentStatus(res.data.local_ai_server.details);
+                }
+            } catch (err) {
+                console.error("Failed to fetch current status", err);
+            } finally {
+                setStatusLoading(false);
+            }
+        };
+
+        fetchModels();
+        fetchCurrentStatus();
+    }, []);
+
     const handleChange = (field: string, value: any) => {
+        // If changing model backend, also try to set a sane default model path if available
+        if (field === 'stt_backend') {
+            // Logic to auto-select recommended model could go here, but for now just change backend
+        }
         onChange({ ...config, [field]: value });
     };
 
     const name = (config?.name || '').toLowerCase();
     const caps = config?.capabilities || [];
-    const isFullAgent = config?.type === 'full' || (caps.includes('stt') && caps.includes('llm') && caps.includes('tts'));
-    
+    const isFullAgent = (caps.includes('stt') && caps.includes('llm') && caps.includes('tts'));
+
     // For modular providers, detect role by name or capability
     const isSTT = isFullAgent || name.includes('stt') || caps.includes('stt');
     const isTTS = isFullAgent || name.includes('tts') || caps.includes('tts');
     const isLLM = isFullAgent || name.includes('llm') || caps.includes('llm') || (!name.includes('stt') && !name.includes('tts'));
+
+    // Helpers to find model details
+    const getModelPathPlaceholder = (backend: string, type: 'stt' | 'tts') => {
+        if (loading) return "Loading...";
+        if (backend === 'vosk') return '/app/models/stt/vosk-model-en-us-0.22';
+        if (backend === 'sherpa') return '/app/models/stt/sherpa-onnx-streaming-zipformer-en-2023-06-26';
+        if (backend === 'piper') return '/app/models/tts/en_US-lessac-medium.onnx';
+        if (backend === 'kokoro') return '/app/models/tts/kokoro';
+        return '';
+    };
 
     return (
         <div className="space-y-6">
@@ -23,6 +96,90 @@ const LocalProviderForm: React.FC<LocalProviderFormProps> = ({ config, onChange 
             {isFullAgent && (
                 <div className="bg-green-50/50 dark:bg-green-900/10 p-3 rounded-md border border-green-200 dark:border-green-900/30 text-sm text-green-800 dark:text-green-300">
                     <strong>Full Agent Mode:</strong> This provider handles STT, LLM, and TTS together via Local AI Server.
+                </div>
+            )}
+
+            {/* Currently Loaded Models - Live Status */}
+            {currentStatus && (
+                <div className="bg-blue-50/50 dark:bg-blue-900/10 p-4 rounded-md border border-blue-200 dark:border-blue-900/30">
+                    <h4 className="font-semibold text-sm mb-3 text-blue-800 dark:text-blue-300">📊 Currently Loaded</h4>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+                        {/* STT Status */}
+                        <div className="space-y-1">
+                            <span className="text-muted-foreground">STT:</span>
+                            <div className="font-medium flex items-center gap-2">
+                                {currentStatus.models?.stt?.loaded ? (
+                                    <span className="w-2 h-2 rounded-full bg-green-500"></span>
+                                ) : (
+                                    <span className="w-2 h-2 rounded-full bg-yellow-500"></span>
+                                )}
+                                <span>{currentStatus.stt_backend?.charAt(0).toUpperCase() + currentStatus.stt_backend?.slice(1) || 'Unknown'}</span>
+                                {currentStatus.kroko_embedded && (
+                                    <span className="text-xs px-1.5 py-0.5 bg-purple-100 dark:bg-purple-900/30 text-purple-600 rounded">
+                                        Embedded:{currentStatus.kroko_port || 6006}
+                                    </span>
+                                )}
+                                {currentStatus.stt_backend === 'kroko' && !currentStatus.kroko_embedded && (
+                                    <span className="text-xs px-1.5 py-0.5 bg-blue-100 dark:bg-blue-900/30 text-blue-600 rounded">Cloud</span>
+                                )}
+                            </div>
+                            <div className="text-xs text-muted-foreground truncate" title={currentStatus.models?.stt?.path}>
+                                {currentStatus.models?.stt?.path || 'Not configured'}
+                            </div>
+                        </div>
+
+                        {/* LLM Status */}
+                        <div className="space-y-1">
+                            <span className="text-muted-foreground">LLM:</span>
+                            <div className="font-medium flex items-center gap-2">
+                                {currentStatus.models?.llm?.loaded ? (
+                                    <span className="w-2 h-2 rounded-full bg-green-500"></span>
+                                ) : (
+                                    <span className="w-2 h-2 rounded-full bg-yellow-500"></span>
+                                )}
+                                <span className="truncate">{currentStatus.models?.llm?.path?.split('/').pop() || 'Not loaded'}</span>
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                                ctx:{currentStatus.models?.llm?.config?.context || '-'} threads:{currentStatus.models?.llm?.config?.threads || '-'}
+                            </div>
+                        </div>
+
+                        {/* TTS Status */}
+                        <div className="space-y-1">
+                            <span className="text-muted-foreground">TTS:</span>
+                            <div className="font-medium flex items-center gap-2">
+                                {currentStatus.models?.tts?.loaded ? (
+                                    <span className="w-2 h-2 rounded-full bg-green-500"></span>
+                                ) : (
+                                    <span className="w-2 h-2 rounded-full bg-yellow-500"></span>
+                                )}
+                                <span>{currentStatus.tts_backend?.charAt(0).toUpperCase() + currentStatus.tts_backend?.slice(1) || 'Unknown'}</span>
+                                {currentStatus.kokoro_mode === 'local' && (
+                                    <span className="text-xs px-1.5 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-600 rounded">Local</span>
+                                )}
+                                {currentStatus.kokoro_mode === 'api' && (
+                                    <span className="text-xs px-1.5 py-0.5 bg-blue-100 dark:bg-blue-900/30 text-blue-600 rounded">API</span>
+                                )}
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                                {currentStatus.kokoro_voice ? `Voice: ${currentStatus.kokoro_voice}` : currentStatus.models?.tts?.path || 'Not configured'}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+            {statusLoading && (
+                <div className="bg-muted/50 p-4 rounded-md animate-pulse">
+                    <div className="h-4 bg-muted rounded w-1/3 mb-2"></div>
+                    <div className="h-3 bg-muted rounded w-full"></div>
+                </div>
+            )}
+
+            {/* Error Banner */}
+            {fetchError && (
+                <div className="bg-red-50 dark:bg-red-900/10 p-3 rounded-md border border-red-200 dark:border-red-900/30 text-sm text-red-600 dark:text-red-400 flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4" />
+                    {fetchError}
                 </div>
             )}
 
@@ -42,6 +199,18 @@ const LocalProviderForm: React.FC<LocalProviderFormProps> = ({ config, onChange 
                             Initial greeting message spoken when a call starts.
                         </p>
                     </div>
+                    <div className="space-y-2 mt-4">
+                        <label className="text-sm font-medium">Instructions (System Prompt)</label>
+                        <textarea
+                            className="w-full p-2 rounded border border-input bg-background min-h-[80px]"
+                            value={config.instructions || ''}
+                            onChange={(e) => handleChange('instructions', e.target.value)}
+                            placeholder="You are a helpful voice assistant. Be concise and friendly."
+                        />
+                        <p className="text-xs text-muted-foreground">
+                            System prompt that defines the AI's behavior and personality.
+                        </p>
+                    </div>
                 </div>
             )}
 
@@ -56,7 +225,7 @@ const LocalProviderForm: React.FC<LocalProviderFormProps> = ({ config, onChange 
                     <input
                         type="text"
                         className="w-full p-2 rounded border border-input bg-background"
-                        value={isFullAgent 
+                        value={isFullAgent
                             ? (config.base_url || '${LOCAL_WS_URL:-ws://local_ai_server:8765}')
                             : (config.ws_url || '${LOCAL_WS_URL:-ws://local_ai_server:8765}')}
                         onChange={(e) => handleChange(isFullAgent ? 'base_url' : 'ws_url', e.target.value)}
@@ -93,6 +262,34 @@ const LocalProviderForm: React.FC<LocalProviderFormProps> = ({ config, onChange 
                         />
                     </div>
                     <div className="space-y-2">
+                        <label className="text-sm font-medium">Farewell Mode</label>
+                        <select
+                            className="w-full p-2 rounded border border-input bg-background"
+                            value={config.farewell_mode || 'asterisk'}
+                            onChange={(e) => handleChange('farewell_mode', e.target.value)}
+                        >
+                            <option value="asterisk">Asterisk Sound (Reliable)</option>
+                            <option value="tts">Local TTS (Fast Hardware)</option>
+                        </select>
+                        <p className="text-xs text-muted-foreground">
+                            "asterisk" for slow hardware, "tts" for fast hardware (&lt;5s LLM response).
+                        </p>
+                    </div>
+                    <div className="space-y-2">
+                        <label className="text-sm font-medium">Farewell TTS Timeout (s)</label>
+                        <input
+                            type="number"
+                            step="1"
+                            className="w-full p-2 rounded border border-input bg-background"
+                            value={config.farewell_timeout_sec || 30.0}
+                            onChange={(e) => handleChange('farewell_timeout_sec', parseFloat(e.target.value))}
+                            disabled={config.farewell_mode !== 'tts'}
+                        />
+                        <p className="text-xs text-muted-foreground">
+                            Only for TTS mode. Set based on LLM warmup time in logs.
+                        </p>
+                    </div>
+                    <div className="space-y-2">
                         <label className="text-sm font-medium">Chunk Size (ms)</label>
                         <input
                             type="number"
@@ -116,47 +313,151 @@ const LocalProviderForm: React.FC<LocalProviderFormProps> = ({ config, onChange 
                                 value={config.stt_backend || 'vosk'}
                                 onChange={(e) => handleChange('stt_backend', e.target.value)}
                             >
-                                <option value="vosk">Vosk (Local)</option>
-                                <option value="kroko">Kroko (Cloud)</option>
-                                <option value="sherpa">Sherpa-ONNX (Local)</option>
+                                {/* Default option if loading */}
+                                {loading && <option>Loading...</option>}
+
+                                {/* Dynamic options based on available backends */}
+                                {!loading && Object.keys(rawModelData.stt).map(backend => (
+                                    <option key={backend} value={backend}>
+                                        {backend.charAt(0).toUpperCase() + backend.slice(1)}
+                                    </option>
+                                ))}
+
+                                {/* Fallback options if API fails or data empty */}
+                                {!loading && Object.keys(rawModelData.stt).length === 0 && (
+                                    <>
+                                        <option value="vosk">Vosk (Local)</option>
+                                        <option value="kroko">Kroko</option>
+                                        <option value="sherpa">Sherpa-ONNX (Local)</option>
+                                    </>
+                                )}
                             </select>
                         </div>
-                        
+
                         {/* Vosk settings */}
-                        {(config.stt_backend || 'vosk') === 'vosk' && (
+                        {config.stt_backend === 'vosk' && (
                             <div className="space-y-2">
                                 <label className="text-sm font-medium">Vosk Model Path</label>
-                                <input
-                                    type="text"
-                                    className="w-full p-2 rounded border border-input bg-background"
-                                    value={config.stt_model || '/app/models/stt/vosk-model-en-us-0.22'}
-                                    onChange={(e) => handleChange('stt_model', e.target.value)}
-                                />
-                            </div>
-                        )}
-                        
-                        {/* Kroko settings */}
-                        {config.stt_backend === 'kroko' && (
-                            <>
-                                <div className="space-y-2">
-                                    <label className="text-sm font-medium">Kroko URL</label>
+                                <div className="relative">
                                     <input
                                         type="text"
                                         className="w-full p-2 rounded border border-input bg-background"
-                                        value={config.kroko_url || 'wss://app.kroko.ai/api/v1/transcripts/streaming'}
-                                        onChange={(e) => handleChange('kroko_url', e.target.value)}
+                                        value={config.stt_model || ''}
+                                        onChange={(e) => handleChange('stt_model', e.target.value)}
+                                        placeholder={getModelPathPlaceholder('vosk', 'stt')}
                                     />
+                                    {/* Quick Select for Vosk Models */}
+                                    {modelCatalog.stt.some((m: any) => m.id === 'vosk') && (
+                                        <div className="mt-1 text-xs text-muted-foreground">
+                                            Available: {modelCatalog.stt.filter((m: any) => m.id === 'vosk').map((m: any) => (
+                                                <button
+                                                    key={m.id}
+                                                    type="button"
+                                                    className="underline mr-2 text-primary"
+                                                    onClick={() => handleChange('stt_model', m.model_path)}
+                                                >
+                                                    {m.model_path}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    )}
                                 </div>
+                            </div>
+                        )}
+
+                        {/* Sherpa settings */}
+                        {config.stt_backend === 'sherpa' && (
+                            <div className="space-y-2">
+                                <label className="text-sm font-medium">Sherpa Model Path</label>
+                                <input
+                                    type="text"
+                                    className="w-full p-2 rounded border border-input bg-background"
+                                    value={config.sherpa_model_path || ''}
+                                    onChange={(e) => handleChange('sherpa_model_path', e.target.value)}
+                                    placeholder={getModelPathPlaceholder('sherpa', 'stt')}
+                                />
+                                {modelCatalog.stt.some((m: any) => m.id.includes('sherpa')) && (
+                                    <div className="mt-1 text-xs text-muted-foreground">
+                                        Available: {modelCatalog.stt.filter((m: any) => m.id.includes('sherpa')).map((m: any) => (
+                                            <button
+                                                key={m.id}
+                                                type="button"
+                                                className="underline mr-2 text-primary"
+                                                onClick={() => handleChange('sherpa_model_path', m.model_path)}
+                                            >
+                                                {m.model_path}
+                                            </button>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        {/* Kroko settings - Cloud or Local */}
+                        {config.stt_backend === 'kroko' && (
+                            <>
                                 <div className="space-y-2">
-                                    <label className="text-sm font-medium">Kroko API Key</label>
-                                    <input
-                                        type="password"
-                                        className="w-full p-2 rounded border border-input bg-background"
-                                        value={config.kroko_api_key || ''}
-                                        onChange={(e) => handleChange('kroko_api_key', e.target.value)}
-                                        placeholder="Your Kroko API key"
-                                    />
+                                    <label className="text-sm font-medium">Kroko Model</label>
+                                    <div className="relative">
+                                        <input
+                                            type="text"
+                                            className="w-full p-2 rounded border border-input bg-background"
+                                            value={config.stt_model || ''}
+                                            onChange={(e) => handleChange('stt_model', e.target.value)}
+                                            placeholder="Leave empty for Cloud, or enter path for Embedded"
+                                        />
+                                        {/* Quick Select for Kroko Models */}
+                                        {modelCatalog.stt.some((m: any) => m.backend === 'kroko') && (
+                                            <div className="mt-1 text-xs text-muted-foreground">
+                                                Available: {modelCatalog.stt
+                                                    .filter((m: any) => m.backend === 'kroko')
+                                                    .map((m: any) => (
+                                                        <button
+                                                            key={m.id}
+                                                            type="button"
+                                                            className="underline mr-2 text-primary"
+                                                            onClick={() => {
+                                                                if (m.id === 'kroko_cloud') {
+                                                                    handleChange('stt_model', '');
+                                                                    handleChange('kroko_url', m.path);
+                                                                } else {
+                                                                    handleChange('stt_model', m.path);
+                                                                }
+                                                            }}
+                                                        >
+                                                            {m.name}
+                                                        </button>
+                                                    ))}
+                                            </div>
+                                        )}
+                                    </div>
                                 </div>
+
+                                {/* Only show URL/Key if NO local model path is set (Cloud Mode) */}
+                                {!config.stt_model && (
+                                    <>
+                                        <div className="space-y-2">
+                                            <label className="text-sm font-medium">Kroko URL</label>
+                                            <input
+                                                type="text"
+                                                className="w-full p-2 rounded border border-input bg-background"
+                                                value={config.kroko_url || 'wss://app.kroko.ai/api/v1/transcripts/streaming'}
+                                                onChange={(e) => handleChange('kroko_url', e.target.value)}
+                                            />
+                                        </div>
+                                        <div className="space-y-2">
+                                            <label className="text-sm font-medium">Kroko API Key</label>
+                                            <input
+                                                type="password"
+                                                className="w-full p-2 rounded border border-input bg-background"
+                                                value={config.kroko_api_key || ''}
+                                                onChange={(e) => handleChange('kroko_api_key', e.target.value)}
+                                                placeholder="Your Kroko API key"
+                                            />
+                                        </div>
+                                    </>
+                                )}
+
                                 <div className="space-y-2">
                                     <label className="text-sm font-medium">Language</label>
                                     <select
@@ -172,19 +473,6 @@ const LocalProviderForm: React.FC<LocalProviderFormProps> = ({ config, onChange 
                                     </select>
                                 </div>
                             </>
-                        )}
-                        
-                        {/* Sherpa settings */}
-                        {config.stt_backend === 'sherpa' && (
-                            <div className="space-y-2">
-                                <label className="text-sm font-medium">Sherpa Model Path</label>
-                                <input
-                                    type="text"
-                                    className="w-full p-2 rounded border border-input bg-background"
-                                    value={config.sherpa_model_path || '/app/models/stt/sherpa-onnx-streaming-zipformer-en-2023-06-26'}
-                                    onChange={(e) => handleChange('sherpa_model_path', e.target.value)}
-                                />
-                            </div>
                         )}
                     </div>
                 </div>
@@ -202,11 +490,23 @@ const LocalProviderForm: React.FC<LocalProviderFormProps> = ({ config, onChange 
                                 value={config.tts_backend || 'piper'}
                                 onChange={(e) => handleChange('tts_backend', e.target.value)}
                             >
-                                <option value="piper">Piper (Local)</option>
-                                <option value="kokoro">Kokoro (Local, Premium)</option>
+                                {/* Dynamic options based on available backends */}
+                                {!loading && Object.keys(rawModelData.tts).map(backend => (
+                                    <option key={backend} value={backend}>
+                                        {backend.charAt(0).toUpperCase() + backend.slice(1)}
+                                    </option>
+                                ))}
+
+                                {/* Fallback options */}
+                                {!loading && Object.keys(rawModelData.tts).length === 0 && (
+                                    <>
+                                        <option value="piper">Piper (Local)</option>
+                                        <option value="kokoro">Kokoro (Local, Premium)</option>
+                                    </>
+                                )}
                             </select>
                         </div>
-                        
+
                         {/* Piper settings */}
                         {(config.tts_backend || 'piper') === 'piper' && (
                             <div className="space-y-2">
@@ -214,12 +514,29 @@ const LocalProviderForm: React.FC<LocalProviderFormProps> = ({ config, onChange 
                                 <input
                                     type="text"
                                     className="w-full p-2 rounded border border-input bg-background"
-                                    value={config.tts_voice || '/app/models/tts/en_US-lessac-medium.onnx'}
+                                    value={config.tts_voice || ''}
                                     onChange={(e) => handleChange('tts_voice', e.target.value)}
+                                    placeholder={getModelPathPlaceholder('piper', 'tts')}
                                 />
+                                {modelCatalog.tts.some((m: any) => m.id.includes('piper')) && (
+                                    <div className="mt-1 text-xs text-muted-foreground flex flex-wrap gap-2">
+                                        <span>Use:</span>
+                                        {modelCatalog.tts.filter((m: any) => m.id.includes('piper')).map((m: any) => (
+                                            <button
+                                                key={m.id}
+                                                type="button"
+                                                className="underline text-primary"
+                                                onClick={() => handleChange('tts_voice', m.model_path)}
+                                                title={m.name}
+                                            >
+                                                {m.id.replace('piper_', '')}
+                                            </button>
+                                        ))}
+                                    </div>
+                                )}
                             </div>
                         )}
-                        
+
                         {/* Kokoro settings */}
                         {config.tts_backend === 'kokoro' && (
                             <>
@@ -230,17 +547,27 @@ const LocalProviderForm: React.FC<LocalProviderFormProps> = ({ config, onChange 
                                         value={config.kokoro_voice || 'af_heart'}
                                         onChange={(e) => handleChange('kokoro_voice', e.target.value)}
                                     >
-                                        <option value="af_heart">Heart (Female, American)</option>
-                                        <option value="af_bella">Bella (Female, American)</option>
-                                        <option value="af_nicole">Nicole (Female, American)</option>
-                                        <option value="af_sarah">Sarah (Female, American)</option>
-                                        <option value="af_sky">Sky (Female, American)</option>
-                                        <option value="am_adam">Adam (Male, American)</option>
-                                        <option value="am_michael">Michael (Male, American)</option>
-                                        <option value="bf_emma">Emma (Female, British)</option>
-                                        <option value="bf_isabella">Isabella (Female, British)</option>
-                                        <option value="bm_george">George (Male, British)</option>
-                                        <option value="bm_lewis">Lewis (Male, British)</option>
+                                        {/* Use backend voice files list if available, else fallback */}
+                                        {modelCatalog.tts.find((m: any) => m.id === 'kokoro_82m')?.voice_files
+                                            ? Object.keys(modelCatalog.tts.find((m: any) => m.id === 'kokoro_82m').voice_files).map((v: string) => (
+                                                <option key={v} value={v}>{v}</option>
+                                            ))
+                                            : (
+                                                <>
+                                                    <option value="af_heart">Heart (Female, American)</option>
+                                                    <option value="af_bella">Bella (Female, American)</option>
+                                                    <option value="af_nicole">Nicole (Female, American)</option>
+                                                    <option value="af_sarah">Sarah (Female, American)</option>
+                                                    <option value="af_sky">Sky (Female, American)</option>
+                                                    <option value="am_adam">Adam (Male, American)</option>
+                                                    <option value="am_michael">Michael (Male, American)</option>
+                                                    <option value="bf_emma">Emma (Female, British)</option>
+                                                    <option value="bf_isabella">Isabella (Female, British)</option>
+                                                    <option value="bm_george">George (Male, British)</option>
+                                                    <option value="bm_lewis">Lewis (Male, British)</option>
+                                                </>
+                                            )
+                                        }
                                     </select>
                                 </div>
                                 <div className="space-y-2">
@@ -248,9 +575,24 @@ const LocalProviderForm: React.FC<LocalProviderFormProps> = ({ config, onChange 
                                     <input
                                         type="text"
                                         className="w-full p-2 rounded border border-input bg-background"
-                                        value={config.kokoro_model_path || '/app/models/tts/kokoro'}
+                                        value={config.kokoro_model_path || ''}
                                         onChange={(e) => handleChange('kokoro_model_path', e.target.value)}
+                                        placeholder={getModelPathPlaceholder('kokoro', 'tts')}
                                     />
+                                    {modelCatalog.tts.some((m: any) => m.id === 'kokoro_82m') && (
+                                        <div className="mt-1 text-xs text-muted-foreground">
+                                            Available: {modelCatalog.tts.filter((m: any) => m.id === 'kokoro_82m').map((m: any) => (
+                                                <button
+                                                    key={m.id}
+                                                    type="button"
+                                                    className="underline mr-2 text-primary"
+                                                    onClick={() => handleChange('kokoro_model_path', m.model_path)}
+                                                >
+                                                    {m.model_path}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    )}
                                 </div>
                             </>
                         )}
@@ -271,7 +613,7 @@ const LocalProviderForm: React.FC<LocalProviderFormProps> = ({ config, onChange 
                             onChange={(e) => handleChange('max_tokens', parseInt(e.target.value))}
                         />
                         <p className="text-xs text-muted-foreground">
-                            Uses local model configured via Environment settings.
+                            Uses local model configured via Environment variables.
                         </p>
                     </div>
                 </div>

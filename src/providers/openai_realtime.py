@@ -99,6 +99,8 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         self._hangup_after_response: bool = False  # Flag to trigger hangup after next response
         self._farewell_timeout_task: Optional[asyncio.Task] = None  # Timeout fallback for hangup
         self._in_audio_burst: bool = False
+        self._response_audio_start_time: Optional[float] = None  # Track when audio started for interruption cooldown
+        self._min_response_time_before_interrupt: float = 2.5  # Minimum seconds of audio before allowing interruption (increased for farewells)
         self._first_output_chunk_logged: bool = False
         self._closing: bool = False
         self._closed: bool = False
@@ -391,40 +393,40 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         await self._send_session_update()
         self._log_session_assumptions()
         
-        # CRITICAL FIX #2: Send greeting IMMEDIATELY, don't wait for ACK
-        # Waiting for ACK blocks greeting for 3+ seconds (ACK arrives 8ms after timeout)
-        # This creates 4.5 second silence gap before greeting plays
-        # Proactively request an initial response so the agent can greet
-        # even before user audio arrives. Prefer explicit greeting text
-        # when provided; otherwise fall back to generic instructions.
-        try:
-            if (self.config.greeting or "").strip():
-                logger.info("Sending explicit greeting (before ACK wait)", call_id=call_id)
-                await self._send_explicit_greeting()
-            else:
-                await self._ensure_response_request()
-        except Exception:
-            logger.debug("Initial response.create request failed", call_id=call_id, exc_info=True)
+        # Start receive loop FIRST - this is required to receive ACK events!
+        # Previous bug: We waited for ACK but the receive loop wasn't running yet,
+        # so we always timed out. Now we start the loop first, then wait briefly.
+        self._receive_task = asyncio.create_task(self._receive_loop())
+        self._keepalive_task = asyncio.create_task(self._keepalive_loop())
         
-        # THEN wait for session.updated ACK (doesn't block greeting anymore)
+        # Brief wait for session.updated ACK - now receive loop can process it
+        # Per OpenAI Dec 2024 docs, session config must be applied before response.create
         try:
-            logger.debug("Waiting for OpenAI session.updated ACK...", call_id=call_id)
-            await asyncio.wait_for(self._session_ack_event.wait(), timeout=3.0)  # Increased from 2.0s - ACK arrives at ~2.005s
+            logger.debug("Waiting for OpenAI session.updated ACK before greeting...", call_id=call_id)
+            await asyncio.wait_for(self._session_ack_event.wait(), timeout=2.0)  # Short timeout - ACK arrives fast now
             logger.info(
-                "✅ OpenAI session.updated ACK received",
+                "✅ OpenAI session.updated ACK received - session configured",
                 call_id=call_id,
+                acknowledged=self._outfmt_acknowledged,
                 output_format=self._provider_output_format,
                 sample_rate=self._active_output_sample_rate_hz,
             )
         except asyncio.TimeoutError:
             logger.warning(
-                "❌ OpenAI session.updated ACK timeout (greeting already sent)",
+                "⚠️ OpenAI session.updated ACK timeout - proceeding anyway",
                 call_id=call_id,
-                note="OpenAI may have rejected audio format configuration - will use inference"
+                note="Session may not be fully configured"
             )
-
-        self._receive_task = asyncio.create_task(self._receive_loop())
-        self._keepalive_task = asyncio.create_task(self._keepalive_loop())
+        
+        # NOW send greeting after session is configured
+        try:
+            if (self.config.greeting or "").strip():
+                logger.info("Sending explicit greeting (after session ACK)", call_id=call_id)
+                await self._send_explicit_greeting()
+            else:
+                await self._ensure_response_request()
+        except Exception:
+            logger.debug("Initial response.create request failed", call_id=call_id, exc_info=True)
 
         # Reset egress pacer state at session start
         try:
@@ -501,13 +503,20 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             if not pcm16:
                 return
             
-            # IMPORTANT: For OpenAI Realtime with server-side VAD, DO NOT use client-side gating
-            # OpenAI handles turn detection and echo cancellation server-side
-            # Client-side gating fights OpenAI's server-side VAD and causes self-interruption
-            # See: OpenAI Realtime Golden Baseline (webrtc_aggressiveness: 1)
-            # The gate should stay OPEN and let OpenAI handle everything
+            # ECHO GATING for speakerphone support:
+            # Gate input ONLY while we're outputting real audio from OpenAI.
+            # The pacer keeps running and emitting silence, so we can't just check _outbuf.
+            # Instead, check if pacer has real audio (underruns == 0 means real audio).
+            # 
+            # When _pacer_underruns > 0, we're just emitting silence - allow input.
+            try:
+                if self._in_audio_burst and self._pacer_underruns == 0:
+                    # Agent is outputting REAL audio - gate input to prevent echo
+                    return
+            except Exception:
+                pass  # If we can't check, allow input
             
-            # Send audio directly - no gating for continuous input with server-side VAD
+            # Send audio to OpenAI for processing
             await self._send_audio_to_openai(pcm16)
             
         except ConnectionClosedError:
@@ -753,8 +762,20 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         # If not configured, DON'T SET IT - let OpenAI use optimized defaults
         # This prevents us from interfering with OpenAI's audio processing
 
+        # Build instructions with audio-forcing prefix
+        # CRITICAL: Per OpenAI community reports (Dec 2024), the Realtime API has a bug
+        # where modalities can get "stuck" on text-only after any text exchange.
+        # Adding explicit audio instructions helps force audio output.
+        audio_forcing_prefix = (
+            "IMPORTANT: You are a voice-based AI assistant. "
+            "ALWAYS respond with AUDIO speech, never text-only. "
+            "Every response MUST include spoken audio output. "
+        )
+        
         if self.config.instructions:
-            session["instructions"] = self.config.instructions
+            session["instructions"] = audio_forcing_prefix + self.config.instructions
+        else:
+            session["instructions"] = audio_forcing_prefix
 
         # Add tool calling configuration
         try:
@@ -790,15 +811,14 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         if not greeting or not self.websocket or self.websocket.closed:
             return
 
-        # OFFICIAL OPENAI SOLUTION: Disable turn_detection during greeting
-        # This prevents server-side VAD from committing user speech while greeting generates
-        # Reference: https://platform.openai.com/docs/guides/realtime-vad
+        # Per OpenAI Dec 2024 docs: Disable turn_detection during greeting
+        # to prevent user speech from interrupting the greeting
         logger.info(
             "🔇 Disabling turn_detection for greeting playback",
             call_id=self._call_id
         )
         
-        # Send session.update to disable VAD temporarily
+        # Disable VAD before greeting
         disable_vad_payload: Dict[str, Any] = {
             "type": "session.update",
             "event_id": f"sess-disable-vad-{uuid.uuid4()}",
@@ -808,34 +828,60 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         }
         await self._send_json(disable_vad_payload)
         
-        # Give a small delay for session update to take effect
-        await asyncio.sleep(0.05)
+        # Small delay to ensure VAD disable is processed
+        await asyncio.sleep(0.1)
 
-        # Map config modalities to output_modalities
+        # REVERT TO WORKING FORMAT - voice is a SESSION parameter, NOT response parameter
+        # The working version used simpler instructions without voice in response.create
         output_modalities = [m for m in (self.config.response_modalities or []) if m in ("audio", "text")] or ["audio"]
-
+        
         response_payload: Dict[str, Any] = {
             "type": "response.create",
             "event_id": f"resp-{uuid.uuid4()}",
             "response": {
-                # Force audio modality for greeting at response level (optional)
                 "modalities": output_modalities,
-                # Be explicit to ensure the model speaks immediately
+                # Simple instruction that was working before
                 "instructions": f"Please greet the user with the following: {greeting}",
-                "metadata": {"call_id": self._call_id, "purpose": "initial_greeting"},
-                # Optionally strip context to avoid distractions
-                "input": [],
+                "input": [],  # Empty input to avoid distractions
             },
         }
+        
+        logger.info(
+            "🎤 Sending greeting response.create",
+            call_id=self._call_id,
+            greeting_preview=greeting[:50] + "..." if len(greeting) > 50 else greeting,
+        )
 
         await self._send_json(response_payload)
         self._pending_response = True
         
-        # Mark that we've sent a greeting - next response.created will be protected
         logger.info(
-            "🛡️  Greeting sent with VAD disabled - will re-enable after completion",
+            "🛡️  Greeting sent - will re-enable VAD after completion",
             call_id=self._call_id
         )
+        
+        # FALLBACK: Re-enable VAD after timeout in case response.done doesn't fire correctly
+        # This ensures two-way conversation can proceed even if greeting tracking fails
+        asyncio.create_task(self._greeting_vad_fallback())
+
+    async def _greeting_vad_fallback(self):
+        """Fallback to re-enable VAD if greeting completion detection fails."""
+        try:
+            # Wait for greeting to complete (typical greeting is 3-5 seconds)
+            await asyncio.sleep(5.0)
+            
+            # If VAD wasn't re-enabled yet, do it now
+            if not self._greeting_completed:
+                logger.warning(
+                    "⚠️ VAD fallback - greeting completion not detected, re-enabling VAD",
+                    call_id=self._call_id
+                )
+                self._greeting_completed = True
+                await self._re_enable_vad()
+        except asyncio.CancelledError:
+            pass  # Task cancelled on session stop
+        except Exception:
+            logger.debug("VAD fallback failed", call_id=self._call_id, exc_info=True)
 
     async def _re_enable_vad(self):
         """Re-enable turn_detection after greeting completes."""
@@ -1270,6 +1316,8 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                 # Track audio burst for metrics, but don't use gating for server-side VAD
                 if not self._in_audio_burst:
                     self._in_audio_burst = True
+                    # SMOOTHNESS FIX: Record when audio started for interruption cooldown
+                    self._response_audio_start_time = time.time()
                 
                 await self._handle_output_audio(audio_b64)
             else:
@@ -1280,6 +1328,8 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             # Track end of audio burst for metrics
             if self._in_audio_burst:
                 self._in_audio_burst = False
+            # NOTE: Don't reset _response_audio_start_time here - response.audio.done fires per-segment
+            # We keep the timer until the full response is done to prevent mid-sentence interruption
             
             # NOTE: response.audio.done fires after EACH audio segment, not at end of response
             # Do NOT re-enable VAD here - it will trigger too early!
@@ -1311,16 +1361,28 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             # Track if audio was emitted during this response
             had_audio_burst = self._in_audio_burst
             
+            # Reset audio start time when response fully completes - allows interruption for next response
+            self._response_audio_start_time = None
+            
             await self._emit_audio_done()
             
             # Only emit additional audio_done if this response actually had audio output
             # This prevents premature hangup when tool responses complete (no audio yet)
             # The farewell response will emit audio_done when IT completes with audio
             if event_type in ("response.completed", "response.done") and not had_audio_burst:
-                logger.debug(
-                    "Response completed without audio output - no AgentAudioDone",
+                # DEBUG: Log response details to understand why no audio
+                response_data = event.get("response", {})
+                output_items = response_data.get("output", [])
+                status = response_data.get("status")
+                status_details = response_data.get("status_details")
+                logger.warning(
+                    "⚠️ Response completed without audio output - investigating",
                     call_id=self._call_id,
-                    event_type=event_type
+                    event_type=event_type,
+                    response_status=status,
+                    status_details=status_details,
+                    output_items_count=len(output_items),
+                    output_types=[item.get("type") for item in output_items] if output_items else [],
                 )
             
             if event_type == "response.error":
@@ -1457,9 +1519,29 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                         call_id=self._call_id,
                         response_id=self._current_response_id
                     )
+                # SMOOTHNESS FIX: Don't cancel if response just started - prevents premature cutoff
+                elif self._response_audio_start_time:
+                    elapsed = time.time() - self._response_audio_start_time
+                    if elapsed < self._min_response_time_before_interrupt:
+                        logger.info(
+                            "🛡️  Barge-in blocked - response too young",
+                            call_id=self._call_id,
+                            response_id=self._current_response_id,
+                            elapsed_seconds=round(elapsed, 2),
+                            min_required=self._min_response_time_before_interrupt
+                        )
+                    else:
+                        logger.info(
+                            "🎤 User interruption detected, cancelling response",
+                            call_id=self._call_id,
+                            response_id=self._current_response_id,
+                            elapsed_seconds=round(elapsed, 2)
+                        )
+                        await self._cancel_response(self._current_response_id)
                 else:
+                    # No audio started yet, still cancel text-only responses
                     logger.info(
-                        "🎤 User interruption detected, cancelling response",
+                        "🎤 User interruption detected (no audio), cancelling response",
                         call_id=self._call_id,
                         response_id=self._current_response_id
                     )
@@ -2081,6 +2163,20 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             return
         self._pacer_running = True
         self._pacer_start_ts = time.monotonic()
+        
+        # CRITICAL: Clear OpenAI's input audio buffer when we start outputting
+        # This prevents echo from being processed - any audio buffered before
+        # our local gating kicked in will be discarded by OpenAI
+        try:
+            clear_buffer_payload = {
+                "type": "input_audio_buffer.clear",
+                "event_id": f"clear-echo-{uuid.uuid4()}",
+            }
+            await self._send_json(clear_buffer_payload)
+            logger.debug("🔇 Cleared OpenAI input buffer for echo prevention", call_id=self._call_id)
+        except Exception:
+            logger.debug("Failed to clear input buffer", call_id=self._call_id, exc_info=True)
+        
         try:
             if self._pacer_task and not self._pacer_task.done():
                 self._pacer_task.cancel()
@@ -2122,18 +2218,29 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                     self._pacer_underruns += 1
                     chunk = silence_factory(chunk_bytes)
 
-                if not self._first_output_chunk_logged:
-                    try:
-                        logger.info(
-                            "OpenAI Realtime first paced audio chunk",
-                            call_id=call_id,
-                            bytes=len(chunk),
-                            target_encoding=self.config.target_encoding,
-                        )
-                    except Exception:
-                        pass
-                    self._first_output_chunk_logged = True
-                self._in_audio_burst = True
+                # Track whether we're emitting real audio (not silence) for echo gating
+                # NOTE: We do NOT set _in_audio_burst=False during silence here!
+                # The burst flag must remain True until response.audio.done fires,
+                # otherwise AgentAudioDone won't be emitted and the stream queue
+                # won't be cleared for the next response.
+                has_buffered_audio = len(self._outbuf) > 0
+                is_first_real_chunk = chunk and self._pacer_underruns == 0
+                
+                if has_buffered_audio or is_first_real_chunk:
+                    self._in_audio_burst = True
+                    if not self._first_output_chunk_logged:
+                        try:
+                            logger.info(
+                                "OpenAI Realtime first paced audio chunk",
+                                call_id=call_id,
+                                bytes=len(chunk),
+                                target_encoding=self.config.target_encoding,
+                            )
+                        except Exception:
+                            pass
+                        self._first_output_chunk_logged = True
+                # Don't clear _in_audio_burst during silence - let response.audio.done handle it
+                
                 try:
                     await self.on_event(
                         {
@@ -2154,6 +2261,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             logger.debug("Pacer loop error", call_id=call_id, exc_info=True)
         finally:
             self._pacer_running = False
+            self._in_audio_burst = False  # Always clear when pacer stops
 
     def _pacer_params(self) -> (int, Any):
         # Compute chunk size for 20 ms frames and a silence factory matching target encoding

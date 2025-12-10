@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AlertCircle, AlertTriangle, ArrowRight, Loader2, Cloud, Server, Shield, Zap, SkipForward, CheckCircle, CheckCircle2, XCircle, Terminal, Copy, HardDrive, Play } from 'lucide-react';
+import { AlertCircle, ArrowRight, Loader2, Cloud, Server, Shield, Zap, SkipForward, CheckCircle, CheckCircle2, XCircle, Terminal, Copy, HardDrive, Play } from 'lucide-react';
 import axios from 'axios';
 
 interface SetupConfig {
@@ -20,6 +20,17 @@ interface SetupConfig {
     greeting: string;
     ai_name: string;
     ai_role: string;
+    // Local AI Config
+    local_stt_backend?: string;
+    local_stt_model?: string;
+    kroko_embedded?: boolean;
+    kroko_api_key?: string;
+    local_tts_backend?: string;
+    local_tts_model?: string;
+    kokoro_mode?: string;
+    kokoro_voice?: string;
+    kokoro_api_key?: string;
+    local_llm_model?: string;
 }
 
 const Wizard = () => {
@@ -41,14 +52,19 @@ const Wizard = () => {
         google_key: '',
         greeting: 'Hello, how can I help you today?',
         ai_name: 'Asterisk Agent',
-        ai_role: 'Helpful Assistant'
+        ai_role: 'Helpful Assistant',
+        // Defaults
+        local_stt_backend: 'vosk',
+        local_stt_model: '',
+        kroko_embedded: true,
+        local_tts_backend: 'piper',
+        local_tts_model: '',
+        kokoro_mode: 'local',
+        kokoro_voice: 'af_heart',
+        local_llm_model: 'phi-3-mini'
     });
 
-    const [validations, setValidations] = useState({
-        openai: false,
-        deepgram: false,
-        google: false
-    });
+
 
     const [showSkipConfirm, setShowSkipConfirm] = useState(false);
     const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
@@ -63,33 +79,20 @@ const Wizard = () => {
         checked: boolean;
     }>({ running: false, exists: false, checked: false });
     const [startingEngine, setStartingEngine] = useState(false);
-    
+
     // Model selection state
-    interface ModelOption {
-        id: string;
-        name: string;
-        size_mb: number;
-        size_display: string;
-        latency: string;
-        description: string;
-        requires_api_key: boolean;
-        recommended?: boolean;
-        system_recommended?: boolean;
-    }
-    
-    interface ModelCatalog {
-        stt: ModelOption[];
-        llm: ModelOption[];
-        tts: ModelOption[];
-    }
-    
-    const [modelCatalog, setModelCatalog] = useState<ModelCatalog | null>(null);
-    const [selectedModels, setSelectedModels] = useState({
-        stt: 'sherpa_streaming',
-        llm: 'phi3_mini',
-        tts: 'piper_lessac_medium'
-    });
-    
+    const [selectedLanguage, setSelectedLanguage] = useState<string>('en-US');
+    const [availableLanguages, setAvailableLanguages] = useState<{
+        languages: Record<string, { stt: string[]; tts: string[]; region: string }>;
+        language_names: Record<string, string>;
+        region_names: Record<string, string>;
+    }>({ languages: {}, language_names: {}, region_names: {} });
+    const [modelCatalog, setModelCatalog] = useState<{
+        stt: any[];
+        tts: any[];
+        llm: any[];
+    }>({ stt: [], tts: [], llm: [] });
+
     // Local AI Server state
     const [localAIStatus, setLocalAIStatus] = useState<{
         tier: string;
@@ -112,15 +115,15 @@ const Wizard = () => {
         cpuCores: 0,
         ramGb: 0,
         gpuDetected: false,
+        existingModels: { stt: [] as string[], llm: [] as string[], tts: [] as string[] },
         modelsReady: false,
-        existingModels: { stt: [], llm: [], tts: [] },
+        systemDetected: false,
         downloading: false,
-        downloadOutput: [],
+        downloadOutput: [] as string[],
         downloadCompleted: false,
         serverStarted: false,
-        serverLogs: [],
-        serverReady: false,
-        systemDetected: false
+        serverLogs: [] as string[],
+        serverReady: false
     });
 
     // Load existing config from .env on mount
@@ -143,6 +146,58 @@ const Wizard = () => {
         };
         loadExistingConfig();
     }, []);
+
+    // Load available languages and models when reaching local AI step
+    useEffect(() => {
+        const loadModelsAndLanguages = async () => {
+            try {
+                const res = await axios.get('/api/wizard/local/available-models');
+                if (res.data) {
+                    setModelCatalog(res.data.catalog);
+                    setAvailableLanguages({
+                        languages: res.data.languages,
+                        language_names: res.data.language_names,
+                        region_names: res.data.region_names
+                    });
+                }
+            } catch (err) {
+                console.log('Failed to load model catalog');
+            }
+        };
+        if (step === 3) {
+            loadModelsAndLanguages();
+        }
+    }, [step]);
+
+    // Auto-select first available model when language changes
+    useEffect(() => {
+        if (modelCatalog?.stt?.length > 0) {
+            const sttModels = modelCatalog.stt.filter((m: any) => 
+                m.language === selectedLanguage || m.language === 'multi'
+            );
+            const ttsModels = modelCatalog.tts.filter((m: any) => 
+                m.language === selectedLanguage || m.language === 'multi'
+            );
+            
+            // Auto-select first STT model for the language
+            if (sttModels.length > 0 && !sttModels.find((m: any) => m.id === config.local_stt_model)) {
+                setConfig(prev => ({
+                    ...prev,
+                    local_stt_model: sttModels[0].id,
+                    local_stt_backend: sttModels[0].backend
+                }));
+            }
+            
+            // Auto-select first TTS model for the language
+            if (ttsModels.length > 0 && !ttsModels.find((m: any) => m.id === config.local_tts_model)) {
+                setConfig(prev => ({
+                    ...prev,
+                    local_tts_model: ttsModels[0].id,
+                    local_tts_backend: ttsModels[0].backend
+                }));
+            }
+        }
+    }, [selectedLanguage, modelCatalog]);
 
     const handleSkip = () => {
         setShowSkipConfirm(true);
@@ -191,11 +246,9 @@ const Wizard = () => {
             });
             if (!res.data.valid) throw new Error(`${provider} Key Invalid: ${res.data.error}`);
 
-            setValidations(prev => ({ ...prev, [provider === 'openai_realtime' ? 'openai' : provider]: true }));
             showToast(`${provider} API Key is valid!`, 'success');
         } catch (err: any) {
             showToast(err.message, 'error');
-            setValidations(prev => ({ ...prev, [provider === 'openai_realtime' ? 'openai' : provider]: false }));
         } finally {
             setLoading(false);
         }
@@ -264,7 +317,7 @@ const Wizard = () => {
                             api_key: config.openai_key
                         });
                         if (!res.data.valid) throw new Error(`OpenAI Key Invalid: ${res.data.error}`);
-                        setValidations(prev => ({ ...prev, openai: true }));
+                        if (!res.data.valid) throw new Error(`OpenAI Key Invalid: ${res.data.error}`);
                     } else if (config.provider === 'openai_realtime') {
                         throw new Error('OpenAI API Key is required for OpenAI Realtime provider');
                     }
@@ -277,7 +330,7 @@ const Wizard = () => {
                             api_key: config.deepgram_key
                         });
                         if (!res.data.valid) throw new Error(`Deepgram Key Invalid: ${res.data.error}`);
-                        setValidations(prev => ({ ...prev, deepgram: true }));
+                        if (!res.data.valid) throw new Error(`Deepgram Key Invalid: ${res.data.error}`);
                     } else {
                         throw new Error('Deepgram API Key is required for Deepgram provider');
                     }
@@ -290,7 +343,7 @@ const Wizard = () => {
                             api_key: config.google_key
                         });
                         if (!res.data.valid) throw new Error(`Google Key Invalid: ${res.data.error}`);
-                        setValidations(prev => ({ ...prev, google: true }));
+                        if (!res.data.valid) throw new Error(`Google Key Invalid: ${res.data.error}`);
                     } else {
                         throw new Error('Google API Key is required for Google Live provider');
                     }
@@ -367,7 +420,7 @@ const Wizard = () => {
             setLoading(true);
             try {
                 await axios.post('/api/wizard/save', config);
-                
+
                 // Check engine status for completion step
                 try {
                     const statusRes = await axios.get('/api/wizard/engine-status');
@@ -379,7 +432,7 @@ const Wizard = () => {
                 } catch {
                     setEngineStatus({ running: false, exists: false, checked: true });
                 }
-                
+
                 setStep(5); // Go to completion step
             } catch (err: any) {
                 setError(err.response?.data?.detail || err.message);
@@ -533,58 +586,111 @@ const Wizard = () => {
                         {(config.provider === 'openai_realtime' || config.provider === 'local_hybrid') && (
                             <div className="space-y-4">
                                 {config.provider === 'local_hybrid' && (
-                                    <div className="space-y-3">
-                                        <div className="bg-blue-50/50 dark:bg-blue-900/10 p-4 rounded-md border border-blue-100 dark:border-blue-900/20 text-sm text-blue-800 dark:text-blue-300">
-                                            <p className="font-semibold mb-1 flex items-center gap-2">
-                                                <Server className="w-4 h-4" />
-                                                Local Server Required
-                                            </p>
-                                            <p>
-                                                The Local Hybrid mode requires the <code>local-ai-server</code> container to be running.
-                                                The wizard will attempt to start it, but ensure you have built the image.
-                                            </p>
-                                        </div>
-                                        
-                                        {/* Check for existing models button */}
-                                        <div className="flex items-center gap-2">
-                                            <button
-                                                onClick={async () => {
-                                                    try {
-                                                        const res = await axios.get('/api/wizard/local/models-status');
-                                                        setLocalAIStatus(prev => ({
-                                                            ...prev,
-                                                            existingModels: {
-                                                                stt: res.data.stt_models || [],
-                                                                llm: res.data.llm_models || [],
-                                                                tts: res.data.tts_models || []
-                                                            },
-                                                            modelsReady: res.data.ready
-                                                        }));
-                                                    } catch (err) {}
-                                                }}
-                                                className="text-xs px-2 py-1 rounded bg-secondary text-secondary-foreground hover:bg-secondary/80"
-                                            >
-                                                Check Existing Models
-                                            </button>
-                                        </div>
-                                        
-                                        {/* Warning if models already exist */}
-                                        {localAIStatus.modelsReady && (
-                                            <div className="p-3 bg-yellow-50 dark:bg-yellow-900/20 rounded border border-yellow-200 dark:border-yellow-800 text-sm">
-                                                <p className="font-medium text-yellow-800 dark:text-yellow-300 flex items-center">
-                                                    <AlertTriangle className="w-4 h-4 mr-2" />
-                                                    Existing Models Detected
-                                                </p>
-                                                <ul className="text-xs text-yellow-600 dark:text-yellow-500 mt-1 ml-6 list-disc">
-                                                    {localAIStatus.existingModels.stt.length > 0 && <li>STT: {localAIStatus.existingModels.stt.join(', ')}</li>}
-                                                    {localAIStatus.existingModels.llm.length > 0 && <li>LLM: {localAIStatus.existingModels.llm.join(', ')}</li>}
-                                                    {localAIStatus.existingModels.tts.length > 0 && <li>TTS: {localAIStatus.existingModels.tts.join(', ')}</li>}
-                                                </ul>
-                                                <p className="text-yellow-700 dark:text-yellow-400 mt-1 text-xs">
-                                                    ⚠️ Re-running model setup will overwrite these.
-                                                </p>
+                                    <div className="space-y-6 border-b pb-6 mb-6">
+                                        <h3 className="font-medium text-lg">Local AI Configuration</h3>
+
+                                        {/* STT Config */}
+                                        <div className="space-y-3 p-4 bg-muted/30 rounded-lg border">
+                                            <h4 className="font-medium text-sm text-muted-foreground uppercase tracking-wider">Speech-to-Text (STT)</h4>
+                                            <div className="grid grid-cols-2 gap-4">
+                                                <div>
+                                                    <label className="text-sm font-medium">Backend</label>
+                                                    <select
+                                                        className="w-full p-2 rounded-md border border-input bg-background mt-1"
+                                                        value={config.local_stt_backend}
+                                                        onChange={e => setConfig({ ...config, local_stt_backend: e.target.value })}
+                                                    >
+                                                        <option value="vosk">Vosk (Local)</option>
+                                                        <option value="kroko">Kroko (Local/Cloud)</option>
+                                                        <option value="sherpa">Sherpa (Local)</option>
+                                                    </select>
+                                                </div>
+                                                {config.local_stt_backend === 'kroko' && (
+                                                    <div className="flex items-center pt-6">
+                                                        <label className="flex items-center space-x-2 cursor-pointer">
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={config.kroko_embedded}
+                                                                onChange={e => setConfig({ ...config, kroko_embedded: e.target.checked })}
+                                                                className="rounded border-gray-300"
+                                                            />
+                                                            <span className="text-sm">Embedded Mode (Local)</span>
+                                                        </label>
+                                                    </div>
+                                                )}
                                             </div>
-                                        )}
+                                            {config.local_stt_backend === 'kroko' && !config.kroko_embedded && (
+                                                <div>
+                                                    <label className="text-sm font-medium">Kroko API Key</label>
+                                                    <input
+                                                        type="password"
+                                                        className="w-full p-2 rounded-md border border-input bg-background mt-1"
+                                                        value={config.kroko_api_key || ''}
+                                                        onChange={e => setConfig({ ...config, kroko_api_key: e.target.value })}
+                                                        placeholder="Kroko API Key"
+                                                    />
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        {/* TTS Config */}
+                                        <div className="space-y-3 p-4 bg-muted/30 rounded-lg border">
+                                            <h4 className="font-medium text-sm text-muted-foreground uppercase tracking-wider">Text-to-Speech (TTS)</h4>
+                                            <div className="grid grid-cols-2 gap-4">
+                                                <div>
+                                                    <label className="text-sm font-medium">Backend</label>
+                                                    <select
+                                                        className="w-full p-2 rounded-md border border-input bg-background mt-1"
+                                                        value={
+                                                            config.local_tts_backend === 'kokoro'
+                                                                ? (config.kokoro_mode === 'local' ? 'kokoro_local' : 'kokoro_cloud')
+                                                                : config.local_tts_backend
+                                                        }
+                                                        onChange={e => {
+                                                            const val = e.target.value;
+                                                            if (val === 'kokoro_local') {
+                                                                setConfig({ ...config, local_tts_backend: 'kokoro', kokoro_mode: 'local' });
+                                                            } else if (val === 'kokoro_cloud') {
+                                                                setConfig({ ...config, local_tts_backend: 'kokoro', kokoro_mode: 'api' });
+                                                            } else {
+                                                                setConfig({ ...config, local_tts_backend: val });
+                                                            }
+                                                        }}
+                                                    >
+                                                        <option value="piper">Piper (Local)</option>
+                                                        <option value="kokoro_local">Kokoro (Local)</option>
+                                                        <option value="kokoro_cloud">Kokoro (Cloud/API)</option>
+                                                    </select>
+                                                </div></div>
+                                            {config.local_tts_backend === 'kokoro' && config.kokoro_mode === 'api' && (
+                                                <div>
+                                                    <label className="text-sm font-medium">Kokoro API Key</label>
+                                                    <input
+                                                        type="password"
+                                                        className="w-full p-2 rounded-md border border-input bg-background mt-1"
+                                                        value={config.kokoro_api_key || ''}
+                                                        onChange={e => setConfig({ ...config, kokoro_api_key: e.target.value })}
+                                                        placeholder="Kokoro API Key"
+                                                    />
+                                                </div>
+                                            )}
+                                            {config.local_tts_backend === 'kokoro' && config.kokoro_mode === 'local' && (
+                                                <div>
+                                                    <label className="text-sm font-medium">Voice</label>
+                                                    <select
+                                                        className="w-full p-2 rounded-md border border-input bg-background mt-1"
+                                                        value={config.kokoro_voice}
+                                                        onChange={e => setConfig({ ...config, kokoro_voice: e.target.value })}
+                                                    >
+                                                        <option value="af_heart">Heart (Female, US)</option>
+                                                        <option value="af_bella">Bella (Female, US)</option>
+                                                        <option value="af_nicole">Nicole (Female, US)</option>
+                                                        <option value="am_adam">Adam (Male, US)</option>
+                                                        <option value="bf_emma">Emma (Female, UK)</option>
+                                                    </select>
+                                                </div>
+                                            )}
+                                        </div>
                                     </div>
                                 )}
                                 <div className="space-y-2">
@@ -671,7 +777,7 @@ const Wizard = () => {
                                         Voice, system prompt, and LLM model are configured there.
                                     </p>
                                 </div>
-                                
+
                                 <div className="space-y-2">
                                     <label className="text-sm font-medium">
                                         Agent ID
@@ -726,7 +832,7 @@ const Wizard = () => {
                         )}
 
                         {config.provider === 'local' && (
-                            <div className="space-y-4">
+                            <div className="space-y-6">
                                 <div className="bg-green-50/50 dark:bg-green-900/10 p-4 rounded-md border border-green-100 dark:border-green-900/20">
                                     <p className="font-semibold mb-2 flex items-center gap-2 text-green-800 dark:text-green-300">
                                         <HardDrive className="w-4 h-4" />
@@ -745,10 +851,9 @@ const Wizard = () => {
                                             onClick={async () => {
                                                 setLoading(true);
                                                 try {
-                                                    const [tierRes, modelsRes, catalogRes] = await Promise.all([
+                                                    const [tierRes, modelsRes] = await Promise.all([
                                                         axios.get('/api/wizard/local/detect-tier'),
-                                                        axios.get('/api/wizard/local/models-status'),
-                                                        axios.get('/api/wizard/local/available-models')
+                                                        axios.get('/api/wizard/local/models-status')
                                                     ]);
                                                     setLocalAIStatus(prev => ({
                                                         ...prev,
@@ -765,18 +870,15 @@ const Wizard = () => {
                                                         modelsReady: modelsRes.data.ready,
                                                         systemDetected: true
                                                     }));
-                                                    setModelCatalog(catalogRes.data.catalog);
-                                                    
+
+
                                                     // Auto-select recommended models
-                                                    const catalog = catalogRes.data.catalog;
-                                                    const sttRec = catalog.stt.find((m: ModelOption) => m.system_recommended || m.recommended);
-                                                    const llmRec = catalog.llm.find((m: ModelOption) => m.system_recommended || m.recommended);
-                                                    const ttsRec = catalog.tts.find((m: ModelOption) => m.system_recommended || m.recommended);
-                                                    setSelectedModels({
-                                                        stt: sttRec?.id || 'kroko_local',
-                                                        llm: llmRec?.id || 'phi3_mini',
-                                                        tts: ttsRec?.id || 'piper_lessac_medium'
-                                                    });
+                                                    setConfig(prev => ({
+                                                        ...prev,
+                                                        local_stt_backend: 'vosk',
+                                                        local_tts_backend: 'piper',
+                                                        local_llm_model: 'phi-3-mini'
+                                                    }));
                                                 } catch (err: any) {
                                                     setError('Failed to detect system: ' + err.message);
                                                 }
@@ -788,267 +890,347 @@ const Wizard = () => {
                                             {loading ? 'Detecting...' : 'Detect System'}
                                         </button>
                                     </div>
-                                    
+
+                                    {/* Tier Info */}
                                     {localAIStatus.systemDetected && (
-                                        <div className="grid grid-cols-3 gap-2 text-sm">
-                                            <div className="p-2 bg-background rounded">
-                                                <span className="text-muted-foreground">CPU:</span>
-                                                <span className="ml-2 font-medium">{localAIStatus.cpuCores} Cores</span>
+                                        <div className="grid grid-cols-3 gap-4 mb-4 text-sm">
+                                            <div className="p-2 bg-background rounded border">
+                                                <span className="text-muted-foreground block text-xs">CPU Cores</span>
+                                                <span className="font-medium">{localAIStatus.cpuCores}</span>
                                             </div>
-                                            <div className="p-2 bg-background rounded">
-                                                <span className="text-muted-foreground">RAM:</span>
-                                                <span className="ml-2 font-medium">{localAIStatus.ramGb} GB</span>
+                                            <div className="p-2 bg-background rounded border">
+                                                <span className="text-muted-foreground block text-xs">RAM</span>
+                                                <span className="font-medium">{localAIStatus.ramGb} GB</span>
                                             </div>
-                                            <div className="p-2 bg-background rounded">
-                                                <span className="text-muted-foreground">GPU:</span>
-                                                <span className="ml-2 font-medium">{localAIStatus.gpuDetected ? 'Yes' : 'No'}</span>
+                                            <div className="p-2 bg-background rounded border">
+                                                <span className="text-muted-foreground block text-xs">GPU</span>
+                                                <span className={`font-medium ${localAIStatus.gpuDetected ? 'text-green-500' : 'text-muted-foreground'}`}>
+                                                    {localAIStatus.gpuDetected ? 'Detected' : 'Not Detected'}
+                                                </span>
                                             </div>
                                         </div>
                                     )}
                                 </div>
 
-                                {/* Model Selection UI */}
-                                {localAIStatus.systemDetected && modelCatalog && !localAIStatus.downloading && !localAIStatus.downloadCompleted && (
-                                    <div className="space-y-4">
-                                        {/* STT Selection */}
-                                        <div className="bg-muted p-4 rounded-lg">
-                                            <h4 className="font-medium mb-3 flex items-center gap-2">
-                                                🎤 STT (Speech-to-Text)
-                                            </h4>
-                                            <div className="space-y-2">
-                                                {modelCatalog.stt.map((model) => (
-                                                    <label
-                                                        key={model.id}
-                                                        className={`flex items-center p-3 rounded-md border cursor-pointer transition-all ${
-                                                            selectedModels.stt === model.id
-                                                                ? 'border-primary bg-primary/5'
-                                                                : 'border-border hover:border-primary/50'
-                                                        }`}
-                                                    >
-                                                        <input
-                                                            type="radio"
-                                                            name="stt"
-                                                            value={model.id}
-                                                            checked={selectedModels.stt === model.id}
-                                                            onChange={(e) => setSelectedModels(prev => ({ ...prev, stt: e.target.value }))}
-                                                            className="mr-3"
-                                                        />
-                                                        <div className="flex-1">
-                                                            <div className="flex items-center gap-2">
-                                                                <span className="font-medium">{model.name}</span>
-                                                                <span className="text-xs text-muted-foreground">({model.size_display})</span>
-                                                                {(model.system_recommended || model.recommended) && (
-                                                                    <span className="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded-full">⭐ Recommended</span>
-                                                                )}
-                                                                {model.requires_api_key && (
-                                                                    <span className="text-xs bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400 px-2 py-0.5 rounded-full">API Key</span>
-                                                                )}
-                                                            </div>
-                                                            <p className="text-xs text-muted-foreground mt-1">{model.description} • {model.latency}</p>
-                                                        </div>
-                                                    </label>
-                                                ))}
+                                {/* Configuration UI */}
+                                <div className="space-y-6 border-t pt-6">
+                                    <h3 className="font-medium text-lg">Local AI Configuration</h3>
+
+                                    {/* Language Selection */}
+                                    <div className="space-y-3 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
+                                        <h4 className="font-medium text-sm text-blue-700 dark:text-blue-300 uppercase tracking-wider flex items-center gap-2">
+                                            🌍 Language Selection
+                                        </h4>
+                                        <p className="text-sm text-muted-foreground">
+                                            Choose your preferred language. STT and TTS models will be filtered accordingly.
+                                        </p>
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <div>
+                                                <label className="text-sm font-medium">Primary Language</label>
+                                                <select
+                                                    className="w-full p-2 rounded-md border border-input bg-background mt-1"
+                                                    value={selectedLanguage}
+                                                    onChange={e => setSelectedLanguage(e.target.value)}
+                                                >
+                                                    <optgroup label="🌟 Popular">
+                                                        <option value="en-US">English (US)</option>
+                                                        <option value="en-GB">English (UK)</option>
+                                                        <option value="es-ES">Spanish</option>
+                                                        <option value="fr-FR">French</option>
+                                                        <option value="de-DE">German</option>
+                                                    </optgroup>
+                                                    <optgroup label="🇪🇺 European">
+                                                        <option value="it-IT">Italian</option>
+                                                        <option value="pt-BR">Portuguese (Brazil)</option>
+                                                        <option value="nl-NL">Dutch</option>
+                                                        <option value="ru-RU">Russian</option>
+                                                        <option value="pl-PL">Polish</option>
+                                                        <option value="uk-UA">Ukrainian</option>
+                                                        <option value="cs-CZ">Czech</option>
+                                                        <option value="sv-SE">Swedish</option>
+                                                        <option value="el-GR">Greek</option>
+                                                        <option value="tr-TR">Turkish</option>
+                                                        <option value="da-DK">Danish</option>
+                                                        <option value="fi-FI">Finnish</option>
+                                                        <option value="hu-HU">Hungarian</option>
+                                                        <option value="no-NO">Norwegian</option>
+                                                    </optgroup>
+                                                    <optgroup label="🌏 Asian">
+                                                        <option value="zh-CN">Chinese (Mandarin)</option>
+                                                        <option value="ja-JP">Japanese</option>
+                                                        <option value="ko-KR">Korean</option>
+                                                        <option value="hi-IN">Hindi</option>
+                                                        <option value="vi-VN">Vietnamese</option>
+                                                    </optgroup>
+                                                    <optgroup label="🌍 Other">
+                                                        <option value="ar">Arabic</option>
+                                                        <option value="fa-IR">Farsi/Persian</option>
+                                                        <option value="sw">Swahili</option>
+                                                    </optgroup>
+                                                </select>
+                                            </div>
+                                            <div className="flex items-end">
+                                                <p className="text-xs text-muted-foreground">
+                                                    {availableLanguages.languages[selectedLanguage] ? (
+                                                        <>
+                                                            <span className="text-green-600 dark:text-green-400">✓</span> {availableLanguages.languages[selectedLanguage]?.stt?.length || 0} STT models, {availableLanguages.languages[selectedLanguage]?.tts?.length || 0} TTS voices available
+                                                        </>
+                                                    ) : (
+                                                        'Loading...'
+                                                    )}
+                                                </p>
                                             </div>
                                         </div>
+                                    </div>
 
-                                        {/* LLM Selection */}
-                                        <div className="bg-muted p-4 rounded-lg">
-                                            <h4 className="font-medium mb-3 flex items-center gap-2">
-                                                🧠 LLM (Language Model)
-                                            </h4>
-                                            <div className="space-y-2">
-                                                {modelCatalog.llm.map((model) => (
-                                                    <label
-                                                        key={model.id}
-                                                        className={`flex items-center p-3 rounded-md border cursor-pointer transition-all ${
-                                                            selectedModels.llm === model.id
-                                                                ? 'border-primary bg-primary/5'
-                                                                : 'border-border hover:border-primary/50'
-                                                        }`}
-                                                    >
-                                                        <input
-                                                            type="radio"
-                                                            name="llm"
-                                                            value={model.id}
-                                                            checked={selectedModels.llm === model.id}
-                                                            onChange={(e) => setSelectedModels(prev => ({ ...prev, llm: e.target.value }))}
-                                                            className="mr-3"
-                                                        />
-                                                        <div className="flex-1">
-                                                            <div className="flex items-center gap-2">
-                                                                <span className="font-medium">{model.name}</span>
-                                                                <span className="text-xs text-muted-foreground">({model.size_display})</span>
-                                                                {(model.system_recommended || model.recommended) && (
-                                                                    <span className="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded-full">⭐ Recommended</span>
-                                                                )}
-                                                                {model.requires_api_key && (
-                                                                    <span className="text-xs bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400 px-2 py-0.5 rounded-full">API Key</span>
-                                                                )}
-                                                            </div>
-                                                            <p className="text-xs text-muted-foreground mt-1">{model.description} • {model.latency}</p>
-                                                        </div>
-                                                    </label>
-                                                ))}
-                                            </div>
-                                        </div>
-
-                                        {/* TTS Selection */}
-                                        <div className="bg-muted p-4 rounded-lg">
-                                            <h4 className="font-medium mb-3 flex items-center gap-2">
-                                                🔊 TTS (Text-to-Speech)
-                                            </h4>
-                                            <div className="space-y-2">
-                                                {modelCatalog.tts.map((model) => (
-                                                    <label
-                                                        key={model.id}
-                                                        className={`flex items-center p-3 rounded-md border cursor-pointer transition-all ${
-                                                            selectedModels.tts === model.id
-                                                                ? 'border-primary bg-primary/5'
-                                                                : 'border-border hover:border-primary/50'
-                                                        }`}
-                                                    >
-                                                        <input
-                                                            type="radio"
-                                                            name="tts"
-                                                            value={model.id}
-                                                            checked={selectedModels.tts === model.id}
-                                                            onChange={(e) => setSelectedModels(prev => ({ ...prev, tts: e.target.value }))}
-                                                            className="mr-3"
-                                                        />
-                                                        <div className="flex-1">
-                                                            <div className="flex items-center gap-2">
-                                                                <span className="font-medium">{model.name}</span>
-                                                                <span className="text-xs text-muted-foreground">({model.size_display})</span>
-                                                                {(model.system_recommended || model.recommended) && (
-                                                                    <span className="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded-full">⭐ Recommended</span>
-                                                                )}
-                                                            </div>
-                                                            <p className="text-xs text-muted-foreground mt-1">{model.description} • {model.latency}</p>
-                                                        </div>
-                                                    </label>
-                                                ))}
-                                            </div>
-                                        </div>
-
-                                        {/* Download Summary */}
-                                        <div className="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-lg border border-blue-200 dark:border-blue-800">
-                                            <div className="flex justify-between items-center">
-                                                <div>
-                                                    <p className="font-medium text-blue-800 dark:text-blue-300">
-                                                        📦 Total Download: {(
-                                                            (modelCatalog.stt.find(m => m.id === selectedModels.stt)?.size_mb || 0) +
-                                                            (modelCatalog.llm.find(m => m.id === selectedModels.llm)?.size_mb || 0) +
-                                                            (modelCatalog.tts.find(m => m.id === selectedModels.tts)?.size_mb || 0)
-                                                        ) > 1000 
-                                                            ? `${((
-                                                                (modelCatalog.stt.find(m => m.id === selectedModels.stt)?.size_mb || 0) +
-                                                                (modelCatalog.llm.find(m => m.id === selectedModels.llm)?.size_mb || 0) +
-                                                                (modelCatalog.tts.find(m => m.id === selectedModels.tts)?.size_mb || 0)
-                                                            ) / 1000).toFixed(1)} GB`
-                                                            : `${(
-                                                                (modelCatalog.stt.find(m => m.id === selectedModels.stt)?.size_mb || 0) +
-                                                                (modelCatalog.llm.find(m => m.id === selectedModels.llm)?.size_mb || 0) +
-                                                                (modelCatalog.tts.find(m => m.id === selectedModels.tts)?.size_mb || 0)
-                                                            )} MB`
-                                                        }
-                                                    </p>
-                                                    <p className="text-xs text-blue-600 dark:text-blue-400 mt-1">
-                                                        Estimated time: 5-15 minutes depending on connection
-                                                    </p>
-                                                </div>
-                                                <button
-                                                    onClick={async () => {
-                                                        setLocalAIStatus(prev => ({ ...prev, downloading: true, downloadOutput: [] }));
-                                                        try {
-                                                            await axios.post('/api/wizard/local/download-selected-models', selectedModels);
-                                                            const pollProgress = async () => {
-                                                                try {
-                                                                    const res = await axios.get('/api/wizard/local/download-progress');
-                                                                    setLocalAIStatus(prev => ({
-                                                                        ...prev,
-                                                                        downloadOutput: res.data.output || []
-                                                                    }));
-                                                                    
-                                                                    if (res.data.completed) {
-                                                                        setLocalAIStatus(prev => ({
-                                                                            ...prev,
-                                                                            downloading: false,
-                                                                            downloadCompleted: true,
-                                                                            modelsReady: true
-                                                                        }));
-                                                                    } else if (res.data.error) {
-                                                                        setError('Download failed: ' + res.data.error);
-                                                                        setLocalAIStatus(prev => ({ ...prev, downloading: false }));
-                                                                    } else if (res.data.running) {
-                                                                        setTimeout(pollProgress, 2000);
-                                                                    }
-                                                                } catch (err) {
-                                                                    setTimeout(pollProgress, 3000);
-                                                                }
-                                                            };
-                                                            setTimeout(pollProgress, 1000);
-                                                        } catch (err: any) {
-                                                            setError('Failed to start download: ' + err.message);
-                                                            setLocalAIStatus(prev => ({ ...prev, downloading: false }));
+                                    {/* STT Config */}
+                                    <div className="space-y-3 p-4 bg-muted/30 rounded-lg border">
+                                        <h4 className="font-medium text-sm text-muted-foreground uppercase tracking-wider">Speech-to-Text (STT)</h4>
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <div>
+                                                <label className="text-sm font-medium">Model</label>
+                                                <select
+                                                    className="w-full p-2 rounded-md border border-input bg-background mt-1"
+                                                    value={config.local_stt_model || config.local_stt_backend}
+                                                    onChange={e => {
+                                                        const val = e.target.value;
+                                                        const model = modelCatalog?.stt?.find((m: any) => m.id === val);
+                                                        if (model) {
+                                                            setConfig({ 
+                                                                ...config, 
+                                                                local_stt_backend: model.backend,
+                                                                local_stt_model: model.id,
+                                                                kroko_embedded: model.backend === 'kroko' && model.id.includes('embedded')
+                                                            });
+                                                        } else if (val === 'kroko_cloud') {
+                                                            setConfig({ ...config, local_stt_backend: 'kroko', local_stt_model: val, kroko_embedded: false });
                                                         }
                                                     }}
-                                                    className="px-4 py-2 rounded-md bg-primary text-primary-foreground hover:bg-primary/90"
                                                 >
-                                                    Download Selected Models
-                                                </button>
+                                                    {/* Language-specific models */}
+                                                    {modelCatalog?.stt?.filter((m: any) => 
+                                                        m.language === selectedLanguage || m.language === 'multi'
+                                                    ).map((model: any) => (
+                                                        <option key={model.id} value={model.id}>
+                                                            {model.name} ({model.backend}) - {model.size_display}
+                                                        </option>
+                                                    ))}
+                                                    {/* Fallback if no models for language */}
+                                                    {(!modelCatalog?.stt || modelCatalog.stt.filter((m: any) => 
+                                                        m.language === selectedLanguage || m.language === 'multi'
+                                                    ).length === 0) && (
+                                                        <>
+                                                            <option value="vosk">Vosk (Local)</option>
+                                                            <option value="kroko_cloud">Kroko (Cloud)</option>
+                                                        </>
+                                                    )}
+                                                </select>
+                                                <p className="text-xs text-muted-foreground mt-1">
+                                                    Models filtered for {availableLanguages.language_names?.[selectedLanguage] || selectedLanguage}
+                                                </p>
                                             </div>
                                         </div>
-
-                                        {/* Existing Models Warning */}
-                                        {localAIStatus.modelsReady && (
-                                            <div className="p-3 bg-yellow-50 dark:bg-yellow-900/20 rounded border border-yellow-200 dark:border-yellow-800">
-                                                <p className="font-medium text-yellow-800 dark:text-yellow-300 flex items-center">
-                                                    <AlertTriangle className="w-4 h-4 mr-2" />
-                                                    Existing Models Detected
-                                                </p>
-                                                <p className="text-yellow-700 dark:text-yellow-400 mt-1 text-xs">
-                                                    ⚠️ Downloading new models will overwrite existing ones.
-                                                </p>
+                                        {config.local_stt_backend === 'kroko' && !config.kroko_embedded && (
+                                            <div>
+                                                <label className="text-sm font-medium">Kroko API Key</label>
+                                                <input
+                                                    type="password"
+                                                    className="w-full p-2 rounded-md border border-input bg-background mt-1"
+                                                    value={config.kroko_api_key || ''}
+                                                    onChange={e => setConfig({ ...config, kroko_api_key: e.target.value })}
+                                                    placeholder="Kroko API Key"
+                                                />
                                             </div>
                                         )}
                                     </div>
-                                )}
 
-                                {/* Download Progress */}
-                                {localAIStatus.downloading && (
-                                    <div className="bg-muted p-4 rounded-lg">
-                                        <div className="flex items-center gap-2 mb-3">
-                                            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary"></div>
-                                            <span className="font-medium">Downloading models...</span>
+                                    {/* TTS Config */}
+                                    <div className="space-y-3 p-4 bg-muted/30 rounded-lg border">
+                                        <h4 className="font-medium text-sm text-muted-foreground uppercase tracking-wider">Text-to-Speech (TTS)</h4>
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <div>
+                                                <label className="text-sm font-medium">Voice</label>
+                                                <select
+                                                    className="w-full p-2 rounded-md border border-input bg-background mt-1"
+                                                    value={config.local_tts_model || config.local_tts_backend}
+                                                    onChange={e => {
+                                                        const val = e.target.value;
+                                                        const model = modelCatalog?.tts?.find((m: any) => m.id === val);
+                                                        if (model) {
+                                                            setConfig({ 
+                                                                ...config, 
+                                                                local_tts_backend: model.backend,
+                                                                local_tts_model: model.id,
+                                                                kokoro_mode: model.backend === 'kokoro' ? 'local' : config.kokoro_mode
+                                                            });
+                                                        }
+                                                    }}
+                                                >
+                                                    {/* Language-specific voices */}
+                                                    {modelCatalog?.tts?.filter((m: any) => 
+                                                        m.language === selectedLanguage || m.language === 'multi'
+                                                    ).map((model: any) => (
+                                                        <option key={model.id} value={model.id}>
+                                                            {model.name} ({model.backend}) - {model.size_display}
+                                                        </option>
+                                                    ))}
+                                                    {/* Fallback if no models for language */}
+                                                    {(!modelCatalog?.tts || modelCatalog.tts.filter((m: any) => 
+                                                        m.language === selectedLanguage || m.language === 'multi'
+                                                    ).length === 0) && (
+                                                        <>
+                                                            <option value="piper">Piper (Local)</option>
+                                                            <option value="kokoro">Kokoro (Premium)</option>
+                                                        </>
+                                                    )}
+                                                </select>
+                                                <p className="text-xs text-muted-foreground mt-1">
+                                                    Voices filtered for {availableLanguages.language_names?.[selectedLanguage] || selectedLanguage}
+                                                </p>
+                                            </div>
                                         </div>
-                                        <div className="bg-black/90 rounded p-3 max-h-64 overflow-y-auto font-mono text-xs text-green-400">
-                                            {localAIStatus.downloadOutput.length > 0 ? (
-                                                localAIStatus.downloadOutput.map((line, i) => (
-                                                    <div key={i} className="whitespace-pre-wrap">{line}</div>
-                                                ))
-                                            ) : (
-                                                <div className="text-gray-500">Starting download...</div>
-                                            )}
+                                        {config.local_tts_backend === 'kokoro' && config.kokoro_mode === 'api' && (
+                                            <div>
+                                                <label className="text-sm font-medium">Kokoro API Key</label>
+                                                <input
+                                                    type="password"
+                                                    className="w-full p-2 rounded-md border border-input bg-background mt-1"
+                                                    value={config.kokoro_api_key || ''}
+                                                    onChange={e => setConfig({ ...config, kokoro_api_key: e.target.value })}
+                                                    placeholder="Kokoro API Key"
+                                                />
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    {/* LLM Config */}
+                                    <div className="space-y-3 p-4 bg-muted/30 rounded-lg border">
+                                        <h4 className="font-medium text-sm text-muted-foreground uppercase tracking-wider">Large Language Model (LLM)</h4>
+                                        <div>
+                                            <label className="text-sm font-medium">Model</label>
+                                            <select
+                                                className="w-full p-2 rounded-md border border-input bg-background mt-1"
+                                                value={config.local_llm_model}
+                                                onChange={e => setConfig({ ...config, local_llm_model: e.target.value })}
+                                            >
+                                                <option value="phi-3-mini">Phi-3 Mini (3.8B) - Recommended</option>
+                                                <option value="llama-3-8b">Llama 3 (8B) - High VRAM</option>
+                                                <option value="mistral-7b">Mistral (7B)</option>
+                                            </select>
                                         </div>
                                     </div>
-                                )}
 
-                                {/* Download Complete */}
-                                {localAIStatus.downloadCompleted && (
-                                    <div className="bg-green-50 dark:bg-green-900/20 p-4 rounded-lg border border-green-200 dark:border-green-800">
-                                        <p className="text-green-800 dark:text-green-300 flex items-center font-medium">
-                                            <CheckCircle className="w-5 h-5 mr-2" />
-                                            Models downloaded successfully!
-                                        </p>
-                                        <p className="text-sm text-green-700 dark:text-green-400 mt-1">
-                                            Click Next to continue with the setup.
-                                        </p>
+                                    {/* Download Button */}
+                                    <div className="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-lg border border-blue-200 dark:border-blue-800">
+                                        <div className="flex justify-between items-center">
+                                            <div>
+                                                <p className="font-medium text-blue-800 dark:text-blue-300">
+                                                    Download Required Models
+                                                </p>
+                                                <p className="text-xs text-blue-600 dark:text-blue-400 mt-1">
+                                                    Downloads models for selected backends.
+                                                </p>
+                                            </div>
+                                            <button
+                                                onClick={async () => {
+                                                    setLocalAIStatus(prev => ({ ...prev, downloading: true, downloadOutput: [] }));
+                                                    try {
+                                                        await axios.post('/api/wizard/local/download-selected-models', {
+                                                            stt: config.local_stt_backend,
+                                                            llm: config.local_llm_model,
+                                                            tts: config.local_tts_backend,
+                                                            kroko_embedded: config.kroko_embedded,
+                                                            kokoro_mode: config.kokoro_mode,
+                                                            language: selectedLanguage
+                                                        });
+                                                        const pollProgress = async () => {
+                                                            try {
+                                                                const res = await axios.get('/api/wizard/local/download-progress');
+                                                                setLocalAIStatus(prev => ({
+                                                                    ...prev,
+                                                                    downloadOutput: res.data.output || []
+                                                                }));
+
+                                                                if (res.data.completed) {
+                                                                    setLocalAIStatus(prev => ({
+                                                                        ...prev,
+                                                                        downloading: false,
+                                                                        downloadCompleted: true,
+                                                                        modelsReady: true
+                                                                    }));
+                                                                } else if (res.data.error) {
+                                                                    setError('Download failed: ' + res.data.error);
+                                                                    setLocalAIStatus(prev => ({ ...prev, downloading: false }));
+                                                                } else if (res.data.running) {
+                                                                    setTimeout(pollProgress, 2000);
+                                                                }
+                                                            } catch (err) {
+                                                                setTimeout(pollProgress, 3000);
+                                                            }
+                                                        };
+                                                        pollProgress();
+                                                    } catch (err: any) {
+                                                        setError('Failed to start download: ' + err.message);
+                                                        setLocalAIStatus(prev => ({ ...prev, downloading: false }));
+                                                    }
+                                                }}
+                                                disabled={localAIStatus.downloading || localAIStatus.downloadCompleted}
+                                                className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50"
+                                            >
+                                                {localAIStatus.downloading ? (
+                                                    <span className="flex items-center gap-2">
+                                                        <Loader2 className="w-4 h-4 animate-spin" />
+                                                        Downloading...
+                                                    </span>
+                                                ) : localAIStatus.downloadCompleted ? (
+                                                    <span className="flex items-center gap-2">
+                                                        <CheckCircle2 className="w-4 h-4" />
+                                                        Downloaded
+                                                    </span>
+                                                ) : (
+                                                    <span className="flex items-center gap-2">
+                                                        <Cloud className="w-4 h-4" />
+                                                        Download Models
+                                                    </span>
+                                                )}
+                                            </button>
+                                        </div>
+
+                                        {/* Download Output */}
+                                        {localAIStatus.downloadOutput.length > 0 && (
+                                            <div className="mt-4 bg-black/90 text-green-400 p-3 rounded-md font-mono text-xs h-32 overflow-y-auto">
+                                                {localAIStatus.downloadOutput.map((line, i) => (
+                                                    <div key={i}>{line}</div>
+                                                ))}
+                                                {localAIStatus.downloading && (
+                                                    <div className="animate-pulse">_</div>
+                                                )}
+                                            </div>
+                                        )}
                                     </div>
-                                )}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Download Complete */}
+                        {localAIStatus.downloadCompleted && (
+                            <div className="bg-green-50 dark:bg-green-900/20 p-4 rounded-lg border border-green-200 dark:border-green-800">
+                                <p className="text-green-800 dark:text-green-300 flex items-center font-medium">
+                                    <CheckCircle className="w-5 h-5 mr-2" />
+                                    Models downloaded successfully!
+                                </p>
+                                <p className="text-sm text-green-700 dark:text-green-400 mt-1">
+                                    Click Next to continue with the setup.
+                                </p>
+                                <p className="text-sm text-blue-600 dark:text-blue-400 mt-2 bg-blue-50 dark:bg-blue-900/20 p-2 rounded">
+                                    💡 <strong>Tip:</strong> You can download additional models and voices later from{' '}
+                                    <span className="font-semibold">System → Models</span> in the Admin UI.
+                                </p>
                             </div>
                         )}
                     </div>
                 )}
+
 
                 {step === 4 && (
                     <div className="space-y-4">
@@ -1205,7 +1387,7 @@ const Wizard = () => {
                                         <Server className="w-4 h-4 mr-2" />
                                         Local AI Server
                                     </h3>
-                                    
+
                                     {!localAIStatus.serverStarted ? (
                                         <button
                                             onClick={async () => {
@@ -1213,7 +1395,7 @@ const Wizard = () => {
                                                 setError(null);
                                                 // Mark as started immediately to show logs panel
                                                 setLocalAIStatus(prev => ({ ...prev, serverStarted: true, serverLogs: ['Starting container...'] }));
-                                                
+
                                                 try {
                                                     const res = await axios.post('/api/wizard/local/start-server');
                                                     if (!res.data.success) {
@@ -1228,9 +1410,9 @@ const Wizard = () => {
                                                     setLoading(false);
                                                     return;
                                                 }
-                                                
+
                                                 setLoading(false);
-                                                
+
                                                 // Start polling logs
                                                 const pollLogs = async () => {
                                                     try {
@@ -1279,7 +1461,7 @@ const Wizard = () => {
                                                     </span>
                                                 )}
                                             </div>
-                                            
+
                                             {/* Server Logs */}
                                             <div className="bg-black/90 rounded p-3 max-h-48 overflow-y-auto font-mono text-xs text-green-400">
                                                 {localAIStatus.serverLogs.length > 0 ? (
@@ -1315,8 +1497,8 @@ const Wizard = () => {
                                                         // Show media setup warnings if any
                                                         const mediaErrors = res.data.media_setup?.errors || [];
                                                         if (mediaErrors.length > 0) {
-                                                            setError('Warning: Media path setup had issues. Audio playback may not work.\n\n' + 
-                                                                mediaErrors.join('\n') + 
+                                                            setError('Warning: Media path setup had issues. Audio playback may not work.\n\n' +
+                                                                mediaErrors.join('\n') +
                                                                 '\n\nManual fix: Run on your host:\n  sudo ln -sfn /path/to/asterisk_media/ai-generated /var/lib/asterisk/sounds/ai-generated');
                                                         }
                                                     } else {
@@ -1376,7 +1558,7 @@ const Wizard = () => {
                                             Asterisk Dialplan for Local Provider
                                         </h3>
                                         <pre className="bg-black text-green-400 p-3 rounded-md overflow-x-auto text-xs font-mono">
-{`[from-ai-agent-local]
+                                            {`[from-ai-agent-local]
 exten => s,1,NoOp(AI Agent - Local Full)
  same => n,Set(AI_CONTEXT=default)
  same => n,Set(AI_PROVIDER=local)
@@ -1396,7 +1578,7 @@ exten => s,1,NoOp(AI Agent - Local Full)
                                     Start AI Engine
                                 </h3>
                                 <p className="text-sm text-blue-700 dark:text-blue-400 mb-4">
-                                    {engineStatus.exists 
+                                    {engineStatus.exists
                                         ? "The AI Engine container exists but is not running. Click below to start it."
                                         : "The AI Engine container needs to be created. Run the command below, then click Start."}
                                 </p>
@@ -1416,8 +1598,8 @@ exten => s,1,NoOp(AI Agent - Local Full)
                                                 // Show media setup warnings if any
                                                 const mediaErrors = res.data.media_setup?.errors || [];
                                                 if (mediaErrors.length > 0) {
-                                                    setError('Warning: Media path setup had issues. Audio playback may not work.\n\n' + 
-                                                        mediaErrors.join('\n') + 
+                                                    setError('Warning: Media path setup had issues. Audio playback may not work.\n\n' +
+                                                        mediaErrors.join('\n') +
                                                         '\n\nManual fix: Run on your host:\n  sudo ln -sfn /path/to/asterisk_media/ai-generated /var/lib/asterisk/sounds/ai-generated');
                                                 }
                                             } else {
@@ -1459,49 +1641,49 @@ exten => s,1,NoOp(AI Agent - Local Full)
 
                         {/* Dialplan Section - non-local providers */}
                         {config.provider !== 'local' && (
-                        <>
-                        <div className="bg-muted p-4 rounded-lg text-left">
-                            <h3 className="font-semibold mb-2 flex items-center">
-                                <Terminal className="w-4 h-4 mr-2" />
-                                Next Step: Update Asterisk Dialplan
-                            </h3>
-                            <p className="text-sm text-muted-foreground mb-3">
-                                Add this to your <code>extensions_custom.conf</code> to route calls to the agent:
-                            </p>
-                            <div className="relative group">
-                                <pre className="bg-black text-green-400 p-4 rounded-md overflow-x-auto text-sm font-mono">
-                                    {`; extensions_custom.conf
+                            <>
+                                <div className="bg-muted p-4 rounded-lg text-left">
+                                    <h3 className="font-semibold mb-2 flex items-center">
+                                        <Terminal className="w-4 h-4 mr-2" />
+                                        Next Step: Update Asterisk Dialplan
+                                    </h3>
+                                    <p className="text-sm text-muted-foreground mb-3">
+                                        Add this to your <code>extensions_custom.conf</code> to route calls to the agent:
+                                    </p>
+                                    <div className="relative group">
+                                        <pre className="bg-black text-green-400 p-4 rounded-md overflow-x-auto text-sm font-mono">
+                                            {`; extensions_custom.conf
 [from-ai-agent]
 exten => s,1,NoOp(AI Agent Call)
  same => n,Stasis(asterisk-ai-voice-agent)
  same => n,Hangup()`}
-                                </pre>
-                                <button
-                                    onClick={() => {
-                                        const dialplan = `; extensions_custom.conf
+                                        </pre>
+                                        <button
+                                            onClick={() => {
+                                                const dialplan = `; extensions_custom.conf
 [from-ai-agent]
 exten => s,1,NoOp(AI Agent Call)
  same => n,Stasis(asterisk-ai-voice-agent)
  same => n,Hangup()`;
-                                        navigator.clipboard.writeText(dialplan);
-                                    }}
-                                    className="absolute top-2 right-2 p-1 bg-white/10 rounded hover:bg-white/20 text-white opacity-0 group-hover:opacity-100 transition-opacity"
-                                    title="Copy to clipboard"
-                                >
-                                    <Copy className="w-4 h-4" />
-                                </button>
-                            </div>
-                        </div>
+                                                navigator.clipboard.writeText(dialplan);
+                                            }}
+                                            className="absolute top-2 right-2 p-1 bg-white/10 rounded hover:bg-white/20 text-white opacity-0 group-hover:opacity-100 transition-opacity"
+                                            title="Copy to clipboard"
+                                        >
+                                            <Copy className="w-4 h-4" />
+                                        </button>
+                                    </div>
+                                </div>
 
-                        <div className="pt-4">
-                            <button
-                                onClick={() => navigate('/')}
-                                className="w-full px-4 py-3 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 font-medium"
-                            >
-                                Go to Dashboard
-                            </button>
-                        </div>
-                        </>
+                                <div className="pt-4">
+                                    <button
+                                        onClick={() => navigate('/')}
+                                        className="w-full px-4 py-3 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 font-medium"
+                                    >
+                                        Go to Dashboard
+                                    </button>
+                                </div>
+                            </>
                         )}
                     </div>
                 )}
@@ -1558,11 +1740,10 @@ exten => s,1,NoOp(AI Agent Call)
                 {toast && (
                     <div className="fixed bottom-4 right-4 z-50">
                         <div
-                            className={`flex items-center gap-2 px-4 py-3 rounded-lg shadow-lg text-sm font-medium animate-in slide-in-from-right ${
-                                toast.type === 'success' 
-                                    ? 'bg-green-500 text-white' 
-                                    : 'bg-red-500 text-white'
-                            }`}
+                            className={`flex items-center gap-2 px-4 py-3 rounded-lg shadow-lg text-sm font-medium animate-in slide-in-from-right ${toast.type === 'success'
+                                ? 'bg-green-500 text-white'
+                                : 'bg-red-500 text-white'
+                                }`}
                         >
                             {toast.type === 'success' ? (
                                 <CheckCircle2 className="w-4 h-4" />

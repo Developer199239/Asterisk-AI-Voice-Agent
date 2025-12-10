@@ -209,6 +209,32 @@ class ToolDefinition:
         params_text = "\n  ".join(params_desc) if params_desc else "  (no parameters)"
         
         return f"{self.name}: {self.description}\n  Parameters:\n  {params_text}"
+    
+    def to_local_llm_schema(self) -> Dict[str, Any]:
+        """
+        Convert to JSON schema format for local LLM prompts.
+        
+        Returns a dictionary that can be serialized to JSON and embedded
+        in system prompts for local LLMs (Phi-3, Llama, etc.) that don't
+        have native function calling but can output structured JSON.
+        """
+        import json
+        params = {}
+        required = []
+        for p in self.parameters:
+            param_def = {"type": p.type, "description": p.description}
+            if p.enum:
+                param_def["enum"] = p.enum
+            params[p.name] = param_def
+            if p.required:
+                required.append(p.name)
+        
+        return {
+            "name": self.name,
+            "description": self.description,
+            "parameters": params,
+            "required": required
+        }
 
 
 class Tool(ABC):

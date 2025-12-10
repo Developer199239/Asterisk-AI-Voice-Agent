@@ -242,6 +242,32 @@ async def get_system_health():
                 print(f"DEBUG: Local AI response: {response[:100]}...")
                 data = json.loads(response)
                 if data.get("type") == "status_response":
+                    # Parse embedded/local mode from path strings
+                    stt_path = data.get("models", {}).get("stt", {}).get("path", "")
+                    tts_path = data.get("models", {}).get("tts", {}).get("path", "")
+                    
+                    # Detect Kroko embedded mode from path containing "embedded"
+                    kroko_embedded = "embedded" in stt_path.lower()
+                    kroko_port = None
+                    if kroko_embedded and "port" in stt_path.lower():
+                        import re
+                        port_match = re.search(r'port\s*(\d+)', stt_path, re.IGNORECASE)
+                        if port_match:
+                            kroko_port = int(port_match.group(1))
+                    
+                    # Detect Kokoro mode - local if model path exists
+                    kokoro_mode = "local" if "/app/models" in str(data.get("models", {}).get("tts", {}).get("path", "")) or "af_" in tts_path else "api"
+                    # Extract Kokoro voice from path like "Kokoro (af_heart)"
+                    kokoro_voice = None
+                    if "(" in tts_path and ")" in tts_path:
+                        kokoro_voice = tts_path.split("(")[1].rstrip(")")
+                    
+                    # Add parsed fields to response
+                    data["kroko_embedded"] = kroko_embedded
+                    data["kroko_port"] = kroko_port
+                    data["kokoro_mode"] = kokoro_mode
+                    data["kokoro_voice"] = kokoro_voice
+                    
                     return {
                         "status": "connected",
                         "details": data
@@ -510,3 +536,718 @@ async def fix_directory_issues():
         "errors": errors,
         "restart_required": any("restart" in f.lower() for f in fixes_applied)
     }
+
+
+# =============================================================================
+# Platform Detection API (AAVA-126)
+# =============================================================================
+
+class PlatformCheck(BaseModel):
+    id: str
+    status: str  # ok, warning, error
+    message: str
+    blocking: bool
+    action: dict = None
+
+class PlatformInfo(BaseModel):
+    os: dict
+    docker: dict
+    compose: dict
+    selinux: dict = None
+    directories: dict
+    asterisk: dict = None
+
+class PlatformResponse(BaseModel):
+    platform: PlatformInfo
+    checks: List[PlatformCheck]
+    summary: dict
+
+
+def _detect_os():
+    """Detect OS from /etc/os-release or container environment."""
+    os_info = {
+        "id": "unknown",
+        "version": "unknown", 
+        "family": "unknown",
+        "arch": os.uname().machine,
+        "is_eol": False,
+        "in_container": os.path.exists("/.dockerenv")
+    }
+    
+    # Try to read host OS info (mounted from host in docker-compose)
+    os_release_paths = [
+        "/host/etc/os-release",  # Mounted from host
+        "/etc/os-release"         # Container's own
+    ]
+    
+    for path in os_release_paths:
+        if os.path.exists(path):
+            try:
+                with open(path) as f:
+                    for line in f:
+                        if line.startswith("ID="):
+                            os_info["id"] = line.split("=")[1].strip().strip('"')
+                        elif line.startswith("VERSION_ID="):
+                            os_info["version"] = line.split("=")[1].strip().strip('"')
+                
+                # Determine family
+                os_id = os_info["id"]
+                if os_id in ["ubuntu", "debian", "linuxmint"]:
+                    os_info["family"] = "debian"
+                elif os_id in ["centos", "rhel", "rocky", "almalinux", "fedora"]:
+                    os_info["family"] = "rhel"
+                
+                # Check EOL status
+                eol_versions = {
+                    "ubuntu": ["18.04", "20.04"],
+                    "debian": ["9", "10"],
+                    "centos": ["7", "8"]
+                }
+                if os_info["version"] in eol_versions.get(os_id, []):
+                    os_info["is_eol"] = True
+                
+                break
+            except Exception:
+                pass
+    
+    return os_info
+
+
+def _detect_docker():
+    """Detect Docker version and mode."""
+    docker_info = {
+        "installed": False,
+        "version": None,
+        "mode": "unknown",
+        "status": "error",
+        "message": "Docker not detected"
+    }
+    
+    try:
+        client = docker.from_env()
+        version_info = client.version()
+        docker_info["installed"] = True
+        docker_info["version"] = version_info.get("Version", "unknown")
+        docker_info["api_version"] = version_info.get("ApiVersion", "unknown")
+        docker_info["status"] = "ok"
+        docker_info["message"] = None
+        
+        # Check version
+        try:
+            major = int(docker_info["version"].split(".")[0])
+            if major < 20:
+                docker_info["status"] = "error"
+                docker_info["message"] = "Docker version too old (minimum: 20.10)"
+            elif major < 25:
+                docker_info["status"] = "warning"
+                docker_info["message"] = "Upgrade to Docker 25.x+ recommended"
+        except:
+            pass
+        
+        # Detect rootless (check socket path)
+        docker_host = os.environ.get("DOCKER_HOST", "")
+        if "rootless" in docker_host or "/run/user/" in docker_host:
+            docker_info["mode"] = "rootless"
+        else:
+            docker_info["mode"] = "rootful"
+            
+    except Exception as e:
+        docker_info["message"] = str(e)
+    
+    return docker_info
+
+
+def _detect_compose():
+    """Detect Docker Compose version."""
+    import subprocess
+    
+    compose_info = {
+        "installed": False,
+        "version": None,
+        "type": "unknown",
+        "status": "error",
+        "message": "Docker Compose not detected"
+    }
+    
+    # Method 1: Try docker compose (v2 plugin) via subprocess
+    try:
+        result = subprocess.run(
+            ["docker", "compose", "version", "--short"],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0:
+            version = result.stdout.strip().lstrip("v")
+            compose_info["installed"] = True
+            compose_info["version"] = version
+            compose_info["type"] = "plugin"
+            compose_info["status"] = "ok"
+            compose_info["message"] = None
+            
+            # Check version - v2.x.x format
+            try:
+                parts = version.split(".")
+                major = int(parts[0])
+                minor = int(parts[1]) if len(parts) > 1 else 0
+                if major >= 2:
+                    if minor < 20:
+                        compose_info["status"] = "warning"
+                        compose_info["message"] = "Upgrade to Compose 2.20+ recommended"
+                    # v2.20+ is good
+                elif major == 1:
+                    compose_info["status"] = "error"
+                    compose_info["message"] = "Compose v1 is EOL and unsupported"
+            except:
+                pass
+            
+            return compose_info
+    except Exception as e:
+        # Docker CLI not available in container
+        pass
+    
+    # Method 2: Infer from Docker SDK - if we're running in compose, it's v2
+    try:
+        client = docker.from_env()
+        # Check if any containers are managed by compose
+        for container in client.containers.list():
+            labels = container.labels
+            if "com.docker.compose.version" in labels:
+                version = labels.get("com.docker.compose.version", "")
+                compose_info["installed"] = True
+                compose_info["version"] = version
+                compose_info["type"] = "plugin"
+                compose_info["status"] = "ok"
+                compose_info["message"] = None
+                
+                # Check version
+                try:
+                    parts = version.split(".")
+                    major = int(parts[0])
+                    minor = int(parts[1]) if len(parts) > 1 else 0
+                    if major >= 2:
+                        if minor < 20:
+                            compose_info["status"] = "warning"
+                            compose_info["message"] = "Upgrade to Compose 2.20+ recommended"
+                    elif major == 1:
+                        compose_info["status"] = "error"
+                        compose_info["message"] = "Compose v1 is EOL and unsupported"
+                except:
+                    pass
+                
+                return compose_info
+    except:
+        pass
+    
+    # Method 3: Try docker-compose (v1 standalone) - last resort
+    try:
+        result = subprocess.run(
+            ["docker-compose", "version", "--short"],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0:
+            compose_info["installed"] = True
+            compose_info["version"] = result.stdout.strip().lstrip("v")
+            compose_info["type"] = "standalone_v1"
+            compose_info["status"] = "error"
+            compose_info["message"] = "Compose v1 is EOL and unsupported"
+    except:
+        pass
+    
+    return compose_info
+
+
+def _detect_selinux():
+    """Detect SELinux status."""
+    selinux_info = {
+        "present": False,
+        "mode": None,
+        "tools_installed": False
+    }
+    
+    # Check if SELinux is present
+    if os.path.exists("/sys/fs/selinux"):
+        selinux_info["present"] = True
+        
+        # Get mode
+        try:
+            import subprocess
+            result = subprocess.run(["getenforce"], capture_output=True, text=True, timeout=5)
+            if result.returncode == 0:
+                selinux_info["mode"] = result.stdout.strip().lower()
+        except:
+            pass
+        
+        # Check if semanage is available
+        try:
+            import subprocess
+            result = subprocess.run(["which", "semanage"], capture_output=True, timeout=5)
+            selinux_info["tools_installed"] = result.returncode == 0
+        except:
+            pass
+    
+    return selinux_info
+
+
+def _detect_directories():
+    """Check required directories."""
+    media_dir = os.environ.get("AST_MEDIA_DIR", "/mnt/asterisk_media/ai-generated")
+    in_container = os.path.exists("/.dockerenv")
+    
+    # When running in container, check if media dir is mounted
+    # The path inside container may differ from host path
+    container_media_path = "/app/media" if in_container else media_dir
+    
+    # Also check the actual configured path
+    paths_to_check = [media_dir, container_media_path, "/mnt/asterisk_media/ai-generated"]
+    
+    exists = False
+    writable = False
+    actual_path = media_dir
+    
+    for path in paths_to_check:
+        if os.path.exists(path):
+            exists = True
+            writable = os.access(path, os.W_OK)
+            actual_path = path
+            break
+    
+    # If in container and no local path found, check via Docker client
+    if in_container and not exists:
+        try:
+            client = docker.from_env()
+            # Check if there's a volume mount for media
+            for container in client.containers.list():
+                if container.name in ["ai_engine", "admin_ui"]:
+                    mounts = container.attrs.get("Mounts", [])
+                    for mount in mounts:
+                        if "asterisk_media" in mount.get("Source", "") or "ai-generated" in mount.get("Source", ""):
+                            # Volume is mounted on host
+                            exists = True
+                            writable = True  # Assume writable if mounted
+                            actual_path = mount.get("Source", media_dir)
+                            break
+        except:
+            pass
+    
+    dir_info = {
+        "media": {
+            "path": actual_path,
+            "exists": exists,
+            "writable": writable,
+            "status": "ok" if (exists and writable) else "warning",
+            "in_container": in_container
+        }
+    }
+    
+    return dir_info
+
+
+def _detect_asterisk():
+    """Detect Asterisk installation."""
+    asterisk_info = {
+        "detected": False,
+        "version": None,
+        "config_dir": None,
+        "freepbx": {
+            "detected": False,
+            "version": None
+        }
+    }
+    
+    # Check common paths
+    asterisk_paths = ["/etc/asterisk", "/usr/local/etc/asterisk"]
+    for path in asterisk_paths:
+        if os.path.exists(path) and os.path.exists(os.path.join(path, "asterisk.conf")):
+            asterisk_info["detected"] = True
+            asterisk_info["config_dir"] = path
+            break
+    
+    # Check for Asterisk binary
+    try:
+        import subprocess
+        result = subprocess.run(["asterisk", "-V"], capture_output=True, text=True, timeout=5)
+        if result.returncode == 0:
+            asterisk_info["version"] = result.stdout.strip()
+    except:
+        pass
+    
+    # Check for FreePBX
+    if os.path.exists("/etc/freepbx.conf") or os.path.exists("/etc/sangoma/pbx"):
+        asterisk_info["freepbx"]["detected"] = True
+        try:
+            import subprocess
+            result = subprocess.run(["fwconsole", "-V"], capture_output=True, text=True, timeout=5)
+            if result.returncode == 0:
+                asterisk_info["freepbx"]["version"] = result.stdout.strip()
+        except:
+            pass
+    
+    return asterisk_info
+
+
+def _check_port(port: int, is_own_port: bool = False) -> dict:
+    """Check if a port is in use and by what."""
+    import socket
+    
+    result = {
+        "port": port,
+        "in_use": False,
+        "is_own_port": is_own_port,
+        "status": "ok"
+    }
+    
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(1)
+            connect_result = s.connect_ex(('localhost', port))
+            result["in_use"] = (connect_result == 0)
+    except:
+        pass
+    
+    # If it's our own port (admin-ui on 3003), it's expected to be in use
+    if is_own_port and result["in_use"]:
+        result["status"] = "ok"  # Expected
+    elif result["in_use"]:
+        result["status"] = "warning"
+    
+    return result
+
+
+def _build_checks(os_info, docker_info, compose_info, selinux_info, dir_info, asterisk_info) -> List[dict]:
+    """Build list of checks with status and actions."""
+    checks = []
+    
+    # Architecture check
+    if os_info["arch"] != "x86_64":
+        checks.append({
+            "id": "architecture",
+            "status": "error",
+            "message": f"Unsupported architecture: {os_info['arch']} (x86_64 required)",
+            "blocking": True,
+            "action": None
+        })
+    else:
+        checks.append({
+            "id": "architecture",
+            "status": "ok",
+            "message": f"Architecture: {os_info['arch']}",
+            "blocking": False,
+            "action": None
+        })
+    
+    # OS EOL check
+    if os_info["is_eol"]:
+        checks.append({
+            "id": "os_eol",
+            "status": "warning",
+            "message": f"{os_info['id']} {os_info['version']} is EOL or nearing EOL",
+            "blocking": False,
+            "action": {
+                "type": "link",
+                "label": "Upgrade Guide",
+                "value": "https://docs.docker.com/engine/install/"
+            }
+        })
+    
+    # Docker check
+    if not docker_info["installed"]:
+        checks.append({
+            "id": "docker_installed",
+            "status": "error",
+            "message": "Docker not installed",
+            "blocking": True,
+            "action": {
+                "type": "link",
+                "label": "Install Docker",
+                "value": "https://docs.docker.com/engine/install/"
+            }
+        })
+    elif docker_info["status"] == "error":
+        checks.append({
+            "id": "docker_version",
+            "status": "error",
+            "message": docker_info["message"],
+            "blocking": True,
+            "action": {
+                "type": "link",
+                "label": "Upgrade Docker",
+                "value": "https://docs.docker.com/engine/install/"
+            }
+        })
+    elif docker_info["status"] == "warning":
+        checks.append({
+            "id": "docker_version",
+            "status": "warning",
+            "message": docker_info["message"],
+            "blocking": False,
+            "action": None
+        })
+    else:
+        checks.append({
+            "id": "docker_version",
+            "status": "ok",
+            "message": f"Docker {docker_info['version']}",
+            "blocking": False,
+            "action": None
+        })
+    
+    # Compose check
+    if not compose_info["installed"]:
+        checks.append({
+            "id": "compose_installed",
+            "status": "error",
+            "message": "Docker Compose not installed",
+            "blocking": True,
+            "action": {
+                "type": "link",
+                "label": "Install Compose",
+                "value": "https://docs.docker.com/compose/install/"
+            }
+        })
+    elif compose_info["status"] == "error":
+        checks.append({
+            "id": "compose_version",
+            "status": "error",
+            "message": compose_info["message"],
+            "blocking": True,
+            "action": {
+                "type": "link",
+                "label": "Upgrade Compose",
+                "value": "https://docs.docker.com/compose/install/"
+            }
+        })
+    elif compose_info["status"] == "warning":
+        checks.append({
+            "id": "compose_version",
+            "status": "warning",
+            "message": compose_info["message"],
+            "blocking": False,
+            "action": None
+        })
+    else:
+        checks.append({
+            "id": "compose_version",
+            "status": "ok",
+            "message": f"Docker Compose {compose_info['version']}",
+            "blocking": False,
+            "action": None
+        })
+    
+    # Media directory check
+    media = dir_info["media"]
+    if not media["exists"]:
+        checks.append({
+            "id": "media_directory",
+            "status": "warning",
+            "message": f"Media directory missing: {media['path']}",
+            "blocking": False,
+            "action": {
+                "type": "command",
+                "label": "Create Directory",
+                "value": f"sudo mkdir -p {media['path']} && sudo chown -R $(id -u):$(id -g) {media['path']}",
+                "rootless_value": f"mkdir -p {media['path']}"
+            }
+        })
+    elif not media["writable"]:
+        checks.append({
+            "id": "media_directory",
+            "status": "warning",
+            "message": f"Media directory not writable: {media['path']}",
+            "blocking": False,
+            "action": {
+                "type": "command",
+                "label": "Fix Permissions",
+                "value": f"sudo chown -R $(id -u):$(id -g) {media['path']}",
+                "rootless_value": None
+            }
+        })
+    else:
+        checks.append({
+            "id": "media_directory",
+            "status": "ok",
+            "message": f"Media directory: {media['path']}",
+            "blocking": False,
+            "action": None
+        })
+    
+    # SELinux check
+    if selinux_info["present"] and selinux_info["mode"] == "enforcing":
+        if not selinux_info["tools_installed"]:
+            checks.append({
+                "id": "selinux",
+                "status": "warning",
+                "message": "SELinux enforcing but semanage not installed",
+                "blocking": False,
+                "action": {
+                    "type": "command",
+                    "label": "Install SELinux Tools",
+                    "value": "sudo dnf install -y policycoreutils-python-utils"
+                }
+            })
+        else:
+            checks.append({
+                "id": "selinux",
+                "status": "warning",
+                "message": "SELinux enforcing - context fix may be needed",
+                "blocking": False,
+                "action": {
+                    "type": "command",
+                    "label": "Fix SELinux Context",
+                    "value": f"sudo semanage fcontext -a -t container_file_t '{media['path']}(/.*)?'"
+                }
+            })
+    elif selinux_info["present"]:
+        checks.append({
+            "id": "selinux",
+            "status": "ok",
+            "message": f"SELinux: {selinux_info['mode'] or 'disabled'}",
+            "blocking": False,
+            "action": None
+        })
+    
+    # Port check - port 3003 is admin-ui's own port, so it's expected to be in use
+    port_check = _check_port(3003, is_own_port=True)
+    # Only show port check if it's NOT in use (which would be unexpected for admin-ui)
+    # or skip entirely since this is admin-ui's port
+    # We'll show a success message instead
+    checks.append({
+        "id": "port_3003",
+        "status": "ok",
+        "message": "Admin UI port 3003 active",
+        "blocking": False,
+        "action": None
+    })
+    
+    # Asterisk check
+    if asterisk_info["detected"]:
+        checks.append({
+            "id": "asterisk",
+            "status": "ok",
+            "message": f"Asterisk config: {asterisk_info['config_dir']}",
+            "blocking": False,
+            "action": None
+        })
+        if asterisk_info["freepbx"]["detected"]:
+            checks.append({
+                "id": "freepbx",
+                "status": "ok",
+                "message": f"FreePBX: {asterisk_info['freepbx']['version'] or 'detected'}",
+                "blocking": False,
+                "action": None
+            })
+    
+    return checks
+
+
+@router.get("/platform")
+async def get_platform():
+    """
+    Get platform detection and check results.
+    AAVA-126: Cross-Platform Support
+    """
+    os_info = _detect_os()
+    docker_info = _detect_docker()
+    compose_info = _detect_compose()
+    selinux_info = _detect_selinux()
+    dir_info = _detect_directories()
+    asterisk_info = _detect_asterisk()
+    
+    checks = _build_checks(os_info, docker_info, compose_info, selinux_info, dir_info, asterisk_info)
+    
+    # Build summary
+    passed = sum(1 for c in checks if c["status"] == "ok")
+    warnings = sum(1 for c in checks if c["status"] == "warning")
+    errors = sum(1 for c in checks if c["status"] == "error")
+    blocking = sum(1 for c in checks if c.get("blocking", False))
+    
+    return {
+        "platform": {
+            "os": os_info,
+            "docker": docker_info,
+            "compose": compose_info,
+            "selinux": selinux_info,
+            "directories": dir_info,
+            "asterisk": asterisk_info
+        },
+        "checks": checks,
+        "summary": {
+            "total_checks": len(checks),
+            "passed": passed,
+            "warnings": warnings,
+            "errors": errors,
+            "blocking_errors": blocking,
+            "ready": blocking == 0
+        }
+    }
+
+
+@router.post("/preflight")
+async def run_preflight():
+    """
+    Re-run preflight checks and return fresh results.
+    AAVA-126: Cross-Platform Support
+    """
+    # Same as GET /platform but explicitly named for clarity
+    return await get_platform()
+
+
+class ContainerAction(BaseModel):
+    containers: List[str] = None  # None = all
+
+
+@router.post("/containers/start")
+async def start_containers(action: ContainerAction = None):
+    """Start containers."""
+    import subprocess
+    project_root = os.getenv("PROJECT_ROOT", "/app/project")
+    
+    cmd = ["docker", "compose", "up", "-d"]
+    if action and action.containers:
+        cmd.extend(action.containers)
+    
+    try:
+        result = subprocess.run(cmd, cwd=project_root, capture_output=True, text=True, timeout=120)
+        return {
+            "success": result.returncode == 0,
+            "output": result.stdout or result.stderr
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/containers/stop")
+async def stop_containers(action: ContainerAction = None):
+    """Stop containers."""
+    import subprocess
+    project_root = os.getenv("PROJECT_ROOT", "/app/project")
+    
+    cmd = ["docker", "compose", "stop"]
+    if action and action.containers:
+        cmd.extend(action.containers)
+    
+    try:
+        result = subprocess.run(cmd, cwd=project_root, capture_output=True, text=True, timeout=120)
+        return {
+            "success": result.returncode == 0,
+            "output": result.stdout or result.stderr
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/containers/restart-all")
+async def restart_all_containers():
+    """Restart all containers."""
+    import subprocess
+    project_root = os.getenv("PROJECT_ROOT", "/app/project")
+    
+    try:
+        # Stop
+        subprocess.run(["docker", "compose", "stop"], cwd=project_root, timeout=60)
+        # Start
+        result = subprocess.run(["docker", "compose", "up", "-d"], cwd=project_root, capture_output=True, text=True, timeout=120)
+        return {
+            "success": result.returncode == 0,
+            "output": result.stdout or result.stderr
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

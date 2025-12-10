@@ -8,6 +8,7 @@ from structlog import get_logger
 
 from ..config import LocalProviderConfig
 from .base import AIProviderInterface
+from ..tools.parser import parse_response_with_tools
 
 logger = get_logger(__name__)
 
@@ -283,6 +284,15 @@ class LocalProvider(AIProviderInterface):
 
             await self.websocket.send(json.dumps(tts_message))
             logger.info("Sent greeting TTS request to Local AI Server", call_id=call_id)
+            
+            # Record greeting in conversation history
+            if self.on_event:
+                await self.on_event({
+                    "type": "agent_transcript",
+                    "call_id": call_id,
+                    "text": greeting_text,
+                })
+                logger.debug("Recorded greeting in conversation history", call_id=call_id)
         except Exception as e:
             logger.error("Failed to send greeting message", call_id=call_id, error=str(e), exc_info=True)
 
@@ -378,10 +388,69 @@ class LocalProvider(AIProviderInterface):
                                                 "type": "AgentAudioDone",
                                                 "call_id": target_call_id,
                                             })
+                                            # Signal farewell TTS received for hangup coordination
+                                            if text and text.lower() == "goodbye":
+                                                await self.on_event({
+                                                    "type": "FarewellTTSReceived",
+                                                    "call_id": target_call_id,
+                                                    "audio_size": len(audio_bytes),
+                                                })
+                                                logger.info("🎤 Farewell TTS audio emitted", call_id=target_call_id, audio_size=len(audio_bytes))
                                         except Exception:
                                             logger.error("Failed to emit AgentAudio(/Done) for tts_response", exc_info=True)
                                     else:
                                         logger.debug("Dropping TTS audio - no active call to attribute", size=len(audio_bytes))
+                        elif data.get("type") == "stt_result":
+                            # Handle STT result - emit as transcript for conversation history
+                            text = data.get("text", "").strip()
+                            call_id = data.get("call_id") or self._active_call_id
+                            is_final = data.get("is_final", True)
+                            
+                            if text and is_final and self.on_event:
+                                await self.on_event({
+                                    "type": "transcript",
+                                    "call_id": call_id,
+                                    "text": text,
+                                })
+                                logger.debug("Emitted user transcript for history", call_id=call_id, text=text[:50])
+                        elif data.get("type") == "llm_response":
+                            # Handle LLM response - parse for tool calls
+                            llm_text = data.get("text", "")
+                            call_id = data.get("call_id") or self._active_call_id
+                            
+                            # Parse the response for tool calls
+                            clean_text, tool_calls = parse_response_with_tools(llm_text)
+                            
+                            # Emit agent transcript for conversation history (use clean text)
+                            response_text = clean_text if clean_text else llm_text
+                            if response_text and self.on_event:
+                                await self.on_event({
+                                    "type": "agent_transcript",
+                                    "call_id": call_id,
+                                    "text": response_text,
+                                })
+                                logger.debug("Emitted agent transcript for history", call_id=call_id, text=response_text[:50])
+                            
+                            if tool_calls:
+                                logger.info(
+                                    "🔧 Tool calls detected in local LLM response",
+                                    call_id=call_id,
+                                    tools=[tc.get("name") for tc in tool_calls]
+                                )
+                                # Emit tool call event for engine to handle
+                                if self.on_event:
+                                    await self.on_event({
+                                        "type": "ToolCall",
+                                        "call_id": call_id,
+                                        "tool_calls": tool_calls,
+                                        "text": clean_text,  # Text to speak (if any)
+                                    })
+                            else:
+                                logger.debug(
+                                    "LLM response received (no tools)",
+                                    call_id=call_id,
+                                    preview=llm_text[:80] if llm_text else "(empty)"
+                                )
                         else:
                             logger.debug("Received JSON message from Local AI Server", message=data)
                     except json.JSONDecodeError:

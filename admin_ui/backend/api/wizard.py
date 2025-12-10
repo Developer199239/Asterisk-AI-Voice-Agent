@@ -8,6 +8,11 @@ import subprocess
 import stat
 from typing import Dict, Any, Optional
 from settings import ENV_PATH, CONFIG_PATH, ensure_env_file, PROJECT_ROOT
+from api.models_catalog import (
+    get_full_catalog, get_models_by_language, get_available_languages,
+    LANGUAGE_NAMES, REGION_NAMES, VOSK_STT_MODELS, SHERPA_STT_MODELS,
+    KROKO_STT_MODELS, PIPER_TTS_MODELS, KOKORO_TTS_MODELS, LLM_MODELS
+)
 
 router = APIRouter()
 
@@ -372,181 +377,33 @@ async def start_engine():
 
 # ============== Local AI Server Setup ==============
 
-# Model catalog with all available options
-MODEL_CATALOG = {
-    "stt": [
-        {
-            "id": "vosk",
-            "name": "Vosk English",
-            "size_mb": 1800,
-            "size_display": "1.8 GB",
-            "latency": "~200ms",
-            "description": "Offline, proven accuracy, English only",
-            "download_url": "https://alphacephei.com/vosk/models/vosk-model-en-us-0.22.zip",
-            "model_path": "vosk-model-en-us-0.22",
-            "recommended_ram_gb": 4,
-            "requires_api_key": False,
-            "env_var": "LOCAL_STT_BACKEND=vosk"
-        },
-        {
-            "id": "sherpa_streaming",
-            "name": "Sherpa Streaming (Local)",
-            "size_mb": 100,
-            "size_display": "100 MB",
-            "latency": "~100ms",
-            "description": "Fast local streaming ASR, no server needed",
-            "download_url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-en-2023-06-26.tar.bz2",
-            "model_path": "sherpa-onnx-streaming-zipformer-en-2023-06-26",
-            "recommended_ram_gb": 2,
-            "requires_api_key": False,
-            "env_var": "LOCAL_STT_BACKEND=sherpa",
-            "recommended": True,
-            "is_archive": True,
-            "archive_type": "tar.bz2"
-        },
-        {
-            "id": "kroko_hosted",
-            "name": "Kroko Hosted API",
-            "size_mb": 0,
-            "size_display": "0 (Cloud)",
-            "latency": "~50ms",
-            "description": "Fastest, requires API key, cloud-based",
-            "download_url": None,
-            "model_path": None,
-            "recommended_ram_gb": 0,
-            "requires_api_key": True,
-            "api_key_name": "KROKO_API_KEY",
-            "env_var": "LOCAL_STT_BACKEND=kroko\nKROKO_URL=wss://app.kroko.ai/api/v1/transcripts/streaming"
-        }
-    ],
-    "llm": [
-        {
-            "id": "phi3_mini",
-            "name": "Phi-3-mini-4K",
-            "size_mb": 2500,
-            "size_display": "2.5 GB",
-            "latency": "Fast",
-            "description": "Good quality, optimized for 4K context",
-            "download_url": "https://huggingface.co/microsoft/Phi-3-mini-4k-instruct-gguf/resolve/main/Phi-3-mini-4k-instruct-q4.gguf",
-            "model_path": "phi-3-mini-4k-instruct.Q4_K_M.gguf",
-            "recommended_ram_gb": 8,
-            "requires_api_key": False,
-            "recommended": True
-        },
-        {
-            "id": "tinyllama",
-            "name": "TinyLlama 1.1B",
-            "size_mb": 700,
-            "size_display": "700 MB",
-            "latency": "Fastest",
-            "description": "Lightweight, for low-resource systems",
-            "download_url": "https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
-            "model_path": "tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
-            "recommended_ram_gb": 4,
-            "requires_api_key": False
-        },
-        {
-            "id": "llama32_3b",
-            "name": "Llama-3.2-3B",
-            "size_mb": 2000,
-            "size_display": "2 GB",
-            "latency": "Fast",
-            "description": "Balanced performance and quality",
-            "download_url": "https://huggingface.co/lmstudio-community/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
-            "model_path": "Llama-3.2-3B-Instruct-Q4_K_M.gguf",
-            "recommended_ram_gb": 8,
-            "requires_api_key": False
-        },
-        {
-            "id": "openai_cloud",
-            "name": "OpenAI Cloud",
-            "size_mb": 0,
-            "size_display": "0 (Cloud)",
-            "latency": "Fast",
-            "description": "Best quality, requires API key",
-            "download_url": None,
-            "model_path": None,
-            "recommended_ram_gb": 0,
-            "requires_api_key": True,
-            "api_key_name": "OPENAI_API_KEY"
-        }
-    ],
-    "tts": [
-        {
-            "id": "piper_lessac_medium",
-            "name": "Piper lessac-medium",
-            "size_mb": 100,
-            "size_display": "100 MB",
-            "latency": "Good quality",
-            "description": "Clear American English voice",
-            "download_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/lessac/medium/en_US-lessac-medium.onnx",
-            "model_path": "en_US-lessac-medium.onnx",
-            "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json",
-            "recommended_ram_gb": 1,
-            "requires_api_key": False,
-            "recommended": True
-        },
-        {
-            "id": "piper_lessac_high",
-            "name": "Piper lessac-high",
-            "size_mb": 200,
-            "size_display": "200 MB",
-            "latency": "Better quality",
-            "description": "Higher quality American English",
-            "download_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/lessac/high/en_US-lessac-high.onnx",
-            "model_path": "en_US-lessac-high.onnx",
-            "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/lessac/high/en_US-lessac-high.onnx.json",
-            "recommended_ram_gb": 2,
-            "requires_api_key": False
-        },
-        {
-            "id": "piper_amy_medium",
-            "name": "Piper amy-medium",
-            "size_mb": 100,
-            "size_display": "100 MB",
-            "latency": "Good quality",
-            "description": "British English voice",
-            "download_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_GB/amy/medium/en_GB-amy-medium.onnx",
-            "model_path": "en_GB-amy-medium.onnx",
-            "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_GB/amy/medium/en_GB-amy-medium.onnx.json",
-            "recommended_ram_gb": 1,
-            "requires_api_key": False
-        },
-        {
-            "id": "kokoro_82m",
-            "name": "Kokoro 82M",
-            "size_mb": 330,
-            "size_display": "330 MB",
-            "latency": "Excellent",
-            "description": "High-quality lightweight TTS, multi-voice",
-            "download_url": "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/kokoro-v1_0.pth",
-            "model_path": "kokoro",
-            "config_url": "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/config.json",
-            "voice_files": {
-                "af_heart": "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/voices/af_heart.pt",
-                "af_bella": "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/voices/af_bella.pt",
-                "am_adam": "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/voices/am_adam.pt",
-                "am_michael": "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/voices/am_michael.pt"
-            },
-            "recommended_ram_gb": 2,
-            "requires_api_key": False,
-            "env_var": "LOCAL_TTS_BACKEND=kokoro"
-        }
-    ]
-}
+# Model catalog - now imported from models_catalog.py for multi-language support
+# Use get_full_catalog() to get the complete catalog with all language models
 
 
 @router.get("/local/available-models")
-async def get_available_models():
-    """Return catalog of available models with system recommendations."""
+async def get_available_models(language: Optional[str] = None):
+    """Return catalog of available models with system recommendations.
+    
+    Args:
+        language: Optional language code to filter models (e.g., 'en-US', 'fr-FR')
+    """
     import psutil
     
     # Get system info for recommendations
     ram_gb = psutil.virtual_memory().total // (1024**3)
     
+    # Get the full catalog or filtered by language
+    if language:
+        full_catalog = get_models_by_language(language)
+        # Add LLM models (language-independent)
+        full_catalog["llm"] = LLM_MODELS
+    else:
+        full_catalog = get_full_catalog()
+    
     # Add recommendation flags based on system
     catalog = {}
-    for category, models in MODEL_CATALOG.items():
+    for category, models in full_catalog.items():
         catalog[category] = []
         for model in models:
             model_copy = model.copy()
@@ -557,7 +414,20 @@ async def get_available_models():
     
     return {
         "catalog": catalog,
-        "system_ram_gb": ram_gb
+        "system_ram_gb": ram_gb,
+        "languages": get_available_languages(),
+        "language_names": LANGUAGE_NAMES,
+        "region_names": REGION_NAMES
+    }
+
+
+@router.get("/local/available-languages")
+async def get_languages():
+    """Return list of all available languages for STT and TTS models."""
+    return {
+        "languages": get_available_languages(),
+        "language_names": LANGUAGE_NAMES,
+        "region_names": REGION_NAMES
     }
 
 
@@ -718,10 +588,133 @@ async def get_download_progress():
     }
 
 
+class SingleModelDownload(BaseModel):
+    model_id: str
+    type: str  # stt, tts, llm
+    download_url: str
+    model_path: Optional[str] = None
+
+
+@router.post("/local/download-model")
+async def download_single_model(request: SingleModelDownload):
+    """Download a single model from the catalog."""
+    import threading
+    import urllib.request
+    import zipfile
+    import tarfile
+    import shutil
+    from settings import PROJECT_ROOT
+    
+    global _download_output, _download_status
+    
+    # Reset state
+    _download_output = []
+    _download_status = {"running": True, "completed": False, "error": None}
+    
+    # Determine target directory based on type
+    if request.type == "stt":
+        target_dir = os.path.join(PROJECT_ROOT, "models", "stt")
+    elif request.type == "tts":
+        target_dir = os.path.join(PROJECT_ROOT, "models", "tts")
+    elif request.type == "llm":
+        target_dir = os.path.join(PROJECT_ROOT, "models", "llm")
+    else:
+        return {"status": "error", "message": f"Invalid model type: {request.type}"}
+    
+    # Ensure target directory exists
+    os.makedirs(target_dir, exist_ok=True)
+    
+    def download_worker():
+        global _download_output, _download_status
+        try:
+            _download_output.append(f"📥 Starting download: {request.model_id}")
+            _download_output.append(f"   URL: {request.download_url}")
+            
+            # Determine file extension
+            url_lower = request.download_url.lower()
+            if '.zip' in url_lower:
+                ext = '.zip'
+                is_archive = True
+            elif '.tar.gz' in url_lower or '.tgz' in url_lower:
+                ext = '.tar.gz'
+                is_archive = True
+            elif '.tar' in url_lower:
+                ext = '.tar'
+                is_archive = True
+            else:
+                # Single file (e.g., ONNX model)
+                ext = os.path.splitext(request.download_url)[1] or ''
+                is_archive = False
+            
+            # Download to temp file
+            temp_file = os.path.join(target_dir, f"temp_download{ext}")
+            
+            def progress_hook(block_num, block_size, total_size):
+                if total_size > 0:
+                    percent = min(100, (block_num * block_size * 100) // total_size)
+                    if block_num % 100 == 0:  # Update every 100 blocks
+                        _download_output.append(f"   Progress: {percent}%")
+                        if len(_download_output) > 50:
+                            _download_output.pop(0)
+            
+            urllib.request.urlretrieve(request.download_url, temp_file, progress_hook)
+            _download_output.append("✅ Download complete, extracting...")
+            
+            if is_archive:
+                # Extract archive
+                if ext == '.zip':
+                    with zipfile.ZipFile(temp_file, 'r') as zf:
+                        # Get the root folder name from the archive
+                        names = zf.namelist()
+                        root_folder = names[0].split('/')[0] if names else None
+                        zf.extractall(target_dir)
+                        _download_output.append(f"✅ Extracted to {target_dir}/{root_folder}")
+                elif ext in ['.tar.gz', '.tar', '.tgz']:
+                    with tarfile.open(temp_file, 'r:*') as tf:
+                        names = tf.getnames()
+                        root_folder = names[0].split('/')[0] if names else None
+                        tf.extractall(target_dir)
+                        _download_output.append(f"✅ Extracted to {target_dir}/{root_folder}")
+                
+                # Clean up temp file
+                os.remove(temp_file)
+            else:
+                # Single file - rename to model_path or keep original name
+                if request.model_path:
+                    final_path = os.path.join(target_dir, request.model_path)
+                else:
+                    final_path = os.path.join(target_dir, os.path.basename(request.download_url))
+                
+                if temp_file != final_path:
+                    shutil.move(temp_file, final_path)
+                _download_output.append(f"✅ Saved to {final_path}")
+            
+            _download_status["running"] = False
+            _download_status["completed"] = True
+            _download_output.append(f"🎉 Model {request.model_id} installed successfully!")
+            
+        except Exception as e:
+            _download_status["running"] = False
+            _download_status["error"] = str(e)
+            _download_output.append(f"❌ Error: {str(e)}")
+    
+    # Start download thread
+    thread = threading.Thread(target=download_worker, daemon=True)
+    thread.start()
+    
+    return {
+        "status": "started",
+        "message": f"Downloading {request.model_id}..."
+    }
+
+
 class ModelSelection(BaseModel):
     stt: str
     llm: str
     tts: str
+    language: Optional[str] = "en-US"
+    kroko_embedded: Optional[bool] = False
+    kokoro_mode: Optional[str] = "local"
 
 
 @router.post("/local/download-selected-models")
@@ -740,10 +733,46 @@ async def download_selected_models(selection: ModelSelection):
     _download_output = []
     _download_status = {"running": True, "completed": False, "error": None}
     
-    # Get model info from catalog
-    stt_model = next((m for m in MODEL_CATALOG["stt"] if m["id"] == selection.stt), None)
-    llm_model = next((m for m in MODEL_CATALOG["llm"] if m["id"] == selection.llm), None)
-    tts_model = next((m for m in MODEL_CATALOG["tts"] if m["id"] == selection.tts), None)
+    # Get full catalog
+    catalog = get_full_catalog()
+    
+    # Find appropriate model for the selected backend and language
+    def find_stt_model(backend: str, language: str):
+        """Find the best STT model for a given backend and language."""
+        for model in catalog["stt"]:
+            if model.get("backend") == backend and model.get("language") == language:
+                return model
+        # Fallback to English if language not available
+        for model in catalog["stt"]:
+            if model.get("backend") == backend and model.get("language") == "en-US":
+                return model
+        # Final fallback to any model with that backend
+        for model in catalog["stt"]:
+            if model.get("backend") == backend:
+                return model
+        return None
+    
+    def find_tts_model(backend: str, language: str):
+        """Find the best TTS model for a given backend and language."""
+        for model in catalog["tts"]:
+            if model.get("backend") == backend and model.get("language") == language:
+                return model
+        # Fallback to English if language not available
+        for model in catalog["tts"]:
+            if model.get("backend") == backend and model.get("language") == "en-US":
+                return model
+        # Final fallback to any model with that backend
+        for model in catalog["tts"]:
+            if model.get("backend") == backend:
+                return model
+        return None
+    
+    # Get model info from catalog based on backend and language
+    stt_model = find_stt_model(selection.stt, selection.language)
+    llm_model = next((m for m in catalog["llm"] if m["id"] == selection.llm), None)
+    tts_model = find_tts_model(selection.tts, selection.language)
+    
+    _download_output.append(f"🌍 Selected language: {selection.language}")
     
     if not stt_model:
         return {"status": "error", "message": f"Unknown STT model: {selection.stt}"}
@@ -1499,6 +1528,13 @@ async def save_setup_config(config: SetupConfig):
                 yaml_config.setdefault("providers", {})
                 yaml_config["providers"].setdefault("google_live", {})["enabled"] = True
                 yaml_config["providers"]["google_live"]["greeting"] = config.greeting
+                # CRITICAL: Set correct model for Google Live API
+                # Only models with "API Live" category support bidiGenerateContent:
+                # - gemini-2.5-flash-live (recommended, newer)
+                # - gemini-2.5-flash-native-audio-dialog
+                # - gemini-2.0-flash-live
+                # gemini-1.5-pro does NOT support Live API
+                yaml_config["providers"]["google_live"]["llm_model"] = "gemini-2.0-flash-live"
                 yaml_config["providers"].setdefault("openai_realtime", {})["enabled"] = False
                 yaml_config["providers"].setdefault("deepgram", {})["enabled"] = False
                 yaml_config["providers"].setdefault("local", {})["enabled"] = False

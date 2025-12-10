@@ -836,12 +836,66 @@ prompt_local_ai_setup() {
         LOCAL_AI_SETUP=1
         print_info "Will set up local AI server..."
         
+        # Language selection
+        echo ""
+        echo "╔═══════════════════════════════════════════════════════════╗"
+        echo "║          🌍 Language Selection                            ║"
+        echo "╚═══════════════════════════════════════════════════════════╝"
+        echo ""
+        echo "Select your primary language for STT and TTS models:"
+        echo ""
+        echo "=== Popular ==="
+        echo "  1) English (US) [default]"
+        echo "  2) Spanish"
+        echo "  3) French"
+        echo "  4) German"
+        echo ""
+        echo "=== European ==="
+        echo "  5) Italian"
+        echo "  6) Portuguese (Brazil)"
+        echo "  7) Dutch"
+        echo "  8) Russian"
+        echo "  9) Polish"
+        echo ""
+        echo "=== Asian ==="
+        echo "  10) Chinese (Mandarin)"
+        echo "  11) Japanese"
+        echo "  12) Korean"
+        echo "  13) Hindi"
+        echo ""
+        echo "=== Other ==="
+        echo "  14) Arabic"
+        echo "  15) Turkish"
+        echo ""
+        read -p "Enter choice [1-15, default=1]: " lang_choice
+        
+        case "$lang_choice" in
+            2) LANG_CODE="es-ES"; LANG_NAME="Spanish" ;;
+            3) LANG_CODE="fr-FR"; LANG_NAME="French" ;;
+            4) LANG_CODE="de-DE"; LANG_NAME="German" ;;
+            5) LANG_CODE="it-IT"; LANG_NAME="Italian" ;;
+            6) LANG_CODE="pt-BR"; LANG_NAME="Portuguese" ;;
+            7) LANG_CODE="nl-NL"; LANG_NAME="Dutch" ;;
+            8) LANG_CODE="ru-RU"; LANG_NAME="Russian" ;;
+            9) LANG_CODE="pl-PL"; LANG_NAME="Polish" ;;
+            10) LANG_CODE="zh-CN"; LANG_NAME="Chinese" ;;
+            11) LANG_CODE="ja-JP"; LANG_NAME="Japanese" ;;
+            12) LANG_CODE="ko-KR"; LANG_NAME="Korean" ;;
+            13) LANG_CODE="hi-IN"; LANG_NAME="Hindi" ;;
+            14) LANG_CODE="ar"; LANG_NAME="Arabic" ;;
+            15) LANG_CODE="tr-TR"; LANG_NAME="Turkish" ;;
+            *) LANG_CODE="en-US"; LANG_NAME="English (US)" ;;
+        esac
+        
+        print_success "✓ Selected language: ${LANG_NAME}"
+        echo ""
+        
         # Download models if script exists
         if [ -f scripts/model_setup.sh ]; then
             echo ""
-            print_info "Downloading AI models (~200MB)..."
+            print_info "Downloading AI models for ${LANG_NAME}..."
             print_info "This may take 5-10 minutes depending on your connection"
-            if bash scripts/model_setup.sh --assume-yes; then
+            if bash scripts/model_setup.sh --assume-yes --language="${LANG_CODE}"; then
                 print_success "✓ Models downloaded successfully"
                 autodetect_local_models
             else
@@ -850,6 +904,11 @@ prompt_local_ai_setup() {
         else
             print_warning "Model setup script not found. Models will download on first start."
         fi
+        
+        # Notify about additional models
+        echo ""
+        print_info "💡 Tip: You can download additional models and voices later from"
+        print_info "   System → Models in the Admin UI."
         
         # Enable local provider in YAML
         if command -v yq >/dev/null 2>&1; then

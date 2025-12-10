@@ -11,23 +11,89 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")"/.. && pwd)"
 MODELS_DIR="${ROOT_DIR}/models"
 ASSUME_YES=0
 TIER_OVERRIDE=""
+LANGUAGE="en-US"
 
 usage() {
   cat <<EOF
-Usage: $0 [--tier LIGHT|MEDIUM|HEAVY] [--assume-yes]
+Usage: $0 [--tier LIGHT|MEDIUM|HEAVY] [--assume-yes] [--language LANG_CODE]
 
 Downloads local provider models under models/ and prints expected performance.
+
+Options:
+  --tier         Force a specific tier (LIGHT, MEDIUM, HEAVY)
+  --assume-yes   Skip confirmation prompts
+  --language     Language code for STT/TTS models (default: en-US)
+                 Supported: en-US, es-ES, fr-FR, de-DE, it-IT, pt-BR, nl-NL,
+                           ru-RU, pl-PL, zh-CN, ja-JP, ko-KR, hi-IN, ar, tr-TR
 EOF
 }
 
-for arg in "$@"; do
-  case "$arg" in
-    --assume-yes) ASSUME_YES=1 ; shift ;;
-    --tier) TIER_OVERRIDE="${2:-}" ; shift 2 ;;
-    -h|--help) usage ; exit 0 ;;
-    *) ;;
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --assume-yes) ASSUME_YES=1; shift ;;
+    --tier) TIER_OVERRIDE="${2:-}"; shift 2 ;;
+    --language) LANGUAGE="${2:-en-US}"; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    *) shift ;;
   esac
 done
+
+echo "🌍 Language: ${LANGUAGE}"
+
+# Language-to-model URL mappings
+get_vosk_model_url() {
+  case "$LANGUAGE" in
+    en-US) echo "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip|vosk-model-small-en-us-0.15" ;;
+    es-ES) echo "https://alphacephei.com/vosk/models/vosk-model-small-es-0.42.zip|vosk-model-small-es-0.42" ;;
+    fr-FR) echo "https://alphacephei.com/vosk/models/vosk-model-small-fr-0.22.zip|vosk-model-small-fr-0.22" ;;
+    de-DE) echo "https://alphacephei.com/vosk/models/vosk-model-small-de-0.15.zip|vosk-model-small-de-0.15" ;;
+    it-IT) echo "https://alphacephei.com/vosk/models/vosk-model-small-it-0.22.zip|vosk-model-small-it-0.22" ;;
+    pt-BR) echo "https://alphacephei.com/vosk/models/vosk-model-small-pt-0.3.zip|vosk-model-small-pt-0.3" ;;
+    nl-NL) echo "https://alphacephei.com/vosk/models/vosk-model-small-nl-0.22.zip|vosk-model-small-nl-0.22" ;;
+    ru-RU) echo "https://alphacephei.com/vosk/models/vosk-model-small-ru-0.22.zip|vosk-model-small-ru-0.22" ;;
+    pl-PL) echo "https://alphacephei.com/vosk/models/vosk-model-small-pl-0.22.zip|vosk-model-small-pl-0.22" ;;
+    zh-CN) echo "https://alphacephei.com/vosk/models/vosk-model-small-cn-0.22.zip|vosk-model-small-cn-0.22" ;;
+    ja-JP) echo "https://alphacephei.com/vosk/models/vosk-model-small-ja-0.22.zip|vosk-model-small-ja-0.22" ;;
+    ko-KR) echo "https://alphacephei.com/vosk/models/vosk-model-small-ko-0.22.zip|vosk-model-small-ko-0.22" ;;
+    hi-IN) echo "https://alphacephei.com/vosk/models/vosk-model-small-hi-0.22.zip|vosk-model-small-hi-0.22" ;;
+    ar)    echo "https://alphacephei.com/vosk/models/vosk-model-ar-0.22-linto-1.1.0.zip|vosk-model-ar-0.22-linto-1.1.0" ;;
+    tr-TR) echo "https://alphacephei.com/vosk/models/vosk-model-small-tr-0.3.zip|vosk-model-small-tr-0.3" ;;
+    *)     echo "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip|vosk-model-small-en-us-0.15" ;;
+  esac
+}
+
+get_piper_model_url() {
+  case "$LANGUAGE" in
+    en-US) echo "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/lessac/medium/en_US-lessac-medium.onnx|en_US-lessac-medium.onnx" ;;
+    es-ES) echo "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/es/es_ES/davefx/medium/es_ES-davefx-medium.onnx|es_ES-davefx-medium.onnx" ;;
+    fr-FR) echo "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/fr/fr_FR/siwis/medium/fr_FR-siwis-medium.onnx|fr_FR-siwis-medium.onnx" ;;
+    de-DE) echo "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/de/de_DE/thorsten/medium/de_DE-thorsten-medium.onnx|de_DE-thorsten-medium.onnx" ;;
+    it-IT) echo "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/it/it_IT/riccardo/x_low/it_IT-riccardo-x_low.onnx|it_IT-riccardo-x_low.onnx" ;;
+    pt-BR) echo "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/pt/pt_BR/faber/medium/pt_BR-faber-medium.onnx|pt_BR-faber-medium.onnx" ;;
+    nl-NL) echo "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/nl/nl_NL/mls/medium/nl_NL-mls-medium.onnx|nl_NL-mls-medium.onnx" ;;
+    ru-RU) echo "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/ru/ru_RU/irina/medium/ru_RU-irina-medium.onnx|ru_RU-irina-medium.onnx" ;;
+    pl-PL) echo "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/pl/pl_PL/mls/medium/pl_PL-mls-medium.onnx|pl_PL-mls-medium.onnx" ;;
+    zh-CN) echo "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/zh/zh_CN/huayan/medium/zh_CN-huayan-medium.onnx|zh_CN-huayan-medium.onnx" ;;
+    ja-JP) echo "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/lessac/medium/en_US-lessac-medium.onnx|en_US-lessac-medium.onnx" ;; # Piper doesn't have Japanese
+    ko-KR) echo "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/lessac/medium/en_US-lessac-medium.onnx|en_US-lessac-medium.onnx" ;; # Piper doesn't have Korean
+    hi-IN) echo "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/lessac/medium/en_US-lessac-medium.onnx|en_US-lessac-medium.onnx" ;; # Fallback
+    ar)    echo "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/ar/ar_JO/kareem/medium/ar_JO-kareem-medium.onnx|ar_JO-kareem-medium.onnx" ;;
+    tr-TR) echo "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/tr/tr_TR/dfki/medium/tr_TR-dfki-medium.onnx|tr_TR-dfki-medium.onnx" ;;
+    *)     echo "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/lessac/medium/en_US-lessac-medium.onnx|en_US-lessac-medium.onnx" ;;
+  esac
+}
+
+# Parse model info from functions
+VOSK_INFO=$(get_vosk_model_url)
+VOSK_URL="${VOSK_INFO%|*}"
+VOSK_MODEL="${VOSK_INFO#*|}"
+
+PIPER_INFO=$(get_piper_model_url)
+PIPER_URL="${PIPER_INFO%|*}"
+PIPER_MODEL="${PIPER_INFO#*|}"
+
+echo "📦 Vosk model: ${VOSK_MODEL}"
+echo "🔊 Piper voice: ${PIPER_MODEL}"
 
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || { echo "ERROR: '$1' is required" >&2; exit 1; }
@@ -195,11 +261,11 @@ extract_zip() { # zip_path target_dir
 }
 
 setup_light_cpu() {
-  # STT (Vosk small) - check for README to verify correct extraction
-  local stt_zip="$MODELS_DIR/stt/vosk-model-small-en-us-0.15.zip"
-  if [ ! -f "$MODELS_DIR/stt/vosk-model-small-en-us-0.15/README" ]; then
-    download "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip" "$stt_zip" "vosk-model-small-en-us-0.15"
-    extract_zip "$stt_zip" "$MODELS_DIR/stt/vosk-model-small-en-us-0.15"
+  # STT (Vosk) - language-aware model
+  local stt_zip="$MODELS_DIR/stt/${VOSK_MODEL}.zip"
+  if [ ! -f "$MODELS_DIR/stt/${VOSK_MODEL}/README" ]; then
+    download "${VOSK_URL}" "$stt_zip" "${VOSK_MODEL}"
+    extract_zip "$stt_zip" "$MODELS_DIR/stt/${VOSK_MODEL}"
     rm -f "$stt_zip"
   else
     echo "STT model already exists, skipping download"
@@ -215,19 +281,17 @@ setup_light_cpu() {
     download "https://huggingface.co/hieupt/TinyLlama-1.1B-Chat-v1.0-Q4_K_M-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0-q4_k_m.gguf" \
              "$tiny_dst" "tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf (mirror)"
   fi
-  # TTS (Piper Lessac medium)
-  download "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx" \
-           "$MODELS_DIR/tts/en_US-lessac-medium.onnx" "en_US-lessac-medium.onnx"
-  download "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json" \
-           "$MODELS_DIR/tts/en_US-lessac-medium.onnx.json" "en_US-lessac-medium.onnx.json"
+  # TTS (Piper) - language-aware voice
+  download "${PIPER_URL}" "$MODELS_DIR/tts/${PIPER_MODEL}" "${PIPER_MODEL}"
+  download "${PIPER_URL}.json" "$MODELS_DIR/tts/${PIPER_MODEL}.json" "${PIPER_MODEL}.json"
 }
 
 setup_medium_cpu() {
-  # STT (Vosk 0.22) - check for README to verify correct extraction
-  local stt_zip="$MODELS_DIR/stt/vosk-model-en-us-0.22.zip"
-  if [ ! -f "$MODELS_DIR/stt/vosk-model-en-us-0.22/README" ]; then
-    download "https://alphacephei.com/vosk/models/vosk-model-en-us-0.22.zip" "$stt_zip" "vosk-model-en-us-0.22"
-    extract_zip "$stt_zip" "$MODELS_DIR/stt/vosk-model-en-us-0.22"
+  # STT (Vosk) - language-aware model
+  local stt_zip="$MODELS_DIR/stt/${VOSK_MODEL}.zip"
+  if [ ! -f "$MODELS_DIR/stt/${VOSK_MODEL}/README" ]; then
+    download "${VOSK_URL}" "$stt_zip" "${VOSK_MODEL}"
+    extract_zip "$stt_zip" "$MODELS_DIR/stt/${VOSK_MODEL}"
     rm -f "$stt_zip"
   else
     echo "STT model already exists, skipping download"
@@ -239,11 +303,9 @@ setup_medium_cpu() {
   else
     echo "LLM model already exists, skipping download"
   fi
-  # TTS (Piper Lessac medium)
-  download "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx" \
-           "$MODELS_DIR/tts/en_US-lessac-medium.onnx" "en_US-lessac-medium.onnx"
-  download "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json" \
-           "$MODELS_DIR/tts/en_US-lessac-medium.onnx.json" "en_US-lessac-medium.onnx.json"
+  # TTS (Piper) - language-aware voice
+  download "${PIPER_URL}" "$MODELS_DIR/tts/${PIPER_MODEL}" "${PIPER_MODEL}"
+  download "${PIPER_URL}.json" "$MODELS_DIR/tts/${PIPER_MODEL}.json" "${PIPER_MODEL}.json"
 }
 
 setup_heavy_cpu() {
@@ -264,11 +326,11 @@ setup_medium_gpu() {
 }
 
 setup_heavy_gpu() {
-  # STT (Vosk 0.22) - check for README to verify correct extraction
-  local stt_zip="$MODELS_DIR/stt/vosk-model-en-us-0.22.zip"
-  if [ ! -f "$MODELS_DIR/stt/vosk-model-en-us-0.22/README" ]; then
-    download "https://alphacephei.com/vosk/models/vosk-model-en-us-0.22.zip" "$stt_zip" "vosk-model-en-us-0.22"
-    extract_zip "$stt_zip" "$MODELS_DIR/stt/vosk-model-en-us-0.22"
+  # STT (Vosk) - language-aware model
+  local stt_zip="$MODELS_DIR/stt/${VOSK_MODEL}.zip"
+  if [ ! -f "$MODELS_DIR/stt/${VOSK_MODEL}/README" ]; then
+    download "${VOSK_URL}" "$stt_zip" "${VOSK_MODEL}"
+    extract_zip "$stt_zip" "$MODELS_DIR/stt/${VOSK_MODEL}"
     rm -f "$stt_zip"
   else
     echo "STT model already exists, skipping download"
@@ -280,11 +342,9 @@ setup_heavy_gpu() {
   else
     echo "LLM model already exists, skipping download"
   fi
-  # TTS (Piper Lessac high)
-  download "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/high/en_US-lessac-high.onnx" \
-           "$MODELS_DIR/tts/en_US-lessac-high.onnx" "en_US-lessac-high.onnx"
-  download "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/high/en_US-lessac-high.onnx.json" \
-           "$MODELS_DIR/tts/en_US-lessac-high.onnx.json" "en_US-lessac-high.onnx.json"
+  # TTS (Piper) - language-aware voice
+  download "${PIPER_URL}" "$MODELS_DIR/tts/${PIPER_MODEL}" "${PIPER_MODEL}"
+  download "${PIPER_URL}.json" "$MODELS_DIR/tts/${PIPER_MODEL}.json" "${PIPER_MODEL}.json"
 }
 
 main() {

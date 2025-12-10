@@ -9,6 +9,7 @@ import time
 import uuid
 import audioop
 import base64
+import json
 from collections import deque
 from datetime import datetime
 from typing import Dict, Any, Optional, List, Set, Tuple
@@ -4500,6 +4501,13 @@ class Engine:
                     else:
                         logger.debug("AgentAudioDone with no active stream queue", call_id=call_id)
                     self._provider_stream_formats.pop(call_id, None)
+                
+                # Signal farewell done event if we're waiting for hangup
+                farewell_key = f"farewell_done_{call_id}"
+                if hasattr(self, '_farewell_done_events') and farewell_key in self._farewell_done_events:
+                    self._farewell_done_events[farewell_key].set()
+                    logger.info("✅ Farewell audio done - signaling hangup", call_id=call_id)
+                
                 # Log provider segment wall duration
                 try:
                     start_ts = self._provider_segment_start_ts.pop(call_id, None)
@@ -4686,6 +4694,119 @@ class Engine:
                         error=str(e),
                         exc_info=True,
                     )
+            
+            elif etype == "ToolCall":
+                # Handle tool calls from local LLM (parsed from text response)
+                tool_calls = event.get("tool_calls", [])
+                text_response = event.get("text")
+                
+                logger.info(
+                    "🔧 Tool calls parsed from local LLM",
+                    call_id=call_id,
+                    tools=[tc.get("name") for tc in tool_calls],
+                    has_text=bool(text_response),
+                )
+                
+                # Execute each tool call
+                for tool_call in tool_calls:
+                    tool_name = tool_call.get("name")
+                    parameters = tool_call.get("parameters", {})
+                    
+                    try:
+                        result = await self._execute_provider_tool(
+                            call_id=call_id,
+                            function_name=tool_name,
+                            function_call_id=f"local-{tool_name}",
+                            parameters=parameters,
+                            session=session,
+                        )
+                        logger.info(
+                            "✅ Local tool execution complete",
+                            call_id=call_id,
+                            tool_name=tool_name,
+                            status=result.get("status"),
+                        )
+                        
+                        # Handle terminal tools (hangup, transfer)
+                        if result.get("will_hangup"):
+                            # For local provider, we need to synthesize farewell via TTS
+                            farewell = "Goodbye"  # Keep it simple and short
+                            provider_name = getattr(session, 'provider_name', None)
+                            local_provider = self.providers.get(provider_name) if provider_name else None
+                            
+                            logger.info(
+                                "🎤 Preparing farewell TTS",
+                                call_id=call_id,
+                                provider_name=provider_name,
+                                has_provider=bool(local_provider),
+                                has_tts_method=hasattr(local_provider, 'text_to_speech') if local_provider else False,
+                            )
+                            
+                            # Get farewell mode from config
+                            farewell_mode = "asterisk"  # default
+                            farewell_timeout = 30.0
+                            try:
+                                local_config = self.config.providers.get("local")
+                                if local_config:
+                                    farewell_mode = getattr(local_config, 'farewell_mode', 'asterisk') or 'asterisk'
+                                    farewell_timeout = float(getattr(local_config, 'farewell_timeout_sec', 30.0) or 30.0)
+                            except Exception:
+                                pass
+                            
+                            logger.info(
+                                "🎤 Farewell mode",
+                                call_id=call_id,
+                                mode=farewell_mode,
+                                timeout_sec=farewell_timeout if farewell_mode == "tts" else "N/A",
+                            )
+                            
+                            if farewell_mode == "tts":
+                                # Use TTS farewell - best for fast hardware
+                                # Wait for TTS from LLM response to complete
+                                logger.info(
+                                    "⏳ Waiting for TTS farewell",
+                                    call_id=call_id,
+                                    timeout_sec=farewell_timeout,
+                                )
+                                await asyncio.sleep(farewell_timeout)
+                            else:
+                                # Use Asterisk's built-in goodbye sound - reliable for slow hardware
+                                try:
+                                    await self.ari_client.play_media(
+                                        session.caller_channel_id,
+                                        "sound:goodbye"
+                                    )
+                                    # Wait for the sound to play (~2 seconds)
+                                    await asyncio.sleep(3.0)
+                                    logger.info("✅ Goodbye sound played", call_id=call_id)
+                                except Exception as sound_err:
+                                    logger.warning(
+                                        "⚠️ Failed to play goodbye sound",
+                                        call_id=call_id,
+                                        error=str(sound_err),
+                                    )
+                                    await asyncio.sleep(1.0)
+                            
+                            logger.info("✅ Farewell wait complete", call_id=call_id)
+                            
+                            # Explicitly hang up after farewell TTS
+                            try:
+                                await self.ari_client.hangup_channel(session.caller_channel_id)
+                                logger.info("✅ Call hung up after farewell", call_id=call_id)
+                            except Exception:
+                                logger.debug("Hangup after farewell failed (may already be hung up)", call_id=call_id)
+                            break
+                        elif result.get("transferred"):
+                            # Transfer already handled
+                            break
+                    except Exception as e:
+                        logger.error(
+                            "❌ Local tool execution failed",
+                            call_id=call_id,
+                            tool_name=tool_name,
+                            error=str(e),
+                            exc_info=True,
+                        )
             
             elif etype == "transcript":
                 # User speech transcript from provider (ElevenLabs, etc.)
@@ -5368,6 +5489,75 @@ class Engine:
                                     if name in ["transfer"] and result.get("status") == "success":
                                         logger.info("Transfer successful, ending turn loop", tool=name)
                                         return
+                                    
+                                    # Handle non-terminal tools (e.g., request_transcript)
+                                    # Feed result back to LLM for continuation
+                                    if not result.get("will_hangup") and name not in ["transfer"]:
+                                        tool_result_msg = result.get("message", f"Tool {name} executed successfully.")
+                                        # Add tool result to conversation history
+                                        conversation_history.append({
+                                            "role": "assistant",
+                                            "content": None,
+                                            "tool_calls": [{"id": f"call_{name}", "type": "function", "function": {"name": name, "arguments": json.dumps(args)}}]
+                                        })
+                                        conversation_history.append({
+                                            "role": "tool",
+                                            "tool_call_id": f"call_{name}",
+                                            "content": tool_result_msg
+                                        })
+                                        logger.info("Tool result added to conversation, triggering LLM continuation", tool=name, call_id=call_id)
+                                        
+                                        # Trigger LLM to generate follow-up response
+                                        try:
+                                            context_for_llm = {"prior_messages": list(conversation_history)}
+                                            llm_response = await pipeline.llm_adapter.generate(
+                                                call_id,
+                                                "",  # Empty transcript - tool result already in context
+                                                context_for_llm,
+                                                pipeline.llm_options
+                                            )
+                                            if llm_response:
+                                                # Handle text response if present
+                                                if getattr(llm_response, 'text', None):
+                                                    response_text = llm_response.text.strip()
+                                                    if response_text:
+                                                        conversation_history.append({"role": "assistant", "content": response_text})
+                                                        logger.info("LLM continuation response", preview=response_text[:80], call_id=call_id)
+                                                        
+                                                        # Synthesize and play TTS
+                                                        tts_bytes = bytearray()
+                                                        async for chunk in pipeline.tts_adapter.synthesize(call_id, response_text, pipeline.tts_options):
+                                                            if chunk:
+                                                                tts_bytes.extend(chunk)
+                                                        if tts_bytes:
+                                                            await self.playback_manager.play_audio(call_id, bytes(tts_bytes), "pipeline-tts")
+                                                            duration_sec = len(tts_bytes) / 8000.0
+                                                            await asyncio.sleep(duration_sec + 0.3)
+                                                
+                                                # Handle tool calls (with or without text)
+                                                if getattr(llm_response, 'tool_calls', None):
+                                                    for next_tc in llm_response.tool_calls:
+                                                        next_name = next_tc.get("name")
+                                                        next_args = next_tc.get("parameters") or {}
+                                                        next_tool = tool_registry.get(next_name)
+                                                        if next_tool:
+                                                            logger.info("Executing follow-up tool", tool=next_name, call_id=call_id)
+                                                            next_result = await next_tool.execute(next_args, tool_ctx)
+                                                            if next_result.get("will_hangup"):
+                                                                farewell = next_result.get("message", "Goodbye!")
+                                                                conversation_history.append({"role": "assistant", "content": farewell})
+                                                                session.conversation_history = list(conversation_history)
+                                                                await self.session_store.upsert_call(session)
+                                                                fw_bytes = bytearray()
+                                                                async for chunk in pipeline.tts_adapter.synthesize(call_id, farewell, pipeline.tts_options):
+                                                                    fw_bytes.extend(chunk)
+                                                                if fw_bytes:
+                                                                    await self.playback_manager.play_audio(call_id, bytes(fw_bytes), "pipeline-farewell")
+                                                                    await asyncio.sleep(len(fw_bytes) / 8000.0 + 0.5)
+                                                                await self.ari_client.hangup_channel(getattr(session, 'channel_id', call_id))
+                                                                return
+                                        except Exception as e:
+                                            logger.error("LLM continuation failed", error=str(e), exc_info=True)
                                 else:
                                     logger.warning("Tool not found", tool=name)
                             except Exception as e:
@@ -7116,22 +7306,26 @@ class Engine:
                 
                 # Handle special tools
                 if function_name == "hangup_call" and result.get("will_hangup"):
-                    # For full agent providers like ElevenLabs, they manage their own TTS
-                    # so we should hangup after a short delay for the farewell to play
-                    logger.info("Hangup requested - scheduling delayed hangup", call_id=call_id)
-                    
-                    # Schedule hangup after delay to let farewell audio play
-                    async def delayed_hangup():
-                        await asyncio.sleep(3.0)  # Wait for farewell TTS
-                        try:
-                            current_session = await self.session_store.get_by_call_id(call_id)
-                            if current_session:
-                                await self.ari_client.hangup_channel(current_session.caller_channel_id)
-                                logger.info("✅ Call hung up after farewell", call_id=call_id)
-                        except Exception as e:
-                            logger.debug(f"Delayed hangup failed (may already be hung up): {e}", call_id=call_id)
-                    
-                    asyncio.create_task(delayed_hangup())
+                    # Skip delayed hangup for local provider - ToolCall handler manages TTS and hangup
+                    if provider_name == "local":
+                        logger.info("Hangup requested - local provider will handle TTS and hangup", call_id=call_id)
+                    else:
+                        # For full agent providers like ElevenLabs, they manage their own TTS
+                        # so we should hangup after a short delay for the farewell to play
+                        logger.info("Hangup requested - scheduling delayed hangup", call_id=call_id)
+                        
+                        # Schedule hangup after delay to let farewell audio play
+                        async def delayed_hangup():
+                            await asyncio.sleep(3.0)  # Wait for farewell TTS
+                            try:
+                                current_session = await self.session_store.get_by_call_id(call_id)
+                                if current_session:
+                                    await self.ari_client.hangup_channel(current_session.caller_channel_id)
+                                    logger.info("✅ Call hung up after farewell", call_id=call_id)
+                            except Exception as e:
+                                logger.debug(f"Delayed hangup failed (may already be hung up): {e}", call_id=call_id)
+                        
+                        asyncio.create_task(delayed_hangup())
             else:
                 logger.warning(
                     "Tool not found in registry",

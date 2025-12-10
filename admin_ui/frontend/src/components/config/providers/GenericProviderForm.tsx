@@ -12,6 +12,7 @@ interface GenericProviderFormProps {
 
 const PROVIDER_TYPES = [
     { value: 'full', label: 'Full Agent (STT+LLM+TTS)' },
+    { value: 'elevenlabs', label: 'ElevenLabs TTS / Agent' },
     { value: 'modular', label: 'Modular (Single Capability)' },
 ];
 

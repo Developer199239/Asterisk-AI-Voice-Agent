@@ -71,31 +71,39 @@ providers:
 - `modalities`: **MUST include both "text" and "audio"** for Realtime to work
 - `turn_detection_type`: Use `server_vad` for best results
 
-### 4. Critical VAD Configuration ⚠️
+### 4. Critical Turn Detection Configuration ⚠️
 
-**REQUIRED FOR PRODUCTION**: Set VAD aggressiveness to prevent echo detection issues.
+**REQUIRED FOR PRODUCTION**: Configure server-side VAD for proper turn detection.
 
 In `config/ai-agent.yaml`:
 
 ```yaml
-vad:
-  webrtc_aggressiveness: 1  # CRITICAL: Must be 1 for OpenAI Realtime
-  enhanced_enabled: true
-  confidence_threshold: 0.6
-  energy_threshold: 1500
+providers:
+  openai_realtime:
+    turn_detection:
+      type: server_vad
+      threshold: 0.5              # Standard sensitivity
+      silence_duration_ms: 1000   # 1 second before responding
+      prefix_padding_ms: 300      # Capture speech before VAD trigger
+      create_response: true       # Auto-create response after speech
 ```
 
 **Why This Matters**:
-- `webrtc_aggressiveness: 0` is too sensitive and detects echo as speech
-- This causes audio gate to flutter, letting echo leak through
-- OpenAI's server-side echo cancellation works best when local VAD is level 1
-- Level 1 ignores echo but detects real speech
+- OpenAI's server-side VAD handles speech detection
+- `threshold: 0.5` balances sensitivity (too high blocks user speech)
+- `silence_duration_ms: 1000` waits 1 second after speech stops before responding
+- VAD is disabled during greeting playback and re-enabled after completion
 
-**Symptoms of Wrong VAD Setting**:
-- AI interrupts itself mid-sentence
-- Echo heard during conversation
-- Log shows 50+ gate closures per call (should be 1-2)
-- Self-interruption loop
+**VAD Fallback Timer** (Added Dec 2025):
+- 5-second fallback timer ensures VAD is re-enabled even if greeting detection fails
+- Guarantees two-way conversation can proceed
+
+**Known Limitation** ⚠️:
+OpenAI Realtime API has an intermittent **modalities bug** where responses may be text-only:
+- Some responses return without audio (transcript only)
+- Farewell messages occasionally don't have audio
+- This is an OpenAI API issue, not a configuration problem
+- Workaround: 5-second hangup timeout ensures call ends even without farewell audio
 
 **See**: `docs/case-studies/OpenAI-Realtime-Golden-Baseline.md` for validated configuration
 

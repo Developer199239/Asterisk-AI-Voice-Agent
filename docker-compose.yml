@@ -48,6 +48,8 @@ services:
     build:
       context: ./local_ai_server
       dockerfile: Dockerfile
+      args:
+        - INCLUDE_KROKO_EMBEDDED=${INCLUDE_KROKO_EMBEDDED:-true}
     container_name: local_ai_server
     network_mode: host
     env_file:
@@ -62,15 +64,16 @@ services:
       - LOCAL_LLM_INFER_TIMEOUT_SEC=${LOCAL_LLM_INFER_TIMEOUT_SEC:-30}
       - LOCAL_LLM_MODEL_PATH=${LOCAL_LLM_MODEL_PATH:-/app/models/llm/phi-3-mini-4k-instruct.Q4_K_M.gguf}
       - LOCAL_LLM_THREADS=${LOCAL_LLM_THREADS:-16}
-      - LOCAL_LLM_CONTEXT=${LOCAL_LLM_CONTEXT:-4096}
-      - LOCAL_LLM_BATCH=${LOCAL_LLM_BATCH:-256}
-      - LOCAL_LLM_MAX_TOKENS=${LOCAL_LLM_MAX_TOKENS:-32}
-      - LOCAL_LLM_TEMPERATURE=${LOCAL_LLM_TEMPERATURE:-0.2}
+      - LOCAL_LLM_CONTEXT=${LOCAL_LLM_CONTEXT:-768}
+      - LOCAL_LLM_BATCH=${LOCAL_LLM_BATCH:-128}
+      - LOCAL_LLM_MAX_TOKENS=${LOCAL_LLM_MAX_TOKENS:-64}
+      - LOCAL_LLM_TEMPERATURE=${LOCAL_LLM_TEMPERATURE:-0.4}
       - LOCAL_LLM_TOP_P=${LOCAL_LLM_TOP_P:-0.85}
       - LOCAL_LLM_REPEAT_PENALTY=${LOCAL_LLM_REPEAT_PENALTY:-1.05}
       - LOCAL_STT_MODEL_PATH=${LOCAL_STT_MODEL_PATH:-/app/models/stt/vosk-model-en-us-0.22}
       - LOCAL_TTS_MODEL_PATH=${LOCAL_TTS_MODEL_PATH:-/app/models/tts/en_US-lessac-medium.onnx}
       - LOCAL_LLM_USE_MLOCK=${LOCAL_LLM_USE_MLOCK:-0}
+      - LOCAL_LLM_SYSTEM_PROMPT=${LOCAL_LLM_SYSTEM_PROMPT:-You are a helpful AI voice assistant. When the caller wants to end the call or says goodbye, output <tool_call>{"name":"hangup_call","arguments":{"farewell":"Goodbye, have a great day!"}}</tool_call> and say a brief farewell. When the caller asks to email the transcript, output <tool_call>{"name":"request_transcript","arguments":{"email":"caller@example.com"}}</tool_call>. Always provide a spoken response.}
     tty: true
     stdin_open: true
     restart: unless-stopped
@@ -92,6 +95,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - /usr/bin/docker:/usr/bin/docker:ro
       - /usr/local/bin/docker-compose:/usr/local/bin/docker-compose:ro
+      - /etc/os-release:/host/etc/os-release:ro
     environment:
       - PROJECT_ROOT=/app/project
       - UVICORN_PORT=3003

@@ -11,7 +11,7 @@ from time import monotonic
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
-from websockets.exceptions import ConnectionClosed
+from websockets.exceptions import ConnectionClosed, ConnectionClosedError, ConnectionClosedOK
 from websockets.server import serve
 import websockets.client as ws_client
 from vosk import Model as VoskModel, KaldiRecognizer
@@ -1733,6 +1733,31 @@ class LocalAIServer:
             payload["request_id"] = request_id
         return await self._send_json(websocket, payload)
 
+    def _strip_tool_calls_for_tts(self, text: str) -> str:
+        """
+        Strip tool call markup from text before TTS to avoid speaking tags.
+        Returns the clean spoken text without <tool_call>...</tool_call> blocks.
+        """
+        import re
+        if not text:
+            return ""
+        
+        # Remove <tool_call>...</tool_call> blocks (including newlines inside)
+        clean = re.sub(r'<tool_call>.*?</tool_call>', '', text, flags=re.DOTALL | re.IGNORECASE)
+        
+        # Also handle potential JSON tool calls without tags
+        # e.g., {"name": "hangup_call", ...}
+        clean = re.sub(r'\{["\']name["\']\s*:\s*["\'](?:hangup_call|transfer|request_transcript)["\'].*?\}', '', clean, flags=re.DOTALL)
+        
+        # Clean up extra whitespace
+        clean = re.sub(r'\s+', ' ', clean).strip()
+        
+        if clean != text.strip():
+            logging.info("🔇 TTS - Stripped tool call markup: original=%d chars, clean=%d chars", 
+                        len(text), len(clean))
+        
+        return clean
+
     async def _emit_llm_response(
         self,
         websocket,
@@ -1945,7 +1970,12 @@ class LocalAIServer:
             return
 
         if mode == "full" and llm_response:
-            audio_response = await self.process_tts(llm_response)
+            # Strip tool call markup before TTS to avoid speaking <tool_call>...</tool_call>
+            tts_text = self._strip_tool_calls_for_tts(llm_response)
+            if tts_text:
+                audio_response = await self.process_tts(tts_text)
+            else:
+                audio_response = b""  # No spoken text, just tool call
             await self._emit_tts_audio(
                 websocket,
                 audio_response,
@@ -2385,6 +2415,12 @@ class LocalAIServer:
                     await self._handle_binary_message(websocket, session, message)
                 else:
                     await self._handle_json_message(websocket, session, message)
+        except ConnectionClosedError:
+            # Expected when client disconnects without close frame (call ended)
+            logging.debug("🔌 Client disconnected (no close frame)")
+        except ConnectionClosedOK:
+            # Normal close
+            logging.debug("🔌 Client disconnected normally")
         except Exception as exc:
             logging.error("❌ WebSocket handler error: %s", exc, exc_info=True)
         finally:
@@ -2401,8 +2437,8 @@ async def main():
         server.handler,
         "0.0.0.0",
         8765,
-        ping_interval=30,
-        ping_timeout=30,
+        ping_interval=60,
+        ping_timeout=120,
         max_size=None,
         origins=None,  # Allow connections from other containers/browsers
     ):

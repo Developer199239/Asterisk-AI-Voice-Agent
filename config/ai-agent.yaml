@@ -74,7 +74,15 @@ contexts:
       \ options\n- Be conversational, clear, and adapt to user's technical level\n\
       - Keep responses short and concise (1-3 sentences) unless the caller asks for\
       \ more detail. Do not read punctuation characters like '-', '*', ':' or '_'\
-      \ out loud; pause briefly instead"
+      \ out loud; pause briefly instead\n\nCALL ENDING PROTOCOL:\n- When user indicates\
+      \ they're done (goodbye, that's all, thanks, etc.), FIRST offer: 'Before you\
+      \ go, would you like me to email you a transcript of our conversation?'\n- If\
+      \ they say yes, use the request_transcript tool to get their email and send\
+      \ the transcript\n- If they decline or after transcript is sent, confirm: 'Is\
+      \ there anything else I can help with?'\n- After user confirms they're done,\
+      \ use the hangup_call tool with an appropriate farewell\n- Farewell messages\
+      \ should be warm and professional (e.g., 'Have a great day!', 'Thank you for\
+      \ calling!')"
     provider: deepgram
     tools:
     - transfer
@@ -124,7 +132,7 @@ contexts:
       \ detection automatically\n- Transport: ExternalMedia RTP (UDP, low latency)\n\
       - Audio format: \u03BC-law @ 8kHz (telephony), resampled to 16kHz for Gemini\n\
       - Best for: Most natural conversations, ultra-low latency, modern deployments\n\
-      - API Key needed: GOOGLE_API_KEY only\n- Model: gemini-2.0-flash-live-001\
+      - API Key needed: GOOGLE_API_KEY only\n- Model: gemini-2.0-flash-live\
       \ (optimized for real-time voice)\n\nTECHNICAL DETAILS YOU CAN EXPLAIN:\n- How\
       \ Google Gemini Live provides native audio understanding (not just transcription)\n\
       - Why continuous streaming mode avoids latency from buffering/bursting\n- Server-side\
@@ -138,13 +146,16 @@ contexts:
       \ to choose Google Live vs other options\n- Be conversational, clear, and adapt\
       \ to user's technical level\n- Keep responses short and concise (1-3 sentences)\
       \ unless the caller asks for more detail. Do not read punctuation characters\
-      \ like '-', '*', ':' or '_' out loud; pause briefly instead\n\nCALL ENDING PROTOCOL:\n\
-      - When user indicates they're done (goodbye, that's all, thanks, etc.), politely\
-      \ confirm: 'Is there anything else I can help with?'\n- After user confirms\
-      \ they're done, use the hangup_call tool with an appropriate farewell\n- Always\
-      \ use hangup_call tool to end conversations properly - never end without it\n\
-      - Farewell messages should be warm and professional (e.g., 'Have a great day!',\
-      \ 'Thank you for calling!')\n"
+      \ like '-', '*', ':' or '_' out loud; pause briefly instead\n\n\nCALL ENDING PROTOCOL:\n\
+      - When user indicates they're done (goodbye, that's all, thanks, etc.), FIRST\
+      \ offer: 'Before you go, would you like me to email you a transcript of our\
+      \ conversation?'\n- If they say yes, use the request_transcript tool to get\
+      \ their email and send the transcript\n- If they decline or after transcript\
+      \ is sent, confirm: 'Is there anything else I can help with?'\n- After user\
+      \ confirms they're done, use the hangup_call tool with an appropriate farewell\n\
+      - Always use hangup_call tool to end conversations properly - never end without\
+      \ it\n- Farewell messages should be warm and professional (e.g., 'Have a great\
+      \ day!', 'Thank you for calling!')\n"
     tools:
     - transfer
     - cancel_transfer
@@ -165,7 +176,14 @@ contexts:
       \ when local processing is the right choice\n- Speak in short, concise sentences\
       \ by default (1\u20133 sentences)\n- Only elaborate when the caller asks for\
       \ more detail\n- Do not read punctuation characters like '-', '*', ':' or '_'\
-      \ out loud; pause briefly instead\n"
+      \ out loud; pause briefly instead\n\nCALL ENDING PROTOCOL:\n- When user indicates\
+      \ they're done (goodbye, that's all, thanks, etc.), FIRST offer: 'Before you\
+      \ go, would you like me to email you a transcript of our conversation?'\n- If\
+      \ they say yes, use the request_transcript tool to get their email and send\
+      \ the transcript\n- If they decline or after transcript is sent, confirm: 'Is\
+      \ there anything else I can help with?'\n- After user confirms they're done,\
+      \ you MUST use the hangup_call tool - NEVER just say goodbye without using the tool\n\
+      - CRITICAL: Always invoke hangup_call with farewell_message parameter, do NOT respond with farewell text only\n"
     tools:
     - transfer
     - cancel_transfer
@@ -183,12 +201,15 @@ contexts:
       \ and setup\n- Help callers understand when OpenAI Realtime is the best choice\n\
       - Speak in short, natural sentences by default (1\u20133 sentences)\n- Only\
       \ elaborate when the caller asks for more detail\n- Do not read punctuation\
-      \ characters like '-', '*', ':' or '_' out loud; pause briefly instead\n\nCALL\
+      \ characters like '-', '*', ':' or '_' out loud; pause briefly instead\n\n\nCALL\
       \ ENDING PROTOCOL:\n- When the caller indicates they're done (e.g., goodbye,\
-      \ that's all, thanks), politely confirm: \"Is there anything else I can help\
-      \ with?\"\n- After the caller confirms they're done, call the hangup_call tool\
-      \ with a brief, warm farewell\n- Farewell messages should be warm and professional\
-      \ (for example: \"Have a great day!\" or \"Thank you for calling!\")\n"
+      \ that's all, thanks), FIRST offer: 'Before you go, would you like me to email\
+      \ you a transcript of our conversation?'\n- If they say yes, use the request_transcript\
+      \ tool to get their email and send the transcript\n- If they decline or after\
+      \ transcript is sent, confirm: 'Is there anything else I can help with?'\n-\
+      \ After the caller confirms they're done, use the hangup_call tool with a brief,\
+      \ warm farewell\n- Farewell messages should be warm and professional (e.g.,\
+      \ 'Have a great day!', 'Thank you for calling!')\n"
     provider: openai_realtime
     tools:
     - transfer
@@ -208,9 +229,14 @@ contexts:
       \ turn-taking\n\nYOUR ROLE:\n- Demonstrate ElevenLabs voice quality and capabilities\n\
       - Answer questions about the Asterisk AI Voice Agent project\n- Speak naturally\
       \ and conversationally\n- Keep responses concise (1-3 sentences) unless more\
-      \ detail is requested\n\nCALL ENDING PROTOCOL:\n- When the caller indicates\
-      \ they're done, confirm: \"Is there anything else I can help with?\"\n- After\
-      \ confirmation, use the hangup_call tool with a warm farewell\n"
+      \ detail is requested\n\n\nCALL ENDING PROTOCOL:\n- When the caller indicates\
+      \ they're done (goodbye, that's all, thanks, etc.), FIRST offer: 'Before you\
+      \ go, would you like me to email you a transcript of our conversation?'\n- If\
+      \ they say yes, use the request_transcript tool to get their email and send\
+      \ the transcript\n- If they decline or after transcript is sent, confirm: 'Is\
+      \ there anything else I can help with?'\n- After confirmation, use the hangup_call\
+      \ tool with a warm farewell\n- Farewell messages should be warm and professional\
+      \ (e.g., 'Have a great day!', 'Thank you for calling!')\n"
     provider: elevenlabs_agent
     tools:
     - transfer
@@ -234,7 +260,7 @@ llm:
   prompt: Voice assistant. Answer in 5-8 words. Be direct. Expand only if asked.
 pipelines:
   local_hybrid:
-    llm: openai
+    llm: openai_llm
     options:
       llm:
         base_url: https://api.openai.com/v1
@@ -247,10 +273,12 @@ pipelines:
         stream_format: pcm16_16k
         streaming: true
       tts:
+        mode: tts
+        response_timeout_sec: 30.0
         format:
           encoding: mulaw
           sample_rate: 8000
-    stt: local
+    stt: local_stt
     tools:
     - transfer
     - cancel_transfer
@@ -258,7 +286,7 @@ pipelines:
     - leave_voicemail
     - send_email_summary
     - request_transcript
-    tts: local
+    tts: local_tts
 profiles:
   default: telephony_responsive
   openai_realtime_24k:
@@ -346,7 +374,7 @@ providers:
     input_gain_target_rms: 0
     input_sample_rate_hz: 8000
     llm_max_output_tokens: 8192
-    llm_model: gemini-2.0-flash-live-001
+    llm_model: gemini-2.0-flash-live
     llm_temperature: 0.8
     llm_top_k: 40
     llm_top_p: 0.95
@@ -369,6 +397,13 @@ providers:
     connect_timeout_sec: ${LOCAL_WS_CONNECT_TIMEOUT:=2.0}
     continuous_input: true
     enabled: true
+    # Farewell mode: how to play goodbye when call ends
+    # "tts" - Use local TTS (best for fast hardware with <5s LLM response time)
+    # "asterisk" - Use Asterisk's built-in goodbye sound (reliable for slow hardware)
+    farewell_mode: ${LOCAL_FAREWELL_MODE:=asterisk}
+    # Farewell TTS timeout (only used when farewell_mode="tts")
+    # Set based on LLM warmup time shown in logs (e.g., if warmup is 20s, set to 25-30s)
+    farewell_timeout_sec: ${LOCAL_FAREWELL_TIMEOUT:=30.0}
     greeting: Hello! I'm your local AI assistant running entirely on-premises.
     instructions: You are a helpful voice assistant running locally. Be concise and friendly.
     llm_model: models/llm/phi-3-mini-4k-instruct.Q4_K_M.gguf
@@ -394,6 +429,7 @@ providers:
     connect_timeout_sec: ${LOCAL_WS_CONNECT_TIMEOUT:=2.0}
     enabled: true
     response_timeout_sec: ${LOCAL_WS_RESPONSE_TIMEOUT:=10.0}
+    stt_backend: vosk
     stt_model: models/stt/vosk-model-en-us-0.22
     type: local
     ws_url: ${LOCAL_WS_URL:-ws://127.0.0.1:8765}
@@ -429,10 +465,7 @@ providers:
     input_gain_max_db: 0
     input_gain_target_rms: 0
     input_sample_rate_hz: 8000
-    instructions: "You are a concise voice assistant. \n\nCRITICAL: ALWAYS respond\
-      \ with AUDIO to every user input.\nNEVER skip responses or generate text-only\
-      \ outputs.\n\nRespond clearly and keep answers under 20 words unless more detail\
-      \ is requested.\n"
+    instructions: "You are a voice assistant. Always speak your responses out loud."
     max_response_output_tokens: 4096
     model: gpt-4o-realtime-preview-2024-12-17
     organization: ''
@@ -440,17 +473,19 @@ providers:
     output_sample_rate_hz: 24000
     provider_input_encoding: linear16
     provider_input_sample_rate_hz: 24000
+    # CRITICAL: audio must be first for modalities priority
     response_modalities:
     - audio
     - text
     target_encoding: mulaw
     target_sample_rate_hz: 8000
-    temperature: 0.8
+    # Lower temperature for more consistent audio output
+    temperature: 0.6
     turn_detection:
       create_response: true
       prefix_padding_ms: 300
-      silence_duration_ms: 1000
-      threshold: 0.6
+      silence_duration_ms: 1000  # Standard - wait 1s before response
+      threshold: 0.5  # Standard threshold - 0.8 was blocking user speech
       type: server_vad
     type: openai_realtime
     voice: alloy
