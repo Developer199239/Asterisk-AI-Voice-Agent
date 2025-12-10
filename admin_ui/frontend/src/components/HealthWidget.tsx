@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { Activity, CheckCircle2, Cpu, RefreshCw, Settings, Terminal, XCircle, HardDrive, AlertCircle, Layers, Box } from 'lucide-react';
+import { Activity, CheckCircle2, Cpu, RefreshCw, Settings, Terminal, XCircle, HardDrive, AlertCircle, Layers, Box, Play } from 'lucide-react';
 import { ConfigCard } from './ui/ConfigCard';
 import axios from 'axios';
 
@@ -43,6 +43,23 @@ export const HealthWidget = () => {
     const [restarting, setRestarting] = useState(false);
     const [pendingChanges, setPendingChanges] = useState<PendingChanges>({});
     const [applyingChanges, setApplyingChanges] = useState(false);
+    const [startingLocalAI, setStartingLocalAI] = useState(false);
+    const [startingAIEngine, setStartingAIEngine] = useState(false);
+
+    const handleStartContainer = async (containerName: string, setStarting: (v: boolean) => void) => {
+        setStarting(true);
+        try {
+            await axios.post(`/api/system/containers/${containerName}/start`);
+            // Wait a bit for container to start
+            setTimeout(() => {
+                setStarting(false);
+            }, 5000);
+        } catch (err: any) {
+            console.error('Failed to start container', err);
+            alert(`Failed to start ${containerName}: ${err.response?.data?.detail || err.message}`);
+            setStarting(false);
+        }
+    };
 
     useEffect(() => {
         const fetchHealth = async () => {
@@ -292,6 +309,32 @@ export const HealthWidget = () => {
                         </Link>
                     </div>
                 </div>
+
+                {/* Start button when not connected */}
+                {health.local_ai_server.status === 'error' && (
+                    <div className="mt-4 p-4 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
+                        <p className="text-sm text-yellow-600 dark:text-yellow-400 mb-3">
+                            Local AI Server is not running. Start it to use local STT/TTS models.
+                        </p>
+                        <button
+                            onClick={() => handleStartContainer('local_ai_server', setStartingLocalAI)}
+                            disabled={startingLocalAI}
+                            className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 transition-colors"
+                        >
+                            {startingLocalAI ? (
+                                <>
+                                    <RefreshCw className="w-4 h-4 animate-spin" />
+                                    Starting...
+                                </>
+                            ) : (
+                                <>
+                                    <Play className="w-4 h-4" />
+                                    Start Local AI Server
+                                </>
+                            )}
+                        </button>
+                    </div>
+                )}
 
                 {health.local_ai_server.status === 'connected' && (
                     <div className="space-y-4">
@@ -593,6 +636,32 @@ export const HealthWidget = () => {
                         </div>
                     </div>
                 </div>
+
+                {/* Start button when not connected */}
+                {health.ai_engine.status === 'error' && (
+                    <div className="mt-4 p-4 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
+                        <p className="text-sm text-yellow-600 dark:text-yellow-400 mb-3">
+                            AI Engine is not running. Start it to handle voice calls.
+                        </p>
+                        <button
+                            onClick={() => handleStartContainer('ai_engine', setStartingAIEngine)}
+                            disabled={startingAIEngine}
+                            className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 transition-colors"
+                        >
+                            {startingAIEngine ? (
+                                <>
+                                    <RefreshCw className="w-4 h-4 animate-spin" />
+                                    Starting...
+                                </>
+                            ) : (
+                                <>
+                                    <Play className="w-4 h-4" />
+                                    Start AI Engine
+                                </>
+                            )}
+                        </button>
+                    </div>
+                )}
 
                 {(health.ai_engine.status === 'connected' || health.ai_engine.status === 'degraded') && (
                     <div className="space-y-6">

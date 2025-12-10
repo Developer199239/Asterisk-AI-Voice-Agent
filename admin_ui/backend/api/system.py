@@ -97,6 +97,71 @@ async def get_containers():
         print(f"Error listing containers: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.post("/containers/{container_id}/start")
+async def start_container(container_id: str):
+    """Start a stopped container using docker-compose."""
+    import subprocess
+    
+    # Map container names to docker-compose service names
+    service_map = {
+        "ai_engine": "ai-engine",
+        "admin_ui": "admin-ui",
+        "local_ai_server": "local-ai-server"
+    }
+    
+    service_name = service_map.get(container_id)
+    
+    # If not in map, it might be an ID or a raw name.
+    if not service_name:
+        try:
+            client = docker.from_env()
+            container = client.containers.get(container_id)
+            name = container.name.lstrip('/')
+            service_name = service_map.get(name, name)
+        except:
+            service_name = container_id
+    
+    project_root = os.getenv("PROJECT_ROOT", "/app/project")
+    
+    print(f"DEBUG: Starting {service_name} from {project_root}")
+    
+    try:
+        # Use docker-compose up to start the service
+        result = subprocess.run(
+            ["/usr/local/bin/docker-compose", "-p", "asterisk-ai-voice-agent",
+             "up", "-d", "--no-build", service_name],
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+            timeout=120
+        )
+        
+        print(f"DEBUG: start returncode={result.returncode}")
+        print(f"DEBUG: start stdout={result.stdout}")
+        print(f"DEBUG: start stderr={result.stderr}")
+        
+        if result.returncode == 0:
+            return {"status": "success", "output": result.stdout or "Container started"}
+        else:
+            raise HTTPException(
+                status_code=500, 
+                detail=f"Failed to start: {result.stderr or result.stdout}"
+            )
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=500, detail="Timeout waiting for container start")
+    except FileNotFoundError:
+        # Fallback to Docker API if docker-compose not available
+        try:
+            client = docker.from_env()
+            container = client.containers.get(container_id)
+            container.start()
+            return {"status": "success", "method": "docker-api"}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/containers/{container_id}/restart")
 async def restart_container(container_id: str):
     """Restart a container using docker-compose with proper stop/remove/recreate."""

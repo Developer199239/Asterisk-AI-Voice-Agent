@@ -32,6 +32,15 @@ interface Toast {
     type: 'success' | 'error';
 }
 
+interface DownloadProgress {
+    bytes_downloaded: number;
+    total_bytes: number;
+    percent: number;
+    speed_bps: number;
+    eta_seconds: number | null;
+    current_file: string;
+}
+
 const ModelsPage = () => {
     const [catalog, setCatalog] = useState<{ stt: ModelInfo[]; tts: ModelInfo[]; llm: ModelInfo[] }>({ stt: [], tts: [], llm: [] });
     const [installedModels, setInstalledModels] = useState<InstalledModel[]>([]);
@@ -39,6 +48,7 @@ const ModelsPage = () => {
     const [regionNames, setRegionNames] = useState<Record<string, string>>({});
     const [loading, setLoading] = useState(true);
     const [downloadingModel, setDownloadingModel] = useState<string | null>(null);
+    const [downloadProgress, setDownloadProgress] = useState<DownloadProgress | null>(null);
     const [deletingModel, setDeletingModel] = useState<string | null>(null);
     const [selectedTab, setSelectedTab] = useState<'installed' | 'stt' | 'tts' | 'llm'>('installed');
     const [selectedRegion, setSelectedRegion] = useState<string>('all');
@@ -133,6 +143,7 @@ const ModelsPage = () => {
         }
 
         setDownloadingModel(model.id);
+        setDownloadProgress(null);
         try {
             await axios.post('/api/wizard/local/download-model', {
                 model_id: model.id,
@@ -141,31 +152,47 @@ const ModelsPage = () => {
                 model_path: model.model_path
             });
             showToast(`Started downloading ${model.name}`, 'success');
-            // Poll for completion
+            // Poll for completion with progress updates
             const pollDownload = async () => {
                 try {
                     const res = await axios.get('/api/wizard/local/download-progress');
+                    // Update progress state
+                    if (res.data.bytes_downloaded > 0 || res.data.total_bytes > 0) {
+                        setDownloadProgress({
+                            bytes_downloaded: res.data.bytes_downloaded,
+                            total_bytes: res.data.total_bytes,
+                            percent: res.data.percent,
+                            speed_bps: res.data.speed_bps,
+                            eta_seconds: res.data.eta_seconds,
+                            current_file: res.data.current_file
+                        });
+                    }
+                    
                     if (res.data.completed) {
                         showToast(`${model.name} downloaded successfully!`, 'success');
                         setDownloadingModel(null);
+                        setDownloadProgress(null);
                         fetchModels();
                     } else if (res.data.error) {
                         showToast(`Download failed: ${res.data.error}`, 'error');
                         setDownloadingModel(null);
+                        setDownloadProgress(null);
                     } else if (res.data.running) {
-                        setTimeout(pollDownload, 2000);
+                        setTimeout(pollDownload, 1000);
                     } else {
                         setDownloadingModel(null);
+                        setDownloadProgress(null);
                     }
                 } catch (err) {
-                    setTimeout(pollDownload, 3000);
+                    setTimeout(pollDownload, 2000);
                 }
             };
-            setTimeout(pollDownload, 1000);
+            setTimeout(pollDownload, 500);
         } catch (err: any) {
             const message = err.response?.data?.detail || err.response?.data?.message || err.message || 'Unknown error';
             showToast(`Failed to start download: ${message}`, 'error');
             setDownloadingModel(null);
+            setDownloadProgress(null);
         }
     };
 
@@ -307,6 +334,37 @@ const ModelsPage = () => {
                         </button>
                     </div>
                 </div>
+
+                {/* Download Progress Bar */}
+                {downloadingModel && downloadProgress && (
+                    <div className="mb-6 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
+                        <div className="flex justify-between items-center mb-2">
+                            <span className="text-sm font-medium text-blue-800 dark:text-blue-300">
+                                Downloading: {downloadProgress.current_file || downloadingModel}
+                            </span>
+                            <span className="text-sm text-blue-600 dark:text-blue-400">
+                                {downloadProgress.percent}%
+                            </span>
+                        </div>
+                        <div className="w-full bg-blue-200 dark:bg-blue-800 rounded-full h-2 mb-2">
+                            <div 
+                                className="bg-blue-600 dark:bg-blue-400 h-2 rounded-full transition-all duration-300"
+                                style={{ width: `${downloadProgress.percent}%` }}
+                            />
+                        </div>
+                        <div className="flex justify-between text-xs text-blue-600 dark:text-blue-400">
+                            <span>
+                                {(downloadProgress.bytes_downloaded / (1024 * 1024)).toFixed(1)} / {(downloadProgress.total_bytes / (1024 * 1024)).toFixed(1)} MB
+                            </span>
+                            <span>
+                                {(downloadProgress.speed_bps / (1024 * 1024)).toFixed(2)} MB/s
+                                {downloadProgress.eta_seconds !== null && (
+                                    <> • ETA: {Math.floor(downloadProgress.eta_seconds / 60)}m {downloadProgress.eta_seconds % 60}s</>
+                                )}
+                            </span>
+                        </div>
+                    </div>
+                )}
 
                 {loading ? (
                     <div className="flex justify-center items-center py-12">
