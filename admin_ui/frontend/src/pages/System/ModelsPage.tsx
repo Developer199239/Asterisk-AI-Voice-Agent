@@ -63,10 +63,57 @@ const ModelsPage = () => {
                 setRegionNames(catalogRes.data.region_names || {});
             }
 
-            // Fetch installed models
+            // Fetch installed models from local-ai-server
             const installedRes = await axios.get('/api/local-ai/models');
-            if (installedRes.data?.models) {
-                setInstalledModels(installedRes.data.models);
+            if (installedRes.data) {
+                // Flatten the nested response into a single array
+                const models: InstalledModel[] = [];
+                
+                // Process STT models (grouped by backend)
+                if (installedRes.data.stt) {
+                    Object.entries(installedRes.data.stt).forEach(([backend, backendModels]: [string, any]) => {
+                        if (Array.isArray(backendModels)) {
+                            backendModels.forEach((m: any) => {
+                                models.push({
+                                    name: m.name,
+                                    path: m.path,
+                                    size_mb: m.size_mb || 0,
+                                    type: 'stt'
+                                });
+                            });
+                        }
+                    });
+                }
+                
+                // Process TTS models (grouped by backend)
+                if (installedRes.data.tts) {
+                    Object.entries(installedRes.data.tts).forEach(([backend, backendModels]: [string, any]) => {
+                        if (Array.isArray(backendModels)) {
+                            backendModels.forEach((m: any) => {
+                                models.push({
+                                    name: m.name,
+                                    path: m.path,
+                                    size_mb: m.size_mb || 0,
+                                    type: 'tts'
+                                });
+                            });
+                        }
+                    });
+                }
+                
+                // Process LLM models (flat array)
+                if (Array.isArray(installedRes.data.llm)) {
+                    installedRes.data.llm.forEach((m: any) => {
+                        models.push({
+                            name: m.name,
+                            path: m.path,
+                            size_mb: m.size_mb || 0,
+                            type: 'llm'
+                        });
+                    });
+                }
+                
+                setInstalledModels(models);
             }
         } catch (err) {
             console.error('Failed to fetch models', err);
