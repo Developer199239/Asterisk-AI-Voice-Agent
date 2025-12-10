@@ -242,6 +242,32 @@ async def get_system_health():
                 print(f"DEBUG: Local AI response: {response[:100]}...")
                 data = json.loads(response)
                 if data.get("type") == "status_response":
+                    # Parse embedded/local mode from path strings
+                    stt_path = data.get("models", {}).get("stt", {}).get("path", "")
+                    tts_path = data.get("models", {}).get("tts", {}).get("path", "")
+                    
+                    # Detect Kroko embedded mode from path containing "embedded"
+                    kroko_embedded = "embedded" in stt_path.lower()
+                    kroko_port = None
+                    if kroko_embedded and "port" in stt_path.lower():
+                        import re
+                        port_match = re.search(r'port\s*(\d+)', stt_path, re.IGNORECASE)
+                        if port_match:
+                            kroko_port = int(port_match.group(1))
+                    
+                    # Detect Kokoro mode - local if model path exists
+                    kokoro_mode = "local" if "/app/models" in str(data.get("models", {}).get("tts", {}).get("path", "")) or "af_" in tts_path else "api"
+                    # Extract Kokoro voice from path like "Kokoro (af_heart)"
+                    kokoro_voice = None
+                    if "(" in tts_path and ")" in tts_path:
+                        kokoro_voice = tts_path.split("(")[1].rstrip(")")
+                    
+                    # Add parsed fields to response
+                    data["kroko_embedded"] = kroko_embedded
+                    data["kroko_port"] = kroko_port
+                    data["kokoro_mode"] = kokoro_mode
+                    data["kokoro_voice"] = kokoro_voice
+                    
                     return {
                         "status": "connected",
                         "details": data
