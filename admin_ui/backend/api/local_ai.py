@@ -379,6 +379,67 @@ async def switch_model(request: SwitchModelRequest):
     )
 
 
+class DeleteModelRequest(BaseModel):
+    model_path: str
+    type: str  # stt, tts, llm
+
+
+@router.delete("/models")
+async def delete_model(request: DeleteModelRequest):
+    """
+    Delete an installed model from the filesystem.
+    """
+    import shutil
+    from settings import PROJECT_ROOT
+    
+    model_path = request.model_path
+    model_type = request.type
+    
+    # Security: Ensure path is within the models directory
+    models_base = os.path.join(PROJECT_ROOT, "models")
+    
+    # Normalize paths for comparison
+    abs_model_path = os.path.abspath(model_path)
+    abs_models_base = os.path.abspath(models_base)
+    
+    if not abs_model_path.startswith(abs_models_base):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid model path: must be within {models_base}"
+        )
+    
+    if not os.path.exists(abs_model_path):
+        raise HTTPException(
+            status_code=404,
+            detail=f"Model not found: {model_path}"
+        )
+    
+    try:
+        if os.path.isdir(abs_model_path):
+            shutil.rmtree(abs_model_path)
+        else:
+            os.remove(abs_model_path)
+            # Also remove .json config file if exists (for Piper models)
+            json_path = abs_model_path.replace('.onnx', '.onnx.json')
+            if os.path.exists(json_path):
+                os.remove(json_path)
+        
+        return {
+            "success": True,
+            "message": f"Model deleted: {os.path.basename(abs_model_path)}"
+        }
+    except PermissionError:
+        raise HTTPException(
+            status_code=403,
+            detail="Permission denied: cannot delete model"
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to delete model: {str(e)}"
+        )
+
+
 async def _verify_model_loaded(model_type: str, get_setting) -> bool:
     """Verify that the specified model type is loaded after restart."""
     # Try both localhost and container name
