@@ -216,9 +216,15 @@ const ProvidersPage: React.FC = () => {
     const renderProviderForm = () => {
         const updateForm = (newValues: any) => setProviderForm({ ...providerForm, ...newValues });
 
+        // Check provider name for specific forms, fallback to type
+        const providerName = (providerForm.name || '').toLowerCase();
+        
+        // Local provider (including full agent mode) uses LocalProviderForm
+        if (providerForm.type === 'local' || providerName === 'local' || providerName.includes('local')) {
+            return <LocalProviderForm config={providerForm} onChange={updateForm} />;
+        }
+        
         switch (providerForm.type) {
-            case 'local':
-                return <LocalProviderForm config={providerForm} onChange={updateForm} />;
             case 'openai_realtime':
                 return <OpenAIRealtimeProviderForm config={providerForm} onChange={updateForm} />;
             case 'deepgram':
