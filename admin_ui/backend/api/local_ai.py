@@ -328,30 +328,32 @@ async def switch_model(request: SwitchModelRequest):
         try:
             import subprocess
             
-            # Use docker compose to properly recreate container with new .env values
-            # First, stop and remove the existing container
-            client = docker.from_env()
-            try:
-                container = client.containers.get("local_ai_server")
-                container.stop(timeout=10)
-                container.remove(force=True)
-            except Exception:
-                pass  # Container might not exist
+            # Use docker compose down/up to properly recreate with new .env values
+            # down: removes container completely (clears env cache)
+            # up: creates fresh container reading new .env values
             
-            # Let docker-compose create a fresh container with the new .env values
-            # -p: Use correct project name (matches image name prefix)
-            # --no-build: Use existing image, don't rebuild (models are in mounted volume)
-            result = subprocess.run(
+            # Step 1: Stop and remove the container
+            down_result = subprocess.run(
+                ["/usr/local/bin/docker-compose", "-p", "asterisk-ai-voice-agent", 
+                 "down", "local-ai-server"],
+                cwd=PROJECT_ROOT,
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            
+            # Step 2: Create and start fresh container with new env
+            up_result = subprocess.run(
                 ["/usr/local/bin/docker-compose", "-p", "asterisk-ai-voice-agent", 
                  "up", "-d", "--no-build", "local-ai-server"],
                 cwd=PROJECT_ROOT,
                 capture_output=True,
                 text=True,
-                timeout=30  # Should be fast with --no-build
+                timeout=60  # May take longer to start
             )
             
-            if result.returncode != 0:
-                raise Exception(f"docker-compose failed: {result.stderr}")
+            if up_result.returncode != 0:
+                raise Exception(f"docker-compose up failed: {up_result.stderr}")
             
             return SwitchModelResponse(
                 success=True,
