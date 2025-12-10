@@ -385,7 +385,8 @@ async def export_logs():
                 for container_name in containers_to_log:
                     try:
                         container = client.containers.get(container_name)
-                        logs = container.logs(tail=2000).decode('utf-8', errors='replace')
+                        # Capture full logs (no tail limit)
+                        logs = container.logs().decode('utf-8', errors='replace')
                         if logs:
                             # Strip ANSI escape codes for clean log files
                             clean_logs = strip_ansi_codes(logs)
