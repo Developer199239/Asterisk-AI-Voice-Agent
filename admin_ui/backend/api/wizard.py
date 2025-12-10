@@ -709,12 +709,15 @@ async def download_single_model(request: SingleModelDownload):
 
 
 class ModelSelection(BaseModel):
-    stt: str
-    llm: str
-    tts: str
+    stt: str  # backend name (e.g., "vosk")
+    llm: str  # model id (e.g., "phi-3-mini")
+    tts: str  # backend name (e.g., "piper")
     language: Optional[str] = "en-US"
     kroko_embedded: Optional[bool] = False
     kokoro_mode: Optional[str] = "local"
+    # New fields for exact model selection
+    stt_model_id: Optional[str] = None  # exact model id (e.g., "vosk_en_us_small")
+    tts_model_id: Optional[str] = None  # exact model id (e.g., "piper_en_us_lessac_medium")
 
 
 @router.post("/local/download-selected-models")
@@ -736,9 +739,15 @@ async def download_selected_models(selection: ModelSelection):
     # Get full catalog
     catalog = get_full_catalog()
     
-    # Find appropriate model for the selected backend and language
-    def find_stt_model(backend: str, language: str):
-        """Find the best STT model for a given backend and language."""
+    # Find appropriate model - prefer exact model_id, fallback to backend+language
+    def find_stt_model(backend: str, language: str, model_id: str = None):
+        """Find the best STT model. Prefers exact model_id match."""
+        # First try exact model ID match
+        if model_id:
+            for model in catalog["stt"]:
+                if model.get("id") == model_id:
+                    return model
+        # Fallback to backend + language match
         for model in catalog["stt"]:
             if model.get("backend") == backend and model.get("language") == language:
                 return model
@@ -752,8 +761,14 @@ async def download_selected_models(selection: ModelSelection):
                 return model
         return None
     
-    def find_tts_model(backend: str, language: str):
-        """Find the best TTS model for a given backend and language."""
+    def find_tts_model(backend: str, language: str, model_id: str = None):
+        """Find the best TTS model. Prefers exact model_id match."""
+        # First try exact model ID match
+        if model_id:
+            for model in catalog["tts"]:
+                if model.get("id") == model_id:
+                    return model
+        # Fallback to backend + language match
         for model in catalog["tts"]:
             if model.get("backend") == backend and model.get("language") == language:
                 return model
@@ -767,10 +782,10 @@ async def download_selected_models(selection: ModelSelection):
                 return model
         return None
     
-    # Get model info from catalog based on backend and language
-    stt_model = find_stt_model(selection.stt, selection.language)
+    # Get model info from catalog - prefer exact model_id if provided
+    stt_model = find_stt_model(selection.stt, selection.language, selection.stt_model_id)
     llm_model = next((m for m in catalog["llm"] if m["id"] == selection.llm), None)
-    tts_model = find_tts_model(selection.tts, selection.language)
+    tts_model = find_tts_model(selection.tts, selection.language, selection.tts_model_id)
     
     _download_output.append(f"🌍 Selected language: {selection.language}")
     
