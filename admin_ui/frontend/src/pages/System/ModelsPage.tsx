@@ -163,7 +163,8 @@ const ModelsPage = () => {
             };
             setTimeout(pollDownload, 1000);
         } catch (err: any) {
-            showToast(`Failed to start download: ${err.message}`, 'error');
+            const message = err.response?.data?.detail || err.response?.data?.message || err.message || 'Unknown error';
+            showToast(`Failed to start download: ${message}`, 'error');
             setDownloadingModel(null);
         }
     };
@@ -181,7 +182,8 @@ const ModelsPage = () => {
             showToast(`${model.name} deleted successfully`, 'success');
             fetchModels();
         } catch (err: any) {
-            showToast(`Failed to delete model: ${err.message}`, 'error');
+            const message = err.response?.data?.detail || err.message || 'Unknown error';
+            showToast(`Failed to delete model: ${message}`, 'error');
         } finally {
             setDeletingModel(null);
         }
