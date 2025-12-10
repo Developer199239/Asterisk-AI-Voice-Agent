@@ -87,18 +87,27 @@ export const HealthWidget = () => {
     // Check if there are pending changes
     const hasPendingChanges = Object.keys(pendingChanges).length > 0;
 
-    // Get the displayed value (pending or current)
+    // Get the displayed value (pending or current) - returns backend:path format for model selection
     const getDisplayedBackend = (modelType: 'stt' | 'tts') => {
         if (modelType === 'stt') {
             if (pendingChanges.stt?.backend) {
                 if (pendingChanges.stt.backend === 'kroko') {
                     return pendingChanges.stt.embedded ? 'kroko_embedded' : 'kroko_cloud';
                 }
+                // Return backend:path format for specific model
+                if (pendingChanges.stt.modelPath) {
+                    return `${pendingChanges.stt.backend}:${pendingChanges.stt.modelPath}`;
+                }
                 return pendingChanges.stt.backend;
             }
             const currentBackend = health?.local_ai_server.details.models?.stt?.backend || health?.local_ai_server.details.stt_backend || 'vosk';
+            const currentPath = health?.local_ai_server.details.models?.stt?.path;
             if (currentBackend === 'kroko') {
                 return health?.local_ai_server.details.kroko_embedded ? 'kroko_embedded' : 'kroko_cloud';
+            }
+            // Return backend:path format to match selected model
+            if (currentPath) {
+                return `${currentBackend}:${currentPath}`;
             }
             return currentBackend;
         } else {
@@ -107,11 +116,20 @@ export const HealthWidget = () => {
                 if (pendingChanges.tts.backend === 'kokoro') {
                     return pendingChanges.tts.mode === 'local' ? 'kokoro_local' : 'kokoro_cloud';
                 }
+                // Return backend:path format for specific model
+                if (pendingChanges.tts.modelPath) {
+                    return `${pendingChanges.tts.backend}:${pendingChanges.tts.modelPath}`;
+                }
                 return pendingChanges.tts.backend;
             }
             const currentBackend = health?.local_ai_server.details.models?.tts?.backend || health?.local_ai_server.details.tts_backend || 'piper';
+            const currentPath = health?.local_ai_server.details.models?.tts?.path;
             if (currentBackend === 'kokoro') {
                 return health?.local_ai_server.details.kokoro_mode === 'local' ? 'kokoro_local' : 'kokoro_cloud';
+            }
+            // Return backend:path format to match selected model
+            if (currentPath) {
+                return `${currentBackend}:${currentPath}`;
             }
             return currentBackend;
         }
@@ -298,7 +316,8 @@ export const HealthWidget = () => {
                                     value={getDisplayedBackend('stt')}
                                     onChange={(e) => {
                                         const val = e.target.value;
-                                        let backend = val;
+                                        let backend = '';
+                                        let modelPath = '';
                                         let embedded = false;
 
                                         if (val === 'kroko_embedded') {
@@ -307,19 +326,26 @@ export const HealthWidget = () => {
                                         } else if (val === 'kroko_cloud') {
                                             backend = 'kroko';
                                             embedded = false;
+                                        } else if (val.includes(':')) {
+                                            // Format: backend:path (e.g., "vosk:/app/models/stt/vosk-model-hi-0.22")
+                                            const parts = val.split(':');
+                                            backend = parts[0];
+                                            modelPath = parts.slice(1).join(':'); // Handle paths with colons
+                                        } else {
+                                            backend = val;
                                         }
 
                                         const currentBackend = health?.local_ai_server.details.models?.stt?.backend || health?.local_ai_server.details.stt_backend;
+                                        const currentPath = health?.local_ai_server.details.models?.stt?.path;
                                         const currentEmbedded = health?.local_ai_server.details.kroko_embedded;
 
                                         // Check if changed
                                         const isBackendChanged = backend !== currentBackend;
+                                        const isPathChanged = modelPath && modelPath !== currentPath;
                                         const isModeChanged = backend === 'kroko' && embedded !== currentEmbedded;
 
-                                        if (isBackendChanged || isModeChanged) {
-                                            const models = availableModels?.stt[backend] || [];
-                                            const firstModel = models[0];
-                                            queueChange('stt', { backend, modelPath: firstModel?.path, embedded });
+                                        if (isBackendChanged || isPathChanged || isModeChanged) {
+                                            queueChange('stt', { backend, modelPath: modelPath || undefined, embedded });
                                         } else {
                                             setPendingChanges(prev => {
                                                 const { stt, ...rest } = prev;
@@ -332,16 +358,21 @@ export const HealthWidget = () => {
                                     {availableModels?.stt && Object.entries(availableModels.stt).map(([backend, models]) => {
                                         if (backend === 'kroko') {
                                             return (
-                                                <>
+                                                <optgroup key="kroko" label="Kroko">
                                                     <option key="kroko_embedded" value="kroko_embedded">Kroko (Embedded)</option>
                                                     <option key="kroko_cloud" value="kroko_cloud">Kroko (Cloud)</option>
-                                                </>
+                                                </optgroup>
                                             );
                                         }
+                                        // Show individual models in optgroup by backend
                                         return models.length > 0 && (
-                                            <option key={backend} value={backend}>
-                                                {backend.charAt(0).toUpperCase() + backend.slice(1)} ({models.length})
-                                            </option>
+                                            <optgroup key={backend} label={backend.charAt(0).toUpperCase() + backend.slice(1)}>
+                                                {models.map((model: any) => (
+                                                    <option key={model.id || model.path} value={`${backend}:${model.path}`}>
+                                                        {model.name}
+                                                    </option>
+                                                ))}
+                                            </optgroup>
                                         );
                                     })}
                                 </select>
@@ -420,7 +451,8 @@ export const HealthWidget = () => {
                                     value={getDisplayedBackend('tts')}
                                     onChange={(e) => {
                                         const val = e.target.value;
-                                        let backend = val;
+                                        let backend = '';
+                                        let modelPath = '';
                                         let mode = 'local';
 
                                         if (val === 'kokoro_local') {
@@ -429,18 +461,25 @@ export const HealthWidget = () => {
                                         } else if (val === 'kokoro_cloud') {
                                             backend = 'kokoro';
                                             mode = 'api';
+                                        } else if (val.includes(':')) {
+                                            // Format: backend:path (e.g., "piper:/app/models/tts/en_US-lessac-medium.onnx")
+                                            const parts = val.split(':');
+                                            backend = parts[0];
+                                            modelPath = parts.slice(1).join(':');
+                                        } else {
+                                            backend = val;
                                         }
 
                                         const currentBackend = health?.local_ai_server.details.models?.tts?.backend || health?.local_ai_server.details.tts_backend;
+                                        const currentPath = health?.local_ai_server.details.models?.tts?.path;
                                         const currentMode = health?.local_ai_server.details.kokoro_mode;
 
                                         const isBackendChanged = backend !== currentBackend;
+                                        const isPathChanged = modelPath && modelPath !== currentPath;
                                         const isModeChanged = backend === 'kokoro' && mode !== currentMode;
 
-                                        if (isBackendChanged || isModeChanged) {
-                                            const models = availableModels?.tts[backend] || [];
-                                            const firstModel = models[0];
-                                            const change: any = { backend, modelPath: firstModel?.path };
+                                        if (isBackendChanged || isPathChanged || isModeChanged) {
+                                            const change: any = { backend, modelPath: modelPath || undefined };
                                             if (backend === 'kokoro') {
                                                 change.voice = 'af_heart';
                                                 change.mode = mode;
@@ -458,16 +497,21 @@ export const HealthWidget = () => {
                                     {availableModels?.tts && Object.entries(availableModels.tts).map(([backend, models]) => {
                                         if (backend === 'kokoro') {
                                             return (
-                                                <>
+                                                <optgroup key="kokoro" label="Kokoro">
                                                     <option key="kokoro_local" value="kokoro_local">Kokoro (Local)</option>
                                                     <option key="kokoro_cloud" value="kokoro_cloud">Kokoro (Cloud/API)</option>
-                                                </>
+                                                </optgroup>
                                             );
                                         }
+                                        // Show individual models in optgroup by backend
                                         return models.length > 0 && (
-                                            <option key={backend} value={backend}>
-                                                {backend.charAt(0).toUpperCase() + backend.slice(1)} ({models.length})
-                                            </option>
+                                            <optgroup key={backend} label={backend.charAt(0).toUpperCase() + backend.slice(1)}>
+                                                {models.map((model: any) => (
+                                                    <option key={model.id || model.path} value={`${backend}:${model.path}`}>
+                                                        {model.name}
+                                                    </option>
+                                                ))}
+                                            </optgroup>
                                         );
                                     })}
                                 </select>
