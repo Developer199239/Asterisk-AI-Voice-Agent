@@ -223,11 +223,11 @@ PIPER_TTS_MODELS = [
      "model_path": "en_US-lessac-high.onnx",
      "download_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/lessac/high/en_US-lessac-high.onnx",
      "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/lessac/high/en_US-lessac-high.onnx.json"},
-    {"id": "piper_en_gb_amy_medium", "name": "Amy (en-GB, Female)", "language": "en-GB", "region": "europe", "backend": "piper",
+    {"id": "piper_en_gb_alba_medium", "name": "Alba (en-GB, Female)", "language": "en-GB", "region": "europe", "backend": "piper",
      "gender": "female", "quality": "medium", "size_mb": 100, "size_display": "100 MB",
-     "model_path": "en_GB-amy-medium.onnx",
-     "download_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_GB/amy/medium/en_GB-amy-medium.onnx",
-     "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_GB/amy/medium/en_GB-amy-medium.onnx.json"},
+     "model_path": "en_GB-alba-medium.onnx",
+     "download_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_GB/alba/medium/en_GB-alba-medium.onnx",
+     "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_GB/alba/medium/en_GB-alba-medium.onnx.json"},
     
     # === European Languages ===
     {"id": "piper_de_thorsten_medium", "name": "Thorsten (de-DE, Male)", "language": "de-DE", "region": "europe", "backend": "piper",
