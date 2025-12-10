@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, UploadFile, File
 import yaml
 import os
 import re
+import asyncio
 from pydantic import BaseModel
 from typing import Dict, Any
 import settings
@@ -191,9 +192,85 @@ async def test_provider_connection(request: ProviderTestRequest):
 
         # Apply substitution to the config
         provider_config = substitute_env_vars(request.config)
-        provider_name = request.name
+        provider_name = request.name.lower()
         
-        # Determine provider type based on config structure
+        # ============================================================
+        # LOCAL PROVIDER - test connection to local_ai_server
+        # ============================================================
+        if 'local' in provider_name or provider_config.get('type') == 'local':
+            import websockets
+            import json
+            
+            # Get WebSocket URL from either base_url or ws_url
+            ws_url = provider_config.get('base_url') or provider_config.get('ws_url') or 'ws://127.0.0.1:8765'
+            # Handle env var format
+            if '${' in ws_url:
+                ws_url = 'ws://127.0.0.1:8765'  # Default fallback
+            
+            try:
+                async with websockets.connect(ws_url, open_timeout=5.0) as ws:
+                    # Send status request to check models
+                    await ws.send(json.dumps({"type": "status"}))
+                    response = await asyncio.wait_for(ws.recv(), timeout=5.0)
+                    data = json.loads(response)
+                    
+                    if data.get("type") == "status_response" and data.get("status") == "ok":
+                        models = data.get("models", {})
+                        stt_loaded = models.get("stt", {}).get("loaded", False)
+                        llm_loaded = models.get("llm", {}).get("loaded", False)
+                        tts_loaded = models.get("tts", {}).get("loaded", False)
+                        
+                        stt_backend = data.get("stt_backend", "unknown")
+                        tts_backend = data.get("tts_backend", "unknown")
+                        llm_model = models.get("llm", {}).get("path", "").split("/")[-1] if models.get("llm", {}).get("path") else "none"
+                        
+                        status_parts = []
+                        if stt_loaded:
+                            status_parts.append(f"STT: {stt_backend} ✓")
+                        else:
+                            status_parts.append(f"STT: not loaded")
+                        if llm_loaded:
+                            status_parts.append(f"LLM: {llm_model} ✓")
+                        else:
+                            status_parts.append(f"LLM: not loaded")
+                        if tts_loaded:
+                            status_parts.append(f"TTS: {tts_backend} ✓")
+                        else:
+                            status_parts.append(f"TTS: not loaded")
+                        
+                        all_loaded = stt_loaded and llm_loaded and tts_loaded
+                        return {
+                            "success": all_loaded,
+                            "message": f"Local AI Server connected. {' | '.join(status_parts)}"
+                        }
+                    else:
+                        return {"success": False, "message": "Local AI Server responded but status invalid"}
+            except Exception as e:
+                return {"success": False, "message": f"Cannot connect to Local AI Server at {ws_url}: {str(e)}"}
+        
+        # ============================================================
+        # ELEVENLABS AGENT - check before other providers
+        # ============================================================
+        if 'elevenlabs' in provider_name or 'agent_id' in provider_config:
+            api_key = get_env_key('ELEVENLABS_API_KEY')
+            if not api_key:
+                return {"success": False, "message": "ELEVENLABS_API_KEY not set in .env file"}
+            
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    "https://api.elevenlabs.io/v1/user",
+                    headers={"xi-api-key": api_key},
+                    timeout=10.0
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    user_name = data.get('subscription', {}).get('tier', 'Unknown Plan')
+                    return {"success": True, "message": f"Connected to ElevenLabs ({user_name})"}
+                return {"success": False, "message": f"ElevenLabs API error: HTTP {response.status_code}"}
+        
+        # ============================================================
+        # OPENAI REALTIME
+        # ============================================================
         if 'realtime_base_url' in provider_config or 'turn_detection' in provider_config:
             # OpenAI Realtime
             api_key = get_env_key('OPENAI_API_KEY')
@@ -279,24 +356,6 @@ async def test_provider_connection(request: ProviderTestRequest):
                 # but without ws_url? Usually local providers have ws_url. 
                 # If it's pure local without WS (e.g. wrapper), assume success if file paths exist?
                 return {"success": True, "message": "Provider configuration valid (No specific connection test available)"}
-
-        elif 'agent_id' in provider_config or 'elevenlabs' in provider_name.lower():
-            # ElevenLabs Agent
-            api_key = get_env_key('ELEVENLABS_API_KEY')
-            if not api_key:
-                return {"success": False, "message": "ELEVENLABS_API_KEY not set in .env file. ElevenLabs requires API key."}
-            
-            async with httpx.AsyncClient() as client:
-                response = await client.get(
-                    "https://api.elevenlabs.io/v1/user",
-                    headers={"xi-api-key": api_key},
-                    timeout=10.0
-                )
-                if response.status_code == 200:
-                    data = response.json()
-                    user_name = data.get('subscription', {}).get('tier', 'Unknown Plan')
-                    return {"success": True, "message": f"Connected to ElevenLabs ({user_name})"}
-                return {"success": False, "message": f"ElevenLabs API error: HTTP {response.status_code}"}
         
         return {"success": False, "message": "Unknown provider type - cannot test"}
         
