@@ -257,15 +257,16 @@ async def test_provider_connection(request: ProviderTestRequest):
                 return {"success": False, "message": "ELEVENLABS_API_KEY not set in .env file"}
             
             async with httpx.AsyncClient() as client:
+                # Use /v1/voices endpoint for validation (works with all API key types)
                 response = await client.get(
-                    "https://api.elevenlabs.io/v1/user",
-                    headers={"xi-api-key": api_key},
+                    "https://api.elevenlabs.io/v1/voices",
+                    headers={"xi-api-key": api_key, "Accept": "application/json"},
                     timeout=10.0
                 )
                 if response.status_code == 200:
                     data = response.json()
-                    user_name = data.get('subscription', {}).get('tier', 'Unknown Plan')
-                    return {"success": True, "message": f"Connected to ElevenLabs ({user_name})"}
+                    voice_count = len(data.get('voices', []))
+                    return {"success": True, "message": f"Connected to ElevenLabs ({voice_count} voices available)"}
                 return {"success": False, "message": f"ElevenLabs API error: HTTP {response.status_code}"}
         
         # ============================================================
