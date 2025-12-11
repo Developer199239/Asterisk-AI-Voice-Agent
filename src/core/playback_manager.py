@@ -351,11 +351,11 @@ class PlaybackManager:
             is_pipeline = playback_id.startswith("pipeline-")
             fallback_delay = audio_duration + (2.5 if is_pipeline else 0.5)  # safety margin
             
-            logger.debug("Scheduling gating fallback",
+            logger.info("[TIMER] Scheduled: action=gating_fallback",
                         call_id=call_id,
                         playback_id=playback_id,
-                        audio_duration=audio_duration,
-                        fallback_delay=fallback_delay,
+                        delay_seconds=round(fallback_delay, 2),
+                        audio_duration=round(audio_duration, 2),
                         is_pipeline=is_pipeline,
                         safety_margin=2.5 if is_pipeline else 0.5)
             
@@ -396,14 +396,16 @@ class PlaybackManager:
                     )
                 else:
                     success = await self.session_store.clear_gating_token(call_id, playback_id)
-                logger.warning("🔊 GATING FALLBACK - Cleared gating token due to missing PlaybackFinished",
+                logger.warning("[TIMER] Executed: action=gating_fallback",
                               call_id=call_id,
                               playback_id=playback_id,
+                              result="gating_cleared",
                               success=success)
             else:
-                logger.debug("Gating fallback skipped - playback already finished",
+                logger.info("[TIMER] Skipped: action=gating_fallback",
                             call_id=call_id,
-                            playback_id=playback_id)
+                            playback_id=playback_id,
+                            reason="playback_already_finished")
                 
         except Exception as e:
             logger.error("Error in gating fallback task",
