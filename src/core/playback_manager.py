@@ -47,16 +47,13 @@ class PlaybackManager:
         self.conversation_coordinator = conversation_coordinator
         
         # Ensure media directory exists
+        # Note: Directory should be set up with setgid bit by preflight.sh
+        # so files inherit group ownership from the directory (asterisk group)
         try:
             os.makedirs(media_dir, exist_ok=True)
             try:
-                os.chmod(media_dir, 0o755)
-            except Exception:
-                pass
-            try:
-                ast_uid = int(os.getenv("ASTERISK_UID", "995"))
-                ast_gid = int(os.getenv("ASTERISK_GID", "995"))
-                os.chown(media_dir, ast_uid, ast_gid)
+                # Group-writable so asterisk group members can access
+                os.chmod(media_dir, 0o775)
             except Exception:
                 pass
         except (PermissionError, OSError):
@@ -250,25 +247,12 @@ class PlaybackManager:
             with open(file_path, 'wb') as f:
                 f.write(audio_bytes)
             
-            # Set file ownership for Asterisk readability (configurable via ASTERISK_UID/GID)
-            chowned = False
+            # Set file permissions for Asterisk readability via group
+            # Files inherit group ownership from setgid directory (set up by preflight.sh)
+            # No chown needed - appuser is member of asterisk group
             try:
-                ast_uid = int(os.getenv("ASTERISK_UID", "995"))
-                ast_gid = int(os.getenv("ASTERISK_GID", "995"))
-                os.chown(file_path, ast_uid, ast_gid)
-                chowned = True
-                logger.debug("Audio file ownership set for Asterisk",
-                            file_path=file_path)
-            except OSError as e:
-                logger.warning("Failed to set file ownership for Asterisk",
-                              file_path=file_path,
-                              error=str(e))
-            # Apply guarded permissions: prefer 0600 when owned by asterisk, else keep readable for availability
-            try:
-                if chowned:
-                    os.chmod(file_path, 0o600)
-                else:
-                    os.chmod(file_path, 0o644)
+                # Group-readable so asterisk group members can access
+                os.chmod(file_path, 0o664)
             except Exception:
                 pass
             

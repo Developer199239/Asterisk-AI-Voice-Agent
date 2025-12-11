@@ -408,6 +408,41 @@ check_asterisk_uid_gid() {
     
     log_ok "Asterisk UID:GID = $AST_UID:$AST_GID"
     
+    # Set up media directory with setgid bit for group permission inheritance
+    MEDIA_DIR="$SCRIPT_DIR/asterisk_media/ai-generated"
+    if [ "$APPLY_FIXES" = true ]; then
+        # Create directory if it doesn't exist
+        mkdir -p "$MEDIA_DIR" 2>/dev/null
+        
+        # Change group ownership to asterisk group
+        if sudo chgrp "$AST_GID" "$MEDIA_DIR" 2>/dev/null; then
+            log_ok "Set media directory group to asterisk (GID=$AST_GID)"
+        else
+            log_warn "Could not set media directory group (may need sudo)"
+            FIX_CMDS+=("sudo chgrp $AST_GID $MEDIA_DIR")
+        fi
+        
+        # Set setgid bit so new files inherit group ownership
+        if sudo chmod 2775 "$MEDIA_DIR" 2>/dev/null; then
+            log_ok "Set media directory permissions (setgid enabled)"
+        else
+            log_warn "Could not set media directory permissions (may need sudo)"
+            FIX_CMDS+=("sudo chmod 2775 $MEDIA_DIR")
+        fi
+        
+        # Also set parent directory
+        MEDIA_PARENT="$SCRIPT_DIR/asterisk_media"
+        sudo chgrp "$AST_GID" "$MEDIA_PARENT" 2>/dev/null
+        sudo chmod 2775 "$MEDIA_PARENT" 2>/dev/null
+    else
+        # Check if directory setup is needed
+        if [ ! -d "$MEDIA_DIR" ]; then
+            FIX_CMDS+=("mkdir -p $MEDIA_DIR")
+        fi
+        FIX_CMDS+=("sudo chgrp $AST_GID $MEDIA_DIR")
+        FIX_CMDS+=("sudo chmod 2775 $MEDIA_DIR  # setgid for group inheritance")
+    fi
+    
     # Check if .env exists and update if needed
     if [ -f "$SCRIPT_DIR/.env" ]; then
         local NEEDS_UPDATE=false

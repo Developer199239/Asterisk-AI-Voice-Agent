@@ -24,9 +24,9 @@ services:
       args:
         ASTERISK_GID: ${ASTERISK_GID:-995}
     container_name: ai_engine
-    # Run as Asterisk user for file permission compatibility (set ASTERISK_UID/GID in .env)
-    # Falls back to appuser if not set
-    user: "${ASTERISK_UID:-1000}:${ASTERISK_GID:-995}"
+    # Container runs as appuser (member of asterisk group via Dockerfile)
+    # Files inherit group ownership from setgid directory (set up by preflight.sh)
+    user: "appuser"
     network_mode: host
     volumes:
       - ./src:/app/src

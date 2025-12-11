@@ -407,15 +407,13 @@ class ARIClient:
             # Audio generated as ulaw format at 8000 Hz for Asterisk compatibility
             logger.debug("Ulaw audio file written (generated as ulaw at 8000 Hz)", path=container_path)
             
-            # Change ownership to asterisk user so Asterisk can read the file
-            # Configurable via ASTERISK_UID/GID env vars (default 995:995)
+            # Set file permissions for Asterisk readability via group
+            # Files inherit group ownership from setgid directory (set up by preflight.sh)
+            # No chown needed - appuser is member of asterisk group
             try:
-                asterisk_uid = int(os.getenv("ASTERISK_UID", "995"))
-                asterisk_gid = int(os.getenv("ASTERISK_GID", "995"))
-                os.chown(container_path, asterisk_uid, asterisk_gid)
-                logger.debug("Changed file ownership to asterisk user", path=container_path, uid=asterisk_uid, gid=asterisk_gid)
+                os.chmod(container_path, 0o664)  # Group-readable
             except Exception as e:
-                logger.warning("Failed to change file ownership", path=container_path, error=str(e))
+                logger.warning("Failed to set file permissions", path=container_path, error=str(e))
             
             logger.debug("Verifying file creation", path=container_path, exists=os.path.exists(container_path))
             if os.path.exists(container_path):
