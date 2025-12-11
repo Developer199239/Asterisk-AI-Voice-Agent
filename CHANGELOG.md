@@ -13,6 +13,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [4.5.0] - 2025-12-13
 
+### Fixed - Admin UI Stability 🔧
+
+#### ConfigEditor Critical Fixes (A1-A3, A9)
+- **Missing State Hooks**: Added `loading`, `saving`, `error`, `success`, `restartRequired` useState declarations
+- **Duplicate Import**: Removed duplicate `AudioSocketConfig` import
+- **Provider Type Persistence**: New providers now correctly save their `type` field
+- **Provider Name Validation**: Empty provider names are now rejected with error message
+- **Unused Code Cleanup**: Removed 15+ unused icon imports, reducing bundle size
+
+#### Save Flow Improvements (A6)
+- **Restart Required Banner**: UI now displays amber banner when config changes require engine restart
+- **Toast Notifications**: Replaced browser `alert()` with inline dismissible notifications
+- **Loading Spinner**: Added visual feedback during config fetch
+
+#### Docker Operations (A4-A5)
+- **Dynamic Path Resolution**: Uses `shutil.which()` to find docker-compose instead of hardcoded paths
+- **Cleaner Restarts**: Uses `container.restart()` via Docker SDK instead of destructive stop/rm/up flow
+- **Fallback Support**: Gracefully falls back to docker-compose if Docker SDK fails
+
 ### Added - Stability Improvements 🛡️
 
 #### Enhanced Timer Logging (L2)
