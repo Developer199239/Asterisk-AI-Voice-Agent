@@ -113,12 +113,14 @@ const TransportPage = () => {
                                 label="Host"
                                 value={audiosocketConfig.host || '127.0.0.1'}
                                 onChange={(e) => updateSectionConfig('audiosocket', 'host', e.target.value)}
+                                tooltip="IP address the AudioSocket server listens on (default: 127.0.0.1)."
                             />
                             <FormInput
                                 label="Port"
                                 type="number"
                                 value={audiosocketConfig.port || 8090}
                                 onChange={(e) => updateSectionConfig('audiosocket', 'port', parseInt(e.target.value))}
+                                tooltip="TCP port for AudioSocket connections (default: 8090)."
                             />
                             <FormInput
                                 label="Format"
@@ -141,18 +143,21 @@ const TransportPage = () => {
                                     label="RTP Host"
                                     value={externalMediaConfig.rtp_host || '127.0.0.1'}
                                     onChange={(e) => updateSectionConfig('external_media', 'rtp_host', e.target.value)}
+                                    tooltip="IP address for RTP media (default: 127.0.0.1 for localhost)."
                                 />
                                 <FormInput
                                     label="RTP Port"
                                     type="number"
                                     value={externalMediaConfig.rtp_port || 18080}
                                     onChange={(e) => updateSectionConfig('external_media', 'rtp_port', parseInt(e.target.value))}
+                                    tooltip="Base UDP port for RTP streams (default: 18080)."
                                 />
                                 <FormInput
                                     label="Port Range"
                                     value={externalMediaConfig.port_range || '18080:18099'}
                                     onChange={(e) => updateSectionConfig('external_media', 'port_range', e.target.value)}
                                     placeholder="18080:18099"
+                                    tooltip="Range of UDP ports for concurrent calls (format: start:end, e.g., 18080:18099)."
                                 />
                             </div>
 

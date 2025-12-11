@@ -118,48 +118,56 @@ const StreamingPage = () => {
                                 type="number"
                                 value={streamingConfig.connection_timeout_ms || 120000}
                                 onChange={(e) => updateStreamingConfig('connection_timeout_ms', parseInt(e.target.value))}
+                                tooltip="Maximum time to wait for provider connection before failing (default: 120000ms = 2 min)."
                             />
                             <FormInput
                                 label="Keepalive Interval (ms)"
                                 type="number"
                                 value={streamingConfig.keepalive_interval_ms || 5000}
                                 onChange={(e) => updateStreamingConfig('keepalive_interval_ms', parseInt(e.target.value))}
+                                tooltip="How often to send keepalive pings to prevent connection timeout (default: 5000ms)."
                             />
                             <FormInput
                                 label="Provider Grace Period (ms)"
                                 type="number"
                                 value={streamingConfig.provider_grace_ms || 200}
                                 onChange={(e) => updateStreamingConfig('provider_grace_ms', parseInt(e.target.value))}
+                                tooltip="Wait time for provider response before considering it unresponsive (default: 200ms)."
                             />
                             <FormInput
                                 label="Fallback Timeout (ms)"
                                 type="number"
                                 value={streamingConfig.fallback_timeout_ms || 8000}
                                 onChange={(e) => updateStreamingConfig('fallback_timeout_ms', parseInt(e.target.value))}
+                                tooltip="Time before switching to fallback provider if primary fails (default: 8000ms)."
                             />
                             <FormInput
                                 label="Low Watermark (ms)"
                                 type="number"
                                 value={streamingConfig.low_watermark_ms || 80}
                                 onChange={(e) => updateStreamingConfig('low_watermark_ms', parseInt(e.target.value))}
+                                tooltip="Minimum audio buffered before playback starts - lower = faster but may be choppy (default: 80ms)."
                             />
                             <FormInput
                                 label="Min Start (ms)"
                                 type="number"
                                 value={streamingConfig.min_start_ms || 120}
                                 onChange={(e) => updateStreamingConfig('min_start_ms', parseInt(e.target.value))}
+                                tooltip="Minimum audio required before starting response playback (default: 120ms)."
                             />
                             <FormInput
                                 label="Greeting Min Start (ms)"
                                 type="number"
                                 value={streamingConfig.greeting_min_start_ms || 40}
                                 onChange={(e) => updateStreamingConfig('greeting_min_start_ms', parseInt(e.target.value))}
+                                tooltip="Reduced min start for greetings - faster initial response (default: 40ms)."
                             />
                             <FormInput
                                 label="Empty Backoff Ticks Max"
                                 type="number"
                                 value={streamingConfig.empty_backoff_ticks_max || 5}
                                 onChange={(e) => updateStreamingConfig('empty_backoff_ticks_max', parseInt(e.target.value))}
+                                tooltip="Max retries when buffer is empty before pausing playback (default: 5)."
                             />
                         </div>
 
@@ -189,6 +197,7 @@ const StreamingPage = () => {
                                 value={streamingConfig.normalizer?.max_gain_db || 18}
                                 onChange={(e) => updateStreamingConfig('normalizer', { ...streamingConfig.normalizer, max_gain_db: parseInt(e.target.value) })}
                                 disabled={!streamingConfig.normalizer?.enabled}
+                                tooltip="Maximum volume boost applied to quiet audio (default: 18dB)."
                             />
                             <FormInput
                                 label="Target RMS"
@@ -196,6 +205,7 @@ const StreamingPage = () => {
                                 value={streamingConfig.normalizer?.target_rms || 1400}
                                 onChange={(e) => updateStreamingConfig('normalizer', { ...streamingConfig.normalizer, target_rms: parseInt(e.target.value) })}
                                 disabled={!streamingConfig.normalizer?.enabled}
+                                tooltip="Target audio level for normalization - higher = louder output (default: 1400)."
                             />
                         </div>
                     </div>
@@ -216,6 +226,7 @@ const StreamingPage = () => {
                             value={streamingConfig.diag_out_dir || '/tmp/ai-engine-taps'}
                             onChange={(e) => updateStreamingConfig('diag_out_dir', e.target.value)}
                             disabled={!streamingConfig.diag_enable_taps}
+                            tooltip="Directory to save diagnostic audio recordings."
                         />
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                             <FormInput
@@ -224,6 +235,7 @@ const StreamingPage = () => {
                                 value={streamingConfig.diag_pre_secs || 1}
                                 onChange={(e) => updateStreamingConfig('diag_pre_secs', parseInt(e.target.value))}
                                 disabled={!streamingConfig.diag_enable_taps}
+                                tooltip="Seconds of audio to capture before an event (default: 1)."
                             />
                             <FormInput
                                 label="Diag Post Seconds"
@@ -231,6 +243,7 @@ const StreamingPage = () => {
                                 value={streamingConfig.diag_post_secs || 1}
                                 onChange={(e) => updateStreamingConfig('diag_post_secs', parseInt(e.target.value))}
                                 disabled={!streamingConfig.diag_enable_taps}
+                                tooltip="Seconds of audio to capture after an event (default: 1)."
                             />
                         </div>
                     </div>

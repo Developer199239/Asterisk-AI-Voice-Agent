@@ -97,18 +97,21 @@ const VADPage = () => {
                                 type="number"
                                 value={vadConfig.min_utterance_duration_ms || 600}
                                 onChange={(e) => updateVADConfig('min_utterance_duration_ms', parseInt(e.target.value))}
+                                tooltip="Minimum speech duration to be considered valid - filters out noise (default: 600ms)."
                             />
                             <FormInput
                                 label="Max Utterance Duration (ms)"
                                 type="number"
                                 value={vadConfig.max_utterance_duration_ms || 10000}
                                 onChange={(e) => updateVADConfig('max_utterance_duration_ms', parseInt(e.target.value))}
+                                tooltip="Maximum speech duration before forcing a cutoff (default: 10000ms = 10s)."
                             />
                             <FormInput
                                 label="Utterance Padding (ms)"
                                 type="number"
                                 value={vadConfig.utterance_padding_ms || 200}
                                 onChange={(e) => updateVADConfig('utterance_padding_ms', parseInt(e.target.value))}
+                                tooltip="Extra silence added after speech ends to catch trailing words (default: 200ms)."
                             />
                         </div>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -117,12 +120,14 @@ const VADPage = () => {
                                 type="number"
                                 value={vadConfig.fallback_buffer_size || 128000}
                                 onChange={(e) => updateVADConfig('fallback_buffer_size', parseInt(e.target.value))}
+                                tooltip="Audio buffer size in bytes for fallback VAD (default: 128000)."
                             />
                             <FormInput
                                 label="Fallback Interval (ms)"
                                 type="number"
                                 value={vadConfig.fallback_interval_ms || 4000}
                                 onChange={(e) => updateVADConfig('fallback_interval_ms', parseInt(e.target.value))}
+                                tooltip="Interval for fallback VAD checks when primary is uncertain (default: 4000ms)."
                             />
                         </div>
                     </div>
@@ -147,12 +152,14 @@ const VADPage = () => {
                                 type="number"
                                 value={vadConfig.fallback_buffer_size || 128000}
                                 onChange={(e) => updateVADConfig('fallback_buffer_size', parseInt(e.target.value))}
+                                tooltip="Audio buffer size in bytes for fallback VAD (default: 128000)."
                             />
                             <FormInput
                                 label="Fallback Interval (ms)"
                                 type="number"
                                 value={vadConfig.fallback_interval_ms || 4000}
                                 onChange={(e) => updateVADConfig('fallback_interval_ms', parseInt(e.target.value))}
+                                tooltip="Interval for fallback VAD checks when primary is uncertain (default: 4000ms)."
                             />
                         </div>
 
@@ -171,12 +178,14 @@ const VADPage = () => {
                                 type="number"
                                 value={vadConfig.webrtc_start_frames || 3}
                                 onChange={(e) => updateVADConfig('webrtc_start_frames', parseInt(e.target.value))}
+                                tooltip="Number of speech frames needed to trigger speech start (default: 3)."
                             />
                             <FormInput
                                 label="End Silence Frames"
                                 type="number"
                                 value={vadConfig.webrtc_end_silence_frames || 50}
                                 onChange={(e) => updateVADConfig('webrtc_end_silence_frames', parseInt(e.target.value))}
+                                tooltip="Silence frames needed to detect end of speech (default: 50)."
                             />
                         </div>
                     </div>
