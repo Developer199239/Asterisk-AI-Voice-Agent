@@ -392,8 +392,8 @@ const ProvidersPage: React.FC = () => {
                                         <div className="flex items-center gap-2">
                                             <h4 className={`font-semibold text-lg ${!providerData.enabled && 'text-muted-foreground'}`}>{name}</h4>
                                             {config.default_provider === name && (
-                                                <span className="text-xs bg-primary/20 text-primary px-2 py-0.5 rounded flex items-center gap-1">
-                                                    <Star className="w-3 h-3" />
+                                                <span className="text-xs bg-green-500/10 text-green-600 dark:text-green-400 px-2 py-0.5 rounded-full flex items-center gap-1">
+                                                    <span className="w-1.5 h-1.5 bg-green-500 rounded-full"></span>
                                                     Default
                                                 </span>
                                             )}
