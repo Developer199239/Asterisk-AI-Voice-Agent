@@ -1333,6 +1333,102 @@ async def get_local_server_status():
         return {"running": False, "healthy": False, "error": str(e)}
 
 
+class ModelSwitchRequest(BaseModel):
+    stt_backend: Optional[str] = None  # vosk, sherpa, kroko
+    stt_model_path: Optional[str] = None
+    llm_model_path: Optional[str] = None
+    tts_backend: Optional[str] = None  # piper, kokoro
+    tts_model_path: Optional[str] = None
+    kokoro_voice: Optional[str] = None
+
+
+@router.post("/local/switch-model")
+async def switch_local_model(request: ModelSwitchRequest):
+    """Switch models on the running local-ai-server without restart.
+    
+    Sends a WebSocket message to the local AI server to switch models dynamically.
+    Also updates .env for persistence across restarts.
+    """
+    import websockets
+    import json
+    from settings import PROJECT_ROOT
+    
+    # Build the switch request
+    switch_data = {"type": "switch_model"}
+    env_updates = []
+    
+    if request.stt_backend:
+        switch_data["stt_backend"] = request.stt_backend
+        env_updates.append(f"LOCAL_STT_BACKEND={request.stt_backend}")
+    
+    if request.stt_model_path:
+        switch_data["stt_model_path"] = request.stt_model_path
+        env_updates.append(f"LOCAL_STT_MODEL_PATH={request.stt_model_path}")
+    
+    if request.llm_model_path:
+        switch_data["llm_model_path"] = request.llm_model_path
+        env_updates.append(f"LOCAL_LLM_MODEL_PATH={request.llm_model_path}")
+    
+    if request.tts_backend:
+        switch_data["tts_backend"] = request.tts_backend
+        env_updates.append(f"LOCAL_TTS_BACKEND={request.tts_backend}")
+    
+    if request.tts_model_path:
+        switch_data["tts_model_path"] = request.tts_model_path
+        env_updates.append(f"LOCAL_TTS_MODEL_PATH={request.tts_model_path}")
+    
+    if request.kokoro_voice:
+        switch_data["kokoro_voice"] = request.kokoro_voice
+        env_updates.append(f"KOKORO_VOICE={request.kokoro_voice}")
+    
+    # Update .env for persistence
+    if env_updates:
+        try:
+            env_path = os.path.join(PROJECT_ROOT, ".env")
+            env_content = ""
+            if os.path.exists(env_path):
+                with open(env_path, "r") as f:
+                    env_content = f.read()
+            
+            import re
+            for update in env_updates:
+                key = update.split("=")[0]
+                env_content = re.sub(f"^{key}=.*$", "", env_content, flags=re.MULTILINE)
+            
+            with open(env_path, "a") as f:
+                f.write("\n# Model switch from Dashboard\n")
+                for update in env_updates:
+                    f.write(f"{update}\n")
+        except Exception as e:
+            return {"success": False, "message": f"Failed to update .env: {e}"}
+    
+    # Send switch command to local AI server via WebSocket
+    try:
+        async with websockets.connect("ws://127.0.0.1:8765", ping_interval=None) as ws:
+            await ws.send(json.dumps(switch_data))
+            response = await ws.recv()
+            result = json.loads(response)
+            
+            if result.get("status") == "success":
+                return {
+                    "success": True,
+                    "message": result.get("message", "Models switched successfully"),
+                    "changed": result.get("changed", []),
+                    "env_updated": env_updates
+                }
+            else:
+                return {
+                    "success": False,
+                    "message": result.get("message", "Switch failed"),
+                }
+    except Exception as e:
+        return {
+            "success": False, 
+            "message": f"Could not connect to local AI server: {e}. Restart the server for changes to take effect.",
+            "env_updated": env_updates
+        }
+
+
 class ApiKeyValidation(BaseModel):
     provider: str
     api_key: str
