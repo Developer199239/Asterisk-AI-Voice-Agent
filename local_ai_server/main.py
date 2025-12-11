@@ -1041,6 +1041,15 @@ class LocalAIServer:
         try:
             if not os.path.exists(self.tts_model_path):
                 raise FileNotFoundError(f"TTS model not found at {self.tts_model_path}")
+            
+            # Piper requires both .onnx model AND .onnx.json config file
+            config_path = self.tts_model_path + ".json"
+            if not os.path.exists(config_path):
+                raise FileNotFoundError(
+                    f"Piper TTS config file not found at {config_path}. "
+                    f"Piper requires both the .onnx model AND the .onnx.json config file. "
+                    f"Please re-download the model from the Models page to get both files."
+                )
 
             self.tts_model = PiperVoice.load(self.tts_model_path)
             logging.info("✅ TTS backend: Piper loaded from %s (22kHz native)", self.tts_model_path)

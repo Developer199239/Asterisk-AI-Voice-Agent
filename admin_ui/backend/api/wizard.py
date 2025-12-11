@@ -601,6 +601,7 @@ class SingleModelDownload(BaseModel):
     type: str  # stt, tts, llm
     download_url: str
     model_path: Optional[str] = None
+    config_url: Optional[str] = None  # For TTS models that need JSON config
 
 
 @router.post("/local/download-model")
@@ -728,6 +729,16 @@ async def download_single_model(request: SingleModelDownload):
                 if temp_file != final_path:
                     shutil.move(temp_file, final_path)
                 _download_output.append(f"✅ Saved to {final_path}")
+                
+                # Download config file for TTS models (e.g., Piper .onnx.json)
+                if request.config_url and request.type == "tts":
+                    config_dest = final_path + ".json"
+                    _download_output.append(f"📥 Downloading config file...")
+                    try:
+                        urllib.request.urlretrieve(request.config_url, config_dest)
+                        _download_output.append(f"✅ Config saved to {config_dest}")
+                    except Exception as config_err:
+                        _download_output.append(f"⚠️ Config download failed: {config_err}")
             
             _download_status["running"] = False
             _download_status["completed"] = True
