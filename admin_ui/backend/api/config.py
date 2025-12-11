@@ -3,9 +3,14 @@ import yaml
 import os
 import re
 import asyncio
+import glob
+import tempfile
 from pydantic import BaseModel
 from typing import Dict, Any
 import settings
+
+# A11: Maximum number of backups to keep
+MAX_BACKUPS = 5
 
 router = APIRouter()
 
@@ -15,6 +20,22 @@ ANSI_ESCAPE = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
 def strip_ansi_codes(text: str) -> str:
     """Remove ANSI escape codes from text for clean log files."""
     return ANSI_ESCAPE.sub('', text)
+
+
+def _rotate_backups(base_path: str) -> None:
+    """
+    A11: Keep only the last MAX_BACKUPS backup files.
+    Deletes oldest backups when limit is exceeded.
+    """
+    pattern = f"{base_path}.bak.*"
+    backups = sorted(glob.glob(pattern), key=os.path.getmtime, reverse=True)
+    
+    # Delete oldest backups beyond MAX_BACKUPS
+    for old_backup in backups[MAX_BACKUPS:]:
+        try:
+            os.remove(old_backup)
+        except OSError:
+            pass  # Ignore errors deleting old backups
 
 class ConfigUpdate(BaseModel):
     content: str
@@ -36,9 +57,15 @@ async def update_yaml_config(update: ConfigUpdate):
             with open(settings.CONFIG_PATH, 'r') as src:
                 with open(backup_path, 'w') as dst:
                     dst.write(src.read())
+            # A11: Rotate backups - keep only last MAX_BACKUPS
+            _rotate_backups(settings.CONFIG_PATH)
 
-        with open(settings.CONFIG_PATH, 'w') as f:
+        # A8: Atomic write via temp file + rename
+        dir_path = os.path.dirname(settings.CONFIG_PATH)
+        with tempfile.NamedTemporaryFile('w', dir=dir_path, delete=False, suffix='.tmp') as f:
             f.write(update.content)
+            temp_path = f.name
+        os.replace(temp_path, settings.CONFIG_PATH)  # Atomic on POSIX
         return {
             "status": "success",
             "restart_required": True,
@@ -83,6 +110,15 @@ async def get_env_config():
 @router.post("/env")
 async def update_env(env_data: Dict[str, str]):
     try:
+        # A12: Validate env data before writing
+        for key, value in env_data.items():
+            if not key or not key.strip():
+                raise HTTPException(status_code=400, detail="Empty key not allowed")
+            if '\n' in key or '\n' in str(value):
+                raise HTTPException(status_code=400, detail=f"Newlines not allowed in key or value: {key}")
+            if '=' in key:
+                raise HTTPException(status_code=400, detail=f"Key cannot contain '=': {key}")
+        
         # Create backup before saving
         if os.path.exists(settings.ENV_PATH):
             import datetime
@@ -91,6 +127,8 @@ async def update_env(env_data: Dict[str, str]):
             with open(settings.ENV_PATH, 'r') as src:
                 with open(backup_path, 'w') as dst:
                     dst.write(src.read())
+            # A11: Rotate backups
+            _rotate_backups(settings.ENV_PATH)
 
         # Read existing lines
         lines = []
@@ -130,9 +168,12 @@ async def update_env(env_data: Dict[str, str]):
                 # Update map for subsequent iterations (though not strictly needed for this simple logic)
                 key_line_map[key] = len(new_lines) - 1
 
-        with open(settings.ENV_PATH, 'w') as f:
+        # A8: Atomic write via temp file + rename
+        dir_path = os.path.dirname(settings.ENV_PATH)
+        with tempfile.NamedTemporaryFile('w', dir=dir_path, delete=False, suffix='.tmp') as f:
             f.writelines(new_lines)
-            
+            temp_path = f.name
+        os.replace(temp_path, settings.ENV_PATH)  # Atomic on POSIX
         
         return {"status": "success"}
     except Exception as e:

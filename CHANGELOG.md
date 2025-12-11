@@ -32,6 +32,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Cleaner Restarts**: Uses `container.restart()` via Docker SDK instead of destructive stop/rm/up flow
 - **Fallback Support**: Gracefully falls back to docker-compose if Docker SDK fails
 
+#### Config File Safety (A8, A11, A12)
+- **Atomic Writes**: Config and .env files written via temp file + atomic rename (prevents corruption on crash)
+- **Backup Rotation**: Only keeps last 5 backups per file (prevents disk exhaustion)
+- **Env Validation**: Rejects empty keys, newlines in values, and `=` in keys before writing .env
+
 ### Added - Stability Improvements 🛡️
 
 #### Enhanced Timer Logging (L2)
