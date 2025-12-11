@@ -234,6 +234,33 @@ class ElevenLabsAgentProvider(AIProviderInterface, ProviderCapabilitiesMixin):
                 "caller_name": context["caller_name"]
             }
         
+        # Add client tools if provided
+        # ElevenLabs expects tools in format: {type: "client", name: "...", description: "..."}
+        tools_list = context.get("tools", [])
+        if tools_list and self.tool_registry:
+            client_tools = []
+            for tool_name in tools_list:
+                tool = self.tool_registry.get_tool(tool_name)
+                if tool:
+                    # Map hangup_call to end_call system tool for ElevenLabs
+                    if tool_name == "hangup_call":
+                        client_tools.append({
+                            "type": "system",
+                            "name": "end_call",
+                            "description": tool.definition.description or "End the call when the conversation is complete",
+                        })
+                    else:
+                        client_tools.append({
+                            "type": "client",
+                            "name": tool_name,
+                            "description": tool.definition.description or "",
+                            "parameters": tool.definition.parameters or {},
+                        })
+            
+            if client_tools:
+                init_data["client_tools"] = client_tools
+                logger.info(f"[elevenlabs] [{self._call_id}] Configured {len(client_tools)} tools: {[t['name'] for t in client_tools]}")
+        
         # Send initialization message if we have config
         if init_data:
             message = {
@@ -428,6 +455,10 @@ class ElevenLabsAgentProvider(AIProviderInterface, ProviderCapabilitiesMixin):
         elif msg_type == "client_tool_call":
             await self._handle_tool_call(data)
         
+        elif msg_type == "system_tool_call":
+            # Handle system tools like end_call
+            await self._handle_system_tool_call(data)
+        
         elif msg_type == "error":
             await self._handle_error(data)
         
@@ -579,6 +610,27 @@ class ElevenLabsAgentProvider(AIProviderInterface, ProviderCapabilitiesMixin):
             except Exception as e:
                 logger.warning(f"[elevenlabs] [{self._call_id}] Failed to send pong: {e}")
     
+    async def _handle_system_tool_call(self, data: Dict[str, Any]) -> None:
+        """Handle system tool call from ElevenLabs (e.g., end_call)."""
+        tool_call = data.get("system_tool_call", {})
+        tool_name = tool_call.get("tool_name", "")
+        tool_call_id = tool_call.get("tool_call_id", "")
+        
+        logger.info(f"[elevenlabs] [{self._call_id}] System tool call: {tool_name}")
+        
+        if tool_name == "end_call":
+            # Emit hangup event - map end_call to hangup_call for engine compatibility
+            await self.on_event({
+                "type": "function_call",
+                "call_id": self._call_id,
+                "function_name": "hangup_call",
+                "function_call_id": tool_call_id,
+                "parameters": {"farewell": ""},  # ElevenLabs handles farewell
+                "is_system_tool": True,
+            })
+        else:
+            logger.warning(f"[elevenlabs] [{self._call_id}] Unknown system tool: {tool_name}")
+
     async def _handle_tool_call(self, data: Dict[str, Any]) -> None:
         """Handle tool/function call request from ElevenLabs."""
         tool_call = data.get("client_tool_call", {})
