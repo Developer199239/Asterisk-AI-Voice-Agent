@@ -1465,8 +1465,11 @@ async def save_setup_config(config: SetupConfig):
     # Validation: Check for required keys based on provider
     if config.provider == "openai_realtime" and not config.openai_key:
             raise HTTPException(status_code=400, detail="OpenAI API Key is required for OpenAI Realtime provider")
-    if config.provider == "deepgram" and not config.deepgram_key:
+    if config.provider == "deepgram":
+        if not config.deepgram_key:
             raise HTTPException(status_code=400, detail="Deepgram API Key is required for Deepgram provider")
+        if not config.openai_key:
+            raise HTTPException(status_code=400, detail="OpenAI API Key is required for Deepgram Think stage")
     if config.provider == "google_live" and not config.google_key:
             raise HTTPException(status_code=400, detail="Google API Key is required for Google Live provider")
     # Local hybrid uses OpenAI for LLM, so check that too
