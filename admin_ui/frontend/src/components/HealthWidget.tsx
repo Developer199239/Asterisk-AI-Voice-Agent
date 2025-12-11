@@ -696,30 +696,28 @@ export const HealthWidget = () => {
                         </div>
 
                         {/* Default Configuration */}
-                        <div className="p-3 bg-muted/30 rounded-lg border border-border/50">
-                            <div className="flex items-center gap-2 mb-2">
-                                <Star className="w-4 h-4 text-yellow-500" />
+                        <div>
+                            <div className="flex items-center gap-2 mb-3">
+                                <Star className="w-4 h-4 text-muted-foreground" />
                                 <h4 className="text-sm font-medium text-muted-foreground">Default Configuration</h4>
                             </div>
-                            <div className="space-y-2">
-                                {activePipeline ? (
-                                    <div className="flex justify-between items-center text-sm">
-                                        <span className="text-muted-foreground">Active Pipeline</span>
-                                        <span className="font-mono text-xs bg-purple-500/10 text-purple-500 px-2 py-1 rounded">
-                                            {activePipeline}
-                                        </span>
-                                    </div>
-                                ) : defaultProvider ? (
-                                    <div className="flex justify-between items-center text-sm">
-                                        <span className="text-muted-foreground">Default Provider</span>
-                                        <span className="font-mono text-xs bg-blue-500/10 text-blue-500 px-2 py-1 rounded capitalize">
-                                            {defaultProvider.replace('_', ' ')}
-                                        </span>
-                                    </div>
-                                ) : (
-                                    <div className="text-xs text-muted-foreground italic">No default configured</div>
-                                )}
-                            </div>
+                            {activePipeline ? (
+                                <div className="flex justify-between items-center text-sm p-2 rounded hover:bg-muted/50 transition-colors">
+                                    <span>Active Pipeline</span>
+                                    <span className="text-xs px-2 py-0.5 rounded-full bg-green-500/10 text-green-500">
+                                        {activePipeline}
+                                    </span>
+                                </div>
+                            ) : defaultProvider ? (
+                                <div className="flex justify-between items-center text-sm p-2 rounded hover:bg-muted/50 transition-colors">
+                                    <span className="capitalize">Default Provider</span>
+                                    <span className="text-xs px-2 py-0.5 rounded-full bg-green-500/10 text-green-500 capitalize">
+                                        {defaultProvider.replace('_', ' ')}
+                                    </span>
+                                </div>
+                            ) : (
+                                <div className="text-xs text-muted-foreground italic p-2">No default configured</div>
+                            )}
                         </div>
 
                         {/* Pipelines */}
