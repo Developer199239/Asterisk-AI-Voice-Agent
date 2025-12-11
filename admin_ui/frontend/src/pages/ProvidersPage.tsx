@@ -26,6 +26,8 @@ const ProvidersPage: React.FC = () => {
     const [testResults, setTestResults] = useState<{ [key: string]: { success: boolean; message: string } | undefined }>({});
     const [showAddProvidersModal, setShowAddProvidersModal] = useState(false);
     const [selectedTemplates, setSelectedTemplates] = useState<string[]>([]);
+    const [pendingRestart, setPendingRestart] = useState(false);
+    const [restartingEngine, setRestartingEngine] = useState(false);
 
     useEffect(() => {
         fetchConfig();
@@ -47,6 +49,7 @@ const ProvidersPage: React.FC = () => {
         try {
             await axios.post('/api/config/yaml', { content: yaml.dump(newConfig) });
             setConfig(newConfig);
+            setPendingRestart(true);
         } catch (err) {
             console.error('Failed to save config', err);
             alert('Failed to save configuration');
@@ -183,6 +186,7 @@ const ProvidersPage: React.FC = () => {
 
         await saveConfig({ ...config, providers: nextProviders });
         setShowAddProvidersModal(false);
+        setPendingRestart(true);
     };
 
     const handleSetAsDefault = async (name: string) => {
@@ -197,6 +201,22 @@ const ProvidersPage: React.FC = () => {
             newConfig.providers[name].enabled = true;
         }
         await saveConfig(newConfig);
+        setPendingRestart(true);
+    };
+
+    const handleRestartAIEngine = async () => {
+        setRestartingEngine(true);
+        try {
+            const response = await axios.post('/api/system/containers/ai_engine/restart');
+            if (response.data.status === 'success') {
+                setPendingRestart(false);
+                alert('AI Engine restarted successfully. Changes are now active.');
+            }
+        } catch (error: any) {
+            alert(`Failed to restart AI Engine: ${error.response?.data?.detail || error.message}`);
+        } finally {
+            setRestartingEngine(false);
+        }
     };
 
     const handleDeleteProvider = async (name: string) => {
@@ -337,17 +357,26 @@ const ProvidersPage: React.FC = () => {
 
     return (
         <div className="space-y-6">
-            <div className="bg-yellow-500/10 border border-yellow-500/20 text-yellow-500 p-4 rounded-md flex items-center justify-between">
+            <div className={`${pendingRestart ? 'bg-orange-500/15 border-orange-500/30' : 'bg-yellow-500/10 border-yellow-500/20'} border text-yellow-600 dark:text-yellow-500 p-4 rounded-md flex items-center justify-between`}>
                 <div className="flex items-center">
                     <AlertCircle className="w-5 h-5 mr-2" />
-                    Changes to provider configurations require a system restart to take effect.
+                    Changes to provider configurations require an AI Engine restart to take effect.
                 </div>
                 <button
-                    onClick={() => window.location.reload()}
-                    className="flex items-center text-xs bg-yellow-500/20 hover:bg-yellow-500/30 px-3 py-1.5 rounded transition-colors"
+                    onClick={handleRestartAIEngine}
+                    disabled={restartingEngine}
+                    className={`flex items-center text-xs px-3 py-1.5 rounded transition-colors ${
+                        pendingRestart 
+                            ? 'bg-orange-500 text-white hover:bg-orange-600 font-medium' 
+                            : 'bg-yellow-500/20 hover:bg-yellow-500/30'
+                    } disabled:opacity-50`}
                 >
-                    <RefreshCw className="w-3 h-3 mr-1.5" />
-                    Reload UI
+                    {restartingEngine ? (
+                        <Loader2 className="w-3 h-3 mr-1.5 animate-spin" />
+                    ) : (
+                        <RefreshCw className="w-3 h-3 mr-1.5" />
+                    )}
+                    {restartingEngine ? 'Restarting...' : 'Reload AI Engine'}
                 </button>
             </div>
 
