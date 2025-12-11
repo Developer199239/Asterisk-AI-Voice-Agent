@@ -1316,3 +1316,67 @@ async def restart_all_containers():
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+class AriTestRequest(BaseModel):
+    host: str
+    port: int = 8088
+    username: str
+    password: str
+    scheme: str = "http"
+
+
+@router.post("/test-ari")
+async def test_ari_connection(request: AriTestRequest):
+    """Test connection to Asterisk ARI endpoint"""
+    import httpx
+    
+    try:
+        # Build ARI URL
+        ari_url = f"{request.scheme}://{request.host}:{request.port}/ari/asterisk/info"
+        
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(
+                ari_url,
+                auth=(request.username, request.password)
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                return {
+                    "success": True,
+                    "message": "Successfully connected to Asterisk ARI",
+                    "asterisk_version": data.get("system", {}).get("version", "Unknown"),
+                    "build": data.get("build", {})
+                }
+            elif response.status_code == 401:
+                return {
+                    "success": False,
+                    "error": "Authentication failed - check username and password"
+                }
+            elif response.status_code == 403:
+                return {
+                    "success": False,
+                    "error": "Access forbidden - check ARI user permissions"
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": f"Unexpected response: HTTP {response.status_code}"
+                }
+                
+    except httpx.ConnectError:
+        return {
+            "success": False,
+            "error": f"Connection refused - is Asterisk running at {request.host}:{request.port}?"
+        }
+    except httpx.ConnectTimeout:
+        return {
+            "success": False,
+            "error": f"Connection timeout - check if {request.host}:{request.port} is reachable"
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"Connection failed: {str(e)}"
+        }
