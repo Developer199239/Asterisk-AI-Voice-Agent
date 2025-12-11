@@ -860,24 +860,31 @@ class Engine:
             
             # Validate provider connectivity (full agent mode)
             for provider_name, provider in self.providers.items():
-                # Check basic readiness
+                # Check basic readiness - providers must have is_ready() and return True
                 try:
-                    ready = provider.is_ready() if hasattr(provider, 'is_ready') else True
-                    if not ready:
-                        logger.error(
-                            "Provider NOT ready",
-                            provider=provider_name,
-                            reason="is_ready() returned False"
-                        )
+                    if hasattr(provider, 'is_ready'):
+                        ready = provider.is_ready()
+                        if not ready:
+                            logger.warning(
+                                "⚠️ Provider NOT ready - missing API key or config",
+                                provider=provider_name,
+                                hint="Check that API key is set in ai-agent.yaml or .env"
+                            )
+                        else:
+                            logger.info(
+                                "✅ Provider validated and ready",
+                                provider=provider_name,
+                                type=provider.__class__.__name__
+                            )
                     else:
-                        logger.info(
-                            "Provider validated and ready",
+                        logger.warning(
+                            "⚠️ Provider missing is_ready() method",
                             provider=provider_name,
                             type=provider.__class__.__name__
                         )
                 except Exception as exc:
                     logger.error(
-                        "Provider readiness check failed",
+                        "❌ Provider readiness check failed",
                         provider=provider_name,
                         error=str(exc),
                         exc_info=True
@@ -7406,25 +7413,33 @@ class Engine:
                         "tools": p_cfg.tools
                     }
 
-            # Gather provider details
+            # Gather provider details - only mark ready if is_ready() explicitly returns True
             providers_info = {}
             for name, prov in (self.providers or {}).items():
-                ready = True
+                ready = False  # Default to not ready
+                reason = None
                 try:
                     if hasattr(prov, 'is_ready'):
                         ready = bool(prov.is_ready())
-                except Exception:
-                    ready = True
-                providers_info[name] = {"ready": ready}
+                        if not ready:
+                            reason = "missing_config"
+                    else:
+                        # Provider doesn't implement is_ready - assume not ready
+                        ready = False
+                        reason = "no_is_ready_method"
+                except Exception as e:
+                    ready = False
+                    reason = f"error: {str(e)}"
+                providers_info[name] = {"ready": ready, "reason": reason} if reason else {"ready": ready}
 
-            # Compute readiness
+            # Compute readiness - default provider must be ready
             default_ready = False
             if self.config and getattr(self.config, 'default_provider', None) in (self.providers or {}):
                 prov = self.providers[self.config.default_provider]
                 try:
-                    default_ready = bool(prov.is_ready()) if hasattr(prov, 'is_ready') else True
+                    default_ready = bool(prov.is_ready()) if hasattr(prov, 'is_ready') else False
                 except Exception:
-                    default_ready = True
+                    default_ready = False
             ari_connected = bool(self.ari_client and self.ari_client.running)
             audiosocket_listening = self.audio_socket_server is not None if self.config.audio_transport == 'audiosocket' else True
             is_ready = ari_connected and audiosocket_listening and default_ready

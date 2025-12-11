@@ -86,6 +86,12 @@ class ElevenLabsAgentProvider(AIProviderInterface, ProviderCapabilitiesMixin):
         """Returns supported codec names."""
         return ["linear16", "pcm16", "ulaw"]
     
+    def is_ready(self) -> bool:
+        """Check if provider is properly configured with required API key and agent ID."""
+        api_key = getattr(self.config, 'api_key', None) or os.getenv("ELEVENLABS_API_KEY", "")
+        agent_id = getattr(self.config, 'agent_id', None) or os.getenv("ELEVENLABS_AGENT_ID", "")
+        return bool(api_key and str(api_key).strip() and agent_id and str(agent_id).strip())
+
     def get_capabilities(self) -> ProviderCapabilities:
         """Return static capability hints for the orchestrator."""
         return ProviderCapabilities(
