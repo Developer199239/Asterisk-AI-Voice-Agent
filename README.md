@@ -254,6 +254,7 @@ Experience all four production-ready configurations with a single phone call:
 - **Press 6** → Deepgram Voice Agent (Enterprise cloud with Think stage)
 - **Press 7** → OpenAI Realtime API (Modern cloud AI, most natural)
 - **Press 8** → Local Hybrid Pipeline (Privacy-focused, audio stays local)
+- **Press 9** → Eleven Labs Agent (Eleven Labs Santa Voice with background music)
 
 ---
 
