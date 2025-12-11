@@ -246,7 +246,8 @@ const Wizard = () => {
             });
             if (!res.data.valid) throw new Error(`${provider} Key Invalid: ${res.data.error}`);
 
-            showToast(`${provider} API Key is valid!`, 'success');
+            // Show detailed message from backend (includes model availability for Google)
+            showToast(res.data.message || `${provider} API Key is valid!`, 'success');
         } catch (err: any) {
             showToast(err.message, 'error');
         } finally {
