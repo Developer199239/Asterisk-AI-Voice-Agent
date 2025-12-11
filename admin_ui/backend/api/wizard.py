@@ -1354,7 +1354,37 @@ async def validate_api_key(validation: ApiKeyValidation):
                     timeout=10.0
                 )
                 if response.status_code == 200:
-                    return {"valid": True, "message": "Google API key is valid"}
+                    # Check if the required model with bidiGenerateContent is available
+                    data = response.json()
+                    models = data.get("models", [])
+                    
+                    # Find models that support bidiGenerateContent (required for Live API)
+                    live_models = []
+                    for model in models:
+                        methods = model.get("supportedGenerationMethods", [])
+                        if "bidiGenerateContent" in methods:
+                            model_name = model.get("name", "").replace("models/", "")
+                            live_models.append(model_name)
+                    
+                    if not live_models:
+                        return {
+                            "valid": False, 
+                            "error": "API key valid but no Live API models available. Your API key doesn't have access to Gemini Live models (bidiGenerateContent). Try creating a new key at aistudio.google.com"
+                        }
+                    
+                    # Check if our preferred model is available
+                    preferred_model = "gemini-2.0-flash-exp"
+                    if preferred_model in live_models:
+                        return {
+                            "valid": True, 
+                            "message": f"Google API key is valid. Live model '{preferred_model}' is available."
+                        }
+                    else:
+                        # Use first available live model
+                        return {
+                            "valid": True, 
+                            "message": f"Google API key is valid. Available Live models: {', '.join(live_models[:3])}"
+                        }
                 elif response.status_code in [400, 403]:
                     return {"valid": False, "error": "Invalid API key"}
                 else:
