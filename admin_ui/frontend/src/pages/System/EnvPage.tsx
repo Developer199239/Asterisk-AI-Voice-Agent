@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 import { useState, useEffect } from 'react';
-import { Save, Eye, EyeOff, RefreshCw, AlertTriangle, CheckCircle, XCircle, Loader2 } from 'lucide-react';
+import { Save, Eye, EyeOff, RefreshCw, AlertTriangle, AlertCircle, CheckCircle, XCircle, Loader2 } from 'lucide-react';
 import { ConfigSection } from '../../components/ui/ConfigSection';
 import { ConfigCard } from '../../components/ui/ConfigCard';
 import { FormInput, FormSelect, FormSwitch } from '../../components/ui/FormComponents';
@@ -16,6 +16,8 @@ const EnvPage = () => {
     const [showSecrets, setShowSecrets] = useState<Record<string, boolean>>({});
     const [ariTestResult, setAriTestResult] = useState<{success: boolean; message?: string; error?: string; asterisk_version?: string} | null>(null);
     const [ariTesting, setAriTesting] = useState(false);
+    const [pendingRestart, setPendingRestart] = useState(false);
+    const [restartingEngine, setRestartingEngine] = useState(false);
 
     const [error, setError] = useState<string | null>(null);
 
@@ -57,7 +59,8 @@ const EnvPage = () => {
             await axios.post('/api/config/env', env, {
                 headers: { Authorization: `Bearer ${token}` }
             });
-            alert('Environment variables saved successfully');
+            setPendingRestart(true);
+            alert('Environment variables saved successfully. Restart AI Engine for changes to take effect.');
         } catch (err: any) {
             console.error('Failed to save env', err);
             if (err.response && err.response.status === 401) {
@@ -76,6 +79,23 @@ const EnvPage = () => {
 
     const toggleSecret = (key: string) => {
         setShowSecrets(prev => ({ ...prev, [key]: !prev[key] }));
+    };
+
+    const handleRestartAIEngine = async () => {
+        setRestartingEngine(true);
+        try {
+            const response = await axios.post('/api/system/containers/ai_engine/restart', {}, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            if (response.data.status === 'success') {
+                setPendingRestart(false);
+                alert('AI Engine restarted successfully. Changes are now active.');
+            }
+        } catch (error: any) {
+            alert(`Failed to restart AI Engine: ${error.response?.data?.detail || error.message}`);
+        } finally {
+            setRestartingEngine(false);
+        }
     };
 
     const testAriConnection = async () => {
@@ -174,9 +194,27 @@ const EnvPage = () => {
 
     return (
         <div className="space-y-6">
-            <div className="bg-yellow-500/10 border border-yellow-500/20 text-yellow-500 p-4 rounded-md flex items-center">
-                <AlertTriangle className="w-5 h-5 mr-2" />
-                Changes to environment variables require a system restart to take effect.
+            <div className={`${pendingRestart ? 'bg-orange-500/15 border-orange-500/30' : 'bg-yellow-500/10 border-yellow-500/20'} border text-yellow-600 dark:text-yellow-500 p-4 rounded-md flex items-center justify-between`}>
+                <div className="flex items-center">
+                    <AlertCircle className="w-5 h-5 mr-2" />
+                    Changes to environment variables require an AI Engine restart to take effect.
+                </div>
+                <button
+                    onClick={handleRestartAIEngine}
+                    disabled={restartingEngine}
+                    className={`flex items-center text-xs px-3 py-1.5 rounded transition-colors ${
+                        pendingRestart 
+                            ? 'bg-orange-500 text-white hover:bg-orange-600 font-medium' 
+                            : 'bg-yellow-500/20 hover:bg-yellow-500/30'
+                    } disabled:opacity-50`}
+                >
+                    {restartingEngine ? (
+                        <Loader2 className="w-3 h-3 mr-1.5 animate-spin" />
+                    ) : (
+                        <RefreshCw className="w-3 h-3 mr-1.5" />
+                    )}
+                    {restartingEngine ? 'Restarting...' : 'Reload AI Engine'}
+                </button>
             </div>
             <div className="flex justify-between items-center">
                 <div>
