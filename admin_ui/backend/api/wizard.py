@@ -602,6 +602,7 @@ class SingleModelDownload(BaseModel):
     download_url: str
     model_path: Optional[str] = None
     config_url: Optional[str] = None  # For TTS models that need JSON config
+    voice_files: Optional[Dict[str, str]] = None  # For Kokoro TTS voice files
 
 
 @router.post("/local/download-model")
@@ -721,7 +722,12 @@ async def download_single_model(request: SingleModelDownload):
                 _download_output.append("🧹 Cleaned up archive file")
             else:
                 # Single file - rename to model_path or keep original name
-                if request.model_path:
+                # Special handling for Kokoro which uses a directory structure
+                if request.model_id == "kokoro_82m":
+                    kokoro_dir = os.path.join(target_dir, "kokoro")
+                    os.makedirs(kokoro_dir, exist_ok=True)
+                    final_path = os.path.join(kokoro_dir, "kokoro-v1_0.pth")
+                elif request.model_path:
                     final_path = os.path.join(target_dir, request.model_path)
                 else:
                     final_path = os.path.join(target_dir, os.path.basename(request.download_url))
@@ -732,13 +738,32 @@ async def download_single_model(request: SingleModelDownload):
                 
                 # Download config file for TTS models (e.g., Piper .onnx.json)
                 if request.config_url and request.type == "tts":
-                    config_dest = final_path + ".json"
+                    # For Kokoro, config goes in the model directory; for Piper, next to .onnx
+                    if request.model_id == "kokoro_82m":
+                        kokoro_dir = os.path.dirname(final_path)
+                        config_dest = os.path.join(kokoro_dir, "config.json")
+                    else:
+                        config_dest = final_path + ".json"
                     _download_output.append(f"📥 Downloading config file...")
                     try:
                         urllib.request.urlretrieve(request.config_url, config_dest)
                         _download_output.append(f"✅ Config saved to {config_dest}")
                     except Exception as config_err:
                         _download_output.append(f"⚠️ Config download failed: {config_err}")
+                
+                # Download voice files for Kokoro TTS
+                if request.voice_files and request.type == "tts":
+                    kokoro_dir = os.path.dirname(final_path)
+                    voices_dir = os.path.join(kokoro_dir, "voices")
+                    os.makedirs(voices_dir, exist_ok=True)
+                    _download_output.append(f"📥 Downloading voice files...")
+                    for voice_name, voice_url in request.voice_files.items():
+                        try:
+                            voice_dest = os.path.join(voices_dir, f"{voice_name}.pt")
+                            urllib.request.urlretrieve(voice_url, voice_dest)
+                            _download_output.append(f"✅ Voice '{voice_name}' saved")
+                        except Exception as voice_err:
+                            _download_output.append(f"⚠️ Voice '{voice_name}' download failed: {voice_err}")
             
             _download_status["running"] = False
             _download_status["completed"] = True

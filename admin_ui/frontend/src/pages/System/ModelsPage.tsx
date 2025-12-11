@@ -15,6 +15,7 @@ interface ModelInfo {
     model_path?: string;
     download_url?: string;
     config_url?: string;  // For TTS models that need JSON config
+    voice_files?: Record<string, string>;  // For Kokoro TTS voice files
     installed?: boolean;
     quality?: string;
     gender?: string;
@@ -151,7 +152,8 @@ const ModelsPage = () => {
                 type: type,
                 download_url: model.download_url,
                 model_path: model.model_path,
-                config_url: model.config_url  // For TTS models (Piper JSON config)
+                config_url: model.config_url,  // For TTS models (Piper JSON config)
+                voice_files: model.voice_files  // For Kokoro TTS voice files
             });
             showToast(`Started downloading ${model.name}`, 'success');
             // Poll for completion with progress updates
