@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { Activity, CheckCircle2, Cpu, RefreshCw, Settings, Terminal, XCircle, HardDrive, AlertCircle, Layers, Box, Play } from 'lucide-react';
+import { Activity, CheckCircle2, Cpu, RefreshCw, Settings, Terminal, XCircle, HardDrive, AlertCircle, Layers, Box, Play, Star } from 'lucide-react';
+import yaml from 'js-yaml';
 import { ConfigCard } from './ui/ConfigCard';
 import axios from 'axios';
 
@@ -45,6 +46,8 @@ export const HealthWidget = () => {
     const [applyingChanges, setApplyingChanges] = useState(false);
     const [startingLocalAI, setStartingLocalAI] = useState(false);
     const [startingAIEngine, setStartingAIEngine] = useState(false);
+    const [defaultProvider, setDefaultProvider] = useState<string | null>(null);
+    const [activePipeline, setActivePipeline] = useState<string | null>(null);
 
     const handleStartContainer = async (containerName: string, setStarting: (v: boolean) => void) => {
         setStarting(true);
@@ -91,6 +94,24 @@ export const HealthWidget = () => {
             }
         };
         fetchModels();
+    }, []);
+
+    // Fetch default provider and active pipeline from config
+    useEffect(() => {
+        const fetchConfig = async () => {
+            try {
+                const res = await axios.get('/api/config/yaml');
+                const parsed = yaml.load(res.data.content) as any;
+                setDefaultProvider(parsed?.default_provider || null);
+                setActivePipeline(parsed?.active_pipeline || null);
+            } catch (err) {
+                console.error('Failed to fetch config', err);
+            }
+        };
+        fetchConfig();
+        // Refresh every 10 seconds
+        const interval = setInterval(fetchConfig, 10000);
+        return () => clearInterval(interval);
     }, []);
 
     // Queue a model change (doesn't apply until user confirms)
@@ -672,6 +693,33 @@ export const HealthWidget = () => {
                                 <span className={`w-2 h-2 rounded-full ${health.ai_engine.details.ari_connected ? "bg-green-500" : "bg-red-500"}`}></span>
                                 {health.ai_engine.details.ari_connected ? "Connected" : "Disconnected"}
                             </span>
+                        </div>
+
+                        {/* Default Configuration */}
+                        <div className="p-3 bg-muted/30 rounded-lg border border-border/50">
+                            <div className="flex items-center gap-2 mb-2">
+                                <Star className="w-4 h-4 text-yellow-500" />
+                                <h4 className="text-sm font-medium text-muted-foreground">Default Configuration</h4>
+                            </div>
+                            <div className="space-y-2">
+                                {activePipeline ? (
+                                    <div className="flex justify-between items-center text-sm">
+                                        <span className="text-muted-foreground">Active Pipeline</span>
+                                        <span className="font-mono text-xs bg-purple-500/10 text-purple-500 px-2 py-1 rounded">
+                                            {activePipeline}
+                                        </span>
+                                    </div>
+                                ) : defaultProvider ? (
+                                    <div className="flex justify-between items-center text-sm">
+                                        <span className="text-muted-foreground">Default Provider</span>
+                                        <span className="font-mono text-xs bg-blue-500/10 text-blue-500 px-2 py-1 rounded capitalize">
+                                            {defaultProvider.replace('_', ' ')}
+                                        </span>
+                                    </div>
+                                ) : (
+                                    <div className="text-xs text-muted-foreground italic">No default configured</div>
+                                )}
+                            </div>
                         </div>
 
                         {/* Pipelines */}
