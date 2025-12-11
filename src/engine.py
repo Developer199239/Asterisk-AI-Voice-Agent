@@ -805,7 +805,13 @@ class Engine:
                 elif name == "google_live":
                     # google_live uses GoogleProviderConfig like the pipeline adapters
                     try:
-                        google_cfg = GoogleProviderConfig(**provider_config_data)
+                        # SECURITY: API key ONLY from environment variables, never from YAML
+                        merged = dict(provider_config_data)
+                        merged['api_key'] = os.getenv('GOOGLE_API_KEY') or ''
+                        google_cfg = GoogleProviderConfig(**merged)
+                        # Note: Don't skip for missing API key - let is_ready() handle it
+                        if not google_cfg.api_key:
+                            logger.warning("Google Live provider API key missing (GOOGLE_API_KEY) - provider will show as Not Ready")
                     except Exception as e:
                         logger.error(f"Failed to build GoogleProviderConfig for google_live: {e}", exc_info=True)
                         continue
@@ -3762,12 +3768,13 @@ class Engine:
         try:
             # SECURITY: API keys ONLY from environment variables, never from YAML
             merged = dict(provider_cfg)
-            merged['api_key'] = os.getenv('DEEPGRAM_API_KEY')  # Force from .env only
+            merged['api_key'] = os.getenv('DEEPGRAM_API_KEY') or ''  # Force from .env only
             
             cfg = DeepgramProviderConfig(**merged)
+            # Note: Don't return None for missing API key - let is_ready() handle it
+            # This allows the provider to appear in health status as "Not Ready"
             if not cfg.api_key:
-                logger.error("Deepgram provider API key missing (DEEPGRAM_API_KEY)")
-                return None
+                logger.warning("Deepgram provider API key missing (DEEPGRAM_API_KEY) - provider will show as Not Ready")
             return cfg
         except Exception as exc:
             logger.error("Failed to build DeepgramProviderConfig", error=str(exc), exc_info=True)
@@ -3799,9 +3806,9 @@ class Engine:
             if not cfg.enabled:
                 logger.info("OpenAI Realtime provider disabled in configuration; skipping initialization.")
                 return None
+            # Note: Don't return None for missing API key - let is_ready() handle it
             if not cfg.api_key:
-                logger.error("OpenAI Realtime provider API key missing (OPENAI_API_KEY)")
-                return None
+                logger.warning("OpenAI Realtime provider API key missing (OPENAI_API_KEY) - provider will show as Not Ready")
             return cfg
         except Exception as exc:
             logger.error("Failed to build OpenAIRealtimeProviderConfig", error=str(exc), exc_info=True)
@@ -3834,12 +3841,11 @@ class Engine:
             if not cfg.enabled:
                 logger.info("ElevenLabs provider disabled in configuration; skipping initialization.")
                 return None
+            # Note: Don't return None for missing API key/agent_id - let is_ready() handle it
             if not cfg.api_key:
-                logger.error("ElevenLabs provider API key missing (ELEVENLABS_API_KEY)")
-                return None
+                logger.warning("ElevenLabs provider API key missing (ELEVENLABS_API_KEY) - provider will show as Not Ready")
             if not cfg.agent_id:
-                logger.error("ElevenLabs provider agent ID missing (ELEVENLABS_AGENT_ID)")
-                return None
+                logger.warning("ElevenLabs provider agent ID missing (ELEVENLABS_AGENT_ID) - provider will show as Not Ready")
             return cfg
         except Exception as exc:
             logger.error("Failed to build ElevenLabsAgentConfig", error=str(exc), exc_info=True)
