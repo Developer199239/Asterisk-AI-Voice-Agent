@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 import { useState, useEffect } from 'react';
-import { Save, Eye, EyeOff, RefreshCw, AlertTriangle } from 'lucide-react';
+import { Save, Eye, EyeOff, RefreshCw, AlertTriangle, CheckCircle, XCircle, Loader2 } from 'lucide-react';
 import { ConfigSection } from '../../components/ui/ConfigSection';
 import { ConfigCard } from '../../components/ui/ConfigCard';
 import { FormInput, FormSelect, FormSwitch } from '../../components/ui/FormComponents';
@@ -14,6 +14,8 @@ const EnvPage = () => {
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [showSecrets, setShowSecrets] = useState<Record<string, boolean>>({});
+    const [ariTestResult, setAriTestResult] = useState<{success: boolean; message?: string; error?: string; asterisk_version?: string} | null>(null);
+    const [ariTesting, setAriTesting] = useState(false);
 
     const [error, setError] = useState<string | null>(null);
 
@@ -74,6 +76,32 @@ const EnvPage = () => {
 
     const toggleSecret = (key: string) => {
         setShowSecrets(prev => ({ ...prev, [key]: !prev[key] }));
+    };
+
+    const testAriConnection = async () => {
+        setAriTesting(true);
+        setAriTestResult(null);
+        
+        try {
+            const response = await axios.post('/api/system/test-ari', {
+                host: env['ASTERISK_HOST'] || '127.0.0.1',
+                port: parseInt(env['ASTERISK_ARI_PORT'] || '8088'),
+                username: env['ASTERISK_ARI_USERNAME'] || '',
+                password: env['ASTERISK_ARI_PASSWORD'] || '',
+                scheme: env['ASTERISK_ARI_WEBSOCKET_SCHEME'] === 'wss' ? 'https' : 'http'
+            }, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            
+            setAriTestResult(response.data);
+        } catch (err: any) {
+            setAriTestResult({
+                success: false,
+                error: err.response?.data?.detail || 'Failed to test connection'
+            });
+        } finally {
+            setAriTesting(false);
+        }
     };
 
     const SecretInput = ({ label, name, placeholder }: { label: string, name: string, placeholder?: string }) => (
@@ -217,6 +245,48 @@ const EnvPage = () => {
                                 { value: 'wss', label: 'WSS (Encrypted)' },
                             ]}
                         />
+                    </div>
+                    
+                    {/* Test Connection Button */}
+                    <div className="mt-6 pt-4 border-t">
+                        <div className="flex items-center gap-4">
+                            <button
+                                type="button"
+                                onClick={testAriConnection}
+                                disabled={ariTesting}
+                                className="inline-flex items-center px-4 py-2 rounded-md text-sm font-medium bg-secondary text-secondary-foreground hover:bg-secondary/80 disabled:opacity-50"
+                            >
+                                {ariTesting ? (
+                                    <>
+                                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                                        Testing...
+                                    </>
+                                ) : (
+                                    'Test Connection'
+                                )}
+                            </button>
+                            
+                            {ariTestResult && (
+                                <div className={`flex items-center gap-2 text-sm ${ariTestResult.success ? 'text-green-600' : 'text-red-600'}`}>
+                                    {ariTestResult.success ? (
+                                        <>
+                                            <CheckCircle className="w-4 h-4" />
+                                            <span>{ariTestResult.message}</span>
+                                            {ariTestResult.asterisk_version && (
+                                                <span className="text-muted-foreground ml-2">
+                                                    (Asterisk {ariTestResult.asterisk_version})
+                                                </span>
+                                            )}
+                                        </>
+                                    ) : (
+                                        <>
+                                            <XCircle className="w-4 h-4" />
+                                            <span>{ariTestResult.error}</span>
+                                        </>
+                                    )}
+                                </div>
+                            )}
+                        </div>
                     </div>
                 </ConfigCard>
             </ConfigSection>
