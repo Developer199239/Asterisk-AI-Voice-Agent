@@ -9,6 +9,7 @@ import { Modal } from '../components/ui/Modal';
 // Provider Forms
 import GenericProviderForm from '../components/config/providers/GenericProviderForm';
 import LocalProviderForm from '../components/config/providers/LocalProviderForm';
+import OllamaProviderForm from '../components/config/providers/OllamaProviderForm';
 import OpenAIRealtimeProviderForm from '../components/config/providers/OpenAIRealtimeProviderForm';
 import DeepgramProviderForm from '../components/config/providers/DeepgramProviderForm';
 import GoogleLiveProviderForm from '../components/config/providers/GoogleLiveProviderForm';
@@ -69,6 +70,7 @@ const ProvidersPage: React.FC = () => {
                 else if (lowerName.includes('deepgram')) providerData.type = 'deepgram';
                 else if (lowerName.includes('google') || lowerName.includes('gemini')) providerData.type = 'google_live';
                 else if (lowerName.includes('elevenlabs')) providerData.type = 'elevenlabs_agent';
+                else if (lowerName.includes('ollama')) providerData.type = 'ollama';
                 else if (lowerName.includes('local')) providerData.type = 'local';
                 else providerData.type = 'other';
             }
@@ -348,6 +350,8 @@ const ProvidersPage: React.FC = () => {
             case 'elevenlabs_agent':
             case 'elevenlabs':
                 return <ElevenLabsProviderForm config={providerForm} onChange={updateForm} />;
+            case 'ollama':
+                return <OllamaProviderForm config={providerForm} onChange={updateForm} />;
             default:
                 return <GenericProviderForm config={providerForm} onChange={updateForm} isNew={isNewProvider} />;
         }

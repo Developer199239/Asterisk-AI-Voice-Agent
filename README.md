@@ -209,30 +209,35 @@ docker compose logs -f ai-engine
    - Local STT/TTS + Cloud LLM (OpenAI). Audio stays on-premises.
    - *Best for: Audio privacy, cost control, compliance.*
 
-### 🆓 Free Demo Mode (No API Key Required)
+### 🏠 Self-Hosted LLM with Ollama (No API Key Required)
 
-For quick testing without any API keys, use the **`local_free`** pipeline:
+Run your own local LLM using [Ollama](https://ollama.ai) - perfect for privacy-focused deployments:
 
 ```yaml
-# In dialplan or via Admin UI
-AI_PROVIDER=local_free
-AI_CONTEXT=demo_free
+# In ai-agent.yaml
+active_pipeline: local_ollama
 ```
 
 **Features:**
 
-- Uses [mlvoca.com](https://mlvoca.github.io/free-llm-api/) free LLM API (DeepSeek-R1 1.5b)
-- Local Vosk STT + Free Cloud LLM + Local Piper TTS
-- **No API key required** - works out of the box
+- **No API key required** - fully self-hosted on your network
+- **Tool calling support** with compatible models (Llama 3.2, Mistral, Qwen)
+- Local Vosk STT + Your Ollama LLM + Local Piper TTS
+- Complete privacy - all processing stays on-premises
 
-**Limitations:**
+**Requirements:**
 
-- ❌ **No tool calling** - AI cannot hang up, transfer, or send emails
-- ❌ User must hang up manually when done
-- ⚠️ Limited hardware = slower responses during peak usage
-- ⚠️ Non-commercial use only
+- Mac Mini, gaming PC, or server with Ollama installed
+- 8GB+ RAM (16GB+ recommended for larger models)
+- See [docs/OLLAMA_SETUP.md](docs/OLLAMA_SETUP.md) for setup guide
 
-> **For production use**, sign up for [OpenAI](https://platform.openai.com), [Groq](https://console.groq.com), or [Deepgram](https://deepgram.com) API keys to enable full functionality.
+**Recommended Models:**
+
+| Model | Size | Tool Calling |
+|-------|------|--------------|
+| `llama3.2` | 2GB | ✅ Yes |
+| `mistral` | 4GB | ✅ Yes |
+| `qwen2.5` | 4.7GB | ✅ Yes |
 
 ### Technical Features
 

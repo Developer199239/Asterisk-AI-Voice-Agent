@@ -497,18 +497,18 @@ class PipelineOrchestrator:
         else:
             logger.debug("ElevenLabs pipeline adapters not registered - API key unavailable")
 
-        # Free LLM adapter (mlvoca.com) - always available, no API key required
-        free_llm_factory = self._make_free_llm_factory()
-        self.register_factory("free_llm", free_llm_factory)
+        # Ollama LLM adapter - for self-hosted local LLMs
+        ollama_llm_factory = self._make_ollama_llm_factory()
+        self.register_factory("ollama_llm", ollama_llm_factory)
         logger.info(
-            "Free LLM adapter registered (NO TOOL CALLING)",
-            llm_factory="free_llm",
-            endpoint="https://mlvoca.com",
-            note="Demo/testing only - user must hang up manually",
+            "Ollama LLM adapter registered",
+            llm_factory="ollama_llm",
+            default_endpoint="http://localhost:11434",
+            note="Self-hosted LLM with optional tool calling",
         )
 
-    def _make_free_llm_factory(self) -> ComponentFactory:
-        """Create factory for the free Ollama-compatible LLM API."""
+    def _make_ollama_llm_factory(self) -> ComponentFactory:
+        """Create factory for Ollama LLM adapter (self-hosted local models)."""
         def factory(component_key: str, options: Dict[str, Any]) -> Component:
             return OllamaLLMAdapter(
                 self.config,

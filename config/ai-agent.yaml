@@ -163,28 +163,31 @@ contexts:
     - leave_voicemail
     - send_email_summary
     - request_transcript
-  # Free demo - NO API KEY REQUIRED, NO TOOL CALLING
-  # Uses mlvoca.com free LLM API - for basic testing only
-  demo_free:
-    greeting: Hi! I'm a free AI demo. Ask me anything - but note I cannot hang up or transfer calls, so you'll need to hang up when done.
+  # Ollama demo - Self-hosted LLM with tool calling
+  # Requires Ollama running on the network
+  demo_ollama:
+    greeting: Hi! I'm running on your local Ollama server. How can I help you today?
     profile: telephony_ulaw_8k
-    pipeline: local_free
+    pipeline: local_ollama
     prompt: |
-      You are a helpful voice assistant for testing purposes.
-      
-      IMPORTANT LIMITATIONS:
-      - You CANNOT hang up calls or transfer calls
-      - You have NO access to tools or actions
-      - Keep responses SHORT (1-3 sentences) for voice
-      - The user must hang up when they're done
+      You are a helpful voice assistant running on a self-hosted Ollama instance.
       
       YOUR ROLE:
       - Answer questions conversationally
       - Be helpful and friendly
-      - Keep responses concise for voice interaction
-      - When the user says goodbye, simply say a warm farewell (they will hang up)
+      - Keep responses SHORT (1-3 sentences) for voice
+      - Speak naturally without reading punctuation
       
-      Do not mention that you're an AI or that you have limitations unless asked.
+      CALL ENDING PROTOCOL:
+      - When user says goodbye, use the hangup_call tool with a warm farewell
+      - Always invoke the tool, don't just say goodbye
+    tools:
+      - transfer
+      - cancel_transfer
+      - hangup_call
+      - leave_voicemail
+      - send_email_summary
+      - request_transcript
   demo_hybrid:
     greeting: Hi {caller_name}, I'm Ava with the local hybrid voice demo. I can explain
       how this project works in simple terms.
@@ -309,21 +312,31 @@ pipelines:
     - send_email_summary
     - request_transcript
     tts: local_tts
-  # Free pipeline - NO API KEY REQUIRED, but NO TOOL CALLING
-  # Uses mlvoca.com free LLM API (DeepSeek-R1 1.5b or TinyLlama)
-  # For demo/testing only - user must hang up manually
-  local_free:
+  # Ollama pipeline - Self-hosted LLM with local STT/TTS
+  # Requires user to run Ollama on their network
+  # See docs/OLLAMA_SETUP.md for installation instructions
+  local_ollama:
     stt: local_stt
-    llm: free_llm
+    llm: ollama_llm
     tts: local_tts
-    # NO tools - free LLM API doesn't support function calling
+    tools:
+      - transfer
+      - cancel_transfer
+      - hangup_call
+      - leave_voicemail
+      - send_email_summary
+      - request_transcript
     options:
       llm:
-        base_url: https://mlvoca.com
-        model: deepseek-r1:1.5b  # or "tinyllama"
+        # IMPORTANT: Replace with your Ollama server IP address
+        # Docker cannot reach localhost - use your host machine's IP
+        # Example: http://192.168.1.100:11434
+        base_url: http://localhost:11434
+        model: llama3.2  # or mistral, qwen2.5, etc.
         temperature: 0.7
-        max_tokens: 150
-        timeout_sec: 30
+        max_tokens: 200
+        timeout_sec: 60  # Local models may be slower
+        tools_enabled: true  # Enable tool calling for compatible models
       stt:
         chunk_ms: 160
         mode: stt
