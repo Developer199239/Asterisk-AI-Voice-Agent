@@ -8,6 +8,40 @@ import { FormInput, FormSelect, FormSwitch } from '../../components/ui/FormCompo
 
 import { useAuth } from '../../auth/AuthContext';
 
+// SecretInput defined OUTSIDE EnvPage to prevent re-creation on every render
+const SecretInput = ({ 
+    label, 
+    placeholder,
+    value,
+    onChange,
+    showSecret,
+    onToggleSecret
+}: { 
+    label: string;
+    placeholder?: string;
+    value: string;
+    onChange: (value: string) => void;
+    showSecret: boolean;
+    onToggleSecret: () => void;
+}) => (
+    <div className="relative">
+        <FormInput
+            label={label}
+            type={showSecret ? 'text' : 'password'}
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder={placeholder}
+        />
+        <button
+            type="button"
+            onClick={onToggleSecret}
+            className="absolute right-3 top-[38px] text-muted-foreground hover:text-foreground"
+        >
+            {showSecret ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+        </button>
+    </div>
+);
+
 const EnvPage = () => {
     const { token, loading: authLoading } = useAuth();
     const [env, setEnv] = useState<Record<string, string>>({});
@@ -124,23 +158,16 @@ const EnvPage = () => {
         }
     };
 
-    const SecretInput = ({ label, name, placeholder }: { label: string, name: string, placeholder?: string }) => (
-        <div className="relative">
-            <FormInput
-                label={label}
-                type={showSecrets[name] ? 'text' : 'password'}
-                value={env[name] || ''}
-                onChange={(e) => updateEnv(name, e.target.value)}
-                placeholder={placeholder}
-            />
-            <button
-                type="button"
-                onClick={() => toggleSecret(name)}
-                className="absolute right-3 top-[38px] text-muted-foreground hover:text-foreground"
-            >
-                {showSecrets[name] ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-            </button>
-        </div>
+    // Helper to render SecretInput with current state
+    const renderSecretInput = (label: string, envKey: string, placeholder?: string) => (
+        <SecretInput
+            label={label}
+            placeholder={placeholder}
+            value={env[envKey] || ''}
+            onChange={(value) => updateEnv(envKey, value)}
+            showSecret={showSecrets[envKey] || false}
+            onToggleSecret={() => toggleSecret(envKey)}
+        />
     );
 
     if (loading) return <div className="p-8 text-center text-muted-foreground">Loading environment variables...</div>;
@@ -267,7 +294,7 @@ const EnvPage = () => {
                             value={env['ASTERISK_ARI_USERNAME'] || ''}
                             onChange={(e) => updateEnv('ASTERISK_ARI_USERNAME', e.target.value)}
                         />
-                        <SecretInput label="ARI Password" name="ASTERISK_ARI_PASSWORD" />
+                        {renderSecretInput('ARI Password', 'ASTERISK_ARI_PASSWORD')}
                         <FormInput
                             label="ARI Port"
                             type="number"
@@ -333,13 +360,13 @@ const EnvPage = () => {
             <ConfigSection title="API Keys" description="Securely manage API keys for external services.">
                 <ConfigCard>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <SecretInput label="OpenAI API Key" name="OPENAI_API_KEY" placeholder="sk-..." />
-                        <SecretInput label="Deepgram API Key" name="DEEPGRAM_API_KEY" placeholder="Token..." />
-                        <SecretInput label="Google API Key" name="GOOGLE_API_KEY" placeholder="AIza..." />
-                        <SecretInput label="ElevenLabs API Key" name="ELEVENLABS_API_KEY" placeholder="xi-..." />
-                        <SecretInput label="Cartesia API Key" name="CARTESIA_API_KEY" placeholder="Token..." />
-                        <SecretInput label="Resend API Key" name="RESEND_API_KEY" placeholder="re_..." />
-                        <SecretInput label="JWT Secret" name="JWT_SECRET" placeholder="Secret for auth tokens" />
+                        {renderSecretInput('OpenAI API Key', 'OPENAI_API_KEY', 'sk-...')}
+                        {renderSecretInput('Deepgram API Key', 'DEEPGRAM_API_KEY', 'Token...')}
+                        {renderSecretInput('Google API Key', 'GOOGLE_API_KEY', 'AIza...')}
+                        {renderSecretInput('ElevenLabs API Key', 'ELEVENLABS_API_KEY', 'xi-...')}
+                        {renderSecretInput('Cartesia API Key', 'CARTESIA_API_KEY', 'Token...')}
+                        {renderSecretInput('Resend API Key', 'RESEND_API_KEY', 're_...')}
+                        {renderSecretInput('JWT Secret', 'JWT_SECRET', 'Secret for auth tokens')}
                     </div>
                 </ConfigCard>
             </ConfigSection>
@@ -590,7 +617,7 @@ const EnvPage = () => {
                                             value={env['KROKO_URL'] || 'wss://app.kroko.ai/api/v1/transcripts/streaming'}
                                             onChange={(e) => updateEnv('KROKO_URL', e.target.value)}
                                         />
-                                        <SecretInput label="Kroko API Key" name="KROKO_API_KEY" placeholder="Your Kroko API key" />
+                                        {renderSecretInput('Kroko API Key', 'KROKO_API_KEY', 'Your Kroko API key')}
                                     </>
                                 )}
                                 <FormSelect
@@ -673,7 +700,7 @@ const EnvPage = () => {
                                     ]}
                                 />
                                 {env['KOKORO_MODE'] === 'api' ? (
-                                    <SecretInput label="Kokoro API Key" name="KOKORO_API_KEY" placeholder="Your Kokoro API key" />
+                                    renderSecretInput('Kokoro API Key', 'KOKORO_API_KEY', 'Your Kokoro API key')
                                 ) : (
                                     <FormInput
                                         label="Model Path"
