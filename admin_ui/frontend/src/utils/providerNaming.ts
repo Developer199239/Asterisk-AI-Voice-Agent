@@ -84,6 +84,7 @@ export const REGISTERED_PROVIDER_TYPES = [
     'openai',
     'google',
     'elevenlabs',
+    'ollama',
 ] as const;
 
 export type RegisteredProviderType = typeof REGISTERED_PROVIDER_TYPES[number];
