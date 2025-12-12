@@ -14,6 +14,7 @@ import os
 import json
 import asyncio
 import websockets
+from services.fs import upsert_env_vars
 
 router = APIRouter()
 
@@ -475,35 +476,7 @@ def _read_env_values(env_file: str, keys: list) -> Dict[str, str]:
 
 def _update_env_file(env_file: str, updates: Dict[str, str]):
     """Update environment variables in .env file."""
-    lines = []
-    updated_keys = set()
-    
-    # Read existing file
-    if os.path.exists(env_file):
-        with open(env_file, 'r') as f:
-            lines = f.readlines()
-    
-    # Update existing lines
-    new_lines = []
-    for line in lines:
-        key = None
-        if '=' in line and not line.strip().startswith('#'):
-            key = line.split('=')[0].strip()
-        
-        if key and key in updates:
-            new_lines.append(f"{key}={updates[key]}\n")
-            updated_keys.add(key)
-        else:
-            new_lines.append(line)
-    
-    # Add new keys that weren't in the file
-    for key, value in updates.items():
-        if key not in updated_keys:
-            new_lines.append(f"{key}={value}\n")
-    
-    # Write back
-    with open(env_file, 'w') as f:
-        f.writelines(new_lines)
+    upsert_env_vars(env_file, updates, header="Local AI model management")
 
 
 # Import docker at module level for switch endpoint

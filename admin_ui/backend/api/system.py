@@ -6,6 +6,7 @@ import psutil
 import os
 import shutil
 import logging
+from services.fs import upsert_env_vars
 
 logger = logging.getLogger(__name__)
 
@@ -652,25 +653,14 @@ async def fix_directory_issues():
     # Fix 4: Update .env if needed
     env_file = os.path.join(project_root, ".env")
     try:
-        env_content = ""
-        if os.path.exists(env_file):
-            with open(env_file, "r") as f:
-                env_content = f.read()
-        
-        if "AST_MEDIA_DIR=" not in env_content:
-            with open(env_file, "a") as f:
-                f.write(f"\nAST_MEDIA_DIR=/mnt/asterisk_media/ai-generated\n")
+        result = upsert_env_vars(
+            env_file,
+            {"AST_MEDIA_DIR": "/mnt/asterisk_media/ai-generated"},
+            header="Auto-fix: media directory",
+        )
+        if result.added_keys:
             fixes_applied.append("Added AST_MEDIA_DIR to .env (requires container restart)")
-        elif "AST_MEDIA_DIR=/mnt/asterisk_media/ai-generated" not in env_content:
-            # Update existing value
-            import re
-            new_content = re.sub(
-                r"AST_MEDIA_DIR=.*", 
-                "AST_MEDIA_DIR=/mnt/asterisk_media/ai-generated", 
-                env_content
-            )
-            with open(env_file, "w") as f:
-                f.write(new_content)
+        elif result.updated_keys:
             fixes_applied.append("Updated AST_MEDIA_DIR in .env (requires container restart)")
     except Exception as e:
         errors.append(f"Failed to update .env: {str(e)}")

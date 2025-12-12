@@ -8,6 +8,7 @@ import subprocess
 import stat
 from typing import Dict, Any, Optional
 from settings import ENV_PATH, CONFIG_PATH, ensure_env_file, PROJECT_ROOT
+from services.fs import upsert_env_vars, atomic_write_text
 from api.models_catalog import (
     get_full_catalog, get_models_by_language, get_available_languages,
     LANGUAGE_NAMES, REGION_NAMES, VOSK_STT_MODELS, SHERPA_STT_MODELS,
@@ -1028,22 +1029,18 @@ async def download_selected_models(selection: ModelSelection):
             # Write to .env
             if env_updates:
                 env_path = os.path.join(PROJECT_ROOT, ".env")
-                env_content = ""
-                if os.path.exists(env_path):
-                    with open(env_path, "r") as f:
-                        env_content = f.read()
-                
+                updates_dict = {}
                 for update in env_updates:
-                    key = update.split("=")[0]
-                    # Remove existing line if present
-                    import re
-                    env_content = re.sub(f"^{key}=.*$", "", env_content, flags=re.MULTILINE)
-                
-                # Add new values
-                with open(env_path, "a") as f:
-                    f.write("\n# Model selections from wizard\n")
-                    for update in env_updates:
-                        f.write(f"{update}\n")
+                    if "=" not in update:
+                        continue
+                    k, v = update.split("=", 1)
+                    updates_dict[k.strip()] = v.strip()
+
+                upsert_env_vars(
+                    env_path,
+                    updates_dict,
+                    header="Model selections from wizard",
+                )
                 
                 _download_output.append("✅ Configuration updated")
             
@@ -1386,20 +1383,18 @@ async def switch_local_model(request: ModelSwitchRequest):
     if env_updates:
         try:
             env_path = os.path.join(PROJECT_ROOT, ".env")
-            env_content = ""
-            if os.path.exists(env_path):
-                with open(env_path, "r") as f:
-                    env_content = f.read()
-            
-            import re
+            updates_dict = {}
             for update in env_updates:
-                key = update.split("=")[0]
-                env_content = re.sub(f"^{key}=.*$", "", env_content, flags=re.MULTILINE)
-            
-            with open(env_path, "a") as f:
-                f.write("\n# Model switch from Dashboard\n")
-                for update in env_updates:
-                    f.write(f"{update}\n")
+                if "=" not in update:
+                    continue
+                k, v = update.split("=", 1)
+                updates_dict[k.strip()] = v.strip()
+
+            upsert_env_vars(
+                env_path,
+                updates_dict,
+                header="Model switch from Dashboard",
+            )
         except Exception as e:
             return {"success": False, "message": f"Failed to update .env: {e}"}
     
@@ -1694,7 +1689,7 @@ async def save_setup_config(config: SetupConfig):
             "ASTERISK_APP_NAME": config.asterisk_app,
             "AI_NAME": config.ai_name,
             "AI_ROLE": config.ai_role,
-            "AI_GREETING": config.greeting
+            "GREETING": config.greeting,
         }
         
         if config.openai_key:
@@ -1712,20 +1707,7 @@ async def save_setup_config(config: SetupConfig):
         if config.cartesia_key:
             env_updates["CARTESIA_API_KEY"] = config.cartesia_key
 
-        current_env = {}
-        if os.path.exists(ENV_PATH):
-            with open(ENV_PATH, "r") as f:
-                for line in f:
-                    line = line.strip()
-                    if line and not line.startswith("#") and "=" in line:
-                        key, val = line.split("=", 1)
-                        current_env[key] = val
-        
-        current_env.update(env_updates)
-        
-        with open(ENV_PATH, "w") as f:
-            for key, val in current_env.items():
-                f.write(f"{key}={val}\n")
+        upsert_env_vars(ENV_PATH, env_updates, header="Setup Wizard")
 
         # 2. Update ai-agent.yaml - APPEND MODE
         # If provider already exists, just enable it and update greeting
@@ -1940,8 +1922,11 @@ async def save_setup_config(config: SetupConfig):
                 "profile": "telephony_ulaw_8k"
             }
 
-            with open(CONFIG_PATH, "w") as f:
-                yaml.dump(yaml_config, f, default_flow_style=False)
+            atomic_write_text(
+                CONFIG_PATH,
+                yaml.dump(yaml_config, default_flow_style=False, sort_keys=False),
+                mode_from_existing=True,
+            )
         
         # Config saved - engine start will be handled by completion step UI
         return {"status": "success", "provider": config.provider}
@@ -1959,11 +1944,16 @@ async def skip_setup():
     try:
         # Create minimal .env with a marker that setup was acknowledged
         if not os.path.exists(ENV_PATH):
-            with open(ENV_PATH, 'w') as f:
-                f.write("# Setup wizard skipped - configure manually\n")
-                f.write("ASTERISK_HOST=127.0.0.1\n")
-                f.write("ASTERISK_ARI_USERNAME=asterisk\n")
-                f.write("ASTERISK_ARI_PASSWORD=\n")
+            atomic_write_text(
+                ENV_PATH,
+                (
+                    "# Setup wizard skipped - configure manually\n"
+                    "ASTERISK_HOST=127.0.0.1\n"
+                    "ASTERISK_ARI_USERNAME=asterisk\n"
+                    "ASTERISK_ARI_PASSWORD=\n"
+                ),
+                mode_from_existing=True,
+            )
         
         return {"status": "success", "message": "Setup skipped successfully"}
     except Exception as e:

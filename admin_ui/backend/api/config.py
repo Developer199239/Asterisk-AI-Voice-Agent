@@ -496,11 +496,11 @@ async def export_configuration():
         
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
             # Add YAML config
-            if settings.CONFIG_PATH.exists():
+            if os.path.exists(settings.CONFIG_PATH):
                 zip_file.write(settings.CONFIG_PATH, 'ai-agent.yaml')
             
             # Add ENV file
-            if settings.ENV_PATH.exists():
+            if os.path.exists(settings.ENV_PATH):
                 zip_file.write(settings.ENV_PATH, '.env')
             
             # Add timestamp file
