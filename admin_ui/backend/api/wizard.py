@@ -1889,7 +1889,7 @@ async def save_setup_config(config: SetupConfig):
                             "api_key": "${GROQ_API_KEY}",
                             "chat_base_url": "https://api.groq.com/openai/v1",
                             "chat_model": "llama-3.3-70b-versatile",
-                            "tools_enabled": True,
+                            "tools_enabled": False,
                             "type": "openai",
                             "capabilities": ["llm"],
                         })
