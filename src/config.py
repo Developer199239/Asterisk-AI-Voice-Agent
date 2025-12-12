@@ -147,6 +147,7 @@ class OpenAIProviderConfig(BaseModel):
     api_key: Optional[str] = None
     organization: Optional[str] = None
     project: Optional[str] = None
+    tools_enabled: bool = Field(default=True)
     realtime_base_url: str = Field(default="wss://api.openai.com/v1/realtime")
     chat_base_url: str = Field(default="https://api.openai.com/v1")
     tts_base_url: str = Field(default="https://api.openai.com/v1/audio/speech")

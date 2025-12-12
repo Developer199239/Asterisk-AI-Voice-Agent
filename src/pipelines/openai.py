@@ -368,8 +368,9 @@ class OpenAILLMAdapter(LLMComponent):
         payload = self._build_chat_payload(transcript, context, merged)
         
         # Milestone7: Tool support
+        tools_enabled = bool(merged.get("tools_enabled", True))
         tools_list = merged.get("tools")
-        if tools_list and isinstance(tools_list, list):
+        if tools_enabled and tools_list and isinstance(tools_list, list):
             tool_schemas = []
             for tool_name in tools_list:
                 tool = tool_registry.get(tool_name)
@@ -526,10 +527,15 @@ class OpenAILLMAdapter(LLMComponent):
 
     def _compose_options(self, runtime_options: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         runtime_options = runtime_options or {}
+        tools_enabled_explicit = "tools_enabled" in runtime_options or "tools_enabled" in (self._pipeline_defaults or {})
         merged = {
             "api_key": runtime_options.get("api_key", self._pipeline_defaults.get("api_key", self._provider_defaults.api_key)),
             "organization": runtime_options.get("organization", self._pipeline_defaults.get("organization", self._provider_defaults.organization)),
             "project": runtime_options.get("project", self._pipeline_defaults.get("project", self._provider_defaults.project)),
+            "tools_enabled": runtime_options.get(
+                "tools_enabled",
+                self._pipeline_defaults.get("tools_enabled", self._provider_defaults.tools_enabled),
+            ),
             "chat_base_url": runtime_options.get(
                 "chat_base_url",
                 self._pipeline_defaults.get("chat_base_url", self._provider_defaults.chat_base_url),
@@ -558,6 +564,16 @@ class OpenAILLMAdapter(LLMComponent):
             "use_realtime": runtime_options.get("use_realtime", self._pipeline_defaults.get("use_realtime", False)),
             "tools": runtime_options.get("tools", self._pipeline_defaults.get("tools", [])),
         }
+
+        # Groq is OpenAI-compatible, but tool calling frequently fails unless the prompt is tuned.
+        # For best out-of-box experience, disable tools by default for Groq unless explicitly enabled.
+        try:
+            chat_base_url = str(merged.get("chat_base_url") or "")
+        except Exception:
+            chat_base_url = ""
+        if not tools_enabled_explicit and "api.groq.com" in chat_base_url:
+            merged["tools_enabled"] = False
+
         # Fallback persona when missing
         try:
             sys_p = (merged.get("system_prompt") or "").strip()
