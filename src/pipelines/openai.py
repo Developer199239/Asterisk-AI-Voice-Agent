@@ -527,7 +527,6 @@ class OpenAILLMAdapter(LLMComponent):
 
     def _compose_options(self, runtime_options: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         runtime_options = runtime_options or {}
-        tools_enabled_explicit = "tools_enabled" in runtime_options or "tools_enabled" in (self._pipeline_defaults or {})
         merged = {
             "api_key": runtime_options.get("api_key", self._pipeline_defaults.get("api_key", self._provider_defaults.api_key)),
             "organization": runtime_options.get("organization", self._pipeline_defaults.get("organization", self._provider_defaults.organization)),
@@ -564,15 +563,6 @@ class OpenAILLMAdapter(LLMComponent):
             "use_realtime": runtime_options.get("use_realtime", self._pipeline_defaults.get("use_realtime", False)),
             "tools": runtime_options.get("tools", self._pipeline_defaults.get("tools", [])),
         }
-
-        # Groq is OpenAI-compatible, but tool calling frequently fails unless the prompt is tuned.
-        # For best out-of-box experience, disable tools by default for Groq unless explicitly enabled.
-        try:
-            chat_base_url = str(merged.get("chat_base_url") or "")
-        except Exception:
-            chat_base_url = ""
-        if not tools_enabled_explicit and "api.groq.com" in chat_base_url:
-            merged["tools_enabled"] = False
 
         # Fallback persona when missing
         try:

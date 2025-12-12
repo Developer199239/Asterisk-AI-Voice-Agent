@@ -203,6 +203,14 @@ async def get_local_ai_status():
     
     try:
         async with websockets.connect(ws_url, open_timeout=5) as ws:
+            auth_token = (get_setting("LOCAL_WS_AUTH_TOKEN", os.getenv("LOCAL_WS_AUTH_TOKEN", "")) or "").strip()
+            if auth_token:
+                await ws.send(json.dumps({"type": "auth", "auth_token": auth_token}))
+                raw = await asyncio.wait_for(ws.recv(), timeout=5)
+                data = json.loads(raw)
+                if data.get("type") != "auth_response" or data.get("status") != "ok":
+                    raise RuntimeError(f"Local AI auth failed: {data}")
+
             await ws.send(json.dumps({"type": "status"}))
             response = await asyncio.wait_for(ws.recv(), timeout=5)
             data = json.loads(response)
@@ -289,6 +297,14 @@ async def switch_model(request: SwitchModelRequest):
             ws_url = get_setting("HEALTH_CHECK_LOCAL_AI_URL", "ws://local_ai_server:8765")
             try:
                 async with websockets.connect(ws_url, open_timeout=5) as ws:
+                    auth_token = (get_setting("LOCAL_WS_AUTH_TOKEN", os.getenv("LOCAL_WS_AUTH_TOKEN", "")) or "").strip()
+                    if auth_token:
+                        await ws.send(json.dumps({"type": "auth", "auth_token": auth_token}))
+                        raw = await asyncio.wait_for(ws.recv(), timeout=5)
+                        auth_data = json.loads(raw)
+                        if auth_data.get("type") != "auth_response" or auth_data.get("status") != "ok":
+                            raise RuntimeError(f"Local AI auth failed: {auth_data}")
+
                     await ws.send(json.dumps({
                         "type": "reload_llm",
                         "model_path": request.model_path
@@ -319,35 +335,8 @@ async def switch_model(request: SwitchModelRequest):
     # 3. Recreate container if needed (restart doesn't reload .env)
     if requires_restart:
         try:
-            import subprocess
-            
-            # Use docker compose down/up to properly recreate with new .env values
-            # down: removes container completely (clears env cache)
-            # up: creates fresh container reading new .env values
-            
-            # Step 1: Stop and remove the container
-            down_result = subprocess.run(
-                ["/usr/local/bin/docker-compose", "-p", "asterisk-ai-voice-agent", 
-                 "down", "local-ai-server"],
-                cwd=PROJECT_ROOT,
-                capture_output=True,
-                text=True,
-                timeout=30
-            )
-            
-            # Step 2: Create and start fresh container with new env
-            up_result = subprocess.run(
-                ["/usr/local/bin/docker-compose", "-p", "asterisk-ai-voice-agent", 
-                 "up", "-d", "--no-build", "local-ai-server"],
-                cwd=PROJECT_ROOT,
-                capture_output=True,
-                text=True,
-                timeout=60  # May take longer to start
-            )
-            
-            if up_result.returncode != 0:
-                raise Exception(f"docker-compose up failed: {up_result.stderr}")
-            
+            from api.system import _recreate_via_compose
+            result = await _recreate_via_compose("local-ai-server")
             return SwitchModelResponse(
                 success=True,
                 message=f"Model switch initiated. Container recreating with new settings...",

@@ -1406,6 +1406,14 @@ async def switch_local_model(request: ModelSwitchRequest):
     # Send switch command to local AI server via WebSocket
     try:
         async with websockets.connect("ws://127.0.0.1:8765", ping_interval=None) as ws:
+            auth_token = (os.getenv("LOCAL_WS_AUTH_TOKEN", "") or "").strip()
+            if auth_token:
+                await ws.send(json.dumps({"type": "auth", "auth_token": auth_token}))
+                raw = await asyncio.wait_for(ws.recv(), timeout=5)
+                auth_data = json.loads(raw)
+                if auth_data.get("type") != "auth_response" or auth_data.get("status") != "ok":
+                    raise RuntimeError(f"Local AI auth failed: {auth_data}")
+
             await ws.send(json.dumps(switch_data))
             response = await ws.recv()
             result = json.loads(response)
@@ -1881,7 +1889,7 @@ async def save_setup_config(config: SetupConfig):
                             "api_key": "${GROQ_API_KEY}",
                             "chat_base_url": "https://api.groq.com/openai/v1",
                             "chat_model": "llama-3.3-70b-versatile",
-                            "tools_enabled": False,
+                            "tools_enabled": True,
                             "type": "openai",
                             "capabilities": ["llm"],
                         })
