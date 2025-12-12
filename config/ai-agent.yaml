@@ -40,11 +40,12 @@ contexts:
       - Dual transport support: AudioSocket (legacy) and ExternalMedia RTP (modern)\n\
       - Two-container design: ai-engine (orchestrator) + local-ai-server (optional,\
       \ for local AI)\n- Uses Asterisk REST Interface (ARI) for call control\n- Enterprise\
-      \ monitoring: Prometheus + Grafana with 50+ metrics\n\n3 VALIDATED CONFIGURATIONS\
-      \ (Golden Baselines):\n1. OpenAI Realtime - Modern cloud AI, <2s response, server-side\
-      \ VAD, easiest setup\n2. Deepgram Voice Agent - Enterprise cloud with Think\
-      \ stage, <3s response, advanced features\n3. Local Hybrid - Privacy-focused:\
-      \ Local STT/TTS + Cloud LLM, 3-7s response, audio stays on-premises\n\nSETUP\
+      \ monitoring: Prometheus + Grafana with 50+ metrics\n\n5 GOLDEN BASELINE CONFIGURATIONS:\n\
+      1. OpenAI Realtime - Modern cloud AI, <2s response, server-side VAD (Recommended)\n\
+      2. Deepgram Voice Agent - Enterprise cloud with Think stage, <3s response\n\
+      3. Google Live API - Gemini 2.0 Flash multimodal, <2s response\n\
+      4. ElevenLabs Agent - Premium voice quality, natural conversations, <2s response\n\
+      5. Local Hybrid - Privacy-focused: Local STT/TTS + Cloud LLM, audio stays on-premises\n\nSETUP\
       \ PROCESS:\n1. Clone repo: git clone https://github.com/hkjarral/Asterisk-AI-Voice-Agent.git\n\
       2. Run installer: ./install.sh (guides through 3 config choices, handles everything)\n\
       3. Add dialplan to FreePBX (Config Edit \u2192 extensions_custom.conf)\n4. Route\
@@ -112,12 +113,12 @@ contexts:
       - Dual transport support: AudioSocket (legacy) and ExternalMedia RTP (modern)\n\
       - Two-container design: ai-engine (orchestrator) + local-ai-server (optional,\
       \ for local AI)\n- Uses Asterisk REST Interface (ARI) for call control\n- Enterprise\
-      \ monitoring: Prometheus + Grafana with 50+ metrics\n\n3 VALIDATED CONFIGURATIONS\
-      \ (Golden Baselines):\n1. Google Gemini Live - Native audio AI, <1s response,\
-      \ TRUE duplex, built-in VAD\n2. OpenAI Realtime - Modern cloud AI, <2s response,\
-      \ server-side VAD, easiest setup\n3. Deepgram Voice Agent - Enterprise cloud\
-      \ with Think stage, <3s response, advanced features\n4. Local Hybrid - Privacy-focused:\
-      \ Local STT/TTS + Cloud LLM, 3-7s response, audio stays on-premises\n\nSETUP\
+      \ monitoring: Prometheus + Grafana with 50+ metrics\n\n5 GOLDEN BASELINE CONFIGURATIONS:\n\
+      1. OpenAI Realtime - Modern cloud AI, <2s response, server-side VAD (Recommended)\n\
+      2. Deepgram Voice Agent - Enterprise cloud with Think stage, <3s response\n\
+      3. Google Live API - Gemini 2.0 Flash multimodal, <2s response\n\
+      4. ElevenLabs Agent - Premium voice quality, natural conversations, <2s response\n\
+      5. Local Hybrid - Privacy-focused: Local STT/TTS + Cloud LLM, audio stays on-premises\n\nSETUP\
       \ PROCESS:\n1. Clone repo: git clone https://github.com/hkjarral/Asterisk-AI-Voice-Agent.git\n\
       2. Run installer: ./install.sh (guides through 3 config choices, handles everything)\n\
       3. Add dialplan to FreePBX (Config Edit \u2192 extensions_custom.conf)\n4. Route\
