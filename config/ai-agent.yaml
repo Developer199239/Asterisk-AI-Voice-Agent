@@ -453,15 +453,13 @@ providers:
   ollama_llm:
     capabilities:
     - llm
-    # IMPORTANT: Replace with your Ollama server IP address
-    # Docker cannot reach localhost - use your host machine's IP
-    base_url: ${OLLAMA_BASE_URL:-http://localhost:11434}
-    model: ${OLLAMA_MODEL:-llama3.2}
-    enabled: false  # Enable after configuring base_url with your Ollama server IP
+    base_url: http://localhost:11434
+    model: llama3.2
+    enabled: false
     temperature: 0.7
     max_tokens: 200
     timeout_sec: 60
-    tools_enabled: true  # Enable for models that support tool calling
+    tools_enabled: true
     type: ollama
   openai_realtime:
     base_url: wss://api.openai.com/v1/realtime

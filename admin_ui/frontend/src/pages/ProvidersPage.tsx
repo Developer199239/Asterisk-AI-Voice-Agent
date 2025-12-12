@@ -582,52 +582,50 @@ const ProvidersPage: React.FC = () => {
                                         </div>
                                     </div>
                                 </div>
-                                <div className="flex items-center gap-2">
-                                    <div className="flex items-center space-x-2 mr-2">
-                                        <label className="relative inline-flex items-center cursor-pointer">
-                                            <input
-                                                type="checkbox"
-                                                className="sr-only peer"
-                                                checked={providerData.enabled ?? true}
-                                                onChange={async (e) => {
-                                                    const newProviders = { ...config.providers };
-                                                    newProviders[name] = { ...providerData, enabled: e.target.checked };
-                                                    await saveConfig({ ...config, providers: newProviders });
-                                                }}
-                                            />
-                                            <div className="w-9 h-5 bg-input peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-ring rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary"></div>
-                                        </label>
-                                    </div>
-                                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                        <button
-                                            onClick={() => handleTestConnection(name, providerData)}
-                                            disabled={testingProvider === name}
-                                            className="p-2 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground disabled:opacity-50"
-                                            title="Test Connection"
-                                        >
-                                            {testingProvider === name ? (
-                                                <Loader2 className="w-4 h-4 animate-spin" />
-                                            ) : testResults[name]?.success ? (
-                                                <CheckCircle2 className="w-4 h-4 text-green-500" />
-                                            ) : testResults[name]?.success === false ? (
-                                                <AlertCircle className="w-4 h-4 text-destructive" />
-                                            ) : (
-                                                <Server className="w-4 h-4" />
-                                            )}
-                                        </button>
-                                        <button
-                                            onClick={() => handleEditProvider(name)}
-                                            className="p-2 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground"
-                                        >
-                                            <Settings className="w-4 h-4" />
-                                        </button>
-                                        <button
-                                            onClick={() => handleDeleteProvider(name)}
-                                            className="p-2 hover:bg-destructive/10 rounded-md text-destructive"
-                                        >
-                                            <Trash2 className="w-4 h-4" />
-                                        </button>
-                                    </div>
+                                <div className="flex items-center gap-1 shrink-0">
+                                    <label className="relative inline-flex items-center cursor-pointer mr-2">
+                                        <input
+                                            type="checkbox"
+                                            className="sr-only peer"
+                                            checked={providerData.enabled ?? true}
+                                            onChange={async (e) => {
+                                                const newProviders = { ...config.providers };
+                                                newProviders[name] = { ...providerData, enabled: e.target.checked };
+                                                await saveConfig({ ...config, providers: newProviders });
+                                            }}
+                                        />
+                                        <div className="w-9 h-5 bg-input peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-ring rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary"></div>
+                                    </label>
+                                    <button
+                                        onClick={() => handleTestConnection(name, providerData)}
+                                        disabled={testingProvider === name}
+                                        className="p-1.5 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground disabled:opacity-50"
+                                        title="Test Connection"
+                                    >
+                                        {testingProvider === name ? (
+                                            <Loader2 className="w-4 h-4 animate-spin" />
+                                        ) : testResults[name]?.success ? (
+                                            <CheckCircle2 className="w-4 h-4 text-green-500" />
+                                        ) : testResults[name]?.success === false ? (
+                                            <AlertCircle className="w-4 h-4 text-destructive" />
+                                        ) : (
+                                            <Server className="w-4 h-4" />
+                                        )}
+                                    </button>
+                                    <button
+                                        onClick={() => handleEditProvider(name)}
+                                        className="p-1.5 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground"
+                                        title="Settings"
+                                    >
+                                        <Settings className="w-4 h-4" />
+                                    </button>
+                                    <button
+                                        onClick={() => handleDeleteProvider(name)}
+                                        className="p-1.5 hover:bg-destructive/10 rounded-md text-destructive"
+                                        title="Delete"
+                                    >
+                                        <Trash2 className="w-4 h-4" />
+                                    </button>
                                 </div>
                             </div>
                             {testResults[name] && (
