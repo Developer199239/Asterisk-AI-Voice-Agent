@@ -28,7 +28,7 @@ Each milestone includes scope, implementation details, and verification criteria
 
 - **Goal**: Automatically download and cache local AI models based on the host architecture.
 - **What We Shipped**:
-  - Added `models/registry.json` and the `scripts/model_setup.py` utility to detect hardware tier, download the right STT/LLM/TTS bundles, and verify integrity.
+  - Added `models/registry.json` and the `scripts/model_setup.sh` utility to detect hardware tier, download the right STT/LLM/TTS bundles, and verify integrity.
   - Makefile task `make model-setup` (documented in Agents/Architecture) calls the script and skips work when models are already cached.
 - **Verification**:
   - First-run downloads populate `models/` on both laptops and the server; subsequent runs detect cached artifacts and exit quickly. Local provider boots cleanly after `make model-setup`.

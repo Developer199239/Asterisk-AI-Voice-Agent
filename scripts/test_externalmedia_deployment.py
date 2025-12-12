@@ -41,7 +41,7 @@ async def test_configuration():
         logger.info(f"   RTP Port: {config.external_media.rtp_port}")
         logger.info(f"   Codec: {config.external_media.codec}")
         logger.info(f"   Direction: {config.external_media.direction}")
-        logger.info(f"   Jitter Buffer: {config.external_media.jitter_buffer_ms}ms")
+        # jitter_buffer_ms was removed from ExternalMediaConfig (RTP buffering is not configurable here)
         
         # Validate audio transport
         if config.audio_transport != "externalmedia":

@@ -80,7 +80,7 @@ See [LOCAL_ONLY_SETUP.md](LOCAL_ONLY_SETUP.md) for detailed configuration.
 - external_media.port_range: Optional range (`start:end`) for dynamic per-call RTP allocation; defaults to `rtp_port`.
 - external_media.codec: `ulaw` | `slin16` (8 kHz).
 - external_media.direction: `both` | `sendonly` | `recvonly`.
-- external_media.jitter_buffer_ms: Target frame size for RTP playout pacing.
+- Note: `external_media.jitter_buffer_ms` is no longer used (RTP buffering is not configurable here). Use `streaming.jitter_buffer_ms` for downstream playback pacing.
 
 ## Barge‑In
 

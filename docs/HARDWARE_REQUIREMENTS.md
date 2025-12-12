@@ -138,7 +138,7 @@ Total:                     ~600MB
 - **Response Time**: 1-3 seconds (with local LLM)
 - **Concurrent Calls**: 20-40 (GPU-accelerated)
 
-**Note**: Current v4.0 local-ai-server uses CPU-only models. GPU support planned for v4.1.
+**Note**: The default local-ai-server image runs CPU-only. GPU acceleration is possible for local LLM inference via llama.cpp when you build/run with NVIDIA support (enable the Docker GPU config and tune `LOCAL_LLM_GPU_LAYERS`).
 
 ---
 
