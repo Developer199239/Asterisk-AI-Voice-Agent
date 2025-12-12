@@ -389,6 +389,7 @@ providers:
     type: full
   local:
     base_url: ${LOCAL_WS_URL:-ws://127.0.0.1:8765}
+    auth_token: ${LOCAL_WS_AUTH_TOKEN:-}
     capabilities:
     - stt
     - llm
@@ -414,6 +415,7 @@ providers:
     tts_voice: models/tts/en_US-lessac-medium.onnx
     type: full
   local_llm:
+    auth_token: ${LOCAL_WS_AUTH_TOKEN:-}
     capabilities:
     - llm
     enabled: true
@@ -423,6 +425,7 @@ providers:
     type: local
     ws_url: ${LOCAL_WS_URL:-ws://127.0.0.1:8765}
   local_stt:
+    auth_token: ${LOCAL_WS_AUTH_TOKEN:-}
     capabilities:
     - stt
     chunk_ms: ${LOCAL_WS_CHUNK_MS:=320}
@@ -434,6 +437,7 @@ providers:
     type: local
     ws_url: ${LOCAL_WS_URL:-ws://127.0.0.1:8765}
   local_tts:
+    auth_token: ${LOCAL_WS_AUTH_TOKEN:-}
     capabilities:
     - tts
     enabled: true

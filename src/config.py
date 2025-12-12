@@ -72,6 +72,8 @@ class LocalProviderConfig(BaseModel):
     # ws_url is kept for backward compatibility with modular providers
     base_url: Optional[str] = Field(default=None)
     ws_url: Optional[str] = Field(default="ws://127.0.0.1:8765")
+    # Optional WS auth token for local-ai-server.
+    auth_token: Optional[str] = None
     connect_timeout_sec: float = Field(default=5.0)
     response_timeout_sec: float = Field(default=5.0)
     # Farewell mode: how to play goodbye message when call ends

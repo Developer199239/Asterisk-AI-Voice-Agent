@@ -22,6 +22,7 @@ class LocalProvider(AIProviderInterface):
         self.websocket: Optional[websockets.WebSocketClientProtocol] = None
         # Use effective_ws_url which prefers base_url over ws_url
         self.ws_url = config.effective_ws_url
+        self.auth_token: Optional[str] = getattr(config, "auth_token", None) or None
         self.connect_timeout = float(getattr(config, "connect_timeout_sec", 5.0) or 5.0)
         self.response_timeout = float(getattr(config, "response_timeout_sec", 5.0) or 5.0)
         self._batch_ms = max(5, int(getattr(config, "chunk_ms", 200) or 200))
@@ -65,6 +66,26 @@ class LocalProvider(AIProviderInterface):
             timeout=self.connect_timeout,
         )
 
+    async def _authenticate(self) -> None:
+        """Authenticate with local-ai-server if auth_token is configured."""
+        if not self.auth_token or not self.websocket or self.websocket.closed:
+            return
+        await self.websocket.send(
+            json.dumps({"type": "auth", "auth_token": self.auth_token})
+        )
+        try:
+            raw = await asyncio.wait_for(
+                self.websocket.recv(), timeout=self.connect_timeout
+            )
+            if isinstance(raw, (bytes, bytearray)):
+                raise RuntimeError("Unexpected binary auth response")
+            data = json.loads(raw)
+        except Exception as exc:
+            raise RuntimeError(f"Auth handshake failed: {exc}") from exc
+
+        if data.get("type") != "auth_response" or data.get("status") != "ok":
+            raise RuntimeError(f"Auth rejected: {data}")
+
     async def _reconnect(self):
         # Exponential backoff up to 30s, total ~3 minutes to cover LLM warmup (~111s)
         backoff_schedule = [2, 5, 10, 20, 30, 30, 30, 30]  # Total: ~157s
@@ -88,6 +109,11 @@ class LocalProvider(AIProviderInterface):
                 
                 self.websocket = await self._connect_ws()
                 logger.info("✅ Connected to Local AI Server", elapsed=f"{total_elapsed}s")
+
+                # Authenticate before starting receive/send loops if required.
+                if self.auth_token:
+                    await self._authenticate()
+                    logger.info("🔐 Authenticated to Local AI Server", url=self.ws_url)
                 
                 # Cancel old tasks and restart listener/sender loops on new connection
                 if self._listener_task and not self._listener_task.done():

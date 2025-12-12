@@ -1,0 +1,23 @@
+from __future__ import annotations
+
+import logging
+import os
+
+# Configure logging level from environment (default INFO)
+_level_name = os.getenv("LOCAL_LOG_LEVEL", "INFO").upper()
+_level = getattr(logging, _level_name, logging.INFO)
+logging.basicConfig(level=_level)
+
+# Debug mode for verbose audio processing logs
+# Set LOCAL_DEBUG=1 in .env to enable detailed audio flow logging
+DEBUG_AUDIO_FLOW = os.getenv("LOCAL_DEBUG", "0") == "1"
+
+SUPPORTED_MODES = {"full", "stt", "llm", "tts"}
+DEFAULT_MODE = "full"
+ULAW_SAMPLE_RATE = 8000
+PCM16_TARGET_RATE = 16000
+
+
+def _normalize_text(value: str) -> str:
+    return " ".join((value or "").strip().lower().split())
+

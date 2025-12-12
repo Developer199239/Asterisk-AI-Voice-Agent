@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import base64
 import json
@@ -14,50 +16,20 @@ import numpy as np
 from websockets.exceptions import ConnectionClosed, ConnectionClosedError, ConnectionClosedOK
 from websockets.server import serve
 import websockets.client as ws_client
-from vosk import Model as VoskModel, KaldiRecognizer
-from llama_cpp import Llama
-from piper import PiperVoice
 
-# Configure logging level from environment (default INFO)
-_level_name = os.getenv("LOCAL_LOG_LEVEL", "INFO").upper()
-_level = getattr(logging, _level_name, logging.INFO)
-logging.basicConfig(level=_level)
-
-# Debug mode for verbose audio processing logs
-# Set LOCAL_DEBUG=1 in .env to enable detailed audio flow logging
-DEBUG_AUDIO_FLOW = os.getenv("LOCAL_DEBUG", "0") == "1"
-
-SUPPORTED_MODES = {"full", "stt", "llm", "tts"}
-DEFAULT_MODE = "full"
-ULAW_SAMPLE_RATE = 8000
-PCM16_TARGET_RATE = 16000
+from constants import (
+    _level_name,
+    DEBUG_AUDIO_FLOW,
+    SUPPORTED_MODES,
+    DEFAULT_MODE,
+    ULAW_SAMPLE_RATE,
+    PCM16_TARGET_RATE,
+    _normalize_text,
+)
+from optional_imports import VoskModel, KaldiRecognizer, Llama, PiperVoice
 
 
-def _normalize_text(value: str) -> str:
-    return " ".join((value or "").strip().lower().split())
-
-
-@dataclass
-class SessionContext:
-    """# Milestone7: Track per-connection defaults for selective mode handling."""
-    call_id: str = "unknown"
-    mode: str = DEFAULT_MODE
-    recognizer: Optional[KaldiRecognizer] = None
-    last_partial: str = ""
-    partial_emitted: bool = False
-    last_audio_at: float = 0.0
-    idle_task: Optional[asyncio.Task] = None
-    last_request_meta: Dict[str, Any] = field(default_factory=dict)
-    last_final_text: str = ""
-    last_final_norm: str = ""
-    last_final_at: float = 0.0
-    llm_user_turns: List[str] = field(default_factory=list)
-    audio_buffer: bytes = b""
-    # Kroko-specific session state
-    kroko_ws: Optional[Any] = None
-    kroko_connected: bool = False
-    # Sherpa-onnx session state
-    sherpa_stream: Optional[Any] = None
+from session import SessionContext
 
 
 class KrokoSTTBackend:
@@ -710,6 +682,13 @@ class AudioProcessor:
             return input_data
 
 
+# Backends and audio processor are maintained in separate modules for easier development.
+# These imports intentionally shadow the legacy in-file definitions above.
+from stt_backends import KrokoSTTBackend, SherpaONNXSTTBackend
+from tts_backends import KokoroTTSBackend
+from audio_processor import AudioProcessor
+
+
 class LocalAIServer:
     def __init__(self):
         self.stt_model: Optional[VoskModel] = None
@@ -719,6 +698,9 @@ class LocalAIServer:
         
         # Lock to serialize LLM inference (llama-cpp is NOT thread-safe)
         self._llm_lock = asyncio.Lock()
+        # Optional WebSocket auth token for local-ai-server. If set, clients must
+        # authenticate with {"type":"auth","auth_token":"..."} before other messages.
+        self.ws_auth_token = (os.getenv("LOCAL_WS_AUTH_TOKEN", "") or "").strip()
 
         # ─────────────────────────────────────────────────────────────────────
         # STT Backend Selection: vosk (default), kroko, or sherpa
@@ -763,7 +745,8 @@ class LocalAIServer:
         
         # Kokoro TTS settings (if using kokoro backend)
         self.kokoro_backend: Optional[KokoroTTSBackend] = None
-        self.kokoro_voice = os.getenv("KOKORO_VOICE", "af_heart")
+        # Back-compat / docs alias: LOCAL_TTS_VOICE is treated as Kokoro voice.
+        self.kokoro_voice = os.getenv("KOKORO_VOICE") or os.getenv("LOCAL_TTS_VOICE", "af_heart")
         self.kokoro_lang = os.getenv("KOKORO_LANG", "a")  # 'a' = American English
         self.kokoro_model_path = os.getenv("KOKORO_MODEL_PATH", "/app/models/tts/kokoro")
 
@@ -843,6 +826,12 @@ class LocalAIServer:
     async def _load_vosk_backend(self):
         """Load Vosk STT model with 16kHz support."""
         try:
+            if VoskModel is None or KaldiRecognizer is None:
+                raise ImportError(
+                    "Vosk STT backend requested but vosk is not installed. "
+                    "Build with INCLUDE_VOSK=true or install vosk==0.3.45."
+                )
+
             # Resolve nested model directory if needed
             resolved_path = self._resolve_vosk_model_path(self.stt_model_path)
             if not os.path.exists(resolved_path):
@@ -958,6 +947,14 @@ class LocalAIServer:
 
     async def _load_llm_model(self):
         """Load LLM model with optimized parameters for faster inference"""
+        if Llama is None:
+            logging.warning(
+                "🤖 LLM backend disabled: llama-cpp-python not installed. "
+                "Build with INCLUDE_LLAMA=true or install llama-cpp-python==0.3.16."
+            )
+            self.llm_model = None
+            return
+
         try:
             if not os.path.exists(self.llm_model_path):
                 raise FileNotFoundError(f"LLM model not found at {self.llm_model_path}")
@@ -1077,6 +1074,12 @@ class LocalAIServer:
     async def _load_piper_backend(self):
         """Load Piper TTS model with 22kHz support."""
         try:
+            if PiperVoice is None:
+                raise ImportError(
+                    "Piper TTS backend requested but piper-tts is not installed. "
+                    "Build with INCLUDE_PIPER=true or install piper-tts==1.2.0."
+                )
+
             if not os.path.exists(self.tts_model_path):
                 raise FileNotFoundError(f"TTS model not found at {self.tts_model_path}")
             
@@ -1121,10 +1124,42 @@ class LocalAIServer:
             logging.error("❌ Failed to initialize Kokoro TTS backend: %s", exc)
             raise
 
+    async def _cleanup_kroko_backend(self) -> None:
+        """Stop any embedded Kroko subprocess and clear backend state."""
+        if not self.kroko_backend:
+            return
+        try:
+            await self.kroko_backend.stop_subprocess()
+        except Exception as exc:  # pragma: no cover
+            logging.debug("Kroko backend cleanup failed: %s", exc, exc_info=True)
+        finally:
+            self.kroko_backend = None
+
+    async def shutdown(self) -> None:
+        """Best-effort cleanup on server shutdown."""
+        logging.info("🛑 Shutting down Local AI Server...")
+        await self._cleanup_kroko_backend()
+        if self.sherpa_backend:
+            try:
+                self.sherpa_backend.shutdown()
+            except Exception as exc:  # pragma: no cover
+                logging.debug("Sherpa backend shutdown failed: %s", exc, exc_info=True)
+            self.sherpa_backend = None
+        if self.kokoro_backend:
+            try:
+                self.kokoro_backend.shutdown()
+            except Exception as exc:  # pragma: no cover
+                logging.debug("Kokoro backend shutdown failed: %s", exc, exc_info=True)
+            self.kokoro_backend = None
+        self.stt_model = None
+        self.tts_model = None
+        self.llm_model = None
+
     async def reload_models(self):
         """Hot reload all models without restarting the server"""
         logging.info("🔄 Hot reloading models...")
         try:
+            await self._cleanup_kroko_backend()
             await self.initialize_models()
             logging.info("✅ Models reloaded successfully")
         except Exception as exc:
@@ -1134,30 +1169,34 @@ class LocalAIServer:
     async def reload_llm_only(self):
         """Hot reload only the LLM model with optimized parameters"""
         logging.info("🔄 Hot reloading LLM model with optimizations...")
-        try:
-            if self.llm_model:
-                del self.llm_model
-                self.llm_model = None
-                logging.info("🗑️ Previous LLM model unloaded")
+        async with self._llm_lock:
+            try:
+                if self.llm_model:
+                    del self.llm_model
+                    self.llm_model = None
+                    logging.info("🗑️ Previous LLM model unloaded")
 
-            await self._load_llm_model()
-            logging.info("✅ LLM model reloaded with optimizations")
-            logging.info(
-                "📊 Optimized: ctx=%s, batch=%s, temp=%s, max_tokens=%s",
-                self.llm_context,
-                self.llm_batch,
-                self.llm_temperature,
-                self.llm_max_tokens,
-            )
-        except Exception as exc:
-            logging.error("❌ LLM reload failed: %s", exc)
-            raise
+                await self._load_llm_model()
+                logging.info("✅ LLM model reloaded with optimizations")
+                logging.info(
+                    "📊 Optimized: ctx=%s, batch=%s, temp=%s, max_tokens=%s",
+                    self.llm_context,
+                    self.llm_batch,
+                    self.llm_temperature,
+                    self.llm_max_tokens,
+                )
+            except Exception as exc:
+                logging.error("❌ LLM reload failed: %s", exc)
+                raise
 
     async def process_stt_buffered(self, audio_data: bytes) -> str:
         """Process STT with buffering for 20ms chunks"""
         try:
             if not self.stt_model:
                 logging.error("STT model not loaded")
+                return ""
+            if KaldiRecognizer is None:
+                logging.error("Vosk STT backend unavailable (vosk not installed)")
                 return ""
 
             self.audio_buffer += audio_data
@@ -1203,6 +1242,9 @@ class LocalAIServer:
             if not self.stt_model:
                 logging.error("STT model not loaded")
                 return ""
+            if KaldiRecognizer is None:
+                logging.error("Vosk STT backend unavailable (vosk not installed)")
+                return ""
 
             logging.debug("🎤 STT INPUT - %s bytes at %s Hz", len(audio_data), input_rate)
 
@@ -1213,8 +1255,13 @@ class LocalAIServer:
                     PCM16_TARGET_RATE,
                     len(audio_data),
                 )
-                resampled_audio = self.audio_processor.resample_audio(
-                    audio_data, input_rate, PCM16_TARGET_RATE, "raw", "raw"
+                resampled_audio = await asyncio.to_thread(
+                    self.audio_processor.resample_audio,
+                    audio_data,
+                    input_rate,
+                    PCM16_TARGET_RATE,
+                    "raw",
+                    "raw",
                 )
             else:
                 resampled_audio = audio_data
@@ -1381,7 +1428,9 @@ class LocalAIServer:
             with open(wav_path, "rb") as wav_file:
                 wav_data = wav_file.read()
 
-            ulaw_data = self.audio_processor.convert_to_ulaw_8k(wav_data, 22050)
+            ulaw_data = await asyncio.to_thread(
+                self.audio_processor.convert_to_ulaw_8k, wav_data, 22050
+            )
             os.unlink(wav_path)
 
             logging.info("🔊 TTS RESULT - Piper generated uLaw 8kHz audio: %s bytes", len(ulaw_data))
@@ -1421,7 +1470,9 @@ class LocalAIServer:
                 wav_data = wav_file.read()
 
             # Convert 24kHz WAV to 8kHz uLaw
-            ulaw_data = self.audio_processor.convert_to_ulaw_8k(wav_data, 24000)
+            ulaw_data = await asyncio.to_thread(
+                self.audio_processor.convert_to_ulaw_8k, wav_data, 24000
+            )
             os.unlink(wav_path)
 
             logging.info("🔊 TTS RESULT - Kokoro generated uLaw 8kHz audio: %s bytes", len(ulaw_data))
@@ -1465,6 +1516,9 @@ class LocalAIServer:
         if not self.stt_model:
             logging.error("STT model not loaded")
             return None
+        if KaldiRecognizer is None:
+            logging.error("Vosk STT backend unavailable (vosk not installed)")
+            return None
 
         if session.recognizer is None:
             session.recognizer = KaldiRecognizer(self.stt_model, PCM16_TARGET_RATE)
@@ -1500,8 +1554,13 @@ class LocalAIServer:
 
         # Resample to 16kHz if needed
         if input_rate != PCM16_TARGET_RATE:
-            audio_bytes = self.audio_processor.resample_audio(
-                audio_data, input_rate, PCM16_TARGET_RATE, "raw", "raw"
+            audio_bytes = await asyncio.to_thread(
+                self.audio_processor.resample_audio,
+                audio_data,
+                input_rate,
+                PCM16_TARGET_RATE,
+                "raw",
+                "raw",
             )
         else:
             audio_bytes = audio_data
@@ -1573,8 +1632,13 @@ class LocalAIServer:
 
         # Resample to 16kHz if needed
         if input_rate != PCM16_TARGET_RATE:
-            audio_bytes = self.audio_processor.resample_audio(
-                audio_data, input_rate, PCM16_TARGET_RATE, "raw", "raw"
+            audio_bytes = await asyncio.to_thread(
+                self.audio_processor.resample_audio,
+                audio_data,
+                input_rate,
+                PCM16_TARGET_RATE,
+                "raw",
+                "raw",
             )
         else:
             audio_bytes = audio_data
@@ -1640,8 +1704,13 @@ class LocalAIServer:
                 PCM16_TARGET_RATE,
                 len(audio_data),
             )
-            audio_bytes = self.audio_processor.resample_audio(
-                audio_data, input_rate, PCM16_TARGET_RATE, "raw", "raw"
+            audio_bytes = await asyncio.to_thread(
+                self.audio_processor.resample_audio,
+                audio_data,
+                input_rate,
+                PCM16_TARGET_RATE,
+                "raw",
+                "raw",
             )
         else:
             audio_bytes = audio_data
@@ -2319,6 +2388,46 @@ class LocalAIServer:
             logging.warning("JSON payload missing 'type': %s", data)
             return
 
+        # Optional auth gate.
+        if msg_type == "auth":
+            token = (data.get("auth_token") or data.get("token") or "").strip()
+            call_id = data.get("call_id")
+            if call_id:
+                session.call_id = call_id
+            if not self.ws_auth_token or token == self.ws_auth_token:
+                session.authenticated = True
+                await self._send_json(websocket, {"type": "auth_response", "status": "ok"})
+                logging.info("🔐 WS AUTH - Authenticated session call_id=%s", session.call_id)
+            else:
+                await self._send_json(
+                    websocket,
+                    {
+                        "type": "auth_response",
+                        "status": "error",
+                        "message": "invalid_auth_token",
+                    },
+                )
+                logging.warning(
+                    "🔐 WS AUTH - Invalid token call_id=%s", session.call_id
+                )
+            return
+
+        if self.ws_auth_token and not session.authenticated:
+            await self._send_json(
+                websocket,
+                {
+                    "type": "auth_response",
+                    "status": "error",
+                    "message": "authentication_required",
+                },
+            )
+            logging.warning(
+                "🔐 WS AUTH - Message rejected before auth type=%s call_id=%s",
+                msg_type,
+                session.call_id,
+            )
+            return
+
         if msg_type == "set_mode":
             # Milestone7: allow clients to pre-select default mode for subsequent binary frames.
             requested = data.get("mode", DEFAULT_MODE)
@@ -2511,6 +2620,21 @@ class LocalAIServer:
         logging.warning("❓ Unknown message type: %s", msg_type)
 
     async def _handle_binary_message(self, websocket, session: SessionContext, message: bytes) -> None:
+        if self.ws_auth_token and not session.authenticated:
+            await self._send_json(
+                websocket,
+                {
+                    "type": "auth_response",
+                    "status": "error",
+                    "message": "authentication_required",
+                },
+            )
+            logging.warning(
+                "🔐 WS AUTH - Dropping binary audio before auth call_id=%s bytes=%d",
+                session.call_id,
+                len(message),
+            )
+            return
         logging.info("🎵 AUDIO INPUT - Received binary audio: %s bytes", len(message))
         await self._handle_audio_payload(
             websocket,
@@ -2545,23 +2669,29 @@ class LocalAIServer:
 async def main():
     """Main server function"""
     server = LocalAIServer()
-    await server.initialize_models()
+    try:
+        await server.initialize_models()
 
-    async with serve(
-        server.handler,
-        "0.0.0.0",
-        8765,
-        ping_interval=60,
-        ping_timeout=120,
-        max_size=None,
-        origins=None,  # Allow connections from other containers/browsers
-    ):
-        logging.info("🚀 Enhanced Local AI Server started on ws://0.0.0.0:8765")
-        logging.info(
-            "📋 Pipeline: ExternalMedia (8kHz) → STT (16kHz) → LLM → TTS (8kHz uLaw) "
-            "- now with #Milestone7 selective mode support"
-        )
-        await asyncio.Future()  # Run forever
+        host = os.getenv("LOCAL_WS_HOST", "0.0.0.0")
+        port = int(os.getenv("LOCAL_WS_PORT", "8765"))
+
+        async with serve(
+            server.handler,
+            host,
+            port,
+            ping_interval=60,
+            ping_timeout=120,
+            max_size=None,
+            origins=None,  # Allow connections from other containers/browsers
+        ):
+            logging.info("🚀 Enhanced Local AI Server started on ws://%s:%s", host, port)
+            logging.info(
+                "📋 Pipeline: ExternalMedia (8kHz) → STT (16kHz) → LLM → TTS (8kHz uLaw) "
+                "- now with #Milestone7 selective mode support"
+            )
+            await asyncio.Future()  # Run forever
+    finally:
+        await server.shutdown()
 
 
 if __name__ == "__main__":

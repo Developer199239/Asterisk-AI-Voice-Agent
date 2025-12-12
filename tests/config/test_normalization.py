@@ -288,7 +288,9 @@ class TestNormalizeLocalProviderTokens:
         config_data = {
             'providers': {
                 'local': {
+                    'base_url': '${LOCAL_WS_URL:-ws://127.0.0.1:8765}',
                     'ws_url': '${LOCAL_WS_URL:-ws://127.0.0.1:8765}',
+                    'auth_token': '${LOCAL_WS_AUTH_TOKEN:-secret-token}',
                     'connect_timeout_sec': '${CONNECT_TIMEOUT:-5.0}',
                     'response_timeout_sec': '${RESPONSE_TIMEOUT:-5.0}',
                     'chunk_ms': '${CHUNK_MS:-200}'
@@ -298,7 +300,9 @@ class TestNormalizeLocalProviderTokens:
         normalize_local_provider_tokens(config_data)
         
         local = config_data['providers']['local']
+        assert local['base_url'] == 'ws://127.0.0.1:8765'
         assert local['ws_url'] == 'ws://127.0.0.1:8765'
+        assert local['auth_token'] == 'secret-token'
         assert local['connect_timeout_sec'] == 5.0
         assert local['response_timeout_sec'] == 5.0
         assert local['chunk_ms'] == 200

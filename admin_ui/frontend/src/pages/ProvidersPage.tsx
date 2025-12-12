@@ -156,13 +156,13 @@ const ProvidersPage: React.FC = () => {
                 target_encoding: 'ulaw',
                 target_sample_rate_hz: 8000
             },
-            local_modular: {
-                // This adds local_stt, local_llm, local_tts
-                local_stt: { type: 'local', capabilities: ['stt'], enabled: false, ws_url: '${LOCAL_WS_URL:-ws://127.0.0.1:8765}' },
-                local_llm: { type: 'local', capabilities: ['llm'], enabled: false },
-                local_tts: { type: 'local', capabilities: ['tts'], enabled: false, ws_url: '${LOCAL_WS_URL:-ws://127.0.0.1:8765}' }
-            }
-        };
+	            local_modular: {
+	                // This adds local_stt, local_llm, local_tts
+	                local_stt: { type: 'local', capabilities: ['stt'], enabled: false, ws_url: '${LOCAL_WS_URL:-ws://127.0.0.1:8765}', auth_token: '${LOCAL_WS_AUTH_TOKEN:-}' },
+	                local_llm: { type: 'local', capabilities: ['llm'], enabled: false, auth_token: '${LOCAL_WS_AUTH_TOKEN:-}' },
+	                local_tts: { type: 'local', capabilities: ['tts'], enabled: false, ws_url: '${LOCAL_WS_URL:-ws://127.0.0.1:8765}', auth_token: '${LOCAL_WS_AUTH_TOKEN:-}' }
+	            }
+	        };
 
         selectedTemplates.forEach(templateKey => {
             if (templateKey === 'local_modular') {

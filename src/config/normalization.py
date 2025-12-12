@@ -220,8 +220,14 @@ def normalize_local_provider_tokens(config_data: Dict[str, Any]) -> None:
         
         if isinstance(local_block, dict):
             # Apply defaults for known local provider keys
+            local_block['base_url'] = _apply_default_token(
+                local_block.get('base_url')
+            )
             local_block['ws_url'] = _apply_default_token(
                 local_block.get('ws_url'), default='ws://127.0.0.1:8765'
+            )
+            local_block['auth_token'] = _apply_default_token(
+                local_block.get('auth_token')
             )
             local_block['connect_timeout_sec'] = _apply_default_token(
                 local_block.get('connect_timeout_sec'), default='5.0'
