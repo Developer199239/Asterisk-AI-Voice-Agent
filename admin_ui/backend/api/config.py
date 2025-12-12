@@ -60,11 +60,21 @@ async def update_yaml_config(update: ConfigUpdate):
             # A11: Rotate backups - keep only last MAX_BACKUPS
             _rotate_backups(settings.CONFIG_PATH)
 
-        # A8: Atomic write via temp file + rename
+        # A8: Atomic write via temp file + rename (preserve permissions)
         dir_path = os.path.dirname(settings.CONFIG_PATH)
+        # Get original file permissions if file exists
+        original_mode = None
+        if os.path.exists(settings.CONFIG_PATH):
+            original_mode = os.stat(settings.CONFIG_PATH).st_mode
+        
         with tempfile.NamedTemporaryFile('w', dir=dir_path, delete=False, suffix='.tmp') as f:
             f.write(update.content)
             temp_path = f.name
+        
+        # Restore original permissions before replace
+        if original_mode is not None:
+            os.chmod(temp_path, original_mode)
+        
         os.replace(temp_path, settings.CONFIG_PATH)  # Atomic on POSIX
         return {
             "status": "success",
@@ -168,11 +178,21 @@ async def update_env(env_data: Dict[str, str]):
                 # Update map for subsequent iterations (though not strictly needed for this simple logic)
                 key_line_map[key] = len(new_lines) - 1
 
-        # A8: Atomic write via temp file + rename
+        # A8: Atomic write via temp file + rename (preserve permissions)
         dir_path = os.path.dirname(settings.ENV_PATH)
+        # Get original file permissions if file exists
+        original_mode = None
+        if os.path.exists(settings.ENV_PATH):
+            original_mode = os.stat(settings.ENV_PATH).st_mode
+        
         with tempfile.NamedTemporaryFile('w', dir=dir_path, delete=False, suffix='.tmp') as f:
             f.writelines(new_lines)
             temp_path = f.name
+        
+        # Restore original permissions before replace
+        if original_mode is not None:
+            os.chmod(temp_path, original_mode)
+        
         os.replace(temp_path, settings.ENV_PATH)  # Atomic on POSIX
         
         return {"status": "success"}
