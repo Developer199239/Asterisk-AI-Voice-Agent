@@ -163,31 +163,6 @@ contexts:
     - leave_voicemail
     - send_email_summary
     - request_transcript
-  # Ollama demo - Self-hosted LLM with tool calling
-  # Requires Ollama running on the network
-  demo_ollama:
-    greeting: Hi! I'm running on your local Ollama server. How can I help you today?
-    profile: telephony_ulaw_8k
-    pipeline: local_ollama
-    prompt: |
-      You are a helpful voice assistant running on a self-hosted Ollama instance.
-      
-      YOUR ROLE:
-      - Answer questions conversationally
-      - Be helpful and friendly
-      - Keep responses SHORT (1-3 sentences) for voice
-      - Speak naturally without reading punctuation
-      
-      CALL ENDING PROTOCOL:
-      - When user says goodbye, use the hangup_call tool with a warm farewell
-      - Always invoke the tool, don't just say goodbye
-    tools:
-      - transfer
-      - cancel_transfer
-      - hangup_call
-      - leave_voicemail
-      - send_email_summary
-      - request_transcript
   demo_hybrid:
     greeting: Hi {caller_name}, I'm Ava with the local hybrid voice demo. I can explain
       how this project works in simple terms.
@@ -312,42 +287,6 @@ pipelines:
     - send_email_summary
     - request_transcript
     tts: local_tts
-  # Ollama pipeline - Self-hosted LLM with local STT/TTS
-  # Requires user to run Ollama on their network
-  # See docs/OLLAMA_SETUP.md for installation instructions
-  local_ollama:
-    stt: local_stt
-    llm: ollama_llm
-    tts: local_tts
-    tools:
-      - transfer
-      - cancel_transfer
-      - hangup_call
-      - leave_voicemail
-      - send_email_summary
-      - request_transcript
-    options:
-      llm:
-        # IMPORTANT: Replace with your Ollama server IP address
-        # Docker cannot reach localhost - use your host machine's IP
-        # Example: http://192.168.1.100:11434
-        base_url: http://localhost:11434
-        model: llama3.2  # or mistral, qwen2.5, etc.
-        temperature: 0.7
-        max_tokens: 200
-        timeout_sec: 60  # Local models may be slower
-        tools_enabled: true  # Enable tool calling for compatible models
-      stt:
-        chunk_ms: 160
-        mode: stt
-        stream_format: pcm16_16k
-        streaming: true
-      tts:
-        mode: tts
-        response_timeout_sec: 30.0
-        format:
-          encoding: mulaw
-          sample_rate: 8000
 profiles:
   default: telephony_responsive
   openai_realtime_24k:
@@ -511,6 +450,19 @@ providers:
     response_timeout_sec: 5
     temperature: 0.7
     type: openai
+  ollama_llm:
+    capabilities:
+    - llm
+    # IMPORTANT: Replace with your Ollama server IP address
+    # Docker cannot reach localhost - use your host machine's IP
+    base_url: ${OLLAMA_BASE_URL:-http://localhost:11434}
+    model: ${OLLAMA_MODEL:-llama3.2}
+    enabled: false  # Enable after configuring base_url with your Ollama server IP
+    temperature: 0.7
+    max_tokens: 200
+    timeout_sec: 60
+    tools_enabled: true  # Enable for models that support tool calling
+    type: ollama
   openai_realtime:
     base_url: wss://api.openai.com/v1/realtime
     capabilities:

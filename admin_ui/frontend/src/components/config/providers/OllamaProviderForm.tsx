@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import axios from 'axios';
 import { Loader2, CheckCircle2, XCircle, Server, Cpu, Wrench } from 'lucide-react';
 
@@ -174,7 +174,9 @@ const OllamaProviderForm: React.FC<OllamaProviderFormProps> = ({ config, onChang
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
                   <span>{formatSize(model.size)}</span>
                   {model.tools_capable && (
-                    <Wrench className="w-3 h-3 text-green-500" title="Supports tool calling" />
+                    <span title="Supports tool calling">
+                      <Wrench className="w-3 h-3 text-green-500" />
+                    </span>
                   )}
                 </div>
               </button>

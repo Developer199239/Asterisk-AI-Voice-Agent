@@ -710,8 +710,35 @@ const Wizard = () => {
                                                 </div>
                                             )}
                                         </div>
+
+                                        {/* LLM Config for Hybrid */}
+                                        <div className="space-y-3 p-4 bg-muted/30 rounded-lg border">
+                                            <h4 className="font-medium text-sm text-muted-foreground uppercase tracking-wider">Large Language Model (LLM)</h4>
+                                            <div>
+                                                <label className="text-sm font-medium">Provider</label>
+                                                <select
+                                                    className="w-full p-2 rounded-md border border-input bg-background mt-1"
+                                                    value={config.local_llm_model === 'ollama' ? 'ollama' : 'openai'}
+                                                    onChange={e => setConfig({ ...config, local_llm_model: e.target.value })}
+                                                >
+                                                    <option value="openai">OpenAI (Cloud) - Requires API key</option>
+                                                    <option value="ollama">Ollama (Self-hosted) - No API key needed</option>
+                                                </select>
+                                            </div>
+                                            {config.local_llm_model === 'ollama' && (
+                                                <div className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-md border border-blue-200 dark:border-blue-800">
+                                                    <p className="text-sm text-blue-800 dark:text-blue-300">
+                                                        <strong>Ollama:</strong> Run your own LLM on a Mac, PC, or server.
+                                                    </p>
+                                                    <p className="text-xs text-blue-600 dark:text-blue-400 mt-1">
+                                                        Configure the Ollama URL in Providers → ollama_llm after setup.
+                                                    </p>
+                                                </div>
+                                            )}
+                                        </div>
                                     </div>
                                 )}
+                                {config.local_llm_model !== 'ollama' && (
                                 <div className="space-y-2">
                                     <label className="text-sm font-medium">
                                         OpenAI API Key
@@ -736,6 +763,7 @@ const Wizard = () => {
                                     </div>
                                     <p className="text-xs text-muted-foreground">Required for OpenAI Realtime and Local Hybrid providers.</p>
                                 </div>
+                                )}
                             </div>
                         )}
 
@@ -1164,7 +1192,19 @@ const Wizard = () => {
                                                 <option value="phi-3-mini">Phi-3 Mini (3.8B) - Recommended</option>
                                                 <option value="llama-3-8b">Llama 3 (8B) - High VRAM</option>
                                                 <option value="mistral-7b">Mistral (7B)</option>
+                                                <option value="ollama">Ollama (Self-hosted) - No download needed</option>
                                             </select>
+                                            {config.local_llm_model === 'ollama' && (
+                                                <div className="mt-3 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-md border border-blue-200 dark:border-blue-800">
+                                                    <p className="text-sm text-blue-800 dark:text-blue-300">
+                                                        <strong>Ollama:</strong> Use your own Ollama server running on a Mac, PC, or server.
+                                                    </p>
+                                                    <p className="text-xs text-blue-600 dark:text-blue-400 mt-1">
+                                                        Configure the Ollama URL in Providers → ollama_llm after setup.
+                                                        See <a href="/docs/OLLAMA_SETUP.md" className="underline">OLLAMA_SETUP.md</a> for details.
+                                                    </p>
+                                                </div>
+                                            )}
                                         </div>
                                     </div>
 
