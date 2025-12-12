@@ -313,6 +313,13 @@ pipelines:
           encoding: mulaw
           sample_rate: 8000
     stt: local_stt
+    tools:
+    - transfer
+    - cancel_transfer
+    - hangup_call
+    - leave_voicemail
+    - send_email_summary
+    - request_transcript
     tts: local_tts
   # Alternative: Use Groq for faster/cheaper LLM inference
   # To use: Set active_pipeline: local_hybrid_groq, set context to demo_hybrid_groq, and ensure GROQ_API_KEY is set
