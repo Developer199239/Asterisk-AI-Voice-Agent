@@ -205,7 +205,7 @@ const EnvPage = () => {
         'LOCAL_LLM_MODEL_PATH', 'LOCAL_LLM_THREADS',
         'LOCAL_LLM_CONTEXT', 'LOCAL_LLM_BATCH', 'LOCAL_LLM_MAX_TOKENS', 'LOCAL_LLM_TEMPERATURE', 'LOCAL_LLM_INFER_TIMEOUT_SEC',
         // Other
-        'OPENAI_API_KEY', 'DEEPGRAM_API_KEY', 'GOOGLE_API_KEY', 'RESEND_API_KEY', 'ELEVENLABS_API_KEY', 'CARTESIA_API_KEY', 'JWT_SECRET',
+        'OPENAI_API_KEY', 'GROQ_API_KEY', 'DEEPGRAM_API_KEY', 'GOOGLE_API_KEY', 'RESEND_API_KEY', 'ELEVENLABS_API_KEY', 'CARTESIA_API_KEY', 'JWT_SECRET',
         'AI_NAME', 'AI_ROLE', 'ASTERISK_ARI_PORT', 'ASTERISK_ARI_WEBSOCKET_SCHEME',
         'HEALTH_CHECK_LOCAL_AI_URL', 'HEALTH_CHECK_AI_ENGINE_URL'
     ];
@@ -361,6 +361,7 @@ const EnvPage = () => {
                 <ConfigCard>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         {renderSecretInput('OpenAI API Key', 'OPENAI_API_KEY', 'sk-...')}
+                        {renderSecretInput('Groq API Key', 'GROQ_API_KEY', 'gsk_...')}
                         {renderSecretInput('Deepgram API Key', 'DEEPGRAM_API_KEY', 'Token...')}
                         {renderSecretInput('Google API Key', 'GOOGLE_API_KEY', 'AIza...')}
                         {renderSecretInput('ElevenLabs API Key', 'ELEVENLABS_API_KEY', 'xi-...')}

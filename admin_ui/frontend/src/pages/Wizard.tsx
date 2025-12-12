@@ -12,6 +12,7 @@ interface SetupConfig {
     asterisk_scheme?: string;
     asterisk_app?: string;
     openai_key?: string;
+    groq_key?: string;
     deepgram_key?: string;
     google_key?: string;
     elevenlabs_key?: string;
@@ -20,6 +21,7 @@ interface SetupConfig {
     greeting: string;
     ai_name: string;
     ai_role: string;
+    hybrid_llm_provider?: string;
     // Local AI Config
     local_stt_backend?: string;
     local_stt_model?: string;
@@ -48,11 +50,13 @@ const Wizard = () => {
         asterisk_scheme: 'http',
         asterisk_app: 'asterisk-ai-voice-agent',
         openai_key: '',
+        groq_key: '',
         deepgram_key: '',
         google_key: '',
         greeting: 'Hello, how can I help you today?',
         ai_name: 'Asterisk Agent',
         ai_role: 'Helpful Assistant',
+        hybrid_llm_provider: 'groq',
         // Defaults
         local_stt_backend: 'vosk',
         local_stt_model: '',
@@ -303,6 +307,17 @@ const Wizard = () => {
                 setError('Google API key is required for Google Live.');
                 return;
             }
+            if (config.provider === 'local_hybrid') {
+                const llmProvider = (config.hybrid_llm_provider || 'openai').toLowerCase();
+                if (llmProvider === 'openai' && !config.openai_key) {
+                    setError('OpenAI API key is required for Local Hybrid when using OpenAI.');
+                    return;
+                }
+                if (llmProvider === 'groq' && !config.groq_key) {
+                    setError('Groq API key is required for Local Hybrid when using Groq.');
+                    return;
+                }
+            }
             if (config.provider === 'elevenlabs_agent') {
                 if (!config.elevenlabs_key) {
                     setError('ElevenLabs API key is required.');
@@ -319,16 +334,40 @@ const Wizard = () => {
             // Validate keys before proceeding
             setLoading(true);
             try {
-                if (config.provider === 'openai_realtime' || config.provider === 'local_hybrid') {
+                if (config.provider === 'openai_realtime') {
                     if (config.openai_key) {
                         const res = await axios.post('/api/wizard/validate-key', {
                             provider: 'openai',
                             api_key: config.openai_key
                         });
                         if (!res.data.valid) throw new Error(`OpenAI Key Invalid: ${res.data.error}`);
-                        if (!res.data.valid) throw new Error(`OpenAI Key Invalid: ${res.data.error}`);
-                    } else if (config.provider === 'openai_realtime') {
+                    } else {
                         throw new Error('OpenAI API Key is required for OpenAI Realtime provider');
+                    }
+                }
+
+                if (config.provider === 'local_hybrid') {
+                    const llmProvider = (config.hybrid_llm_provider || 'openai').toLowerCase();
+                    if (llmProvider === 'openai') {
+                        if (config.openai_key) {
+                            const res = await axios.post('/api/wizard/validate-key', {
+                                provider: 'openai',
+                                api_key: config.openai_key
+                            });
+                            if (!res.data.valid) throw new Error(`OpenAI Key Invalid: ${res.data.error}`);
+                        } else {
+                            throw new Error('OpenAI API Key is required for Local Hybrid when using OpenAI');
+                        }
+                    } else if (llmProvider === 'groq') {
+                        if (config.groq_key) {
+                            const res = await axios.post('/api/wizard/validate-key', {
+                                provider: 'groq',
+                                api_key: config.groq_key
+                            });
+                            if (!res.data.valid) throw new Error(`Groq Key Invalid: ${res.data.error}`);
+                        } else {
+                            throw new Error('Groq API Key is required for Local Hybrid when using Groq');
+                        }
                     }
                 }
 
@@ -473,7 +512,7 @@ const Wizard = () => {
 
     const ProviderCard = ({ id, title, description, icon: Icon, recommended = false }: any) => (
         <div
-            onClick={() => setConfig({ ...config, provider: id })}
+            onClick={() => setConfig({ ...config, provider: id, hybrid_llm_provider: id === 'local_hybrid' ? (config.hybrid_llm_provider || 'groq') : config.hybrid_llm_provider })}
             className={`relative p-6 rounded-lg border-2 cursor-pointer transition-all ${config.provider === id
                 ? 'border-primary bg-primary/5'
                 : 'border-border hover:border-primary/50'
@@ -718,14 +757,15 @@ const Wizard = () => {
                                                 <label className="text-sm font-medium">Provider</label>
                                                 <select
                                                     className="w-full p-2 rounded-md border border-input bg-background mt-1"
-                                                    value={config.local_llm_model === 'ollama' ? 'ollama' : 'openai'}
-                                                    onChange={e => setConfig({ ...config, local_llm_model: e.target.value })}
+                                                    value={config.hybrid_llm_provider || 'groq'}
+                                                    onChange={e => setConfig({ ...config, hybrid_llm_provider: e.target.value })}
                                                 >
-                                                    <option value="openai">OpenAI (Cloud) - Requires API key</option>
+                                                    <option value="groq">Groq (Cloud) - Free tier, no credit card</option>
+                                                    <option value="openai">OpenAI (Cloud)</option>
                                                     <option value="ollama">Ollama (Self-hosted) - No API key needed</option>
                                                 </select>
                                             </div>
-                                            {config.local_llm_model === 'ollama' && (
+                                            {config.hybrid_llm_provider === 'ollama' && (
                                                 <div className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-md border border-blue-200 dark:border-blue-800">
                                                     <p className="text-sm text-blue-800 dark:text-blue-300">
                                                         <strong>Ollama:</strong> Run your own LLM on a Mac, PC, or server.
@@ -738,30 +778,30 @@ const Wizard = () => {
                                         </div>
                                     </div>
                                 )}
-                                {config.local_llm_model !== 'ollama' && (
+                                {config.hybrid_llm_provider !== 'ollama' && (
                                 <div className="space-y-2">
                                     <label className="text-sm font-medium">
-                                        OpenAI API Key
+                                        {config.hybrid_llm_provider === 'groq' ? 'Groq API Key' : 'OpenAI API Key'}
                                         {config.provider === 'local_hybrid' && <span className="text-muted-foreground font-normal ml-2">(for LLM only)</span>}
                                     </label>
                                     <div className="flex space-x-2">
                                         <input
                                             type="password"
                                             className="w-full p-2 rounded-md border border-input bg-background"
-                                            value={config.openai_key}
-                                            onChange={e => setConfig({ ...config, openai_key: e.target.value })}
-                                            placeholder="sk-..."
+                                            value={config.hybrid_llm_provider === 'groq' ? (config.groq_key || '') : (config.openai_key || '')}
+                                            onChange={e => setConfig({ ...config, [config.hybrid_llm_provider === 'groq' ? 'groq_key' : 'openai_key']: e.target.value })}
+                                            placeholder={config.hybrid_llm_provider === 'groq' ? 'gsk_...' : 'sk-...'}
                                         />
                                         <button
                                             type="button"
-                                            onClick={() => handleTestKey('openai', config.openai_key || '')}
+                                            onClick={() => handleTestKey(config.hybrid_llm_provider === 'groq' ? 'groq' : 'openai', config.hybrid_llm_provider === 'groq' ? (config.groq_key || '') : (config.openai_key || ''))}
                                             className="px-3 py-2 rounded-md bg-secondary text-secondary-foreground hover:bg-secondary/80"
                                             disabled={loading}
                                         >
                                             Test
                                         </button>
                                     </div>
-                                    <p className="text-xs text-muted-foreground">Required for OpenAI Realtime and Local Hybrid providers.</p>
+                                    <p className="text-xs text-muted-foreground">Required for Local Hybrid cloud LLM.</p>
                                 </div>
                                 )}
                             </div>

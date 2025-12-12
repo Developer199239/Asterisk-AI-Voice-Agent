@@ -204,6 +204,7 @@ async def load_existing_config():
             "asterisk_scheme": env_values.get("ASTERISK_ARI_SCHEME", "http"),
             "asterisk_app": env_values.get("ASTERISK_ARI_APP", "asterisk-ai-voice-agent"),
             "openai_key": env_values.get("OPENAI_API_KEY", ""),
+            "groq_key": env_values.get("GROQ_API_KEY", ""),
             "deepgram_key": env_values.get("DEEPGRAM_API_KEY", ""),
             "google_key": env_values.get("GOOGLE_API_KEY", ""),
             "elevenlabs_key": env_values.get("ELEVENLABS_API_KEY", ""),
@@ -1466,6 +1467,19 @@ async def validate_api_key(validation: ApiKeyValidation):
                     return {"valid": False, "error": "Invalid API key"}
                 else:
                     return {"valid": False, "error": f"API error: HTTP {response.status_code}"}
+
+            elif provider == "groq":
+                response = await client.get(
+                    "https://api.groq.com/openai/v1/models",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    timeout=10.0
+                )
+                if response.status_code == 200:
+                    return {"valid": True, "message": "Groq API key is valid"}
+                elif response.status_code == 401:
+                    return {"valid": False, "error": "Invalid API key"}
+                else:
+                    return {"valid": False, "error": f"API error: HTTP {response.status_code}"}
                     
             elif provider == "deepgram":
                 response = await client.get(
@@ -1611,6 +1625,7 @@ class SetupConfig(BaseModel):
     asterisk_scheme: str = "http"
     asterisk_app: str = "asterisk-ai-voice-agent"
     openai_key: Optional[str] = None
+    groq_key: Optional[str] = None
     deepgram_key: Optional[str] = None
     google_key: Optional[str] = None
     elevenlabs_key: Optional[str] = None
@@ -1619,6 +1634,7 @@ class SetupConfig(BaseModel):
     greeting: str
     ai_name: str
     ai_role: str
+    hybrid_llm_provider: Optional[str] = None
 
 # ... (keep existing endpoints) ...
 
@@ -1634,9 +1650,13 @@ async def save_setup_config(config: SetupConfig):
             raise HTTPException(status_code=400, detail="OpenAI API Key is required for Deepgram Think stage")
     if config.provider == "google_live" and not config.google_key:
             raise HTTPException(status_code=400, detail="Google API Key is required for Google Live provider")
-    # Local hybrid uses OpenAI for LLM, so check that too
-    if config.provider == "local_hybrid" and not config.openai_key:
-            raise HTTPException(status_code=400, detail="OpenAI API Key is required for Local Hybrid pipeline (LLM)")
+    # Local hybrid uses a cloud LLM (Groq/OpenAI) or Ollama
+    if config.provider == "local_hybrid":
+        llm_provider = (config.hybrid_llm_provider or "groq").lower()
+        if llm_provider == "openai" and not config.openai_key:
+            raise HTTPException(status_code=400, detail="OpenAI API Key is required for Local Hybrid pipeline when using OpenAI")
+        if llm_provider == "groq" and not config.groq_key:
+            raise HTTPException(status_code=400, detail="Groq API Key is required for Local Hybrid pipeline when using Groq")
     if config.provider == "elevenlabs_agent":
         if not config.elevenlabs_key:
             raise HTTPException(status_code=400, detail="ElevenLabs API Key is required for ElevenLabs Conversational provider")
@@ -1671,6 +1691,8 @@ async def save_setup_config(config: SetupConfig):
         
         if config.openai_key:
             env_updates["OPENAI_API_KEY"] = config.openai_key
+        if config.groq_key:
+            env_updates["GROQ_API_KEY"] = config.groq_key
         if config.deepgram_key:
             env_updates["DEEPGRAM_API_KEY"] = config.deepgram_key
         if config.google_key:
@@ -1813,7 +1835,7 @@ async def save_setup_config(config: SetupConfig):
                     print(f"Error starting local_ai_server: {e}")
 
             elif config.provider == "local_hybrid":
-                # local_hybrid is a PIPELINE (Local STT + OpenAI LLM + Local TTS)
+                # local_hybrid is a PIPELINE (Local STT + Cloud/Local LLM + Local TTS)
                 yaml_config["active_pipeline"] = "local_hybrid"
                 yaml_config["default_provider"] = "local"  # Fallback provider
                 
@@ -1841,17 +1863,51 @@ async def save_setup_config(config: SetupConfig):
                 if not provider_exists("local_tts"):
                     providers["local_tts"]["ws_url"] = "${LOCAL_WS_URL:-ws://127.0.0.1:8765}"
                 
-                providers.setdefault("openai_llm", {})["enabled"] = True
-                if not provider_exists("openai_llm"):
-                    providers["openai_llm"].update({
-                        "chat_base_url": "https://api.openai.com/v1",
-                        "chat_model": "gpt-4o-mini"
-                    })
+                llm_provider = (config.hybrid_llm_provider or "groq").lower()
+                if llm_provider == "openai":
+                    providers.setdefault("openai_llm", {})["enabled"] = True
+                    if not provider_exists("openai_llm"):
+                        providers["openai_llm"].update({
+                            "api_key": "${OPENAI_API_KEY}",
+                            "chat_base_url": "https://api.openai.com/v1",
+                            "chat_model": "gpt-4o-mini",
+                            "type": "openai",
+                            "capabilities": ["llm"],
+                        })
+                elif llm_provider == "groq":
+                    providers.setdefault("groq_llm", {})["enabled"] = True
+                    if not provider_exists("groq_llm"):
+                        providers["groq_llm"].update({
+                            "api_key": "${GROQ_API_KEY}",
+                            "chat_base_url": "https://api.groq.com/openai/v1",
+                            "chat_model": "llama-3.3-70b-versatile",
+                            "type": "openai",
+                            "capabilities": ["llm"],
+                        })
+                elif llm_provider == "ollama":
+                    providers.setdefault("ollama_llm", {})["enabled"] = True
+                    if not provider_exists("ollama_llm"):
+                        providers["ollama_llm"].update({
+                            "base_url": "http://localhost:11434",
+                            "model": "llama3.2",
+                            "temperature": 0.7,
+                            "max_tokens": 200,
+                            "timeout_sec": 60,
+                            "tools_enabled": True,
+                            "type": "ollama",
+                            "capabilities": ["llm"],
+                        })
                 
                 # Define the pipeline
+                llm_component = "openai_llm"
+                if llm_provider == "groq":
+                    llm_component = "groq_llm"
+                elif llm_provider == "ollama":
+                    llm_component = "ollama_llm"
+
                 yaml_config.setdefault("pipelines", {})["local_hybrid"] = {
                     "stt": "local_stt",
-                    "llm": "openai_llm",
+                    "llm": llm_component,
                     "tts": "local_tts"
                 }
                 
