@@ -266,3 +266,8 @@ docs/linear-issues-community-features.md
 AVA.mdc
 .cursor/rules/asterisk_ai_voice_agent.mdc
 .windsurf/rules/asterisk_ai_voice_agent.md
+
+# Development artifacts (not for main branch)
+.agent/
+walkthrough.md
+admin_ui/RELEASE_SUMMARY.md
