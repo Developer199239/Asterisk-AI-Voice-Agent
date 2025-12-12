@@ -67,7 +67,7 @@ This staged architecture provides:
 - **`provider_grace_ms`** – grace period after cleanup to absorb any late provider frames without logging warnings.
 - Defaults currently favour reliability: 120 ms warm-up, 80 ms low watermark, 4 s fallback timeout, and 500 ms grace for late provider chunks.
 
-Defaults align with Deepgram’s recommended 100–120 ms buffering window and can be overridden per deployment. Refer to `docs/milestones/milestone-5-streaming-transport.md` for implementation details and tuning guidance.
+Defaults align with Deepgram’s recommended 100–120 ms buffering window and can be overridden per deployment. Refer to `docs/contributing/milestones/milestone-5-streaming-transport.md` for implementation details and tuning guidance.
 
 - **OpenAI Realtime codec alignment** – inbound AudioSocket PCM16 (8 kHz) is upsampled to 24 kHz before publishing via `input_audio_buffer`, and OpenAI’s 24 kHz PCM16 output is resampled back to the configured target (8 kHz PCM16 for AudioSocket playback by default). Keep `openai_realtime.provider_input_sample_rate_hz` and `openai_realtime.output_sample_rate_hz` at 24000 so the session advertises the correct formats while the engine handles the final downsampling.
 
@@ -106,7 +106,7 @@ The engine loads the active pipeline at startup (or reload) and instantiates the
 
 | Layer | Responsibilities | Key Files / Types |
 | ----- | ---------------- | ----------------- |
-| Configuration (`YAML`) | Declare named pipelines and provider blocks (`providers.local`, `providers.deepgram`, `providers.google`, `providers.openai`, etc.). Each pipeline specifies `stt`, `llm`, `tts`, and an `options` map passed verbatim to adapters. | [`config/ai-agent.yaml`](config/ai-agent.yaml), [`docs/milestones/milestone-7-configurable-pipelines.md`](docs/milestones/milestone-7-configurable-pipelines.md) |
+| Configuration (`YAML`) | Declare named pipelines and provider blocks (`providers.local`, `providers.deepgram`, `providers.google`, `providers.openai`, etc.). Each pipeline specifies `stt`, `llm`, `tts`, and an `options` map passed verbatim to adapters. | [`config/ai-agent.yaml`](config/ai-agent.yaml), [`docs/contributing/milestones/milestone-7-configurable-pipelines.md`](docs/contributing/milestones/milestone-7-configurable-pipelines.md) |
 | Pydantic Models | Validate YAML, normalize legacy configs, and expose typed access via `PipelineEntry`, `ProviderConfig`, `PipelineOptions`. | [`src/config.py`](src/config.py) |
 | Orchestrator | Resolve the active pipeline, look up component factories, and hydrate adapters with provider + pipeline options. Handles hot reload by rebuilding component bindings while leaving in-flight calls untouched. | [`src/pipelines/orchestrator.py`](src/pipelines/orchestrator.py) |
 | Component Adapters | Implement the STT / LLM / TTS interfaces for each provider. Adapters honor selective roles (e.g., `local_stt` can operate without LLM/TTS) and surface capability metadata to the orchestrator. | [`src/pipelines/local.py`](src/providers/local.py) (via adapters automatically registered), [`src/pipelines/deepgram.py`](src/pipelines/deepgram.py), [`src/pipelines/openai.py`](src/pipelines/openai.py), [`src/pipelines/google.py`](src/pipelines/google.py) |
@@ -171,7 +171,7 @@ Configuration changes propagate through the existing async watcher introduced in
 
 Operators can trigger a reload manually with `make engine-reload` (wrapper around `kill -HUP $(pgrep -f ai-engine)` on the host). This preserves uptime while enabling rapid iteration on streaming quality or provider selection.
 
-### Monitoring & Analytics (Milestone 8)
+### Monitoring & Analytics (Milestone 14)
 
 An optional monitoring stack (Prometheus + Grafana) is defined in `docker-compose.yml` and managed via `make monitor-up` / `make monitor-down`. When enabled it provides:
 
@@ -179,7 +179,7 @@ An optional monitoring stack (Prometheus + Grafana) is defined in `docker-compos
 - Turn latency histograms and provider distribution panels
 - Hooks for future transcript/sentiment analytics (Deepgram Test Intelligence, etc.)
 
-Dashboards are stored under `monitoring/dashboards/`, and configuration instructions live in `docs/milestones/milestone-8-monitoring-stack.md`. The stack is disabled by default so standard deployments remain lightweight.
+Dashboards are stored under `monitoring/dashboards/`, and configuration instructions live in `docs/contributing/milestones/milestone-14-monitoring-stack.md`. The stack is disabled by default so standard deployments remain lightweight.
 
 ## Recent Progress and Current State
 
@@ -242,10 +242,10 @@ Ongoing milestones and their acceptance criteria live in `docs/ROADMAP.md`. Upda
 
 ### IDE Playbooks
 
-- **Codex / CLI**: `Agents.md` and `call-framework.md` summarize deployment runbooks and regression expectations for terminal-first workflows.
-- **Cursor**: `.cursor/rules/asterisk_ai_voice_agent.mdc` mirrors the same guardrails, emphasising SessionStore usage and AudioSocket-first assumptions.
+- **Codex / CLI**: `Agents.md` and `.agent/workflows/` summarize deployment runbooks and regression expectations for terminal-first workflows.
+- **Cursor**: `.cursor/rules/asterisk_ai_voice_agent.mdc` mirrors the same guardrails, emphasizing SessionStore usage, dual upstream transport, and streaming-first playback.
 - **Windsurf**: `.windsurf/rules/asterisk_ai_voice_agent.md` keeps IDE prompts aligned with the roadmap so code and documentation stays in sync.
-- **Shared artifacts**: Regression notes (`docs/regressions/*.md`) and architecture snapshots (`docs/Architecture.md`, `docs/ROADMAP.md`) are the canonical hand-off regardless of editor; update them after every call so all IDEs inherit the latest context.
+- **Shared artifacts**: Golden baselines (`docs/baselines/golden/`), regression evidence (`docs/resilience.md`), and architecture/roadmap snapshots (`docs/contributing/architecture-deep-dive.md`, `docs/ROADMAP.md`) are the canonical hand-off regardless of editor; update them after every call so all IDEs inherit the latest context.
 
 ## Contributing
 
