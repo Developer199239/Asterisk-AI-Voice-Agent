@@ -327,6 +327,24 @@ const GenericProviderForm: React.FC<GenericProviderFormProps> = ({ config, onCha
                         </div>
                     </div>
                 )}
+
+                {/* Groq Tool Calling Warning */}
+                {(config.name || '').toLowerCase().includes('groq') && (
+                    <div className="bg-amber-500/10 border border-amber-500/30 text-amber-700 dark:text-amber-400 p-4 rounded-md">
+                        <div className="flex items-start gap-3">
+                            <AlertTriangle className="w-5 h-5 flex-shrink-0 mt-0.5" />
+                            <div className="space-y-2">
+                                <p className="font-semibold">Groq Tool Calling Limitation</p>
+                                <p className="text-sm">
+                                    Groq does not support function/tool calling reliably and will return errors if tools are enabled.
+                                </p>
+                                <p className="text-sm">
+                                    <strong>Do not enable <code>tools_enabled</code></strong> in the configuration fields below.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                )}
             </div>
 
             {/* Connection Details */}

@@ -765,6 +765,16 @@ const Wizard = () => {
                                                     <option value="ollama">Ollama (Self-hosted) - No API key needed</option>
                                                 </select>
                                             </div>
+                                            {config.hybrid_llm_provider === 'groq' && (
+                                                <div className="p-3 bg-amber-50 dark:bg-amber-900/20 rounded-md border border-amber-200 dark:border-amber-800">
+                                                    <p className="text-sm text-amber-800 dark:text-amber-300">
+                                                        <strong>Note:</strong> Groq does not support function/tool calling reliably.
+                                                    </p>
+                                                    <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
+                                                        Tools are disabled by default. Do not enable tools_enabled in the provider config.
+                                                    </p>
+                                                </div>
+                                            )}
                                             {config.hybrid_llm_provider === 'ollama' && (
                                                 <div className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-md border border-blue-200 dark:border-blue-800">
                                                     <p className="text-sm text-blue-800 dark:text-blue-300">
