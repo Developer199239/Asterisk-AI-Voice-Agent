@@ -29,6 +29,7 @@ from .deepgram_flux import DeepgramFluxSTTAdapter
 from .elevenlabs import ElevenLabsTTSAdapter
 from .google import GoogleLLMAdapter, GoogleSTTAdapter, GoogleTTSAdapter
 from .local import LocalLLMAdapter, LocalSTTAdapter, LocalTTSAdapter
+from .ollama import OllamaLLMAdapter
 from .openai import OpenAISTTAdapter, OpenAILLMAdapter, OpenAITTSAdapter
 
 logger = get_logger(__name__)
@@ -495,6 +496,25 @@ class PipelineOrchestrator:
             )
         else:
             logger.debug("ElevenLabs pipeline adapters not registered - API key unavailable")
+
+        # Free LLM adapter (mlvoca.com) - always available, no API key required
+        free_llm_factory = self._make_free_llm_factory()
+        self.register_factory("free_llm", free_llm_factory)
+        logger.info(
+            "Free LLM adapter registered (NO TOOL CALLING)",
+            llm_factory="free_llm",
+            endpoint="https://mlvoca.com",
+            note="Demo/testing only - user must hang up manually",
+        )
+
+    def _make_free_llm_factory(self) -> ComponentFactory:
+        """Create factory for the free Ollama-compatible LLM API."""
+        def factory(component_key: str, options: Dict[str, Any]) -> Component:
+            return OllamaLLMAdapter(
+                self.config,
+                options,
+            )
+        return factory
 
     def _make_local_stt_factory(
         self,

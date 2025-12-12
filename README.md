@@ -209,6 +209,31 @@ docker compose logs -f ai-engine
    - Local STT/TTS + Cloud LLM (OpenAI). Audio stays on-premises.
    - *Best for: Audio privacy, cost control, compliance.*
 
+### 🆓 Free Demo Mode (No API Key Required)
+
+For quick testing without any API keys, use the **`local_free`** pipeline:
+
+```yaml
+# In dialplan or via Admin UI
+AI_PROVIDER=local_free
+AI_CONTEXT=demo_free
+```
+
+**Features:**
+
+- Uses [mlvoca.com](https://mlvoca.github.io/free-llm-api/) free LLM API (DeepSeek-R1 1.5b)
+- Local Vosk STT + Free Cloud LLM + Local Piper TTS
+- **No API key required** - works out of the box
+
+**Limitations:**
+
+- ❌ **No tool calling** - AI cannot hang up, transfer, or send emails
+- ❌ User must hang up manually when done
+- ⚠️ Limited hardware = slower responses during peak usage
+- ⚠️ Non-commercial use only
+
+> **For production use**, sign up for [OpenAI](https://platform.openai.com), [Groq](https://console.groq.com), or [Deepgram](https://deepgram.com) API keys to enable full functionality.
+
 ### Technical Features
 
 - **Tool Calling System**: AI-powered actions (transfers, emails) work with any provider.
