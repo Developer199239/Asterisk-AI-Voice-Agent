@@ -205,6 +205,11 @@ contexts:
     - leave_voicemail
     - send_email_summary
     - request_transcript
+  demo_hybrid_groq:
+    greeting: Hi {caller_name}, I'm Ava with the Groq-powered local hybrid demo. I can explain how this privacy-focused setup works.
+    profile: telephony_ulaw_8k
+    prompt: "You are Ava (Asterisk Voice Agent) demonstrating the Local Hybrid pipeline with Groq LLM.\n\nABOUT THIS CONFIGURATION:\n- Local STT (Vosk/Kroko/Sherpa) + Groq Llama-3.3-70B LLM + Local TTS (Piper/Kokoro)\n- Audio stays on-premises; only text goes to Groq's cloud\n- Groq offers faster inference at lower cost than OpenAI\n- ExternalMedia RTP is used for clean, low-latency audio routing\n\nNOTE: Tool calling is disabled for this pipeline (Groq compatibility).\nFor tool support, switch to local_hybrid pipeline with OpenAI LLM.\n\nADMIN UI FEATURES:\n- VAD Settings: Tune voice activity detection via Advanced > VAD\n- Barge-In Settings: Adjust interruption behavior via Advanced > Barge-In\n- Provider Config: Switch STT/TTS backends via Providers page\n\nYOUR ROLE:\n- Explain the privacy-focused hybrid architecture with Groq\n- Answer questions about the project, setup, and features\n- Be clear that tool functions (transfer, hangup) are not available in this mode\n- Speak in short, concise sentences (1-3 sentences)\n- Do not read punctuation characters out loud; pause briefly instead\n\nCALL ENDING PROTOCOL:\n- When user indicates they're done, simply say a warm farewell\n- Example: 'Thank you for calling! Have a great day!'\n- Note: hangup_call tool is not available - call will end naturally or via dialplan\n"
+    tools: []  # Tools disabled for Groq (compatibility)
   demo_openai:
     greeting: Hi {caller_name}, I'm Ava with the OpenAI Realtime voice demo. Ask me
       anything about the Asterisk AI Voice Agent project.
@@ -308,16 +313,10 @@ pipelines:
           encoding: mulaw
           sample_rate: 8000
     stt: local_stt
-    tools:
-    - transfer
-    - cancel_transfer
-    - hangup_call
-    - leave_voicemail
-    - send_email_summary
-    - request_transcript
     tts: local_tts
   # Alternative: Use Groq for faster/cheaper LLM inference
-  # To use: Set active_pipeline: local_hybrid_groq and ensure GROQ_API_KEY is set
+  # To use: Set active_pipeline: local_hybrid_groq, set context to demo_hybrid_groq, and ensure GROQ_API_KEY is set
+  # Note: Tools are disabled for Groq - tools are defined in demo_hybrid_groq context (empty list)
   local_hybrid_groq:
     llm: groq_llm
     options:
@@ -338,13 +337,6 @@ pipelines:
           encoding: mulaw
           sample_rate: 8000
     stt: local_stt
-    tools:
-    - transfer
-    - cancel_transfer
-    - hangup_call
-    - leave_voicemail
-    - send_email_summary
-    - request_transcript
     tts: local_tts
 profiles:
   default: telephony_responsive
