@@ -1653,7 +1653,7 @@ class Engine:
             await self.ari_client.hangup_channel(channel_id)
             return
         
-        # Step 1: Remove UnicastRTP/ExternalMedia from bridge
+        # Step 1: Remove AI audio channel from bridge (ExternalMedia OR AudioSocket)
         if session.external_media_id:
             try:
                 await self.ari_client.remove_channel_from_bridge(
@@ -1664,6 +1664,17 @@ class Engine:
                            external_media_id=session.external_media_id)
             except Exception as e:
                 logger.warning(f"Failed to remove UnicastRTP: {e}")
+        
+        if session.audiosocket_channel_id:
+            try:
+                await self.ari_client.remove_channel_from_bridge(
+                    session.bridge_id,
+                    session.audiosocket_channel_id
+                )
+                logger.info("✅ AudioSocket channel removed from bridge",
+                           audiosocket_channel_id=session.audiosocket_channel_id)
+            except Exception as e:
+                logger.warning(f"Failed to remove AudioSocket channel: {e}")
         
         # Step 2: Stop AI provider session
         provider = self.providers.get(session.provider_name)
@@ -1777,7 +1788,9 @@ class Engine:
 
         audio_uuid = str(uuid.uuid4())
         host = self.config.audiosocket.host or "127.0.0.1"
-        if host in ("0.0.0.0", "::"):
+        # Only rewrite bind-all addresses if no explicit host was configured
+        # This allows remote Asterisk deployments to specify the actual AI engine host
+        if host in ("0.0.0.0", "::") and not self.config.audiosocket.host:
             host = "127.0.0.1"
         port = self.config.audiosocket.port
         # Match channel interface codec to YAML audiosocket.format
@@ -7141,8 +7154,11 @@ class Engine:
                             as_fmt = None
                         if as_fmt in ('ulaw', 'mulaw', 'g711_ulaw'):
                             provider.set_input_mode('mulaw8k')
+                        elif as_fmt in ('slin16', 'linear16', 'pcm16'):
+                            # slin16 is 16kHz PCM16, set correct input mode
+                            provider.set_input_mode('pcm16_16k')
                         else:
-                            # Default to PCM16 at 8 kHz when AudioSocket is slin16 or unspecified
+                            # Default to PCM16 at 8 kHz for slin (8kHz) or unspecified
                             provider.set_input_mode('pcm16_8k')
             except Exception:
                 logger.debug("Provider set_input_mode failed or unsupported", exc_info=True)
