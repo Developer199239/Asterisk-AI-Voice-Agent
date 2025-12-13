@@ -228,16 +228,19 @@ const Wizard = () => {
         setLoading(true);
         setError(null);
         try {
-            await axios.post('/api/wizard/validate-connection', {
+            const res = await axios.post('/api/wizard/validate-connection', {
                 host: config.asterisk_host,
                 username: config.asterisk_username,
                 password: config.asterisk_password,
                 port: config.asterisk_port,
                 scheme: config.asterisk_scheme
             });
-            alert('Successfully connected to Asterisk!');
+            if (!res.data.valid) {
+                throw new Error(res.data.error || 'Connection failed');
+            }
+            alert(res.data.message || 'Successfully connected to Asterisk!');
         } catch (err: any) {
-            setError('Connection failed: ' + (err.response?.data?.detail || err.message));
+            setError('Connection failed: ' + (err.response?.data?.error || err.message));
         } finally {
             setLoading(false);
         }

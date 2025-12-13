@@ -349,7 +349,7 @@ for i in {1..10}; do
 done
 
 # Monitor CPU/RAM during test
-docker stats ai-engine local-ai-server
+docker stats ai_engine local_ai_server
 ```
 
 ### Performance Baseline
