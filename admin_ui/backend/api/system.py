@@ -6,6 +6,7 @@ import psutil
 import os
 import shutil
 import logging
+from services.fs import upsert_env_vars
 
 logger = logging.getLogger(__name__)
 
@@ -165,16 +166,16 @@ async def start_container(container_id: str):
     logger.info(f"Starting {service_name} from {project_root}")
     
     try:
-        # A4: Use dynamic docker-compose path resolution
+        # Use docker compose with --build to ensure image exists
         compose_cmd = get_docker_compose_cmd()
-        cmd = compose_cmd + ["-p", "asterisk-ai-voice-agent", "up", "-d", "--no-build", service_name]
+        cmd = compose_cmd + ["up", "-d", "--build", service_name]
         
         result = subprocess.run(
             cmd,
             cwd=project_root,
             capture_output=True,
             text=True,
-            timeout=120
+            timeout=300  # 5 min timeout for potential build
         )
         
         logger.debug(f"start returncode={result.returncode}, stdout={result.stdout}, stderr={result.stderr}")
@@ -231,6 +232,12 @@ async def restart_container(container_id: str):
         container_name = container_name_map[container_id]
     
     logger.info(f"Restarting container: {container_name}")
+
+    # NOTE: docker restart does NOT reload env_file changes.
+    # For ai_engine/local_ai_server, prefer force-recreate so updated .env keys apply.
+    if container_name in ("ai_engine", "local_ai_server"):
+        service_name = service_map.get(container_name, container_name)
+        return await _recreate_via_compose(service_name)
     
     try:
         # A5: Use Docker SDK for cleaner restart (no stop/rm/up)
@@ -292,6 +299,114 @@ async def _start_via_compose(container_id: str, service_map: dict):
         raise HTTPException(status_code=500, detail="docker-compose not found")
     except subprocess.TimeoutExpired:
         raise HTTPException(status_code=500, detail="Timeout waiting for container start")
+
+
+async def _recreate_via_compose(service_name: str):
+    """Force-recreate a compose service so env_file changes (.env) are applied."""
+    import subprocess
+
+    project_root = os.getenv("PROJECT_ROOT", "/app/project")
+    
+    # Map service names to container names for stopping
+    container_map = {
+        "ai-engine": "ai_engine",
+        "admin-ui": "admin_ui",
+        "local-ai-server": "local_ai_server"
+    }
+    container_name = container_map.get(service_name, service_name)
+
+    try:
+        # First stop and remove the existing container to avoid name conflicts
+        try:
+            client = docker.from_env()
+            container = client.containers.get(container_name)
+            logger.info(f"Stopping container {container_name} before recreate")
+            container.stop(timeout=10)
+            container.remove()
+            logger.info(f"Container {container_name} stopped and removed")
+        except docker.errors.NotFound:
+            logger.info(f"Container {container_name} not found, will create fresh")
+        except Exception as e:
+            logger.warning(f"Error stopping container: {e}")
+        
+        compose_cmd = get_docker_compose_cmd()
+        cmd = compose_cmd + [
+            "up",
+            "-d",
+            "--build",
+            service_name,
+        ]
+
+        result = subprocess.run(
+            cmd,
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+
+        if result.returncode == 0:
+            return {"status": "success", "method": "docker-compose", "output": result.stdout or "Service recreated"}
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to recreate via compose: {result.stderr or result.stdout}",
+        )
+    except FileNotFoundError:
+        raise HTTPException(status_code=500, detail="docker-compose not found")
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=500, detail="Timeout waiting for container recreate")
+
+
+@router.post("/containers/ai_engine/reload")
+async def reload_ai_engine():
+    """
+    Hot-reload AI Engine configuration without restarting the container.
+    This reloads ai-agent.yaml and .env changes.
+    
+    Returns restart_required=True if new providers need to be added (hot-reload can't add new providers).
+    """
+    try:
+        import httpx
+        url = os.getenv("HEALTH_CHECK_AI_ENGINE_URL", "http://127.0.0.1:15000/health").replace("/health", "/reload")
+        logger.info(f"Sending reload request to AI Engine at {url}")
+        
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(url)
+            
+            if resp.status_code == 200:
+                data = resp.json()
+                changes = data.get("changes", [])
+                
+                # Check if any change requires a restart (new providers, removed providers)
+                restart_required = any("restart needed" in str(c).lower() for c in changes)
+                
+                if restart_required:
+                    return {
+                        "status": "partial",
+                        "message": "Config updated but new providers require a restart to load",
+                        "changes": changes,
+                        "restart_required": True
+                    }
+                
+                return {
+                    "status": "success",
+                    "message": data.get("message", "Configuration reloaded"),
+                    "changes": changes,
+                    "restart_required": False
+                }
+            else:
+                raise HTTPException(
+                    status_code=resp.status_code,
+                    detail=f"AI Engine reload failed: {resp.text}"
+                )
+    except httpx.ConnectError:
+        raise HTTPException(
+            status_code=503,
+            detail="AI Engine is not running. Start it first."
+        )
+    except Exception as e:
+        logger.error(f"Error reloading AI Engine: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/metrics")
 async def get_system_metrics():
@@ -548,15 +663,18 @@ async def get_directory_health():
 async def fix_directory_issues():
     """
     Attempt to fix directory permission and symlink issues.
+    Note: Symlink creation requires host access - use preflight.sh for that.
     """
     import subprocess
     
     project_root = os.getenv("PROJECT_ROOT", "/app/project")
     host_media_dir = os.path.join(project_root, "asterisk_media", "ai-generated")
     asterisk_sounds_link = "/var/lib/asterisk/sounds/ai-generated"
+    in_docker = os.path.exists("/.dockerenv") or os.getenv("DOCKER_CONTAINER", "")
     
     fixes_applied = []
     errors = []
+    manual_steps = []
     
     # Fix 1: Create directory if missing
     try:
@@ -574,59 +692,56 @@ async def fix_directory_issues():
     except Exception as e:
         errors.append(f"Failed to set permissions: {str(e)}")
     
-    # Fix 3: Create/fix symlink
-    try:
-        # Remove existing symlink or file
-        if os.path.islink(asterisk_sounds_link):
-            os.unlink(asterisk_sounds_link)
-            fixes_applied.append(f"Removed old symlink: {asterisk_sounds_link}")
-        elif os.path.exists(asterisk_sounds_link):
-            errors.append(f"Cannot fix: {asterisk_sounds_link} exists and is not a symlink")
-        
-        # Create new symlink
-        if not os.path.exists(asterisk_sounds_link):
-            os.symlink(host_media_dir, asterisk_sounds_link)
-            fixes_applied.append(f"Created symlink: {asterisk_sounds_link} → {host_media_dir}")
-    except PermissionError:
-        # Try with sudo
+    # Fix 3: Symlink - can only be done from host, not container
+    if in_docker:
+        # Check if symlink already exists on host via mounted path
+        # The symlink is on the host at /var/lib/asterisk/sounds which isn't mounted
+        manual_steps.append(
+            f"Run on host: sudo ln -sf /mnt/asterisk_media/ai-generated {asterisk_sounds_link}"
+        )
+        manual_steps.append(
+            f"Or run: ./preflight.sh --apply-fixes"
+        )
+    else:
+        # Running on host - can create symlink directly
         try:
-            result = subprocess.run(
-                ["sudo", "ln", "-sf", host_media_dir, asterisk_sounds_link],
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-            if result.returncode == 0:
-                fixes_applied.append(f"Created symlink with sudo: {asterisk_sounds_link} → {host_media_dir}")
-            else:
-                errors.append(f"Failed to create symlink with sudo: {result.stderr}")
+            if os.path.islink(asterisk_sounds_link):
+                os.unlink(asterisk_sounds_link)
+                fixes_applied.append(f"Removed old symlink: {asterisk_sounds_link}")
+            elif os.path.exists(asterisk_sounds_link):
+                errors.append(f"Cannot fix: {asterisk_sounds_link} exists and is not a symlink")
+            
+            if not os.path.exists(asterisk_sounds_link):
+                os.symlink(host_media_dir, asterisk_sounds_link)
+                fixes_applied.append(f"Created symlink: {asterisk_sounds_link} → {host_media_dir}")
+        except PermissionError:
+            try:
+                result = subprocess.run(
+                    ["sudo", "ln", "-sf", host_media_dir, asterisk_sounds_link],
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+                if result.returncode == 0:
+                    fixes_applied.append(f"Created symlink with sudo: {asterisk_sounds_link} → {host_media_dir}")
+                else:
+                    errors.append(f"Failed to create symlink with sudo: {result.stderr}")
+            except Exception as e:
+                errors.append(f"Failed to create symlink: {str(e)}")
         except Exception as e:
-            errors.append(f"Failed to create symlink: {str(e)}")
-    except Exception as e:
-        errors.append(f"Failed to manage symlink: {str(e)}")
+            errors.append(f"Failed to manage symlink: {str(e)}")
     
     # Fix 4: Update .env if needed
     env_file = os.path.join(project_root, ".env")
     try:
-        env_content = ""
-        if os.path.exists(env_file):
-            with open(env_file, "r") as f:
-                env_content = f.read()
-        
-        if "AST_MEDIA_DIR=" not in env_content:
-            with open(env_file, "a") as f:
-                f.write(f"\nAST_MEDIA_DIR=/mnt/asterisk_media/ai-generated\n")
+        result = upsert_env_vars(
+            env_file,
+            {"AST_MEDIA_DIR": "/mnt/asterisk_media/ai-generated"},
+            header="Auto-fix: media directory",
+        )
+        if result.added_keys:
             fixes_applied.append("Added AST_MEDIA_DIR to .env (requires container restart)")
-        elif "AST_MEDIA_DIR=/mnt/asterisk_media/ai-generated" not in env_content:
-            # Update existing value
-            import re
-            new_content = re.sub(
-                r"AST_MEDIA_DIR=.*", 
-                "AST_MEDIA_DIR=/mnt/asterisk_media/ai-generated", 
-                env_content
-            )
-            with open(env_file, "w") as f:
-                f.write(new_content)
+        elif result.updated_keys:
             fixes_applied.append("Updated AST_MEDIA_DIR in .env (requires container restart)")
     except Exception as e:
         errors.append(f"Failed to update .env: {str(e)}")
@@ -635,6 +750,7 @@ async def fix_directory_issues():
         "success": len(errors) == 0,
         "fixes_applied": fixes_applied,
         "errors": errors,
+        "manual_steps": manual_steps if manual_steps else None,
         "restart_required": any("restart" in f.lower() for f in fixes_applied)
     }
 

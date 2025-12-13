@@ -11,10 +11,20 @@ Comprehensive documentation of production-validated configurations with complete
   - Status: Production Ready (v4.2.0)
   - Best For: Interactive voice applications requiring natural conversation
 
+- **[Deepgram Agent Golden Baseline](Deepgram-Agent-Golden-Baseline.md)**
+  - Response Latency: <2 seconds
+  - Status: Production Ready
+  - Best For: Enterprise cloud agent with Think stage support
+
 - **[OpenAI Realtime Golden Baseline](OpenAI-Realtime-Golden-Baseline.md)**
   - Response Latency: <2 seconds
   - Status: Production Ready
   - Best For: Full agent mode with streaming capabilities
+
+- **[ElevenLabs Agent Golden Baseline](ElevenLabs-Agent-Golden-Baseline.md)**
+  - Response Latency: <2 seconds
+  - Status: Production Ready
+  - Best For: Premium voice quality and natural conversations
 
 ### **Pipeline Providers**
 

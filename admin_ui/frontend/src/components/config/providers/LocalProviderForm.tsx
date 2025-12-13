@@ -214,28 +214,45 @@ const LocalProviderForm: React.FC<LocalProviderFormProps> = ({ config, onChange 
                 </div>
             )}
 
-            {/* Connection Settings */}
-            <div>
-                <h4 className="font-semibold mb-3">Connection Settings</h4>
-                <div className="space-y-2">
-                    <label className="text-sm font-medium">
-                        {isFullAgent ? 'Base URL / WebSocket URL' : 'WebSocket URL'}
-                        <span className="text-xs text-muted-foreground ml-2">({isFullAgent ? 'base_url' : 'ws_url'})</span>
-                    </label>
-                    <input
-                        type="text"
-                        className="w-full p-2 rounded border border-input bg-background"
-                        value={isFullAgent
-                            ? (config.base_url || '${LOCAL_WS_URL:-ws://local_ai_server:8765}')
-                            : (config.ws_url || '${LOCAL_WS_URL:-ws://local_ai_server:8765}')}
-                        onChange={(e) => handleChange(isFullAgent ? 'base_url' : 'ws_url', e.target.value)}
-                        placeholder="${LOCAL_WS_URL:-ws://local_ai_server:8765}"
-                    />
-                    <p className="text-xs text-muted-foreground">
-                        WebSocket URL for local AI server. Change port if running on custom configuration.
-                    </p>
-                </div>
-            </div>
+	            {/* Connection Settings */}
+	            <div>
+	                <h4 className="font-semibold mb-3">Connection Settings</h4>
+	                <div className="space-y-2">
+	                    <label className="text-sm font-medium">
+	                        {isFullAgent ? 'Base URL / WebSocket URL' : 'WebSocket URL'}
+	                        <span className="text-xs text-muted-foreground ml-2">({isFullAgent ? 'base_url' : 'ws_url'})</span>
+	                    </label>
+	                    <input
+	                        type="text"
+	                        className="w-full p-2 rounded border border-input bg-background"
+	                        value={isFullAgent
+	                            ? (config.base_url || '${LOCAL_WS_URL:-ws://local_ai_server:8765}')
+	                            : (config.ws_url || '${LOCAL_WS_URL:-ws://local_ai_server:8765}')}
+	                        onChange={(e) => handleChange(isFullAgent ? 'base_url' : 'ws_url', e.target.value)}
+	                        placeholder="${LOCAL_WS_URL:-ws://local_ai_server:8765}"
+	                    />
+	                    <p className="text-xs text-muted-foreground">
+	                        WebSocket URL for local AI server. Change port if running on custom configuration.
+	                    </p>
+
+	                    <div className="space-y-2 mt-3">
+	                        <label className="text-sm font-medium">
+	                            Auth Token (optional)
+	                            <span className="text-xs text-muted-foreground ml-2">(auth_token)</span>
+	                        </label>
+	                        <input
+	                            type="password"
+	                            className="w-full p-2 rounded border border-input bg-background"
+	                            value={config.auth_token || '${LOCAL_WS_AUTH_TOKEN:-}'}
+	                            onChange={(e) => handleChange('auth_token', e.target.value)}
+	                            placeholder="${LOCAL_WS_AUTH_TOKEN:-}"
+	                        />
+	                        <p className="text-xs text-muted-foreground">
+	                            If set, local-ai-server requires an auth handshake; token must match `LOCAL_WS_AUTH_TOKEN` in both containers.
+	                        </p>
+	                    </div>
+	                </div>
+	            </div>
 
             {/* Connection Parameters */}
             <div>

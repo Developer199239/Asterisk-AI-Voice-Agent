@@ -238,7 +238,11 @@ async def test_provider_connection(request: ProviderTestRequest):
                     default_value = match.group(2)
                     # Check env var first
                     val = os.getenv(var_name)
-                    if val is not None:
+                    if val is not None and val != "":
+                        return val
+                    # Then check .env file (Admin UI backend typically runs without env vars)
+                    val = get_env_key(var_name)
+                    if val:
                         return val
                     # Then check if we have a default value
                     if default_value is not None:
@@ -347,6 +351,35 @@ async def test_provider_connection(request: ProviderTestRequest):
                 if response.status_code == 200:
                     return {"success": True, "message": f"Connected to OpenAI (HTTP {response.status_code})"}
                 return {"success": False, "message": f"OpenAI API error: HTTP {response.status_code}"}
+
+        # ============================================================
+        # OPENAI-COMPATIBLE (OpenAI / Groq / OpenRouter / etc.)
+        # ============================================================
+        if provider_config.get('type') == 'openai':
+            chat_base_url = (provider_config.get('chat_base_url') or 'https://api.openai.com/v1').rstrip('/')
+            api_key = provider_config.get('api_key')
+            if not api_key:
+                return {"success": False, "message": "API key missing for OpenAI-compatible provider (set api_key or env var)"}
+
+            try:
+                async with httpx.AsyncClient() as client:
+                    response = await client.get(
+                        f"{chat_base_url}/models",
+                        headers={"Authorization": f"Bearer {api_key}"},
+                        timeout=10.0,
+                    )
+                    if response.status_code == 200:
+                        try:
+                            data = response.json()
+                            models = data.get('data') or []
+                            return {"success": True, "message": f"Connected (OpenAI-compatible). Found {len(models)} models."}
+                        except Exception:
+                            return {"success": True, "message": f"Connected (OpenAI-compatible) (HTTP {response.status_code})"}
+                    if response.status_code == 401:
+                        return {"success": False, "message": "Invalid API key (401)"}
+                    return {"success": False, "message": f"Provider API error: HTTP {response.status_code}"}
+            except Exception as e:
+                return {"success": False, "message": f"Cannot connect to provider at {chat_base_url}: {str(e)}"}
                 
         elif 'google_live' in provider_config or ('llm_model' in provider_config and 'gemini' in provider_config.get('llm_model', '')):
             # Google Live
@@ -379,6 +412,30 @@ async def test_provider_connection(request: ProviderTestRequest):
             except Exception as e:
                 # If local-ai-server is on host network, ensure we use host.docker.internal or host networking properties
                 return {"success": False, "message": f"Cannot reach local AI server at {ws_url}. Error: {str(e)}"}
+        
+        # ============================================================
+        # OLLAMA - Self-hosted LLM
+        # ============================================================
+        if 'ollama' in provider_name or provider_config.get('type') == 'ollama':
+            import aiohttp
+            base_url = provider_config.get('base_url', 'http://localhost:11434').rstrip('/')
+            try:
+                async with aiohttp.ClientSession() as session:
+                    url = f"{base_url}/api/tags"
+                    timeout = aiohttp.ClientTimeout(total=10)
+                    async with session.get(url, timeout=timeout) as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            models = data.get("models", [])
+                            return {"success": True, "message": f"Connected to Ollama! Found {len(models)} models."}
+                        else:
+                            return {"success": False, "message": f"Ollama returned status {response.status}"}
+            except aiohttp.ClientConnectorError:
+                return {"success": False, "message": f"Cannot connect to Ollama at {base_url}. Ensure Ollama is running and accessible."}
+            except asyncio.TimeoutError:
+                return {"success": False, "message": "Connection timeout - is Ollama running?"}
+            except Exception as e:
+                return {"success": False, "message": f"Ollama connection failed: {str(e)}"}
                 
         elif 'model' in provider_config or 'stt_model' in provider_config or 'chat_model' in provider_config or 'tts_model' in provider_config:
             # Check if it's Deepgram or OpenAI standard
@@ -439,11 +496,11 @@ async def export_configuration():
         
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
             # Add YAML config
-            if settings.CONFIG_PATH.exists():
+            if os.path.exists(settings.CONFIG_PATH):
                 zip_file.write(settings.CONFIG_PATH, 'ai-agent.yaml')
             
             # Add ENV file
-            if settings.ENV_PATH.exists():
+            if os.path.exists(settings.ENV_PATH):
                 zip_file.write(settings.ENV_PATH, '.env')
             
             # Add timestamp file

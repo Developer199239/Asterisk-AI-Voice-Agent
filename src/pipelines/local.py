@@ -143,6 +143,43 @@ class _LocalAdapterBase:
             )
             raise
 
+        # Optional auth handshake for local-ai-server.
+        auth_token = (merged.get("auth_token") or "").strip()
+        if auth_token:
+            try:
+                await websocket.send(
+                    json.dumps(
+                        {
+                            "type": "auth",
+                            "auth_token": auth_token,
+                            "call_id": call_id,
+                        }
+                    )
+                )
+                raw = await asyncio.wait_for(websocket.recv(), timeout=connect_timeout)
+                if isinstance(raw, (bytes, bytearray)):
+                    raise RuntimeError("Unexpected binary auth response")
+                resp = json.loads(raw)
+                if resp.get("type") != "auth_response" or resp.get("status") != "ok":
+                    raise RuntimeError(f"Auth rejected: {resp}")
+                logger.info(
+                    "Local adapter authenticated",
+                    component=self.component_key,
+                    call_id=call_id,
+                )
+            except Exception as exc:
+                try:
+                    await websocket.close()
+                except Exception:
+                    pass
+                logger.error(
+                    "Local adapter auth failed",
+                    component=self.component_key,
+                    call_id=call_id,
+                    error=str(exc),
+                )
+                raise
+
         session = _LocalSessionState(
             websocket=websocket,
             options=merged,

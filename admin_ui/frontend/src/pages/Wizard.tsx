@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AlertCircle, ArrowRight, Loader2, Cloud, Server, Shield, Zap, SkipForward, CheckCircle, CheckCircle2, XCircle, Terminal, Copy, HardDrive, Play } from 'lucide-react';
+import { AlertCircle, ArrowRight, Loader2, Cloud, Server, Shield, Zap, SkipForward, CheckCircle, CheckCircle2, XCircle, Terminal, Copy, HardDrive, Play, RefreshCw, Info } from 'lucide-react';
 import axios from 'axios';
 
 interface SetupConfig {
@@ -12,6 +12,7 @@ interface SetupConfig {
     asterisk_scheme?: string;
     asterisk_app?: string;
     openai_key?: string;
+    groq_key?: string;
     deepgram_key?: string;
     google_key?: string;
     elevenlabs_key?: string;
@@ -20,6 +21,7 @@ interface SetupConfig {
     greeting: string;
     ai_name: string;
     ai_role: string;
+    hybrid_llm_provider?: string;
     // Local AI Config
     local_stt_backend?: string;
     local_stt_model?: string;
@@ -48,11 +50,13 @@ const Wizard = () => {
         asterisk_scheme: 'http',
         asterisk_app: 'asterisk-ai-voice-agent',
         openai_key: '',
+        groq_key: '',
         deepgram_key: '',
         google_key: '',
         greeting: 'Hello, how can I help you today?',
         ai_name: 'Asterisk Agent',
         ai_role: 'Helpful Assistant',
+        hybrid_llm_provider: 'groq',
         // Defaults
         local_stt_backend: 'vosk',
         local_stt_model: '',
@@ -79,6 +83,11 @@ const Wizard = () => {
         checked: boolean;
     }>({ running: false, exists: false, checked: false });
     const [startingEngine, setStartingEngine] = useState(false);
+    const [reloadingEngine, setReloadingEngine] = useState(false);
+    const [engineProgress, setEngineProgress] = useState<{
+        steps: Array<{ name: string; status: string; message: string }>;
+        currentStep: string;
+    }>({ steps: [], currentStep: '' });
 
     // Model selection state
     const [selectedLanguage, setSelectedLanguage] = useState<string>('en-US');
@@ -219,22 +228,25 @@ const Wizard = () => {
         setLoading(true);
         setError(null);
         try {
-            await axios.post('/api/wizard/validate-connection', {
+            const res = await axios.post('/api/wizard/validate-connection', {
                 host: config.asterisk_host,
                 username: config.asterisk_username,
                 password: config.asterisk_password,
                 port: config.asterisk_port,
                 scheme: config.asterisk_scheme
             });
-            alert('Successfully connected to Asterisk!');
+            if (!res.data.valid) {
+                throw new Error(res.data.error || 'Connection failed');
+            }
+            alert(res.data.message || 'Successfully connected to Asterisk!');
         } catch (err: any) {
-            setError('Connection failed: ' + (err.response?.data?.detail || err.message));
+            setError('Connection failed: ' + (err.response?.data?.error || err.message));
         } finally {
             setLoading(false);
         }
     };
 
-    const handleTestKey = async (provider: string, key: string) => {
+    const handleTestKey = async (provider: string, key: string, agentId?: string) => {
         if (!key) {
             setError(`${provider} API Key is required`);
             return;
@@ -242,10 +254,15 @@ const Wizard = () => {
         setLoading(true);
         setError(null);
         try {
-            const res = await axios.post('/api/wizard/validate-key', {
+            const payload: any = {
                 provider: provider === 'openai_realtime' ? 'openai' : provider,
                 api_key: key
-            });
+            };
+            // Include agent_id for ElevenLabs Conversational AI
+            if (provider === 'elevenlabs' && agentId) {
+                payload.agent_id = agentId;
+            }
+            const res = await axios.post('/api/wizard/validate-key', payload);
             if (!res.data.valid) throw new Error(`${provider} Key Invalid: ${res.data.error}`);
 
             // Show detailed message from backend (includes model availability for Google)
@@ -303,6 +320,17 @@ const Wizard = () => {
                 setError('Google API key is required for Google Live.');
                 return;
             }
+            if (config.provider === 'local_hybrid') {
+                const llmProvider = (config.hybrid_llm_provider || 'openai').toLowerCase();
+                if (llmProvider === 'openai' && !config.openai_key) {
+                    setError('OpenAI API key is required for Local Hybrid when using OpenAI.');
+                    return;
+                }
+                if (llmProvider === 'groq' && !config.groq_key) {
+                    setError('Groq API key is required for Local Hybrid when using Groq.');
+                    return;
+                }
+            }
             if (config.provider === 'elevenlabs_agent') {
                 if (!config.elevenlabs_key) {
                     setError('ElevenLabs API key is required.');
@@ -319,16 +347,40 @@ const Wizard = () => {
             // Validate keys before proceeding
             setLoading(true);
             try {
-                if (config.provider === 'openai_realtime' || config.provider === 'local_hybrid') {
+                if (config.provider === 'openai_realtime') {
                     if (config.openai_key) {
                         const res = await axios.post('/api/wizard/validate-key', {
                             provider: 'openai',
                             api_key: config.openai_key
                         });
                         if (!res.data.valid) throw new Error(`OpenAI Key Invalid: ${res.data.error}`);
-                        if (!res.data.valid) throw new Error(`OpenAI Key Invalid: ${res.data.error}`);
-                    } else if (config.provider === 'openai_realtime') {
+                    } else {
                         throw new Error('OpenAI API Key is required for OpenAI Realtime provider');
+                    }
+                }
+
+                if (config.provider === 'local_hybrid') {
+                    const llmProvider = (config.hybrid_llm_provider || 'openai').toLowerCase();
+                    if (llmProvider === 'openai') {
+                        if (config.openai_key) {
+                            const res = await axios.post('/api/wizard/validate-key', {
+                                provider: 'openai',
+                                api_key: config.openai_key
+                            });
+                            if (!res.data.valid) throw new Error(`OpenAI Key Invalid: ${res.data.error}`);
+                        } else {
+                            throw new Error('OpenAI API Key is required for Local Hybrid when using OpenAI');
+                        }
+                    } else if (llmProvider === 'groq') {
+                        if (config.groq_key) {
+                            const res = await axios.post('/api/wizard/validate-key', {
+                                provider: 'groq',
+                                api_key: config.groq_key
+                            });
+                            if (!res.data.valid) throw new Error(`Groq Key Invalid: ${res.data.error}`);
+                        } else {
+                            throw new Error('Groq API Key is required for Local Hybrid when using Groq');
+                        }
                     }
                 }
 
@@ -375,7 +427,8 @@ const Wizard = () => {
                     if (config.elevenlabs_key) {
                         const res = await axios.post('/api/wizard/validate-key', {
                             provider: 'elevenlabs',
-                            api_key: config.elevenlabs_key
+                            api_key: config.elevenlabs_key,
+                            agent_id: config.elevenlabs_agent_id
                         });
                         if (!res.data.valid) throw new Error(`ElevenLabs Key Invalid: ${res.data.error}`);
                     } else {
@@ -473,7 +526,7 @@ const Wizard = () => {
 
     const ProviderCard = ({ id, title, description, icon: Icon, recommended = false }: any) => (
         <div
-            onClick={() => setConfig({ ...config, provider: id })}
+            onClick={() => setConfig({ ...config, provider: id, hybrid_llm_provider: id === 'local_hybrid' ? (config.hybrid_llm_provider || 'groq') : config.hybrid_llm_provider })}
             className={`relative p-6 rounded-lg border-2 cursor-pointer transition-all ${config.provider === id
                 ? 'border-primary bg-primary/5'
                 : 'border-border hover:border-primary/50'
@@ -710,32 +763,71 @@ const Wizard = () => {
                                                 </div>
                                             )}
                                         </div>
+
+                                        {/* LLM Config for Hybrid */}
+                                        <div className="space-y-3 p-4 bg-muted/30 rounded-lg border">
+                                            <h4 className="font-medium text-sm text-muted-foreground uppercase tracking-wider">Large Language Model (LLM)</h4>
+                                            <div>
+                                                <label className="text-sm font-medium">Provider</label>
+                                                <select
+                                                    className="w-full p-2 rounded-md border border-input bg-background mt-1"
+                                                    value={config.hybrid_llm_provider || 'groq'}
+                                                    onChange={e => setConfig({ ...config, hybrid_llm_provider: e.target.value })}
+                                                >
+                                                    <option value="groq">Groq (Cloud) - Free tier, no credit card</option>
+                                                    <option value="openai">OpenAI (Cloud)</option>
+                                                    <option value="ollama">Ollama (Self-hosted) - No API key needed</option>
+                                                </select>
+                                            </div>
+                                            {config.hybrid_llm_provider === 'groq' && (
+                                                <div className="p-3 bg-amber-50 dark:bg-amber-900/20 rounded-md border border-amber-200 dark:border-amber-800">
+                                                    <p className="text-sm text-amber-800 dark:text-amber-300">
+                                                        <strong>Note:</strong> Groq does not support function/tool calling reliably.
+                                                    </p>
+                                                    <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
+                                                        Tools are disabled by default. Do not enable tools_enabled in the provider config.
+                                                    </p>
+                                                </div>
+                                            )}
+                                            {config.hybrid_llm_provider === 'ollama' && (
+                                                <div className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-md border border-blue-200 dark:border-blue-800">
+                                                    <p className="text-sm text-blue-800 dark:text-blue-300">
+                                                        <strong>Ollama:</strong> Run your own LLM on a Mac, PC, or server.
+                                                    </p>
+                                                    <p className="text-xs text-blue-600 dark:text-blue-400 mt-1">
+                                                        Configure the Ollama URL in Providers → ollama_llm after setup.
+                                                    </p>
+                                                </div>
+                                            )}
+                                        </div>
                                     </div>
                                 )}
+                                {config.hybrid_llm_provider !== 'ollama' && (
                                 <div className="space-y-2">
                                     <label className="text-sm font-medium">
-                                        OpenAI API Key
+                                        {config.hybrid_llm_provider === 'groq' ? 'Groq API Key' : 'OpenAI API Key'}
                                         {config.provider === 'local_hybrid' && <span className="text-muted-foreground font-normal ml-2">(for LLM only)</span>}
                                     </label>
                                     <div className="flex space-x-2">
                                         <input
                                             type="password"
                                             className="w-full p-2 rounded-md border border-input bg-background"
-                                            value={config.openai_key}
-                                            onChange={e => setConfig({ ...config, openai_key: e.target.value })}
-                                            placeholder="sk-..."
+                                            value={config.hybrid_llm_provider === 'groq' ? (config.groq_key || '') : (config.openai_key || '')}
+                                            onChange={e => setConfig({ ...config, [config.hybrid_llm_provider === 'groq' ? 'groq_key' : 'openai_key']: e.target.value })}
+                                            placeholder={config.hybrid_llm_provider === 'groq' ? 'gsk_...' : 'sk-...'}
                                         />
                                         <button
                                             type="button"
-                                            onClick={() => handleTestKey('openai', config.openai_key || '')}
+                                            onClick={() => handleTestKey(config.hybrid_llm_provider === 'groq' ? 'groq' : 'openai', config.hybrid_llm_provider === 'groq' ? (config.groq_key || '') : (config.openai_key || ''))}
                                             className="px-3 py-2 rounded-md bg-secondary text-secondary-foreground hover:bg-secondary/80"
                                             disabled={loading}
                                         >
                                             Test
                                         </button>
                                     </div>
-                                    <p className="text-xs text-muted-foreground">Required for OpenAI Realtime and Local Hybrid providers.</p>
+                                    <p className="text-xs text-muted-foreground">Required for Local Hybrid cloud LLM.</p>
                                 </div>
+                                )}
                             </div>
                         )}
 
@@ -858,7 +950,7 @@ const Wizard = () => {
                                         />
                                         <button
                                             type="button"
-                                            onClick={() => handleTestKey('elevenlabs', config.elevenlabs_key || '')}
+                                            onClick={() => handleTestKey('elevenlabs', config.elevenlabs_key || '', config.elevenlabs_agent_id)}
                                             className="px-3 py-2 rounded-md bg-secondary text-secondary-foreground hover:bg-secondary/80"
                                             disabled={loading}
                                         >
@@ -1164,7 +1256,19 @@ const Wizard = () => {
                                                 <option value="phi-3-mini">Phi-3 Mini (3.8B) - Recommended</option>
                                                 <option value="llama-3-8b">Llama 3 (8B) - High VRAM</option>
                                                 <option value="mistral-7b">Mistral (7B)</option>
+                                                <option value="ollama">Ollama (Self-hosted) - No download needed</option>
                                             </select>
+                                            {config.local_llm_model === 'ollama' && (
+                                                <div className="mt-3 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-md border border-blue-200 dark:border-blue-800">
+                                                    <p className="text-sm text-blue-800 dark:text-blue-300">
+                                                        <strong>Ollama:</strong> Use your own Ollama server running on a Mac, PC, or server.
+                                                    </p>
+                                                    <p className="text-xs text-blue-600 dark:text-blue-400 mt-1">
+                                                        Configure the Ollama URL in Providers → ollama_llm after setup.
+                                                        See <a href="/docs/OLLAMA_SETUP.md" className="underline">OLLAMA_SETUP.md</a> for details.
+                                                    </p>
+                                                </div>
+                                            )}
                                         </div>
                                     </div>
 
@@ -1414,31 +1518,68 @@ const Wizard = () => {
                                 Test Connection
                             </button>
                         </div>
-                        <div className="border-t border-border my-4 pt-4"></div>
+                        <div className="border-t border-border my-4 pt-4">
+                            <div className="flex items-center gap-2 mb-3">
+                                <span className="text-sm font-semibold">Default Context Settings</span>
+                                <div className="group relative">
+                                    <Info className="w-4 h-4 text-muted-foreground cursor-help" />
+                                    <div className="absolute left-0 bottom-full mb-2 w-72 p-2 bg-popover text-popover-foreground text-xs rounded-md shadow-lg border border-border opacity-0 group-hover:opacity-100 transition-opacity z-50 pointer-events-none">
+                                        These settings become the default when no <code className="bg-muted px-1 rounded">AI_CONTEXT</code> variable is passed from the Asterisk dialplan. You can create additional contexts with different personas in the Contexts page.
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                         <div className="space-y-2">
-                            <label className="text-sm font-medium">AI Name</label>
+                            <div className="flex items-center gap-2">
+                                <label className="text-sm font-medium">AI Name</label>
+                                <div className="group relative">
+                                    <Info className="w-3 h-3 text-muted-foreground cursor-help" />
+                                    <div className="absolute left-0 bottom-full mb-2 w-64 p-2 bg-popover text-popover-foreground text-xs rounded-md shadow-lg border border-border opacity-0 group-hover:opacity-100 transition-opacity z-50 pointer-events-none">
+                                        The name your AI agent will use to identify itself to callers.
+                                    </div>
+                                </div>
+                            </div>
                             <input
                                 type="text"
                                 className="w-full p-2 rounded-md border border-input bg-background"
                                 value={config.ai_name}
                                 onChange={e => setConfig({ ...config, ai_name: e.target.value })}
+                                placeholder="e.g., Sarah, Alex, Support Agent"
                             />
                         </div>
                         <div className="space-y-2">
-                            <label className="text-sm font-medium">AI Role</label>
+                            <div className="flex items-center gap-2">
+                                <label className="text-sm font-medium">AI Role</label>
+                                <div className="group relative">
+                                    <Info className="w-3 h-3 text-muted-foreground cursor-help" />
+                                    <div className="absolute left-0 bottom-full mb-2 w-64 p-2 bg-popover text-popover-foreground text-xs rounded-md shadow-lg border border-border opacity-0 group-hover:opacity-100 transition-opacity z-50 pointer-events-none">
+                                        Defines the AI's persona and behavior. This becomes part of the system prompt.
+                                    </div>
+                                </div>
+                            </div>
                             <input
                                 type="text"
                                 className="w-full p-2 rounded-md border border-input bg-background"
                                 value={config.ai_role}
                                 onChange={e => setConfig({ ...config, ai_role: e.target.value })}
+                                placeholder="e.g., You are a helpful customer service agent..."
                             />
                         </div>
                         <div className="space-y-2">
-                            <label className="text-sm font-medium">Greeting Message</label>
+                            <div className="flex items-center gap-2">
+                                <label className="text-sm font-medium">Greeting Message</label>
+                                <div className="group relative">
+                                    <Info className="w-3 h-3 text-muted-foreground cursor-help" />
+                                    <div className="absolute left-0 bottom-full mb-2 w-64 p-2 bg-popover text-popover-foreground text-xs rounded-md shadow-lg border border-border opacity-0 group-hover:opacity-100 transition-opacity z-50 pointer-events-none">
+                                        The first message spoken when a call connects. Keep it brief and welcoming.
+                                    </div>
+                                </div>
+                            </div>
                             <textarea
                                 className="w-full p-2 rounded-md border border-input bg-background min-h-[80px]"
                                 value={config.greeting}
                                 onChange={e => setConfig({ ...config, greeting: e.target.value })}
+                                placeholder="e.g., Hello! Thank you for calling. How can I help you today?"
                             />
                         </div>
                     </div>
@@ -1577,10 +1718,16 @@ const Wizard = () => {
                                             onClick={async () => {
                                                 setStartingEngine(true);
                                                 setError(null);
+                                                setEngineProgress({ steps: [], currentStep: 'Starting...' });
                                                 try {
                                                     const res = await axios.post('/api/wizard/start-engine');
+                                                    // Update progress from response
+                                                    if (res.data.steps) {
+                                                        setEngineProgress({ steps: res.data.steps, currentStep: '' });
+                                                    }
                                                     if (res.data.success) {
                                                         setEngineStatus({ ...engineStatus, running: true, exists: true });
+                                                        showToast('AI Engine started successfully!', 'success');
                                                         // Show media setup warnings if any
                                                         const mediaErrors = res.data.media_setup?.errors || [];
                                                         if (mediaErrors.length > 0) {
@@ -1589,7 +1736,7 @@ const Wizard = () => {
                                                                 '\n\nManual fix: Run on your host:\n  sudo ln -sfn /path/to/asterisk_media/ai-generated /var/lib/asterisk/sounds/ai-generated');
                                                         }
                                                     } else {
-                                                        setError(res.data.message);
+                                                        setError(res.data.message + (res.data.stderr ? `\n\nDetails: ${res.data.stderr.slice(0, 300)}` : ''));
                                                     }
                                                 } catch (err: any) {
                                                     setError(err.response?.data?.detail || err.message);
@@ -1603,7 +1750,7 @@ const Wizard = () => {
                                             {startingEngine ? (
                                                 <>
                                                     <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                                                    Starting AI Engine...
+                                                    Building & Starting AI Engine...
                                                 </>
                                             ) : (
                                                 <>
@@ -1612,15 +1759,74 @@ const Wizard = () => {
                                                 </>
                                             )}
                                         </button>
+                                        
+                                        {/* Progress Steps - show during build or after completion */}
+                                        {startingEngine && engineProgress.steps.length === 0 && (
+                                            <div className="mt-4 space-y-2 text-sm text-muted-foreground">
+                                                <div className="flex items-center">
+                                                    <Loader2 className="w-4 h-4 mr-2 animate-spin text-blue-500" />
+                                                    <span>Checking Docker environment...</span>
+                                                </div>
+                                                <div className="flex items-center">
+                                                    <Loader2 className="w-4 h-4 mr-2 animate-spin text-blue-500" />
+                                                    <span>Building AI Engine image (this may take 1-2 minutes)...</span>
+                                                </div>
+                                            </div>
+                                        )}
+                                        {engineProgress.steps.length > 0 && (
+                                            <div className="mt-4 space-y-2">
+                                                {engineProgress.steps.map((step, idx) => (
+                                                    <div key={idx} className="flex items-center text-sm">
+                                                        {step.status === 'complete' && <CheckCircle className="w-4 h-4 mr-2 text-green-500" />}
+                                                        {step.status === 'running' && <Loader2 className="w-4 h-4 mr-2 animate-spin text-blue-500" />}
+                                                        {step.status === 'error' && <XCircle className="w-4 h-4 mr-2 text-red-500" />}
+                                                        {step.status === 'warning' && <AlertCircle className="w-4 h-4 mr-2 text-yellow-500" />}
+                                                        <span className={step.status === 'error' ? 'text-red-600' : step.status === 'complete' ? 'text-green-600' : ''}>
+                                                            {step.message || step.name}
+                                                        </span>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
                                     </div>
                                 )}
 
                                 {/* Engine Running Success for Local */}
                                 {localAIStatus.serverReady && engineStatus.running && (
                                     <div className="bg-green-50 dark:bg-green-900/20 p-4 rounded-lg border border-green-200 dark:border-green-800">
-                                        <div className="flex items-center text-green-700 dark:text-green-400">
-                                            <CheckCircle className="w-5 h-5 mr-2" />
-                                            <span className="font-medium">AI Engine is running</span>
+                                        <div className="flex items-center justify-between">
+                                            <div className="flex items-center text-green-700 dark:text-green-400">
+                                                <CheckCircle className="w-5 h-5 mr-2" />
+                                                <span className="font-medium">AI Engine is running</span>
+                                            </div>
+                                            <button
+                                                onClick={async () => {
+                                                    setReloadingEngine(true);
+                                                    try {
+                                                        const res = await axios.post('/api/system/containers/ai_engine/reload');
+                                                        if (res.data.restart_required) {
+                                                            if (confirm('New provider detected. A full restart is needed. Restart now?')) {
+                                                                showToast('Restarting AI Engine...', 'success');
+                                                                await axios.post('/api/system/containers/ai_engine/restart');
+                                                                showToast('AI Engine restarted!', 'success');
+                                                            } else {
+                                                                showToast('Config saved. Restart later to apply.', 'success');
+                                                            }
+                                                        } else {
+                                                            showToast('AI Engine configuration reloaded!', 'success');
+                                                        }
+                                                    } catch (err: any) {
+                                                        showToast(err.response?.data?.detail || 'Failed to reload', 'error');
+                                                    } finally {
+                                                        setReloadingEngine(false);
+                                                    }
+                                                }}
+                                                disabled={reloadingEngine}
+                                                className="flex items-center gap-1 px-3 py-1.5 text-sm bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50"
+                                            >
+                                                <RefreshCw className={`w-4 h-4 ${reloadingEngine ? 'animate-spin' : ''}`} />
+                                                {reloadingEngine ? 'Applying...' : 'Apply Changes'}
+                                            </button>
                                         </div>
                                     </div>
                                 )}
@@ -1678,10 +1884,16 @@ exten => s,1,NoOp(AI Agent - Local Full)
                                     onClick={async () => {
                                         setStartingEngine(true);
                                         setError(null);
+                                        setEngineProgress({ steps: [], currentStep: 'Starting...' });
                                         try {
                                             const res = await axios.post('/api/wizard/start-engine');
+                                            // Update progress from response
+                                            if (res.data.steps) {
+                                                setEngineProgress({ steps: res.data.steps, currentStep: '' });
+                                            }
                                             if (res.data.success) {
                                                 setEngineStatus({ ...engineStatus, running: true, exists: true });
+                                                showToast('AI Engine started successfully!', 'success');
                                                 // Show media setup warnings if any
                                                 const mediaErrors = res.data.media_setup?.errors || [];
                                                 if (mediaErrors.length > 0) {
@@ -1690,7 +1902,7 @@ exten => s,1,NoOp(AI Agent - Local Full)
                                                         '\n\nManual fix: Run on your host:\n  sudo ln -sfn /path/to/asterisk_media/ai-generated /var/lib/asterisk/sounds/ai-generated');
                                                 }
                                             } else {
-                                                setError(res.data.message);
+                                                setError(res.data.message + (res.data.stderr ? `\n\nDetails: ${res.data.stderr.slice(0, 300)}` : ''));
                                             }
                                         } catch (err: any) {
                                             setError(err.response?.data?.detail || err.message);
@@ -1704,7 +1916,7 @@ exten => s,1,NoOp(AI Agent - Local Full)
                                     {startingEngine ? (
                                         <>
                                             <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                                            Starting...
+                                            Building & Starting AI Engine...
                                         </>
                                     ) : (
                                         <>
@@ -1713,16 +1925,79 @@ exten => s,1,NoOp(AI Agent - Local Full)
                                         </>
                                     )}
                                 </button>
+                                
+                                {/* Progress Steps - show during build or after completion */}
+                                {startingEngine && engineProgress.steps.length === 0 && (
+                                    <div className="mt-4 space-y-2 text-sm text-muted-foreground">
+                                        <div className="flex items-center">
+                                            <Loader2 className="w-4 h-4 mr-2 animate-spin text-blue-500" />
+                                            <span>Checking Docker environment...</span>
+                                        </div>
+                                        <div className="flex items-center">
+                                            <Loader2 className="w-4 h-4 mr-2 animate-spin text-blue-500" />
+                                            <span>Building AI Engine image (this may take 1-2 minutes)...</span>
+                                        </div>
+                                    </div>
+                                )}
+                                {engineProgress.steps.length > 0 && (
+                                    <div className="mt-4 space-y-2">
+                                        {engineProgress.steps.map((step, idx) => (
+                                            <div key={idx} className="flex items-center text-sm">
+                                                {step.status === 'complete' && <CheckCircle className="w-4 h-4 mr-2 text-green-500" />}
+                                                {step.status === 'running' && <Loader2 className="w-4 h-4 mr-2 animate-spin text-blue-500" />}
+                                                {step.status === 'error' && <XCircle className="w-4 h-4 mr-2 text-red-500" />}
+                                                {step.status === 'warning' && <AlertCircle className="w-4 h-4 mr-2 text-yellow-500" />}
+                                                <span className={step.status === 'error' ? 'text-red-600' : step.status === 'complete' ? 'text-green-600' : ''}>
+                                                    {step.message || step.name}
+                                                </span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
                             </div>
                         )}
 
                         {/* Engine Running - Success (non-local providers) */}
                         {config.provider !== 'local' && engineStatus.checked && engineStatus.running && (
                             <div className="bg-green-50 dark:bg-green-900/20 p-4 rounded-lg text-left border border-green-200 dark:border-green-800">
-                                <div className="flex items-center text-green-700 dark:text-green-400">
-                                    <CheckCircle className="w-5 h-5 mr-2" />
-                                    <span className="font-medium">AI Engine is running</span>
+                                <div className="flex items-center justify-between">
+                                    <div className="flex items-center text-green-700 dark:text-green-400">
+                                        <CheckCircle className="w-5 h-5 mr-2" />
+                                        <span className="font-medium">AI Engine is running</span>
+                                    </div>
+                                    <button
+                                        onClick={async () => {
+                                            setReloadingEngine(true);
+                                            try {
+                                                const res = await axios.post('/api/system/containers/ai_engine/reload');
+                                                if (res.data.restart_required) {
+                                                    // New provider needs full restart
+                                                    if (confirm('New provider detected. A full restart is needed to load it. Restart now?')) {
+                                                        showToast('Restarting AI Engine...', 'success');
+                                                        await axios.post('/api/system/containers/ai_engine/restart');
+                                                        showToast('AI Engine restarted! New provider is now available.', 'success');
+                                                    } else {
+                                                        showToast('Config saved. Restart AI Engine later to use new provider.', 'success');
+                                                    }
+                                                } else {
+                                                    showToast('AI Engine configuration reloaded successfully!', 'success');
+                                                }
+                                            } catch (err: any) {
+                                                showToast(err.response?.data?.detail || 'Failed to reload', 'error');
+                                            } finally {
+                                                setReloadingEngine(false);
+                                            }
+                                        }}
+                                        disabled={reloadingEngine}
+                                        className="flex items-center gap-1 px-3 py-1.5 text-sm bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50"
+                                    >
+                                        <RefreshCw className={`w-4 h-4 ${reloadingEngine ? 'animate-spin' : ''}`} />
+                                        {reloadingEngine ? 'Applying...' : 'Apply Changes'}
+                                    </button>
                                 </div>
+                                <p className="text-xs text-green-600 dark:text-green-500 mt-2">
+                                    Click "Apply Changes" to activate your new provider settings.
+                                </p>
                             </div>
                         )}
 

@@ -29,6 +29,7 @@ from .deepgram_flux import DeepgramFluxSTTAdapter
 from .elevenlabs import ElevenLabsTTSAdapter
 from .google import GoogleLLMAdapter, GoogleSTTAdapter, GoogleTTSAdapter
 from .local import LocalLLMAdapter, LocalSTTAdapter, LocalTTSAdapter
+from .ollama import OllamaLLMAdapter
 from .openai import OpenAISTTAdapter, OpenAILLMAdapter, OpenAITTSAdapter
 
 logger = get_logger(__name__)
@@ -495,6 +496,62 @@ class PipelineOrchestrator:
             )
         else:
             logger.debug("ElevenLabs pipeline adapters not registered - API key unavailable")
+
+        # Ollama LLM adapter - for self-hosted local LLMs
+        ollama_llm_factory = self._make_ollama_llm_factory()
+        self.register_factory("ollama_llm", ollama_llm_factory)
+        logger.info(
+            "Ollama LLM adapter registered",
+            llm_factory="ollama_llm",
+            default_endpoint="http://localhost:11434",
+            note="Self-hosted LLM with optional tool calling",
+        )
+
+        self._register_openai_compatible_llm_factories()
+
+
+    def _register_openai_compatible_llm_factories(self) -> None:
+        providers = getattr(self.config, "providers", {}) or {}
+        if not isinstance(providers, dict):
+            return
+
+        for name, cfg in providers.items():
+            if not isinstance(cfg, dict):
+                continue
+            try:
+                role = _extract_role(name)
+            except Exception:
+                continue
+            if role != "llm":
+                continue
+            if str(cfg.get("type", "")).lower() != "openai":
+                continue
+            if cfg.get("enabled") is False:
+                continue
+
+            provider_prefix = _extract_provider(str(name))
+            if not provider_prefix:
+                continue
+
+            payload = dict(cfg)
+            # Prefer config-expanded api_key; fallback to environment variable named after provider key
+            payload["api_key"] = cfg.get("api_key") or os.getenv(f"{provider_prefix.upper()}_API_KEY")
+            try:
+                provider_cfg = OpenAIProviderConfig(**payload)
+            except Exception:
+                continue
+
+            llm_factory = self._make_openai_llm_factory(provider_cfg)
+            self.register_factory(str(name), llm_factory)
+
+    def _make_ollama_llm_factory(self) -> ComponentFactory:
+        """Create factory for Ollama LLM adapter (self-hosted local models)."""
+        def factory(component_key: str, options: Dict[str, Any]) -> Component:
+            return OllamaLLMAdapter(
+                self.config,
+                options,
+            )
+        return factory
 
     def _make_local_stt_factory(
         self,

@@ -1,11 +1,15 @@
 # Local AI Server WebSocket Protocol
 
-This document describes the WebSocket API exposed by the local AI server at `ws://127.0.0.1:8765` (configurable via `LOCAL_WS_URL`). It supports selective operation modes for STT, LLM, TTS, and a full pipeline.
+This document describes the WebSocket API exposed by the local AI server (default `ws://127.0.0.1:8765`). It supports selective operation modes for STT, LLM, TTS, and a full pipeline.
 
-- Address: `ws://<host>:8765` (default `ws://127.0.0.1:8765`)
+- Default address: `ws://127.0.0.1:8765`
+- Engine/client URL: `LOCAL_WS_URL` (used by `providers.*.base_url/ws_url` in `config/ai-agent.yaml`)
+- Server bind: `LOCAL_WS_HOST` + `LOCAL_WS_PORT` (server-side)
+- Optional auth: `LOCAL_WS_AUTH_TOKEN` (server-side)
 - Modes: `full`, `stt`, `llm`, `tts` (default `full`)
-- Binary messages: raw PCM16 mono audio frames
-- JSON messages: control, text requests, or base64 audio frames
+- Binary messages (client → server): raw PCM16 mono frames (assumed 16 kHz unless you set `rate` on JSON `audio`)
+- Binary messages (server → client): μ-law 8 kHz audio bytes for TTS playback (used by `full` pipeline)
+- JSON messages: control, status, text requests, or base64 audio frames
 
 Source of truth:
 
@@ -19,7 +23,37 @@ Source of truth:
 
 ## Connection and Modes
 
-1) Optionally set a default mode for subsequent binary audio frames.
+### Authentication (optional)
+
+If `LOCAL_WS_AUTH_TOKEN` is set on the server, clients must authenticate before any other messages (including binary audio).
+
+Request:
+
+```json
+{ "type": "auth", "auth_token": "..." }
+```
+
+Response:
+
+```json
+{ "type": "auth_response", "status": "ok" }
+```
+
+If authentication is required and not completed, the server responds with:
+
+```json
+{ "type": "auth_response", "status": "error", "message": "authentication_required" }
+```
+
+If the token is wrong:
+
+```json
+{ "type": "auth_response", "status": "error", "message": "invalid_auth_token" }
+```
+
+### Mode selection
+
+Optionally set a default mode for subsequent binary audio frames.
 
 Request:
 
@@ -51,12 +85,15 @@ Notes:
 
 ## Message Types (JSON)
 
+- `auth` → Authenticate session (if enabled); responds with `auth_response`.
 - `set_mode` → Changes session mode; responds with `mode_ready`.
-- `audio` → Base64 PCM16 audio for STT/LLM/FULL flows.
+- `audio` → Base64 audio frames for STT/LLM/FULL flows (recommended: PCM16 mono @ 16 kHz).
 - `llm_request` → Ask LLM with text; responds with `llm_response`.
-- `tts_request` → Synthesize TTS from text; responds with `tts_audio` metadata then a binary message containing μ-law bytes.
+- `tts_request` → Synthesize TTS from text; responds with `tts_response` (base64 μ-law).
 - `reload_models` → Reload all models; responds with `reload_response`.
 - `reload_llm` → Reload only LLM; responds with `reload_response`.
+- `switch_model` → Switch backend/model paths at runtime; responds with `switch_response`.
+- `status` → Report loaded backends/models; responds with `status_response`.
 
 ### Common fields
 
@@ -94,7 +131,8 @@ Expected responses (sequence):
 - `stt_result` (zero or more partials)
 - `stt_result` (one final)
 - `llm_response`
-- `tts_audio` (metadata) + a following binary frame with μ-law 8 kHz audio bytes
+- (optional) `tts_audio` metadata (only if `request_id` is provided)
+- one binary WebSocket message containing μ-law 8 kHz audio bytes
 
 Example events:
 
@@ -105,7 +143,7 @@ Example events:
 { "type": "tts_audio", "call_id": "1234-5678", "mode": "full", "request_id": "r1", "encoding": "mulaw", "sample_rate_hz": 8000, "byte_length": 16347 }
 ```
 
-Immediately after the `tts_audio` metadata, you will receive one binary WebSocket message containing the μ-law bytes.
+If `request_id` is set, the server emits `tts_audio` metadata before the binary audio. If `request_id` is omitted, you will only receive the binary audio bytes.
 
 ### Binary audio example (stt-only)
 
@@ -168,13 +206,20 @@ Request:
 }
 ```
 
-Response sequence:
+Response:
 
 ```json
-{ "type": "tts_audio", "call_id": "1234-5678", "mode": "tts", "request_id": "t1", "encoding": "mulaw", "sample_rate_hz": 8000, "byte_length": 12446 }
+{
+  "type": "tts_response",
+  "text": "Hello, how can I help you?",
+  "call_id": "1234-5678",
+  "request_id": "t1",
+  "audio_data": "<base64 mulaw bytes>",
+  "encoding": "mulaw",
+  "sample_rate_hz": 8000,
+  "byte_length": 12446
+}
 ```
-
-Then one binary WebSocket message will follow with the μ-law 8 kHz audio bytes suitable for telephony playback.
 
 ---
 
@@ -206,6 +251,55 @@ Response:
 
 ---
 
+## Status
+
+Request:
+
+```json
+{ "type": "status" }
+```
+
+Response:
+
+```json
+{
+  "type": "status_response",
+  "status": "ok",
+  "stt_backend": "vosk|kroko|sherpa",
+  "tts_backend": "piper|kokoro",
+  "models": { "stt": { "loaded": true }, "llm": { "loaded": true }, "tts": { "loaded": true } },
+  "config": { "log_level": "INFO", "debug_audio": false }
+}
+```
+
+---
+
+## Model Switching
+
+`switch_model` updates server-side model/backend selections and reloads models without restarting the container.
+
+Request (examples):
+
+```json
+{ "type": "switch_model", "stt_backend": "kroko" }
+```
+
+```json
+{ "type": "switch_model", "tts_backend": "kokoro", "kokoro_voice": "af_heart" }
+```
+
+```json
+{ "type": "switch_model", "llm_model_path": "/app/models/llm/phi-3-mini-4k-instruct.Q4_K_M.gguf" }
+```
+
+Response:
+
+```json
+{ "type": "switch_response", "status": "success", "message": "...", "changed": ["stt_backend=kroko"] }
+```
+
+---
+
 ## Client Examples
 
 Additional example code (including an espeak-ng based lightweight TTS demo) lives under `docs/local-ai-server/examples/`.
@@ -223,11 +317,12 @@ async def tts():
             "call_id": "demo",
             "request_id": "t1",
         }))
-        meta = json.loads(await ws.recv())
-        assert meta["type"] == "tts_audio"
-        pcm = await ws.recv()  # binary μ-law bytes
+        resp = json.loads(await ws.recv())
+        assert resp["type"] == "tts_response"
+        import base64
+        audio_bytes = base64.b64decode(resp["audio_data"])
         with open("out.ulaw", "wb") as f:
-            f.write(pcm)
+            f.write(audio_bytes)
 
 asyncio.run(tts())
 ```
@@ -262,6 +357,8 @@ async def stt(pcm_bytes):
 Server-side (see `local_ai_server/main.py`):
 
 - Models: `LOCAL_STT_MODEL_PATH`, `LOCAL_LLM_MODEL_PATH`, `LOCAL_TTS_MODEL_PATH`
+- WebSocket bind: `LOCAL_WS_HOST`, `LOCAL_WS_PORT`
+- Optional auth: `LOCAL_WS_AUTH_TOKEN`
 - LLM performance: `LOCAL_LLM_THREADS`, `LOCAL_LLM_CONTEXT`, `LOCAL_LLM_BATCH`, `LOCAL_LLM_MAX_TOKENS`, `LOCAL_LLM_TEMPERATURE`, `LOCAL_LLM_TOP_P`, `LOCAL_LLM_REPEAT_PENALTY`, `LOCAL_LLM_SYSTEM_PROMPT`, `LOCAL_LLM_STOP_TOKENS`
 - STT idle promote: `LOCAL_STT_IDLE_MS` (default 3000 ms)
 - LLM timeout: `LOCAL_LLM_INFER_TIMEOUT_SEC` (default 20.0)
@@ -269,7 +366,8 @@ Server-side (see `local_ai_server/main.py`):
 
 Engine-side (see `config/ai-agent.*.yaml` and `.env.example`):
 
-- `providers.local.ws_url` (default `${LOCAL_WS_URL:-ws://127.0.0.1:8765}`)
+- `providers.local.base_url` / `providers.local*.ws_url` (default `${LOCAL_WS_URL:-ws://127.0.0.1:8765}`)
+- `providers.local*.auth_token` (default `${LOCAL_WS_AUTH_TOKEN:-}`)
 - Timeouts: `${LOCAL_WS_CONNECT_TIMEOUT}`, `${LOCAL_WS_RESPONSE_TIMEOUT}`
 - Chunk size (ms): `${LOCAL_WS_CHUNK_MS}`
 
@@ -286,7 +384,7 @@ For a single request_id and continuous audio segment in `full` mode:
 1. `stt_result` (0..N partial)
 2. `stt_result` (1 final)
 3. `llm_response`
-4. `tts_audio` metadata
+4. (optional) `tts_audio` metadata (only if `request_id` was provided on the input)
 5. Binary μ-law audio bytes (8 kHz)
 
 Duplicate/empty finals are suppressed; see `_handle_final_transcript()` for details.
@@ -340,7 +438,8 @@ Example:
 - STT returns empty often
   - Cause: utterances too short. Increase chunk size or allow idle finalizer (`LOCAL_STT_IDLE_MS`), ensure PCM16 @ 16kHz input.
 - No TTS audio received
-  - Ensure you listen for binary frames after `tts_audio` metadata. Mode `tts` or `full` produces metadata followed by a binary message.
+  - For `tts_request`, the response is JSON `tts_response` containing `audio_data` (base64 μ-law @ 8 kHz).
+  - For `full` mode, the server sends a binary WebSocket frame containing μ-law bytes (and may also send `tts_audio` metadata if `request_id` was provided).
 - LLM timeout (slow responses)
   - Increase `LOCAL_LLM_INFER_TIMEOUT_SEC`; reduce `LOCAL_LLM_MAX_TOKENS`; use faster model or fewer threads context.
 - Model load failures

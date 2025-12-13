@@ -1,6 +1,6 @@
-# Asterisk AI Voice Agent - Installation Guide (v4.4.2)
+# Asterisk AI Voice Agent - Installation Guide (v4.5.0)
 
-This guide provides detailed instructions for setting up the Asterisk AI Voice Agent v4.4.2 on your server.
+This guide provides detailed instructions for setting up the Asterisk AI Voice Agent v4.5.0 on your server.
 
 ## Three Setup Paths
 
@@ -18,8 +18,8 @@ cp .env.example .env
 # Start services
 docker compose up -d admin-ui ai-engine
 
-# Open browser to complete setup
-open http://localhost:3003
+# Complete setup in the Admin UI
+# Browse to: http://localhost:3003
 ```
 
 The Setup Wizard will:
@@ -67,7 +67,7 @@ cd Asterisk-AI-Voice-Agent
 ```
 
 The installer will:
-1. Guide you through **3 golden baseline choices**:
+1. Guide you through **3 baseline choices**:
    - **OpenAI Realtime** - Fastest (0.5-1.5s), requires OPENAI_API_KEY
    - **Deepgram Voice Agent** - Enterprise (1-2s), requires DEEPGRAM_API_KEY + OPENAI_API_KEY
    - **Local Hybrid** - Privacy-focused (3-7s), requires OPENAI_API_KEY + 8GB RAM
@@ -211,7 +211,7 @@ After you complete the wizard, the script will create a `.env` file in the proje
 Once the configuration is complete, the script will prompt you to build and start the Docker container. You can also do this manually.
 
 ```bash
-docker-compose up --build -d
+docker compose up --build -d
 ```
 
 > IMPORTANT: First startup time (local models)
@@ -219,7 +219,7 @@ docker-compose up --build -d
 > If you selected a Local or Hybrid workflow, the `local-ai-server` may take 15–20 minutes on first startup to load LLM/TTS models depending on your CPU, RAM, and disk speed. This is expected and readiness may show degraded until models have fully loaded. Monitor with:
 >
 > ```bash
-> docker-compose logs -f local-ai-server
+> docker compose logs -f local-ai-server
 > ```
 >
 > Subsequent restarts are typically much faster due to OS page cache. If startup is too slow for your hardware, consider using MEDIUM or LIGHT tier models and update the `.env` model paths accordingly.
@@ -231,7 +231,7 @@ After starting the service, you can check that it is running correctly.
 ### Check Docker Container Status
 
 ```bash
-docker-compose ps
+docker compose ps
 ```
 
 You should see the `ai-engine` and `local-ai-server` containers running.
@@ -239,7 +239,7 @@ You should see the `ai-engine` and `local-ai-server` containers running.
 ### Check Container Logs
 
 ```bash
-docker-compose logs -f ai-engine
+docker compose logs -f ai-engine
 ```
 
 Look for a message indicating a successful connection to the Asterisk ARI and that the AudioSocket listener is ready on port 8090.
@@ -254,7 +254,7 @@ Add to `/etc/asterisk/extensions_custom.conf`:
 
 ```asterisk
 [from-ai-agent]
-exten => s,1,NoOp(Asterisk AI Voice Agent v4.0)
+exten => s,1,NoOp(Asterisk AI Voice Agent v4.5.0)
  same => n,Stasis(asterisk-ai-voice-agent)
  same => n,Hangup()
 ```
@@ -316,11 +316,11 @@ asterisk -rx "dialplan reload"
   - Run helpers directly in the container if desired:
 
         ```bash
-        docker-compose exec -T ai-engine python /app/scripts/validate_externalmedia_config.py
-        docker-compose exec -T ai-engine python /app/scripts/test_externalmedia_call.py
-        docker-compose exec -T ai-engine python /app/scripts/monitor_externalmedia.py
-        docker-compose exec -T ai-engine python /app/scripts/capture_test_logs.py --duration 40
-        docker-compose exec -T ai-engine python /app/scripts/analyze_logs.py /app/logs/latest.json
+        docker compose exec -T ai-engine python /app/scripts/validate_externalmedia_config.py
+        docker compose exec -T ai-engine python /app/scripts/test_externalmedia_call.py
+        docker compose exec -T ai-engine python /app/scripts/monitor_externalmedia.py
+        docker compose exec -T ai-engine python /app/scripts/capture_test_logs.py --duration 40
+        docker compose exec -T ai-engine python /app/scripts/analyze_logs.py /app/logs/latest.json
         ```
 
 For more advanced troubleshooting, refer to the project's main `README.md` or open an issue in the repository.

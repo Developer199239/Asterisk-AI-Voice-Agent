@@ -346,7 +346,14 @@ class OpenAILLMAdapter(LLMComponent):
             await self._session.close()
         self._session = None
 
-    # validate_connectivity removed - uses smart generic base class implementation
+    async def validate_connectivity(self, options: Dict[str, Any]) -> Dict[str, Any]:
+        """Override to merge provider defaults with options for validation."""
+        merged = {
+            "chat_base_url": self._provider_defaults.chat_base_url,
+            "api_key": self._provider_defaults.api_key,
+        }
+        merged.update(options)
+        return await super().validate_connectivity(merged)
 
     async def generate(
         self,
@@ -368,8 +375,9 @@ class OpenAILLMAdapter(LLMComponent):
         payload = self._build_chat_payload(transcript, context, merged)
         
         # Milestone7: Tool support
+        tools_enabled = bool(merged.get("tools_enabled", True))
         tools_list = merged.get("tools")
-        if tools_list and isinstance(tools_list, list):
+        if tools_enabled and tools_list and isinstance(tools_list, list):
             tool_schemas = []
             for tool_name in tools_list:
                 tool = tool_registry.get(tool_name)
@@ -530,6 +538,10 @@ class OpenAILLMAdapter(LLMComponent):
             "api_key": runtime_options.get("api_key", self._pipeline_defaults.get("api_key", self._provider_defaults.api_key)),
             "organization": runtime_options.get("organization", self._pipeline_defaults.get("organization", self._provider_defaults.organization)),
             "project": runtime_options.get("project", self._pipeline_defaults.get("project", self._provider_defaults.project)),
+            "tools_enabled": runtime_options.get(
+                "tools_enabled",
+                self._pipeline_defaults.get("tools_enabled", self._provider_defaults.tools_enabled),
+            ),
             "chat_base_url": runtime_options.get(
                 "chat_base_url",
                 self._pipeline_defaults.get("chat_base_url", self._provider_defaults.chat_base_url),
@@ -558,6 +570,7 @@ class OpenAILLMAdapter(LLMComponent):
             "use_realtime": runtime_options.get("use_realtime", self._pipeline_defaults.get("use_realtime", False)),
             "tools": runtime_options.get("tools", self._pipeline_defaults.get("tools", [])),
         }
+
         # Fallback persona when missing
         try:
             sys_p = (merged.get("system_prompt") or "").strip()

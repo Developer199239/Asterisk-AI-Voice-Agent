@@ -92,14 +92,14 @@ cp .env.example .env
 # Edit .env with your API keys
 
 # Start services
-docker-compose up -d
+docker compose up -d
 ```
 
 ### Configure Asterisk Dialplan
 Add this to your FreePBX (`extensions_custom.conf`):
 ```asterisk
 [from-ai-agent]
-exten => s,1,NoOp(Asterisk AI Voice Agent v4.3)
+exten => s,1,NoOp(Asterisk AI Voice Agent v4.5.0)
  same => n,Stasis(asterisk-ai-voice-agent)
  same => n,Hangup()
 ```
@@ -191,23 +191,58 @@ docker compose logs -f ai-engine
 
 1. **OpenAI Realtime** (Recommended for Quick Start)
    - Modern cloud AI with natural conversations (<2s response).
+   - Config: `config/ai-agent.golden-openai.yaml`
    - *Best for: Enterprise deployments, quick setup.*
 
 2. **Deepgram Voice Agent** (Enterprise Cloud)
    - Advanced Think stage for complex reasoning (<3s response).
+   - Config: `config/ai-agent.golden-deepgram.yaml`
    - *Best for: Deepgram ecosystem, advanced features.*
 
 3. **Google Live API** (Multimodal AI)
-   - Gemini 2.0 Flash with multimodal capabilities (<2s response).
+   - Gemini Live (Flash) with multimodal capabilities (<2s response).
+   - Config: `config/ai-agent.golden-google-live.yaml`
    - *Best for: Google ecosystem, advanced AI features.*
 
 4. **ElevenLabs Agent** (Premium Voice Quality)
    - ElevenLabs Conversational AI with premium voices (<2s response).
+   - Config: `config/ai-agent.golden-elevenlabs.yaml`
    - *Best for: Voice quality priority, natural conversations.*
 
 5. **Local Hybrid** (Privacy-Focused)
    - Local STT/TTS + Cloud LLM (OpenAI). Audio stays on-premises.
+   - Config: `config/ai-agent.golden-local-hybrid.yaml`
    - *Best for: Audio privacy, cost control, compliance.*
+
+### 🏠 Self-Hosted LLM with Ollama (No API Key Required)
+
+Run your own local LLM using [Ollama](https://ollama.ai) - perfect for privacy-focused deployments:
+
+```yaml
+# In ai-agent.yaml
+active_pipeline: local_ollama
+```
+
+**Features:**
+
+- **No API key required** - fully self-hosted on your network
+- **Tool calling support** with compatible models (Llama 3.2, Mistral, Qwen)
+- Local Vosk STT + Your Ollama LLM + Local Piper TTS
+- Complete privacy - all processing stays on-premises
+
+**Requirements:**
+
+- Mac Mini, gaming PC, or server with Ollama installed
+- 8GB+ RAM (16GB+ recommended for larger models)
+- See [docs/OLLAMA_SETUP.md](docs/OLLAMA_SETUP.md) for setup guide
+
+**Recommended Models:**
+
+| Model | Size | Tool Calling |
+|-------|------|--------------|
+| `llama3.2` | 2GB | ✅ Yes |
+| `mistral` | 4GB | ✅ Yes |
+| `qwen2.5` | 4.7GB | ✅ Yes |
 
 ### Technical Features
 
@@ -226,7 +261,7 @@ Modern web interface for configuration and system management.
 
 **Quick Start:**
 ```bash
-docker-compose up -d admin-ui
+docker compose up -d admin-ui
 # Access at: http://localhost:3003
 # Login: admin / admin (change immediately!)
 ```
@@ -241,7 +276,7 @@ docker-compose up -d admin-ui
 
 ## 🎥 Demo
 
-[![Watch the demo](https://img.youtube.com/vi/ZQVny8wfCeY/hqdefault.jpg)](https://youtu.be/ZQVny8wfCeY "Asterisk AI Voice Agent demo")
+[![Watch the demo](https://img.youtube.com/vi/ZGrr9-Q85xA/hqdefault.jpg)](https://www.youtube.com/watch?v=ZGrr9-Q85xA "Asterisk AI Voice Agent demo")
 
 ### 📞 Try it Live! (US Only)
 

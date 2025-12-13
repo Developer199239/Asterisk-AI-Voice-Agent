@@ -20,6 +20,15 @@ class ToolRegistry:
     
     _instance = None
     
+    # Tool name aliases for provider compatibility
+    # Different providers use different naming conventions for the same tools
+    TOOL_ALIASES = {
+        "transfer_call": "transfer",      # ElevenLabs, some OpenAI prompts
+        "hangup": "hangup_call",          # Alternative naming
+        "end_call": "hangup_call",        # Alternative naming
+        "transfer_to_queue": "transfer",  # Legacy queue transfer
+    }
+    
     def __new__(cls):
         """Singleton pattern - only one instance exists."""
         if cls._instance is None:
@@ -49,15 +58,25 @@ class ToolRegistry:
     
     def get(self, name: str) -> Optional[Tool]:
         """
-        Get tool by name.
+        Get tool by name, with alias support.
         
         Args:
-            name: Tool name (e.g., "transfer_call")
+            name: Tool name (e.g., "transfer_call" or "transfer")
         
         Returns:
             Tool instance or None if not found
         """
-        return self._tools.get(name)
+        # Try direct lookup first
+        tool = self._tools.get(name)
+        if tool:
+            return tool
+        
+        # Try alias lookup
+        canonical_name = self.TOOL_ALIASES.get(name)
+        if canonical_name:
+            return self._tools.get(canonical_name)
+        
+        return None
     
     def get_all(self) -> List[Tool]:
         """

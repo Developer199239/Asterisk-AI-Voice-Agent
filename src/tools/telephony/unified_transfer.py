@@ -69,7 +69,8 @@ class UnifiedTransferTool(Tool):
         Returns:
             Dict with status and message
         """
-        destination = parameters.get('destination')
+        # Support both 'destination' (canonical) and 'target' (ElevenLabs uses this)
+        destination = parameters.get('destination') or parameters.get('target')
         
         # Get destinations from config via context
         config = context.get_config_value("tools.transfer")
@@ -81,6 +82,50 @@ class UnifiedTransferTool(Tool):
             }
         
         destinations = config.get('destinations', {})
+        
+        # Fuzzy matching for common destination patterns
+        # Maps generic terms to configured destination keys
+        if destination and destination not in destinations:
+            dest_lower = destination.lower().strip()
+            matched = None
+            
+            # Try exact match first (case-insensitive)
+            for key in destinations:
+                if key.lower() == dest_lower:
+                    matched = key
+                    break
+            
+            # Try prefix/contains matching
+            if not matched:
+                for key in destinations:
+                    key_lower = key.lower()
+                    # "sales" matches "sales_agent", "sales_team", "sales_queue"
+                    if key_lower.startswith(dest_lower) or dest_lower in key_lower:
+                        matched = key
+                        logger.info("Fuzzy matched destination", 
+                                   original=destination, matched=matched)
+                        break
+            
+            # Try common aliases
+            if not matched:
+                alias_map = {
+                    'sales': 'sales_team',
+                    'support': 'support_team', 
+                    'live agent': 'sales_agent',
+                    'live person': 'sales_agent',
+                    'agent': 'sales_agent',
+                    'human': 'sales_agent',
+                    'person': 'sales_agent',
+                    'representative': 'support_agent',
+                    'rep': 'support_agent',
+                }
+                if dest_lower in alias_map and alias_map[dest_lower] in destinations:
+                    matched = alias_map[dest_lower]
+                    logger.info("Alias matched destination",
+                               original=destination, matched=matched)
+            
+            if matched:
+                destination = matched
         
         # Validate destination exists
         if destination not in destinations:
@@ -139,33 +184,38 @@ class UnifiedTransferTool(Tool):
         logger.info("Extension transfer", call_id=context.call_id, 
                    extension=extension, description=description)
         
-        # Build dial string for extension
-        dial_string = f"PJSIP/{extension}"
+        # Get dialplan context for extension transfers (default: from-internal for FreePBX)
+        config = context.get_config_value("tools.transfer") or {}
+        dialplan_context = config.get("extension_context", "from-internal")
         
-        # Use ARI redirect - channel stays in Stasis
-        result = await context.ari_client.send_command(
-            method="POST",
-            resource=f"channels/{context.caller_channel_id}/redirect",
-            data={"endpoint": dial_string}
+        # Set transfer_active flag BEFORE continue() - this prevents cleanup
+        # from hanging up the caller when StasisEnd fires
+        await context.update_session(
+            transfer_active=True,
+            transfer_state="transferring",
+            transfer_target=description
         )
         
-        if result and result.get('status') == 204:
-            logger.info("✅ Extension transfer completed", 
-                       call_id=context.call_id, extension=extension)
-            return {
-                "status": "success",
-                "message": f"Transferring you to {description} now.",
-                "destination": extension,
-                "type": "extension"
+        # Use ARI continue to transfer via dialplan (like queue/ringgroup transfers)
+        # This properly leaves Stasis and lets Asterisk dialplan handle the call
+        await context.ari_client.send_command(
+            method="POST",
+            resource=f"channels/{context.caller_channel_id}/continue",
+            params={
+                "context": dialplan_context,
+                "extension": extension,
+                "priority": 1
             }
-        else:
-            logger.error("Extension transfer failed", call_id=context.call_id, 
-                        result=result)
-            return {
-                "status": "failed",
-                "message": "Unable to complete transfer.",
-                "destination": extension
-            }
+        )
+        
+        logger.info("✅ Extension transfer initiated", 
+                   call_id=context.call_id, extension=extension, context=dialplan_context)
+        return {
+            "status": "success",
+            "message": f"Transferring you to {description} now.",
+            "destination": extension,
+            "type": "extension"
+        }
     
     async def _transfer_to_queue(
         self,

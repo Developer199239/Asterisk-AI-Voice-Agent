@@ -1,6 +1,6 @@
 # Production Deployment Guide
 
-Best practices and recommendations for deploying Asterisk AI Voice Agent v4.0 in production environments.
+Best practices and recommendations for deploying Asterisk AI Voice Agent v4.5.0 in production environments.
 
 ## Overview
 
@@ -786,7 +786,7 @@ receivers:
 - [ ] Review overnight alerts
 - [ ] Verify all containers running: `docker ps`
 - [ ] Check disk space: `df -h`
-- [ ] Review error logs: `docker logs ai-engine --since 24h | grep -i error`
+- [ ] Review error logs: `docker logs ai_engine --since 24h | grep -i error`
 
 **Health Check Script**:
 ```bash
@@ -799,7 +799,7 @@ echo
 
 # Container status
 echo "Container Status:"
-docker ps --format "table {{.Names}}\t{{.Status}}" | grep -E "ai-engine|local-ai"
+docker ps --format "table {{.Names}}\t{{.Status}}" | grep -E "ai_engine|local_ai_server|admin_ui"
 echo
 
 # Health endpoint
@@ -852,7 +852,7 @@ docker compose build --no-cache ai-engine
 docker compose up -d --force-recreate ai-engine
 
 # 6. Monitor logs for 5 minutes
-docker logs -f ai-engine
+docker compose logs -f ai-engine
 
 # 7. Make test call
 
@@ -900,13 +900,13 @@ services:
 **Log Analysis**:
 ```bash
 # Find errors in last hour
-docker logs ai-engine --since 1h 2>&1 | grep -i error
+docker logs ai_engine --since 1h 2>&1 | grep -i error
 
 # Count warnings
-docker logs ai-engine --since 24h 2>&1 | grep -i warning | wc -l
+docker logs ai_engine --since 24h 2>&1 | grep -i warning | wc -l
 
 # Export logs for analysis
-docker logs ai-engine --since 24h > /tmp/ai-engine.log
+docker logs ai_engine --since 24h > /tmp/ai-engine.log
 ```
 
 ---
@@ -967,14 +967,14 @@ find /mnt/asterisk_media/ai-generated -type f -mtime +30 -delete
 
 ```bash
 # Check logs
-docker logs ai-engine
+docker logs ai_engine
 
 # Common issues:
 # 1. Port already in use
 sudo lsof -i :15000
 
 # 2. Invalid configuration
-docker run --rm -v $(pwd):/app ai-engine python -c "import yaml; yaml.safe_load(open('config/ai-agent.yaml'))"
+docker compose run --rm ai-engine python -c "import yaml; yaml.safe_load(open('config/ai-agent.yaml'))"
 
 # 3. Missing .env file
 ls -l .env
@@ -984,7 +984,7 @@ ls -l .env
 
 ```bash
 # Identify cause
-docker stats ai-engine
+docker stats ai_engine
 
 # Check concurrent calls
 curl 'http://localhost:9090/api/v1/query?query=ai_agent_active_calls'

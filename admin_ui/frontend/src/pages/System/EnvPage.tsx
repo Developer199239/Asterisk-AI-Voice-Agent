@@ -115,15 +115,17 @@ const EnvPage = () => {
         setShowSecrets(prev => ({ ...prev, [key]: !prev[key] }));
     };
 
-    const handleRestartAIEngine = async () => {
+    const handleReloadAIEngine = async () => {
         setRestartingEngine(true);
         try {
+            // Environment variable changes require a full container restart (not just config reload)
+            // because env vars are read at container startup
             const response = await axios.post('/api/system/containers/ai_engine/restart', {}, {
                 headers: { Authorization: `Bearer ${token}` }
             });
             if (response.data.status === 'success') {
                 setPendingRestart(false);
-                alert('AI Engine restarted successfully. Changes are now active.');
+                alert('AI Engine restarted! Environment changes are now active.');
             }
         } catch (error: any) {
             alert(`Failed to restart AI Engine: ${error.response?.data?.detail || error.message}`);
@@ -187,15 +189,16 @@ const EnvPage = () => {
     );
 
     // Define known keys to exclude from "Other Variables"
-    const knownKeys = [
-        'ASTERISK_HOST', 'ASTERISK_ARI_USERNAME', 'ASTERISK_ARI_PASSWORD',
-        'DIAG_ENABLE_TAPS', 'DIAG_TAP_PRE_SECS', 'DIAG_TAP_POST_SECS', 'DIAG_TAP_OUTPUT_DIR',
-        'DIAG_EGRESS_SWAP_MODE', 'DIAG_EGRESS_FORCE_MULAW', 'DIAG_ATTACK_MS',
-        'LOG_LEVEL', 'LOG_FORMAT', 'LOG_COLOR', 'LOG_SHOW_TRACEBACKS',
-        'STREAMING_LOG_LEVEL', 'LOG_TO_FILE', 'LOG_FILE_PATH',
-        'LOCAL_WS_URL', 'LOCAL_WS_CONNECT_TIMEOUT', 'LOCAL_WS_RESPONSE_TIMEOUT', 'LOCAL_WS_CHUNK_MS',
-        // STT backends
-        'LOCAL_STT_BACKEND', 'LOCAL_STT_MODEL_PATH',
+	    const knownKeys = [
+	        'ASTERISK_HOST', 'ASTERISK_ARI_USERNAME', 'ASTERISK_ARI_PASSWORD',
+	        'DIAG_ENABLE_TAPS', 'DIAG_TAP_PRE_SECS', 'DIAG_TAP_POST_SECS', 'DIAG_TAP_OUTPUT_DIR',
+	        'DIAG_EGRESS_SWAP_MODE', 'DIAG_EGRESS_FORCE_MULAW', 'DIAG_ATTACK_MS',
+	        'LOG_LEVEL', 'LOG_FORMAT', 'LOG_COLOR', 'LOG_SHOW_TRACEBACKS',
+	        'STREAMING_LOG_LEVEL', 'LOG_TO_FILE', 'LOG_FILE_PATH',
+	        'LOCAL_WS_URL', 'LOCAL_WS_CONNECT_TIMEOUT', 'LOCAL_WS_RESPONSE_TIMEOUT', 'LOCAL_WS_CHUNK_MS',
+	        'LOCAL_WS_HOST', 'LOCAL_WS_PORT', 'LOCAL_WS_AUTH_TOKEN',
+	        // STT backends
+	        'LOCAL_STT_BACKEND', 'LOCAL_STT_MODEL_PATH',
         'KROKO_URL', 'KROKO_API_KEY', 'KROKO_LANGUAGE', 'KROKO_EMBEDDED', 'KROKO_MODEL_PATH', 'KROKO_PORT',
         'SHERPA_MODEL_PATH',
         // TTS backends
@@ -205,7 +208,7 @@ const EnvPage = () => {
         'LOCAL_LLM_MODEL_PATH', 'LOCAL_LLM_THREADS',
         'LOCAL_LLM_CONTEXT', 'LOCAL_LLM_BATCH', 'LOCAL_LLM_MAX_TOKENS', 'LOCAL_LLM_TEMPERATURE', 'LOCAL_LLM_INFER_TIMEOUT_SEC',
         // Other
-        'OPENAI_API_KEY', 'DEEPGRAM_API_KEY', 'GOOGLE_API_KEY', 'RESEND_API_KEY', 'ELEVENLABS_API_KEY', 'CARTESIA_API_KEY', 'JWT_SECRET',
+        'OPENAI_API_KEY', 'GROQ_API_KEY', 'DEEPGRAM_API_KEY', 'GOOGLE_API_KEY', 'RESEND_API_KEY', 'ELEVENLABS_API_KEY', 'CARTESIA_API_KEY', 'JWT_SECRET',
         'AI_NAME', 'AI_ROLE', 'ASTERISK_ARI_PORT', 'ASTERISK_ARI_WEBSOCKET_SCHEME',
         'HEALTH_CHECK_LOCAL_AI_URL', 'HEALTH_CHECK_AI_ENGINE_URL'
     ];
@@ -227,7 +230,7 @@ const EnvPage = () => {
                     Changes to environment variables require an AI Engine restart to take effect.
                 </div>
                 <button
-                    onClick={handleRestartAIEngine}
+                    onClick={handleReloadAIEngine}
                     disabled={restartingEngine}
                     className={`flex items-center text-xs px-3 py-1.5 rounded transition-colors ${
                         pendingRestart 
@@ -361,6 +364,7 @@ const EnvPage = () => {
                 <ConfigCard>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         {renderSecretInput('OpenAI API Key', 'OPENAI_API_KEY', 'sk-...')}
+                        {renderSecretInput('Groq API Key', 'GROQ_API_KEY', 'gsk_...')}
                         {renderSecretInput('Deepgram API Key', 'DEEPGRAM_API_KEY', 'Token...')}
                         {renderSecretInput('Google API Key', 'GOOGLE_API_KEY', 'AIza...')}
                         {renderSecretInput('ElevenLabs API Key', 'ELEVENLABS_API_KEY', 'xi-...')}
@@ -533,19 +537,40 @@ const EnvPage = () => {
             {/* Local AI Server Connection Settings */}
             <ConfigSection title="Local AI Server" description="Connection and model settings for local AI services.">
                 {/* Connection Settings */}
-                <ConfigCard>
-                    <h3 className="text-sm font-semibold text-muted-foreground mb-4">Connection Settings</h3>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <FormInput
-                            label="WebSocket URL"
-                            value={env['LOCAL_WS_URL'] || 'ws://127.0.0.1:8765'}
-                            onChange={(e) => updateEnv('LOCAL_WS_URL', e.target.value)}
-                        />
-                        <FormInput
-                            label="Connect Timeout (s)"
-                            type="number"
-                            value={env['LOCAL_WS_CONNECT_TIMEOUT'] || '2.0'}
-                            onChange={(e) => updateEnv('LOCAL_WS_CONNECT_TIMEOUT', e.target.value)}
+	                <ConfigCard>
+	                    <h3 className="text-sm font-semibold text-muted-foreground mb-4">Connection Settings</h3>
+	                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+	                        <FormInput
+	                            label="WebSocket URL"
+	                            value={env['LOCAL_WS_URL'] || 'ws://127.0.0.1:8765'}
+	                            onChange={(e) => updateEnv('LOCAL_WS_URL', e.target.value)}
+	                            tooltip="Client URL used by ai-engine to reach local-ai-server."
+	                        />
+	                        <FormInput
+	                            label="Bind Host (local-ai-server)"
+	                            value={env['LOCAL_WS_HOST'] || '0.0.0.0'}
+	                            onChange={(e) => updateEnv('LOCAL_WS_HOST', e.target.value)}
+	                            tooltip="Address local-ai-server binds to (default 0.0.0.0)."
+	                        />
+	                        <FormInput
+	                            label="Bind Port (local-ai-server)"
+	                            type="number"
+	                            value={env['LOCAL_WS_PORT'] || '8765'}
+	                            onChange={(e) => updateEnv('LOCAL_WS_PORT', e.target.value)}
+	                            tooltip="Port local-ai-server listens on; update LOCAL_WS_URL to match if changed."
+	                        />
+	                        <FormInput
+	                            label="Auth Token (optional)"
+	                            type="password"
+	                            value={env['LOCAL_WS_AUTH_TOKEN'] || ''}
+	                            onChange={(e) => updateEnv('LOCAL_WS_AUTH_TOKEN', e.target.value)}
+	                            tooltip="If set, local-ai-server requires an auth handshake. Must match providers.local*.auth_token."
+	                        />
+	                        <FormInput
+	                            label="Connect Timeout (s)"
+	                            type="number"
+	                            value={env['LOCAL_WS_CONNECT_TIMEOUT'] || '2.0'}
+	                            onChange={(e) => updateEnv('LOCAL_WS_CONNECT_TIMEOUT', e.target.value)}
                         />
                         <FormInput
                             label="Response Timeout (s)"

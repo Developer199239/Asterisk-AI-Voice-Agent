@@ -444,7 +444,7 @@ curl 'http://localhost:9090/api/v1/query?query=up{job="ai-engine"}'
 ```
 
 **Solutions**:
-1. **ai-engine not running**: `docker ps | grep ai-engine`
+1. **ai-engine not running**: `docker ps | grep ai_engine`
 2. **Metrics endpoint unreachable**: Check port 15000 not blocked
 3. **Prometheus configuration error**: `docker logs prometheus`
 4. **Wrong data source in Grafana**: Check Grafana → Configuration → Data Sources

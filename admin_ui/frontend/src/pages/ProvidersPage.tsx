@@ -9,6 +9,7 @@ import { Modal } from '../components/ui/Modal';
 // Provider Forms
 import GenericProviderForm from '../components/config/providers/GenericProviderForm';
 import LocalProviderForm from '../components/config/providers/LocalProviderForm';
+import OllamaProviderForm from '../components/config/providers/OllamaProviderForm';
 import OpenAIRealtimeProviderForm from '../components/config/providers/OpenAIRealtimeProviderForm';
 import DeepgramProviderForm from '../components/config/providers/DeepgramProviderForm';
 import GoogleLiveProviderForm from '../components/config/providers/GoogleLiveProviderForm';
@@ -69,6 +70,7 @@ const ProvidersPage: React.FC = () => {
                 else if (lowerName.includes('deepgram')) providerData.type = 'deepgram';
                 else if (lowerName.includes('google') || lowerName.includes('gemini')) providerData.type = 'google_live';
                 else if (lowerName.includes('elevenlabs')) providerData.type = 'elevenlabs_agent';
+                else if (lowerName.includes('ollama')) providerData.type = 'ollama';
                 else if (lowerName.includes('local')) providerData.type = 'local';
                 else providerData.type = 'other';
             }
@@ -154,13 +156,13 @@ const ProvidersPage: React.FC = () => {
                 target_encoding: 'ulaw',
                 target_sample_rate_hz: 8000
             },
-            local_modular: {
-                // This adds local_stt, local_llm, local_tts
-                local_stt: { type: 'local', capabilities: ['stt'], enabled: false, ws_url: '${LOCAL_WS_URL:-ws://127.0.0.1:8765}' },
-                local_llm: { type: 'local', capabilities: ['llm'], enabled: false },
-                local_tts: { type: 'local', capabilities: ['tts'], enabled: false, ws_url: '${LOCAL_WS_URL:-ws://127.0.0.1:8765}' }
-            }
-        };
+	            local_modular: {
+	                // This adds local_stt, local_llm, local_tts
+	                local_stt: { type: 'local', capabilities: ['stt'], enabled: false, ws_url: '${LOCAL_WS_URL:-ws://127.0.0.1:8765}', auth_token: '${LOCAL_WS_AUTH_TOKEN:-}' },
+	                local_llm: { type: 'local', capabilities: ['llm'], enabled: false, auth_token: '${LOCAL_WS_AUTH_TOKEN:-}' },
+	                local_tts: { type: 'local', capabilities: ['tts'], enabled: false, ws_url: '${LOCAL_WS_URL:-ws://127.0.0.1:8765}', auth_token: '${LOCAL_WS_AUTH_TOKEN:-}' }
+	            }
+	        };
 
         selectedTemplates.forEach(templateKey => {
             if (templateKey === 'local_modular') {
@@ -204,13 +206,14 @@ const ProvidersPage: React.FC = () => {
         setPendingRestart(true);
     };
 
-    const handleRestartAIEngine = async () => {
+    const handleReloadAIEngine = async () => {
         setRestartingEngine(true);
         try {
+            // Provider changes may require new env vars - use restart to ensure they're picked up
             const response = await axios.post('/api/system/containers/ai_engine/restart');
             if (response.data.status === 'success') {
                 setPendingRestart(false);
-                alert('AI Engine restarted successfully. Changes are now active.');
+                alert('AI Engine restarted! Changes are now active.');
             }
         } catch (error: any) {
             alert(`Failed to restart AI Engine: ${error.response?.data?.detail || error.message}`);
@@ -348,6 +351,8 @@ const ProvidersPage: React.FC = () => {
             case 'elevenlabs_agent':
             case 'elevenlabs':
                 return <ElevenLabsProviderForm config={providerForm} onChange={updateForm} />;
+            case 'ollama':
+                return <OllamaProviderForm config={providerForm} onChange={updateForm} />;
             default:
                 return <GenericProviderForm config={providerForm} onChange={updateForm} isNew={isNewProvider} />;
         }
@@ -360,10 +365,10 @@ const ProvidersPage: React.FC = () => {
             <div className={`${pendingRestart ? 'bg-orange-500/15 border-orange-500/30' : 'bg-yellow-500/10 border-yellow-500/20'} border text-yellow-600 dark:text-yellow-500 p-4 rounded-md flex items-center justify-between`}>
                 <div className="flex items-center">
                     <AlertCircle className="w-5 h-5 mr-2" />
-                    Changes to provider configurations require an AI Engine restart to take effect.
+                    Changes to provider configurations require a reload to take effect.
                 </div>
                 <button
-                    onClick={handleRestartAIEngine}
+                    onClick={handleReloadAIEngine}
                     disabled={restartingEngine}
                     className={`flex items-center text-xs px-3 py-1.5 rounded transition-colors ${
                         pendingRestart 
@@ -376,7 +381,7 @@ const ProvidersPage: React.FC = () => {
                     ) : (
                         <RefreshCw className="w-3 h-3 mr-1.5" />
                     )}
-                    {restartingEngine ? 'Restarting...' : 'Reload AI Engine'}
+                    {restartingEngine ? 'Reloading...' : 'Reload AI Engine'}
                 </button>
             </div>
 
@@ -578,52 +583,50 @@ const ProvidersPage: React.FC = () => {
                                         </div>
                                     </div>
                                 </div>
-                                <div className="flex items-center gap-2">
-                                    <div className="flex items-center space-x-2 mr-2">
-                                        <label className="relative inline-flex items-center cursor-pointer">
-                                            <input
-                                                type="checkbox"
-                                                className="sr-only peer"
-                                                checked={providerData.enabled ?? true}
-                                                onChange={async (e) => {
-                                                    const newProviders = { ...config.providers };
-                                                    newProviders[name] = { ...providerData, enabled: e.target.checked };
-                                                    await saveConfig({ ...config, providers: newProviders });
-                                                }}
-                                            />
-                                            <div className="w-9 h-5 bg-input peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-ring rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary"></div>
-                                        </label>
-                                    </div>
-                                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                        <button
-                                            onClick={() => handleTestConnection(name, providerData)}
-                                            disabled={testingProvider === name}
-                                            className="p-2 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground disabled:opacity-50"
-                                            title="Test Connection"
-                                        >
-                                            {testingProvider === name ? (
-                                                <Loader2 className="w-4 h-4 animate-spin" />
-                                            ) : testResults[name]?.success ? (
-                                                <CheckCircle2 className="w-4 h-4 text-green-500" />
-                                            ) : testResults[name]?.success === false ? (
-                                                <AlertCircle className="w-4 h-4 text-destructive" />
-                                            ) : (
-                                                <Server className="w-4 h-4" />
-                                            )}
-                                        </button>
-                                        <button
-                                            onClick={() => handleEditProvider(name)}
-                                            className="p-2 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground"
-                                        >
-                                            <Settings className="w-4 h-4" />
-                                        </button>
-                                        <button
-                                            onClick={() => handleDeleteProvider(name)}
-                                            className="p-2 hover:bg-destructive/10 rounded-md text-destructive"
-                                        >
-                                            <Trash2 className="w-4 h-4" />
-                                        </button>
-                                    </div>
+                                <div className="flex items-center gap-1 shrink-0">
+                                    <label className="relative inline-flex items-center cursor-pointer mr-2">
+                                        <input
+                                            type="checkbox"
+                                            className="sr-only peer"
+                                            checked={providerData.enabled ?? true}
+                                            onChange={async (e) => {
+                                                const newProviders = { ...config.providers };
+                                                newProviders[name] = { ...providerData, enabled: e.target.checked };
+                                                await saveConfig({ ...config, providers: newProviders });
+                                            }}
+                                        />
+                                        <div className="w-9 h-5 bg-input peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-ring rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary"></div>
+                                    </label>
+                                    <button
+                                        onClick={() => handleTestConnection(name, providerData)}
+                                        disabled={testingProvider === name}
+                                        className="p-1.5 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground disabled:opacity-50"
+                                        title="Test Connection"
+                                    >
+                                        {testingProvider === name ? (
+                                            <Loader2 className="w-4 h-4 animate-spin" />
+                                        ) : testResults[name]?.success ? (
+                                            <CheckCircle2 className="w-4 h-4 text-green-500" />
+                                        ) : testResults[name]?.success === false ? (
+                                            <AlertCircle className="w-4 h-4 text-destructive" />
+                                        ) : (
+                                            <Server className="w-4 h-4" />
+                                        )}
+                                    </button>
+                                    <button
+                                        onClick={() => handleEditProvider(name)}
+                                        className="p-1.5 hover:bg-accent rounded-md text-muted-foreground hover:text-foreground"
+                                        title="Settings"
+                                    >
+                                        <Settings className="w-4 h-4" />
+                                    </button>
+                                    <button
+                                        onClick={() => handleDeleteProvider(name)}
+                                        className="p-1.5 hover:bg-destructive/10 rounded-md text-destructive"
+                                        title="Delete"
+                                    >
+                                        <Trash2 className="w-4 h-4" />
+                                    </button>
                                 </div>
                             </div>
                             {testResults[name] && (

@@ -3,8 +3,8 @@
 Use these references for a known-good Google Live flow:
 
 - Google Live Golden Baseline: `docs/case-studies/Google-Live-Golden-Baseline.md`
-- Milestone Documentation: `docs/milestone/milestone-17-google-live.md`
-- Provider Setup Guide: `docs/GOOGLE_PROVIDER_SETUP.md`
+- Milestone Documentation: `docs/contributing/milestones/milestone-17-google-live.md`
+- Provider Setup Guide: `docs/Provider-Google-Setup.md`
 
 Quick checks to match the baseline:
 - Response latency < 1 second (fastest available)
@@ -13,4 +13,3 @@ Quick checks to match the baseline:
 - Clean call termination with hangup_call tool
 - No manual hangup required
 - Tool execution in streaming mode
-

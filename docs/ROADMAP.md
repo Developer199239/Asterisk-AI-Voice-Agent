@@ -28,7 +28,7 @@ Each milestone includes scope, implementation details, and verification criteria
 
 - **Goal**: Automatically download and cache local AI models based on the host architecture.
 - **What We Shipped**:
-  - Added `models/registry.json` and the `scripts/model_setup.py` utility to detect hardware tier, download the right STT/LLM/TTS bundles, and verify integrity.
+  - Added `models/registry.json` and the `scripts/model_setup.sh` utility to detect hardware tier, download the right STT/LLM/TTS bundles, and verify integrity.
   - Makefile task `make model-setup` (documented in Agents/Architecture) calls the script and skips work when models are already cached.
 - **Verification**:
   - First-run downloads populate `models/` on both laptops and the server; subsequent runs detect cached artifacts and exit quickly. Local provider boots cleanly after `make model-setup`.
@@ -540,6 +540,15 @@ Keep this roadmap updated after each milestone to help any collaborator—or fut
 - ⏳ Integration tests for transfer workflows (unit tests complete, full workflow pending)
 - 🎯 Increase CI coverage threshold to 30% then 40% (currently 27%)
 - ⏳ Automated regression test suite (foundation in place)
+
+**Admin UI Adoption Readiness**:
+
+- 🔥 AAVA-130: Fix JWT secret load-order vulnerability; tighten CORS defaults
+- 🔥 AAVA-130: Fix config export crash (`CONFIG_PATH.exists()`)
+- 🔥 AAVA-130: Atomic writes for remaining hotspots (`wizard.py`, `local_ai.py`, `system.py`)
+- 🔥 AAVA-130: Lightweight config validation endpoint (syntax + basic schema/footguns)
+- 🔄 Restart orchestration improvements (restart vs recreate, readiness verification via `/ready`)
+- 🔄 ARI scheme/port alignment across wizard → `.env` → engine runtime
 
 **Additional Tool Categories**:
 

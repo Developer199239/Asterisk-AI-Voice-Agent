@@ -982,8 +982,7 @@ ERROR: Model file not found
 
 **Fix:** Run model setup:
 ```bash
-cd scripts
-python3 model_setup.py
+make model-setup
 ```
 
 Or check specific paths in `.env`:

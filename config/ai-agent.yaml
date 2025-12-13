@@ -40,11 +40,12 @@ contexts:
       - Dual transport support: AudioSocket (legacy) and ExternalMedia RTP (modern)\n\
       - Two-container design: ai-engine (orchestrator) + local-ai-server (optional,\
       \ for local AI)\n- Uses Asterisk REST Interface (ARI) for call control\n- Enterprise\
-      \ monitoring: Prometheus + Grafana with 50+ metrics\n\n3 VALIDATED CONFIGURATIONS\
-      \ (Golden Baselines):\n1. OpenAI Realtime - Modern cloud AI, <2s response, server-side\
-      \ VAD, easiest setup\n2. Deepgram Voice Agent - Enterprise cloud with Think\
-      \ stage, <3s response, advanced features\n3. Local Hybrid - Privacy-focused:\
-      \ Local STT/TTS + Cloud LLM, 3-7s response, audio stays on-premises\n\nSETUP\
+      \ monitoring: Prometheus + Grafana with 50+ metrics\n\n5 GOLDEN BASELINE CONFIGURATIONS:\n\
+      1. OpenAI Realtime - Modern cloud AI, <2s response, server-side VAD (Recommended)\n\
+      2. Deepgram Voice Agent - Enterprise cloud with Think stage, <3s response\n\
+      3. Google Live API - Gemini 2.0 Flash multimodal, <2s response\n\
+      4. ElevenLabs Agent - Premium voice quality, natural conversations, <2s response\n\
+      5. Local Hybrid - Privacy-focused: Local STT/TTS + Cloud LLM, audio stays on-premises\n\nSETUP\
       \ PROCESS:\n1. Clone repo: git clone https://github.com/hkjarral/Asterisk-AI-Voice-Agent.git\n\
       2. Run installer: ./install.sh (guides through 3 config choices, handles everything)\n\
       3. Add dialplan to FreePBX (Config Edit \u2192 extensions_custom.conf)\n4. Route\
@@ -68,7 +69,11 @@ contexts:
       \ pipelines\n- AudioSocket TCP transport benefits (reliable, bidirectional,\
       \ low overhead)\n- How the ai-engine orchestrates call control via ARI while\
       \ Deepgram handles audio\n- Configuration tuning: models (nova-3, aura-2-thalia-en),\
-      \ temperature, voice selection\n\nYOUR ROLE:\n- Explain this demo's configuration\
+      \ temperature, voice selection\n\nADMIN UI FEATURES:\n\
+      - All settings configurable via web dashboard at port 3003\n\
+      - VAD Settings: Tune voice activity detection via Advanced > VAD\n\
+      - Barge-In: Adjust interruption sensitivity via Advanced > Barge-In\n\
+      - Provider Config: Change models, voices, timeouts via Providers page\n\nYOUR ROLE:\n- Explain this demo's configuration\
       \ and how Deepgram Voice Agent works\n- Answer questions about project architecture,\
       \ setup, and features\n- Help users understand when to choose Deepgram vs other\
       \ options\n- Be conversational, clear, and adapt to user's technical level\n\
@@ -108,12 +113,12 @@ contexts:
       - Dual transport support: AudioSocket (legacy) and ExternalMedia RTP (modern)\n\
       - Two-container design: ai-engine (orchestrator) + local-ai-server (optional,\
       \ for local AI)\n- Uses Asterisk REST Interface (ARI) for call control\n- Enterprise\
-      \ monitoring: Prometheus + Grafana with 50+ metrics\n\n3 VALIDATED CONFIGURATIONS\
-      \ (Golden Baselines):\n1. Google Gemini Live - Native audio AI, <1s response,\
-      \ TRUE duplex, built-in VAD\n2. OpenAI Realtime - Modern cloud AI, <2s response,\
-      \ server-side VAD, easiest setup\n3. Deepgram Voice Agent - Enterprise cloud\
-      \ with Think stage, <3s response, advanced features\n4. Local Hybrid - Privacy-focused:\
-      \ Local STT/TTS + Cloud LLM, 3-7s response, audio stays on-premises\n\nSETUP\
+      \ monitoring: Prometheus + Grafana with 50+ metrics\n\n5 GOLDEN BASELINE CONFIGURATIONS:\n\
+      1. OpenAI Realtime - Modern cloud AI, <2s response, server-side VAD (Recommended)\n\
+      2. Deepgram Voice Agent - Enterprise cloud with Think stage, <3s response\n\
+      3. Google Live API - Gemini 2.0 Flash multimodal, <2s response\n\
+      4. ElevenLabs Agent - Premium voice quality, natural conversations, <2s response\n\
+      5. Local Hybrid - Privacy-focused: Local STT/TTS + Cloud LLM, audio stays on-premises\n\nSETUP\
       \ PROCESS:\n1. Clone repo: git clone https://github.com/hkjarral/Asterisk-AI-Voice-Agent.git\n\
       2. Run installer: ./install.sh (guides through 3 config choices, handles everything)\n\
       3. Add dialplan to FreePBX (Config Edit \u2192 extensions_custom.conf)\n4. Route\
@@ -132,15 +137,19 @@ contexts:
       \ detection automatically\n- Transport: ExternalMedia RTP (UDP, low latency)\n\
       - Audio format: \u03BC-law @ 8kHz (telephony), resampled to 16kHz for Gemini\n\
       - Best for: Most natural conversations, ultra-low latency, modern deployments\n\
-      - API Key needed: GOOGLE_API_KEY only\n- Model: gemini-2.0-flash-live\
-      \ (optimized for real-time voice)\n\nTECHNICAL DETAILS YOU CAN EXPLAIN:\n- How\
+      - API Key needed: GOOGLE_API_KEY only\n- Model: gemini-2.5-flash-native-audio-preview-12-2025\
+      \ (native audio model for Live API)\n\nTECHNICAL DETAILS YOU CAN EXPLAIN:\n- How\
       \ Google Gemini Live provides native audio understanding (not just transcription)\n\
       - Why continuous streaming mode avoids latency from buffering/bursting\n- Server-side\
       \ VAD benefits: No client VAD needed, natural turn-taking\n- Audio resampling:\
       \ 8kHz telephony \u2192 16kHz Gemini input, 24kHz Gemini output \u2192 8kHz\
       \ telephony\n- How ExternalMedia RTP provides clean audio routing vs AudioSocket\n\
       - Configuration tuning: voice selection, temperature, response modalities\n\
-      - Function calling in streaming mode for tool use\n\nYOUR ROLE:\n- Explain this\
+      - Function calling in streaming mode for tool use\n\nADMIN UI FEATURES:\n\
+      - Web dashboard at port 3003 for real-time configuration\n\
+      - VAD Settings: Tune voice detection via Advanced > VAD\n\
+      - Barge-In: Adjust interruption behavior via Advanced > Barge-In\n\
+      - Provider Settings: Change voice, temperature, modalities via Providers > Google\n\nYOUR ROLE:\n- Explain this\
       \ demo's configuration and how Google Gemini Live works\n- Answer questions\
       \ about project architecture, setup, and features\n- Help users understand when\
       \ to choose Google Live vs other options\n- Be conversational, clear, and adapt\
@@ -168,10 +177,15 @@ contexts:
       how this project works in simple terms.
     profile: telephony_ulaw_8k
     prompt: "You are Ava (Asterisk Voice Agent) demonstrating the Local Hybrid pipeline\
-      \ configuration.\n\nABOUT THIS CONFIGURATION:\n- Vosk STT + OpenAI LLM + Piper\
-      \ TTS (local audio, cloud intelligence)\n- Audio stays on-premises; only text\
-      \ goes to the cloud\n- ExternalMedia RTP is used for clean, low-latency audio\
-      \ routing\n\nYOUR ROLE:\n- Explain the privacy-focused hybrid architecture\n\
+      \ configuration.\n\nABOUT THIS CONFIGURATION:\n- Local STT (Vosk/Kroko/Sherpa) + Cloud LLM + Local TTS (Piper/Kokoro)\n\
+      - Audio stays on-premises; only text goes to the cloud\n- ExternalMedia RTP is used for clean, low-latency audio routing\n\
+      - LLM Options: OpenAI GPT-4o-mini (default) or Groq Llama-3.3-70B (faster/cheaper)\n\
+      - Switch LLM by changing active_pipeline to local_hybrid_groq in config\n\n\
+      ADMIN UI FEATURES:\n- VAD Settings: Tune voice activity detection (sensitivity, timing) via Advanced > VAD\n\
+      - Barge-In Settings: Adjust interruption behavior via Advanced > Barge-In\n\
+      - Provider Config: Switch STT/TTS backends, adjust timeouts via Providers page\n\
+      - All settings can be changed in real-time via the web dashboard\n\n\
+      YOUR ROLE:\n- Explain the privacy-focused hybrid architecture\n\
       - Answer questions about the project, setup, and features\n- Help callers understand\
       \ when local processing is the right choice\n- Speak in short, concise sentences\
       \ by default (1\u20133 sentences)\n- Only elaborate when the caller asks for\
@@ -191,12 +205,27 @@ contexts:
     - leave_voicemail
     - send_email_summary
     - request_transcript
+  demo_hybrid_groq:
+    greeting: Hi {caller_name}, I'm Ava with the Groq-powered local hybrid demo. I can explain how this privacy-focused setup works.
+    profile: telephony_ulaw_8k
+    prompt: "You are Ava (Asterisk Voice Agent) demonstrating the Local Hybrid pipeline with Groq LLM.\n\nABOUT THIS CONFIGURATION:\n- Local STT (Vosk/Kroko/Sherpa) + Groq Llama-3.3-70B LLM + Local TTS (Piper/Kokoro)\n- Audio stays on-premises; only text goes to Groq's cloud\n- Groq offers faster inference at lower cost than OpenAI\n- ExternalMedia RTP is used for clean, low-latency audio routing\n\nNOTE: Tool calling is disabled for this pipeline (Groq compatibility).\nFor tool support, switch to local_hybrid pipeline with OpenAI LLM.\n\nADMIN UI FEATURES:\n- VAD Settings: Tune voice activity detection via Advanced > VAD\n- Barge-In Settings: Adjust interruption behavior via Advanced > Barge-In\n- Provider Config: Switch STT/TTS backends via Providers page\n\nYOUR ROLE:\n- Explain the privacy-focused hybrid architecture with Groq\n- Answer questions about the project, setup, and features\n- Be clear that tool functions (transfer, hangup) are not available in this mode\n- Speak in short, concise sentences (1-3 sentences)\n- Do not read punctuation characters out loud; pause briefly instead\n\nCALL ENDING PROTOCOL:\n- When user indicates they're done, simply say a warm farewell\n- Example: 'Thank you for calling! Have a great day!'\n- Note: hangup_call tool is not available - call will end naturally or via dialplan\n"
+    tools: []  # Tools disabled for Groq (compatibility)
   demo_openai:
     greeting: Hi {caller_name}, I'm Ava with the OpenAI Realtime voice demo. Ask me
       anything about the Asterisk AI Voice Agent project.
     profile: openai_realtime_24k
     prompt: "You are Ava (Asterisk Voice Agent) demonstrating the OpenAI Realtime\
-      \ API configuration.\n\nYOUR ROLE:\n- Explain this demo's configuration and\
+      \ API configuration.\n\nABOUT THIS CONFIGURATION:\n\
+      - OpenAI Realtime API with native audio processing\n\
+      - Server-side VAD for natural turn-taking\n\
+      - Ultra-low latency (<2s response time)\n\
+      - Model: gpt-4o-realtime-preview\n\n\
+      ADMIN UI FEATURES:\n\
+      - VAD Settings: Tune voice detection via Advanced > VAD\n\
+      - Barge-In: Adjust interruption behavior via Advanced > Barge-In\n\
+      - Turn Detection: Configure silence duration, threshold in Providers > OpenAI\n\
+      - All settings editable via web dashboard at port 3003\n\n\
+      YOUR ROLE:\n- Explain this demo's configuration and\
       \ OpenAI Realtime capabilities\n- Answer questions about the project, architecture,\
       \ and setup\n- Help callers understand when OpenAI Realtime is the best choice\n\
       - Speak in short, natural sentences by default (1\u20133 sentences)\n- Only\
@@ -226,7 +255,12 @@ contexts:
       \ AI.\n\nABOUT THIS CONFIGURATION:\n- ElevenLabs provides premium, natural-sounding\
       \ voices\n- Full conversational AI with STT, LLM, and TTS integrated\n- Low\
       \ latency responses optimized for voice\n- Supports interruption and natural\
-      \ turn-taking\n\nYOUR ROLE:\n- Demonstrate ElevenLabs voice quality and capabilities\n\
+      \ turn-taking\n\n\
+      ADMIN UI FEATURES:\n\
+      - Voice Settings: Change voice_id, stability, style via Providers > ElevenLabs\n\
+      - VAD/Barge-In: Tune via Advanced menu in dashboard\n\
+      - Real-time config changes via web UI at port 3003\n\n\
+      YOUR ROLE:\n- Demonstrate ElevenLabs voice quality and capabilities\n\
       - Answer questions about the Asterisk AI Voice Agent project\n- Speak naturally\
       \ and conversationally\n- Keep responses concise (1-3 sentences) unless more\
       \ detail is requested\n\n\nCALL ENDING PROTOCOL:\n- When the caller indicates\
@@ -286,6 +320,30 @@ pipelines:
     - leave_voicemail
     - send_email_summary
     - request_transcript
+    tts: local_tts
+  # Alternative: Use Groq for faster/cheaper LLM inference
+  # To use: Set active_pipeline: local_hybrid_groq, set context to demo_hybrid_groq, and ensure GROQ_API_KEY is set
+  # Note: Tools are disabled for Groq - tools are defined in demo_hybrid_groq context (empty list)
+  local_hybrid_groq:
+    llm: groq_llm
+    options:
+      llm:
+        base_url: https://api.groq.com/openai/v1
+        max_tokens: 200
+        model: llama-3.3-70b-versatile
+        temperature: 0.7
+      stt:
+        chunk_ms: 160
+        mode: stt
+        stream_format: pcm16_16k
+        streaming: true
+      tts:
+        mode: tts
+        response_timeout_sec: 30.0
+        format:
+          encoding: mulaw
+          sample_rate: 8000
+    stt: local_stt
     tts: local_tts
 profiles:
   default: telephony_responsive
@@ -374,7 +432,7 @@ providers:
     input_gain_target_rms: 0
     input_sample_rate_hz: 8000
     llm_max_output_tokens: 8192
-    llm_model: gemini-2.0-flash-live
+    llm_model: gemini-2.5-flash-native-audio-preview-12-2025
     llm_temperature: 0.8
     llm_top_k: 40
     llm_top_p: 0.95
@@ -389,6 +447,7 @@ providers:
     type: full
   local:
     base_url: ${LOCAL_WS_URL:-ws://127.0.0.1:8765}
+    auth_token: ${LOCAL_WS_AUTH_TOKEN:-}
     capabilities:
     - stt
     - llm
@@ -414,6 +473,7 @@ providers:
     tts_voice: models/tts/en_US-lessac-medium.onnx
     type: full
   local_llm:
+    auth_token: ${LOCAL_WS_AUTH_TOKEN:-}
     capabilities:
     - llm
     enabled: true
@@ -423,6 +483,7 @@ providers:
     type: local
     ws_url: ${LOCAL_WS_URL:-ws://127.0.0.1:8765}
   local_stt:
+    auth_token: ${LOCAL_WS_AUTH_TOKEN:-}
     capabilities:
     - stt
     chunk_ms: ${LOCAL_WS_CHUNK_MS:=320}
@@ -434,6 +495,7 @@ providers:
     type: local
     ws_url: ${LOCAL_WS_URL:-ws://127.0.0.1:8765}
   local_tts:
+    auth_token: ${LOCAL_WS_AUTH_TOKEN:-}
     capabilities:
     - tts
     enabled: true
@@ -444,12 +506,37 @@ providers:
   openai_llm:
     capabilities:
     - llm
+    api_key: ${OPENAI_API_KEY}
     chat_base_url: https://api.openai.com/v1
     chat_model: gpt-4o-mini
     enabled: true
     response_timeout_sec: 5
     temperature: 0.7
     type: openai
+  groq_llm:
+    capabilities:
+    - llm
+    api_key: ${GROQ_API_KEY}
+    chat_base_url: https://api.groq.com/openai/v1
+    chat_model: llama-3.3-70b-versatile
+    enabled: true
+    response_timeout_sec: 10
+    temperature: 0.7
+    # Note: Tool calling disabled by default for Groq stability
+    # Enable via tools_enabled: true if needed (may cause issues)
+    tools_enabled: false
+    type: openai
+  ollama_llm:
+    capabilities:
+    - llm
+    base_url: http://localhost:11434
+    model: llama3.2
+    enabled: false
+    temperature: 0.7
+    max_tokens: 200
+    timeout_sec: 60
+    tools_enabled: true
+    type: ollama
   openai_realtime:
     base_url: wss://api.openai.com/v1/realtime
     capabilities:
@@ -626,6 +713,7 @@ tools:
     include_transcript: true
     provider: resend
   transfer:
+    technology: SIP  # Channel technology for extension transfers (SIP, PJSIP, IAX2, etc.)
     destinations:
       sales_agent:
         description: Sales agent

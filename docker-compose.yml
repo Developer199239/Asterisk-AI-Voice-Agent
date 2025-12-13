@@ -18,6 +18,7 @@
 
 services:
   ai-engine:
+    image: asterisk-ai-voice-agent-ai-engine:latest
     build:
       context: .
       dockerfile: Dockerfile
@@ -47,6 +48,7 @@ services:
     restart: unless-stopped
 
   local-ai-server:
+    image: asterisk-ai-voice-agent-local-ai-server:latest
     build:
       context: ./local_ai_server
       dockerfile: Dockerfile
@@ -96,13 +98,56 @@ services:
     #           count: 1
     #           capabilities: [gpu]
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import asyncio; import websockets; async def check(): async with websockets.connect('ws://127.0.0.1:8765', ping_interval=None) as ws: await ws.close(); asyncio.run(check())\""]
+      test:
+        - CMD-SHELL
+        - |
+          python - <<'PY'
+          import asyncio
+          import json
+          import os
+          import websockets
+
+          async def main():
+              port = os.getenv("LOCAL_WS_PORT", "8765")
+              token = (os.getenv("LOCAL_WS_AUTH_TOKEN", "") or "").strip()
+              uri = f"ws://127.0.0.1:{port}"
+
+              ws = await websockets.connect(
+                  uri,
+                  ping_interval=None,
+                  ping_timeout=None,
+                  close_timeout=2,
+                  max_size=None,
+              )
+              try:
+                  if token:
+                      await ws.send(json.dumps({"type": "auth", "auth_token": token}))
+                      raw = await ws.recv()
+                      if isinstance(raw, (bytes, bytearray)):
+                          raise RuntimeError("Unexpected binary auth response")
+                      data = json.loads(raw)
+                      if data.get("type") != "auth_response" or data.get("status") != "ok":
+                          raise RuntimeError(f"Auth rejected: {data}")
+
+                  await ws.send(json.dumps({"type": "status"}))
+                  raw = await ws.recv()
+                  if isinstance(raw, (bytes, bytearray)):
+                      raise RuntimeError("Unexpected binary status response")
+                  data = json.loads(raw)
+                  if data.get("type") != "status_response" or data.get("status") != "ok":
+                      raise RuntimeError(f"Unexpected status response: {data}")
+              finally:
+                  await ws.close()
+
+          asyncio.run(main())
+          PY
       interval: 60s
       timeout: 5s
       retries: 180
       start_period: 120s
 
   admin-ui:
+    image: asterisk-ai-voice-agent-admin-ui:latest
     build:
       context: ./admin_ui
       dockerfile: Dockerfile
@@ -111,8 +156,8 @@ services:
     volumes:
       - ./:/app/project
       - /var/run/docker.sock:/var/run/docker.sock
-      - /usr/bin/docker:/usr/bin/docker:ro
-      - /usr/local/bin/docker-compose:/usr/local/bin/docker-compose:ro
+      # The admin-ui image installs Docker CLI + Compose plugin internally.
+      # Optional fallback (host binaries): use `docker compose -f docker-compose.yml -f docker-compose.admin-ui-host-binaries.yml up -d admin-ui`
       - /etc/os-release:/host/etc/os-release:ro
     environment:
       - PROJECT_ROOT=/app/project

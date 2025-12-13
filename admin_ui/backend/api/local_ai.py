@@ -14,6 +14,7 @@ import os
 import json
 import asyncio
 import websockets
+from services.fs import upsert_env_vars
 
 router = APIRouter()
 
@@ -203,6 +204,14 @@ async def get_local_ai_status():
     
     try:
         async with websockets.connect(ws_url, open_timeout=5) as ws:
+            auth_token = (get_setting("LOCAL_WS_AUTH_TOKEN", os.getenv("LOCAL_WS_AUTH_TOKEN", "")) or "").strip()
+            if auth_token:
+                await ws.send(json.dumps({"type": "auth", "auth_token": auth_token}))
+                raw = await asyncio.wait_for(ws.recv(), timeout=5)
+                data = json.loads(raw)
+                if data.get("type") != "auth_response" or data.get("status") != "ok":
+                    raise RuntimeError(f"Local AI auth failed: {data}")
+
             await ws.send(json.dumps({"type": "status"}))
             response = await asyncio.wait_for(ws.recv(), timeout=5)
             data = json.loads(response)
@@ -289,6 +298,14 @@ async def switch_model(request: SwitchModelRequest):
             ws_url = get_setting("HEALTH_CHECK_LOCAL_AI_URL", "ws://local_ai_server:8765")
             try:
                 async with websockets.connect(ws_url, open_timeout=5) as ws:
+                    auth_token = (get_setting("LOCAL_WS_AUTH_TOKEN", os.getenv("LOCAL_WS_AUTH_TOKEN", "")) or "").strip()
+                    if auth_token:
+                        await ws.send(json.dumps({"type": "auth", "auth_token": auth_token}))
+                        raw = await asyncio.wait_for(ws.recv(), timeout=5)
+                        auth_data = json.loads(raw)
+                        if auth_data.get("type") != "auth_response" or auth_data.get("status") != "ok":
+                            raise RuntimeError(f"Local AI auth failed: {auth_data}")
+
                     await ws.send(json.dumps({
                         "type": "reload_llm",
                         "model_path": request.model_path
@@ -319,35 +336,8 @@ async def switch_model(request: SwitchModelRequest):
     # 3. Recreate container if needed (restart doesn't reload .env)
     if requires_restart:
         try:
-            import subprocess
-            
-            # Use docker compose down/up to properly recreate with new .env values
-            # down: removes container completely (clears env cache)
-            # up: creates fresh container reading new .env values
-            
-            # Step 1: Stop and remove the container
-            down_result = subprocess.run(
-                ["/usr/local/bin/docker-compose", "-p", "asterisk-ai-voice-agent", 
-                 "down", "local-ai-server"],
-                cwd=PROJECT_ROOT,
-                capture_output=True,
-                text=True,
-                timeout=30
-            )
-            
-            # Step 2: Create and start fresh container with new env
-            up_result = subprocess.run(
-                ["/usr/local/bin/docker-compose", "-p", "asterisk-ai-voice-agent", 
-                 "up", "-d", "--no-build", "local-ai-server"],
-                cwd=PROJECT_ROOT,
-                capture_output=True,
-                text=True,
-                timeout=60  # May take longer to start
-            )
-            
-            if up_result.returncode != 0:
-                raise Exception(f"docker-compose up failed: {up_result.stderr}")
-            
+            from api.system import _recreate_via_compose
+            result = await _recreate_via_compose("local-ai-server")
             return SwitchModelResponse(
                 success=True,
                 message=f"Model switch initiated. Container recreating with new settings...",
@@ -486,35 +476,7 @@ def _read_env_values(env_file: str, keys: list) -> Dict[str, str]:
 
 def _update_env_file(env_file: str, updates: Dict[str, str]):
     """Update environment variables in .env file."""
-    lines = []
-    updated_keys = set()
-    
-    # Read existing file
-    if os.path.exists(env_file):
-        with open(env_file, 'r') as f:
-            lines = f.readlines()
-    
-    # Update existing lines
-    new_lines = []
-    for line in lines:
-        key = None
-        if '=' in line and not line.strip().startswith('#'):
-            key = line.split('=')[0].strip()
-        
-        if key and key in updates:
-            new_lines.append(f"{key}={updates[key]}\n")
-            updated_keys.add(key)
-        else:
-            new_lines.append(line)
-    
-    # Add new keys that weren't in the file
-    for key, value in updates.items():
-        if key not in updated_keys:
-            new_lines.append(f"{key}={value}\n")
-    
-    # Write back
-    with open(env_file, 'w') as f:
-        f.writelines(new_lines)
+    upsert_env_vars(env_file, updates, header="Local AI model management")
 
 
 # Import docker at module level for switch endpoint

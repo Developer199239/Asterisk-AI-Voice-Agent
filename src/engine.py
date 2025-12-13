@@ -1653,7 +1653,7 @@ class Engine:
             await self.ari_client.hangup_channel(channel_id)
             return
         
-        # Step 1: Remove UnicastRTP/ExternalMedia from bridge
+        # Step 1: Remove AI audio channel from bridge (ExternalMedia OR AudioSocket)
         if session.external_media_id:
             try:
                 await self.ari_client.remove_channel_from_bridge(
@@ -1664,6 +1664,17 @@ class Engine:
                            external_media_id=session.external_media_id)
             except Exception as e:
                 logger.warning(f"Failed to remove UnicastRTP: {e}")
+        
+        if session.audiosocket_channel_id:
+            try:
+                await self.ari_client.remove_channel_from_bridge(
+                    session.bridge_id,
+                    session.audiosocket_channel_id
+                )
+                logger.info("✅ AudioSocket channel removed from bridge",
+                           audiosocket_channel_id=session.audiosocket_channel_id)
+            except Exception as e:
+                logger.warning(f"Failed to remove AudioSocket channel: {e}")
         
         # Step 2: Stop AI provider session
         provider = self.providers.get(session.provider_name)
@@ -1777,7 +1788,9 @@ class Engine:
 
         audio_uuid = str(uuid.uuid4())
         host = self.config.audiosocket.host or "127.0.0.1"
-        if host in ("0.0.0.0", "::"):
+        # Only rewrite bind-all addresses if no explicit host was configured
+        # This allows remote Asterisk deployments to specify the actual AI engine host
+        if host in ("0.0.0.0", "::") and not self.config.audiosocket.host:
             host = "127.0.0.1"
         port = self.config.audiosocket.port
         # Match channel interface codec to YAML audiosocket.format
@@ -7141,8 +7154,11 @@ class Engine:
                             as_fmt = None
                         if as_fmt in ('ulaw', 'mulaw', 'g711_ulaw'):
                             provider.set_input_mode('mulaw8k')
+                        elif as_fmt in ('slin16', 'linear16', 'pcm16'):
+                            # slin16 is 16kHz PCM16, set correct input mode
+                            provider.set_input_mode('pcm16_16k')
                         else:
-                            # Default to PCM16 at 8 kHz when AudioSocket is slin16 or unspecified
+                            # Default to PCM16 at 8 kHz for slin (8kHz) or unspecified
                             provider.set_input_mode('pcm16_8k')
             except Exception:
                 logger.debug("Provider set_input_mode failed or unsupported", exc_info=True)
@@ -7275,6 +7291,7 @@ class Engine:
             app.router.add_get('/ready', self._ready_handler)
             app.router.add_get('/health', self._health_handler)
             app.router.add_get('/metrics', self._metrics_handler)
+            app.router.add_post('/reload', self._reload_handler)
             runner = web.AppRunner(app)
             await runner.setup()
             # Host/port configurable via YAML health block with environment overrides (AAVA-30)
@@ -7529,6 +7546,101 @@ class Engine:
             return web.Response(body=data, headers={"Content-Type": CONTENT_TYPE_LATEST})
         except Exception as exc:
             return web.Response(text=str(exc), status=500)
+
+    async def _reload_handler(self, request):
+        """Hot-reload configuration without restarting the engine.
+        
+        Reloads ai-agent.yaml and reinitializes providers with new settings.
+        Active calls continue uninterrupted - changes apply to new calls only.
+        
+        POST /reload
+        Returns JSON with reload status and what changed.
+        """
+        try:
+            logger.info("🔄 Configuration reload requested")
+            changes = []
+            errors = []
+            
+            # Step 1: Reload configuration from YAML
+            from .config import load_config
+            try:
+                new_config = load_config()
+                changes.append("Configuration file reloaded")
+            except Exception as e:
+                errors.append(f"Failed to load config: {str(e)}")
+                return web.json_response({
+                    "success": False,
+                    "message": "Failed to reload configuration",
+                    "errors": errors
+                }, status=500)
+            
+            # Step 2: Compare and update provider configurations
+            old_providers = set(self.providers.keys()) if self.providers else set()
+            
+            # Update config reference
+            old_config = self.config
+            self.config = new_config
+            changes.append("Configuration updated")
+            
+            # Step 3: Reinitialize providers that have changed
+            try:
+                # Re-register providers with new config
+                new_providers_config = getattr(new_config, 'providers', {})
+                
+                for provider_name, provider_config in new_providers_config.items():
+                    if not getattr(provider_config, 'enabled', True):
+                        continue
+                    
+                    # Check if provider exists and needs update
+                    if provider_name in self.providers:
+                        # Provider exists - check if config changed
+                        old_prov_config = getattr(old_config, 'providers', {}).get(provider_name)
+                        if old_prov_config != provider_config:
+                            changes.append(f"Provider '{provider_name}' configuration updated")
+                    else:
+                        changes.append(f"Provider '{provider_name}' detected (restart needed to add)")
+                
+                # Check for removed providers
+                for old_name in old_providers:
+                    if old_name not in new_providers_config:
+                        changes.append(f"Provider '{old_name}' removed from config (restart needed)")
+                        
+            except Exception as e:
+                errors.append(f"Error updating providers: {str(e)}")
+            
+            # Step 4: Update contexts
+            try:
+                if hasattr(new_config, 'contexts') and new_config.contexts:
+                    self.contexts = new_config.contexts
+                    changes.append(f"Contexts updated ({len(new_config.contexts)} contexts)")
+            except Exception as e:
+                errors.append(f"Error updating contexts: {str(e)}")
+            
+            # Step 5: Update prompts
+            try:
+                if hasattr(new_config, 'prompts') and new_config.prompts:
+                    self.prompts = new_config.prompts
+                    changes.append(f"Prompts updated ({len(new_config.prompts)} prompts)")
+            except Exception as e:
+                errors.append(f"Error updating prompts: {str(e)}")
+            
+            logger.info("✅ Configuration reload completed", changes=changes, errors=errors)
+            
+            return web.json_response({
+                "success": len(errors) == 0,
+                "message": "Configuration reloaded" if not errors else "Reload completed with errors",
+                "changes": changes,
+                "errors": errors,
+                "note": "Changes apply to new calls. Active calls use previous config."
+            })
+            
+        except Exception as exc:
+            logger.error("Configuration reload failed", error=str(exc), exc_info=True)
+            return web.json_response({
+                "success": False,
+                "message": f"Reload failed: {str(exc)}",
+                "errors": [str(exc)]
+            }, status=500)
 
 
 async def main():

@@ -55,6 +55,10 @@ class SessionStore:
             if session.external_media_id:
                 self._sessions_by_channel_id[session.external_media_id] = session
             
+            # Store by audiosocket_channel_id if present
+            if session.audiosocket_channel_id:
+                self._sessions_by_channel_id[session.audiosocket_channel_id] = session
+            
             logger.debug("Call session upserted",
                         call_id=session.call_id,
                         caller_channel_id=session.caller_channel_id,
@@ -83,6 +87,8 @@ class SessionStore:
                 self._sessions_by_channel_id.pop(session.local_channel_id, None)
             if session.external_media_id:
                 self._sessions_by_channel_id.pop(session.external_media_id, None)
+            if session.audiosocket_channel_id:
+                self._sessions_by_channel_id.pop(session.audiosocket_channel_id, None)
             
             logger.debug("Call session removed",
                         call_id=call_id,

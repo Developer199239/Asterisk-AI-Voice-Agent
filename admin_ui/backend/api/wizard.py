@@ -1,4 +1,5 @@
 import docker
+import logging
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 import httpx
@@ -7,7 +8,10 @@ import yaml
 import subprocess
 import stat
 from typing import Dict, Any, Optional
+
+logger = logging.getLogger(__name__)
 from settings import ENV_PATH, CONFIG_PATH, ensure_env_file, PROJECT_ROOT
+from services.fs import upsert_env_vars, atomic_write_text
 from api.models_catalog import (
     get_full_catalog, get_models_by_language, get_available_languages,
     LANGUAGE_NAMES, REGION_NAMES, VOSK_STT_MODELS, SHERPA_STT_MODELS,
@@ -204,6 +208,7 @@ async def load_existing_config():
             "asterisk_scheme": env_values.get("ASTERISK_ARI_SCHEME", "http"),
             "asterisk_app": env_values.get("ASTERISK_ARI_APP", "asterisk-ai-voice-agent"),
             "openai_key": env_values.get("OPENAI_API_KEY", ""),
+            "groq_key": env_values.get("GROQ_API_KEY", ""),
             "deepgram_key": env_values.get("DEEPGRAM_API_KEY", ""),
             "google_key": env_values.get("GOOGLE_API_KEY", ""),
             "elevenlabs_key": env_values.get("ELEVENLABS_API_KEY", ""),
@@ -273,107 +278,191 @@ async def setup_media_paths_endpoint():
 
 
 @router.post("/start-engine")
-async def start_engine():
-    """Start the ai-engine container.
+async def start_engine(action: str = "start"):
+    """Start, restart, or rebuild the ai-engine container.
     
-    Called from wizard completion step when user clicks 'Start AI Engine'.
-    Uses docker-compose to create/start the container.
-    Uses --force-recreate if container is already running.
+    Args:
+        action: "start" (default), "restart", or "rebuild"
     
-    Automatically sets up media paths before starting to ensure audio playback works.
+    Uses docker compose (installed in container) to manage containers.
+    Returns detailed progress and error information.
     """
     import subprocess
     from settings import PROJECT_ROOT
     
-    print(f"DEBUG: Starting AI Engine from PROJECT_ROOT={PROJECT_ROOT}")
+    print(f"DEBUG: AI Engine action={action} from PROJECT_ROOT={PROJECT_ROOT}")
     
-    # First, setup media paths for audio playback
-    print("DEBUG: Setting up media paths...")
+    # Setup media paths first
     media_setup = setup_media_paths()
-    print(f"DEBUG: Media setup result: {media_setup}")
     
-    # Check if container is already running
-    already_running = False
-    try:
-        client = docker.from_env()
-        try:
-            container = client.containers.get("ai_engine")
-            already_running = container.status == "running"
-            print(f"DEBUG: ai_engine container status: {container.status}")
-        except docker.errors.NotFound:
-            print("DEBUG: ai_engine container not found, will create")
-    except Exception as e:
-        print(f"DEBUG: Could not check container status: {e}")
+    steps = []
+    
+    def add_step(name: str, status: str, message: str = ""):
+        steps.append({"name": name, "status": status, "message": message})
+        print(f"DEBUG: Step '{name}': {status} - {message}")
     
     try:
-        # Use --force-recreate if already running to ensure fresh start with latest config
-        cmd = ["docker", "compose", "up", "-d"]
-        
-        # Explicitly remove container if it exists to avoid "Conflict" errors
-        # This handles cases where the container exists but isn't managed by compose correctly
-        try:
-            client = docker.from_env()
-            try:
-                old_container = client.containers.get("ai_engine")
-                print(f"DEBUG: Removing existing ai_engine container ({old_container.status})")
-                old_container.remove(force=True)
-            except docker.errors.NotFound:
-                pass
-        except Exception as e:
-            print(f"DEBUG: Error removing container: {e}")
-
-        if already_running:
-            cmd.append("--force-recreate")
-            print("DEBUG: Container already running, using --force-recreate")
-        cmd.append("ai-engine")
-        
+        # Step 1: Check Docker availability
+        add_step("check_docker", "running", "Checking Docker availability...")
         result = subprocess.run(
-            cmd,
-            cwd=PROJECT_ROOT,
-            capture_output=True,
-            text=True,
-            timeout=120  # Give more time for potential build
+            ["docker", "compose", "version"],
+            capture_output=True, text=True, timeout=10
         )
-        
-        print(f"DEBUG: docker-compose returncode={result.returncode}")
-        print(f"DEBUG: docker-compose stdout={result.stdout}")
-        print(f"DEBUG: docker-compose stderr={result.stderr}")
-        
-        if result.returncode == 0:
-            return {
-                "success": True,
-                "action": "started",
-                "message": "AI Engine started successfully" + (" (recreated)" if already_running else ""),
-                "output": result.stdout,
-                "media_setup": media_setup,
-                "recreated": already_running
-            }
-        else:
-            error_msg = result.stderr or result.stdout or "Unknown error"
+        if result.returncode != 0:
+            add_step("check_docker", "error", "Docker Compose not available")
             return {
                 "success": False,
                 "action": "error",
-                "message": f"Failed to start AI Engine: {error_msg}",
+                "message": "Docker Compose not available in container",
+                "steps": steps,
                 "media_setup": media_setup
             }
-    except subprocess.TimeoutExpired:
+        add_step("check_docker", "complete", f"Docker Compose available")
+        
+        # Step 2: Check current container status
+        add_step("check_container", "running", "Checking container status...")
+        client = docker.from_env()
+        container_exists = False
+        container_running = False
+        try:
+            container = client.containers.get("ai_engine")
+            container_exists = True
+            container_running = container.status == "running"
+            add_step("check_container", "complete", f"Container exists, status: {container.status}")
+        except docker.errors.NotFound:
+            add_step("check_container", "complete", "Container does not exist")
+        
+        # Step 3: Determine action
+        if action == "rebuild":
+            add_step("rebuild", "running", "Rebuilding AI Engine image...")
+            result = subprocess.run(
+                ["docker", "compose", "build", "--no-cache", "ai-engine"],
+                cwd=PROJECT_ROOT,
+                capture_output=True, text=True, timeout=300
+            )
+            if result.returncode != 0:
+                add_step("rebuild", "error", result.stderr[:500] if result.stderr else "Build failed")
+                return {
+                    "success": False,
+                    "action": "error",
+                    "message": f"Failed to rebuild: {result.stderr[:200] if result.stderr else 'Unknown error'}",
+                    "steps": steps,
+                    "media_setup": media_setup
+                }
+            add_step("rebuild", "complete", "Image rebuilt successfully")
+        
+        # Step 4: Build image if container doesn't exist (docker compose handles image naming)
+        if not container_exists:
+            add_step("build", "running", "Building AI Engine image (this may take 1-2 minutes)...")
+            build_result = subprocess.run(
+                ["docker", "compose", "build", "ai-engine"],
+                cwd=PROJECT_ROOT,
+                capture_output=True, text=True, timeout=300  # 5 min timeout for build
+            )
+            if build_result.returncode != 0:
+                error_msg = build_result.stderr or build_result.stdout or "Build failed"
+                add_step("build", "error", error_msg[:500])
+                return {
+                    "success": False,
+                    "action": "error",
+                    "message": f"Failed to build AI Engine image: {error_msg[:200]}",
+                    "steps": steps,
+                    "stdout": build_result.stdout,
+                    "stderr": build_result.stderr,
+                    "media_setup": media_setup
+                }
+            add_step("build", "complete", "Image built successfully")
+        
+        # Step 5: Start/restart container using docker compose
+        if action == "restart" and container_running:
+            add_step("restart", "running", "Restarting AI Engine...")
+            result = subprocess.run(
+                ["docker", "compose", "restart", "ai-engine"],
+                cwd=PROJECT_ROOT,
+                capture_output=True, text=True, timeout=60
+            )
+        else:
+            add_step("start", "running", "Starting AI Engine container...")
+            # Use up -d with --force-recreate if container exists
+            cmd = ["docker", "compose", "up", "-d"]
+            if container_exists:
+                cmd.append("--force-recreate")
+            cmd.append("ai-engine")
+            
+            result = subprocess.run(
+                cmd,
+                cwd=PROJECT_ROOT,
+                capture_output=True, text=True, timeout=60  # Container start should be quick after build
+            )
+        
+        if result.returncode != 0:
+            error_msg = result.stderr or result.stdout or "Unknown error"
+            add_step("start" if action != "restart" else "restart", "error", error_msg[:500])
+            return {
+                "success": False,
+                "action": "error",
+                "message": f"Failed to start AI Engine: {error_msg[:200]}",
+                "steps": steps,
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+                "media_setup": media_setup
+            }
+        
+        add_step("start" if action != "restart" else "restart", "complete", "Container started")
+        
+        # Step 5: Wait for health check
+        add_step("health_check", "running", "Waiting for AI Engine to be ready...")
+        import httpx
+        import asyncio
+        
+        health_url = "http://127.0.0.1:15000/health"
+        max_attempts = 30
+        for attempt in range(max_attempts):
+            try:
+                async with httpx.AsyncClient(timeout=2.0) as http_client:
+                    resp = await http_client.get(health_url)
+                    if resp.status_code == 200:
+                        health_data = resp.json()
+                        add_step("health_check", "complete", f"AI Engine healthy - {len(health_data.get('providers', {}))} providers loaded")
+                        return {
+                            "success": True,
+                            "action": action,
+                            "message": "AI Engine started successfully",
+                            "steps": steps,
+                            "health": health_data,
+                            "media_setup": media_setup
+                        }
+            except Exception:
+                pass
+            await asyncio.sleep(1)
+        
+        add_step("health_check", "warning", "Health check timed out but container is running")
+        return {
+            "success": True,
+            "action": action,
+            "message": "AI Engine started (health check pending)",
+            "steps": steps,
+            "media_setup": media_setup
+        }
+        
+    except subprocess.TimeoutExpired as e:
+        add_step("timeout", "error", f"Operation timed out after {e.timeout}s")
         return {
             "success": False,
             "action": "timeout",
-            "message": "Timeout waiting for AI Engine to start (120s). Check docker-compose logs.",
-            "media_setup": media_setup
-        }
-    except FileNotFoundError as e:
-        print(f"DEBUG: FileNotFoundError: {e}")
-        return {
-            "success": False,
-            "action": "not_found",
-            "message": "docker-compose not found. Please install Docker Compose.",
+            "message": f"Operation timed out. Check container logs.",
+            "steps": steps,
             "media_setup": media_setup
         }
     except Exception as e:
-        print(f"DEBUG: Exception: {type(e).__name__}: {e}")
-        return {"success": False, "action": "error", "message": str(e), "media_setup": media_setup}
+        add_step("error", "error", str(e))
+        return {
+            "success": False,
+            "action": "error",
+            "message": str(e),
+            "steps": steps,
+            "media_setup": media_setup
+        }
 
 # ============== Local AI Server Setup ==============
 
@@ -1027,22 +1116,18 @@ async def download_selected_models(selection: ModelSelection):
             # Write to .env
             if env_updates:
                 env_path = os.path.join(PROJECT_ROOT, ".env")
-                env_content = ""
-                if os.path.exists(env_path):
-                    with open(env_path, "r") as f:
-                        env_content = f.read()
-                
+                updates_dict = {}
                 for update in env_updates:
-                    key = update.split("=")[0]
-                    # Remove existing line if present
-                    import re
-                    env_content = re.sub(f"^{key}=.*$", "", env_content, flags=re.MULTILINE)
-                
-                # Add new values
-                with open(env_path, "a") as f:
-                    f.write("\n# Model selections from wizard\n")
-                    for update in env_updates:
-                        f.write(f"{update}\n")
+                    if "=" not in update:
+                        continue
+                    k, v = update.split("=", 1)
+                    updates_dict[k.strip()] = v.strip()
+
+                upsert_env_vars(
+                    env_path,
+                    updates_dict,
+                    header="Model selections from wizard",
+                )
                 
                 _download_output.append("✅ Configuration updated")
             
@@ -1385,26 +1470,32 @@ async def switch_local_model(request: ModelSwitchRequest):
     if env_updates:
         try:
             env_path = os.path.join(PROJECT_ROOT, ".env")
-            env_content = ""
-            if os.path.exists(env_path):
-                with open(env_path, "r") as f:
-                    env_content = f.read()
-            
-            import re
+            updates_dict = {}
             for update in env_updates:
-                key = update.split("=")[0]
-                env_content = re.sub(f"^{key}=.*$", "", env_content, flags=re.MULTILINE)
-            
-            with open(env_path, "a") as f:
-                f.write("\n# Model switch from Dashboard\n")
-                for update in env_updates:
-                    f.write(f"{update}\n")
+                if "=" not in update:
+                    continue
+                k, v = update.split("=", 1)
+                updates_dict[k.strip()] = v.strip()
+
+            upsert_env_vars(
+                env_path,
+                updates_dict,
+                header="Model switch from Dashboard",
+            )
         except Exception as e:
             return {"success": False, "message": f"Failed to update .env: {e}"}
     
     # Send switch command to local AI server via WebSocket
     try:
         async with websockets.connect("ws://127.0.0.1:8765", ping_interval=None) as ws:
+            auth_token = (os.getenv("LOCAL_WS_AUTH_TOKEN", "") or "").strip()
+            if auth_token:
+                await ws.send(json.dumps({"type": "auth", "auth_token": auth_token}))
+                raw = await asyncio.wait_for(ws.recv(), timeout=5)
+                auth_data = json.loads(raw)
+                if auth_data.get("type") != "auth_response" or auth_data.get("status") != "ok":
+                    raise RuntimeError(f"Local AI auth failed: {auth_data}")
+
             await ws.send(json.dumps(switch_data))
             response = await ws.recv()
             result = json.loads(response)
@@ -1432,6 +1523,7 @@ async def switch_local_model(request: ModelSwitchRequest):
 class ApiKeyValidation(BaseModel):
     provider: str
     api_key: str
+    agent_id: Optional[str] = None  # Required for ElevenLabs Conversational AI
 
 class AsteriskConnection(BaseModel):
     host: str
@@ -1448,10 +1540,12 @@ async def validate_api_key(validation: ApiKeyValidation):
         import httpx
         
         provider = validation.provider.lower()
-        api_key = validation.api_key
+        api_key = validation.api_key.strip() if validation.api_key else ""
         
         if not api_key:
             return {"valid": False, "error": "API key is empty"}
+        
+        logger.info(f"Validating {provider} API key (length: {len(api_key)})")
         
         async with httpx.AsyncClient() as client:
             if provider == "openai":
@@ -1462,6 +1556,19 @@ async def validate_api_key(validation: ApiKeyValidation):
                 )
                 if response.status_code == 200:
                     return {"valid": True, "message": "OpenAI API key is valid"}
+                elif response.status_code == 401:
+                    return {"valid": False, "error": "Invalid API key"}
+                else:
+                    return {"valid": False, "error": f"API error: HTTP {response.status_code}"}
+
+            elif provider == "groq":
+                response = await client.get(
+                    "https://api.groq.com/openai/v1/models",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    timeout=10.0
+                )
+                if response.status_code == 200:
+                    return {"valid": True, "message": "Groq API key is valid"}
                 elif response.status_code == 401:
                     return {"valid": False, "error": "Invalid API key"}
                 else:
@@ -1504,37 +1611,73 @@ async def validate_api_key(validation: ApiKeyValidation):
                             "error": "API key valid but no Live API models available. Your API key doesn't have access to Gemini Live models (bidiGenerateContent). Try creating a new key at aistudio.google.com"
                         }
                     
-                    # Check if our preferred model is available
-                    preferred_model = "gemini-2.0-flash-exp"
-                    if preferred_model in live_models:
-                        return {
-                            "valid": True, 
-                            "message": f"Google API key is valid. Live model '{preferred_model}' is available."
-                        }
-                    else:
-                        # Use first available live model
-                        return {
-                            "valid": True, 
-                            "message": f"Google API key is valid. Available Live models: {', '.join(live_models[:3])}"
-                        }
+                    # Check if our preferred models are available (in order of preference)
+                    preferred_models = [
+                        "gemini-2.5-flash-native-audio-preview-12-2025",  # Latest native audio model
+                        "gemini-2.0-flash-live-001",  # Stable live model
+                        "gemini-2.0-flash-exp",  # Experimental
+                    ]
+                    
+                    for preferred_model in preferred_models:
+                        if preferred_model in live_models:
+                            return {
+                                "valid": True, 
+                                "message": f"Google API key is valid. Live model '{preferred_model}' is available."
+                            }
+                    
+                    # No preferred model found, but we have some live models
+                    return {
+                        "valid": True, 
+                        "message": f"Google API key is valid. Available Live models: {', '.join(live_models[:3])}"
+                    }
                 elif response.status_code in [400, 403]:
                     return {"valid": False, "error": "Invalid API key"}
                 else:
                     return {"valid": False, "error": f"API error: HTTP {response.status_code}"}
             
             elif provider == "elevenlabs":
-                # Validate ElevenLabs API key by fetching user info
-                response = await client.get(
-                    "https://api.elevenlabs.io/v1/user",
-                    headers={"xi-api-key": api_key},
-                    timeout=10.0
-                )
-                if response.status_code == 200:
-                    return {"valid": True, "message": "ElevenLabs API key is valid"}
-                elif response.status_code == 401:
-                    return {"valid": False, "error": "Invalid API key"}
+                # For ElevenLabs Conversational AI, validate using agent endpoint
+                # Agent-scoped API keys don't have user_read permission
+                agent_id = validation.agent_id
+                
+                if agent_id:
+                    # Validate by fetching agent details (works with agent-scoped keys)
+                    response = await client.get(
+                        f"https://api.elevenlabs.io/v1/convai/agents/{agent_id}",
+                        headers={"xi-api-key": api_key},
+                        timeout=10.0
+                    )
+                    logger.info(f"ElevenLabs agent API response: {response.status_code}")
+                    if response.status_code == 200:
+                        agent_data = response.json()
+                        agent_name = agent_data.get("name", "Unknown")
+                        return {"valid": True, "message": f"ElevenLabs API key valid. Agent: {agent_name}"}
+                    elif response.status_code == 401:
+                        error_detail = response.json().get("detail", {})
+                        error_msg = error_detail.get("message", "Invalid API key") if isinstance(error_detail, dict) else "Invalid API key"
+                        return {"valid": False, "error": error_msg}
+                    elif response.status_code == 404:
+                        return {"valid": False, "error": "Agent not found. Check your Agent ID."}
+                    else:
+                        return {"valid": False, "error": f"API error: HTTP {response.status_code}"}
                 else:
-                    return {"valid": False, "error": f"API error: HTTP {response.status_code}"}
+                    # Fallback: try user endpoint (for full-access keys)
+                    response = await client.get(
+                        "https://api.elevenlabs.io/v1/user",
+                        headers={"xi-api-key": api_key},
+                        timeout=10.0
+                    )
+                    if response.status_code == 200:
+                        return {"valid": True, "message": "ElevenLabs API key is valid"}
+                    elif response.status_code == 401:
+                        error_detail = response.json().get("detail", {})
+                        error_msg = error_detail.get("message", "Invalid API key") if isinstance(error_detail, dict) else "Invalid API key"
+                        # Hint about agent_id if it's a permissions issue
+                        if "missing_permissions" in str(error_detail):
+                            error_msg = "API key valid but agent-scoped. Please provide Agent ID for validation."
+                        return {"valid": False, "error": error_msg}
+                    else:
+                        return {"valid": False, "error": f"API error: HTTP {response.status_code}"}
             
             else:
                 return {"valid": False, "error": f"Unknown provider: {provider}"}
@@ -1611,6 +1754,7 @@ class SetupConfig(BaseModel):
     asterisk_scheme: str = "http"
     asterisk_app: str = "asterisk-ai-voice-agent"
     openai_key: Optional[str] = None
+    groq_key: Optional[str] = None
     deepgram_key: Optional[str] = None
     google_key: Optional[str] = None
     elevenlabs_key: Optional[str] = None
@@ -1619,6 +1763,7 @@ class SetupConfig(BaseModel):
     greeting: str
     ai_name: str
     ai_role: str
+    hybrid_llm_provider: Optional[str] = None
 
 # ... (keep existing endpoints) ...
 
@@ -1634,9 +1779,13 @@ async def save_setup_config(config: SetupConfig):
             raise HTTPException(status_code=400, detail="OpenAI API Key is required for Deepgram Think stage")
     if config.provider == "google_live" and not config.google_key:
             raise HTTPException(status_code=400, detail="Google API Key is required for Google Live provider")
-    # Local hybrid uses OpenAI for LLM, so check that too
-    if config.provider == "local_hybrid" and not config.openai_key:
-            raise HTTPException(status_code=400, detail="OpenAI API Key is required for Local Hybrid pipeline (LLM)")
+    # Local hybrid uses a cloud LLM (Groq/OpenAI) or Ollama
+    if config.provider == "local_hybrid":
+        llm_provider = (config.hybrid_llm_provider or "groq").lower()
+        if llm_provider == "openai" and not config.openai_key:
+            raise HTTPException(status_code=400, detail="OpenAI API Key is required for Local Hybrid pipeline when using OpenAI")
+        if llm_provider == "groq" and not config.groq_key:
+            raise HTTPException(status_code=400, detail="Groq API Key is required for Local Hybrid pipeline when using Groq")
     if config.provider == "elevenlabs_agent":
         if not config.elevenlabs_key:
             raise HTTPException(status_code=400, detail="ElevenLabs API Key is required for ElevenLabs Conversational provider")
@@ -1666,11 +1815,13 @@ async def save_setup_config(config: SetupConfig):
             "ASTERISK_APP_NAME": config.asterisk_app,
             "AI_NAME": config.ai_name,
             "AI_ROLE": config.ai_role,
-            "AI_GREETING": config.greeting
+            "GREETING": config.greeting,
         }
         
         if config.openai_key:
             env_updates["OPENAI_API_KEY"] = config.openai_key
+        if config.groq_key:
+            env_updates["GROQ_API_KEY"] = config.groq_key
         if config.deepgram_key:
             env_updates["DEEPGRAM_API_KEY"] = config.deepgram_key
         if config.google_key:
@@ -1682,20 +1833,7 @@ async def save_setup_config(config: SetupConfig):
         if config.cartesia_key:
             env_updates["CARTESIA_API_KEY"] = config.cartesia_key
 
-        current_env = {}
-        if os.path.exists(ENV_PATH):
-            with open(ENV_PATH, "r") as f:
-                for line in f:
-                    line = line.strip()
-                    if line and not line.startswith("#") and "=" in line:
-                        key, val = line.split("=", 1)
-                        current_env[key] = val
-        
-        current_env.update(env_updates)
-        
-        with open(ENV_PATH, "w") as f:
-            for key, val in current_env.items():
-                f.write(f"{key}={val}\n")
+        upsert_env_vars(ENV_PATH, env_updates, header="Setup Wizard")
 
         # 2. Update ai-agent.yaml - APPEND MODE
         # If provider already exists, just enable it and update greeting
@@ -1813,7 +1951,7 @@ async def save_setup_config(config: SetupConfig):
                     print(f"Error starting local_ai_server: {e}")
 
             elif config.provider == "local_hybrid":
-                # local_hybrid is a PIPELINE (Local STT + OpenAI LLM + Local TTS)
+                # local_hybrid is a PIPELINE (Local STT + Cloud/Local LLM + Local TTS)
                 yaml_config["active_pipeline"] = "local_hybrid"
                 yaml_config["default_provider"] = "local"  # Fallback provider
                 
@@ -1841,17 +1979,52 @@ async def save_setup_config(config: SetupConfig):
                 if not provider_exists("local_tts"):
                     providers["local_tts"]["ws_url"] = "${LOCAL_WS_URL:-ws://127.0.0.1:8765}"
                 
-                providers.setdefault("openai_llm", {})["enabled"] = True
-                if not provider_exists("openai_llm"):
-                    providers["openai_llm"].update({
-                        "chat_base_url": "https://api.openai.com/v1",
-                        "chat_model": "gpt-4o-mini"
-                    })
+                llm_provider = (config.hybrid_llm_provider or "groq").lower()
+                if llm_provider == "openai":
+                    providers.setdefault("openai_llm", {})["enabled"] = True
+                    if not provider_exists("openai_llm"):
+                        providers["openai_llm"].update({
+                            "api_key": "${OPENAI_API_KEY}",
+                            "chat_base_url": "https://api.openai.com/v1",
+                            "chat_model": "gpt-4o-mini",
+                            "type": "openai",
+                            "capabilities": ["llm"],
+                        })
+                elif llm_provider == "groq":
+                    providers.setdefault("groq_llm", {})["enabled"] = True
+                    if not provider_exists("groq_llm"):
+                        providers["groq_llm"].update({
+                            "api_key": "${GROQ_API_KEY}",
+                            "chat_base_url": "https://api.groq.com/openai/v1",
+                            "chat_model": "llama-3.3-70b-versatile",
+                            "tools_enabled": False,
+                            "type": "openai",
+                            "capabilities": ["llm"],
+                        })
+                elif llm_provider == "ollama":
+                    providers.setdefault("ollama_llm", {})["enabled"] = True
+                    if not provider_exists("ollama_llm"):
+                        providers["ollama_llm"].update({
+                            "base_url": "http://localhost:11434",
+                            "model": "llama3.2",
+                            "temperature": 0.7,
+                            "max_tokens": 200,
+                            "timeout_sec": 60,
+                            "tools_enabled": True,
+                            "type": "ollama",
+                            "capabilities": ["llm"],
+                        })
                 
                 # Define the pipeline
+                llm_component = "openai_llm"
+                if llm_provider == "groq":
+                    llm_component = "groq_llm"
+                elif llm_provider == "ollama":
+                    llm_component = "ollama_llm"
+
                 yaml_config.setdefault("pipelines", {})["local_hybrid"] = {
                     "stt": "local_stt",
-                    "llm": "openai_llm",
+                    "llm": llm_component,
                     "tts": "local_tts"
                 }
                 
@@ -1875,8 +2048,11 @@ async def save_setup_config(config: SetupConfig):
                 "profile": "telephony_ulaw_8k"
             }
 
-            with open(CONFIG_PATH, "w") as f:
-                yaml.dump(yaml_config, f, default_flow_style=False)
+            atomic_write_text(
+                CONFIG_PATH,
+                yaml.dump(yaml_config, default_flow_style=False, sort_keys=False),
+                mode_from_existing=True,
+            )
         
         # Config saved - engine start will be handled by completion step UI
         return {"status": "success", "provider": config.provider}
@@ -1894,11 +2070,16 @@ async def skip_setup():
     try:
         # Create minimal .env with a marker that setup was acknowledged
         if not os.path.exists(ENV_PATH):
-            with open(ENV_PATH, 'w') as f:
-                f.write("# Setup wizard skipped - configure manually\n")
-                f.write("ASTERISK_HOST=127.0.0.1\n")
-                f.write("ASTERISK_ARI_USERNAME=asterisk\n")
-                f.write("ASTERISK_ARI_PASSWORD=\n")
+            atomic_write_text(
+                ENV_PATH,
+                (
+                    "# Setup wizard skipped - configure manually\n"
+                    "ASTERISK_HOST=127.0.0.1\n"
+                    "ASTERISK_ARI_USERNAME=asterisk\n"
+                    "ASTERISK_ARI_PASSWORD=\n"
+                ),
+                mode_from_existing=True,
+            )
         
         return {"status": "success", "message": "Setup skipped successfully"}
     except Exception as e:
