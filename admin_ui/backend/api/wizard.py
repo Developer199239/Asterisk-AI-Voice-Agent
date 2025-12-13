@@ -309,7 +309,8 @@ async def start_engine():
     
     try:
         # Use --force-recreate if already running to ensure fresh start with latest config
-        cmd = ["docker", "compose", "up", "-d"]
+        # Use docker-compose (wrapper script on host) instead of docker compose plugin
+        cmd = ["docker-compose", "up", "-d"]
         
         # Explicitly remove container if it exists to avoid "Conflict" errors
         # This handles cases where the container exists but isn't managed by compose correctly
