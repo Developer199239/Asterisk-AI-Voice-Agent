@@ -51,20 +51,35 @@ for arg in "$@"; do
         --help|-h) 
             echo "AAVA Pre-flight Check"
             echo ""
-            echo "Usage: ./preflight.sh [OPTIONS]"
+            echo "Usage: sudo ./preflight.sh [OPTIONS]"
             echo ""
             echo "Options:"
-            echo "  --apply-fixes  Apply fixes automatically (may require sudo)"
+            echo "  --apply-fixes  Apply fixes automatically (requires root/sudo)"
             echo "  --help         Show this help message"
             echo ""
             echo "Exit codes:"
             echo "  0 = All checks passed"
             echo "  1 = Warnings only (can proceed)"
             echo "  2 = Failures (blocking issues)"
+            echo ""
+            echo "Note: For --apply-fixes, run as root or with sudo:"
+            echo "  sudo ./preflight.sh --apply-fixes"
             exit 0 
             ;;
     esac
 done
+
+# Check for root/sudo when --apply-fixes is used
+if [ "$APPLY_FIXES" = true ] && [ "$(id -u)" -ne 0 ]; then
+    echo -e "${RED}ERROR: --apply-fixes requires root privileges${NC}"
+    echo ""
+    echo "Please run with sudo:"
+    echo "  sudo ./preflight.sh --apply-fixes"
+    echo ""
+    echo "Or run without --apply-fixes to see issues only:"
+    echo "  ./preflight.sh"
+    exit 2
+fi
 
 # ============================================================================
 # OS Detection
@@ -96,9 +111,30 @@ detect_os() {
     # Check architecture (HARD FAIL for non-x86_64)
     ARCH=$(uname -m)
     if [ "$ARCH" != "x86_64" ]; then
-        log_fail "Unsupported architecture: $ARCH (x86_64 required - AAVA images are 64-bit only)"
+        log_fail "Unsupported architecture: $ARCH"
+        log_info "  AAVA requires x86_64 (64-bit Intel/AMD) architecture"
+        log_info "  ARM64/aarch64 support is planned for a future release"
     else
         log_ok "Architecture: $ARCH"
+    fi
+    
+    # Check for unsupported OS family with helpful instructions
+    if [ "$OS_FAMILY" = "unknown" ]; then
+        log_fail "Unsupported Linux distribution: $OS_ID"
+        log_info ""
+        log_info "  AAVA officially supports:"
+        log_info "    - Ubuntu 20.04, 22.04, 24.04"
+        log_info "    - Debian 11, 12"
+        log_info "    - CentOS 7 (including Sangoma/FreePBX Distro)"
+        log_info "    - RHEL 8, 9 / Rocky Linux / AlmaLinux"
+        log_info "    - Fedora (latest)"
+        log_info ""
+        log_info "  For other distributions, you can still run AAVA if you:"
+        log_info "    1. Install Docker manually: https://docs.docker.com/engine/install/"
+        log_info "    2. Install Docker Compose v2"
+        log_info "    3. Ensure systemd is available"
+        log_info ""
+        log_info "  Then re-run this script to verify the setup."
     fi
     
     # Check EOL status (WARNING only - we still support if Docker works)
@@ -132,17 +168,44 @@ detect_os() {
 install_docker_rhel() {
     log_info "Installing Docker for RHEL/CentOS family..."
     
+    # Detect package manager (dnf for RHEL 8+/Fedora, yum for CentOS 7/Sangoma)
+    local PKG_MGR="yum"
+    local PKG_MGR_CONFIG="yum-config-manager"
+    
+    if command -v dnf &>/dev/null; then
+        PKG_MGR="dnf"
+        # dnf uses dnf config-manager (with space, not hyphen)
+        PKG_MGR_CONFIG="dnf config-manager"
+        log_info "Using dnf package manager"
+    else
+        log_info "Using yum package manager"
+    fi
+    
     # Remove old Docker if present
-    yum remove -y docker docker-client docker-client-latest docker-common \
+    $PKG_MGR remove -y docker docker-client docker-client-latest docker-common \
         docker-latest docker-latest-logrotate docker-logrotate docker-engine 2>/dev/null
     
     # Install prerequisites
-    yum install -y yum-utils
+    if [ "$PKG_MGR" = "dnf" ]; then
+        dnf install -y dnf-plugins-core
+    else
+        yum install -y yum-utils
+    fi
+    
+    # Determine Docker repo URL based on distro
+    local DOCKER_REPO_URL=""
+    local DOCKER_REPO_VERSION=""
+    
+    # Source os-release for accurate detection
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+    fi
     
     # For Sangoma/FreePBX Distro, we need to create the repo manually
-    # because yum-config-manager uses the distro version string which Docker doesn't recognize
+    # because the distro version string which Docker doesn't recognize
     if [ "$OS_ID" = "sangoma" ] || [ -f /etc/sangoma/pbx ]; then
         log_info "Detected Sangoma/FreePBX - using CentOS 7 Docker repo"
+        DOCKER_REPO_VERSION="7"
         cat > /etc/yum.repos.d/docker-ce.repo << 'EOF'
 [docker-ce-stable]
 name=Docker CE Stable - $basearch
@@ -151,13 +214,34 @@ enabled=1
 gpgcheck=1
 gpgkey=https://download.docker.com/linux/centos/gpg
 EOF
+    elif [ "$ID" = "fedora" ]; then
+        log_info "Detected Fedora - using Fedora Docker repo"
+        $PKG_MGR_CONFIG --add-repo https://download.docker.com/linux/fedora/docker-ce.repo
+    elif [ "$ID" = "rhel" ] || [ "$ID" = "centos" ] || [ "$ID" = "rocky" ] || [ "$ID" = "almalinux" ]; then
+        # Determine version for repo URL
+        local MAJOR_VERSION="${VERSION_ID%%.*}"
+        log_info "Detected $ID $MAJOR_VERSION - using CentOS $MAJOR_VERSION Docker repo"
+        
+        if [ "$MAJOR_VERSION" -ge 8 ]; then
+            # RHEL 8+ uses dnf
+            $PKG_MGR_CONFIG --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+        else
+            # CentOS 7
+            yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+        fi
     else
-        # Standard CentOS/RHEL - use yum-config-manager
-        yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+        log_fail "Unsupported RHEL-family distro: $ID"
+        log_info "  Please install Docker manually: https://docs.docker.com/engine/install/"
+        return 1
     fi
     
     # Install Docker CE
-    yum install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+    if ! $PKG_MGR install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin; then
+        log_fail "Docker package installation failed"
+        log_info "  This may happen if Docker doesn't support your OS version"
+        log_info "  Try manual installation: https://docs.docker.com/engine/install/centos/"
+        return 1
+    fi
     
     # Start and enable Docker
     systemctl start docker
@@ -169,12 +253,53 @@ EOF
         return 0
     else
         log_fail "Docker installation failed"
+        log_info "  Check logs: journalctl -u docker"
         return 1
     fi
 }
 
 install_docker_debian() {
     log_info "Installing Docker for Debian/Ubuntu family..."
+    
+    # Determine the correct Docker repo based on actual distro
+    local DOCKER_DISTRO=""
+    local DOCKER_CODENAME=""
+    
+    # Source os-release to get ID and VERSION_CODENAME
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        case "$ID" in
+            ubuntu)
+                DOCKER_DISTRO="ubuntu"
+                DOCKER_CODENAME="${VERSION_CODENAME:-focal}"
+                ;;
+            debian)
+                DOCKER_DISTRO="debian"
+                DOCKER_CODENAME="${VERSION_CODENAME:-bullseye}"
+                ;;
+            linuxmint)
+                # Linux Mint uses Ubuntu repos - map to Ubuntu base
+                DOCKER_DISTRO="ubuntu"
+                # Mint 21.x = Ubuntu 22.04 (jammy), Mint 20.x = Ubuntu 20.04 (focal)
+                case "${VERSION_ID%%.*}" in
+                    21) DOCKER_CODENAME="jammy" ;;
+                    20) DOCKER_CODENAME="focal" ;;
+                    *) DOCKER_CODENAME="focal" ;;
+                esac
+                log_info "Linux Mint detected - using Ubuntu $DOCKER_CODENAME Docker repo"
+                ;;
+            *)
+                log_fail "Unsupported Debian-family distro: $ID"
+                log_info "  Please install Docker manually: https://docs.docker.com/engine/install/"
+                return 1
+                ;;
+        esac
+    else
+        log_fail "Cannot detect OS version - /etc/os-release not found"
+        return 1
+    fi
+    
+    log_info "Using Docker repo: $DOCKER_DISTRO ($DOCKER_CODENAME)"
     
     # Remove old Docker if present
     apt-get remove -y docker docker-engine docker.io containerd runc 2>/dev/null
@@ -183,20 +308,25 @@ install_docker_debian() {
     apt-get update
     apt-get install -y ca-certificates curl gnupg
     
-    # Add Docker's official GPG key
+    # Add Docker's official GPG key (use correct distro)
     install -m 0755 -d /etc/apt/keyrings
-    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+    curl -fsSL "https://download.docker.com/linux/${DOCKER_DISTRO}/gpg" | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
     chmod a+r /etc/apt/keyrings/docker.gpg
     
-    # Add Docker repository
+    # Add Docker repository (use correct distro and codename)
     echo \
-      "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
-      $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+      "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/${DOCKER_DISTRO} \
+      ${DOCKER_CODENAME} stable" | \
       tee /etc/apt/sources.list.d/docker.list > /dev/null
     
     # Install Docker CE
     apt-get update
-    apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+    if ! apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin; then
+        log_fail "Docker package installation failed"
+        log_info "  This may happen if Docker doesn't support your OS version"
+        log_info "  Try manual installation: https://docs.docker.com/engine/install/${DOCKER_DISTRO}/"
+        return 1
+    fi
     
     # Start and enable Docker
     systemctl start docker
@@ -208,6 +338,7 @@ install_docker_debian() {
         return 0
     else
         log_fail "Docker installation failed"
+        log_info "  Check logs: journalctl -u docker"
         return 1
     fi
 }
@@ -382,7 +513,8 @@ docker compose "$@"' > /usr/local/bin/docker-compose
 # Directory Setup
 # ============================================================================
 check_directories() {
-    MEDIA_DIR="${MEDIA_DIR:-/mnt/asterisk_media/ai-generated}"
+    # Use AST_MEDIA_DIR (matches .env.example) with repo-local default (matches docker-compose.yml)
+    MEDIA_DIR="${AST_MEDIA_DIR:-$SCRIPT_DIR/asterisk_media/ai-generated}"
     
     if [ -d "$MEDIA_DIR" ] && [ -w "$MEDIA_DIR" ]; then
         log_ok "Media directory: $MEDIA_DIR"
@@ -400,8 +532,8 @@ check_directories() {
         FIX_CMDS+=("mkdir -p $MEDIA_DIR")
         log_info "  Rootless tip: Use volume with :Z suffix for SELinux compatibility"
     else
-        FIX_CMDS+=("sudo mkdir -p $MEDIA_DIR")
-        FIX_CMDS+=("sudo chown -R \$(id -u):\$(id -g) $MEDIA_DIR")
+        FIX_CMDS+=("mkdir -p $MEDIA_DIR")
+        FIX_CMDS+=("chown -R \$(id -u):\$(id -g) $MEDIA_DIR")
     fi
 }
 
@@ -413,13 +545,19 @@ check_selinux() {
     command -v getenforce &>/dev/null || return 0
     
     SELINUX_MODE=$(getenforce 2>/dev/null || echo "Disabled")
-    MEDIA_DIR="${MEDIA_DIR:-/mnt/asterisk_media/ai-generated}"
+    # Use consistent AST_MEDIA_DIR with repo-local default
+    MEDIA_DIR="${AST_MEDIA_DIR:-$SCRIPT_DIR/asterisk_media/ai-generated}"
     
     if [ "$SELINUX_MODE" = "Enforcing" ]; then
         # Check if semanage is available
         if ! command -v semanage &>/dev/null; then
             log_warn "SELinux: Enforcing but semanage not installed"
-            FIX_CMDS+=("sudo dnf install -y policycoreutils-python-utils")
+            # Use dnf or yum based on availability
+            if command -v dnf &>/dev/null; then
+                FIX_CMDS+=("dnf install -y policycoreutils-python-utils")
+            else
+                FIX_CMDS+=("yum install -y policycoreutils-python-utils")
+            fi
         fi
         
         log_warn "SELinux: Enforcing (context fix may be needed for media directory)"
