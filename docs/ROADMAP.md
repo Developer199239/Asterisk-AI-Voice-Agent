@@ -541,6 +541,15 @@ Keep this roadmap updated after each milestone to help any collaborator—or fut
 - 🎯 Increase CI coverage threshold to 30% then 40% (currently 27%)
 - ⏳ Automated regression test suite (foundation in place)
 
+**Admin UI Adoption Readiness**:
+
+- 🔥 AAVA-130: Fix JWT secret load-order vulnerability; tighten CORS defaults
+- 🔥 AAVA-130: Fix config export crash (`CONFIG_PATH.exists()`)
+- 🔥 AAVA-130: Atomic writes for remaining hotspots (`wizard.py`, `local_ai.py`, `system.py`)
+- 🔥 AAVA-130: Lightweight config validation endpoint (syntax + basic schema/footguns)
+- 🔄 Restart orchestration improvements (restart vs recreate, readiness verification via `/ready`)
+- 🔄 ARI scheme/port alignment across wizard → `.env` → engine runtime
+
 **Additional Tool Categories**:
 
 - ✅ Queue management tools - Transfer to queue (AAVA-63) - IMPLEMENTED
