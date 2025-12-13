@@ -362,6 +362,8 @@ async def reload_ai_engine():
     """
     Hot-reload AI Engine configuration without restarting the container.
     This reloads ai-agent.yaml and .env changes.
+    
+    Returns restart_required=True if new providers need to be added (hot-reload can't add new providers).
     """
     try:
         import httpx
@@ -373,10 +375,24 @@ async def reload_ai_engine():
             
             if resp.status_code == 200:
                 data = resp.json()
+                changes = data.get("changes", [])
+                
+                # Check if any change requires a restart (new providers, removed providers)
+                restart_required = any("restart needed" in str(c).lower() for c in changes)
+                
+                if restart_required:
+                    return {
+                        "status": "partial",
+                        "message": "Config updated but new providers require a restart to load",
+                        "changes": changes,
+                        "restart_required": True
+                    }
+                
                 return {
                     "status": "success",
                     "message": data.get("message", "Configuration reloaded"),
-                    "reloaded": data.get("reloaded", [])
+                    "changes": changes,
+                    "restart_required": False
                 }
             else:
                 raise HTTPException(

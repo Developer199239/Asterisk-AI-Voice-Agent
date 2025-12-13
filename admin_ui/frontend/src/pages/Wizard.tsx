@@ -1757,8 +1757,18 @@ const Wizard = () => {
                                                 onClick={async () => {
                                                     setReloadingEngine(true);
                                                     try {
-                                                        await axios.post('/api/system/containers/ai_engine/reload');
-                                                        showToast('AI Engine configuration reloaded!', 'success');
+                                                        const res = await axios.post('/api/system/containers/ai_engine/reload');
+                                                        if (res.data.restart_required) {
+                                                            if (confirm('New provider detected. A full restart is needed. Restart now?')) {
+                                                                showToast('Restarting AI Engine...', 'success');
+                                                                await axios.post('/api/system/containers/ai_engine/restart');
+                                                                showToast('AI Engine restarted!', 'success');
+                                                            } else {
+                                                                showToast('Config saved. Restart later to apply.', 'success');
+                                                            }
+                                                        } else {
+                                                            showToast('AI Engine configuration reloaded!', 'success');
+                                                        }
                                                     } catch (err: any) {
                                                         showToast(err.response?.data?.detail || 'Failed to reload', 'error');
                                                     } finally {
@@ -1769,7 +1779,7 @@ const Wizard = () => {
                                                 className="flex items-center gap-1 px-3 py-1.5 text-sm bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50"
                                             >
                                                 <RefreshCw className={`w-4 h-4 ${reloadingEngine ? 'animate-spin' : ''}`} />
-                                                {reloadingEngine ? 'Reloading...' : 'Reload Config'}
+                                                {reloadingEngine ? 'Applying...' : 'Apply Changes'}
                                             </button>
                                         </div>
                                     </div>
@@ -1913,8 +1923,19 @@ exten => s,1,NoOp(AI Agent - Local Full)
                                         onClick={async () => {
                                             setReloadingEngine(true);
                                             try {
-                                                await axios.post('/api/system/containers/ai_engine/reload');
-                                                showToast('AI Engine configuration reloaded successfully!', 'success');
+                                                const res = await axios.post('/api/system/containers/ai_engine/reload');
+                                                if (res.data.restart_required) {
+                                                    // New provider needs full restart
+                                                    if (confirm('New provider detected. A full restart is needed to load it. Restart now?')) {
+                                                        showToast('Restarting AI Engine...', 'success');
+                                                        await axios.post('/api/system/containers/ai_engine/restart');
+                                                        showToast('AI Engine restarted! New provider is now available.', 'success');
+                                                    } else {
+                                                        showToast('Config saved. Restart AI Engine later to use new provider.', 'success');
+                                                    }
+                                                } else {
+                                                    showToast('AI Engine configuration reloaded successfully!', 'success');
+                                                }
                                             } catch (err: any) {
                                                 showToast(err.response?.data?.detail || 'Failed to reload', 'error');
                                             } finally {
@@ -1925,11 +1946,11 @@ exten => s,1,NoOp(AI Agent - Local Full)
                                         className="flex items-center gap-1 px-3 py-1.5 text-sm bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50"
                                     >
                                         <RefreshCw className={`w-4 h-4 ${reloadingEngine ? 'animate-spin' : ''}`} />
-                                        {reloadingEngine ? 'Reloading...' : 'Reload Config'}
+                                        {reloadingEngine ? 'Applying...' : 'Apply Changes'}
                                     </button>
                                 </div>
                                 <p className="text-xs text-green-600 dark:text-green-500 mt-2">
-                                    Click "Reload Config" to apply your new provider settings without restarting.
+                                    Click "Apply Changes" to activate your new provider settings.
                                 </p>
                             </div>
                         )}
