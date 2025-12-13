@@ -139,8 +139,22 @@ install_docker_rhel() {
     # Install prerequisites
     yum install -y yum-utils
     
-    # Add Docker repo
-    yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+    # For Sangoma/FreePBX Distro, we need to create the repo manually
+    # because yum-config-manager uses the distro version string which Docker doesn't recognize
+    if [ "$OS_ID" = "sangoma" ] || [ -f /etc/sangoma/pbx ]; then
+        log_info "Detected Sangoma/FreePBX - using CentOS 7 Docker repo"
+        cat > /etc/yum.repos.d/docker-ce.repo << 'EOF'
+[docker-ce-stable]
+name=Docker CE Stable - $basearch
+baseurl=https://download.docker.com/linux/centos/7/$basearch/stable
+enabled=1
+gpgcheck=1
+gpgkey=https://download.docker.com/linux/centos/gpg
+EOF
+    else
+        # Standard CentOS/RHEL - use yum-config-manager
+        yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+    fi
     
     # Install Docker CE
     yum install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
