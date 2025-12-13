@@ -1536,10 +1536,12 @@ async def validate_api_key(validation: ApiKeyValidation):
         import httpx
         
         provider = validation.provider.lower()
-        api_key = validation.api_key
+        api_key = validation.api_key.strip() if validation.api_key else ""
         
         if not api_key:
             return {"valid": False, "error": "API key is empty"}
+        
+        logger.info(f"Validating {provider} API key (length: {len(api_key)})")
         
         async with httpx.AsyncClient() as client:
             if provider == "openai":
@@ -1636,10 +1638,16 @@ async def validate_api_key(validation: ApiKeyValidation):
                     headers={"xi-api-key": api_key},
                     timeout=10.0
                 )
+                logger.info(f"ElevenLabs API response: {response.status_code}")
                 if response.status_code == 200:
-                    return {"valid": True, "message": "ElevenLabs API key is valid"}
+                    user_data = response.json()
+                    subscription = user_data.get("subscription", {}).get("tier", "unknown")
+                    return {"valid": True, "message": f"ElevenLabs API key is valid (tier: {subscription})"}
                 elif response.status_code == 401:
-                    return {"valid": False, "error": "Invalid API key"}
+                    error_detail = response.json().get("detail", {})
+                    error_msg = error_detail.get("message", "Invalid API key") if isinstance(error_detail, dict) else "Invalid API key"
+                    logger.warning(f"ElevenLabs validation failed: {error_msg}")
+                    return {"valid": False, "error": error_msg}
                 else:
                     return {"valid": False, "error": f"API error: HTTP {response.status_code}"}
             
