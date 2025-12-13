@@ -348,7 +348,39 @@ async def start_engine(action: str = "start"):
                 }
             add_step("rebuild", "complete", "Image rebuilt successfully")
         
-        # Step 4: Start/restart container using docker compose
+        # Step 4: Check if image exists, build if needed
+        image_name = "asterisk-ai-voice-agent-ai-engine"
+        image_exists = False
+        try:
+            client.images.get(image_name)
+            image_exists = True
+            add_step("check_image", "complete", "AI Engine image found")
+        except docker.errors.ImageNotFound:
+            add_step("check_image", "complete", "AI Engine image not found - will build")
+        
+        # Build image if it doesn't exist
+        if not image_exists:
+            add_step("build", "running", "Building AI Engine image (this may take 1-2 minutes)...")
+            build_result = subprocess.run(
+                ["docker", "compose", "build", "ai-engine"],
+                cwd=PROJECT_ROOT,
+                capture_output=True, text=True, timeout=300  # 5 min timeout for build
+            )
+            if build_result.returncode != 0:
+                error_msg = build_result.stderr or build_result.stdout or "Build failed"
+                add_step("build", "error", error_msg[:500])
+                return {
+                    "success": False,
+                    "action": "error",
+                    "message": f"Failed to build AI Engine image: {error_msg[:200]}",
+                    "steps": steps,
+                    "stdout": build_result.stdout,
+                    "stderr": build_result.stderr,
+                    "media_setup": media_setup
+                }
+            add_step("build", "complete", "Image built successfully")
+        
+        # Step 5: Start/restart container using docker compose
         if action == "restart" and container_running:
             add_step("restart", "running", "Restarting AI Engine...")
             result = subprocess.run(
@@ -357,7 +389,7 @@ async def start_engine(action: str = "start"):
                 capture_output=True, text=True, timeout=60
             )
         else:
-            add_step("start", "running", "Starting AI Engine...")
+            add_step("start", "running", "Starting AI Engine container...")
             # Use up -d with --force-recreate if container exists
             cmd = ["docker", "compose", "up", "-d"]
             if container_exists:
@@ -367,7 +399,7 @@ async def start_engine(action: str = "start"):
             result = subprocess.run(
                 cmd,
                 cwd=PROJECT_ROOT,
-                capture_output=True, text=True, timeout=120
+                capture_output=True, text=True, timeout=60  # Container start should be quick after build
             )
         
         if result.returncode != 0:
