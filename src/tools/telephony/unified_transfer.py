@@ -83,6 +83,50 @@ class UnifiedTransferTool(Tool):
         
         destinations = config.get('destinations', {})
         
+        # Fuzzy matching for common destination patterns
+        # Maps generic terms to configured destination keys
+        if destination and destination not in destinations:
+            dest_lower = destination.lower().strip()
+            matched = None
+            
+            # Try exact match first (case-insensitive)
+            for key in destinations:
+                if key.lower() == dest_lower:
+                    matched = key
+                    break
+            
+            # Try prefix/contains matching
+            if not matched:
+                for key in destinations:
+                    key_lower = key.lower()
+                    # "sales" matches "sales_agent", "sales_team", "sales_queue"
+                    if key_lower.startswith(dest_lower) or dest_lower in key_lower:
+                        matched = key
+                        logger.info("Fuzzy matched destination", 
+                                   original=destination, matched=matched)
+                        break
+            
+            # Try common aliases
+            if not matched:
+                alias_map = {
+                    'sales': 'sales_team',
+                    'support': 'support_team', 
+                    'live agent': 'sales_agent',
+                    'live person': 'sales_agent',
+                    'agent': 'sales_agent',
+                    'human': 'sales_agent',
+                    'person': 'sales_agent',
+                    'representative': 'support_agent',
+                    'rep': 'support_agent',
+                }
+                if dest_lower in alias_map and alias_map[dest_lower] in destinations:
+                    matched = alias_map[dest_lower]
+                    logger.info("Alias matched destination",
+                               original=destination, matched=matched)
+            
+            if matched:
+                destination = matched
+        
         # Validate destination exists
         if destination not in destinations:
             logger.error("Invalid destination", destination=destination, 
