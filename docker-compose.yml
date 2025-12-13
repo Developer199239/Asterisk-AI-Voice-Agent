@@ -156,8 +156,8 @@ services:
     volumes:
       - ./:/app/project
       - /var/run/docker.sock:/var/run/docker.sock
-      - /usr/bin/docker:/usr/bin/docker:ro
-      - /usr/local/bin/docker-compose:/usr/local/bin/docker-compose:ro
+      # The admin-ui image installs Docker CLI + Compose plugin internally.
+      # Optional fallback (host binaries): use `docker compose -f docker-compose.yml -f docker-compose.admin-ui-host-binaries.yml up -d admin-ui`
       - /etc/os-release:/host/etc/os-release:ro
     environment:
       - PROJECT_ROOT=/app/project

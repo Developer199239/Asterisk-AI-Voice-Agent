@@ -27,10 +27,10 @@ The Admin UI provides a modern web interface for managing your Asterisk AI Voice
 
 ```bash
 # From your project root (runs in background)
-docker-compose up -d admin-ui --build
+docker compose up -d --build admin-ui
 
 # View logs if needed
-docker-compose logs -f admin-ui
+docker compose logs -f admin-ui
 ```
 
 That's it! The container will:
@@ -228,7 +228,7 @@ openssl rand -hex 32
 echo "JWT_SECRET=your_generated_secret_here" >> .env
 
 # Restart admin-ui
-docker-compose restart admin-ui
+docker compose restart admin-ui
 # OR for standalone:
 kill $(cat admin_ui.pid) && nohup python main.py > admin_ui.log 2>&1 &
 ```
@@ -250,7 +250,7 @@ kill $(cat admin_ui.pid) && nohup python main.py > admin_ui.log 2>&1 &
 rm config/users.json
 
 # Restart admin-ui
-docker-compose restart admin-ui
+docker compose restart admin-ui
 ```
 
 ---
@@ -360,7 +360,7 @@ If you've been using `install.sh` and `agent quickstart`, the Admin UI works alo
 
 2. **Start the Admin UI**:
    ```bash
-   docker-compose up -d admin-ui
+   docker compose up -d admin-ui
    ```
 
 3. **Access the UI**:
@@ -511,7 +511,7 @@ docker logs admin_ui
 
 **Rebuild if needed**:
 ```bash
-docker-compose up -d --build admin-ui
+docker compose up -d --build admin-ui
 ```
 
 ### Login Not Working
@@ -523,13 +523,13 @@ docker-compose up -d --build admin-ui
 **Reset to defaults**:
 ```bash
 # Stop container
-docker-compose stop admin-ui
+docker compose stop admin-ui
 
 # Delete users file
 rm config/users.json
 
 # Start container (recreates default user)
-docker-compose start admin-ui
+docker compose start admin-ui
 ```
 
 ### 401 Unauthorized Errors
@@ -565,7 +565,7 @@ echo $PROJECT_ROOT
 
 **View detailed logs**:
 ```bash
-docker-compose logs admin-ui
+docker compose logs admin-ui
 ```
 
 **Common issues**:
@@ -575,8 +575,8 @@ docker-compose logs admin-ui
 
 **Force rebuild**:
 ```bash
-docker-compose down
-docker-compose up -d --build admin-ui
+docker compose down
+docker compose up -d --build admin-ui
 ```
 
 ### Page Not Loading
@@ -624,7 +624,7 @@ admin-ui:
 
 Then restart:
 ```bash
-docker-compose up -d admin-ui
+docker compose up -d admin-ui
 ```
 
 ---
@@ -703,7 +703,7 @@ cat admin_ui.log
 git pull origin develop
 
 # Rebuild and restart
-docker-compose up -d --build admin-ui
+docker compose up -d --build admin-ui
 ```
 
 **Standalone deployment**:
@@ -781,38 +781,38 @@ Coming in future releases:
 
 ```bash
 # Start Admin UI (Docker)
-docker-compose up -d admin-ui
+docker compose up -d admin-ui
 
 # Stop Admin UI
-docker-compose stop admin-ui
+docker compose stop admin-ui
 
 # View logs
 docker logs admin_ui -f
 
 # Restart after changes
-docker-compose restart admin-ui
+docker compose restart admin-ui
 
 # Rebuild from scratch
-docker-compose up -d --build admin-ui
+docker compose up -d --build admin-ui
 
 # Access UI
-open http://localhost:3003
+# Browse to: http://localhost:3003
 ```
 
 ### Emergency Recovery
 
 ```bash
 # Reset to admin/admin
-rm config/users.json && docker-compose restart admin-ui
+rm config/users.json && docker compose restart admin-ui
 
 # Restore configuration
 cp config/ai-agent.yaml.backup config/ai-agent.yaml
 cp .env.backup .env
-docker-compose restart ai-engine
+docker compose restart ai-engine
 
 # Full restart
-docker-compose down
-docker-compose up -d
+docker compose down
+docker compose up -d
 ```
 
 ---

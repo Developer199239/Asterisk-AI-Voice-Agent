@@ -2,7 +2,7 @@
 
 This document explains every major option in `config/ai-agent.yaml`, the precedence model for greeting/persona, and the impact of fine‑tuning parameters across AudioSocket/ExternalMedia, VAD, Barge‑In, Streaming, and Providers.
 
-## Configuration Architecture (v4.4)
+## Configuration Architecture (v4.5)
 
 v4.0 introduces a **modular pipeline architecture** alongside monolithic provider support:
 
@@ -19,9 +19,11 @@ v4.0 introduces a **modular pipeline architecture** alongside monolithic provide
 - **Best for**: Flexibility, privacy (local audio processing), cost control
 
 ### Golden Baselines
-See the 3 validated configurations in `config/`:
+See the 5 validated configurations in `config/`:
 - `ai-agent.golden-openai.yaml` - OpenAI Realtime (monolithic, fastest)
 - `ai-agent.golden-deepgram.yaml` - Deepgram Voice Agent (monolithic, enterprise)
+- `ai-agent.golden-google-live.yaml` - Google Live (monolithic, lowest latency)
+- `ai-agent.golden-elevenlabs.yaml` - ElevenLabs Agent (monolithic, premium voice)
 - `ai-agent.golden-local-hybrid.yaml` - Local Hybrid (pipeline, privacy-focused)
 
 For comprehensive inline documentation, refer to the golden baseline YAML files directly.
