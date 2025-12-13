@@ -593,15 +593,18 @@ async def get_directory_health():
 async def fix_directory_issues():
     """
     Attempt to fix directory permission and symlink issues.
+    Note: Symlink creation requires host access - use preflight.sh for that.
     """
     import subprocess
     
     project_root = os.getenv("PROJECT_ROOT", "/app/project")
     host_media_dir = os.path.join(project_root, "asterisk_media", "ai-generated")
     asterisk_sounds_link = "/var/lib/asterisk/sounds/ai-generated"
+    in_docker = os.path.exists("/.dockerenv") or os.getenv("DOCKER_CONTAINER", "")
     
     fixes_applied = []
     errors = []
+    manual_steps = []
     
     # Fix 1: Create directory if missing
     try:
@@ -619,36 +622,44 @@ async def fix_directory_issues():
     except Exception as e:
         errors.append(f"Failed to set permissions: {str(e)}")
     
-    # Fix 3: Create/fix symlink
-    try:
-        # Remove existing symlink or file
-        if os.path.islink(asterisk_sounds_link):
-            os.unlink(asterisk_sounds_link)
-            fixes_applied.append(f"Removed old symlink: {asterisk_sounds_link}")
-        elif os.path.exists(asterisk_sounds_link):
-            errors.append(f"Cannot fix: {asterisk_sounds_link} exists and is not a symlink")
-        
-        # Create new symlink
-        if not os.path.exists(asterisk_sounds_link):
-            os.symlink(host_media_dir, asterisk_sounds_link)
-            fixes_applied.append(f"Created symlink: {asterisk_sounds_link} → {host_media_dir}")
-    except PermissionError:
-        # Try with sudo
+    # Fix 3: Symlink - can only be done from host, not container
+    if in_docker:
+        # Check if symlink already exists on host via mounted path
+        # The symlink is on the host at /var/lib/asterisk/sounds which isn't mounted
+        manual_steps.append(
+            f"Run on host: sudo ln -sf /mnt/asterisk_media/ai-generated {asterisk_sounds_link}"
+        )
+        manual_steps.append(
+            f"Or run: ./preflight.sh --apply-fixes"
+        )
+    else:
+        # Running on host - can create symlink directly
         try:
-            result = subprocess.run(
-                ["sudo", "ln", "-sf", host_media_dir, asterisk_sounds_link],
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-            if result.returncode == 0:
-                fixes_applied.append(f"Created symlink with sudo: {asterisk_sounds_link} → {host_media_dir}")
-            else:
-                errors.append(f"Failed to create symlink with sudo: {result.stderr}")
+            if os.path.islink(asterisk_sounds_link):
+                os.unlink(asterisk_sounds_link)
+                fixes_applied.append(f"Removed old symlink: {asterisk_sounds_link}")
+            elif os.path.exists(asterisk_sounds_link):
+                errors.append(f"Cannot fix: {asterisk_sounds_link} exists and is not a symlink")
+            
+            if not os.path.exists(asterisk_sounds_link):
+                os.symlink(host_media_dir, asterisk_sounds_link)
+                fixes_applied.append(f"Created symlink: {asterisk_sounds_link} → {host_media_dir}")
+        except PermissionError:
+            try:
+                result = subprocess.run(
+                    ["sudo", "ln", "-sf", host_media_dir, asterisk_sounds_link],
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+                if result.returncode == 0:
+                    fixes_applied.append(f"Created symlink with sudo: {asterisk_sounds_link} → {host_media_dir}")
+                else:
+                    errors.append(f"Failed to create symlink with sudo: {result.stderr}")
+            except Exception as e:
+                errors.append(f"Failed to create symlink: {str(e)}")
         except Exception as e:
-            errors.append(f"Failed to create symlink: {str(e)}")
-    except Exception as e:
-        errors.append(f"Failed to manage symlink: {str(e)}")
+            errors.append(f"Failed to manage symlink: {str(e)}")
     
     # Fix 4: Update .env if needed
     env_file = os.path.join(project_root, ".env")
@@ -669,6 +680,7 @@ async def fix_directory_issues():
         "success": len(errors) == 0,
         "fixes_applied": fixes_applied,
         "errors": errors,
+        "manual_steps": manual_steps if manual_steps else None,
         "restart_required": any("restart" in f.lower() for f in fixes_applied)
     }
 
