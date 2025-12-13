@@ -1703,7 +1703,7 @@ const Wizard = () => {
                                             {startingEngine ? (
                                                 <>
                                                     <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                                                    Starting AI Engine...
+                                                    Building & Starting AI Engine...
                                                 </>
                                             ) : (
                                                 <>
@@ -1713,7 +1713,19 @@ const Wizard = () => {
                                             )}
                                         </button>
                                         
-                                        {/* Progress Steps */}
+                                        {/* Progress Steps - show during build or after completion */}
+                                        {startingEngine && engineProgress.steps.length === 0 && (
+                                            <div className="mt-4 space-y-2 text-sm text-muted-foreground">
+                                                <div className="flex items-center">
+                                                    <Loader2 className="w-4 h-4 mr-2 animate-spin text-blue-500" />
+                                                    <span>Checking Docker environment...</span>
+                                                </div>
+                                                <div className="flex items-center">
+                                                    <Loader2 className="w-4 h-4 mr-2 animate-spin text-blue-500" />
+                                                    <span>Building AI Engine image (this may take 1-2 minutes)...</span>
+                                                </div>
+                                            </div>
+                                        )}
                                         {engineProgress.steps.length > 0 && (
                                             <div className="mt-4 space-y-2">
                                                 {engineProgress.steps.map((step, idx) => (
@@ -1827,7 +1839,7 @@ exten => s,1,NoOp(AI Agent - Local Full)
                                     {startingEngine ? (
                                         <>
                                             <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                                            Starting...
+                                            Building & Starting AI Engine...
                                         </>
                                     ) : (
                                         <>
@@ -1837,7 +1849,19 @@ exten => s,1,NoOp(AI Agent - Local Full)
                                     )}
                                 </button>
                                 
-                                {/* Progress Steps */}
+                                {/* Progress Steps - show during build or after completion */}
+                                {startingEngine && engineProgress.steps.length === 0 && (
+                                    <div className="mt-4 space-y-2 text-sm text-muted-foreground">
+                                        <div className="flex items-center">
+                                            <Loader2 className="w-4 h-4 mr-2 animate-spin text-blue-500" />
+                                            <span>Checking Docker environment...</span>
+                                        </div>
+                                        <div className="flex items-center">
+                                            <Loader2 className="w-4 h-4 mr-2 animate-spin text-blue-500" />
+                                            <span>Building AI Engine image (this may take 1-2 minutes)...</span>
+                                        </div>
+                                    </div>
+                                )}
                                 {engineProgress.steps.length > 0 && (
                                     <div className="mt-4 space-y-2">
                                         {engineProgress.steps.map((step, idx) => (

@@ -18,6 +18,7 @@
 
 services:
   ai-engine:
+    image: asterisk-ai-voice-agent-ai-engine:latest
     build:
       context: .
       dockerfile: Dockerfile
@@ -47,6 +48,7 @@ services:
     restart: unless-stopped
 
   local-ai-server:
+    image: asterisk-ai-voice-agent-local-ai-server:latest
     build:
       context: ./local_ai_server
       dockerfile: Dockerfile
@@ -145,6 +147,7 @@ services:
       start_period: 120s
 
   admin-ui:
+    image: asterisk-ai-voice-agent-admin-ui:latest
     build:
       context: ./admin_ui
       dockerfile: Dockerfile
