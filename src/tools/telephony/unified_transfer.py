@@ -69,7 +69,8 @@ class UnifiedTransferTool(Tool):
         Returns:
             Dict with status and message
         """
-        destination = parameters.get('destination')
+        # Support both 'destination' (canonical) and 'target' (ElevenLabs uses this)
+        destination = parameters.get('destination') or parameters.get('target')
         
         # Get destinations from config via context
         config = context.get_config_value("tools.transfer")
