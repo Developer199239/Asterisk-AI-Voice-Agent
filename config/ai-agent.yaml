@@ -137,8 +137,8 @@ contexts:
       \ detection automatically\n- Transport: ExternalMedia RTP (UDP, low latency)\n\
       - Audio format: \u03BC-law @ 8kHz (telephony), resampled to 16kHz for Gemini\n\
       - Best for: Most natural conversations, ultra-low latency, modern deployments\n\
-      - API Key needed: GOOGLE_API_KEY only\n- Model: gemini-2.0-flash-live\
-      \ (optimized for real-time voice)\n\nTECHNICAL DETAILS YOU CAN EXPLAIN:\n- How\
+      - API Key needed: GOOGLE_API_KEY only\n- Model: gemini-2.5-flash-native-audio-preview-12-2025\
+      \ (native audio model for Live API)\n\nTECHNICAL DETAILS YOU CAN EXPLAIN:\n- How\
       \ Google Gemini Live provides native audio understanding (not just transcription)\n\
       - Why continuous streaming mode avoids latency from buffering/bursting\n- Server-side\
       \ VAD benefits: No client VAD needed, natural turn-taking\n- Audio resampling:\
@@ -432,7 +432,7 @@ providers:
     input_gain_target_rms: 0
     input_sample_rate_hz: 8000
     llm_max_output_tokens: 8192
-    llm_model: gemini-2.0-flash-live
+    llm_model: gemini-2.5-flash-native-audio-preview-12-2025
     llm_temperature: 0.8
     llm_top_k: 40
     llm_top_p: 0.95

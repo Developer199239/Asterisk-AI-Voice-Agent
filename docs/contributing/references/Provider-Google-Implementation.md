@@ -23,10 +23,10 @@ Google AI support includes two modes:
 ### Configuration
 
 ```yaml
-provider_name: google
-google:
+provider_name: google_live
+google_live:
   api_key: ${GOOGLE_API_KEY}
-  model: gemini-2.0-flash-exp
+  llm_model: gemini-2.5-flash-native-audio-preview-12-2025
   voice:
     name: Puck
   generation_config:
@@ -99,9 +99,9 @@ Google Live has built-in turn detection:
 
 2. **Model Not Available**:
    ```
-   google.api_core.exceptions.NotFound: Model not found
+   models/gemini-X is not found for API version v1beta, or is not supported for bidiGenerateContent
    ```
-   Fix: Use `gemini-2.0-flash-exp` (available in limited preview)
+   Fix: Use `gemini-2.5-flash-native-audio-preview-12-2025` (latest native audio model for Live API)
 
 3. **Rate Limiting**:
    ```
@@ -246,7 +246,7 @@ logging:
 
 **Google Live**:
 - Check API key validity
-- Verify model availability (`gemini-2.0-flash-exp`)
+- Verify model availability (`gemini-2.5-flash-native-audio-preview-12-2025`)
 - Monitor session state transitions
 - Check audio format (PCM16@16kHz recommended)
 
@@ -269,7 +269,7 @@ logging:
 **Errors**:
 ```
 [error] Google API error: UNAUTHENTICATED
-[error] Model not found: gemini-2.0-flash-exp
+[error] Model not found: gemini-2.5-flash-native-audio-preview-12-2025
 [error] Quota exceeded for project
 ```
 
