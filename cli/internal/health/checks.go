@@ -389,13 +389,13 @@ func (c *Checker) checkLogs() Check {
 	
 	if errorCount > 10 {
 		return Check{
-			Name:    "Logs",
-			Status:  StatusFail,
-			Message: fmt.Sprintf("%d errors in last 100 lines", errorCount),
-			Details: "Check logs: docker logs ai-engine",
-			Remediation: "Run: agent troubleshoot",
+				Name:    "Logs",
+				Status:  StatusFail,
+				Message: fmt.Sprintf("%d errors in last 100 lines", errorCount),
+				Details: "Check logs: docker logs ai_engine",
+				Remediation: "Run: agent troubleshoot",
+			}
 		}
-	}
 	
 	if errorCount > 0 || warnCount > 5 {
 		return Check{

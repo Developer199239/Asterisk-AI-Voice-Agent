@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AlertCircle, ArrowRight, Loader2, Cloud, Server, Shield, Zap, SkipForward, CheckCircle, CheckCircle2, XCircle, Terminal, Copy, HardDrive, Play, RefreshCw } from 'lucide-react';
+import { AlertCircle, ArrowRight, Loader2, Cloud, Server, Shield, Zap, SkipForward, CheckCircle, CheckCircle2, XCircle, Terminal, Copy, HardDrive, Play, RefreshCw, Info } from 'lucide-react';
 import axios from 'axios';
 
 interface SetupConfig {
@@ -1515,31 +1515,68 @@ const Wizard = () => {
                                 Test Connection
                             </button>
                         </div>
-                        <div className="border-t border-border my-4 pt-4"></div>
+                        <div className="border-t border-border my-4 pt-4">
+                            <div className="flex items-center gap-2 mb-3">
+                                <span className="text-sm font-semibold">Default Context Settings</span>
+                                <div className="group relative">
+                                    <Info className="w-4 h-4 text-muted-foreground cursor-help" />
+                                    <div className="absolute left-0 bottom-full mb-2 w-72 p-2 bg-popover text-popover-foreground text-xs rounded-md shadow-lg border border-border opacity-0 group-hover:opacity-100 transition-opacity z-50 pointer-events-none">
+                                        These settings become the default when no <code className="bg-muted px-1 rounded">AI_CONTEXT</code> variable is passed from the Asterisk dialplan. You can create additional contexts with different personas in the Contexts page.
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                         <div className="space-y-2">
-                            <label className="text-sm font-medium">AI Name</label>
+                            <div className="flex items-center gap-2">
+                                <label className="text-sm font-medium">AI Name</label>
+                                <div className="group relative">
+                                    <Info className="w-3 h-3 text-muted-foreground cursor-help" />
+                                    <div className="absolute left-0 bottom-full mb-2 w-64 p-2 bg-popover text-popover-foreground text-xs rounded-md shadow-lg border border-border opacity-0 group-hover:opacity-100 transition-opacity z-50 pointer-events-none">
+                                        The name your AI agent will use to identify itself to callers.
+                                    </div>
+                                </div>
+                            </div>
                             <input
                                 type="text"
                                 className="w-full p-2 rounded-md border border-input bg-background"
                                 value={config.ai_name}
                                 onChange={e => setConfig({ ...config, ai_name: e.target.value })}
+                                placeholder="e.g., Sarah, Alex, Support Agent"
                             />
                         </div>
                         <div className="space-y-2">
-                            <label className="text-sm font-medium">AI Role</label>
+                            <div className="flex items-center gap-2">
+                                <label className="text-sm font-medium">AI Role</label>
+                                <div className="group relative">
+                                    <Info className="w-3 h-3 text-muted-foreground cursor-help" />
+                                    <div className="absolute left-0 bottom-full mb-2 w-64 p-2 bg-popover text-popover-foreground text-xs rounded-md shadow-lg border border-border opacity-0 group-hover:opacity-100 transition-opacity z-50 pointer-events-none">
+                                        Defines the AI's persona and behavior. This becomes part of the system prompt.
+                                    </div>
+                                </div>
+                            </div>
                             <input
                                 type="text"
                                 className="w-full p-2 rounded-md border border-input bg-background"
                                 value={config.ai_role}
                                 onChange={e => setConfig({ ...config, ai_role: e.target.value })}
+                                placeholder="e.g., You are a helpful customer service agent..."
                             />
                         </div>
                         <div className="space-y-2">
-                            <label className="text-sm font-medium">Greeting Message</label>
+                            <div className="flex items-center gap-2">
+                                <label className="text-sm font-medium">Greeting Message</label>
+                                <div className="group relative">
+                                    <Info className="w-3 h-3 text-muted-foreground cursor-help" />
+                                    <div className="absolute left-0 bottom-full mb-2 w-64 p-2 bg-popover text-popover-foreground text-xs rounded-md shadow-lg border border-border opacity-0 group-hover:opacity-100 transition-opacity z-50 pointer-events-none">
+                                        The first message spoken when a call connects. Keep it brief and welcoming.
+                                    </div>
+                                </div>
+                            </div>
                             <textarea
                                 className="w-full p-2 rounded-md border border-input bg-background min-h-[80px]"
                                 value={config.greeting}
                                 onChange={e => setConfig({ ...config, greeting: e.target.value })}
+                                placeholder="e.g., Hello! Thank you for calling. How can I help you today?"
                             />
                         </div>
                     </div>

@@ -786,7 +786,7 @@ receivers:
 - [ ] Review overnight alerts
 - [ ] Verify all containers running: `docker ps`
 - [ ] Check disk space: `df -h`
-- [ ] Review error logs: `docker logs ai-engine --since 24h | grep -i error`
+- [ ] Review error logs: `docker logs ai_engine --since 24h | grep -i error`
 
 **Health Check Script**:
 ```bash
@@ -900,13 +900,13 @@ services:
 **Log Analysis**:
 ```bash
 # Find errors in last hour
-docker logs ai-engine --since 1h 2>&1 | grep -i error
+docker logs ai_engine --since 1h 2>&1 | grep -i error
 
 # Count warnings
-docker logs ai-engine --since 24h 2>&1 | grep -i warning | wc -l
+docker logs ai_engine --since 24h 2>&1 | grep -i warning | wc -l
 
 # Export logs for analysis
-docker logs ai-engine --since 24h > /tmp/ai-engine.log
+docker logs ai_engine --since 24h > /tmp/ai-engine.log
 ```
 
 ---
@@ -967,7 +967,7 @@ find /mnt/asterisk_media/ai-generated -type f -mtime +30 -delete
 
 ```bash
 # Check logs
-docker logs ai-engine
+docker logs ai_engine
 
 # Common issues:
 # 1. Port already in use
