@@ -1521,19 +1521,25 @@ async def validate_api_key(validation: ApiKeyValidation):
                             "error": "API key valid but no Live API models available. Your API key doesn't have access to Gemini Live models (bidiGenerateContent). Try creating a new key at aistudio.google.com"
                         }
                     
-                    # Check if our preferred model is available
-                    preferred_model = "gemini-2.0-flash-exp"
-                    if preferred_model in live_models:
-                        return {
-                            "valid": True, 
-                            "message": f"Google API key is valid. Live model '{preferred_model}' is available."
-                        }
-                    else:
-                        # Use first available live model
-                        return {
-                            "valid": True, 
-                            "message": f"Google API key is valid. Available Live models: {', '.join(live_models[:3])}"
-                        }
+                    # Check if our preferred models are available (in order of preference)
+                    preferred_models = [
+                        "gemini-2.5-flash-native-audio-preview-12-2025",  # Latest native audio model
+                        "gemini-2.0-flash-live-001",  # Stable live model
+                        "gemini-2.0-flash-exp",  # Experimental
+                    ]
+                    
+                    for preferred_model in preferred_models:
+                        if preferred_model in live_models:
+                            return {
+                                "valid": True, 
+                                "message": f"Google API key is valid. Live model '{preferred_model}' is available."
+                            }
+                    
+                    # No preferred model found, but we have some live models
+                    return {
+                        "valid": True, 
+                        "message": f"Google API key is valid. Available Live models: {', '.join(live_models[:3])}"
+                    }
                 elif response.status_code in [400, 403]:
                     return {"valid": False, "error": "Invalid API key"}
                 else:
