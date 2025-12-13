@@ -115,15 +115,15 @@ const EnvPage = () => {
         setShowSecrets(prev => ({ ...prev, [key]: !prev[key] }));
     };
 
-    const handleRestartAIEngine = async () => {
+    const handleReloadAIEngine = async () => {
         setRestartingEngine(true);
         try {
-            const response = await axios.post('/api/system/containers/ai_engine/restart', {}, {
+            const response = await axios.post('/api/system/containers/ai_engine/reload', {}, {
                 headers: { Authorization: `Bearer ${token}` }
             });
             if (response.data.status === 'success') {
                 setPendingRestart(false);
-                alert('AI Engine restarted successfully. Changes are now active.');
+                alert('AI Engine configuration reloaded! Changes are now active.');
             }
         } catch (error: any) {
             alert(`Failed to restart AI Engine: ${error.response?.data?.detail || error.message}`);
@@ -228,7 +228,7 @@ const EnvPage = () => {
                     Changes to environment variables require an AI Engine restart to take effect.
                 </div>
                 <button
-                    onClick={handleRestartAIEngine}
+                    onClick={handleReloadAIEngine}
                     disabled={restartingEngine}
                     className={`flex items-center text-xs px-3 py-1.5 rounded transition-colors ${
                         pendingRestart 

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AlertCircle, ArrowRight, Loader2, Cloud, Server, Shield, Zap, SkipForward, CheckCircle, CheckCircle2, XCircle, Terminal, Copy, HardDrive, Play } from 'lucide-react';
+import { AlertCircle, ArrowRight, Loader2, Cloud, Server, Shield, Zap, SkipForward, CheckCircle, CheckCircle2, XCircle, Terminal, Copy, HardDrive, Play, RefreshCw } from 'lucide-react';
 import axios from 'axios';
 
 interface SetupConfig {
@@ -83,6 +83,7 @@ const Wizard = () => {
         checked: boolean;
     }>({ running: false, exists: false, checked: false });
     const [startingEngine, setStartingEngine] = useState(false);
+    const [reloadingEngine, setReloadingEngine] = useState(false);
     const [engineProgress, setEngineProgress] = useState<{
         steps: Array<{ name: string; status: string; message: string }>;
         currentStep: string;
@@ -1747,9 +1748,29 @@ const Wizard = () => {
                                 {/* Engine Running Success for Local */}
                                 {localAIStatus.serverReady && engineStatus.running && (
                                     <div className="bg-green-50 dark:bg-green-900/20 p-4 rounded-lg border border-green-200 dark:border-green-800">
-                                        <div className="flex items-center text-green-700 dark:text-green-400">
-                                            <CheckCircle className="w-5 h-5 mr-2" />
-                                            <span className="font-medium">AI Engine is running</span>
+                                        <div className="flex items-center justify-between">
+                                            <div className="flex items-center text-green-700 dark:text-green-400">
+                                                <CheckCircle className="w-5 h-5 mr-2" />
+                                                <span className="font-medium">AI Engine is running</span>
+                                            </div>
+                                            <button
+                                                onClick={async () => {
+                                                    setReloadingEngine(true);
+                                                    try {
+                                                        await axios.post('/api/system/containers/ai_engine/reload');
+                                                        showToast('AI Engine configuration reloaded!', 'success');
+                                                    } catch (err: any) {
+                                                        showToast(err.response?.data?.detail || 'Failed to reload', 'error');
+                                                    } finally {
+                                                        setReloadingEngine(false);
+                                                    }
+                                                }}
+                                                disabled={reloadingEngine}
+                                                className="flex items-center gap-1 px-3 py-1.5 text-sm bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50"
+                                            >
+                                                <RefreshCw className={`w-4 h-4 ${reloadingEngine ? 'animate-spin' : ''}`} />
+                                                {reloadingEngine ? 'Reloading...' : 'Reload Config'}
+                                            </button>
                                         </div>
                                     </div>
                                 )}
@@ -1883,10 +1904,33 @@ exten => s,1,NoOp(AI Agent - Local Full)
                         {/* Engine Running - Success (non-local providers) */}
                         {config.provider !== 'local' && engineStatus.checked && engineStatus.running && (
                             <div className="bg-green-50 dark:bg-green-900/20 p-4 rounded-lg text-left border border-green-200 dark:border-green-800">
-                                <div className="flex items-center text-green-700 dark:text-green-400">
-                                    <CheckCircle className="w-5 h-5 mr-2" />
-                                    <span className="font-medium">AI Engine is running</span>
+                                <div className="flex items-center justify-between">
+                                    <div className="flex items-center text-green-700 dark:text-green-400">
+                                        <CheckCircle className="w-5 h-5 mr-2" />
+                                        <span className="font-medium">AI Engine is running</span>
+                                    </div>
+                                    <button
+                                        onClick={async () => {
+                                            setReloadingEngine(true);
+                                            try {
+                                                await axios.post('/api/system/containers/ai_engine/reload');
+                                                showToast('AI Engine configuration reloaded successfully!', 'success');
+                                            } catch (err: any) {
+                                                showToast(err.response?.data?.detail || 'Failed to reload', 'error');
+                                            } finally {
+                                                setReloadingEngine(false);
+                                            }
+                                        }}
+                                        disabled={reloadingEngine}
+                                        className="flex items-center gap-1 px-3 py-1.5 text-sm bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50"
+                                    >
+                                        <RefreshCw className={`w-4 h-4 ${reloadingEngine ? 'animate-spin' : ''}`} />
+                                        {reloadingEngine ? 'Reloading...' : 'Reload Config'}
+                                    </button>
                                 </div>
+                                <p className="text-xs text-green-600 dark:text-green-500 mt-2">
+                                    Click "Reload Config" to apply your new provider settings without restarting.
+                                </p>
                             </div>
                         )}
 

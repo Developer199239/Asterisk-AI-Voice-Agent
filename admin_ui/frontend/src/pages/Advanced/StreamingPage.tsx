@@ -43,16 +43,16 @@ const StreamingPage = () => {
         }
     };
 
-    const handleRestartAIEngine = async () => {
+    const handleReloadAIEngine = async () => {
         setRestartingEngine(true);
         try {
-            const response = await axios.post('/api/system/containers/ai_engine/restart');
+            const response = await axios.post('/api/system/containers/ai_engine/reload');
             if (response.data.status === 'success') {
                 setPendingRestart(false);
-                alert('AI Engine restarted successfully. Changes are now active.');
+                alert('AI Engine configuration reloaded! Changes are now active.');
             }
         } catch (error: any) {
-            alert(`Failed to restart AI Engine: ${error.response?.data?.detail || error.message}`);
+            alert(`Failed to reload AI Engine: ${error.response?.data?.detail || error.message}`);
         } finally {
             setRestartingEngine(false);
         }
@@ -80,7 +80,7 @@ const StreamingPage = () => {
                     Changes to streaming configurations require an AI Engine restart to take effect.
                 </div>
                 <button
-                    onClick={handleRestartAIEngine}
+                    onClick={handleReloadAIEngine}
                     disabled={restartingEngine}
                     className={`flex items-center text-xs px-3 py-1.5 rounded transition-colors ${
                         pendingRestart 

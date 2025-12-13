@@ -306,16 +306,34 @@ async def _recreate_via_compose(service_name: str):
     import subprocess
 
     project_root = os.getenv("PROJECT_ROOT", "/app/project")
+    
+    # Map service names to container names for stopping
+    container_map = {
+        "ai-engine": "ai_engine",
+        "admin-ui": "admin_ui",
+        "local-ai-server": "local_ai_server"
+    }
+    container_name = container_map.get(service_name, service_name)
 
     try:
+        # First stop and remove the existing container to avoid name conflicts
+        try:
+            client = docker.from_env()
+            container = client.containers.get(container_name)
+            logger.info(f"Stopping container {container_name} before recreate")
+            container.stop(timeout=10)
+            container.remove()
+            logger.info(f"Container {container_name} stopped and removed")
+        except docker.errors.NotFound:
+            logger.info(f"Container {container_name} not found, will create fresh")
+        except Exception as e:
+            logger.warning(f"Error stopping container: {e}")
+        
         compose_cmd = get_docker_compose_cmd()
         cmd = compose_cmd + [
-            "-p",
-            "asterisk-ai-voice-agent",
             "up",
             "-d",
-            "--no-build",
-            "--force-recreate",
+            "--build",
             service_name,
         ]
 
@@ -324,7 +342,7 @@ async def _recreate_via_compose(service_name: str):
             cwd=project_root,
             capture_output=True,
             text=True,
-            timeout=180,
+            timeout=300,
         )
 
         if result.returncode == 0:
@@ -337,6 +355,42 @@ async def _recreate_via_compose(service_name: str):
         raise HTTPException(status_code=500, detail="docker-compose not found")
     except subprocess.TimeoutExpired:
         raise HTTPException(status_code=500, detail="Timeout waiting for container recreate")
+
+
+@router.post("/containers/ai_engine/reload")
+async def reload_ai_engine():
+    """
+    Hot-reload AI Engine configuration without restarting the container.
+    This reloads ai-agent.yaml and .env changes.
+    """
+    try:
+        import httpx
+        url = os.getenv("HEALTH_CHECK_AI_ENGINE_URL", "http://127.0.0.1:15000/health").replace("/health", "/reload")
+        logger.info(f"Sending reload request to AI Engine at {url}")
+        
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(url)
+            
+            if resp.status_code == 200:
+                data = resp.json()
+                return {
+                    "status": "success",
+                    "message": data.get("message", "Configuration reloaded"),
+                    "reloaded": data.get("reloaded", [])
+                }
+            else:
+                raise HTTPException(
+                    status_code=resp.status_code,
+                    detail=f"AI Engine reload failed: {resp.text}"
+                )
+    except httpx.ConnectError:
+        raise HTTPException(
+            status_code=503,
+            detail="AI Engine is not running. Start it first."
+        )
+    except Exception as e:
+        logger.error(f"Error reloading AI Engine: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/metrics")
 async def get_system_metrics():
