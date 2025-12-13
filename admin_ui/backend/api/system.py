@@ -166,16 +166,16 @@ async def start_container(container_id: str):
     logger.info(f"Starting {service_name} from {project_root}")
     
     try:
-        # A4: Use dynamic docker-compose path resolution
+        # Use docker compose with --build to ensure image exists
         compose_cmd = get_docker_compose_cmd()
-        cmd = compose_cmd + ["-p", "asterisk-ai-voice-agent", "up", "-d", "--no-build", service_name]
+        cmd = compose_cmd + ["up", "-d", "--build", service_name]
         
         result = subprocess.run(
             cmd,
             cwd=project_root,
             capture_output=True,
             text=True,
-            timeout=120
+            timeout=300  # 5 min timeout for potential build
         )
         
         logger.debug(f"start returncode={result.returncode}, stdout={result.stdout}, stderr={result.stderr}")

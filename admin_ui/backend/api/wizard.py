@@ -348,18 +348,8 @@ async def start_engine(action: str = "start"):
                 }
             add_step("rebuild", "complete", "Image rebuilt successfully")
         
-        # Step 4: Check if image exists, build if needed
-        image_name = "asterisk-ai-voice-agent-ai-engine"
-        image_exists = False
-        try:
-            client.images.get(image_name)
-            image_exists = True
-            add_step("check_image", "complete", "AI Engine image found")
-        except docker.errors.ImageNotFound:
-            add_step("check_image", "complete", "AI Engine image not found - will build")
-        
-        # Build image if it doesn't exist
-        if not image_exists:
+        # Step 4: Build image if container doesn't exist (docker compose handles image naming)
+        if not container_exists:
             add_step("build", "running", "Building AI Engine image (this may take 1-2 minutes)...")
             build_result = subprocess.run(
                 ["docker", "compose", "build", "ai-engine"],
