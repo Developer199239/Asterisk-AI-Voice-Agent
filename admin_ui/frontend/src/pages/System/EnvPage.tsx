@@ -118,12 +118,14 @@ const EnvPage = () => {
     const handleReloadAIEngine = async () => {
         setRestartingEngine(true);
         try {
-            const response = await axios.post('/api/system/containers/ai_engine/reload', {}, {
+            // Environment variable changes require a full container restart (not just config reload)
+            // because env vars are read at container startup
+            const response = await axios.post('/api/system/containers/ai_engine/restart', {}, {
                 headers: { Authorization: `Bearer ${token}` }
             });
             if (response.data.status === 'success') {
                 setPendingRestart(false);
-                alert('AI Engine configuration reloaded! Changes are now active.');
+                alert('AI Engine restarted! Environment changes are now active.');
             }
         } catch (error: any) {
             alert(`Failed to restart AI Engine: ${error.response?.data?.detail || error.message}`);
