@@ -72,11 +72,11 @@ done
 detect_os() {
     IS_SANGOMA=false
     
-    # Check for Sangoma/FreePBX first (it's Debian-based but customized)
+    # Check for Sangoma/FreePBX first (it's RHEL/CentOS-based)
     if [ -f /etc/sangoma/pbx ] || [ -f /etc/freepbx.conf ]; then
         IS_SANGOMA=true
         OS_ID="sangoma"
-        OS_FAMILY="debian"
+        OS_FAMILY="rhel"  # Sangoma Linux is CentOS 7 based
     fi
     
     if [ -f /etc/os-release ]; then
@@ -88,7 +88,7 @@ detect_os() {
         if [ "$IS_SANGOMA" = false ]; then
             case "$ID" in
                 ubuntu|debian|linuxmint) OS_FAMILY="debian" ;;
-                centos|rhel|rocky|almalinux|fedora) OS_FAMILY="rhel" ;;
+                centos|rhel|rocky|almalinux|fedora|sangoma) OS_FAMILY="rhel" ;;
             esac
         fi
     fi
@@ -127,12 +127,114 @@ detect_os() {
 }
 
 # ============================================================================
+# Docker Installation (for --apply-fixes)
+# ============================================================================
+install_docker_rhel() {
+    log_info "Installing Docker for RHEL/CentOS family..."
+    
+    # Remove old Docker if present
+    yum remove -y docker docker-client docker-client-latest docker-common \
+        docker-latest docker-latest-logrotate docker-logrotate docker-engine 2>/dev/null
+    
+    # Install prerequisites
+    yum install -y yum-utils
+    
+    # Add Docker repo
+    yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+    
+    # Install Docker CE
+    yum install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+    
+    # Start and enable Docker
+    systemctl start docker
+    systemctl enable docker
+    
+    # Verify
+    if docker --version &>/dev/null; then
+        log_ok "Docker installed successfully"
+        return 0
+    else
+        log_fail "Docker installation failed"
+        return 1
+    fi
+}
+
+install_docker_debian() {
+    log_info "Installing Docker for Debian/Ubuntu family..."
+    
+    # Remove old Docker if present
+    apt-get remove -y docker docker-engine docker.io containerd runc 2>/dev/null
+    
+    # Install prerequisites
+    apt-get update
+    apt-get install -y ca-certificates curl gnupg
+    
+    # Add Docker's official GPG key
+    install -m 0755 -d /etc/apt/keyrings
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+    chmod a+r /etc/apt/keyrings/docker.gpg
+    
+    # Add Docker repository
+    echo \
+      "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
+      $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+      tee /etc/apt/sources.list.d/docker.list > /dev/null
+    
+    # Install Docker CE
+    apt-get update
+    apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+    
+    # Start and enable Docker
+    systemctl start docker
+    systemctl enable docker
+    
+    # Verify
+    if docker --version &>/dev/null; then
+        log_ok "Docker installed successfully"
+        return 0
+    else
+        log_fail "Docker installation failed"
+        return 1
+    fi
+}
+
+# ============================================================================
 # Docker Checks
 # ============================================================================
 check_docker() {
     if ! command -v docker &>/dev/null; then
         log_fail "Docker not installed"
-        log_info "  Install: https://docs.docker.com/engine/install/"
+        
+        # Offer to install based on OS family
+        if [ "$APPLY_FIXES" = true ]; then
+            case "$OS_FAMILY" in
+                rhel)
+                    install_docker_rhel
+                    ;;
+                debian)
+                    install_docker_debian
+                    ;;
+                *)
+                    log_info "  Install manually: https://docs.docker.com/engine/install/"
+                    ;;
+            esac
+        else
+            case "$OS_FAMILY" in
+                rhel)
+                    log_info "  Fix: Run with --apply-fixes to auto-install Docker"
+                    log_info "  Or manually: yum install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin"
+                    FIX_CMDS+=("# Docker will be installed automatically with --apply-fixes")
+                    ;;
+                debian)
+                    log_info "  Fix: Run with --apply-fixes to auto-install Docker"
+                    log_info "  Or manually: apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin"
+                    FIX_CMDS+=("# Docker will be installed automatically with --apply-fixes")
+                    ;;
+                *)
+                    log_info "  Install: https://docs.docker.com/engine/install/"
+                    ;;
+            esac
+        fi
         return 1
     fi
     
