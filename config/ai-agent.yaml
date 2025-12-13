@@ -713,6 +713,7 @@ tools:
     include_transcript: true
     provider: resend
   transfer:
+    technology: SIP  # Channel technology for extension transfers (SIP, PJSIP, IAX2, etc.)
     destinations:
       sales_agent:
         description: Sales agent

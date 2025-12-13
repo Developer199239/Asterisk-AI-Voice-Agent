@@ -111,6 +111,13 @@ const ToolForm = ({ config, onChange }: ToolFormProps) => {
 
                     {config.transfer?.enabled !== false && (
                         <div className="mt-4 space-y-4">
+                            <FormInput
+                                label="Channel Technology"
+                                value={config.transfer?.technology || 'SIP'}
+                                onChange={(e) => updateNestedConfig('transfer', 'technology', e.target.value)}
+                                tooltip="Channel technology for extension transfers (SIP, PJSIP, IAX2, etc.). Default: SIP"
+                                placeholder="SIP"
+                            />
                             <div className="flex justify-between items-center">
                                 <FormLabel>Destinations</FormLabel>
                                 <button
