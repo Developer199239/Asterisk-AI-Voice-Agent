@@ -1,4 +1,5 @@
 import docker
+import logging
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 import httpx
@@ -7,6 +8,8 @@ import yaml
 import subprocess
 import stat
 from typing import Dict, Any, Optional
+
+logger = logging.getLogger(__name__)
 from settings import ENV_PATH, CONFIG_PATH, ensure_env_file, PROJECT_ROOT
 from services.fs import upsert_env_vars, atomic_write_text
 from api.models_catalog import (
@@ -1520,6 +1523,7 @@ async def switch_local_model(request: ModelSwitchRequest):
 class ApiKeyValidation(BaseModel):
     provider: str
     api_key: str
+    agent_id: Optional[str] = None  # Required for ElevenLabs Conversational AI
 
 class AsteriskConnection(BaseModel):
     host: str
@@ -1632,24 +1636,48 @@ async def validate_api_key(validation: ApiKeyValidation):
                     return {"valid": False, "error": f"API error: HTTP {response.status_code}"}
             
             elif provider == "elevenlabs":
-                # Validate ElevenLabs API key by fetching user info
-                response = await client.get(
-                    "https://api.elevenlabs.io/v1/user",
-                    headers={"xi-api-key": api_key},
-                    timeout=10.0
-                )
-                logger.info(f"ElevenLabs API response: {response.status_code}")
-                if response.status_code == 200:
-                    user_data = response.json()
-                    subscription = user_data.get("subscription", {}).get("tier", "unknown")
-                    return {"valid": True, "message": f"ElevenLabs API key is valid (tier: {subscription})"}
-                elif response.status_code == 401:
-                    error_detail = response.json().get("detail", {})
-                    error_msg = error_detail.get("message", "Invalid API key") if isinstance(error_detail, dict) else "Invalid API key"
-                    logger.warning(f"ElevenLabs validation failed: {error_msg}")
-                    return {"valid": False, "error": error_msg}
+                # For ElevenLabs Conversational AI, validate using agent endpoint
+                # Agent-scoped API keys don't have user_read permission
+                agent_id = validation.agent_id
+                
+                if agent_id:
+                    # Validate by fetching agent details (works with agent-scoped keys)
+                    response = await client.get(
+                        f"https://api.elevenlabs.io/v1/convai/agents/{agent_id}",
+                        headers={"xi-api-key": api_key},
+                        timeout=10.0
+                    )
+                    logger.info(f"ElevenLabs agent API response: {response.status_code}")
+                    if response.status_code == 200:
+                        agent_data = response.json()
+                        agent_name = agent_data.get("name", "Unknown")
+                        return {"valid": True, "message": f"ElevenLabs API key valid. Agent: {agent_name}"}
+                    elif response.status_code == 401:
+                        error_detail = response.json().get("detail", {})
+                        error_msg = error_detail.get("message", "Invalid API key") if isinstance(error_detail, dict) else "Invalid API key"
+                        return {"valid": False, "error": error_msg}
+                    elif response.status_code == 404:
+                        return {"valid": False, "error": "Agent not found. Check your Agent ID."}
+                    else:
+                        return {"valid": False, "error": f"API error: HTTP {response.status_code}"}
                 else:
-                    return {"valid": False, "error": f"API error: HTTP {response.status_code}"}
+                    # Fallback: try user endpoint (for full-access keys)
+                    response = await client.get(
+                        "https://api.elevenlabs.io/v1/user",
+                        headers={"xi-api-key": api_key},
+                        timeout=10.0
+                    )
+                    if response.status_code == 200:
+                        return {"valid": True, "message": "ElevenLabs API key is valid"}
+                    elif response.status_code == 401:
+                        error_detail = response.json().get("detail", {})
+                        error_msg = error_detail.get("message", "Invalid API key") if isinstance(error_detail, dict) else "Invalid API key"
+                        # Hint about agent_id if it's a permissions issue
+                        if "missing_permissions" in str(error_detail):
+                            error_msg = "API key valid but agent-scoped. Please provide Agent ID for validation."
+                        return {"valid": False, "error": error_msg}
+                    else:
+                        return {"valid": False, "error": f"API error: HTTP {response.status_code}"}
             
             else:
                 return {"valid": False, "error": f"Unknown provider: {provider}"}

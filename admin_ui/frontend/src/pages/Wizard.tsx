@@ -243,7 +243,7 @@ const Wizard = () => {
         }
     };
 
-    const handleTestKey = async (provider: string, key: string) => {
+    const handleTestKey = async (provider: string, key: string, agentId?: string) => {
         if (!key) {
             setError(`${provider} API Key is required`);
             return;
@@ -251,10 +251,15 @@ const Wizard = () => {
         setLoading(true);
         setError(null);
         try {
-            const res = await axios.post('/api/wizard/validate-key', {
+            const payload: any = {
                 provider: provider === 'openai_realtime' ? 'openai' : provider,
                 api_key: key
-            });
+            };
+            // Include agent_id for ElevenLabs Conversational AI
+            if (provider === 'elevenlabs' && agentId) {
+                payload.agent_id = agentId;
+            }
+            const res = await axios.post('/api/wizard/validate-key', payload);
             if (!res.data.valid) throw new Error(`${provider} Key Invalid: ${res.data.error}`);
 
             // Show detailed message from backend (includes model availability for Google)
@@ -419,7 +424,8 @@ const Wizard = () => {
                     if (config.elevenlabs_key) {
                         const res = await axios.post('/api/wizard/validate-key', {
                             provider: 'elevenlabs',
-                            api_key: config.elevenlabs_key
+                            api_key: config.elevenlabs_key,
+                            agent_id: config.elevenlabs_agent_id
                         });
                         if (!res.data.valid) throw new Error(`ElevenLabs Key Invalid: ${res.data.error}`);
                     } else {
@@ -941,7 +947,7 @@ const Wizard = () => {
                                         />
                                         <button
                                             type="button"
-                                            onClick={() => handleTestKey('elevenlabs', config.elevenlabs_key || '')}
+                                            onClick={() => handleTestKey('elevenlabs', config.elevenlabs_key || '', config.elevenlabs_agent_id)}
                                             className="px-3 py-2 rounded-md bg-secondary text-secondary-foreground hover:bg-secondary/80"
                                             disabled={loading}
                                         >
