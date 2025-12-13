@@ -309,8 +309,17 @@ async def start_engine():
     
     try:
         # Use --force-recreate if already running to ensure fresh start with latest config
-        # Use docker-compose (wrapper script on host) instead of docker compose plugin
-        cmd = ["docker-compose", "up", "-d"]
+        # Dynamically detect docker-compose or docker compose plugin
+        from api.system import get_docker_compose_cmd
+        try:
+            compose_cmd = get_docker_compose_cmd()
+            print(f"DEBUG: Using compose command: {compose_cmd}")
+        except FileNotFoundError:
+            # Fallback to docker-compose (most common in container with wrapper)
+            compose_cmd = ["docker-compose"]
+            print(f"DEBUG: Fallback to docker-compose")
+        
+        cmd = compose_cmd + ["up", "-d"]
         
         # Explicitly remove container if it exists to avoid "Conflict" errors
         # This handles cases where the container exists but isn't managed by compose correctly
