@@ -184,38 +184,38 @@ class UnifiedTransferTool(Tool):
         logger.info("Extension transfer", call_id=context.call_id, 
                    extension=extension, description=description)
         
-        # Get technology from config or detect from caller channel
-        # Default to SIP for compatibility with most setups
+        # Get dialplan context for extension transfers (default: from-internal for FreePBX)
         config = context.get_config_value("tools.transfer") or {}
-        tech = config.get("technology", "SIP")  # Default to SIP for broader compatibility
+        dialplan_context = config.get("extension_context", "from-internal")
         
-        # Build dial string for extension
-        dial_string = f"{tech}/{extension}"
-        
-        # Use ARI redirect - channel stays in Stasis
-        result = await context.ari_client.send_command(
-            method="POST",
-            resource=f"channels/{context.caller_channel_id}/redirect",
-            data={"endpoint": dial_string}
+        # Set transfer_active flag BEFORE continue() - this prevents cleanup
+        # from hanging up the caller when StasisEnd fires
+        await context.update_session(
+            transfer_active=True,
+            transfer_state="transferring",
+            transfer_target=description
         )
         
-        if result and result.get('status') == 204:
-            logger.info("✅ Extension transfer completed", 
-                       call_id=context.call_id, extension=extension)
-            return {
-                "status": "success",
-                "message": f"Transferring you to {description} now.",
-                "destination": extension,
-                "type": "extension"
+        # Use ARI continue to transfer via dialplan (like queue/ringgroup transfers)
+        # This properly leaves Stasis and lets Asterisk dialplan handle the call
+        await context.ari_client.send_command(
+            method="POST",
+            resource=f"channels/{context.caller_channel_id}/continue",
+            params={
+                "context": dialplan_context,
+                "extension": extension,
+                "priority": 1
             }
-        else:
-            logger.error("Extension transfer failed", call_id=context.call_id, 
-                        result=result)
-            return {
-                "status": "failed",
-                "message": "Unable to complete transfer.",
-                "destination": extension
-            }
+        )
+        
+        logger.info("✅ Extension transfer initiated", 
+                   call_id=context.call_id, extension=extension, context=dialplan_context)
+        return {
+            "status": "success",
+            "message": f"Transferring you to {description} now.",
+            "destination": extension,
+            "type": "extension"
+        }
     
     async def _transfer_to_queue(
         self,
