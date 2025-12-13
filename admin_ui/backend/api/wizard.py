@@ -279,12 +279,10 @@ async def start_engine():
     """Start the ai-engine container.
     
     Called from wizard completion step when user clicks 'Start AI Engine'.
-    Uses docker-compose to create/start the container.
-    Uses --force-recreate if container is already running.
+    Uses Docker SDK to start container (docker-compose not available in container).
     
     Automatically sets up media paths before starting to ensure audio playback works.
     """
-    import subprocess
     from settings import PROJECT_ROOT
     
     print(f"DEBUG: Starting AI Engine from PROJECT_ROOT={PROJECT_ROOT}")
@@ -294,98 +292,117 @@ async def start_engine():
     media_setup = setup_media_paths()
     print(f"DEBUG: Media setup result: {media_setup}")
     
-    # Check if container is already running
-    already_running = False
     try:
         client = docker.from_env()
+        
+        # Check if container exists
+        container = None
+        already_running = False
         try:
             container = client.containers.get("ai_engine")
             already_running = container.status == "running"
-            print(f"DEBUG: ai_engine container status: {container.status}")
+            print(f"DEBUG: ai_engine container found, status: {container.status}")
         except docker.errors.NotFound:
-            print("DEBUG: ai_engine container not found, will create")
-    except Exception as e:
-        print(f"DEBUG: Could not check container status: {e}")
-    
-    try:
-        # Use --force-recreate if already running to ensure fresh start with latest config
-        # Dynamically detect docker-compose or docker compose plugin
-        from api.system import get_docker_compose_cmd
-        try:
-            compose_cmd = get_docker_compose_cmd()
-            print(f"DEBUG: Using compose command: {compose_cmd}")
-        except FileNotFoundError:
-            # Fallback to docker-compose (most common in container with wrapper)
-            compose_cmd = ["docker-compose"]
-            print(f"DEBUG: Fallback to docker-compose")
+            print("DEBUG: ai_engine container not found")
         
-        cmd = compose_cmd + ["up", "-d"]
-        
-        # Explicitly remove container if it exists to avoid "Conflict" errors
-        # This handles cases where the container exists but isn't managed by compose correctly
-        try:
-            client = docker.from_env()
-            try:
-                old_container = client.containers.get("ai_engine")
-                print(f"DEBUG: Removing existing ai_engine container ({old_container.status})")
-                old_container.remove(force=True)
-            except docker.errors.NotFound:
-                pass
-        except Exception as e:
-            print(f"DEBUG: Error removing container: {e}")
-
-        if already_running:
-            cmd.append("--force-recreate")
-            print("DEBUG: Container already running, using --force-recreate")
-        cmd.append("ai-engine")
-        
-        result = subprocess.run(
-            cmd,
-            cwd=PROJECT_ROOT,
-            capture_output=True,
-            text=True,
-            timeout=120  # Give more time for potential build
-        )
-        
-        print(f"DEBUG: docker-compose returncode={result.returncode}")
-        print(f"DEBUG: docker-compose stdout={result.stdout}")
-        print(f"DEBUG: docker-compose stderr={result.stderr}")
-        
-        if result.returncode == 0:
+        # If container exists but stopped, start it
+        if container and not already_running:
+            print("DEBUG: Starting existing stopped container...")
+            container.start()
             return {
                 "success": True,
                 "action": "started",
-                "message": "AI Engine started successfully" + (" (recreated)" if already_running else ""),
-                "output": result.stdout,
+                "message": "AI Engine started successfully",
                 "media_setup": media_setup,
-                "recreated": already_running
+                "recreated": False
             }
-        else:
-            error_msg = result.stderr or result.stdout or "Unknown error"
+        
+        # If container is running, restart it to pick up new config
+        if container and already_running:
+            print("DEBUG: Restarting running container...")
+            container.restart(timeout=30)
+            return {
+                "success": True,
+                "action": "restarted",
+                "message": "AI Engine restarted successfully",
+                "media_setup": media_setup,
+                "recreated": True
+            }
+        
+        # Container doesn't exist - check if image exists
+        image_name = "asterisk-ai-voice-agent-ai-engine"
+        try:
+            client.images.get(image_name)
+            print(f"DEBUG: Image {image_name} found")
+        except docker.errors.ImageNotFound:
+            # Image doesn't exist - need to build it first
+            print(f"DEBUG: Image {image_name} not found, need to build")
             return {
                 "success": False,
-                "action": "error",
-                "message": f"Failed to start AI Engine: {error_msg}",
-                "media_setup": media_setup
+                "action": "build_required",
+                "message": f"AI Engine image not found. Please run on host: docker compose build ai-engine",
+                "media_setup": media_setup,
+                "manual_command": "docker compose build ai-engine && docker compose up -d ai-engine"
             }
-    except subprocess.TimeoutExpired:
+        
+        # Create and start container with required config
+        # Read env vars from .env file for container environment
+        env_file = os.path.join(PROJECT_ROOT, ".env")
+        env_vars = {}
+        if os.path.exists(env_file):
+            with open(env_file, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('#') and '=' in line:
+                        key, value = line.split('=', 1)
+                        env_vars[key] = value
+        
+        print(f"DEBUG: Creating container with {len(env_vars)} env vars")
+        
+        # Create container with similar config to docker-compose.yml
+        container = client.containers.run(
+            image_name,
+            name="ai_engine",
+            detach=True,
+            network_mode="host",
+            environment=env_vars,
+            volumes={
+                os.path.join(PROJECT_ROOT, "config"): {"bind": "/app/config", "mode": "rw"},
+                os.path.join(PROJECT_ROOT, "asterisk_media"): {"bind": "/mnt/asterisk_media", "mode": "rw"},
+                os.path.join(PROJECT_ROOT, "call_sessions"): {"bind": "/app/call_sessions", "mode": "rw"},
+            },
+            restart_policy={"Name": "unless-stopped"}
+        )
+        
+        print(f"DEBUG: Container created: {container.id}")
+        
         return {
-            "success": False,
-            "action": "timeout",
-            "message": "Timeout waiting for AI Engine to start (120s). Check docker-compose logs.",
-            "media_setup": media_setup
+            "success": True,
+            "action": "created",
+            "message": "AI Engine container created and started",
+            "container_id": container.short_id,
+            "media_setup": media_setup,
+            "recreated": False
         }
-    except FileNotFoundError as e:
-        print(f"DEBUG: FileNotFoundError: {e}")
+        
+    except docker.errors.APIError as e:
+        print(f"DEBUG: Docker API error: {e}")
         return {
             "success": False,
-            "action": "not_found",
-            "message": "docker-compose not found. Please install Docker Compose.",
-            "media_setup": media_setup
+            "action": "error",
+            "message": f"Docker error: {str(e)}",
+            "media_setup": media_setup,
+            "manual_command": "docker compose up -d ai-engine"
         }
     except Exception as e:
         print(f"DEBUG: Exception: {type(e).__name__}: {e}")
-        return {"success": False, "action": "error", "message": str(e), "media_setup": media_setup}
+        return {
+            "success": False, 
+            "action": "error", 
+            "message": str(e), 
+            "media_setup": media_setup,
+            "manual_command": "docker compose up -d ai-engine"
+        }
 
 # ============== Local AI Server Setup ==============
 
