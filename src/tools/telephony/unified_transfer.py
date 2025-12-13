@@ -184,8 +184,13 @@ class UnifiedTransferTool(Tool):
         logger.info("Extension transfer", call_id=context.call_id, 
                    extension=extension, description=description)
         
+        # Get technology from config or detect from caller channel
+        # Default to SIP for compatibility with most setups
+        config = context.get_config_value("tools.transfer") or {}
+        tech = config.get("technology", "SIP")  # Default to SIP for broader compatibility
+        
         # Build dial string for extension
-        dial_string = f"PJSIP/{extension}"
+        dial_string = f"{tech}/{extension}"
         
         # Use ARI redirect - channel stays in Stasis
         result = await context.ari_client.send_command(
