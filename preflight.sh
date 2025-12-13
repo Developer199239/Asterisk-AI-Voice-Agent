@@ -345,6 +345,21 @@ check_compose() {
     else
         log_ok "Docker Compose: $COMPOSE_VER"
     fi
+    
+    # Check buildx version (required >= 0.17 for compose build)
+    if docker buildx version &>/dev/null 2>&1; then
+        BUILDX_VER=$(docker buildx version 2>/dev/null | grep -oP 'v?\K[0-9]+\.[0-9]+' | head -1)
+        BUILDX_MAJOR=$(echo "$BUILDX_VER" | cut -d. -f1)
+        BUILDX_MINOR=$(echo "$BUILDX_VER" | cut -d. -f2)
+        
+        if [ "$BUILDX_MAJOR" -eq 0 ] && [ "$BUILDX_MINOR" -lt 17 ]; then
+            log_warn "Docker Buildx $BUILDX_VER - requires 0.17+ for compose build"
+            log_info "  Fix: curl -L https://github.com/docker/buildx/releases/download/v0.17.1/buildx-v0.17.1.linux-amd64 -o /usr/local/lib/docker/cli-plugins/docker-buildx && chmod +x /usr/local/lib/docker/cli-plugins/docker-buildx"
+            FIX_CMDS+=("curl -L https://github.com/docker/buildx/releases/download/v0.17.1/buildx-v0.17.1.linux-amd64 -o /usr/local/lib/docker/cli-plugins/docker-buildx && chmod +x /usr/local/lib/docker/cli-plugins/docker-buildx")
+        else
+            log_ok "Docker Buildx: $BUILDX_VER"
+        fi
+    fi
 }
 
 # ============================================================================
