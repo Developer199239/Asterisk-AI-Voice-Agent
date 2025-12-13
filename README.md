@@ -276,7 +276,7 @@ docker compose up -d admin-ui
 
 ## 🎥 Demo
 
-[![Watch the demo](https://img.youtube.com/vi/ZQVny8wfCeY/hqdefault.jpg)](https://youtu.be/ZQVny8wfCeY "Asterisk AI Voice Agent demo")
+[![Watch the demo](https://img.youtube.com/vi/ZGrr9-Q85xA/hqdefault.jpg)](https://www.youtube.com/watch?v=ZGrr9-Q85xA "Asterisk AI Voice Agent demo")
 
 ### 📞 Try it Live! (US Only)
 
