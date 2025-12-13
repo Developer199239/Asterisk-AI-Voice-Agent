@@ -116,26 +116,28 @@ Ends the call gracefully after a farewell message.
 }
 ```
 
-### transfer_call
+### transfer
 
 Transfers the call to another destination.
 
 ```json
 {
-  "name": "transfer_call",
+  "name": "transfer",
   "description": "Transfer the call to another person, department, or extension. Use when caller requests to speak with someone specific or needs specialized help.",
   "parameters": {
     "type": "object",
     "properties": {
-      "target": {
+      "destination": {
         "type": "string",
-        "description": "The transfer destination - can be an extension number, queue name, or department"
+        "description": "The transfer destination - can be 'sales_agent', 'support_agent', 'sales_queue', 'support_queue', 'sales_team', or 'support_team'"
       }
     },
-    "required": ["target"]
+    "required": ["destination"]
   }
 }
 ```
+
+> **Note**: The tool registry also accepts `transfer_call` as an alias for backwards compatibility.
 
 ### cancel_transfer
 
