@@ -7,6 +7,7 @@
 - **[FreePBX Integration Guide](FreePBX-Integration-Guide.md)** - Dialplan and queue configuration
 - **[Configuration Reference](Configuration-Reference.md)** - All settings explained
 - **[Tool Calling Guide](TOOL_CALLING_GUIDE.md)** - Using telephony and business tools
+- **[MCP Tool Integration](MCP_INTEGRATION.md)** - Experimental MCP tools (design + branch guide)
 - **[Troubleshooting Guide](TROUBLESHOOTING_GUIDE.md)** - Common issues and solutions
 
 ## 🔌 Provider Setup Guides

@@ -148,6 +148,7 @@ class DeepgramProvider(AIProviderInterface):
         # Tool calling support
         self.tool_adapter = DeepgramToolAdapter(tool_registry)
         logger.info("🛠️ Deepgram provider initialized with tool support")
+        self._allowed_tools: Optional[List[str]] = None
         self._in_audio_burst: bool = False
         self._first_output_chunk_logged: bool = False
         self._closing: bool = False
@@ -353,6 +354,11 @@ class DeepgramProvider(AIProviderInterface):
 
             # Persist call context for downstream events
             self.call_id = call_id
+            # Per-call tool allowlist: if None => legacy (all tools); if [] => no tools
+            if context and "tools" in context:
+                self._allowed_tools = context.get("tools")
+            else:
+                self._allowed_tools = None
             # Capture Deepgram request id if provided
             try:
                 rid = None
@@ -474,33 +480,24 @@ class DeepgramProvider(AIProviderInterface):
             }
         }
         
-        # Add tools if enabled in configuration
-        # Per Deepgram docs: tools go in agent.think.tools, NOT agent.tools
+        # Add tools if enabled in configuration.
+        # Per Deepgram docs: functions go in agent.think.functions.
         try:
-            import yaml
-            with open('/app/config/ai-agent.yaml', 'r') as f:
-                config_dict = yaml.safe_load(f)
-            
-            tools_config = config_dict.get('tools', {}) if config_dict else {}
-            
-            if tools_config.get('enabled', False):
-                # Get tools from adapter
-                tools_schemas = self.tool_adapter.get_tools_config()
-                
+            full_cfg = getattr(self, "_full_config", None)
+            tools_cfg = (full_cfg or {}).get("tools", {}) if isinstance(full_cfg, dict) else {}
+            tools_enabled = bool(tools_cfg.get("enabled", False))
+            if tools_enabled:
+                tools_schemas = self.tool_adapter.get_tools_config(self._allowed_tools)
                 if tools_schemas:
-                    # CRITICAL: Deepgram requires functions in agent.think.functions array
-                    # Per official docs: https://developers.deepgram.com/docs/voice-agents-function-calling
-                    # Functions are placed directly in array, NOT wrapped with {type: "function", function: {...}}
-                    # That wrapping is OpenAI's format. Deepgram wants: [{ name, description, parameters }, ...]
                     settings["agent"]["think"]["functions"] = tools_schemas
                     logger.info(
                         "✅ Deepgram functions configured",
                         call_id=self.call_id,
                         function_count=len(tools_schemas),
-                        functions=[t["name"] for t in tools_schemas]
+                        functions=[t["name"] for t in tools_schemas],
                     )
                 else:
-                    logger.warning("Tools enabled but no tools registered", call_id=self.call_id)
+                    logger.debug("Tools enabled but none selected for this call", call_id=self.call_id)
             else:
                 logger.debug("Tools disabled in configuration", call_id=self.call_id)
         except Exception as e:
@@ -851,6 +848,7 @@ class DeepgramProvider(AIProviderInterface):
                 'session_store': getattr(self, '_session_store', None),
                 'ari_client': getattr(self, '_ari_client', None),
                 'config': getattr(self, '_full_config', None),
+                'allowed_tools': self._allowed_tools,
                 'websocket': self.websocket
             }
             

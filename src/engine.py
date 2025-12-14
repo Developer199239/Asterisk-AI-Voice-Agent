@@ -438,6 +438,8 @@ class Engine:
         self._pipeline_forced: Dict[str, bool] = {}
         # Health server runner
         self._health_runner: Optional[web.AppRunner] = None
+        # MCP client manager (experimental)
+        self.mcp_manager = None
 
         # Event handlers
         self.ari_client.on_event("StasisStart", self._handle_stasis_start)
@@ -482,6 +484,19 @@ class Engine:
             logger.info("✅ Tool calling system initialized", tool_count=len(tool_registry.list_tools()))
         except Exception as e:
             logger.warning(f"Failed to initialize tool calling system: {e}", exc_info=True)
+
+        # Initialize MCP tools (experimental)
+        try:
+            from src.mcp.manager import MCPClientManager
+            mcp_cfg = getattr(self.config, "mcp", None)
+            if mcp_cfg and getattr(mcp_cfg, "enabled", False):
+                self.mcp_manager = MCPClientManager(mcp_cfg)
+                await self.mcp_manager.start()
+                from src.tools.registry import tool_registry
+                self.mcp_manager.register_tools(tool_registry)
+                logger.info("✅ MCP tools initialized")
+        except Exception as e:
+            logger.warning("Failed to initialize MCP tools", error=str(e), exc_info=True)
 
         # Start modular pipeline orchestrator to prepare per-call component lookups.
         # Note: Full agent providers (deepgram, google_live, openai_realtime, elevenlabs_agent, local)
@@ -728,6 +743,12 @@ class Engine:
             await self.pipeline_orchestrator.stop()
         except Exception:
             logger.debug("Pipeline orchestrator stop error", exc_info=True)
+        # Stop MCP servers last (best-effort)
+        try:
+            if self.mcp_manager:
+                await self.mcp_manager.stop()
+        except Exception:
+            logger.debug("MCP manager stop error", exc_info=True)
         logger.info("Engine stopped.")
 
     async def _load_providers(self):
@@ -5473,6 +5494,14 @@ class Engine:
 
                     # 2. Execute Tools (if any)
                     if tool_calls:
+                        # Respect global tools toggle
+                        try:
+                            if isinstance(self.config.tools, dict) and not bool(self.config.tools.get("enabled", True)):
+                                logger.debug("Tools disabled; skipping pipeline tool execution", call_id=call_id)
+                                return
+                        except Exception:
+                            pass
+
                         # Wait for playback to finish before executing tools (especially transfer/hangup)
                         if playback_id:
                             try:
@@ -5502,7 +5531,27 @@ class Engine:
                                 
                                 if tool:
                                     logger.info("Executing pipeline tool", tool=name, call_id=call_id)
-                                    result = await tool.execute(args, tool_ctx)
+                                    # Slow-response UX (pipeline only): speak a waiting message if the tool takes too long.
+                                    slow_threshold_ms = int(getattr(tool, "slow_response_threshold_ms", 0) or 0)
+                                    slow_message = str(getattr(tool, "slow_response_message", "") or "").strip()
+                                    tool_task = asyncio.create_task(tool.execute(args, tool_ctx))
+                                    if slow_threshold_ms > 0 and slow_message:
+                                        done, _pending = await asyncio.wait(
+                                            {tool_task},
+                                            timeout=float(slow_threshold_ms) / 1000.0,
+                                        )
+                                        if not done:
+                                            try:
+                                                wait_bytes = bytearray()
+                                                async for chunk in pipeline.tts_adapter.synthesize(call_id, slow_message, pipeline.tts_options):
+                                                    if chunk:
+                                                        wait_bytes.extend(chunk)
+                                                if wait_bytes:
+                                                    await self.playback_manager.play_audio(call_id, bytes(wait_bytes), "pipeline-wait")
+                                                    await asyncio.sleep(len(wait_bytes) / 8000.0 + 0.2)
+                                            except Exception:
+                                                logger.debug("Failed to speak slow-response message", call_id=call_id, exc_info=True)
+                                    result = await tool_task
                                     logger.info("Tool execution result", tool=name, result=result)
                                     
                                     # Handle Hangup (AAVA-85 Fix)
@@ -5596,7 +5645,26 @@ class Engine:
                                                         next_tool = tool_registry.get(next_name)
                                                         if next_tool:
                                                             logger.info("Executing follow-up tool", tool=next_name, call_id=call_id)
-                                                            next_result = await next_tool.execute(next_args, tool_ctx)
+                                                            slow_threshold_ms = int(getattr(next_tool, "slow_response_threshold_ms", 0) or 0)
+                                                            slow_message = str(getattr(next_tool, "slow_response_message", "") or "").strip()
+                                                            next_task = asyncio.create_task(next_tool.execute(next_args, tool_ctx))
+                                                            if slow_threshold_ms > 0 and slow_message:
+                                                                done, _pending = await asyncio.wait(
+                                                                    {next_task},
+                                                                    timeout=float(slow_threshold_ms) / 1000.0,
+                                                                )
+                                                                if not done:
+                                                                    try:
+                                                                        wait_bytes = bytearray()
+                                                                        async for chunk in pipeline.tts_adapter.synthesize(call_id, slow_message, pipeline.tts_options):
+                                                                            if chunk:
+                                                                                wait_bytes.extend(chunk)
+                                                                        if wait_bytes:
+                                                                            await self.playback_manager.play_audio(call_id, bytes(wait_bytes), "pipeline-wait")
+                                                                            await asyncio.sleep(len(wait_bytes) / 8000.0 + 0.2)
+                                                                    except Exception:
+                                                                        logger.debug("Failed to speak slow-response message", call_id=call_id, exc_info=True)
+                                                            next_result = await next_task
                                                             if next_result.get("will_hangup"):
                                                                 farewell = next_result.get("message", "Goodbye!")
                                                                 conversation_history.append({"role": "assistant", "content": farewell})
@@ -7180,17 +7248,25 @@ class Engine:
                         has_tools_attr=hasattr(context_config, 'tools') if context_config else False,
                     )
                     if context_config:
-                        # Include tools if defined in context
-                        if hasattr(context_config, 'tools') and context_config.tools:
-                            provider_context['tools'] = context_config.tools
+                        # Include tools if context explicitly specifies them.
+                        # - tools is None: legacy/unspecified (provider may choose defaults)
+                        # - tools is []: explicitly no tools
+                        if hasattr(context_config, 'tools') and context_config.tools is not None:
+                            tools_enabled = True
+                            try:
+                                tools_enabled = bool((self.config.tools or {}).get("enabled", True))
+                            except Exception:
+                                tools_enabled = True
+                            provider_context['tools'] = context_config.tools if tools_enabled else []
                             logger.debug(
                                 "Added tools to provider context",
                                 call_id=call_id,
-                                tools=context_config.tools,
+                                tools=provider_context['tools'],
+                                tools_enabled=tools_enabled,
                             )
                         else:
                             logger.debug(
-                                "No tools found in context config",
+                                "No tools specified in context config",
                                 call_id=call_id,
                                 has_tools_attr=hasattr(context_config, 'tools'),
                                 tools_value=getattr(context_config, 'tools', 'NO_ATTR'),
@@ -7342,55 +7418,76 @@ class Engine:
         
         provider_name = getattr(session, 'provider_name', None) or self.config.default_provider
         provider = self.providers.get(provider_name)
-        
+
         result = {"status": "error", "message": f"Tool '{function_name}' not found"}
-        
+
         try:
-            # Build tool execution context
-            context = ToolExecutionContext(
-                call_id=call_id,
-                caller_channel_id=session.caller_channel_id,
-                bridge_id=session.bridge_id,
-                session_store=self.session_store,
-                ari_client=self.ari_client,
-                config=self.config.dict() if hasattr(self.config, 'dict') else {},
-                provider_name=provider_name,
-            )
-            
-            # Execute tool via registry (tool_registry is a module-level singleton)
-            tool = tool_registry.get(function_name) if tool_registry else None
-            if tool:
-                result = await tool.execute(parameters, context)
-                
-                # Handle special tools
-                if function_name == "hangup_call" and result.get("will_hangup"):
-                    # Skip delayed hangup for local provider - ToolCall handler manages TTS and hangup
-                    if provider_name == "local":
-                        logger.info("Hangup requested - local provider will handle TTS and hangup", call_id=call_id)
-                    else:
-                        # For full agent providers like ElevenLabs, they manage their own TTS
-                        # so we should hangup after a short delay for the farewell to play
-                        logger.info("Hangup requested - scheduling delayed hangup", call_id=call_id)
-                        
-                        # Schedule hangup after delay to let farewell audio play
-                        async def delayed_hangup():
-                            await asyncio.sleep(3.0)  # Wait for farewell TTS
-                            try:
-                                current_session = await self.session_store.get_by_call_id(call_id)
-                                if current_session:
-                                    await self.ari_client.hangup_channel(current_session.caller_channel_id)
-                                    logger.info("✅ Call hung up after farewell", call_id=call_id)
-                            except Exception as e:
-                                logger.debug(f"Delayed hangup failed (may already be hung up): {e}", call_id=call_id)
-                        
-                        asyncio.create_task(delayed_hangup())
+            # Determine allowlisted tools for this call.
+            # - None: legacy/unspecified => allow all (backward compatible)
+            # - []: explicitly none allowed
+            allowed_tools = None
+            try:
+                if isinstance(self.config.tools, dict) and not bool(self.config.tools.get("enabled", True)):
+                    allowed_tools = []
+            except Exception:
+                pass
+
+            try:
+                if getattr(session, "context_name", None):
+                    ctx_cfg = self.transport_orchestrator.get_context_config(session.context_name)
+                    if ctx_cfg and hasattr(ctx_cfg, "tools") and ctx_cfg.tools is not None:
+                        allowed_tools = list(ctx_cfg.tools or [])
+            except Exception:
+                logger.debug("Failed resolving context tool allowlist", call_id=call_id, exc_info=True)
+
+            if allowed_tools is not None and function_name not in allowed_tools:
+                result = {"status": "error", "message": f"Tool '{function_name}' not allowed for this call"}
             else:
-                logger.warning(
-                    "Tool not found in registry",
+                # Build tool execution context
+                context = ToolExecutionContext(
                     call_id=call_id,
-                    function_name=function_name,
-                    available_tools=tool_registry.list_tools() if tool_registry else [],
+                    caller_channel_id=session.caller_channel_id,
+                    bridge_id=session.bridge_id,
+                    session_store=self.session_store,
+                    ari_client=self.ari_client,
+                    config=self.config.dict() if hasattr(self.config, 'dict') else {},
+                    provider_name=provider_name,
                 )
+
+                # Execute tool via registry (tool_registry is a module-level singleton)
+                tool = tool_registry.get(function_name) if tool_registry else None
+                if tool:
+                    result = await tool.execute(parameters, context)
+
+                    # Handle special tools
+                    if function_name == "hangup_call" and result.get("will_hangup"):
+                        # Skip delayed hangup for local provider - ToolCall handler manages TTS and hangup
+                        if provider_name == "local":
+                            logger.info("Hangup requested - local provider will handle TTS and hangup", call_id=call_id)
+                        else:
+                            # For full agent providers like ElevenLabs, they manage their own TTS
+                            # so we should hangup after a short delay for the farewell to play
+                            logger.info("Hangup requested - scheduling delayed hangup", call_id=call_id)
+
+                            # Schedule hangup after delay to let farewell audio play
+                            async def delayed_hangup():
+                                await asyncio.sleep(3.0)  # Wait for farewell TTS
+                                try:
+                                    current_session = await self.session_store.get_by_call_id(call_id)
+                                    if current_session:
+                                        await self.ari_client.hangup_channel(current_session.caller_channel_id)
+                                        logger.info("✅ Call hung up after farewell", call_id=call_id)
+                                except Exception as e:
+                                    logger.debug(f"Delayed hangup failed (may already be hung up): {e}", call_id=call_id)
+
+                            asyncio.create_task(delayed_hangup())
+                else:
+                    logger.warning(
+                        "Tool not found in registry",
+                        call_id=call_id,
+                        function_name=function_name,
+                        available_tools=tool_registry.list_tools() if tool_registry else [],
+                    )
         except Exception as e:
             logger.error(
                 "Tool execution error",

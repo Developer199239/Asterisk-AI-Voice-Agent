@@ -4,7 +4,7 @@ OpenAI Realtime API adapter for tool calling.
 Handles translation between unified tool format and OpenAI's function calling format.
 """
 
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from src.tools.registry import ToolRegistry
 from src.tools.context import ToolExecutionContext
 import structlog
@@ -29,7 +29,7 @@ class OpenAIToolAdapter:
         """
         self.registry = registry
     
-    def get_tools_config(self) -> List[Dict[str, Any]]:
+    def get_tools_config(self, tool_names: Optional[List[str]] = None) -> List[Dict[str, Any]]:
         """
         Get tools configuration in OpenAI Realtime format.
         
@@ -50,7 +50,7 @@ class OpenAIToolAdapter:
                 }
             ]
         """
-        schemas = self.registry.to_openai_realtime_schema()
+        schemas = self.registry.to_openai_realtime_schema_filtered(tool_names)
         logger.debug(f"Generated OpenAI Realtime schemas for {len(schemas)} tools")
         return schemas
     
@@ -98,6 +98,31 @@ class OpenAIToolAdapter:
         
         function_call_id = item.get('call_id')  # OpenAI uses 'call_id' field
         function_name = item.get('name')
+
+        try:
+            full_cfg = context.get("config")
+            if isinstance(full_cfg, dict) and not bool((full_cfg.get("tools") or {}).get("enabled", True)):
+                error_msg = f"Tools disabled; rejecting '{function_name}'"
+                logger.warning(error_msg, tool=function_name)
+                return {
+                    "call_id": function_call_id,
+                    "function_name": function_name,
+                    "status": "error",
+                    "message": error_msg,
+                }
+        except Exception:
+            pass
+
+        allowed = context.get("allowed_tools", None)
+        if allowed is not None and function_name not in allowed:
+            error_msg = f"Tool '{function_name}' not allowed for this call"
+            logger.warning(error_msg, tool=function_name)
+            return {
+                "call_id": function_call_id,
+                "function_name": function_name,
+                "status": "error",
+                "message": error_msg,
+            }
         
         # Parse arguments from JSON string to dict
         arguments_str = item.get('arguments', '{}')

@@ -4,7 +4,7 @@ Deepgram Voice Agent adapter for tool calling.
 Handles translation between unified tool format and Deepgram's function calling format.
 """
 
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from src.tools.registry import ToolRegistry
 from src.tools.context import ToolExecutionContext
 import structlog
@@ -29,7 +29,7 @@ class DeepgramToolAdapter:
         """
         self.registry = registry
     
-    def get_tools_config(self) -> List[Dict[str, Any]]:
+    def get_tools_config(self, tool_names: Optional[List[str]] = None) -> List[Dict[str, Any]]:
         """
         Get tools configuration in Deepgram format.
         
@@ -49,7 +49,7 @@ class DeepgramToolAdapter:
                 }
             ]
         """
-        schemas = self.registry.to_deepgram_schema()
+        schemas = self.registry.to_deepgram_schema_filtered(tool_names)
         logger.debug(f"Generated Deepgram schemas for {len(schemas)} tools")
         return schemas
     
@@ -97,6 +97,31 @@ class DeepgramToolAdapter:
         func = functions[0]
         function_call_id = func.get('id')
         function_name = func.get('name')
+
+        try:
+            full_cfg = context.get("config")
+            if isinstance(full_cfg, dict) and not bool((full_cfg.get("tools") or {}).get("enabled", True)):
+                error_msg = f"Tools disabled; rejecting '{function_name}'"
+                logger.warning(error_msg, tool=function_name)
+                return {
+                    "function_call_id": function_call_id,
+                    "function_name": function_name,
+                    "status": "error",
+                    "message": error_msg,
+                }
+        except Exception:
+            pass
+
+        allowed = context.get("allowed_tools", None)
+        if allowed is not None and function_name not in allowed:
+            error_msg = f"Tool '{function_name}' not allowed for this call"
+            logger.warning(error_msg, tool=function_name)
+            return {
+                "function_call_id": function_call_id,
+                "function_name": function_name,
+                "status": "error",
+                "message": error_msg,
+            }
         
         # Parse arguments from JSON string to dict
         arguments_str = func.get('arguments', '{}')

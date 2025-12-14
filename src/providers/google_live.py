@@ -115,6 +115,7 @@ class GoogleLiveProvider(AIProviderInterface):
         # This ensures _session_store, _ari_client, etc. are available for tool execution
         from src.tools.registry import tool_registry
         self._tool_adapter = GoogleToolAdapter(tool_registry)
+        self._allowed_tools: Optional[List[str]] = None
         
         # Transcription buffering - hold latest partial until turnComplete
         self._input_transcription_buffer: str = ""
@@ -171,6 +172,11 @@ class GoogleLiveProvider(AIProviderInterface):
         self._conversation_history = []
         self._setup_complete = False
         self._greeting_completed = False
+        # Per-call tool allowlist: if None => legacy (all tools); if [] => no tools
+        if context and "tools" in context:
+            self._allowed_tools = context.get("tools")
+        else:
+            self._allowed_tools = None
 
         logger.info(
             "Starting Google Live session",
@@ -839,12 +845,29 @@ class GoogleLiveProvider(AIProviderInterface):
                     provider_name="google_live",
                 )
 
+                tools_enabled = True
+                try:
+                    full_cfg = getattr(self, "_full_config", None)
+                    if isinstance(full_cfg, dict):
+                        tools_enabled = bool((full_cfg.get("tools") or {}).get("enabled", True))
+                except Exception:
+                    tools_enabled = True
+
+                # Enforce allowlist (if provided by engine context)
+                if not tools_enabled:
+                    result = {"status": "error", "message": "Tools are disabled"}
+                elif self._allowed_tools is not None and func_name not in self._allowed_tools:
+                    result = {
+                        "status": "error",
+                        "message": f"Tool '{func_name}' not allowed for this call",
+                    }
+                else:
                 # Execute tool
-                result = await self._tool_adapter.execute_tool(
-                    func_name,
-                    func_args,
-                    tool_context,
-                )
+                    result = await self._tool_adapter.execute_tool(
+                        func_name,
+                        func_args,
+                        tool_context,
+                    )
 
                 # Check for hangup intent (like OpenAI Realtime pattern)
                 if func_name == "hangup_call" and result:
