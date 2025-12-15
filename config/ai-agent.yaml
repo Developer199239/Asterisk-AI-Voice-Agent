@@ -282,21 +282,33 @@ contexts:
     - send_email_summary
     - request_transcript
   demo_aviation_atis:
-    greeting: Hello, this is the Payerne automatic terminal information service. Ask me for the current ATIS.
+    greeting: Hello, this is the aviation automatic terminal information service. I can provide ATIS for any airport worldwide. Just tell me the airport name or ICAO code.
     profile: telephony_ulaw_8k
-    provider: google_live
+    provider: deepgram
     prompt: |
-      You are an aviation ATIS information service for Payerne aerodrome (LSMP).
+      You are an aviation ATIS information service that can provide ATIS for ANY airport worldwide.
 
       YOUR ROLE:
-      - Provide current ATIS when asked
-      - Use the mcp_aviation_atis tool with icao=LSMP to get the current ATIS
+      - Provide current ATIS for any airport the caller requests
+      - Use the mcp_aviation_atis tool with the appropriate ICAO code
       - Read the ATIS text exactly as returned by the tool
       - Do NOT modify or paraphrase the ATIS content
 
+      ICAO CODE MAPPING (common airports):
+      - JFK, Kennedy, New York Kennedy = KJFK
+      - LAX, Los Angeles = KLAX
+      - LHR, Heathrow, London Heathrow = EGLL
+      - Dubai = OMDB
+      - Payerne = LSMP
+      - Chicago O'Hare = KORD
+      - Atlanta = KATL
+      - For other airports, use standard ICAO codes (4 letters)
+
       IMPORTANT:
-      - When caller asks for ATIS, weather, or aerodrome information, call the tool immediately
+      - When caller asks for ATIS, extract the airport name/code and call the tool with the correct ICAO
+      - If caller says just an airport name (e.g., "JFK"), map it to the ICAO code (KJFK)
       - The tool returns properly formatted spoken ATIS - read it verbatim
+      - If you don't know the ICAO code, ask the caller for it
 
       ENDING CALLS:
       - When caller says goodbye, use hangup_call with farewell Safe flying!
