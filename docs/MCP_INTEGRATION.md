@@ -88,6 +88,15 @@ Recommendation:
 - Phase 1: implement slow-response announcements for pipeline mode first.
 - Phase 2: add provider-specific support (or disable for monolithic providers by default).
 
+## Google Live: 1011 Internal Errors (Practical Mitigation)
+
+In some cases Google Live can close the WebSocket with `1011 Internal error` shortly after receiving `toolResponse` payloads. This appears to be a provider-side issue, but it is often correlated with tool responses that are large or deeply nested.
+
+Mitigation implemented in this branch:
+
+- Tool responses sent to Google Live are **sanitized and size-capped**, prioritizing `status`, `message`, and a few small control flags.
+- Raw MCP payloads (e.g., `data`) are **not** forwarded to Google Live by default.
+
 ## Configuration (Proposed YAML)
 
 This is the proposed config shape for `config/ai-agent.yaml`. It’s designed to avoid conflicting with existing `tools:` configuration.
@@ -194,6 +203,13 @@ Also add structured logs that include:
    - Tool result is spoken via `message`
 4. Add a slow tool variant to validate timeout and (pipeline-only initially) slow-response announcements.
 
+### Admin UI support
+
+- Admin UI exposes an MCP page for editing YAML `mcp:` config and testing servers.
+- Server “Test” and discovery run in the **ai-engine container context** via:
+  - `GET /mcp/status` (ai-engine health server)
+  - `POST /mcp/test/{server_id}`
+
 ### Minimal smoke config
 
 - Add a dedicated context (e.g. `demo_mcp`) and list only one MCP tool plus `hangup_call`.
@@ -215,4 +231,3 @@ Also add structured logs that include:
   - Extend `src/config.py` to model `mcp:` config (and validate naming).
 - Docs:
   - Update `docs/TOOL_CALLING_GUIDE.md` and `docs/README.md` to reference MCP integration.
-

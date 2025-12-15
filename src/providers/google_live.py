@@ -126,6 +126,8 @@ class GoogleLiveProvider(AIProviderInterface):
         
         # Metrics tracking
         self._session_start_time: Optional[float] = None
+        # Tool response sizing: keep Google toolResponse payloads small to avoid provider errors.
+        self._tool_response_max_bytes: int = 8000
 
     @staticmethod
     def get_capabilities() -> Optional[ProviderCapabilities]:
@@ -373,7 +375,7 @@ class GoogleLiveProvider(AIProviderInterface):
 
     async def _send_message(self, message: Dict[str, Any]) -> None:
         """Send a message to Google Live API."""
-        if not self.websocket:
+        if not self.websocket or getattr(self.websocket, "closed", False):
             logger.warning("No websocket connection", call_id=self._call_id)
             return
 
@@ -386,6 +388,62 @@ class GoogleLiveProvider(AIProviderInterface):
                     call_id=self._call_id,
                     error=str(e),
                 )
+                # Prevent log storms when the socket is already closed.
+                try:
+                    if self.websocket and getattr(self.websocket, "closed", False):
+                        self.websocket = None
+                except Exception:
+                    pass
+
+    def _safe_jsonable(self, obj: Any, *, depth: int = 0, max_depth: int = 4, max_items: int = 30) -> Any:
+        if depth >= max_depth:
+            return str(obj)
+        if obj is None or isinstance(obj, (str, int, float, bool)):
+            return obj
+        if isinstance(obj, dict):
+            out: Dict[str, Any] = {}
+            for idx, (k, v) in enumerate(obj.items()):
+                if idx >= max_items:
+                    break
+                out[str(k)] = self._safe_jsonable(v, depth=depth + 1, max_depth=max_depth, max_items=max_items)
+            return out
+        if isinstance(obj, (list, tuple)):
+            return [self._safe_jsonable(v, depth=depth + 1, max_depth=max_depth, max_items=max_items) for v in list(obj)[:max_items]]
+        return str(obj)
+
+    def _build_tool_response_payload(self, tool_name: str, result: Any) -> Dict[str, Any]:
+        """
+        Google Live can return 1011 internal errors if toolResponse payloads are too large or contain
+        unexpected shapes. Keep responses minimal, JSON-serializable, and capped in size.
+        """
+        if not isinstance(result, dict):
+            payload: Dict[str, Any] = {"status": "success", "message": str(result)}
+        else:
+            payload = {}
+            # Keep fields that affect conversation control.
+            for k in ("status", "message", "will_hangup", "transferred", "transfer_mode", "extension", "destination"):
+                if k in result:
+                    payload[k] = self._safe_jsonable(result.get(k))
+            # Always provide a message string (best-effort).
+            if "message" not in payload:
+                payload["message"] = str(result.get("message") or "")
+            # Do NOT include raw MCP result blobs by default (commonly large/nested).
+            # If you need a hint for model reasoning, include a compact "result" string.
+            if "result" in result and "result" not in payload:
+                payload["result"] = self._safe_jsonable(result.get("result"))
+
+        # Cap size aggressively.
+        try:
+            encoded = json.dumps(payload, ensure_ascii=False)
+            if len(encoded.encode("utf-8")) <= self._tool_response_max_bytes:
+                return payload
+        except Exception:
+            pass
+
+        # If too large, fall back to status + truncated message only.
+        msg = str(payload.get("message") or "")
+        msg = msg[:800]
+        return {"status": payload.get("status", "success"), "message": msg}
 
     async def _send_greeting(self) -> None:
         """Send greeting by asking Gemini to speak it (validated pattern from Golden Baseline)."""
@@ -879,13 +937,14 @@ class GoogleLiveProvider(AIProviderInterface):
                         )
 
                 # Send tool response (camelCase per official API)
+                safe_result = self._build_tool_response_payload(func_name, result)
                 tool_response = {
                     "toolResponse": {
                         "functionResponses": [
                             {
                                 "id": call_id,
                                 "name": func_name,
-                                "response": result,
+                                "response": safe_result,
                             }
                         ]
                     }

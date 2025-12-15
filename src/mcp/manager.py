@@ -47,6 +47,8 @@ class MCPClientManager:
         self._clients: Dict[str, MCPStdioClient] = {}
         self._discovered: Dict[str, Dict[str, _DiscoveredTool]] = {}
         self._tool_routes: Dict[str, Tuple[str, str]] = {}  # exposed_name -> (server_id, tool_name)
+        self._server_up: Dict[str, bool] = {}
+        self._server_errors: Dict[str, str] = {}
         self._started = False
 
     async def start(self) -> None:
@@ -64,6 +66,9 @@ class MCPClientManager:
         self._clients.clear()
         self._discovered.clear()
         self._tool_routes.clear()
+        for server_id in list(self._server_up.keys()):
+            self._server_up[server_id] = False
+            _MCP_SERVER_UP.labels(server_id).set(0)
         self._started = False
 
     def is_enabled(self) -> bool:
@@ -94,6 +99,8 @@ class MCPClientManager:
         """
         registered: List[str] = []
         for server_id, server_cfg in (self.config.servers or {}).items():
+            if not getattr(server_cfg, "enabled", True):
+                continue
             discovered = self._discovered.get(server_id, {})
             if not discovered:
                 logger.warning("No tools discovered for MCP server", server=server_id)
@@ -126,16 +133,73 @@ class MCPClientManager:
         logger.info("Registered MCP tools", count=len(registered), tools=registered)
         return registered
 
+    def get_status(self) -> Dict[str, Any]:
+        """Return a safe-to-expose status snapshot (no secret env values)."""
+        servers: Dict[str, Any] = {}
+        for server_id, server_cfg in (self.config.servers or {}).items():
+            discovered = self._discovered.get(server_id, {})
+            registered = [name for name, (sid, _t) in self._tool_routes.items() if sid == server_id]
+            servers[server_id] = {
+                "enabled": bool(getattr(server_cfg, "enabled", True)),
+                "transport": getattr(server_cfg, "transport", "stdio"),
+                "command": list(getattr(server_cfg, "command", []) or []),
+                "cwd": getattr(server_cfg, "cwd", None),
+                "up": bool(self._server_up.get(server_id, False)),
+                "last_error": self._server_errors.get(server_id),
+                "discovered_tools": sorted(list(discovered.keys())),
+                "registered_tools": sorted(registered),
+                "configured_tools": [t.name for t in (getattr(server_cfg, "tools", None) or [])],
+            }
+        return {
+            "enabled": bool(self.config and self.config.enabled),
+            "servers": servers,
+            "tool_routes": {k: {"server": v[0], "tool": v[1]} for k, v in self._tool_routes.items()},
+        }
+
+    async def test_server(self, server_id: str) -> Dict[str, Any]:
+        if not self.is_enabled():
+            return {"ok": False, "error": "MCP disabled"}
+        server_cfg = (self.config.servers or {}).get(server_id)
+        if not server_cfg:
+            return {"ok": False, "error": f"Unknown server: {server_id}"}
+        if not getattr(server_cfg, "enabled", True):
+            return {"ok": False, "error": f"Server '{server_id}' is disabled"}
+        client = self._clients.get(server_id)
+        if not client:
+            # Start it on-demand using the same start path.
+            await self._start_servers_and_discover()
+            client = self._clients.get(server_id)
+        if not client:
+            return {"ok": False, "error": "Failed to create client"}
+        try:
+            tools = await client.list_tools()
+            names = []
+            for t in tools:
+                if isinstance(t, dict) and t.get("name"):
+                    names.append(str(t["name"]))
+            return {"ok": True, "tools": sorted(names)}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
     async def _start_servers_and_discover(self) -> None:
         if not self.is_enabled():
             return
 
         async def start_one(server_id: str, server_cfg: MCPServerConfig) -> None:
+            self._server_errors.pop(server_id, None)
+            if not getattr(server_cfg, "enabled", True):
+                self._server_up[server_id] = False
+                _MCP_SERVER_UP.labels(server_id).set(0)
+                return
             if (server_cfg.transport or "stdio") != "stdio":
                 logger.warning("Unsupported MCP transport (only stdio supported)", server=server_id, transport=server_cfg.transport)
+                self._server_up[server_id] = False
+                self._server_errors[server_id] = f"Unsupported transport: {server_cfg.transport}"
                 return
             if not server_cfg.command:
                 logger.warning("MCP server missing command", server=server_id)
+                self._server_up[server_id] = False
+                self._server_errors[server_id] = "Missing command"
                 return
 
             client = MCPStdioClient(
@@ -154,6 +218,7 @@ class MCPClientManager:
                 await client.start()
                 tools = await client.list_tools()
                 _MCP_SERVER_UP.labels(server_id).set(1)
+                self._server_up[server_id] = True
                 discovered: Dict[str, _DiscoveredTool] = {}
                 for raw in tools:
                     if not isinstance(raw, dict):
@@ -170,6 +235,8 @@ class MCPClientManager:
                 logger.info("Discovered MCP tools", server=server_id, count=len(discovered), tools=list(discovered.keys()))
             except Exception as exc:
                 _MCP_SERVER_UP.labels(server_id).set(0)
+                self._server_up[server_id] = False
+                self._server_errors[server_id] = str(exc)
                 logger.warning("Failed to start/discover MCP server", server=server_id, error=str(exc), exc_info=True)
 
         await asyncio.gather(*(start_one(sid, scfg) for sid, scfg in (self.config.servers or {}).items()))

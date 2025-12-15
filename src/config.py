@@ -263,6 +263,7 @@ class MCPServerDefaultsConfig(BaseModel):
 class MCPServerConfig(BaseModel):
     """Configuration for a single MCP server."""
 
+    enabled: bool = Field(default=True)
     transport: str = Field(default="stdio")  # currently: stdio
     command: List[str] = Field(default_factory=list)  # e.g., ["python3", "-m", "my_mcp_server"]
     cwd: Optional[str] = None

@@ -7368,6 +7368,8 @@ class Engine:
             app.router.add_get('/health', self._health_handler)
             app.router.add_get('/metrics', self._metrics_handler)
             app.router.add_post('/reload', self._reload_handler)
+            app.router.add_get('/mcp/status', self._mcp_status_handler)
+            app.router.add_post('/mcp/test/{server_id}', self._mcp_test_handler)
             runner = web.AppRunner(app)
             await runner.setup()
             # Host/port configurable via YAML health block with environment overrides (AAVA-30)
@@ -7391,6 +7393,30 @@ class Engine:
             logger.info("Health endpoint started", host=health_host, port=health_port)
         except Exception as exc:
             logger.error("Failed to start health endpoint", error=str(exc), exc_info=True)
+
+    async def _mcp_status_handler(self, request):
+        """Return MCP server/tool status for Admin UI (sanitized)."""
+        try:
+            if not self.mcp_manager:
+                return web.json_response({"enabled": False, "servers": {}, "tool_routes": {}}, status=200)
+            return web.json_response(self.mcp_manager.get_status(), status=200)
+        except Exception as exc:
+            logger.debug("MCP status handler failed", error=str(exc), exc_info=True)
+            return web.json_response({"enabled": False, "error": str(exc)}, status=500)
+
+    async def _mcp_test_handler(self, request):
+        """Test an MCP server in the ai-engine container context (safe; no arbitrary commands)."""
+        try:
+            server_id = request.match_info.get("server_id")
+            if not server_id:
+                return web.json_response({"ok": False, "error": "Missing server_id"}, status=400)
+            if not self.mcp_manager:
+                return web.json_response({"ok": False, "error": "MCP not initialized"}, status=400)
+            result = await self.mcp_manager.test_server(server_id)
+            return web.json_response(result, status=200 if result.get("ok") else 500)
+        except Exception as exc:
+            logger.debug("MCP test handler failed", error=str(exc), exc_info=True)
+            return web.json_response({"ok": False, "error": str(exc)}, status=500)
 
     async def _execute_provider_tool(
         self,
