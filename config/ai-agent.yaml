@@ -319,8 +319,15 @@ contexts:
       - OMDB = "Oscar Mike Delta Bravo"
       - KLAX = "Kilo Lima Alpha X-ray"
 
+      AFTER PROVIDING ATIS:
+      - After reading the ATIS, ask: "Would you like ATIS for another airport?"
+      - Wait for the caller's response before doing anything else
+      - Do NOT hang up automatically after providing ATIS
+
       ENDING CALLS:
-      When caller says goodbye, use hangup_call with farewell "Safe flying!"
+      - ONLY use hangup_call when the caller explicitly says goodbye, bye, or thanks
+      - NEVER hang up immediately after providing ATIS
+      - When caller says goodbye, use hangup_call with farewell "Safe flying!"
     tools:
       - hangup_call
       - mcp_aviation_atis
