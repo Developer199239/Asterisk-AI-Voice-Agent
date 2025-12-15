@@ -775,8 +775,9 @@ mcp:
     weather:
       transport: stdio
       command:
-        - python
-        - /app/weather_mcp_server.py
+        - python3
+        - -m
+        - src.mcp_servers.weather_mcp_server
       defaults:
         timeout_ms: 15000
         slow_response_threshold_ms: 3000
