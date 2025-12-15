@@ -30,7 +30,7 @@ type ServerForm = {
         max_restarts: number;
         backoff_ms: number;
     };
-    env: Array<{ key: string; value: string }>;
+    env: Array<{ key: string; value: string; redacted?: boolean }>;
     tools: Array<{
         name: string;
         expose_as?: string;
@@ -53,6 +53,7 @@ const MCPPage = () => {
     const [config, setConfig] = useState<any>({});
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
+    const [reloadingEngine, setReloadingEngine] = useState(false);
     const [status, setStatus] = useState<MCPStatus | null>(null);
     const [statusLoading, setStatusLoading] = useState(false);
     const [editing, setEditing] = useState(false);
@@ -98,7 +99,20 @@ const MCPPage = () => {
         setSaving(true);
         try {
             await axios.post('/api/config/yaml', { content: yaml.dump(config) });
-            alert('MCP configuration saved. Restart AI Engine to apply changes.');
+            try {
+                setReloadingEngine(true);
+                const res = await axios.post('/api/system/containers/ai_engine/reload');
+                if (res.data?.restart_required) {
+                    alert('MCP configuration saved, but a full AI Engine restart is required for some changes.');
+                } else {
+                    alert('MCP configuration saved and AI Engine reloaded.');
+                }
+            } catch (err: any) {
+                alert(`MCP configuration saved. AI Engine reload failed: ${err.response?.data?.detail || err.message}`);
+            } finally {
+                setReloadingEngine(false);
+                await fetchStatus();
+            }
         } catch (err) {
             console.error('Failed to save config', err);
             alert('Failed to save configuration');
@@ -151,7 +165,11 @@ const MCPPage = () => {
                 max_restarts: s.restart?.max_restarts ?? 5,
                 backoff_ms: s.restart?.backoff_ms ?? 1000,
             },
-            env: Object.entries(s.env || {}).map(([k, v]: any) => ({ key: String(k), value: String(v) })),
+            env: Object.entries(s.env || {}).map(([k, v]: any) => {
+                const value = String(v);
+                const isRef = /^\$\{[A-Za-z0-9_]+\}$/.test(value);
+                return isRef ? { key: String(k), value } : { key: String(k), value: '', redacted: true };
+            }),
             tools: Array.isArray(s.tools) ? s.tools : [],
         });
         setEditing(true);
@@ -178,7 +196,20 @@ const MCPPage = () => {
         for (const row of serverForm.env) {
             const k = (row.key || '').trim();
             if (!k) continue;
-            envObj[k] = String(row.value || '');
+            const v = String(row.value || '').trim();
+            if (row.redacted && !v) {
+                const existing = servers[id]?.env?.[k];
+                if (typeof existing === 'string') envObj[k] = existing;
+                continue;
+            }
+            envObj[k] = v;
+        }
+        const unsafeEnv = Object.entries(envObj).filter(([_k, v]) => v && !/^\$\{[A-Za-z0-9_]+\}$/.test(v));
+        if (unsafeEnv.length > 0) {
+            const names = unsafeEnv.map(([k]) => k).join(', ');
+            if (!confirm(`Some env values are not placeholders like \${VAR} (keys: ${names}). This may expose secrets in YAML/UI. Continue?`)) {
+                return;
+            }
         }
 
         const toolList = (serverForm.tools || [])
@@ -248,7 +279,7 @@ const MCPPage = () => {
                 <div>
                     <h1 className="text-3xl font-bold tracking-tight">MCP Servers</h1>
                     <p className="text-muted-foreground mt-1">
-                        Configure MCP-backed tools (Model Context Protocol). Changes require an AI Engine restart.
+                        Configure MCP-backed tools (Model Context Protocol). Changes require an AI Engine reload.
                     </p>
                 </div>
                 <div className="flex gap-2">
@@ -266,7 +297,7 @@ const MCPPage = () => {
                         className="inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 bg-primary text-primary-foreground shadow hover:bg-primary/90 h-9 px-4 py-2"
                     >
                         <Save className="w-4 h-4 mr-2" />
-                        {saving ? 'Saving...' : 'Save Changes'}
+                        {saving ? 'Saving...' : (reloadingEngine ? 'Reloading...' : 'Save & Reload')}
                     </button>
                 </div>
             </div>
@@ -274,7 +305,7 @@ const MCPPage = () => {
             <div className="bg-yellow-500/10 border border-yellow-500/20 text-yellow-600 dark:text-yellow-500 p-4 rounded-md flex items-center justify-between">
                 <div className="flex items-center">
                     <AlertCircle className="w-5 h-5 mr-2" />
-                    AI Engine must be restarted to apply MCP config changes. “Test” runs in the AI Engine container context.
+                    AI Engine reload applies MCP config changes when there are no active calls. “Test” runs in the AI Engine container context.
                 </div>
             </div>
 
@@ -507,7 +538,7 @@ const MCPPage = () => {
                         </div>
 
                         <div className="space-y-3">
-                            <FormLabel tooltip="Environment variables passed to the MCP server process. Prefer placeholders like ${VAR} (do not paste secrets).">
+                            <FormLabel tooltip="Environment variables passed to the MCP server process. Prefer placeholders like ${VAR}. Non-placeholder values are redacted when editing.">
                                 Environment (optional)
                             </FormLabel>
                             <div className="space-y-2">
@@ -525,11 +556,11 @@ const MCPPage = () => {
                                         />
                                         <input
                                             className="col-span-2 p-2 rounded-md border border-input bg-transparent text-sm"
-                                            placeholder="${ENV_VAR}"
+                                            placeholder={row.redacted ? "<redacted>" : "${ENV_VAR}"}
                                             value={row.value}
                                             onChange={(e) => {
                                                 const next = [...serverForm.env];
-                                                next[idx] = { ...row, value: e.target.value };
+                                                next[idx] = { ...row, value: e.target.value, redacted: false };
                                                 setServerForm({ ...serverForm, env: next });
                                             }}
                                         />

@@ -143,6 +143,7 @@ The deterministic ATIS server uses `met.no` (tafmetar feed) for METAR fetch and 
 - Example config: `config/aviation_atis.example.yaml`
 - Copy to: `config/aviation_atis.yaml` (or any path) and pass via `--config`
 - Optional: `defaults.explicit_not_available: true` to speak explicit “not available” lines when runway/frequency/advisories are not configured.
+- The ATIS MCP server re-reads its `--config` file when it changes (no engine restart required for those per-aerodrome tweaks).
 
 ### Context scoping
 
@@ -190,8 +191,8 @@ For stdio servers:
 
 For hot reload:
 
-- Current `/reload` reloads config but does not rebuild providers/tool registries or manage subprocesses.
-- Treat MCP server config changes as **restart-required** until explicit lifecycle reload support is added.
+- `/reload` can reload MCP servers/tools when there are **no active calls** (it restarts MCP stdio subprocesses and re-registers MCP tools).
+- If there are active calls, MCP reload is deferred (plan a restart or reload during an idle window).
 
 ## Observability
 

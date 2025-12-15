@@ -47,6 +47,6 @@ def test_missing_extras_are_explicit_not_available() -> None:
     metar = parse_metar("METAR LSMP 171720Z VRB01KT 9999NDV OVC007 03/02 Q1025=")
     text = generate_atis_text(metar, AtisExtras(aerodrome_name="Payerne", explicit_not_available=True))
     lines = text.splitlines()
-    assert "Runway information not available." in lines
-    assert "AFIS frequency not available." in lines
+    assert "Runway in use information not available." in lines
+    assert "Information frequency not available." in lines
     assert "Traffic reporting instructions not available." in lines

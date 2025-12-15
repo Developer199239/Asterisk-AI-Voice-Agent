@@ -133,6 +133,19 @@ class MCPClientManager:
         logger.info("Registered MCP tools", count=len(registered), tools=registered)
         return registered
 
+    def unregister_tools(self, tool_registry: Any) -> int:
+        """Unregister MCP tools previously registered by this manager."""
+        removed = 0
+        for exposed_name in list(self._tool_routes.keys()):
+            try:
+                if hasattr(tool_registry, "unregister"):
+                    if tool_registry.unregister(exposed_name):
+                        removed += 1
+            except Exception:
+                logger.debug("Failed to unregister MCP tool", tool=exposed_name, exc_info=True)
+        self._tool_routes.clear()
+        return removed
+
     def get_status(self) -> Dict[str, Any]:
         """Return a safe-to-expose status snapshot (no secret env values)."""
         servers: Dict[str, Any] = {}

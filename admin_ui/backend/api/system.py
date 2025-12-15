@@ -367,38 +367,67 @@ async def reload_ai_engine():
     """
     try:
         import httpx
-        url = os.getenv("HEALTH_CHECK_AI_ENGINE_URL", "http://127.0.0.1:15000/health").replace("/health", "/reload")
-        logger.info(f"Sending reload request to AI Engine at {url}")
+        env = os.getenv("HEALTH_CHECK_AI_ENGINE_URL")
+        candidates = []
+        if env:
+            candidates.append(env.replace("/health", "/reload"))
+        candidates.extend(
+            [
+                "http://127.0.0.1:15000/reload",
+                "http://ai-engine:15000/reload",
+                "http://ai_engine:15000/reload",
+            ]
+        )
+        # Dedupe
+        seen = set()
+        urls = []
+        for u in candidates:
+            u = (u or "").strip()
+            if u and u not in seen:
+                seen.add(u)
+                urls.append(u)
         
+        resp = None
         async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(url)
-            
-            if resp.status_code == 200:
-                data = resp.json()
-                changes = data.get("changes", [])
+            for url in urls:
+                try:
+                    logger.info(f"Sending reload request to AI Engine at {url}")
+                    resp = await client.post(url)
+                    break
+                except httpx.ConnectError:
+                    continue
+        if resp is None:
+            raise HTTPException(status_code=503, detail="AI Engine is not reachable")
+        
+        if resp.status_code == 200:
+            data = resp.json()
+            changes = data.get("changes", [])
                 
-                # Check if any change requires a restart (new providers, removed providers)
-                restart_required = any("restart needed" in str(c).lower() for c in changes)
+            # Check if any change requires a restart (new providers, removed providers, deferred reload)
+            restart_required = any(
+                any(marker in str(c).lower() for marker in ("restart needed", "reload deferred"))
+                for c in changes
+            )
                 
-                if restart_required:
-                    return {
-                        "status": "partial",
-                        "message": "Config updated but new providers require a restart to load",
-                        "changes": changes,
-                        "restart_required": True
-                    }
-                
+            if restart_required:
                 return {
-                    "status": "success",
-                    "message": data.get("message", "Configuration reloaded"),
+                    "status": "partial",
+                    "message": "Config updated but some changes require a restart to fully apply",
                     "changes": changes,
-                    "restart_required": False
+                    "restart_required": True
                 }
-            else:
-                raise HTTPException(
-                    status_code=resp.status_code,
-                    detail=f"AI Engine reload failed: {resp.text}"
-                )
+                
+            return {
+                "status": "success",
+                "message": data.get("message", "Configuration reloaded"),
+                "changes": changes,
+                "restart_required": False
+            }
+        
+        raise HTTPException(
+            status_code=resp.status_code,
+            detail=f"AI Engine reload failed: {resp.text}"
+        )
     except httpx.ConnectError:
         raise HTTPException(
             status_code=503,

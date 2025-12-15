@@ -50,6 +50,7 @@ class AtisExtras:
     aerodrome_name: Optional[str] = None
     runway_in_use: Optional[str] = None
     afis_frequency_mhz: Optional[str] = None
+    frequency_label: Optional[str] = None  # "ATIS", "AFIS", etc.
     traffic_advisory: Optional[str] = None
     # When True, and aerodrome_name not set, speak ICAO code via phonetics.
     speak_icao_when_no_name: bool = True
@@ -73,7 +74,7 @@ def generate_atis_text(metar: Metar, extras: AtisExtras) -> str:
     if extras.runway_in_use:
         lines.append(f"Runway {speak_runway(extras.runway_in_use)} in use.")
     elif extras.explicit_not_available:
-        lines.append("Runway information not available.")
+        lines.append("Runway in use information not available.")
 
     lines.extend(_wind_lines(metar.wind))
     lines.extend(_visibility_lines(metar.visibility, metar.cavok))
@@ -90,14 +91,16 @@ def generate_atis_text(metar: Metar, extras: AtisExtras) -> str:
         lines.append(f"{wx_line}.")
 
     if extras.afis_frequency_mhz:
-        lines.append(f"AFIS frequency {speak_frequency_mhz(extras.afis_frequency_mhz)}.")
+        label = (extras.frequency_label or "AFIS").strip() or "AFIS"
+        lines.append(f"{label} frequency {speak_frequency_mhz(extras.afis_frequency_mhz)}.")
     elif extras.explicit_not_available:
-        lines.append("AFIS frequency not available.")
+        lines.append("Information frequency not available.")
 
     if extras.traffic_advisory and extras.traffic_advisory.strip():
         # Expect caller to provide final text; keep as-is (deterministic/no hallucination).
         lines.append(extras.traffic_advisory.strip().rstrip(".") + ".")
-    # Note: We don't say "Traffic reporting instructions not available" - it's not useful info
+    elif extras.explicit_not_available:
+        lines.append("Traffic reporting instructions not available.")
 
     lines.append("This is an automatic service.")
     return "\n".join(lines)

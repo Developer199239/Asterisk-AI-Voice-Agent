@@ -7738,6 +7738,47 @@ class Engine:
                     changes.append(f"Contexts updated ({len(new_config.contexts)} contexts)")
             except Exception as e:
                 errors.append(f"Error updating contexts: {str(e)}")
+
+            # Step 4b: Reload MCP tools (best-effort; applies to new calls)
+            try:
+                old_mcp = getattr(old_config, "mcp", None)
+                new_mcp = getattr(new_config, "mcp", None)
+                mcp_changed = old_mcp != new_mcp
+                if mcp_changed:
+                    active_calls = []
+                    try:
+                        active_calls = await self.session_store.list_active_calls()
+                    except Exception:
+                        active_calls = []
+
+                    if active_calls:
+                        changes.append(f"MCP config changed (reload deferred; {len(active_calls)} active call(s))")
+                    else:
+                        from src.tools.registry import tool_registry
+                        # Stop/unregister old manager (if any)
+                        if self.mcp_manager:
+                            try:
+                                removed = self.mcp_manager.unregister_tools(tool_registry)
+                                changes.append(f"MCP tools unregistered ({removed})")
+                            except Exception:
+                                logger.debug("Failed unregistering MCP tools on reload", exc_info=True)
+                            try:
+                                await self.mcp_manager.stop()
+                            except Exception:
+                                logger.debug("Failed stopping MCP manager on reload", exc_info=True)
+                            self.mcp_manager = None
+
+                        # Start/register new manager if enabled
+                        if new_mcp and getattr(new_mcp, "enabled", False):
+                            from src.mcp.manager import MCPClientManager
+                            self.mcp_manager = MCPClientManager(new_mcp)
+                            await self.mcp_manager.start()
+                            registered = self.mcp_manager.register_tools(tool_registry)
+                            changes.append(f"MCP tools reloaded ({len(registered)})")
+                        else:
+                            changes.append("MCP tools disabled")
+            except Exception as e:
+                errors.append(f"Error reloading MCP tools: {str(e)}")
             
             # Step 5: Update prompts
             try:

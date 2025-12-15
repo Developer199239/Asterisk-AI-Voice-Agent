@@ -22,6 +22,7 @@ class AerodromeConfig:
     aerodrome_name: Optional[str] = None
     runway_in_use: Optional[str] = None
     afis_frequency_mhz: Optional[str] = None
+    frequency_label: Optional[str] = None
     traffic_advisory: Optional[str] = None
     explicit_not_available: Optional[bool] = None
 
@@ -31,6 +32,9 @@ class ServerConfig:
     metno_user_agent: str
     metno_timeout_seconds: float
     cache_ttl_seconds: int
+    awc_user_agent: Optional[str]
+    awc_timeout_seconds: float
+    awc_cache_ttl_seconds: int
     explicit_not_available_default: bool
     aerodromes: Dict[str, AerodromeConfig]
 
@@ -42,6 +46,7 @@ def _load_config(path: Optional[str], *, user_agent: Optional[str], cache_ttl_se
             raw = yaml.safe_load(f) or {}
 
     metno = raw.get("metno") if isinstance(raw.get("metno"), dict) else {}
+    awc = raw.get("awc") if isinstance(raw.get("awc"), dict) else {}
     defaults = raw.get("defaults") if isinstance(raw.get("defaults"), dict) else {}
     aerodromes_raw = raw.get("aerodromes") if isinstance(raw.get("aerodromes"), dict) else {}
     aerodromes: Dict[str, AerodromeConfig] = {}
@@ -52,6 +57,7 @@ def _load_config(path: Optional[str], *, user_agent: Optional[str], cache_ttl_se
             aerodrome_name=(cfg.get("aerodrome_name") or cfg.get("name")),
             runway_in_use=cfg.get("runway_in_use"),
             afis_frequency_mhz=cfg.get("afis_frequency_mhz"),
+            frequency_label=cfg.get("frequency_label"),
             traffic_advisory=cfg.get("traffic_advisory"),
             explicit_not_available=cfg.get("explicit_not_available"),
         )
@@ -78,10 +84,30 @@ def _load_config(path: Optional[str], *, user_agent: Optional[str], cache_ttl_se
 
     explicit_not_available_default = bool(defaults.get("explicit_not_available", False))
 
+    awc_ua = (awc.get("user_agent") or os.getenv("AWC_USER_AGENT") or "").strip() or None
+    # If not provided, reuse met.no UA (already identifying) to avoid missing UA in deployments.
+    if awc_ua is None:
+        awc_ua = ua
+    awc_timeout = awc.get("timeout_seconds")
+    try:
+        awc_timeout_f = float(awc_timeout) if awc_timeout is not None else 5.0
+    except Exception:
+        awc_timeout_f = 5.0
+    awc_timeout_f = max(1.0, awc_timeout_f)
+    awc_ttl = awc.get("cache_ttl_seconds")
+    try:
+        awc_ttl_i = int(awc_ttl) if awc_ttl is not None else 300
+    except Exception:
+        awc_ttl_i = 300
+    awc_ttl_i = max(0, awc_ttl_i)
+
     return ServerConfig(
         metno_user_agent=ua,
         metno_timeout_seconds=timeout_f,
         cache_ttl_seconds=ttl_i,
+        awc_user_agent=awc_ua,
+        awc_timeout_seconds=awc_timeout_f,
+        awc_cache_ttl_seconds=awc_ttl_i,
         explicit_not_available_default=explicit_not_available_default,
         aerodromes=aerodromes,
     )
@@ -113,7 +139,7 @@ def _tools_list() -> Dict[str, Any]:
                         "icao": {"type": "string", "description": "ICAO station code (e.g., LSMP, KJFK). Required unless metar_raw is provided."},
                         "metar_raw": {"type": "string", "description": "Optional raw METAR string for testing; skips met.no fetch."},
                     },
-                    "required": ["icao"],
+                    "anyOf": [{"required": ["icao"]}, {"required": ["metar_raw"]}],
                 },
             }
         ]
@@ -151,7 +177,12 @@ def _handle_get_atis(
     # Try to get enhanced airport data from aviationweather.gov
     awc_info: Optional[AirportInfo] = None
     try:
-        awc_info = fetch_airport_info(station, timeout_seconds=5.0)
+        awc_info = fetch_airport_info(
+            station,
+            timeout_seconds=cfg.awc_timeout_seconds,
+            user_agent=cfg.awc_user_agent,
+            cache_ttl_seconds=cfg.awc_cache_ttl_seconds,
+        )
     except Exception:
         pass  # Fallback to config-only data
 
@@ -165,9 +196,16 @@ def _handle_get_atis(
     if not aerodrome_name and awc_info and awc_info.name:
         aerodrome_name = awc_info.name
 
-    afis_frequency = (aerodrome_cfg.afis_frequency_mhz if aerodrome_cfg else None)
-    if not afis_frequency and awc_info:
-        afis_frequency = get_primary_atis_frequency(awc_info)
+    freq_mhz = (aerodrome_cfg.afis_frequency_mhz if aerodrome_cfg else None)
+    freq_label = (aerodrome_cfg.frequency_label if aerodrome_cfg else None)
+    if not freq_mhz and awc_info:
+        # AWC provides ATIS frequencies; do not label them as AFIS.
+        freq_mhz = get_primary_atis_frequency(awc_info)
+        if freq_mhz:
+            freq_label = "ATIS"
+    if freq_mhz and not freq_label:
+        # Default label: if the frequency was configured, it's usually AFIS for uncontrolled aerodromes.
+        freq_label = "AFIS"
 
     # Runway in use: only from config (AWC doesn't have "in use" info)
     runway_in_use = (aerodrome_cfg.runway_in_use if aerodrome_cfg else None)
@@ -178,7 +216,8 @@ def _handle_get_atis(
     extras = AtisExtras(
         aerodrome_name=aerodrome_name,
         runway_in_use=runway_in_use,
-        afis_frequency_mhz=afis_frequency,
+        afis_frequency_mhz=freq_mhz,
+        frequency_label=freq_label,
         traffic_advisory=traffic_advisory,
         speak_icao_when_no_name=True,
         explicit_not_available=explicit_na,
@@ -221,6 +260,7 @@ def _handle_get_atis(
             "aerodrome_name": extras.aerodrome_name,
             "runway_in_use": extras.runway_in_use,
             "afis_frequency_mhz": extras.afis_frequency_mhz,
+            "frequency_label": extras.frequency_label,
             "traffic_advisory": extras.traffic_advisory,
         },
         "awc_data": {
@@ -247,7 +287,16 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--cache-ttl-seconds", type=int, default=None, help="METAR cache TTL (default 300)")
     args = parser.parse_args(argv)
 
+    cfg_lock = threading.Lock()
     cfg = _load_config(args.config, user_agent=args.user_agent, cache_ttl_seconds=args.cache_ttl_seconds)
+    cfg_path = args.config
+    cfg_mtime = None
+    if cfg_path and os.path.exists(cfg_path):
+        try:
+            cfg_mtime = os.path.getmtime(cfg_path)
+        except Exception:
+            cfg_mtime = None
+
     client = MetNoMetarClient(
         user_agent=cfg.metno_user_agent,
         timeout_seconds=cfg.metno_timeout_seconds,
@@ -256,6 +305,31 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     tracked_lock = threading.Lock()
     tracked_icaos: set[str] = set(cfg.aerodromes.keys())
+
+    def _maybe_reload_cfg() -> ServerConfig:
+        nonlocal cfg, cfg_mtime
+        if not cfg_path:
+            return cfg
+        try:
+            mtime = os.path.getmtime(cfg_path)
+        except Exception:
+            return cfg
+        if cfg_mtime is not None and mtime == cfg_mtime:
+            return cfg
+        with cfg_lock:
+            try:
+                mtime2 = os.path.getmtime(cfg_path)
+            except Exception:
+                return cfg
+            if cfg_mtime is not None and mtime2 == cfg_mtime:
+                return cfg
+            new_cfg = _load_config(cfg_path, user_agent=args.user_agent, cache_ttl_seconds=args.cache_ttl_seconds)
+            cfg = new_cfg
+            cfg_mtime = mtime2
+            # Expand tracked set (do not remove entries to avoid thrash).
+            with tracked_lock:
+                tracked_icaos.update(set(new_cfg.aerodromes.keys()))
+            return cfg
 
     # Optional background refresh: keeps a warm cache so callers don't wait on network fetch.
     # Default cadence is cache_ttl_seconds (e.g., 5 minutes).
@@ -322,7 +396,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                         _error(req_id, -32601, f"Unknown tool: {name}")
                         continue
                     result = _handle_get_atis(
-                        cfg=cfg,
+                        cfg=_maybe_reload_cfg(),
                         client=client,
                         tracked_icaos=tracked_icaos,
                         tracked_lock=tracked_lock,

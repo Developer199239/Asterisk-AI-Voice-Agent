@@ -91,6 +91,21 @@ class ToolRegistry:
     def has(self, name: str) -> bool:
         """Return True if a tool is registered under this exact name (no alias resolution)."""
         return name in self._tools
+
+    def unregister(self, name: str) -> bool:
+        """Unregister a tool by exact name (no alias resolution)."""
+        if name in self._tools:
+            self._tools.pop(name, None)
+            logger.info(f"🗑️ Unregistered tool: {name}")
+            return True
+        return False
+
+    def unregister_many(self, names: Iterable[str]) -> int:
+        removed = 0
+        for name in names:
+            if self.unregister(str(name)):
+                removed += 1
+        return removed
     
     def get_all(self) -> List[Tool]:
         """

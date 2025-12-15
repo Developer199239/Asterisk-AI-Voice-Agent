@@ -8,17 +8,23 @@ Provides airport data including:
 from __future__ import annotations
 
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.request import Request, urlopen
 from urllib.error import URLError, HTTPError
 import json
+import threading
+import time
 
 logger = logging.getLogger(__name__)
 
 AWC_AIRPORT_API = "https://aviationweather.gov/api/data/airport"
 AWC_USER_AGENT = "Asterisk-AI-Voice-Agent (+https://github.com/hkjarral/Asterisk-AI-Voice-Agent)"
+
+_CACHE_LOCK = threading.Lock()
+_AIRPORT_CACHE: Dict[str, Tuple[float, Optional["AirportInfo"]]] = {}
 
 
 @dataclass
@@ -106,12 +112,20 @@ def _parse_runways(runway_list: Optional[List[Dict[str, Any]]]) -> List[Runway]:
     return runways
 
 
-def fetch_airport_info(icao: str, timeout_seconds: float = 10.0) -> Optional[AirportInfo]:
+def fetch_airport_info(
+    icao: str,
+    timeout_seconds: float = 10.0,
+    *,
+    user_agent: Optional[str] = None,
+    cache_ttl_seconds: int = 300,
+) -> Optional[AirportInfo]:
     """Fetch airport information from aviationweather.gov.
     
     Args:
         icao: ICAO airport code (e.g., KJFK, EGLL)
         timeout_seconds: Request timeout
+        user_agent: Optional User-Agent override (else uses AWC_USER_AGENT or env AWC_USER_AGENT)
+        cache_ttl_seconds: Cache TTL (seconds). 0 disables caching.
         
     Returns:
         AirportInfo if found, None otherwise
@@ -119,16 +133,29 @@ def fetch_airport_info(icao: str, timeout_seconds: float = 10.0) -> Optional[Air
     icao = icao.strip().upper()
     if not icao or len(icao) < 3:
         return None
+
+    ttl = max(0, int(cache_ttl_seconds))
+    if ttl > 0:
+        with _CACHE_LOCK:
+            cached = _AIRPORT_CACHE.get(icao)
+        if cached:
+            cached_at, cached_val = cached
+            if time.time() - cached_at < ttl:
+                return cached_val
     
     url = f"{AWC_AIRPORT_API}?ids={icao}&format=json"
+    ua = (user_agent or os.getenv("AWC_USER_AGENT") or AWC_USER_AGENT).strip()
     
     try:
-        req = Request(url, headers={"User-Agent": AWC_USER_AGENT})
+        req = Request(url, headers={"User-Agent": ua, "Accept": "application/json"})
         with urlopen(req, timeout=timeout_seconds) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         
         if not data or not isinstance(data, list) or len(data) == 0:
             logger.debug(f"No airport data found for {icao}")
+            if ttl > 0:
+                with _CACHE_LOCK:
+                    _AIRPORT_CACHE[icao] = (time.time(), None)
             return None
         
         airport = data[0]
@@ -145,7 +172,7 @@ def fetch_airport_info(icao: str, timeout_seconds: float = 10.0) -> Optional[Air
             # Remove trailing whitespace and normalize
             name = " ".join(name.split())
         
-        return AirportInfo(
+        info = AirportInfo(
             icao=airport.get("icaoId", icao),
             iata=airport.get("iataId"),
             name=name or None,
@@ -156,18 +183,34 @@ def fetch_airport_info(icao: str, timeout_seconds: float = 10.0) -> Optional[Air
             runways=runways,
             raw_data=airport,
         )
+        if ttl > 0:
+            with _CACHE_LOCK:
+                _AIRPORT_CACHE[icao] = (time.time(), info)
+        return info
         
     except HTTPError as e:
         logger.warning(f"HTTP error fetching airport {icao}: {e.code}")
+        if ttl > 0:
+            with _CACHE_LOCK:
+                _AIRPORT_CACHE[icao] = (time.time(), None)
         return None
     except URLError as e:
         logger.warning(f"URL error fetching airport {icao}: {e.reason}")
+        if ttl > 0:
+            with _CACHE_LOCK:
+                _AIRPORT_CACHE[icao] = (time.time(), None)
         return None
     except json.JSONDecodeError as e:
         logger.warning(f"JSON decode error for airport {icao}: {e}")
+        if ttl > 0:
+            with _CACHE_LOCK:
+                _AIRPORT_CACHE[icao] = (time.time(), None)
         return None
     except Exception as e:
         logger.warning(f"Error fetching airport {icao}: {e}")
+        if ttl > 0:
+            with _CACHE_LOCK:
+                _AIRPORT_CACHE[icao] = (time.time(), None)
         return None
 
 

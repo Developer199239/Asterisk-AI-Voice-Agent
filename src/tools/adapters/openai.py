@@ -7,6 +7,7 @@ Handles translation between unified tool format and OpenAI's function calling fo
 from typing import Dict, Any, List, Optional
 from src.tools.registry import ToolRegistry
 from src.tools.context import ToolExecutionContext
+from src.tools.adapters.sanitize import sanitize_tool_result_for_json_string
 import structlog
 import json
 
@@ -218,16 +219,17 @@ class OpenAIToolAdapter:
         
         try:
             # Step 1: Send function_call_output
+            safe_result = sanitize_tool_result_for_json_string(result, max_bytes=12000)
             output_event = {
                 "type": "conversation.item.create",
                 "item": {
                     "type": "function_call_output",
                     "call_id": call_id,
-                    "output": json.dumps(result)  # Stringify the result JSON
+                    "output": json.dumps(safe_result)  # Stringify the result JSON (size-capped)
                 }
             }
             await websocket.send(json.dumps(output_event))
-            logger.info(f"✅ Sent function output to OpenAI: {result.get('status')}", 
+            logger.info(f"✅ Sent function output to OpenAI: {safe_result.get('status')}", 
                        call_id=call_id)
             
             # Step 2: Trigger response generation
