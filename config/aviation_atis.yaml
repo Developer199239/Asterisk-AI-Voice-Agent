@@ -6,17 +6,14 @@ metno:
   # Cache TTL in seconds. The MCP server also background-refreshes tracked ICAOs on this cadence.
   cache_ttl_seconds: 300
 
-# Output controls (optional)
+# Output controls
 defaults:
-  # When true, include explicit "not available" lines for missing runway/frequency/advisories.
-  # Aviation convention usually omits unknown lines; keep this false unless you want explicit phrasing.
-  explicit_not_available: false
+  # When true, include explicit "not available" lines for missing runway/frequency.
+  # Set to true to inform callers when data is unavailable.
+  explicit_not_available: true
 
-# Per-aerodrome deterministic extras (no guessing/hallucinations).
-# Keys are ICAO station codes.
-aerodromes:
-  LSMP:
-    aerodrome_name: "Payerne"
-    runway_in_use: "22"
-    afis_frequency_mhz: "131.130"
-    traffic_advisory: "Traffic to report five minutes prior to entering the aerodrome traffic zone"
+# Per-aerodrome extras - ONLY for data that cannot be obtained dynamically.
+# NOTE: We now fetch most data live from aviationweather.gov (name, frequency, runways).
+# Runway in use is NOT available via any free API - it's an ATC decision.
+# Leave this section empty to use only live data.
+aerodromes: {}

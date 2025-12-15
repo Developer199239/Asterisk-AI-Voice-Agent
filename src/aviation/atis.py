@@ -97,8 +97,7 @@ def generate_atis_text(metar: Metar, extras: AtisExtras) -> str:
     if extras.traffic_advisory and extras.traffic_advisory.strip():
         # Expect caller to provide final text; keep as-is (deterministic/no hallucination).
         lines.append(extras.traffic_advisory.strip().rstrip(".") + ".")
-    elif extras.explicit_not_available:
-        lines.append("Traffic reporting instructions not available.")
+    # Note: We don't say "Traffic reporting instructions not available" - it's not useful info
 
     lines.append("This is an automatic service.")
     return "\n".join(lines)
