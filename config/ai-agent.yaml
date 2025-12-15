@@ -279,6 +279,35 @@ contexts:
     - leave_voicemail
     - send_email_summary
     - request_transcript
+  demo_aviation_atis:
+    greeting: Hello, this is the Payerne automatic terminal information service. Ask me for the current ATIS.
+    profile: telephony_ulaw_8k
+    provider: google_live
+    prompt: |
+      You are an aviation ATIS information service for Payerne aerodrome (LSMP).
+
+      YOUR ROLE:
+      - Provide current ATIS when asked
+      - Use the mcp_aviation_atis tool with icao=LSMP to get the current ATIS
+      - Read the ATIS text exactly as returned by the tool
+      - Do NOT modify or paraphrase the ATIS content
+
+      IMPORTANT:
+      - When caller asks for ATIS, weather, or aerodrome information, call the tool immediately
+      - The tool returns properly formatted spoken ATIS - read it verbatim
+
+      ENDING CALLS:
+      - When caller says goodbye, use hangup_call with farewell Safe flying!
+    tools:
+      - hangup_call
+      - mcp_aviation_atis
+  demo_mcp:
+    greeting: Hi! I can check the weather for any city. Just ask me what the weather is like somewhere!
+    profile: telephony_ulaw_8k
+    provider: openai_realtime
+    tools:
+      - hangup_call
+      - mcp_weather_get_city
 default_provider: local
 downstream_mode: stream
 external_media:
@@ -740,6 +769,41 @@ tools:
         target: '601'
         type: ringgroup
     enabled: true
+mcp:
+  enabled: true
+  servers:
+    weather:
+      transport: stdio
+      command:
+        - python
+        - /app/weather_mcp_server.py
+      defaults:
+        timeout_ms: 15000
+        slow_response_threshold_ms: 3000
+        slow_response_message: Let me check the weather for you, one moment...
+      tools:
+        - name: get_weather_by_city
+          expose_as: mcp_weather_get_city
+          speech_field: spoken
+    aviation_atis:
+      transport: stdio
+      command:
+        - python3
+        - -m
+        - src.mcp_servers.aviation_atis_server
+        - --config
+        - /app/config/aviation_atis.yaml
+      env:
+        METNO_USER_AGENT: "Asterisk-AI-Voice-Agent (+https://github.com/hkjarral/Asterisk-AI-Voice-Agent)"
+      defaults:
+        timeout_ms: 15000
+        slow_response_threshold_ms: 3000
+        slow_response_message: Let me get the current ATIS for you, one moment...
+      tools:
+        - name: get_atis
+          expose_as: mcp_aviation_atis
+          description: Get current ATIS for an ICAO airport code (e.g., LSMP, KJFK)
+          speech_field: atis_text
 vad:
   enhanced_enabled: true
   fallback_buffer_size: 128000

@@ -427,10 +427,9 @@ class GoogleLiveProvider(AIProviderInterface):
             # Always provide a message string (best-effort).
             if "message" not in payload:
                 payload["message"] = str(result.get("message") or "")
-            # Do NOT include raw MCP result blobs by default (commonly large/nested).
-            # If you need a hint for model reasoning, include a compact "result" string.
-            if "result" in result and "result" not in payload:
-                payload["result"] = self._safe_jsonable(result.get("result"))
+            # Do NOT include raw MCP result blobs - they are commonly large/nested and cause
+            # Google Live to stutter when generating audio. The `message` field already contains
+            # the speech text extracted via speech_field/speech_template.
 
         # Cap size aggressively.
         try:

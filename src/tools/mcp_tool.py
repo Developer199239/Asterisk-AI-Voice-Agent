@@ -114,12 +114,9 @@ class MCPTool(Tool):
         return {
             "status": "success",
             "message": message,
-            "data": result,
-            "mcp": {
-                "server": self._server_id,
-                "tool": self._mcp_tool_name,
-                "exposed_name": self._exposed_name,
-            },
+            # Keep structured data for follow-up reasoning/tool chaining, but avoid adding
+            # extra metadata fields into provider tool responses (log routing metadata instead).
+            "result": result,
         }
 
     def _build_speech_message(self, result: Dict[str, Any]) -> str:
@@ -162,4 +159,3 @@ class MCPTool(Tool):
             return content_text
 
         return "I have the result."
-

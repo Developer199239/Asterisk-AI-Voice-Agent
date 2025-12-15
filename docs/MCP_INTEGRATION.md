@@ -107,10 +107,19 @@ mcp:
   servers:
     aviation_atis:
       transport: stdio
-      command: ["python", "-m", "atis_mcp_server"]
-      cwd: "/app/mcp_servers/aviation_atis"   # optional
+      # Built-in deterministic server (ai-engine container): src/mcp_servers/aviation_atis_server.py
+      # Configure per-aerodrome extras (name/runway/frequency/advisory) via a separate YAML passed as an arg.
+      command:
+        - "python3"
+        - "-m"
+        - "src.mcp_servers.aviation_atis_server"
+        - "--config"
+        - "/app/config/aviation_atis.yaml"
       env:
-        ATIS_API_KEY: ${ATIS_API_KEY}
+        # met.no requires an identifying User-Agent; pass one via config file or env.
+        METNO_USER_AGENT: "Asterisk-AI-Voice-Agent (+https://github.com/...)"
+        # Optional override (defaults to 300)
+        # METNO_CACHE_TTL_SECONDS: "300"
       restart:
         enabled: true
         max_restarts: 5
@@ -126,6 +135,14 @@ mcp:
           speech_field: atis_text
           # speech_template: "The current ATIS for {icao} is: {atis_text}"
 ```
+
+### Aviation ATIS server config (per-aerodrome)
+
+The deterministic ATIS server uses `met.no` (tafmetar feed) for METAR fetch and supports a 5-minute cache + background refresh to reduce caller-visible lag.
+
+- Example config: `config/aviation_atis.example.yaml`
+- Copy to: `config/aviation_atis.yaml` (or any path) and pass via `--config`
+- Optional: `defaults.explicit_not_available: true` to speak explicit “not available” lines when runway/frequency/advisories are not configured.
 
 ### Context scoping
 
