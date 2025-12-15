@@ -13,6 +13,7 @@ import yaml
 from src.aviation.atis import AtisExtras, generate_atis_text
 from src.aviation.metar import parse_metar
 from src.aviation.metno import MetNoMetarClient
+from src.aviation.awc import fetch_airport_info, get_primary_atis_frequency, get_runway_list_spoken, AirportInfo
 from src.mcp.stdio_framing import decode_frame, encode_message
 
 
@@ -147,20 +148,57 @@ def _handle_get_atis(
         with tracked_lock:
             tracked_icaos.add(station)
 
+    # Try to get enhanced airport data from aviationweather.gov
+    awc_info: Optional[AirportInfo] = None
+    try:
+        awc_info = fetch_airport_info(station, timeout_seconds=5.0)
+    except Exception:
+        pass  # Fallback to config-only data
+
     aerodrome_cfg = cfg.aerodromes.get(station)
     explicit_na = cfg.explicit_not_available_default
     if aerodrome_cfg and aerodrome_cfg.explicit_not_available is not None:
         explicit_na = bool(aerodrome_cfg.explicit_not_available)
+
+    # Build extras: prefer config, fallback to AWC data
+    aerodrome_name = (aerodrome_cfg.aerodrome_name if aerodrome_cfg else None)
+    if not aerodrome_name and awc_info and awc_info.name:
+        aerodrome_name = awc_info.name
+
+    afis_frequency = (aerodrome_cfg.afis_frequency_mhz if aerodrome_cfg else None)
+    if not afis_frequency and awc_info:
+        afis_frequency = get_primary_atis_frequency(awc_info)
+
+    # Runway in use: only from config (AWC doesn't have "in use" info)
+    runway_in_use = (aerodrome_cfg.runway_in_use if aerodrome_cfg else None)
+
+    # Traffic advisory: only from config
+    traffic_advisory = (aerodrome_cfg.traffic_advisory if aerodrome_cfg else None)
+
     extras = AtisExtras(
-        aerodrome_name=(aerodrome_cfg.aerodrome_name if aerodrome_cfg else None),
-        runway_in_use=(aerodrome_cfg.runway_in_use if aerodrome_cfg else None),
-        afis_frequency_mhz=(aerodrome_cfg.afis_frequency_mhz if aerodrome_cfg else None),
-        traffic_advisory=(aerodrome_cfg.traffic_advisory if aerodrome_cfg else None),
+        aerodrome_name=aerodrome_name,
+        runway_in_use=runway_in_use,
+        afis_frequency_mhz=afis_frequency,
+        traffic_advisory=traffic_advisory,
         speak_icao_when_no_name=True,
         explicit_not_available=explicit_na,
     )
 
     atis_text = generate_atis_text(metar, extras)
+
+    # Add available runways info if we have AWC data but no runway in use
+    if not runway_in_use and awc_info and awc_info.runways:
+        runway_info = get_runway_list_spoken(awc_info)
+        if runway_info:
+            # Insert before "This is an automatic service" line
+            lines = atis_text.split("\n")
+            insert_idx = len(lines) - 1  # Before last line
+            for i, line in enumerate(lines):
+                if "automatic service" in line.lower():
+                    insert_idx = i
+                    break
+            lines.insert(insert_idx, runway_info)
+            atis_text = "\n".join(lines)
 
     structured: Dict[str, Any] = {
         "atis_text": atis_text,
@@ -184,6 +222,14 @@ def _handle_get_atis(
             "runway_in_use": extras.runway_in_use,
             "afis_frequency_mhz": extras.afis_frequency_mhz,
             "traffic_advisory": extras.traffic_advisory,
+        },
+        "awc_data": {
+            "available": awc_info is not None,
+            "iata": awc_info.iata if awc_info else None,
+            "country": awc_info.country if awc_info else None,
+            "atis_frequencies": awc_info.atis_frequencies if awc_info else [],
+            "tower_frequencies": awc_info.tower_frequencies if awc_info else [],
+            "runways": [{"id": r.id, "length_ft": r.length_ft} for r in (awc_info.runways if awc_info else [])],
         },
         "source": meta,
     }
