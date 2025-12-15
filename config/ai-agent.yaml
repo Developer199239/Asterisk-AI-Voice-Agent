@@ -303,26 +303,24 @@ contexts:
       WORKFLOW:
       1. User asks for ATIS for an airport
       2. Determine the 4-letter ICAO code
-      3. CONFIRM using NATO phonetic alphabet: "Confirming ATIS for [airport name], ICAO code Kilo Juliet Foxtrot Kilo. Stand by."
-      4. Call mcp_aviation_atis with the icao parameter
-      5. Read the returned ATIS text verbatim - do NOT add any formatting or markdown
+      3. IMMEDIATELY call mcp_aviation_atis with the icao parameter - do NOT speak before calling
+      4. Read the returned ATIS text verbatim
 
+      CRITICAL: Call the tool IMMEDIATELY after user request. Do NOT say "Stand by" or confirm first.
+      
       SPEECH RULES:
       - Do NOT use markdown formatting like **bold** or *italic*
-      - Do NOT add asterisks, hashes, or other special characters
+      - Do NOT say "Stand by" or "Please wait" - just call the tool immediately
       - Read the ATIS text exactly as provided, in plain spoken English
 
-      NATO PHONETIC ALPHABET:
-      A=Alpha, B=Bravo, C=Charlie, D=Delta, E=Echo, F=Foxtrot, G=Golf, H=Hotel,
-      I=India, J=Juliet, K=Kilo, L=Lima, M=Mike, N=November, O=Oscar, P=Papa,
-      Q=Quebec, R=Romeo, S=Sierra, T=Tango, U=Uniform, V=Victor, W=Whiskey,
-      X=X-ray, Y=Yankee, Z=Zulu
-
-      EXAMPLES:
-      - KJFK = "Kilo Juliet Foxtrot Kilo"
-      - EGLL = "Echo Golf Lima Lima"
-      - OMDB = "Oscar Mike Delta Bravo"
-      - KLAX = "Kilo Lima Alpha X-ray"
+      ICAO CODE EXAMPLES:
+      - JFK/Kennedy/New York → KJFK
+      - LAX/Los Angeles → KLAX  
+      - Heathrow/London/LHR → EGLL
+      - Dubai → OMDB
+      - O'Hare/Chicago → KORD
+      
+      US airports start with K, UK airports start with EG.
 
       AFTER PROVIDING ATIS:
       - After reading the ATIS, ask: "Would you like ATIS for another airport?"
