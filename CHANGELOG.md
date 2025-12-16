@@ -976,22 +976,16 @@ Version 4.1 introduces **unified tool calling architecture** enabling AI agents 
 
 ---
 
-## [Unreleased]
-
-### Planned for v4.2
-- **Additional Provider Integrations**: Anthropic Claude, Google Gemini
-- **Custom Pipeline Tool Support**: Tool calling for local pipelines (AAVA-56)
-- **WebRTC Support**: SIP client integration
-- **High Availability**: Clustering and load balancing
-
----
-
 ## Version History
 
+- **v4.5.2** (2025-12-16) - Local AI Server UX, MCP tools, Aviation ATIS
+- **v4.5.1** (2025-12-13) - Admin UI improvements, wizard fixes, preflight enhancements
+- **v4.5.0** (2025-12-11) - Admin UI stability, graceful shutdown, timer logging
 - **v4.0.0** (2025-10-29) - Modular pipeline architecture, production monitoring, golden baselines
 - **v3.0.0** (2025-09-16) - Modular pipeline architecture, file based playback
-- **v2.0.0** - Internal development version (never released)
-- **v1.0.0** - Initial concept (never released)
 
+[Unreleased]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/compare/v4.5.2...HEAD
+[4.5.2]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/releases/tag/v4.5.2
+[4.5.1]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/releases/tag/v4.5.1
+[4.5.0]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/releases/tag/v4.5.0
 [4.0.0]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/releases/tag/v4.0.0
-[Unreleased]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/compare/v4.0.0...HEAD

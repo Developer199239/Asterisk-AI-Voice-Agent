@@ -345,9 +345,11 @@ Response:
 ```
 
 Notes:
+
 - `kroko_embedded`: `true` only if `/usr/local/bin/kroko-server` exists (requires `INCLUDE_KROKO_EMBEDDED=true` at build time)
-- `kokoro`: `true` if Kokoro TTS package is installed
-- Used by Admin UI `/api/local-ai/capabilities` endpoint
+- `kokoro`: `true` if Kokoro package is installed, or `KOKORO_API_BASE_URL` is set, or model files exist on disk
+- `vosk`, `piper`, `llama`: Reported as `true` in default/full Docker images (assumes standard dependencies are installed)
+- Used by Admin UI `/api/local-ai/capabilities` endpoint to filter available options
 
 ---
 

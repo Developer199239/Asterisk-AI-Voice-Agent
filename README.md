@@ -2,7 +2,7 @@
 
 # Asterisk AI Voice Agent
 
-![Version](https://img.shields.io/badge/version-4.5.0-blue.svg)
+![Version](https://img.shields.io/badge/version-4.5.2-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![Python](https://img.shields.io/badge/python-3.10+-blue.svg)
 ![Docker](https://img.shields.io/badge/docker-compose-blue.svg)
@@ -21,7 +21,7 @@ The most powerful, flexible open-source AI voice agent for Asterisk/FreePBX. Fea
 ## 📖 Table of Contents
 
 - [🚀 Quick Start](#-quick-start)
-- [🎉 What's New](#-whats-new-in-v443)
+- [🎉 What's New](#-whats-new-in-v452)
 - [🌟 Why Asterisk AI Voice Agent?](#-why-asterisk-ai-voice-agent)
 - [✨ Features](#-features)
 - [🎥 Demo](#-demo)
@@ -99,7 +99,7 @@ docker compose up -d
 Add this to your FreePBX (`extensions_custom.conf`):
 ```asterisk
 [from-ai-agent]
-exten => s,1,NoOp(Asterisk AI Voice Agent v4.5.0)
+exten => s,1,NoOp(Asterisk AI Voice Agent v4.5.2)
  same => n,Stasis(asterisk-ai-voice-agent)
  same => n,Hangup()
 ```
@@ -117,7 +117,7 @@ docker compose logs -f ai-engine
 
 ---
 
-## 🎉 What's New in v4.5.0
+## 🎉 What's New in v4.5.2
 
 <details open>
 <summary><b>Latest Updates</b></summary>
@@ -378,7 +378,7 @@ docker compose -f docker-compose.monitoring.yml up -d
 Two-container architecture for performance and scalability:
 
 1. **`ai-engine`** (Lightweight orchestrator): Connects to Asterisk via ARI, manages call lifecycle.
-2. **`local-ai-server`** (Optional): Runs local STT/TTS models (Vosk, Piper).
+2. **`local-ai-server`** (Optional): Runs local STT/LLM/TTS models (Vosk, Sherpa, Kroko, Piper, Kokoro, llama.cpp).
 
 ```mermaid
 graph LR

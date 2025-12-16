@@ -1,6 +1,6 @@
-# MCP Tool Integration (Design + Branch Guide)
-**Status**: Experimental (work happens on `feature/mcp-tools`)  
-**Scope**: `ai-engine` (`src/`) tool calling + provider adapters + config
+# MCP Tool Integration
+**Status**: Shipped (v4.5.2+)  
+**Scope**: `ai-engine` (`src/`) tool calling + provider adapters + config + Admin UI
 
 This document describes how AVA integrates Model Context Protocol (MCP) tools into the existing unified tool calling system. It is written to match the repo’s current architecture (ToolRegistry, per-context tool lists, provider adapters, SessionStore) and to support safe testing on a development server without impacting production baselines.
 
@@ -12,11 +12,17 @@ This document describes how AVA integrates Model Context Protocol (MCP) tools in
 - Preserve voice UX: provide a consistent spoken “result message” even when MCP returns structured JSON.
 - Run safely in production-like environments: process lifecycle management for stdio servers, timeouts, metrics, logging, and secure secret handling.
 
-## Non-goals (initial implementation)
+## Non-goals
 
 - Replacing existing tool calling or provider adapters.
-- Admin UI-first configuration (initially YAML-driven; UI can come later).
 - Automatically discovering arbitrary MCP servers over the network without explicit config.
+
+## Admin UI
+
+MCP servers can be configured via **Admin UI → System → MCP** page (`/system/mcp`). This provides:
+- Server list with status indicators
+- Add/edit/remove MCP server configurations
+- Hot-reload without container restart
 
 ## How This Fits the Current Tool Architecture
 

@@ -1,6 +1,6 @@
-# Asterisk AI Voice Agent - Installation Guide (v4.5.0)
+# Asterisk AI Voice Agent - Installation Guide (v4.5.2)
 
-This guide provides detailed instructions for setting up the Asterisk AI Voice Agent v4.5.0 on your server.
+This guide provides detailed instructions for setting up the Asterisk AI Voice Agent v4.5.2 on your server.
 
 ## Three Setup Paths
 
@@ -272,7 +272,7 @@ Add to `/etc/asterisk/extensions_custom.conf`:
 
 ```asterisk
 [from-ai-agent]
-exten => s,1,NoOp(Asterisk AI Voice Agent v4.5.0)
+exten => s,1,NoOp(Asterisk AI Voice Agent v4.5.2)
  same => n,Stasis(asterisk-ai-voice-agent)
  same => n,Hangup()
 ```
