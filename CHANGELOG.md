@@ -972,7 +972,7 @@ Version 4.1 introduces **unified tool calling architecture** enabling AI agents 
 - **Repository**: https://github.com/hkjarral/Asterisk-AI-Voice-Agent
 - **Tool Calling Guide**: [docs/TOOL_CALLING_GUIDE.md](docs/TOOL_CALLING_GUIDE.md)
 - **FreePBX Guide**: [docs/FreePBX-Integration-Guide.md](docs/FreePBX-Integration-Guide.md)
-- **CLI Tools Guide**: [docs/CLI_TOOLS_GUIDE.md](docs/CLI_TOOLS_GUIDE.md)
+- **CLI Tools Guide**: [cli/README.md](cli/README.md)
 
 ---
 

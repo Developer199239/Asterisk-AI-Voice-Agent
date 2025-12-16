@@ -19,7 +19,7 @@ This document describes how AVA integrates Model Context Protocol (MCP) tools in
 
 ## Admin UI
 
-MCP servers can be configured via **Admin UI → System → MCP** page (`/system/mcp`). This provides:
+MCP servers can be configured via **Admin UI → Core Configuration → MCP** page (`/mcp`). This provides:
 - Server list with status indicators
 - Add/edit/remove MCP server configurations
 - Hot-reload without container restart
