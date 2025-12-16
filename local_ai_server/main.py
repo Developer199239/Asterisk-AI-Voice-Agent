@@ -2645,7 +2645,7 @@ class LocalAIServer:
 
     async def handler(self, websocket):
         """Enhanced WebSocket handler with MVP pipeline and hot reloading"""
-        logging.info("🔌 New connection established: %s", websocket.remote_address)
+        logging.debug("🔌 New connection established: %s", websocket.remote_address)
         session = SessionContext()
         try:
             async for message in websocket:
@@ -2663,7 +2663,7 @@ class LocalAIServer:
             logging.error("❌ WebSocket handler error: %s", exc, exc_info=True)
         finally:
             self._reset_stt_session(session)
-            logging.info("🔌 Connection closed: %s", websocket.remote_address)
+            logging.debug("🔌 Connection closed: %s", websocket.remote_address)
 
 
 async def main():
