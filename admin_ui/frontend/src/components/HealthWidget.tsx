@@ -308,7 +308,7 @@ export const HealthWidget = () => {
                                 if (!window.confirm('Are you sure you want to restart the Local AI Server?')) return;
                                 setRestarting(true);
                                 try {
-                                    await axios.post('/api/system/restart', { container: 'local-ai-server' });
+                                    await axios.post('/api/system/containers/local_ai_server/restart');
                                     // Poll for health
                                     setTimeout(() => setRestarting(false), 5000);
                                 } catch (err) {
