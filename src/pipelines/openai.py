@@ -149,7 +149,7 @@ class OpenAISTTAdapter(STTComponent):
         ws_headers = list(_make_ws_headers(merged))
         websocket = await websockets.connect(
             merged["base_url"],
-            extra_headers=ws_headers,
+            additional_headers=ws_headers,
             max_size=16 * 1024 * 1024,
         )
 
@@ -479,7 +479,7 @@ class OpenAILLMAdapter(LLMComponent):
         headers = list(_make_ws_headers(merged))
         websocket = await websockets.connect(
             merged["realtime_base_url"],
-            extra_headers=headers,
+            additional_headers=headers,
             max_size=8 * 1024 * 1024,
         )
 

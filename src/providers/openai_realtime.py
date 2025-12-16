@@ -350,7 +350,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
 
         logger.info("Connecting to OpenAI Realtime", url=url, call_id=call_id)
         try:
-            self.websocket = await websockets.connect(url, extra_headers=headers)
+            self.websocket = await websockets.connect(url, additional_headers=headers)
         except Exception:
             logger.error("Failed to connect to OpenAI Realtime", call_id=call_id, exc_info=True)
             raise
@@ -1926,7 +1926,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                 if self.config.organization:
                     headers.append(("OpenAI-Organization", self.config.organization))
                 logger.info("Reconnecting to OpenAI Realtime", call_id=call_id, attempt=attempt)
-                self.websocket = await websockets.connect(url, extra_headers=headers)
+                self.websocket = await websockets.connect(url, additional_headers=headers)
                 # Reset minor state
                 self._pending_response = False
                 self._in_audio_burst = False

@@ -350,7 +350,7 @@ class DeepgramProvider(AIProviderInterface):
 
         try:
             logger.info("Connecting to Deepgram Voice Agent...", url=ws_url)
-            self.websocket = await websockets.connect(ws_url, extra_headers=list(headers.items()))
+            self.websocket = await websockets.connect(ws_url, additional_headers=list(headers.items()))
             logger.info("✅ Successfully connected to Deepgram Voice Agent.")
 
             # Persist call context for downstream events
