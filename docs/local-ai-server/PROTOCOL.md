@@ -267,7 +267,13 @@ Response:
   "status": "ok",
   "stt_backend": "vosk|kroko|sherpa",
   "tts_backend": "piper|kokoro",
-  "models": { "stt": { "loaded": true }, "llm": { "loaded": true }, "tts": { "loaded": true } },
+  "models": {
+    "stt": { "loaded": true, "path": "/app/models/stt/...", "display": "vosk-model-en-us-0.22" },
+    "llm": { "loaded": true, "path": "/app/models/llm/...", "display": "phi-3-mini-4k-instruct.Q4_K_M.gguf" },
+    "tts": { "loaded": true, "path": "/app/models/tts/...", "display": "en_US-lessac-medium.onnx" }
+  },
+  "kroko": { "embedded": false, "port": 6006, "language": "en-US", "url": "wss://...", "model_path": "/app/models/kroko/..." },
+  "kokoro": { "mode": "local|api|hf", "voice": "af_heart", "model_path": "/app/models/tts/kokoro", "api_base_url": "https://.../api/v1" },
   "config": { "log_level": "INFO", "debug_audio": false }
 }
 ```
@@ -285,7 +291,19 @@ Request (examples):
 ```
 
 ```json
+{ "type": "switch_model", "stt_backend": "sherpa", "sherpa_model_path": "/app/models/stt/sherpa-onnx-streaming-zipformer-en-2023-06-26" }
+```
+
+```json
+{ "type": "switch_model", "stt_backend": "kroko", "kroko_embedded": true, "kroko_port": 6006, "kroko_model_path": "/app/models/kroko/kroko-en-v1.0.onnx" }
+```
+
+```json
 { "type": "switch_model", "tts_backend": "kokoro", "kokoro_voice": "af_heart" }
+```
+
+```json
+{ "type": "switch_model", "tts_backend": "kokoro", "kokoro_mode": "api", "kokoro_api_base_url": "https://voice-generator.pages.dev/api/v1" }
 ```
 
 ```json

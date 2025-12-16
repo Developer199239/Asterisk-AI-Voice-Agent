@@ -84,6 +84,10 @@ services:
       # TTS Configuration
       - LOCAL_TTS_BACKEND=${LOCAL_TTS_BACKEND:-piper}
       - LOCAL_TTS_MODEL_PATH=${LOCAL_TTS_MODEL_PATH:-/app/models/tts/en_US-lessac-medium.onnx}
+      - KOKORO_MODE=${KOKORO_MODE:-local}
+      - KOKORO_API_BASE_URL=${KOKORO_API_BASE_URL:-https://voice-generator.pages.dev/api/v1}
+      - KOKORO_API_KEY=${KOKORO_API_KEY:-}
+      - KOKORO_API_MODEL=${KOKORO_API_MODEL:-model}
       - KOKORO_VOICE=${KOKORO_VOICE:-af_heart}
       - LOCAL_LLM_SYSTEM_PROMPT=${LOCAL_LLM_SYSTEM_PROMPT:-You are a helpful AI voice assistant. When the caller wants to end the call or says goodbye, output <tool_call>{"name":"hangup_call","arguments":{"farewell":"Goodbye, have a great day!"}}</tool_call> and say a brief farewell. When the caller asks to email the transcript, output <tool_call>{"name":"request_transcript","arguments":{"email":"caller@example.com"}}</tool_call>. Always provide a spoken response.}
     tty: true

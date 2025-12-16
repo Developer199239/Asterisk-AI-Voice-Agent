@@ -491,27 +491,22 @@ async def get_system_health():
                 print(f"DEBUG: Local AI response: {response[:100]}...")
                 data = json.loads(response)
                 if data.get("type") == "status_response":
-                    # Parse embedded/local mode from path strings
-                    stt_path = data.get("models", {}).get("stt", {}).get("path", "")
-                    tts_path = data.get("models", {}).get("tts", {}).get("path", "")
-                    
-                    # Detect Kroko embedded mode from path containing "embedded"
-                    kroko_embedded = "embedded" in stt_path.lower()
-                    kroko_port = None
-                    if kroko_embedded and "port" in stt_path.lower():
-                        import re
-                        port_match = re.search(r'port\s*(\d+)', stt_path, re.IGNORECASE)
-                        if port_match:
-                            kroko_port = int(port_match.group(1))
-                    
-                    # Detect Kokoro mode - local if model path exists
-                    kokoro_mode = "local" if "/app/models" in str(data.get("models", {}).get("tts", {}).get("path", "")) or "af_" in tts_path else "api"
-                    # Extract Kokoro voice from path like "Kokoro (af_heart)"
-                    kokoro_voice = None
-                    if "(" in tts_path and ")" in tts_path:
-                        kokoro_voice = tts_path.split("(")[1].rstrip(")")
-                    
-                    # Add parsed fields to response
+                    # Prefer explicit fields from local-ai-server (v2 protocol), fallback to heuristics.
+                    kroko = data.get("kroko") or {}
+                    kokoro = data.get("kokoro") or {}
+
+                    kroko_embedded = bool(kroko.get("embedded", False))
+                    kroko_port = kroko.get("port")
+
+                    kokoro_mode = (kokoro.get("mode") or "local").lower()
+                    kokoro_voice = kokoro.get("voice")
+
+                    # Back-compat for older payloads that didn't include structured metadata
+                    if not kokoro_voice:
+                        tts_display = data.get("models", {}).get("tts", {}).get("display") or ""
+                        if "(" in tts_display and ")" in tts_display:
+                            kokoro_voice = tts_display.split("(")[1].rstrip(")")
+
                     data["kroko_embedded"] = kroko_embedded
                     data["kroko_port"] = kroko_port
                     data["kokoro_mode"] = kokoro_mode
