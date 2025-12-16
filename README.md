@@ -124,17 +124,17 @@ docker compose logs -f ai-engine
 <details open>
 <summary><b>Latest Updates</b></summary>
 
-### 🔧 Admin UI Stability (AAVA-129)
-- **Atomic Config Writes**: Config files written via temp file + rename (prevents corruption).
-- **Backup Rotation**: Only keeps last 5 backups per file.
-- **Docker SDK Restarts**: Uses `container.restart()` instead of destructive stop/rm/up.
-- **Toast Notifications**: Replaced browser `alert()` with inline notifications.
-- **Input Focus Fix**: Environment page inputs no longer lose focus.
+### 🔌 MCP Tool Integration
+- **External Tools Framework**: Connect AI agents to external services via Model Context Protocol
+- **Admin UI Config**: Configure MCP servers from the web interface
 
-### 🛡️ Engine Stability
-- **Timer Logging**: All timers log with `[TIMER]` prefix for easy filtering.
-- **Health Improvements**: `/health` returns `uptime_seconds`, `pending_timers`, `active_sessions`.
-- **Graceful Shutdown**: `docker stop` waits for active calls to complete (30s timeout).
+### 🔄 Model Hot-Swap
+- **No Restart Required**: Switch STT/TTS/LLM models via WebSocket command
+- **Live Model Switching**: Change models mid-operation from Dashboard
+
+### 🎤 Local AI Improvements
+- **Kokoro API Mode**: Use OpenAI-compatible TTS endpoints (`KOKORO_MODE=api`)
+- **Kroko Embedded Models**: Download Kroko ASR models directly from Admin UI Models Page
 
 </details>
 
