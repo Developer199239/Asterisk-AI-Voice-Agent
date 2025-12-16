@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 from websockets.exceptions import ConnectionClosed, ConnectionClosedError, ConnectionClosedOK
-from websockets.server import serve
+from websockets.asyncio.server import serve
 import websockets.client as ws_client
 
 from constants import (
