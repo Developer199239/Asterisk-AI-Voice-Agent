@@ -31,6 +31,10 @@ jobs:
         run: |
           python -m compileall -q .
 
+      - name: Preflight script smoke (syntax)
+        run: |
+          bash -n preflight.sh
+
       - name: Run tests with coverage
         env:
           PYTHONPATH: ${{ github.workspace }}
@@ -91,11 +95,11 @@ jobs:
       - name: Build local-ai-server image (ci-min)
         run: |
           docker build -t local-ai-server:test ./local_ai_server \
-            --build-arg INCLUDE_VOSK=false \
+            --build-arg INCLUDE_VOSK=true \
             --build-arg INCLUDE_SHERPA=false \
-            --build-arg INCLUDE_PIPER=false \
+            --build-arg INCLUDE_PIPER=true \
             --build-arg INCLUDE_KOKORO=false \
-            --build-arg INCLUDE_LLAMA=false \
+            --build-arg INCLUDE_LLAMA=true \
             --build-arg INCLUDE_KROKO_EMBEDDED=false
 
       - name: Check image sizes
@@ -118,10 +122,10 @@ jobs:
             AI_ENGINE_PASS=true
           fi
           
-          # local-ai-server (ci-min) budget: 1.0GB
+          # local-ai-server (ci-min, local-core) budget: 2.5GB
           LOCAL_AI_SIZE=$(docker inspect local-ai-server:test --format='{{.Size}}')
           LOCAL_AI_MB=$((LOCAL_AI_SIZE / 1024 / 1024))
-          LOCAL_AI_BUDGET=1000
+          LOCAL_AI_BUDGET=2500
           
           if [ $LOCAL_AI_MB -gt $LOCAL_AI_BUDGET ]; then
             echo "| local-ai-server | ${LOCAL_AI_MB}MB | ${LOCAL_AI_BUDGET}MB | ❌ Over budget |" >> $GITHUB_STEP_SUMMARY

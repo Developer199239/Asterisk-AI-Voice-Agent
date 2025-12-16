@@ -730,7 +730,7 @@ async def fix_directory_issues():
         # Check if symlink already exists on host via mounted path
         # The symlink is on the host at /var/lib/asterisk/sounds which isn't mounted
         manual_steps.append(
-            f"Run on host: sudo ln -sf /mnt/asterisk_media/ai-generated {asterisk_sounds_link}"
+            f"Run on host: sudo ln -sf {host_media_dir} {asterisk_sounds_link}"
         )
         manual_steps.append(
             f"Or run: ./preflight.sh --apply-fixes"

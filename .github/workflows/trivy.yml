@@ -45,11 +45,11 @@ jobs:
     - name: Build local-ai-server image (ci-min)
       run: |
         docker build -t local-ai-server:${{ github.sha }} ./local_ai_server \
-          --build-arg INCLUDE_VOSK=false \
+          --build-arg INCLUDE_VOSK=true \
           --build-arg INCLUDE_SHERPA=false \
-          --build-arg INCLUDE_PIPER=false \
+          --build-arg INCLUDE_PIPER=true \
           --build-arg INCLUDE_KOKORO=false \
-          --build-arg INCLUDE_LLAMA=false \
+          --build-arg INCLUDE_LLAMA=true \
           --build-arg INCLUDE_KROKO_EMBEDDED=false
 
     - name: Build local-ai-server image (full, scheduled)

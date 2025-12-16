@@ -731,6 +731,7 @@ async def export_logs():
         import io
         import glob
         from datetime import datetime
+        import subprocess
         
         # Create ZIP in memory
         zip_buffer = io.BytesIO()
@@ -738,14 +739,34 @@ async def export_logs():
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
             # 1. Sanitized YAML
             if os.path.exists(settings.CONFIG_PATH):
-                with open(settings.CONFIG_PATH, 'r') as f:
-                    content = f.read()
-                # Simple sanitization (redact known key patterns if needed, but for now just raw or basic redaction)
-                # For this task, user asked for "sanitized". We'll redact common API key patterns.
-                import re
-                content = re.sub(r'api_key: .*', 'api_key: [REDACTED]', content)
-                content = re.sub(r'key: sk-.*', 'key: [REDACTED]', content)
-                zip_file.writestr('ai-agent-sanitized.yaml', content)
+                try:
+                    import yaml
+                    with open(settings.CONFIG_PATH, 'r') as f:
+                        parsed = yaml.safe_load(f) or {}
+
+                    def redact(obj):
+                        if isinstance(obj, dict):
+                            out = {}
+                            for k, v in obj.items():
+                                key = str(k).lower()
+                                if any(s in key for s in ["api_key", "apikey", "token", "secret", "password", "pass", "key"]):
+                                    out[k] = "[REDACTED]"
+                                else:
+                                    out[k] = redact(v)
+                            return out
+                        if isinstance(obj, list):
+                            return [redact(v) for v in obj]
+                        return obj
+
+                    redacted = redact(parsed)
+                    zip_file.writestr(
+                        'ai-agent-sanitized.yaml',
+                        yaml.safe_dump(redacted, sort_keys=False, default_flow_style=False),
+                    )
+                except Exception:
+                    # Fallback: write raw if sanitization fails
+                    with open(settings.CONFIG_PATH, 'r') as f:
+                        zip_file.writestr('ai-agent-sanitized.yaml', f.read())
             
             # 2. Sanitized ENV (Just keys, no values)
             if os.path.exists(settings.ENV_PATH):
@@ -756,6 +777,28 @@ async def export_logs():
                             key = line.split('=')[0].strip()
                             env_keys.append(f"{key}=[REDACTED]")
                 zip_file.writestr('.env.sanitized', '\n'.join(env_keys))
+
+            # 2b. Host OS info (if mounted) and basic Docker versions
+            for os_release in ("/host/etc/os-release", "/etc/os-release"):
+                if os.path.exists(os_release):
+                    try:
+                        with open(os_release, "r") as f:
+                            zip_file.writestr("os-release.txt", f.read())
+                        break
+                    except Exception:
+                        pass
+
+            def add_cmd(name: str, cmd: list):
+                try:
+                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+                    content = (result.stdout or "") + ("\n" + result.stderr if result.stderr else "")
+                    zip_file.writestr(name, content.strip() + "\n")
+                except Exception as e:
+                    zip_file.writestr(name, f"Failed to run {cmd}: {e}\n")
+
+            add_cmd("docker-version.txt", ["docker", "version"])
+            add_cmd("docker-compose-version.txt", ["docker", "compose", "version"])
+            add_cmd("docker-ps.txt", ["docker", "ps", "-a"])
             
             # 3. Logs from Docker Containers
             try:

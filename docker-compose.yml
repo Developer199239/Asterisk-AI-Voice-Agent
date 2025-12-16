@@ -53,7 +53,7 @@ services:
       context: ./local_ai_server
       dockerfile: Dockerfile
       args:
-        - INCLUDE_KROKO_EMBEDDED=${INCLUDE_KROKO_EMBEDDED:-true}
+        - INCLUDE_KROKO_EMBEDDED=${INCLUDE_KROKO_EMBEDDED:-false}
     container_name: local_ai_server
     network_mode: host
     env_file:
@@ -156,7 +156,7 @@ services:
     network_mode: host
     volumes:
       - ./:/app/project
-      - /var/run/docker.sock:/var/run/docker.sock
+      - ${DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock
       # The admin-ui image installs Docker CLI + Compose plugin internally.
       # Optional fallback (host binaries): use `docker compose -f docker-compose.yml -f docker-compose.admin-ui-host-binaries.yml up -d admin-ui`
       - /etc/os-release:/host/etc/os-release:ro

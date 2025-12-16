@@ -12,6 +12,14 @@ CI is the hard gate for code quality (unit tests + lint/compile checks). Real-ca
 
 Run at least one successful call for each baseline you intend to claim as supported.
 
+**A call “passes” if:**
+
+- Greeting is played completely (no dead air / cut-off)
+- At least 2 user turns are transcribed and responded to correctly
+- No obvious audio corruption (robotic artifacts, repeated segments, severe clipping)
+- Clean hangup (no orphan channels / stuck Stasis sessions)
+- No new `ERROR` spam in `ai_engine` during the call
+
 **Record for each call:**
 
 - Host OS + version
