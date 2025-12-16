@@ -59,7 +59,7 @@ cd Asterisk-AI-Voice-Agent
 
 ```bash
 # Start the Admin UI container
-docker compose up -d admin-ui
+docker compose up -d --build admin-ui
 ```
 
 ### 3. Access the Dashboard
