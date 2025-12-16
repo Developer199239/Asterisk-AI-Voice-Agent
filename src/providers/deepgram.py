@@ -7,6 +7,7 @@ import re
 import audioop
 from typing import Callable, Optional, List, Dict, Any
 import websockets.exceptions
+from websockets.asyncio.client import ClientConnection
 
 from structlog import get_logger
 from prometheus_client import Gauge, Info
@@ -138,7 +139,7 @@ class DeepgramProvider(AIProviderInterface):
         super().__init__(on_event)
         self.config = config
         self.llm_config = llm_config
-        self.websocket: Optional[websockets.WebSocketClientProtocol] = None
+        self.websocket: Optional[ClientConnection] = None
         self._keep_alive_task: Optional[asyncio.Task] = None
         self._is_audio_flowing = False
         self.request_id: Optional[str] = None

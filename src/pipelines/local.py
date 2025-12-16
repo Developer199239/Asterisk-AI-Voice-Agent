@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from typing import Any, AsyncIterator, Dict, Optional, Tuple
 
 import websockets
-from websockets.client import WebSocketClientProtocol
+from websockets.asyncio.client import ClientConnection
 from websockets.exceptions import ConnectionClosed
 
 from ..config import AppConfig, LocalProviderConfig
@@ -42,7 +42,7 @@ def _merge_dicts(base: Dict[str, Any], override: Optional[Dict[str, Any]]) -> Di
 
 @dataclass
 class _LocalSessionState:
-    websocket: WebSocketClientProtocol
+    websocket: ClientConnection
     options: Dict[str, Any]
     mode: str
     call_id: str

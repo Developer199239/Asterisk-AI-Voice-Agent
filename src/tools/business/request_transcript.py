@@ -415,7 +415,7 @@ class RequestTranscriptTool(Tool):
                 "Transcript sent successfully",
                 call_id=call_id,
                 recipient=email_data["to"],
-                email_id=response.get("id")
+                email_id=response.id
             )
             
         except Exception as e:

@@ -2,7 +2,9 @@ import asyncio
 import base64
 import json
 from typing import Callable, Optional, List, Dict, Any
+import websockets
 import websockets.exceptions
+from websockets.asyncio.client import ClientConnection
 
 from structlog import get_logger
 
@@ -19,7 +21,7 @@ class LocalProvider(AIProviderInterface):
     def __init__(self, config: LocalProviderConfig, on_event: Callable[[Dict[str, Any]], None]):
         super().__init__(on_event)
         self.config = config
-        self.websocket: Optional[websockets.WebSocketClientProtocol] = None
+        self.websocket: Optional[ClientConnection] = None
         # Use effective_ws_url which prefers base_url over ws_url
         self.ws_url = config.effective_ws_url
         self.auth_token: Optional[str] = getattr(config, "auth_token", None) or None

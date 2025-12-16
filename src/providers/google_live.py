@@ -28,7 +28,7 @@ from typing import Any, Dict, Optional, List
 from collections import deque
 
 import websockets
-from websockets import WebSocketClientProtocol
+from websockets.asyncio.client import ClientConnection
 from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
 
 from structlog import get_logger
@@ -94,7 +94,7 @@ class GoogleLiveProvider(AIProviderInterface):
     ):
         super().__init__(on_event)
         self.config = config
-        self.websocket: Optional[WebSocketClientProtocol] = None
+        self.websocket: Optional[ClientConnection] = None
         self._receive_task: Optional[asyncio.Task] = None
         self._keepalive_task: Optional[asyncio.Task] = None
         self._send_lock = asyncio.Lock()
