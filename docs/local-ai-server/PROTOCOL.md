@@ -318,6 +318,39 @@ Response:
 
 ---
 
+## Capabilities
+
+Query installed backends without loading models. Useful for Admin UI to show available options.
+
+Request:
+
+```json
+{ "type": "capabilities" }
+```
+
+Response:
+
+```json
+{
+  "type": "capabilities_response",
+  "capabilities": {
+    "vosk": true,
+    "sherpa": true,
+    "kroko_embedded": true,
+    "piper": true,
+    "kokoro": true,
+    "llama": true
+  }
+}
+```
+
+Notes:
+- `kroko_embedded`: `true` only if `/usr/local/bin/kroko-server` exists (requires `INCLUDE_KROKO_EMBEDDED=true` at build time)
+- `kokoro`: `true` if Kokoro TTS package is installed
+- Used by Admin UI `/api/local-ai/capabilities` endpoint
+
+---
+
 ## Client Examples
 
 Additional example code (including an espeak-ng based lightweight TTS demo) lives under `docs/local-ai-server/examples/`.

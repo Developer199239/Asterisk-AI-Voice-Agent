@@ -12,6 +12,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Additional provider integrations
 - Enhanced monitoring features
 
+## [4.5.2] - 2025-12-16
+
+### Added
+
+- **Kokoro API mode**: OpenAI-compatible TTS endpoint (`KOKORO_MODE=api`)
+- **Kroko Embedded models**: Downloadable from Admin UI Models Page
+- **Model hot-swap**: Switch STT/TTS/LLM via WebSocket without container restart
+- **MCP tool integration**: External tool framework with Admin UI config
+- **Aviation ATIS tool**: Live METAR data from aviationweather.gov
+
+### Changed
+
+- Websockets connection logs moved to DEBUG level
+- Local provider auto-reconnects on disconnect (12 min retry)
+
+### Fixed
+
+- Wizard: Kroko embedded detection, Kokoro voice selector alignment
+- Compatibility: websockets 15.x, resend 2.x, sherpa-onnx 1.12.19
+
 ## [4.5.0] - 2025-12-11
 
 ### Fixed - Admin UI Stability 🔧

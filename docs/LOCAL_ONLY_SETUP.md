@@ -186,9 +186,19 @@ LOCAL_STT_MODEL_PATH=/app/models/stt/sherpa-onnx-streaming-zipformer-en-2023-06-
 - `phi-3-mini-128k-instruct.Q4_K_M.gguf` (larger context)
 - Any llama.cpp compatible GGUF model
 
-**TTS**:
-- Kokoro (built-in, high quality)
-- Piper (various voices/languages)
+**TTS - Piper** (default):
+- `en_US-lessac-medium.onnx` (English, recommended)
+- Various voices/languages available
+
+**TTS - Kokoro** (premium quality):
+- **Local mode**: Downloaded model files (`KOKORO_MODE=local`)
+- **API mode**: OpenAI-compatible endpoint (`KOKORO_MODE=api`)
+- Voices: `af_heart`, `af_bella`, `am_adam`, `bf_emma`, etc.
+
+**STT - Kroko Embedded** (optional, requires rebuild):
+- High-accuracy ONNX-based STT
+- Requires: `docker compose build --build-arg INCLUDE_KROKO_EMBEDDED=true local-ai-server`
+- Models: Download from Admin UI → Models Page
 
 ## Troubleshooting
 
