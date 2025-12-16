@@ -498,11 +498,16 @@ export const HealthWidget = () => {
                             </div>
                             {/* Warning when Kroko embedded not available */}
                             {capabilities && !capabilities.stt?.kroko_embedded?.available && (
-                                <div className="text-xs p-2 rounded bg-amber-500/10 border border-amber-500/20 text-amber-600 dark:text-amber-400">
-                                    <span>Kroko Embedded not available. </span>
-                                    <span className="opacity-75">Rebuild with INCLUDE_KROKO_EMBEDDED=true or use </span>
-                                    <Link to="/models" className="underline hover:text-amber-500">Models Page</Link>
-                                    <span className="opacity-75"> to download STT models.</span>
+                                <div className="text-xs p-2 rounded bg-amber-500/10 border border-amber-500/20 text-amber-600 dark:text-amber-400 space-y-1">
+                                    <div>
+                                        <span className="font-medium">Kroko Embedded not available.</span>
+                                        <span className="opacity-75"> First download a Kroko ONNX model from the </span>
+                                        <Link to="/models" className="underline hover:text-amber-500">Models Page</Link>
+                                        <span className="opacity-75">, then rebuild the container:</span>
+                                    </div>
+                                    <code className="block bg-black/20 dark:bg-white/10 px-2 py-1 rounded text-[10px] font-mono select-all">
+                                        docker compose build --build-arg INCLUDE_KROKO_EMBEDDED=true local-ai-server && docker compose up -d local-ai-server
+                                    </code>
                                 </div>
                             )}
                         </div>
