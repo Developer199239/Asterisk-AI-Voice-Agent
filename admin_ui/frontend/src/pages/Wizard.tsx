@@ -1181,7 +1181,7 @@ const Wizard = () => {
                                                                 ...config, 
                                                                 local_stt_backend: model.backend,
                                                                 local_stt_model: model.id,
-                                                                kroko_embedded: model.backend === 'kroko' && model.id.includes('embedded')
+                                                                kroko_embedded: model.backend === 'kroko' && model.embedded === true
                                                             });
                                                         } else if (val === 'kroko_cloud') {
                                                             setConfig({ ...config, local_stt_backend: 'kroko', local_stt_model: val, kroko_embedded: false });
