@@ -131,15 +131,15 @@ def _tools_list() -> Dict[str, Any]:
         "tools": [
             {
                 "name": "get_atis",
-                "description": "Generate a deterministic spoken ATIS from the latest METAR for an ICAO station (4 letters, e.g., LSMP, KJFK, EGLL) using the met.no tafmetar feed.",
+                "description": "Generate a deterministic spoken ATIS from the latest METAR for an ICAO station (4 letters, e.g., KJFK, KLAX, EGLL, KSJC). US airports start with K (e.g., San Jose = KSJC, JFK = KJFK). UK airports start with EG (e.g., Heathrow = EGLL).",
                 "inputSchema": {
                     "type": "object",
                     "additionalProperties": False,
                     "properties": {
-                        "icao": {"type": "string", "description": "ICAO station code (e.g., LSMP, KJFK). Required unless metar_raw is provided."},
+                        "icao": {"type": "string", "description": "4-letter ICAO station code. US airports start with K (KJFK, KLAX, KSJC, KORD). UK airports start with EG (EGLL)."},
                         "metar_raw": {"type": "string", "description": "Optional raw METAR string for testing; skips met.no fetch."},
                     },
-                    "anyOf": [{"required": ["icao"]}, {"required": ["metar_raw"]}],
+                    "required": ["icao"],
                 },
             }
         ]

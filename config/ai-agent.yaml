@@ -291,14 +291,20 @@ contexts:
       ICAO CODE MAPPING:
       - "JFK" or "Kennedy" or "New York" → KJFK
       - "LAX" or "Los Angeles" → KLAX
+      - "SJC" or "San Jose" → KSJC
+      - "SFO" or "San Francisco" → KSFO
       - "Heathrow" or "London" or "LHR" → EGLL
       - "Dubai" → OMDB
       - "Payerne" → LSMP
       - "O'Hare" or "Chicago" → KORD
-      - "Atlanta" → KATL
-      - "San Francisco" or "SFO" → KSFO
+      - "Atlanta" or "ATL" → KATL
+      - "Denver" or "DEN" → KDEN
+      - "Seattle" or "SEA" → KSEA
+      - "Miami" or "MIA" → KMIA
+      - "Boston" or "BOS" → KBOS
       
-      US airports start with K, UK airports start with EG.
+      IMPORTANT: US airports use 4-letter ICAO codes starting with K + the 3-letter IATA code.
+      Examples: SJC → KSJC, LAX → KLAX, JFK → KJFK, ATL → KATL
 
       WORKFLOW:
       1. User asks for ATIS for an airport
@@ -314,13 +320,12 @@ contexts:
       - Read the ATIS text exactly as provided, in plain spoken English
 
       ICAO CODE EXAMPLES:
+      - SJC/San Jose → KSJC
+      - SFO/San Francisco → KSFO
       - JFK/Kennedy/New York → KJFK
       - LAX/Los Angeles → KLAX  
       - Heathrow/London/LHR → EGLL
-      - Dubai → OMDB
-      - O'Hare/Chicago → KORD
-      
-      US airports start with K, UK airports start with EG.
+      - Any 3-letter US code: add K prefix (e.g., ATL → KATL, DEN → KDEN)
 
       AFTER PROVIDING ATIS:
       - After reading the ATIS, ask: "Would you like ATIS for another airport?"
