@@ -746,7 +746,12 @@ async def download_single_model(request: SingleModelDownload):
     _download_progress = {"bytes_downloaded": 0, "total_bytes": 0, "percent": 0, "speed_bps": 0, "eta_seconds": None, "start_time": time.time(), "current_file": request.model_id}
     
     # Determine target directory based on type
-    if request.type == "stt":
+    # Special case: Kroko embedded models go to models/kroko/
+    is_kroko_embedded = request.model_id and request.model_id.startswith("kroko_") and request.model_id != "kroko_cloud"
+    
+    if is_kroko_embedded:
+        target_dir = os.path.join(PROJECT_ROOT, "models", "kroko")
+    elif request.type == "stt":
         target_dir = os.path.join(PROJECT_ROOT, "models", "stt")
     elif request.type == "tts":
         target_dir = os.path.join(PROJECT_ROOT, "models", "tts")
@@ -1114,6 +1119,13 @@ async def download_selected_models(selection: ModelSelection):
                         os.remove(archive_path)
                         _download_output.append("✅ Sherpa model extracted")
                     else:
+                        success = False
+                elif stt_model.get("backend") == "kroko" and stt_model.get("embedded"):
+                    # Kroko embedded ONNX models go to models/kroko/
+                    kroko_dir = os.path.join(models_dir, "kroko")
+                    os.makedirs(kroko_dir, exist_ok=True)
+                    dest = os.path.join(kroko_dir, stt_model["model_path"])
+                    if not download_file(stt_model["download_url"], dest, "Kroko Embedded STT Model"):
                         success = False
                 else:
                     # Single file model

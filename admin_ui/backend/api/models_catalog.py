@@ -203,6 +203,18 @@ SHERPA_STT_MODELS = [
 ]
 
 KROKO_STT_MODELS = [
+    # === Kroko Embedded ONNX Models (requires INCLUDE_KROKO_EMBEDDED=true in Docker build) ===
+    {"id": "kroko_en_community_64l", "name": "Kroko English Community 64L (Embedded)", "language": "en-US", "region": "global", "backend": "kroko",
+     "size_mb": 250, "size_display": "250 MB", "model_path": "Kroko-EN-Community-64-L-Streaming-001.onnx",
+     "download_url": "https://huggingface.co/Kroko-AI/Kroko-EN-Community-64-L-Streaming-001/resolve/main/Kroko-EN-Community-64-L-Streaming-001.onnx",
+     "recommended": True, "embedded": True,
+     "note": "Requires Docker image built with INCLUDE_KROKO_EMBEDDED=true"},
+    {"id": "kroko_nl_community_64l", "name": "Kroko Dutch Community 64L (Embedded)", "language": "nl-NL", "region": "europe", "backend": "kroko",
+     "size_mb": 250, "size_display": "250 MB", "model_path": "Kroko-NL-Community-64-L-Streaming-001.onnx",
+     "download_url": "https://huggingface.co/Kroko-AI/Kroko-NL-Community-64-L-Streaming-001/resolve/main/Kroko-NL-Community-64-L-Streaming-001.onnx",
+     "embedded": True,
+     "note": "Requires Docker image built with INCLUDE_KROKO_EMBEDDED=true"},
+    # === Kroko Cloud API ===
     {"id": "kroko_cloud", "name": "Kroko Cloud API (12 languages)", "language": "multi", "region": "global", "backend": "kroko",
      "size_mb": 0, "size_display": "0 (Cloud)", "model_path": None,
      "download_url": None, "requires_api_key": True, "api_key_name": "KROKO_API_KEY",
