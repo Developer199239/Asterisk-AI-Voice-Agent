@@ -396,7 +396,7 @@ graph LR
 
 ---
 
-## � Requirements
+## 📊 Requirements
 
 ### Platform Requirements
 
@@ -431,7 +431,7 @@ The `preflight.sh` script handles initial setup:
 
 ---
 
-## �🗺️ Documentation
+## 🗺️ Documentation
 
 ### Getting Started
 - **[FreePBX Integration Guide](docs/FreePBX-Integration-Guide.md)**
