@@ -401,13 +401,13 @@ const EnvPage = () => {
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <FormSelect
                             label="Log Level"
-                            value={env['LOG_LEVEL'] || 'INFO'}
+                            value={(env['LOG_LEVEL'] || 'info').toLowerCase()}
                             onChange={(e) => updateEnv('LOG_LEVEL', e.target.value)}
                             options={[
-                                { value: 'DEBUG', label: 'Debug' },
-                                { value: 'INFO', label: 'Info' },
-                                { value: 'WARNING', label: 'Warning' },
-                                { value: 'ERROR', label: 'Error' },
+                                { value: 'debug', label: 'Debug' },
+                                { value: 'info', label: 'Info' },
+                                { value: 'warning', label: 'Warning' },
+                                { value: 'error', label: 'Error' },
                             ]}
                         />
                         <FormSelect
@@ -460,13 +460,13 @@ const EnvPage = () => {
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <FormSelect
                             label="Streaming Log Level"
-                            value={env['STREAMING_LOG_LEVEL'] || 'debug'}
+                            value={(env['STREAMING_LOG_LEVEL'] || 'info').toLowerCase()}
                             onChange={(e) => updateEnv('STREAMING_LOG_LEVEL', e.target.value)}
                             options={[
-                                { value: 'DEBUG', label: 'Debug' },
-                                { value: 'INFO', label: 'Info' },
-                                { value: 'WARNING', label: 'Warning' },
-                                { value: 'ERROR', label: 'Error' },
+                                { value: 'debug', label: 'Debug' },
+                                { value: 'info', label: 'Info' },
+                                { value: 'warning', label: 'Warning' },
+                                { value: 'error', label: 'Error' },
                             ]}
                         />
                     </div>
