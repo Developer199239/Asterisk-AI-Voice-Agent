@@ -51,9 +51,11 @@ cd Asterisk-AI-Voice-Agent
 # Check system compatibility
 ./preflight.sh
 
-# Auto-fix issues (optional)
-./preflight.sh --apply-fixes
+# Auto-fix issues (requires root for system changes)
+sudo ./preflight.sh --apply-fixes
 ```
+
+> **Note:** The `--apply-fixes` flag requires root/sudo to install packages, set permissions, and configure system settings. Running without sudo will show what needs fixing but won't apply changes.
 
 ### 2. Start the Admin UI
 
@@ -394,7 +396,17 @@ graph LR
 
 ---
 
-## 📊 Requirements
+## � Requirements
+
+### Platform Requirements
+
+| Requirement | Details |
+|-------------|---------|
+| **Architecture** | x86_64 (AMD64) only |
+| **OS** | Linux with systemd |
+| **Supported Distros** | Ubuntu 20.04+, Debian 11+, RHEL/Rocky/Alma 8+, Fedora 38+, Sangoma Linux |
+
+> **Note:** ARM64 (Apple Silicon, Raspberry Pi) is not currently supported. See [Supported Platforms](docs/SUPPORTED_PLATFORMS.md) for the full compatibility matrix.
 
 ### Minimum System Requirements
 
@@ -404,13 +416,22 @@ graph LR
 | **Local Hybrid** | 4+ cores | 8GB+ | 2GB |
 
 ### Software Requirements
-- Docker + Docker Compose
+
+- Docker + Docker Compose v2
 - Asterisk 18+ with ARI enabled
 - FreePBX (recommended) or vanilla Asterisk
 
+### Preflight Automation
+
+The `preflight.sh` script handles initial setup:
+- Seeds `.env` from `.env.example` with your settings
+- Prompts for Asterisk config directory location
+- Sets `ASTERISK_UID`/`ASTERISK_GID` to match host permissions (fixes media access issues)
+- Re-running preflight often resolves permission problems
+
 ---
 
-## 🗺️ Documentation
+## �🗺️ Documentation
 
 ### Getting Started
 - **[FreePBX Integration Guide](docs/FreePBX-Integration-Guide.md)**
