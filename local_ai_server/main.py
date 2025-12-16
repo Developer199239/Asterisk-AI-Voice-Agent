@@ -2686,8 +2686,8 @@ async def main():
         ):
             logging.info("🚀 Enhanced Local AI Server started on ws://%s:%s", host, port)
             logging.info(
-                "📋 Pipeline: ExternalMedia (8kHz) → STT (16kHz) → LLM → TTS (8kHz uLaw) "
-                "- now with #Milestone7 selective mode support"
+                "📋 Pipeline: ExternalMedia (8kHz) → STT (16kHz) → LLM → TTS (8kHz µ-law) "
+                "| Supports selective STT/TTS modes"
             )
             await asyncio.Future()  # Run forever
     finally:
