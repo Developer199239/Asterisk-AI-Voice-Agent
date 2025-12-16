@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 func (c *Checker) checkDocker() Check {
@@ -188,7 +190,8 @@ func (c *Checker) checkConfiguration() Check {
 	}
 	
 	// Check if file is readable
-	if _, err := os.ReadFile(configPath); err != nil {
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
 		return Check{
 			Name:        "Configuration",
 			Status:      StatusFail,
@@ -199,11 +202,69 @@ func (c *Checker) checkConfiguration() Check {
 	}
 	
 	absPath, _ := filepath.Abs(configPath)
+
+	// Parse YAML to catch obvious issues early.
+	var root map[string]interface{}
+	if err := yaml.Unmarshal(raw, &root); err != nil {
+		return Check{
+			Name:        "Configuration",
+			Status:      StatusFail,
+			Message:     "Invalid YAML in config/ai-agent.yaml",
+			Details:     err.Error(),
+			Remediation: "Fix YAML syntax (see docs/Configuration-Reference.md) and re-run: agent doctor",
+		}
+	}
+
+	// Minimal schema checks. Credentials are injected from .env at runtime, so we warn
+	// when blocks are missing rather than failing hard.
+	status := StatusPass
+	details := []string{absPath}
+	remediation := []string{}
+
+	if _, ok := root["providers"].(map[string]interface{}); !ok {
+		return Check{
+			Name:        "Configuration",
+			Status:      StatusFail,
+			Message:     "Missing required 'providers' block in ai-agent.yaml",
+			Details:     absPath,
+			Remediation: "Add 'providers:' to config/ai-agent.yaml (see docs/Configuration-Reference.md)",
+		}
+	}
+
+	if _, ok := root["default_provider"].(string); !ok {
+		status = StatusWarn
+		details = append(details, "default_provider is missing or not a string (engine may fall back to defaults)")
+		remediation = append(remediation, "Set default_provider in config/ai-agent.yaml")
+	}
+
+	if _, ok := root["asterisk"].(map[string]interface{}); !ok {
+		status = StatusWarn
+		details = append(details, "asterisk block missing (credentials are injected from .env at runtime)")
+		remediation = append(remediation, "Ensure .env has ASTERISK_ARI_USERNAME and ASTERISK_ARI_PASSWORD (see docs/INSTALLATION.md)")
+	}
+
+	if _, ok := root["llm"].(map[string]interface{}); !ok {
+		status = StatusWarn
+		details = append(details, "llm block missing (defaults/env may be used; behavior may be unexpected)")
+		remediation = append(remediation, "Add llm.initial_greeting and llm.prompt to config/ai-agent.yaml")
+	}
+
+	message := "Configuration file found"
+	if status != StatusPass {
+		message = "Configuration found with warnings"
+	}
+
+	var remediationStr string
+	if len(remediation) > 0 {
+		remediationStr = strings.Join(remediation, " | ")
+	}
+
 	return Check{
-		Name:    "Configuration",
-		Status:  StatusPass,
-		Message: "Configuration file found",
-		Details: absPath,
+		Name:        "Configuration",
+		Status:      status,
+		Message:     message,
+		Details:     strings.Join(details, "\n"),
+		Remediation: remediationStr,
 	}
 }
 

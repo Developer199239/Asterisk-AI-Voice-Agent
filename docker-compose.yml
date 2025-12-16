@@ -148,6 +148,7 @@ services:
 
   admin-ui:
     image: asterisk-ai-voice-agent-admin-ui:latest
+    pull_policy: build
     build:
       context: ./admin_ui
       dockerfile: Dockerfile

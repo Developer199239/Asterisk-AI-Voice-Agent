@@ -78,6 +78,8 @@ The installer will:
 
 **Best for:** Advanced users, custom configurations, specific requirements
 
+**Local note:** This project does **not** bundle models in images. For recommended local build/run profiles (including a smaller `local-core` build), see `docs/LOCAL_PROFILES.md`.
+
 ---
 
 ## Detailed Installation

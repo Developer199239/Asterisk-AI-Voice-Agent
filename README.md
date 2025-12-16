@@ -420,6 +420,8 @@ graph LR
 - **[Configuration Reference](docs/Configuration-Reference.md)**
 - **[Transport Compatibility](docs/Transport-Mode-Compatibility.md)**
 - **[Tuning Recipes](docs/Tuning-Recipes.md)**
+- **[Supported Platforms](docs/SUPPORTED_PLATFORMS.md)**
+- **[Local Profiles](docs/LOCAL_PROFILES.md)**
 - **[Monitoring Guide](docs/MONITORING_GUIDE.md)**
 
 ### Development
