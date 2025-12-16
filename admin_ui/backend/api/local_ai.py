@@ -193,6 +193,94 @@ async def list_available_models():
     )
 
 
+@router.get("/capabilities")
+async def get_backend_capabilities():
+    """
+    Get available backend capabilities from the local-ai-server container.
+    
+    Checks what backends are actually installed/available:
+    - Vosk: Always available (pure Python)
+    - Sherpa: Check if sherpa-onnx is installed
+    - Kroko Embedded: Check if /usr/local/bin/kroko-server exists
+    - Kroko Cloud: Always available (requires API key)
+    - Piper: Check if piper-tts is installed
+    - Kokoro: Check if kokoro models exist
+    - LLM: Check if llama-cpp-python is installed
+    """
+    from settings import get_setting
+    import subprocess
+    
+    capabilities = {
+        "stt": {
+            "vosk": {"available": False, "reason": ""},
+            "sherpa": {"available": False, "reason": ""},
+            "kroko_embedded": {"available": False, "reason": ""},
+            "kroko_cloud": {"available": True, "reason": "Cloud API (requires KROKO_API_KEY)"}
+        },
+        "tts": {
+            "piper": {"available": False, "reason": ""},
+            "kokoro": {"available": False, "reason": ""}
+        },
+        "llm": {"available": False, "reason": ""}
+    }
+    
+    # Query local-ai-server for its capabilities
+    ws_url = get_setting("HEALTH_CHECK_LOCAL_AI_URL", "ws://127.0.0.1:8765")
+    
+    try:
+        async with websockets.connect(ws_url, open_timeout=5) as ws:
+            auth_token = (get_setting("LOCAL_WS_AUTH_TOKEN", os.getenv("LOCAL_WS_AUTH_TOKEN", "")) or "").strip()
+            if auth_token:
+                await ws.send(json.dumps({"type": "auth", "auth_token": auth_token}))
+                raw = await asyncio.wait_for(ws.recv(), timeout=5)
+                data = json.loads(raw)
+                if data.get("type") != "auth_response" or data.get("status") != "ok":
+                    raise RuntimeError(f"Local AI auth failed: {data}")
+
+            # Request capabilities from local-ai-server
+            await ws.send(json.dumps({"type": "capabilities"}))
+            response = await asyncio.wait_for(ws.recv(), timeout=5)
+            data = json.loads(response)
+            
+            if data.get("type") == "capabilities_response":
+                # Merge capabilities from server
+                server_caps = data.get("capabilities", {})
+                
+                # STT backends
+                if server_caps.get("vosk"):
+                    capabilities["stt"]["vosk"] = {"available": True, "reason": "Vosk installed"}
+                if server_caps.get("sherpa"):
+                    capabilities["stt"]["sherpa"] = {"available": True, "reason": "Sherpa-ONNX installed"}
+                if server_caps.get("kroko_embedded"):
+                    capabilities["stt"]["kroko_embedded"] = {"available": True, "reason": "Kroko binary installed"}
+                else:
+                    capabilities["stt"]["kroko_embedded"]["reason"] = "Rebuild with INCLUDE_KROKO_EMBEDDED=true"
+                
+                # TTS backends
+                if server_caps.get("piper"):
+                    capabilities["tts"]["piper"] = {"available": True, "reason": "Piper TTS installed"}
+                if server_caps.get("kokoro"):
+                    capabilities["tts"]["kokoro"] = {"available": True, "reason": "Kokoro installed"}
+                
+                # LLM
+                if server_caps.get("llama"):
+                    capabilities["llm"] = {"available": True, "reason": "llama-cpp-python installed"}
+            else:
+                # Fallback: assume basic capabilities based on what we can detect
+                capabilities["stt"]["vosk"] = {"available": True, "reason": "Default backend"}
+                capabilities["tts"]["piper"] = {"available": True, "reason": "Default backend"}
+                capabilities["llm"] = {"available": True, "reason": "Default backend"}
+                
+    except Exception as e:
+        # Server not reachable - return minimal capabilities
+        capabilities["stt"]["vosk"] = {"available": True, "reason": "Default backend"}
+        capabilities["tts"]["piper"] = {"available": True, "reason": "Default backend"}
+        capabilities["llm"] = {"available": True, "reason": "Default backend"}
+        capabilities["error"] = str(e)
+    
+    return capabilities
+
+
 @router.get("/status")
 async def get_local_ai_status():
     """

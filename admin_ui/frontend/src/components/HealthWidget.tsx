@@ -36,11 +36,26 @@ interface PendingChanges {
     llm?: { modelPath: string };
 }
 
+interface BackendCapabilities {
+    stt: {
+        vosk: { available: boolean; reason: string };
+        sherpa: { available: boolean; reason: string };
+        kroko_embedded: { available: boolean; reason: string };
+        kroko_cloud: { available: boolean; reason: string };
+    };
+    tts: {
+        piper: { available: boolean; reason: string };
+        kokoro: { available: boolean; reason: string };
+    };
+    llm: { available: boolean; reason: string };
+}
+
 export const HealthWidget = () => {
     const [health, setHealth] = useState<HealthInfo | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [availableModels, setAvailableModels] = useState<AvailableModels | null>(null);
+    const [capabilities, setCapabilities] = useState<BackendCapabilities | null>(null);
     const [restarting, setRestarting] = useState(false);
     const [pendingChanges, setPendingChanges] = useState<PendingChanges>({});
     const [applyingChanges, setApplyingChanges] = useState(false);
@@ -83,7 +98,7 @@ export const HealthWidget = () => {
         return () => clearInterval(interval);
     }, []);
 
-    // Fetch available models
+    // Fetch available models and capabilities
     useEffect(() => {
         const fetchModels = async () => {
             try {
@@ -93,7 +108,16 @@ export const HealthWidget = () => {
                 console.error('Failed to fetch available models', err);
             }
         };
+        const fetchCapabilities = async () => {
+            try {
+                const res = await axios.get('/api/local-ai/capabilities');
+                setCapabilities(res.data);
+            } catch (err) {
+                console.error('Failed to fetch capabilities', err);
+            }
+        };
         fetchModels();
+        fetchCapabilities();
     }, []);
 
     // Fetch default provider and active pipeline from config
@@ -421,14 +445,26 @@ export const HealthWidget = () => {
                                 >
                                     {availableModels?.stt && Object.entries(availableModels.stt).map(([backend, models]) => {
                                         if (backend === 'kroko') {
+                                            // Only show Kroko options if available
+                                            const krokoEmbeddedAvailable = capabilities?.stt?.kroko_embedded?.available;
+                                            const krokoCloudAvailable = capabilities?.stt?.kroko_cloud?.available;
+                                            if (!krokoEmbeddedAvailable && !krokoCloudAvailable) return null;
                                             return (
                                                 <optgroup key="kroko" label="Kroko">
-                                                    <option key="kroko_embedded" value="kroko_embedded">Kroko (Embedded)</option>
-                                                    <option key="kroko_cloud" value="kroko_cloud">Kroko (Cloud)</option>
+                                                    {krokoEmbeddedAvailable && (
+                                                        <option key="kroko_embedded" value="kroko_embedded">Kroko (Embedded)</option>
+                                                    )}
+                                                    {krokoCloudAvailable && (
+                                                        <option key="kroko_cloud" value="kroko_cloud">Kroko (Cloud API)</option>
+                                                    )}
                                                 </optgroup>
                                             );
                                         }
-                                        // Show individual models in optgroup by backend
+                                        if (backend === 'sherpa') {
+                                            // Only show Sherpa if available and has models
+                                            if (!capabilities?.stt?.sherpa?.available || models.length === 0) return null;
+                                        }
+                                        // Show individual models in optgroup by backend (only if models exist)
                                         return models.length > 0 && (
                                             <optgroup key={backend} label={backend.charAt(0).toUpperCase() + backend.slice(1)}>
                                                 {models.map((model: any) => (
@@ -449,6 +485,15 @@ export const HealthWidget = () => {
                                     </span>
                                 )}
                             </div>
+                            {/* Warning when Kroko embedded not available */}
+                            {capabilities && !capabilities.stt?.kroko_embedded?.available && (
+                                <div className="text-xs p-2 rounded bg-amber-500/10 border border-amber-500/20 text-amber-600 dark:text-amber-400">
+                                    <span>Kroko Embedded not available. </span>
+                                    <span className="opacity-75">Rebuild with INCLUDE_KROKO_EMBEDDED=true or use </span>
+                                    <Link to="/models" className="underline hover:text-amber-500">Models Page</Link>
+                                    <span className="opacity-75"> to download STT models.</span>
+                                </div>
+                            )}
                         </div>
 
                         {/* LLM Section */}
@@ -560,14 +605,18 @@ export const HealthWidget = () => {
                                 >
                                     {availableModels?.tts && Object.entries(availableModels.tts).map(([backend, models]) => {
                                         if (backend === 'kokoro') {
+                                            // Only show Kokoro if available
+                                            if (!capabilities?.tts?.kokoro?.available && models.length === 0) return null;
                                             return (
                                                 <optgroup key="kokoro" label="Kokoro">
-                                                    <option key="kokoro_local" value="kokoro_local">Kokoro (Local)</option>
+                                                    {(capabilities?.tts?.kokoro?.available || models.length > 0) && (
+                                                        <option key="kokoro_local" value="kokoro_local">Kokoro (Local)</option>
+                                                    )}
                                                     <option key="kokoro_cloud" value="kokoro_cloud">Kokoro (Cloud/API)</option>
                                                 </optgroup>
                                             );
                                         }
-                                        // Show individual models in optgroup by backend
+                                        // Show individual models in optgroup by backend (only if models exist)
                                         return models.length > 0 && (
                                             <optgroup key={backend} label={backend.charAt(0).toUpperCase() + backend.slice(1)}>
                                                 {models.map((model: any) => (

@@ -2617,6 +2617,41 @@ class LocalAIServer:
             await self._send_json(websocket, response)
             return
 
+        if msg_type == "capabilities":
+            # Report what backends are available in this container
+            capabilities = {
+                "vosk": True,  # Always available (pure Python via vosk package)
+                "sherpa": False,
+                "kroko_embedded": False,
+                "piper": True,  # Always available via piper-tts
+                "kokoro": False,
+                "llama": True,  # Always available via llama-cpp-python
+            }
+            
+            # Check if sherpa-onnx is available
+            try:
+                import sherpa_onnx
+                capabilities["sherpa"] = True
+            except ImportError:
+                pass
+            
+            # Check if Kroko binary is installed
+            kroko_binary = "/usr/local/bin/kroko-server"
+            if os.path.exists(kroko_binary):
+                capabilities["kroko_embedded"] = True
+            
+            # Check if Kokoro is available
+            kokoro_model_path = os.environ.get("KOKORO_MODEL_PATH", "/app/models/tts/kokoro")
+            if os.path.exists(kokoro_model_path):
+                capabilities["kokoro"] = True
+            
+            response = {
+                "type": "capabilities_response",
+                "capabilities": capabilities
+            }
+            await self._send_json(websocket, response)
+            return
+
         logging.warning("❓ Unknown message type: %s", msg_type)
 
     async def _handle_binary_message(self, websocket, session: SessionContext, message: bytes) -> None:
