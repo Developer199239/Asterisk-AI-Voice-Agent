@@ -43,11 +43,17 @@ def _build_app_config() -> AppConfig:
     )
 
 
+class _MockState:
+    """Mock websockets State enum."""
+    name = "OPEN"
+
+
 class _MockWebSocket:
     def __init__(self):
         self.sent = []
         self._queue: asyncio.Queue = asyncio.Queue()
         self.closed = False
+        self.state = _MockState()
 
     async def send(self, data):
         self.sent.append(data)
