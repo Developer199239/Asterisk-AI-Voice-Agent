@@ -1023,7 +1023,7 @@ class GoogleLiveProvider(AIProviderInterface):
 
     async def _keepalive_loop(self) -> None:
         """Send periodic keepalive messages."""
-        while self.websocket and not self.websocket.closed:
+        while self.websocket and self.websocket.state.name == "OPEN":
             try:
                 await asyncio.sleep(_KEEPALIVE_INTERVAL_SEC)
                 # Send empty realtime input as keepalive (camelCase)
@@ -1073,7 +1073,7 @@ class GoogleLiveProvider(AIProviderInterface):
                 await self._keepalive_task
 
         # Close WebSocket
-        if self.websocket and not self.websocket.closed:
+        if self.websocket and self.websocket.state.name == "OPEN":
             await self.websocket.close()
             _GOOGLE_LIVE_SESSIONS.dec()
 

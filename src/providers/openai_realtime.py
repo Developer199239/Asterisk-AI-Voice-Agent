@@ -462,7 +462,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         """
         if not audio_chunk:
             return
-        if not self.websocket or self.websocket.closed:
+        if not self.websocket or self.websocket.state.name != "OPEN":
             logger.debug("Dropping inbound audio: websocket not ready", call_id=self._call_id)
             return
 
@@ -533,7 +533,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
 
     async def cancel_response(self):
         """Cancel any in-progress response generation (for barge-in)."""
-        if not self.websocket or self.websocket.closed:
+        if not self.websocket or self.websocket.state.name != "OPEN":
             return
         if not self._pending_response:
             logger.debug("No pending response to cancel", call_id=self._call_id)
@@ -615,7 +615,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                             })
                         }
                     }
-                    if self.websocket and not self.websocket.closed:
+                    if self.websocket and self.websocket.state.name == "OPEN":
                         await self._send_json(error_response)
                         logger.info("Sent error response to OpenAI", call_id=call_id_field)
             except Exception as send_error:
@@ -639,7 +639,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             # Cancel farewell timeout if active
             self._cancel_farewell_timeout()
 
-            if self.websocket and not self.websocket.closed:
+            if self.websocket and self.websocket.state.name == "OPEN":
                 await self.websocket.close()
 
             await self._emit_audio_done()
@@ -825,7 +825,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
 
     async def _send_explicit_greeting(self):
         greeting = (self.config.greeting or "").strip()
-        if not greeting or not self.websocket or self.websocket.closed:
+        if not greeting or not self.websocket or self.websocket.state.name != "OPEN":
             return
 
         # Per OpenAI Dec 2024 docs: Disable turn_detection during greeting
@@ -902,7 +902,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
 
     async def _re_enable_vad(self):
         """Re-enable turn_detection after greeting completes."""
-        if not self.websocket or self.websocket.closed:
+        if not self.websocket or self.websocket.state.name != "OPEN":
             return
         
         # Build turn_detection config from YAML or use OpenAI defaults
@@ -943,7 +943,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         )
 
     async def _ensure_response_request(self):
-        if self._pending_response or not self.websocket or self.websocket.closed:
+        if self._pending_response or not self.websocket or self.websocket.state.name != "OPEN":
             return
 
         response_payload: Dict[str, Any] = {
@@ -1022,7 +1022,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             )
 
     async def _send_json(self, payload: Dict[str, Any]):
-        if not self.websocket or self.websocket.closed:
+        if not self.websocket or self.websocket.state.name != "OPEN":
             return
         # Avoid logging base64 audio payloads; but log control message types
         try:
@@ -1045,7 +1045,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         
         See: https://platform.openai.com/docs/api-reference/realtime-client-events/response/cancel
         """
-        if not self.websocket or self.websocket.closed:
+        if not self.websocket or self.websocket.state.name != "OPEN":
             return
         
         try:
@@ -1890,16 +1890,16 @@ class OpenAIRealtimeProvider(AIProviderInterface):
 
     async def _keepalive_loop(self):
         try:
-            while self.websocket and not self.websocket.closed:
+            while self.websocket and self.websocket.state.name == "OPEN":
                 await asyncio.sleep(_KEEPALIVE_INTERVAL_SEC)
-                if not self.websocket or self.websocket.closed:
+                if not self.websocket or self.websocket.state.name != "OPEN":
                     break
                 try:
                     # Use native WebSocket ping control frames instead of
                     # sending an application-level {"type":"ping"} event,
                     # which Realtime rejects with invalid_request_error.
                     async with self._send_lock:
-                        if self.websocket and not self.websocket.closed:
+                        if self.websocket and self.websocket.state.name == "OPEN":
                             await self.websocket.ping()
                 except asyncio.CancelledError:
                     break
@@ -2211,7 +2211,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         warmup_bytes = int(max(0, self._egress_pacer_warmup_ms) / 20) * chunk_bytes
         # Warm-up buffer
         try:
-            while self.websocket and not self.websocket.closed and self._pacer_running:
+            while self.websocket and self.websocket.state.name == "OPEN" and self._pacer_running:
                 async with self._pacer_lock:
                     buf_len = len(self._outbuf)
                 if buf_len >= warmup_bytes or not self._egress_pacer_enabled:
@@ -2224,7 +2224,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
 
         # Emit loop at 20 ms cadence
         try:
-            while self.websocket and not self.websocket.closed and self._pacer_running:
+            while self.websocket and self.websocket.state.name == "OPEN" and self._pacer_running:
                 chunk = b""
                 async with self._pacer_lock:
                     if len(self._outbuf) >= chunk_bytes:
@@ -2298,7 +2298,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         return chunk_bytes, silence
 
     async def _switch_to_pcm24k_output(self) -> None:
-        if not self.websocket or self.websocket.closed:
+        if not self.websocket or self.websocket.state.name != "OPEN":
             return
         call_id = self._call_id
         try:

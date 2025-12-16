@@ -544,7 +544,7 @@ class DeepgramProvider(AIProviderInterface):
         # Immediately inject greeting once to try to kick off TTS
         async def _inject_greeting_immediate():
             try:
-                if self.websocket and not self.websocket.closed and greeting_val and self._greeting_injections < 1:
+                if self.websocket and self.websocket.state.name == "OPEN" and greeting_val and self._greeting_injections < 1:
                     logger.info("Injecting greeting immediately after Settings", call_id=self.call_id)
                     self._greeting_injections += 1
                     try:
@@ -565,7 +565,7 @@ class DeepgramProvider(AIProviderInterface):
         async def _inject_greeting_if_quiet():
             try:
                 await asyncio.sleep(1.5)
-                if self.websocket and not self.websocket.closed and not self._in_audio_burst and greeting_val and self._greeting_injections < 2:
+                if self.websocket and self.websocket.state.name == "OPEN" and not self._in_audio_burst and greeting_val and self._greeting_injections < 2:
                     logger.info("Injecting greeting via fallback as no AgentAudio detected", call_id=self.call_id)
                     try:
                         self._greeting_injections += 1
@@ -890,7 +890,7 @@ class DeepgramProvider(AIProviderInterface):
                             "error": str(e)
                         }
                     }
-                    if self.websocket and not self.websocket.closed:
+                    if self.websocket and self.websocket.state.name == "OPEN":
                         await self.websocket.send(json.dumps(error_response))
                         logger.info("Sent error response to Deepgram", function_call_id=function_call_id)
             except Exception as send_error:
@@ -904,7 +904,7 @@ class DeepgramProvider(AIProviderInterface):
         try:
             if self._keep_alive_task:
                 self._keep_alive_task.cancel()
-            if self.websocket and not self.websocket.closed:
+            if self.websocket and self.websocket.state.name == "OPEN":
                 await self.websocket.close()
             if not self._closed:
                 logger.info("Disconnected from Deepgram Voice Agent.")
@@ -918,7 +918,7 @@ class DeepgramProvider(AIProviderInterface):
         while True:
             try:
                 await asyncio.sleep(10)
-                if self.websocket and not self.websocket.closed:
+                if self.websocket and self.websocket.state.name == "OPEN":
                     if not self._is_audio_flowing:
                         await self.websocket.send(json.dumps({"type": "KeepAlive"}))
                     self._is_audio_flowing = False
@@ -1211,7 +1211,7 @@ class DeepgramProvider(AIProviderInterface):
                                 except Exception:
                                     pass
                                 # If not yet retried and we have a minimal payload, attempt resend once
-                                if not self._settings_retry_attempted and self._last_settings_minimal and self.websocket and not self.websocket.closed:
+                                if not self._settings_retry_attempted and self._last_settings_minimal and self.websocket and self.websocket.state.name == "OPEN":
                                     try:
                                         self._settings_retry_attempted = True
                                         logger.warning("Deepgram Settings error; retrying with minimal Settings", call_id=self.call_id)
@@ -1303,7 +1303,7 @@ class DeepgramProvider(AIProviderInterface):
                         try:
                             et = event_data.get("type") if isinstance(event_data, dict) else None
                             if et == "SettingsApplied" and not self._in_audio_burst and self._greeting_injections < 2:
-                                if self.websocket and not self.websocket.closed:
+                                if self.websocket and self.websocket.state.name == "OPEN":
                                     logger.info("Skipping greeting injection - using Deepgram agent greeting", call_id=self.call_id, event_type=et)
                                     # Greeting injection disabled to prevent duplicate
                                     # self._greeting_injections += 1

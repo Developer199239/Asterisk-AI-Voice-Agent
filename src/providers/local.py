@@ -106,7 +106,7 @@ class LocalProvider(AIProviderInterface):
 
     async def _authenticate(self) -> None:
         """Authenticate with local-ai-server if auth_token is configured."""
-        if not self.auth_token or not self.websocket or self.websocket.closed:
+        if not self.auth_token or not self.websocket or self.websocket.state.name != "OPEN":
             return
         await self.websocket.send(
             json.dumps({"type": "auth", "auth_token": self.auth_token})
@@ -236,7 +236,7 @@ class LocalProvider(AIProviderInterface):
         mark the provider as unavailable and return gracefully without error.
         """
         try:
-            if self.websocket and not self.websocket.closed:
+            if self.websocket and self.websocket.state.name == "OPEN":
                 logger.debug("WebSocket already connected, skipping initialization")
                 return
             
@@ -264,7 +264,7 @@ class LocalProvider(AIProviderInterface):
     async def start_session(self, call_id: str, context: Optional[Dict[str, Any]] = None):
         try:
             # Check if already connected
-            if self.websocket and not self.websocket.closed:
+            if self.websocket and self.websocket.state.name == "OPEN":
                 logger.debug("WebSocket already connected, reusing connection", call_id=call_id)
                 self._active_call_id = call_id
                 # Ensure listener and sender tasks are running (may have crashed)
@@ -380,7 +380,7 @@ class LocalProvider(AIProviderInterface):
         """Play an initial greeting message to the caller."""
         try:
             # Ensure websocket connection exists
-            if not self.websocket or self.websocket.closed:
+            if not self.websocket or self.websocket.state.name != "OPEN":
                 await self.initialize()
 
             # Ensure the receive loop will attribute AgentAudio to this call
@@ -599,7 +599,7 @@ class LocalProvider(AIProviderInterface):
     async def text_to_speech(self, text: str) -> Optional[bytes]:
         """Generate TTS audio for the given text."""
         try:
-            if not self.websocket or self.websocket.closed:
+            if not self.websocket or self.websocket.state.name != "OPEN":
                 logger.error("WebSocket not connected for TTS")
                 return None
             
@@ -649,4 +649,4 @@ class LocalProvider(AIProviderInterface):
         }
     
     def is_ready(self) -> bool:
-        return self.websocket is not None and not self.websocket.closed
+        return self.websocket is not None and self.websocket.state.name == "OPEN"
