@@ -448,6 +448,46 @@ Keep this roadmap updated after each milestone to help any collaborator—or fut
 
 ---
 
+### v4.5.3 (December 2025) - Security Hardening Sprint
+
+**Release Date**: December 17, 2025  
+**Focus**: Security hardening, resilience, and Admin UI production readiness
+
+**Security Hardening** (AAVA-131):
+
+- Default network bindings changed to localhost (127.0.0.1) for all services
+- Admin UI requires `JWT_SECRET` and `UVICORN_HOST=0.0.0.0` for remote access
+- local_ai_server fail-closed auth enforcement for non-loopback binds
+- Health endpoint binds to localhost by default
+
+**Resilience Improvements** (AAVA-136, AAVA-137):
+
+- ARI runtime reconnect supervisor with exponential backoff
+- Removed blocking IO from async runtime paths (`time.sleep` → `asyncio.sleep`)
+- `/ready` endpoint reflects true ARI connection state
+
+**Admin UI Adoption Readiness** (AAVA-130):
+
+- Fixed JWT_SECRET load-order vulnerability
+- Fixed config export crash (`CONFIG_PATH.exists()`)
+- Atomic writes for all config-mutating endpoints
+- CORS restricted by default with env override
+
+**Documentation Updates** (AAVA-132, AAVA-133, AAVA-134, AAVA-135):
+
+- Updated resilience.md from v3.0 to v4.x
+- Fixed transport default documentation (ExternalMedia is default)
+- Added Kroko binary integrity verification (SHA256)
+- Added Admin-UI control plane hardening documentation
+
+**Local AI Server Logging**:
+
+- Suppressed noisy websockets handshake errors via log filter
+- Added client connection logging at INFO level
+- Aligned main.py defaults with docker-compose.yml
+
+---
+
 ### v4.4.2 (December 2025) - Local AI Enhancements
 
 **Release Date**: December 8, 2025  
@@ -541,14 +581,14 @@ Keep this roadmap updated after each milestone to help any collaborator—or fut
 - 🎯 Increase CI coverage threshold to 30% then 40% (currently 27%)
 - ⏳ Automated regression test suite (foundation in place)
 
-**Admin UI Adoption Readiness**:
+**Admin UI Adoption Readiness** (AAVA-130 - ✅ COMPLETED Dec 2025):
 
-- 🔥 AAVA-130: Fix JWT secret load-order vulnerability; tighten CORS defaults
-- 🔥 AAVA-130: Fix config export crash (`CONFIG_PATH.exists()`)
-- 🔥 AAVA-130: Atomic writes for remaining hotspots (`wizard.py`, `local_ai.py`, `system.py`)
-- 🔥 AAVA-130: Lightweight config validation endpoint (syntax + basic schema/footguns)
-- 🔄 Restart orchestration improvements (restart vs recreate, readiness verification via `/ready`)
-- 🔄 ARI scheme/port alignment across wizard → `.env` → engine runtime
+- ✅ AAVA-130: Fix JWT secret load-order vulnerability; tighten CORS defaults
+- ✅ AAVA-130: Fix config export crash (`CONFIG_PATH.exists()`)
+- ✅ AAVA-130: Atomic writes for remaining hotspots (`wizard.py`, `local_ai.py`, `system.py`)
+- ✅ AAVA-130: Lightweight config validation endpoint (syntax + basic schema/footguns)
+- ✅ Restart orchestration improvements (restart vs recreate, readiness verification via `/ready`)
+- ✅ ARI scheme/port alignment across wizard → `.env` → engine runtime
 
 **Additional Tool Categories**:
 
@@ -710,5 +750,5 @@ For detailed implementation plans and specifications:
 
 ---
 
-**Last Updated**: December 8, 2025  
-**Roadmap Version**: 2.5 (Added v4.4.1 Admin UI, v4.4.2 Local AI Enhancements)
+**Last Updated**: December 17, 2025  
+**Roadmap Version**: 2.6 (Added v4.5.3 Security Hardening Sprint, updated v4.5 Planning status)
