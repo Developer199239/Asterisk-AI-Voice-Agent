@@ -2245,9 +2245,14 @@ class Engine:
             if not store._enabled:
                 return
             
-            # Calculate end time and duration
-            end_time = datetime.now()
-            start_time = session.start_time or datetime.fromtimestamp(session.created_at)
+            # Calculate end time and duration (use UTC for consistent timezone handling)
+            from datetime import timezone
+            end_time = datetime.now(timezone.utc)
+            start_time = session.start_time
+            if start_time and start_time.tzinfo is None:
+                start_time = start_time.replace(tzinfo=timezone.utc)
+            elif not start_time:
+                start_time = datetime.fromtimestamp(session.created_at, tz=timezone.utc)
             duration = (end_time - start_time).total_seconds() if start_time else 0.0
             
             # Determine outcome
