@@ -2913,6 +2913,19 @@ class LocalAIServer:
     async def handler(self, websocket):
         """Enhanced WebSocket handler with MVP pipeline and hot reloading"""
         logging.debug("🔌 New connection established: %s", websocket.remote_address)
+        
+        # SECURITY: Fail-closed for remote connections without auth token configured
+        # If server is bound to non-localhost AND no auth token is set, reject all connections
+        bind_host = os.getenv("LOCAL_WS_HOST", "127.0.0.1")
+        is_remote_bind = bind_host not in ("127.0.0.1", "localhost", "::1")
+        if is_remote_bind and not self.ws_auth_token:
+            logging.error(
+                "🚨 SECURITY: Rejecting connection - server bound to %s but LOCAL_WS_AUTH_TOKEN not set",
+                bind_host
+            )
+            await websocket.close(1008, "Server misconfigured: auth token required for remote access")
+            return
+        
         session = SessionContext()
         try:
             async for message in websocket:
@@ -2944,12 +2957,12 @@ async def main():
         host = os.getenv("LOCAL_WS_HOST", "127.0.0.1")
         port = int(os.getenv("LOCAL_WS_PORT", "8765"))
         
-        # Warn if binding to non-localhost without auth token
+        # SECURITY: Fail-closed for non-localhost bind without auth token
         auth_token = os.getenv("LOCAL_WS_AUTH_TOKEN", "").strip()
         if host != "127.0.0.1" and host != "localhost" and not auth_token:
-            logging.warning(
-                "⚠️  SECURITY WARNING: LOCAL_WS_HOST=%s (non-localhost) but LOCAL_WS_AUTH_TOKEN is not set. "
-                "Remote connections will be rejected. Set LOCAL_WS_AUTH_TOKEN for authenticated remote access.",
+            logging.error(
+                "🚨 SECURITY: LOCAL_WS_HOST=%s (non-localhost) but LOCAL_WS_AUTH_TOKEN is not set. "
+                "All connections will be REJECTED until LOCAL_WS_AUTH_TOKEN is configured.",
                 host
             )
 
