@@ -3,7 +3,7 @@ import {
     Phone, Filter, Download, Trash2, 
     ChevronLeft, ChevronRight, RefreshCw, X, MessageSquare,
     Wrench, AlertCircle, CheckCircle, ArrowRightLeft, PhoneOff,
-    BarChart3, Users, Timer, Activity
+    BarChart3, Users, Timer, Activity, TrendingUp, Zap, PieChart
 } from 'lucide-react';
 import axios from 'axios';
 
@@ -270,13 +270,27 @@ const CallHistoryPage = () => {
 
             {/* Stats Dashboard */}
             {showStats && stats && (
-                <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
                     <div className="bg-card border rounded-lg p-4">
                         <div className="flex items-center gap-2 text-muted-foreground text-sm">
                             <Phone className="w-4 h-4" />
                             Total Calls
                         </div>
                         <div className="text-2xl font-bold mt-1">{stats.total_calls}</div>
+                    </div>
+                    <div className="bg-card border rounded-lg p-4">
+                        <div className="flex items-center gap-2 text-muted-foreground text-sm">
+                            <PieChart className="w-4 h-4" />
+                            Success Rate
+                        </div>
+                        <div className="text-2xl font-bold mt-1">
+                            {stats.total_calls > 0 
+                                ? Math.round(((stats.outcomes?.completed || 0) / stats.total_calls) * 100) 
+                                : 0}%
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                            {stats.outcomes?.completed || 0} / {stats.outcomes?.error || 0} failed
+                        </div>
                     </div>
                     <div className="bg-card border rounded-lg p-4">
                         <div className="flex items-center gap-2 text-muted-foreground text-sm">
@@ -294,24 +308,19 @@ const CallHistoryPage = () => {
                     </div>
                     <div className="bg-card border rounded-lg p-4">
                         <div className="flex items-center gap-2 text-muted-foreground text-sm">
-                            <MessageSquare className="w-4 h-4" />
-                            Total Turns
+                            <TrendingUp className="w-4 h-4" />
+                            Top Provider
                         </div>
-                        <div className="text-2xl font-bold mt-1">{stats.total_turns}</div>
+                        <div className="text-lg font-bold mt-1 truncate">
+                            {Object.entries(stats.providers || {}).sort((a, b) => b[1] - a[1])[0]?.[0] || '-'}
+                        </div>
                     </div>
                     <div className="bg-card border rounded-lg p-4">
                         <div className="flex items-center gap-2 text-muted-foreground text-sm">
                             <Wrench className="w-4 h-4" />
-                            With Tools
+                            Calls with Tools
                         </div>
                         <div className="text-2xl font-bold mt-1">{stats.calls_with_tools}</div>
-                    </div>
-                    <div className="bg-card border rounded-lg p-4">
-                        <div className="flex items-center gap-2 text-muted-foreground text-sm">
-                            <Users className="w-4 h-4" />
-                            Barge-ins
-                        </div>
-                        <div className="text-2xl font-bold mt-1">{stats.total_barge_ins}</div>
                     </div>
                 </div>
             )}
@@ -456,6 +465,8 @@ const CallHistoryPage = () => {
                                     <th className="text-left px-4 py-3 text-sm font-medium">Context</th>
                                     <th className="text-left px-4 py-3 text-sm font-medium">Outcome</th>
                                     <th className="text-left px-4 py-3 text-sm font-medium">Turns</th>
+                                    <th className="text-left px-4 py-3 text-sm font-medium">Latency</th>
+                                    <th className="text-left px-4 py-3 text-sm font-medium">Barge-ins</th>
                                     <th className="text-right px-4 py-3 text-sm font-medium">Actions</th>
                                 </tr>
                             </thead>
@@ -484,6 +495,8 @@ const CallHistoryPage = () => {
                                             </div>
                                         </td>
                                         <td className="px-4 py-3 text-sm">{call.total_turns}</td>
+                                        <td className="px-4 py-3 text-sm">{Math.round(call.avg_turn_latency_ms)}ms</td>
+                                        <td className="px-4 py-3 text-sm">{call.barge_in_count}</td>
                                         <td className="px-4 py-3 text-right">
                                             <button
                                                 onClick={(e) => { e.stopPropagation(); handleDelete(call.id); }}
@@ -548,7 +561,7 @@ const CallHistoryPage = () => {
                         {/* Modal Content */}
                         <div className="flex-1 overflow-y-auto p-4 space-y-6">
                             {/* Overview */}
-                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
                                 <div>
                                     <div className="text-sm text-muted-foreground">Caller</div>
                                     <div className="font-medium">{selectedCall.caller_number || 'Unknown'}</div>
@@ -568,8 +581,16 @@ const CallHistoryPage = () => {
                                     </div>
                                 </div>
                                 <div>
+                                    <div className="text-sm text-muted-foreground">Turns</div>
+                                    <div className="font-medium">{selectedCall.total_turns}</div>
+                                </div>
+                                <div>
                                     <div className="text-sm text-muted-foreground">Avg Latency</div>
                                     <div className="font-medium">{Math.round(selectedCall.avg_turn_latency_ms)}ms</div>
+                                </div>
+                                <div>
+                                    <div className="text-sm text-muted-foreground">Barge-ins</div>
+                                    <div className="font-medium">{selectedCall.barge_in_count}</div>
                                 </div>
                             </div>
 
