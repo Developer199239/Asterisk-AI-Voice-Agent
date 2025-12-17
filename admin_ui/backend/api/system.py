@@ -106,7 +106,7 @@ async def get_containers():
                         else:
                             uptime = f"{minutes}m"
                 except Exception as e:
-                    print(f"Error calculating uptime for {c.name}: {e}")
+                    logger.debug("Error calculating uptime for %s: %s", c.name, e)
             
             # Get exposed ports
             ports = []
@@ -133,9 +133,7 @@ async def get_containers():
             })
         return result
     except Exception as e:
-        import traceback
-        traceback.print_exc()
-        print(f"Error listing containers: {e}")
+        logger.error("Error listing containers: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/containers/{container_id}/start")
@@ -482,13 +480,13 @@ async def get_system_health():
             
             # With host networking, use localhost instead of container name
             uri = os.getenv("HEALTH_CHECK_LOCAL_AI_URL", "ws://127.0.0.1:8765")
-            print(f"DEBUG: Checking Local AI at {uri}")
+            logger.debug("Checking Local AI at %s", uri)
             async with websockets.connect(uri, open_timeout=5) as websocket:
-                print("DEBUG: Local AI connected, sending status...")
+                logger.debug("Local AI connected, sending status...")
                 await websocket.send(json.dumps({"type": "status"}))
-                print("DEBUG: Local AI sent, waiting for response...")
+                logger.debug("Local AI sent, waiting for response...")
                 response = await asyncio.wait_for(websocket.recv(), timeout=5)
-                print(f"DEBUG: Local AI response: {response[:100]}...")
+                logger.debug("Local AI response: %s...", response[:100])
                 data = json.loads(response)
                 if data.get("type") == "status_response":
                     # Prefer explicit fields from local-ai-server (v2 protocol), fallback to heuristics.
@@ -522,7 +520,7 @@ async def get_system_health():
                         "details": {"error": "Invalid response type"}
                     }
         except Exception as e:
-            print(f"Local AI Check Error: {type(e).__name__}: {str(e)}")
+            logger.debug("Local AI Check Error: %s: %s", type(e).__name__, str(e))
             return {
                 "status": "error",
                 "details": {"error": f"{type(e).__name__}: {str(e)}"}
@@ -533,10 +531,10 @@ async def get_system_health():
             import httpx
             # With host networking, use localhost instead of container name
             url = os.getenv("HEALTH_CHECK_AI_ENGINE_URL", "http://127.0.0.1:15000/health")
-            print(f"DEBUG: Checking AI Engine at {url}")
+            logger.debug("Checking AI Engine at %s", url)
             async with httpx.AsyncClient(timeout=5.0) as client:
                 resp = await client.get(url)
-                print(f"DEBUG: AI Engine response: {resp.status_code}")
+                logger.debug("AI Engine response: %s", resp.status_code)
                 if resp.status_code == 200:
                     return {
                         "status": "connected",
@@ -548,7 +546,7 @@ async def get_system_health():
                         "details": {"status_code": resp.status_code}
                     }
         except Exception as e:
-            print(f"AI Engine Check Error: {type(e).__name__}: {str(e)}")
+            logger.debug("AI Engine Check Error: %s: %s", type(e).__name__, str(e))
             return {
                 "status": "error",
                 "details": {"error": f"{type(e).__name__}: {str(e)}"}

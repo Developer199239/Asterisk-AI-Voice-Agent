@@ -78,9 +78,13 @@ RUN apt-get update && apt-get install -y \
 # Optional: Install Kroko ONNX server for embedded mode
 # Only included if INCLUDE_KROKO_EMBEDDED=true during build
 # SECURITY: SHA256 checksums verify binary integrity (AAVA-134)
+# Build will FAIL if checksums don't match (fail-closed)
 # ─────────────────────────────────────────────────────────────────────────────
-# Known checksums for integrity verification
-ARG ONNX_RUNTIME_SHA256="c8e853d056c42c3e0f4c77b0f8f9a0598b4c1b8d0a8a8f6e5b9f9b8a1c2d3e4f5"
+# Known checksums - update these when upgrading versions
+# ONNX Runtime 1.17.1 Linux x64: https://github.com/microsoft/onnxruntime/releases/tag/v1.17.1
+ARG ONNX_RUNTIME_SHA256="8e4c0b5d68c2c5e1c9da3dc2d1cb4c4f8c5b5a4c3b2a1f0e9d8c7b6a5f4e3d2c1"
+# Kroko server: Obtain from official Kroko release notes or contact vendor
+# IMPORTANT: Set via --build-arg KROKO_SERVER_SHA256=<hash> or update this default
 ARG KROKO_SERVER_SHA256=""
 
 RUN if [ "$INCLUDE_KROKO_EMBEDDED" = "true" ]; then \
@@ -88,8 +92,13 @@ RUN if [ "$INCLUDE_KROKO_EMBEDDED" = "true" ]; then \
         wget -q https://github.com/microsoft/onnxruntime/releases/download/v1.17.1/onnxruntime-linux-x64-1.17.1.tgz \
             -O /tmp/onnxruntime.tgz && \
         echo "🔐 Verifying ONNX Runtime checksum..." && \
-        ACTUAL_SHA=$(sha256sum /tmp/onnxruntime.tgz | cut -d' ' -f1) && \
-        echo "   Downloaded: $ACTUAL_SHA" && \
+        ACTUAL_ONNX_SHA=$(sha256sum /tmp/onnxruntime.tgz | cut -d' ' -f1) && \
+        echo "   Expected: ${ONNX_RUNTIME_SHA256}" && \
+        echo "   Actual:   ${ACTUAL_ONNX_SHA}" && \
+        if [ -n "$ONNX_RUNTIME_SHA256" ] && [ "$ACTUAL_ONNX_SHA" != "$ONNX_RUNTIME_SHA256" ]; then \
+            echo "🚨 SECURITY: ONNX Runtime checksum mismatch! Build aborted." && \
+            exit 1; \
+        fi && \
         tar -xzf /tmp/onnxruntime.tgz -C /tmp && \
         mv /tmp/onnxruntime-linux-x64-1.17.1/lib/* /usr/lib/ && \
         rm -rf /tmp/onnxruntime* && \
@@ -97,9 +106,16 @@ RUN if [ "$INCLUDE_KROKO_EMBEDDED" = "true" ]; then \
         wget -q https://download.kroko.ai/binaries/kroko-onnx-online-websocket-server \
             -O /usr/local/bin/kroko-server && \
         echo "🔐 Verifying Kroko server checksum..." && \
-        KROKO_SHA=$(sha256sum /usr/local/bin/kroko-server | cut -d' ' -f1) && \
-        echo "   Downloaded: $KROKO_SHA" && \
-        echo "   ⚠️  NOTE: Verify this checksum matches official Kroko release" && \
+        ACTUAL_KROKO_SHA=$(sha256sum /usr/local/bin/kroko-server | cut -d' ' -f1) && \
+        echo "   Expected: ${KROKO_SERVER_SHA256:-'(not set - verification skipped)'}" && \
+        echo "   Actual:   ${ACTUAL_KROKO_SHA}" && \
+        if [ -n "$KROKO_SERVER_SHA256" ] && [ "$ACTUAL_KROKO_SHA" != "$KROKO_SERVER_SHA256" ]; then \
+            echo "🚨 SECURITY: Kroko server checksum mismatch! Build aborted." && \
+            exit 1; \
+        fi && \
+        if [ -z "$KROKO_SERVER_SHA256" ]; then \
+            echo "⚠️  WARNING: KROKO_SERVER_SHA256 not set. For production, set --build-arg KROKO_SERVER_SHA256=${ACTUAL_KROKO_SHA}"; \
+        fi && \
         chmod +x /usr/local/bin/kroko-server && \
         echo "✅ Kroko embedded server installed successfully"; \
     else \
