@@ -503,10 +503,10 @@ export const HealthWidget = () => {
                                         <span className="font-medium">Kroko Embedded not available.</span>
                                         <span className="opacity-75"> First download a Kroko ONNX model from the </span>
                                         <Link to="/models" className="underline hover:text-amber-500">Models Page</Link>
-                                        <span className="opacity-75">, then rebuild the container:</span>
+                                        <span className="opacity-75">, then add to .env and rebuild:</span>
                                     </div>
                                     <code className="block bg-black/20 dark:bg-white/10 px-2 py-1 rounded text-[10px] font-mono select-all">
-                                        docker compose build --build-arg INCLUDE_KROKO_EMBEDDED=true local-ai-server && docker compose up -d local-ai-server
+                                        echo "INCLUDE_KROKO_EMBEDDED=true" &gt;&gt; .env && docker compose build --no-cache local-ai-server && docker compose up -d local-ai-server
                                     </code>
                                 </div>
                             )}
