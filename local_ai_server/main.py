@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import subprocess
+import sys
 import tempfile
 import wave
 import urllib.request
@@ -2960,8 +2961,17 @@ async def main():
         # SECURITY: Fail-closed for non-localhost bind without auth token
         # Treat 0.0.0.0, ::, ::0, and any non-localhost as remote-accessible
         auth_token = os.getenv("LOCAL_WS_AUTH_TOKEN", "").strip()
-        loopback_addresses = ("127.0.0.1", "localhost", "::1")
-        is_loopback = host in loopback_addresses
+        
+        def is_loopback_address(addr: str) -> bool:
+            """Check if address is loopback (127.0.0.0/8, localhost, ::1)"""
+            if addr in ("localhost", "::1"):
+                return True
+            # Check IPv4 loopback range 127.0.0.0/8
+            if addr.startswith("127."):
+                return True
+            return False
+        
+        is_loopback = is_loopback_address(host)
         
         if not is_loopback and not auth_token:
             logging.error(
