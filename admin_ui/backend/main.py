@@ -2,6 +2,9 @@ from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 import settings
 from dotenv import load_dotenv
+import os
+import sys
+import logging
 
 # Load environment variables (wizard will create .env from .env.example on first Next click)
 load_dotenv(settings.ENV_PATH)
@@ -9,16 +12,29 @@ load_dotenv(settings.ENV_PATH)
 from api import config, system, wizard, logs, local_ai, ollama, mcp
 import auth
 
+# SECURITY: Enforce JWT_SECRET when binding to non-localhost
+_uvicorn_host = os.getenv("UVICORN_HOST", "127.0.0.1")
+_is_remote_bind = _uvicorn_host not in ("127.0.0.1", "localhost", "::1")
+_using_default_secret = auth.SECRET_KEY == "dev-secret-key-change-in-prod"
+
+if _is_remote_bind and _using_default_secret:
+    logging.getLogger(__name__).critical(
+        "🚨 SECURITY ERROR: Admin UI is bound to %s (remote accessible) but JWT_SECRET is not set. "
+        "This is a critical security risk. Either:\n"
+        "  1. Set JWT_SECRET in .env to a strong random value (recommended: openssl rand -hex 32)\n"
+        "  2. Or bind to localhost only by removing UVICORN_HOST=0.0.0.0\n"
+        "Refusing to start.",
+        _uvicorn_host
+    )
+    sys.exit(1)
+
 app = FastAPI(title="Asterisk AI Voice Agent Admin API")
 
 # Initialize users (create default admin if needed)
 auth.load_users()
 
-# Warn loudly if JWT_SECRET isn't set (auth reads it at import time).
-if auth.SECRET_KEY == "dev-secret-key-change-in-prod":
-    # Don't crash dev, but make this impossible to miss in logs.
-    import logging
-
+# Warn if JWT_SECRET isn't set (localhost-only is okay for dev)
+if _using_default_secret:
     logging.getLogger(__name__).warning(
         "JWT_SECRET is not set; Admin UI is using the default dev secret. "
         "Set JWT_SECRET in .env for production."

@@ -7359,8 +7359,37 @@ class Engine:
         except Exception as exc:
             logger.error("Error in PlaybackFinished handler", error=str(exc), exc_info=True)
 
+    def _is_request_authorized(self, request) -> bool:
+        """
+        Check if request is authorized for sensitive endpoints.
+        
+        Authorization granted if:
+        - Request is from localhost (127.0.0.1, ::1, localhost)
+        - OR request has valid HEALTH_API_TOKEN header
+        
+        Returns:
+            True if authorized, False otherwise
+        """
+        # Check if from localhost
+        peername = request.transport.get_extra_info('peername')
+        if peername:
+            client_ip = peername[0]
+            if client_ip in ('127.0.0.1', '::1', 'localhost'):
+                return True
+        
+        # Check for API token
+        expected_token = os.getenv('HEALTH_API_TOKEN', '').strip()
+        if expected_token:
+            auth_header = request.headers.get('Authorization', '')
+            if auth_header.startswith('Bearer '):
+                provided_token = auth_header[7:]
+                if provided_token == expected_token:
+                    return True
+        
+        return False
+
     async def _start_health_server(self):
-        """Start aiohttp health/metrics server on 0.0.0.0:15000."""
+        """Start aiohttp health/metrics server (defaults to 127.0.0.1:15000)."""
         try:
             app = web.Application()
             app.router.add_get('/live', self._live_handler)
@@ -7405,7 +7434,17 @@ class Engine:
             return web.json_response({"enabled": False, "error": str(exc)}, status=500)
 
     async def _mcp_test_handler(self, request):
-        """Test an MCP server in the ai-engine container context (safe; no arbitrary commands)."""
+        """Test an MCP server in the ai-engine container context.
+        
+        SECURITY: Requires localhost or HEALTH_API_TOKEN.
+        """
+        # SECURITY: Gate sensitive endpoint
+        if not self._is_request_authorized(request):
+            return web.json_response(
+                {"ok": False, "error": "Forbidden: requires localhost or valid HEALTH_API_TOKEN"},
+                status=403
+            )
+        
         try:
             server_id = request.match_info.get("server_id")
             if not server_id:
@@ -7678,7 +7717,16 @@ class Engine:
         
         POST /reload
         Returns JSON with reload status and what changed.
+        
+        SECURITY: Requires localhost or HEALTH_API_TOKEN.
         """
+        # SECURITY: Gate sensitive endpoint
+        if not self._is_request_authorized(request):
+            return web.json_response(
+                {"success": False, "error": "Forbidden: requires localhost or valid HEALTH_API_TOKEN"},
+                status=403
+            )
+        
         try:
             logger.info("🔄 Configuration reload requested")
             changes = []

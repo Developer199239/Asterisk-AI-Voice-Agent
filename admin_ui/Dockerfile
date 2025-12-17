@@ -45,5 +45,7 @@ COPY --from=frontend-builder /app/frontend/dist ./static
 # Expose default port (can be overridden by UVICORN_PORT)
 EXPOSE 3003
 
-# Run the application (port configurable via UVICORN_PORT env var)
-CMD uvicorn main:app --host 0.0.0.0 --port ${UVICORN_PORT:-3003}
+# Run the application
+# SECURITY: Binds to localhost by default. Set UVICORN_HOST=0.0.0.0 for remote access (requires reverse proxy + auth).
+# Port configurable via UVICORN_PORT env var.
+CMD uvicorn main:app --host ${UVICORN_HOST:-127.0.0.1} --port ${UVICORN_PORT:-3003}
