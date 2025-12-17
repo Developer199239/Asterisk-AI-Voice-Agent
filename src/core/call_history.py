@@ -398,16 +398,14 @@ class CallHistoryStore:
                         'start_time', 'end_time', 'duration_seconds', 
                         'caller_number', 'provider_name', 'pipeline_name', 'outcome'
                     ]
-                    if order_by not in valid_columns:
-                        order_by = 'start_time'
-                    if order_dir.upper() not in ['ASC', 'DESC']:
-                        order_dir = 'DESC'
+                    safe_order_by = order_by if order_by in valid_columns else 'start_time'
+                    safe_order_dir = order_dir.upper() if order_dir.upper() in ['ASC', 'DESC'] else 'DESC'
                     
                     where_clause = " AND ".join(conditions) if conditions else "1=1"
                     query = f"""
                         SELECT * FROM call_records 
                         WHERE {where_clause}
-                        ORDER BY {order_by} {order_dir}
+                        ORDER BY {safe_order_by} {safe_order_dir}
                         LIMIT ? OFFSET ?
                     """
                     params.extend([limit, offset])
