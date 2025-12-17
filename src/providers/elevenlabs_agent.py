@@ -476,6 +476,32 @@ class ElevenLabsAgentProvider(AIProviderInterface, ProviderCapabilitiesMixin):
                 logger.debug(f"[elevenlabs] [{self._call_id}] Empty audio event: {list(data.keys())}")
                 return
         
+        # Track turn latency on first audio output (Milestone 21 - Call History)
+        if self._turn_start_time is not None and not self._turn_first_audio_received:
+            import time
+            self._turn_first_audio_received = True
+            turn_latency_ms = (time.time() - self._turn_start_time) * 1000
+            # Save to session for call history
+            if self._session_store and self._call_id:
+                try:
+                    call_id_copy = self._call_id
+                    latency_copy = turn_latency_ms
+                    async def save_latency():
+                        try:
+                            session = await self._session_store.get_by_call_id(call_id_copy)
+                            if session:
+                                session.turn_latencies_ms.append(latency_copy)
+                                await self._session_store.upsert_call(session)
+                                logger.debug(f"[elevenlabs] Turn latency saved: {round(latency_copy, 1)}ms")
+                        except Exception as e:
+                            logger.debug(f"[elevenlabs] Failed to save turn latency: {e}")
+                    asyncio.create_task(save_latency())
+                except Exception as e:
+                    logger.debug(f"[elevenlabs] Failed to create latency save task: {e}")
+            logger.info(f"[elevenlabs] [{self._call_id}] Turn latency: {round(turn_latency_ms, 1)}ms")
+            # Reset for next turn
+            self._turn_start_time = None
+        
         # Log first audio received
         if self._session_state.total_audio_received == 0:
             logger.info(f"[elevenlabs] [{self._call_id}] First agent audio received")
@@ -539,6 +565,12 @@ class ElevenLabsAgentProvider(AIProviderInterface, ProviderCapabilitiesMixin):
         transcript_event = data.get("user_transcription_event", {})
         text = transcript_event.get("user_transcript", "")
         is_final = transcript_event.get("is_final", True)
+        
+        # Track turn start time when user starts speaking (Milestone 21)
+        if text and self._turn_start_time is None:
+            import time
+            self._turn_start_time = time.time()
+            self._turn_first_audio_received = False
         
         if text:
             logger.debug(f"[elevenlabs] [{self._call_id}] User: {text[:100]}...")
