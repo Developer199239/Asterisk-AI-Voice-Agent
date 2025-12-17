@@ -5480,6 +5480,7 @@ class Engine:
                     nonlocal conversation_history
                     response_text = ""
                     tool_calls = []
+                    turn_start_time = time.time()  # Track turn latency for call history
                     
                     pipeline_label = getattr(session, 'pipeline_name', None) or 'none'
                     provider_label = getattr(session, 'provider_name', None) or 'unknown'
@@ -5537,6 +5538,9 @@ class Engine:
                                 if tts_chunk:
                                     if first_tts_ts is None:
                                         first_tts_ts = time.time()
+                                        # Track turn latency for call history (Milestone 21)
+                                        turn_latency_ms = (first_tts_ts - turn_start_time) * 1000
+                                        session.turn_latencies_ms.append(turn_latency_ms)
                                         try:
                                             if t_start is not None:
                                                 _TURN_STT_TO_TTS.labels(pipeline_label, provider_label).observe(max(0.0, first_tts_ts - t_start))
