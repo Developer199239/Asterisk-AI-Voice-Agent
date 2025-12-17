@@ -2176,6 +2176,12 @@ class Engine:
             except Exception as e:
                 logger.warning("Failed to process transcript emails", call_id=call_id, error=str(e), exc_info=True)
 
+            # Persist call to history before removing session (Milestone 21)
+            try:
+                await self._persist_call_history(session, call_id)
+            except Exception as e:
+                logger.debug("Failed to persist call history", call_id=call_id, error=str(e))
+
             # Finally remove the session.
             await self.session_store.remove_call(call_id)
 
@@ -2229,6 +2235,71 @@ class Engine:
                     await self.session_store.upsert_call(sess3)
             except Exception:
                 pass
+
+    async def _persist_call_history(self, session: CallSession, call_id: str) -> None:
+        """Persist call record to history database (Milestone 21)."""
+        try:
+            from src.core.call_history import CallRecord, get_call_history_store
+            
+            store = get_call_history_store()
+            if not store._enabled:
+                return
+            
+            # Calculate end time and duration
+            end_time = datetime.now()
+            start_time = session.start_time or datetime.fromtimestamp(session.created_at)
+            duration = (end_time - start_time).total_seconds() if start_time else 0.0
+            
+            # Determine outcome
+            outcome = "completed"
+            if session.error_message:
+                outcome = "error"
+            elif session.transfer_destination:
+                outcome = "transferred"
+            elif not session.conversation_history:
+                outcome = "abandoned"
+            
+            # Calculate latency stats
+            turn_latencies = getattr(session, 'turn_latencies_ms', []) or []
+            avg_latency = sum(turn_latencies) / len(turn_latencies) if turn_latencies else 0.0
+            max_latency = max(turn_latencies) if turn_latencies else 0.0
+            
+            # Get barge-in count from coordinator
+            barge_in_count = getattr(session, 'barge_in_count', 0)
+            if self.conversation_coordinator:
+                barge_in_count = self.conversation_coordinator._barge_in_totals.get(call_id, 0)
+            
+            record = CallRecord(
+                call_id=call_id,
+                caller_number=session.caller_number,
+                caller_name=session.caller_name,
+                start_time=start_time,
+                end_time=end_time,
+                duration_seconds=duration,
+                provider_name=session.provider_name,
+                pipeline_name=session.pipeline_name,
+                pipeline_components=session.pipeline_components or {},
+                context_name=session.context_name,
+                conversation_history=session.conversation_history or [],
+                outcome=outcome,
+                transfer_destination=session.transfer_destination,
+                error_message=session.error_message,
+                tool_calls=getattr(session, 'tool_calls', []) or [],
+                avg_turn_latency_ms=avg_latency,
+                max_turn_latency_ms=max_latency,
+                total_turns=len(turn_latencies),
+                caller_audio_format=session.caller_audio_format,
+                codec_alignment_ok=session.codec_alignment_ok,
+                barge_in_count=barge_in_count,
+            )
+            
+            saved = await store.save(record)
+            if saved:
+                logger.debug("Call history record saved", call_id=call_id, record_id=record.id)
+        except ImportError:
+            logger.debug("Call history module not available", call_id=call_id)
+        except Exception as e:
+            logger.debug("Failed to persist call history", call_id=call_id, error=str(e))
 
     async def _resolve_audio_profile(self, session: CallSession, channel_id: str) -> None:
         """Resolve TransportProfile and provider prefs from profiles/contexts.
@@ -7492,6 +7563,7 @@ class Engine:
         provider = self.providers.get(provider_name)
 
         result = {"status": "error", "message": f"Tool '{function_name}' not found"}
+        tool_start_time = time.time()
 
         try:
             # Determine allowlisted tools for this call.
@@ -7569,6 +7641,24 @@ class Engine:
                 exc_info=True,
             )
             result = {"status": "error", "message": str(e)}
+        
+        # Log tool call to session for call history (Milestone 21)
+        try:
+            tool_duration_ms = (time.time() - tool_start_time) * 1000
+            tool_record = {
+                "name": function_name,
+                "params": parameters,
+                "result": result.get("status", "unknown"),
+                "message": result.get("message", ""),
+                "timestamp": datetime.now().isoformat(),
+                "duration_ms": round(tool_duration_ms, 2),
+            }
+            if not hasattr(session, 'tool_calls') or session.tool_calls is None:
+                session.tool_calls = []
+            session.tool_calls.append(tool_record)
+            await self.session_store.upsert_call(session)
+        except Exception as e:
+            logger.debug("Failed to log tool call to session", call_id=call_id, error=str(e))
         
         # Send result back to provider
         if provider and hasattr(provider, 'send_tool_result'):
