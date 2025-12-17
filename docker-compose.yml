@@ -37,6 +37,7 @@ services:
       - ./scripts:/app/scripts
       - ./models:/app/models
       - ./asterisk_media:/mnt/asterisk_media
+      - ./data:/app/data
     env_file:
       - .env
     environment:
@@ -167,6 +168,7 @@ services:
       # The admin-ui image installs Docker CLI + Compose plugin internally.
       # Optional fallback (host binaries): use `docker compose -f docker-compose.yml -f docker-compose.admin-ui-host-binaries.yml up -d admin-ui`
       - /etc/os-release:/host/etc/os-release:ro
+      - ./data:/app/data
     env_file:
       - .env
     environment:
