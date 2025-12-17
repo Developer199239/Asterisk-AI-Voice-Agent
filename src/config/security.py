@@ -148,11 +148,12 @@ def inject_provider_api_keys(config_data: Dict[str, Any]) -> None:
     try:
         providers_block = config_data.get('providers', {}) or {}
         
-        # Inject OPENAI_API_KEY
-        openai_block = providers_block.get('openai', {}) or {}
-        if isinstance(openai_block, dict):
-            openai_block['api_key'] = os.getenv('OPENAI_API_KEY')
-            providers_block['openai'] = openai_block
+        # Inject OPENAI_API_KEY (only if provider exists in YAML)
+        if 'openai' in providers_block:
+            openai_block = providers_block.get('openai', {}) or {}
+            if isinstance(openai_block, dict):
+                openai_block['api_key'] = os.getenv('OPENAI_API_KEY')
+                providers_block['openai'] = openai_block
         
         # Inject DEEPGRAM_API_KEY
         deepgram_block = providers_block.get('deepgram', {}) or {}
