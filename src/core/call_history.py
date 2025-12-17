@@ -202,6 +202,13 @@ class CallHistoryStore:
                 conn = self._get_connection()
                 try:
                     cursor = conn.cursor()
+                    # Check if record with same call_id already exists (prevent duplicates)
+                    cursor.execute("SELECT id FROM call_records WHERE call_id = ?", (record.call_id,))
+                    existing = cursor.fetchone()
+                    if existing:
+                        # Already saved, skip duplicate
+                        return True
+                    
                     cursor.execute("""
                         INSERT OR REPLACE INTO call_records (
                             id, call_id, caller_number, caller_name,
