@@ -986,6 +986,29 @@ class GoogleLiveProvider(AIProviderInterface):
                     call_id=self._call_id,
                     function=func_name,
                 )
+                
+                # Log tool call to session for call history (Milestone 21)
+                try:
+                    session_store = getattr(self, '_session_store', None)
+                    if session_store and self._call_id:
+                        from datetime import datetime
+                        session = await session_store.get_by_call_id(self._call_id)
+                        if session:
+                            tool_record = {
+                                "name": func_name,
+                                "params": func_args,
+                                "result": result.get("status", "unknown") if isinstance(result, dict) else "success",
+                                "message": result.get("message", "") if isinstance(result, dict) else str(result),
+                                "timestamp": datetime.now().isoformat(),
+                                "duration_ms": 0,  # TODO: track actual duration
+                            }
+                            if not hasattr(session, 'tool_calls') or session.tool_calls is None:
+                                session.tool_calls = []
+                            session.tool_calls.append(tool_record)
+                            await session_store.upsert_call(session)
+                            logger.debug("Tool call logged to session", call_id=self._call_id, tool=func_name)
+                except Exception as e:
+                    logger.debug(f"Failed to log tool call to session: {e}", call_id=self._call_id)
 
         except Exception as e:
             logger.error(

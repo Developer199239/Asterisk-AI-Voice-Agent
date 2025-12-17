@@ -878,6 +878,30 @@ class DeepgramProvider(AIProviderInterface):
             # Send result back to Deepgram
             await self.tool_adapter.send_tool_result(result, context)
             
+            # Log tool call to session for call history (Milestone 21)
+            try:
+                session_store = getattr(self, '_session_store', None)
+                func_name = result.get('function_name') or event_data.get('function_name')
+                if session_store and self.call_id and func_name:
+                    from datetime import datetime
+                    session = await session_store.get_by_call_id(self.call_id)
+                    if session:
+                        tool_record = {
+                            "name": func_name,
+                            "params": event_data.get("arguments", {}),
+                            "result": result.get("status", "unknown") if isinstance(result, dict) else "success",
+                            "message": result.get("message", "") if isinstance(result, dict) else str(result),
+                            "timestamp": datetime.now().isoformat(),
+                            "duration_ms": 0,
+                        }
+                        if not hasattr(session, 'tool_calls') or session.tool_calls is None:
+                            session.tool_calls = []
+                        session.tool_calls.append(tool_record)
+                        await session_store.upsert_call(session)
+                        logger.debug("Tool call logged to session", call_id=self.call_id, tool=func_name)
+            except Exception as log_err:
+                logger.debug(f"Failed to log tool call to session: {log_err}", call_id=self.call_id)
+            
         except Exception as e:
             logger.error(
                 "Function call handling failed",
