@@ -1,41 +1,69 @@
-# Resilience and Error Handling v3.0
+# Resilience and Error Handling
 
-This document outlines the resilience and error handling strategies for the Asterisk AI Voice Agent v3.0.
+This document outlines the resilience and error handling strategies for the Asterisk AI Voice Agent.
 
 ## 1. AI Provider Resilience
 
-Since the core AI logic is handled by external providers (like Deepgram), the primary resilience strategy involves managing the connection to these services.
+The system supports multiple AI providers (OpenAI Realtime, Deepgram, ElevenLabs, Google Live, Local Hybrid). Each provider implements its own connection management.
 
 ### 1.1 Connection Management
 
-- **Automatic Reconnection**: The `DeepgramAgentClient` (and future provider clients) will implement automatic reconnection logic with exponential backoff in case the WebSocket connection is dropped.
-- **Keep-Alive Messages**: The client sends periodic keep-alive messages to prevent the connection from timing out.
+- **Per-Call Connections**: Most providers create a new WebSocket connection per call, avoiding long-lived connection issues.
+- **Keep-Alive Messages**: Providers use ping/pong frames to detect dead connections.
+- **Timeout Handling**: Connection and operation timeouts prevent indefinite hangs.
 
 ### 1.2 Graceful Degradation
 
-If the AI provider is unavailable, the system will fall back to a basic, scripted response.
+If the AI provider is unavailable:
 
-- **Provider Unreachable**: If the initial connection to the provider fails, the call will be handled by a fallback mechanism that plays a pre-recorded message (e.g., "We are currently experiencing technical difficulties. Please call back later.") and then hangs up.
-- **Mid-call Failure**: If the connection drops during a call, the system will attempt to reconnect. If it fails, it will play the same error message and terminate the call.
+- **Provider Unreachable**: The call receives an error response and the channel is cleaned up.
+- **Mid-call Failure**: Active calls are terminated gracefully with cleanup of ARI resources.
+- **Fallback**: Consider configuring a fallback context in your dialplan for provider failures.
 
 ## 2. Asterisk ARI Connection
 
-The connection to the Asterisk server's ARI is critical.
+The connection to the Asterisk server's ARI is critical for call control.
 
-- **Circuit Breaker**: The `ARIClient` uses a circuit breaker pattern (`pybreaker`). If multiple attempts to connect to ARI fail, the circuit will open, and the service will immediately report itself as unhealthy without flooding the network with connection attempts.
-- **Health Checks**: The service's `/health` endpoint constantly monitors the ARI connection status.
+### 2.1 Reconnect Supervisor
+
+The `ARIClient` implements automatic reconnection with exponential backoff:
+
+- **Auto-Reconnect**: On WebSocket disconnect, the client automatically attempts to reconnect.
+- **Exponential Backoff**: Delays increase from 2s up to 60s maximum between attempts.
+- **Unlimited Retries**: Reconnection continues indefinitely until successful or shutdown.
+- **State Tracking**: The `is_connected` property reflects true WebSocket state.
+
+### 2.2 Health Integration
+
+- **`/ready` Endpoint**: Returns 503 during reconnection attempts (not ready for new calls).
+- **`/live` Endpoint**: Returns 200 if the process is running (for container orchestration).
+- **Logging**: Reconnect attempts are logged with attempt count and backoff duration.
 
 ## 3. Health Checks
 
-The `ai-engine` can expose a `/health` endpoint that provides the overall health of the system.
+The `ai-engine` exposes health endpoints on port 15000 (localhost by default).
 
-- **Endpoint**: `http://localhost:15000/health` (if implemented)
-- **Healthy Response**: `{"status": "healthy", "dependencies": {"ari": "connected", "audiosocket": "listening", "ai_provider": "connected"}}` (HTTP 200)
-- **Unhealthy Response**: `{"status": "unhealthy", ...}` (HTTP 503)
-- **Dependency Checks**:
-  - **ARI**: Is the WebSocket connection to Asterisk active?
-  - **AudioSocket**: Is the TCP listener accepting connections and are per‑call sessions healthy?
-  - **AI Provider**: Is the connection to the selected AI provider active?
+### 3.1 Endpoints
+
+| Endpoint | Purpose | Success |
+|----------|---------|---------|
+| `/live` | Liveness probe | 200 if process running |
+| `/ready` | Readiness probe | 200 if ARI + transport + provider ready |
+| `/health` | Detailed status | JSON with component states |
+| `/metrics` | Prometheus metrics | OpenMetrics format |
+
+### 3.2 Health Response
+
+```json
+{
+  "status": "healthy",
+  "ari_connected": true,
+  "rtp_server_running": true,
+  "audio_transport": "externalmedia",
+  "active_calls": 0,
+  "providers": {"deepgram": {"ready": true}, ...}
+}
+```
 
 ## 4. Operational Runbook
 

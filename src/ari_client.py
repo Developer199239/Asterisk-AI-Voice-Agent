@@ -594,7 +594,7 @@ class ARIClient:
             import time
             start_time = time.time()
             
-            # Enhanced file verification with detailed logging
+            # Enhanced file verification with detailed logging (non-blocking)
             for attempt in range(15):  # Try up to 15 times (1.5 seconds total)
                 if os.path.exists(file_path):
                     if os.access(file_path, os.R_OK):
@@ -609,7 +609,7 @@ class ARIClient:
                 else:
                     logger.warning(f"File not found: {file_path} - attempt {attempt + 1}")
                 
-                time.sleep(0.1)  # 100ms delay
+                await asyncio.sleep(0.1)  # 100ms delay (non-blocking)
             
             # Final verification
             if not os.path.exists(file_path):
@@ -681,17 +681,17 @@ class ARIClient:
             # Set proper permissions for Asterisk to read the file
             os.chmod(temp_file_path, 0o600)  # rw-------
             
-            # Force filesystem sync and verify file exists
-            os.sync()  # Force filesystem sync
+            # Force filesystem sync (non-blocking) and verify file exists
+            await asyncio.to_thread(os.sync)
             
-            # Wait and verify file is accessible
+            # Wait and verify file is accessible (non-blocking)
             for attempt in range(10):  # Try up to 10 times (1 second total)
                 if os.path.exists(temp_file_path) and os.access(temp_file_path, os.R_OK):
                     file_size = os.path.getsize(temp_file_path)
                     if file_size > 0:
                         logger.debug(f"Created WAV file: {temp_file_path} ({file_size} bytes) - attempt {attempt + 1}")
                         return temp_file_path
-                time.sleep(0.1)  # 100ms delay
+                await asyncio.sleep(0.1)  # 100ms delay (non-blocking)
             
             logger.error(f"Failed to create accessible WAV file after 10 attempts: {temp_file_path}")
             return ""
