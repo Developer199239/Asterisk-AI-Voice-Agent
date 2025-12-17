@@ -1370,16 +1370,23 @@ class DeepgramProvider(AIProviderInterface):
                         # Save to session for call history
                         if self._session_store and self.call_id:
                             try:
-                                import asyncio
+                                call_id_copy = self.call_id
+                                latency_copy = turn_latency_ms
                                 async def save_latency():
-                                    session = await self._session_store.get_by_call_id(self.call_id)
-                                    if session:
-                                        session.turn_latencies_ms.append(turn_latency_ms)
-                                        await self._session_store.upsert_call(session)
+                                    try:
+                                        session = await self._session_store.get_by_call_id(call_id_copy)
+                                        if session:
+                                            session.turn_latencies_ms.append(latency_copy)
+                                            await self._session_store.upsert_call(session)
+                                            logger.debug("Turn latency saved to session", call_id=call_id_copy, latency_ms=round(latency_copy, 1))
+                                        else:
+                                            logger.debug("Session not found for latency tracking", call_id=call_id_copy)
+                                    except Exception as e:
+                                        logger.debug("Failed to save turn latency", call_id=call_id_copy, error=str(e))
                                 asyncio.create_task(save_latency())
-                            except Exception:
-                                pass
-                        logger.debug("Turn latency recorded", call_id=self.call_id, latency_ms=round(turn_latency_ms, 1))
+                            except Exception as e:
+                                logger.debug("Failed to create latency save task", error=str(e))
+                        logger.info("Turn latency recorded", call_id=self.call_id, latency_ms=round(turn_latency_ms, 1))
                         # Reset for next turn
                         self._turn_start_time = None
                     
