@@ -108,23 +108,68 @@ sudo ufw allow from 10.0.1.5 to any port 15000  # Health (if exposed)
 
 The Admin UI has Docker socket access for container management. If exposed remotely without proper security, this is effectively **root-equivalent access** to the host.
 
+**Risk Summary**:
+| Exposure | Risk Level | Impact |
+|----------|------------|--------|
+| Localhost only | Low | Expected use case |
+| LAN without auth | **Critical** | Full host compromise possible |
+| Internet without auth | **Critical** | Immediate compromise |
+| Internet with JWT only | High | Brute-force/leak risk |
+| Reverse proxy + mTLS | Low | Recommended production setup |
+
 **Security Requirements**:
 1. **Never expose directly to internet** - Always use reverse proxy with authentication
 2. **JWT_SECRET is mandatory** - Service refuses to start if binding non-localhost without JWT_SECRET
 3. **Network isolation** - Place admin-ui on management network only
 4. **Least privilege** - Consider read-only Docker socket mounts if container management not needed
 
+**Docker Socket Hardening**:
+```yaml
+# docker-compose.yml - Read-only socket (if only monitoring needed)
+services:
+  admin-ui:
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro  # Read-only
+```
+
+```bash
+# Alternative: Use docker-socket-proxy for granular control
+# https://github.com/Tecnativa/docker-socket-proxy
+docker run -d --name docker-proxy \
+  -v /var/run/docker.sock:/var/run/docker.sock:ro \
+  -e CONTAINERS=1 -e INFO=1 -e IMAGES=0 -e EXEC=0 \
+  tecnativa/docker-socket-proxy
+```
+
 **Recommended Production Setup**:
 ```nginx
-# nginx reverse proxy with client cert auth
+# nginx reverse proxy with client cert auth (mTLS)
 server {
     listen 443 ssl;
+    ssl_certificate /etc/nginx/server.crt;
+    ssl_certificate_key /etc/nginx/server.key;
     ssl_client_certificate /etc/nginx/client-ca.crt;
     ssl_verify_client on;
     
+    # Rate limiting
+    limit_req_zone $binary_remote_addr zone=admin:10m rate=10r/s;
+    limit_req zone=admin burst=20 nodelay;
+    
     location / {
         proxy_pass http://127.0.0.1:3003;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     }
+}
+```
+
+**Audit Logging** (recommended):
+```bash
+# Enable Docker daemon audit logging
+# /etc/docker/daemon.json
+{
+  "log-driver": "json-file",
+  "log-opts": {"max-size": "10m", "max-file": "3"}
 }
 ```
 
