@@ -36,15 +36,15 @@ exten => _X.,1,NoOp(AI Voice Agent)
 
 **Two Options**:
 
-**AudioSocket** (Default, simpler):
+**ExternalMedia RTP** (Default):
+- RTP streams on port 18080
+- Configurable codecs (μ-law, PCM16)
+- Best for: Production, distributed deployments, clusters
+
+**AudioSocket** (Simpler alternative):
 - TCP connection on port 8090
 - PCM16 @ 16kHz (slin format)
-- Best for: Getting started, simple setups
-
-**ExternalMedia RTP** (Advanced):
-- RTP streams (better for clusters)
-- Configurable codecs
-- Best for: Production, distributed deployments
+- Best for: Getting started, simple setups, debugging
 
 **Format Flow**:
 ```

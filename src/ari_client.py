@@ -40,6 +40,10 @@ class ARIClient:
         self.websocket: Optional[ClientConnection] = None
         self.http_session: Optional[aiohttp.ClientSession] = None
         self.running = False
+        self._should_reconnect = True  # Control flag for reconnect supervisor
+        self._reconnect_attempt = 0
+        self._max_reconnect_backoff = 60  # Max seconds between reconnect attempts
+        self._connected = False  # True readiness state for /ready endpoint
         self.event_handlers: Dict[str, List[Callable]] = {}
         self.active_playbacks: Dict[str, str] = {}
         self.audio_frame_handler: Optional[Callable] = None
@@ -48,17 +52,20 @@ class ARIClient:
         """Alias for add_event_handler for backward compatibility."""
         self.add_event_handler(event_type, handler)
 
-    @retry(
-        stop=stop_after_attempt(5),
-        wait=wait_exponential(multiplier=1, min=2, max=10),
-        retry=retry_if_exception_type(Exception),
-    )
+    @property
+    def is_connected(self) -> bool:
+        """Return true ARI connection state for readiness checks."""
+        return self._connected and self.running and self.websocket is not None
+
     async def connect(self):
         """Connect to the ARI WebSocket and establish an HTTP session."""
-        logger.info("Connecting to ARI...")
+        logger.info("Connecting to ARI...", attempt=self._reconnect_attempt + 1)
+        self._connected = False
         try:
             # First, test HTTP connection to ensure ARI is available
-            self.http_session = aiohttp.ClientSession(auth=aiohttp.BasicAuth(self.username, self.password))
+            if self.http_session is None or self.http_session.closed:
+                self.http_session = aiohttp.ClientSession(auth=aiohttp.BasicAuth(self.username, self.password))
+            
             async with self.http_session.get(f"{self.http_url}/asterisk/info") as response:
                 if response.status != 200:
                     raise ConnectionError(f"Failed to connect to ARI HTTP endpoint. Status: {response.status}")
@@ -67,51 +74,118 @@ class ARIClient:
             # Then, connect to the WebSocket
             self.websocket = await websockets.connect(self.ws_url)
             self.running = True
+            self._connected = True
+            self._reconnect_attempt = 0  # Reset on successful connect
             logger.info("Successfully connected to ARI WebSocket.")
         except Exception as e:
-            logger.error("Failed to connect to ARI, will retry...", error=str(e), exc_info=True)
+            self._connected = False
+            logger.error("Failed to connect to ARI", error=str(e), attempt=self._reconnect_attempt + 1)
             if self.http_session and not self.http_session.closed:
                 await self.http_session.close()
+                self.http_session = None
             raise
 
     async def start_listening(self):
-        """Start listening for events from the ARI WebSocket."""
-        if not self.running or not self.websocket:
-            logger.error("Cannot start listening, client is not connected.")
-            return
+        """Start listening for events from the ARI WebSocket with automatic reconnection."""
+        await self._listen_with_reconnect()
 
-        logger.info("Starting ARI event listener.")
-        try:
-            # Note: PlaybackFinished is registered by Engine.start(). Avoid duplicate registration here.
-
-            async for message in self.websocket:
+    async def _listen_with_reconnect(self):
+        """
+        Supervised listener loop with automatic reconnection.
+        
+        On disconnect:
+        1. Mark as not connected (affects /ready)
+        2. Exponential backoff delay
+        3. Attempt reconnect
+        4. Resume listening
+        
+        Loop continues until _should_reconnect is False (explicit shutdown).
+        """
+        while self._should_reconnect:
+            # Ensure we're connected before listening
+            if not self.running or not self.websocket:
                 try:
-                    event_data = json.loads(message)
-                    event_type = event_data.get("type")
+                    await self.connect()
+                except Exception as e:
+                    self._reconnect_attempt += 1
+                    backoff = min(2 ** self._reconnect_attempt, self._max_reconnect_backoff)
+                    logger.warning(
+                        "ARI connection failed, will retry",
+                        attempt=self._reconnect_attempt,
+                        backoff_seconds=backoff,
+                        error=str(e)
+                    )
+                    await asyncio.sleep(backoff)
+                    continue
+
+            logger.info("Starting ARI event listener.")
+            try:
+                # Note: PlaybackFinished is registered by Engine.start(). Avoid duplicate registration here.
+                async for message in self.websocket:
+                    try:
+                        event_data = json.loads(message)
+                        event_type = event_data.get("type")
+                        
+                        # Handle audio frames from ExternalMedia connections
+                        if event_type == "ChannelAudioFrame":
+                            channel = event_data.get('channel', {})
+                            channel_id = channel.get('id')
+                            logger.debug("ChannelAudioFrame received", channel_id=channel_id)
+                            asyncio.create_task(self._on_audio_frame(channel, event_data))
+                        
+                        # Handle other events
+                        if event_type and event_type in self.event_handlers:
+                            for handler in self.event_handlers[event_type]:
+                                # Call the handler with just the event data
+                                asyncio.create_task(handler(event_data))
+                    except json.JSONDecodeError:
+                        logger.warning("Failed to decode ARI event JSON", message=message)
+                        
+            except ConnectionClosed:
+                self._connected = False
+                self.running = False
+                self.websocket = None
+                if self._should_reconnect:
+                    self._reconnect_attempt += 1
+                    backoff = min(2 ** self._reconnect_attempt, self._max_reconnect_backoff)
+                    logger.warning(
+                        "ARI WebSocket connection closed, will reconnect",
+                        attempt=self._reconnect_attempt,
+                        backoff_seconds=backoff
+                    )
+                    await asyncio.sleep(backoff)
+                else:
+                    logger.info("ARI WebSocket closed (shutdown requested).")
+                    break
                     
-                    # Handle audio frames from ExternalMedia connections
-                    if event_type == "ChannelAudioFrame":
-                        channel = event_data.get('channel', {})
-                        channel_id = channel.get('id')
-                        logger.debug("ChannelAudioFrame received", channel_id=channel_id)
-                        asyncio.create_task(self._on_audio_frame(channel, event_data))
-                    
-                    # Handle other events
-                    if event_type and event_type in self.event_handlers:
-                        for handler in self.event_handlers[event_type]:
-                            # Call the handler with just the event data
-                            asyncio.create_task(handler(event_data))
-                except json.JSONDecodeError:
-                    logger.warning("Failed to decode ARI event JSON", message=message)
-        except ConnectionClosed:
-            logger.warning("ARI WebSocket connection closed.")
-            self.running = False
-        except Exception as e:
-            logger.error("An error occurred in the ARI listener", exc_info=True)
-            self.running = False
+            except Exception as e:
+                self._connected = False
+                self.running = False
+                self.websocket = None
+                if self._should_reconnect:
+                    self._reconnect_attempt += 1
+                    backoff = min(2 ** self._reconnect_attempt, self._max_reconnect_backoff)
+                    logger.error(
+                        "ARI listener error, will reconnect",
+                        attempt=self._reconnect_attempt,
+                        backoff_seconds=backoff,
+                        error=str(e),
+                        exc_info=True
+                    )
+                    await asyncio.sleep(backoff)
+                else:
+                    logger.error("ARI listener error (shutdown requested).", exc_info=True)
+                    break
+        
+        logger.info("ARI reconnect supervisor stopped.")
 
     async def disconnect(self):
-        """Disconnect from the ARI WebSocket and close the HTTP session."""
+        """Disconnect from the ARI WebSocket and close the HTTP session.
+        
+        Also stops the reconnect supervisor to prevent automatic reconnection.
+        """
+        self._should_reconnect = False  # Stop the reconnect supervisor
+        self._connected = False
         self.running = False
         if self.websocket:
             await self.websocket.close()
@@ -520,7 +594,7 @@ class ARIClient:
             import time
             start_time = time.time()
             
-            # Enhanced file verification with detailed logging
+            # Enhanced file verification with detailed logging (non-blocking)
             for attempt in range(15):  # Try up to 15 times (1.5 seconds total)
                 if os.path.exists(file_path):
                     if os.access(file_path, os.R_OK):
@@ -535,7 +609,7 @@ class ARIClient:
                 else:
                     logger.warning(f"File not found: {file_path} - attempt {attempt + 1}")
                 
-                time.sleep(0.1)  # 100ms delay
+                await asyncio.sleep(0.1)  # 100ms delay (non-blocking)
             
             # Final verification
             if not os.path.exists(file_path):
@@ -607,17 +681,17 @@ class ARIClient:
             # Set proper permissions for Asterisk to read the file
             os.chmod(temp_file_path, 0o600)  # rw-------
             
-            # Force filesystem sync and verify file exists
-            os.sync()  # Force filesystem sync
+            # Force filesystem sync (non-blocking) and verify file exists
+            await asyncio.to_thread(os.sync)
             
-            # Wait and verify file is accessible
+            # Wait and verify file is accessible (non-blocking)
             for attempt in range(10):  # Try up to 10 times (1 second total)
                 if os.path.exists(temp_file_path) and os.access(temp_file_path, os.R_OK):
                     file_size = os.path.getsize(temp_file_path)
                     if file_size > 0:
                         logger.debug(f"Created WAV file: {temp_file_path} ({file_size} bytes) - attempt {attempt + 1}")
                         return temp_file_path
-                time.sleep(0.1)  # 100ms delay
+                await asyncio.sleep(0.1)  # 100ms delay (non-blocking)
             
             logger.error(f"Failed to create accessible WAV file after 10 attempts: {temp_file_path}")
             return ""

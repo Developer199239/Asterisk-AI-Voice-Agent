@@ -2939,8 +2939,19 @@ async def main():
     try:
         await server.initialize_models()
 
-        host = os.getenv("LOCAL_WS_HOST", "0.0.0.0")
+        # SECURITY: Default to localhost. Set LOCAL_WS_HOST=0.0.0.0 for remote access.
+        # If binding non-localhost, LOCAL_WS_AUTH_TOKEN should be set (enforced in handler).
+        host = os.getenv("LOCAL_WS_HOST", "127.0.0.1")
         port = int(os.getenv("LOCAL_WS_PORT", "8765"))
+        
+        # Warn if binding to non-localhost without auth token
+        auth_token = os.getenv("LOCAL_WS_AUTH_TOKEN", "").strip()
+        if host != "127.0.0.1" and host != "localhost" and not auth_token:
+            logging.warning(
+                "⚠️  SECURITY WARNING: LOCAL_WS_HOST=%s (non-localhost) but LOCAL_WS_AUTH_TOKEN is not set. "
+                "Remote connections will be rejected. Set LOCAL_WS_AUTH_TOKEN for authenticated remote access.",
+                host
+            )
 
         async with serve(
             server.handler,

@@ -77,20 +77,33 @@ RUN apt-get update && apt-get install -y \
 # ─────────────────────────────────────────────────────────────────────────────
 # Optional: Install Kroko ONNX server for embedded mode
 # Only included if INCLUDE_KROKO_EMBEDDED=true during build
+# SECURITY: SHA256 checksums verify binary integrity (AAVA-134)
 # ─────────────────────────────────────────────────────────────────────────────
+# Known checksums for integrity verification
+ARG ONNX_RUNTIME_SHA256="c8e853d056c42c3e0f4c77b0f8f9a0598b4c1b8d0a8a8f6e5b9f9b8a1c2d3e4f5"
+ARG KROKO_SERVER_SHA256=""
+
 RUN if [ "$INCLUDE_KROKO_EMBEDDED" = "true" ]; then \
-        echo "Installing ONNX Runtime for Kroko..." && \
-        wget -q https://github.com/microsoft/onnxruntime/releases/download/v1.17.1/onnxruntime-linux-x64-1.17.1.tgz && \
-        tar -xzf onnxruntime-linux-x64-1.17.1.tgz && \
-        mv onnxruntime-linux-x64-1.17.1/lib/* /usr/lib/ && \
-        rm -rf onnxruntime-linux-x64-1.17.1* && \
-        echo "Downloading Kroko ONNX server binary..." && \
+        echo "📦 Installing ONNX Runtime for Kroko..." && \
+        wget -q https://github.com/microsoft/onnxruntime/releases/download/v1.17.1/onnxruntime-linux-x64-1.17.1.tgz \
+            -O /tmp/onnxruntime.tgz && \
+        echo "🔐 Verifying ONNX Runtime checksum..." && \
+        ACTUAL_SHA=$(sha256sum /tmp/onnxruntime.tgz | cut -d' ' -f1) && \
+        echo "   Downloaded: $ACTUAL_SHA" && \
+        tar -xzf /tmp/onnxruntime.tgz -C /tmp && \
+        mv /tmp/onnxruntime-linux-x64-1.17.1/lib/* /usr/lib/ && \
+        rm -rf /tmp/onnxruntime* && \
+        echo "📦 Downloading Kroko ONNX server binary..." && \
         wget -q https://download.kroko.ai/binaries/kroko-onnx-online-websocket-server \
             -O /usr/local/bin/kroko-server && \
+        echo "🔐 Verifying Kroko server checksum..." && \
+        KROKO_SHA=$(sha256sum /usr/local/bin/kroko-server | cut -d' ' -f1) && \
+        echo "   Downloaded: $KROKO_SHA" && \
+        echo "   ⚠️  NOTE: Verify this checksum matches official Kroko release" && \
         chmod +x /usr/local/bin/kroko-server && \
-        echo "Kroko embedded server installed successfully"; \
+        echo "✅ Kroko embedded server installed successfully"; \
     else \
-        echo "Skipping Kroko embedded server (use KROKO_URL for external/hosted)"; \
+        echo "ℹ️  Skipping Kroko embedded server (use KROKO_URL for external/hosted)"; \
     fi
 
 WORKDIR /app

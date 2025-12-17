@@ -74,23 +74,119 @@ We take security vulnerabilities seriously. If you discover a security issue, pl
 
 ### 2. Network Security
 
-**Default Configuration** (Secure):
-- RTP Server: Binds to `127.0.0.1:18080` (localhost only)
-- AudioSocket: Binds to `127.0.0.1:8090` (localhost only)
-- Health Endpoint: Binds to `127.0.0.1:15000` (localhost only)
+**Default Configuration** (Secure - all services bind to localhost):
+| Service | Default Bind | Port | Remote Opt-in |
+|---------|-------------|------|---------------|
+| ai-engine Health | `127.0.0.1` | 15000 | `HEALTH_BIND_HOST=0.0.0.0` |
+| Admin UI | `127.0.0.1` | 3003 | `UVICORN_HOST=0.0.0.0` |
+| Local AI Server | `127.0.0.1` | 8765 | `LOCAL_WS_HOST=0.0.0.0` |
+| RTP Server | `127.0.0.1` | 18080 | `EXTERNAL_MEDIA_RTP_HOST=0.0.0.0` |
+| AudioSocket | `127.0.0.1` | 8090 | `AUDIOSOCKET_HOST=0.0.0.0` |
 
 **If Remote Access Required**:
 ```bash
-# .env file
-EXTERNAL_MEDIA_RTP_HOST=0.0.0.0  # Explicit opt-in
-HEALTH_BIND_HOST=0.0.0.0         # Explicit opt-in
+# .env file - explicit opt-in required
+HEALTH_BIND_HOST=0.0.0.0         # ai-engine health endpoints
+HEALTH_API_TOKEN=<strong-token>  # Required for /reload, /mcp/test/* from remote
+UVICORN_HOST=0.0.0.0             # Admin UI (REQUIRES JWT_SECRET!)
+JWT_SECRET=<openssl rand -hex 32>  # Required when UVICORN_HOST != localhost
+LOCAL_WS_HOST=0.0.0.0            # Local AI Server
+LOCAL_WS_AUTH_TOKEN=<token>      # Required when LOCAL_WS_HOST != localhost
 ```
 
 **Firewall Rules** (if binding to 0.0.0.0):
 ```bash
-# Only allow from Asterisk server
+# Only allow from trusted IPs
 sudo ufw allow from 10.0.1.5 to any port 18080  # RTP
 sudo ufw allow from 10.0.1.5 to any port 8090   # AudioSocket
+sudo ufw allow from 10.0.1.5 to any port 15000  # Health (if exposed)
+```
+
+### 2.1 Admin UI Security
+
+**⚠️ CRITICAL: Admin UI is a Control Plane**
+
+The Admin UI has Docker socket access for container management. If exposed remotely without proper security, this is effectively **root-equivalent access** to the host.
+
+**Risk Summary**:
+| Exposure | Risk Level | Impact |
+|----------|------------|--------|
+| Localhost only | Low | Expected use case |
+| LAN without auth | **Critical** | Full host compromise possible |
+| Internet without auth | **Critical** | Immediate compromise |
+| Internet with JWT only | High | Brute-force/leak risk |
+| Reverse proxy + mTLS | Low | Recommended production setup |
+
+**Security Requirements**:
+1. **Never expose directly to internet** - Always use reverse proxy with authentication
+2. **JWT_SECRET is mandatory** - Service refuses to start if binding non-localhost without JWT_SECRET
+3. **Network isolation** - Place admin-ui on management network only
+4. **Least privilege** - Consider read-only Docker socket mounts if container management not needed
+
+**Docker Socket Hardening**:
+```yaml
+# docker-compose.yml - Read-only socket (if only monitoring needed)
+services:
+  admin-ui:
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro  # Read-only
+```
+
+```bash
+# Alternative: Use docker-socket-proxy for granular control
+# https://github.com/Tecnativa/docker-socket-proxy
+docker run -d --name docker-proxy \
+  -v /var/run/docker.sock:/var/run/docker.sock:ro \
+  -e CONTAINERS=1 -e INFO=1 -e IMAGES=0 -e EXEC=0 \
+  tecnativa/docker-socket-proxy
+```
+
+**Recommended Production Setup**:
+```nginx
+# nginx reverse proxy with client cert auth (mTLS)
+server {
+    listen 443 ssl;
+    ssl_certificate /etc/nginx/server.crt;
+    ssl_certificate_key /etc/nginx/server.key;
+    ssl_client_certificate /etc/nginx/client-ca.crt;
+    ssl_verify_client on;
+    
+    # Rate limiting
+    limit_req_zone $binary_remote_addr zone=admin:10m rate=10r/s;
+    limit_req zone=admin burst=20 nodelay;
+    
+    location / {
+        proxy_pass http://127.0.0.1:3003;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}
+```
+
+**Audit Logging** (recommended):
+```bash
+# Enable Docker daemon audit logging
+# /etc/docker/daemon.json
+{
+  "log-driver": "json-file",
+  "log-opts": {"max-size": "10m", "max-file": "3"}
+}
+```
+
+### 2.2 Sensitive Endpoint Protection
+
+The following ai-engine endpoints require authorization:
+- `POST /reload` - Hot-reload configuration
+- `POST /mcp/test/{server_id}` - Test MCP server connections
+
+**Authorization Methods**:
+1. **Localhost access** - Automatically authorized from 127.0.0.1
+2. **API Token** - Set `HEALTH_API_TOKEN` and include `Authorization: Bearer <token>` header
+
+```bash
+# Remote reload with token
+curl -X POST http://ai-engine:15000/reload \
+  -H "Authorization: Bearer $HEALTH_API_TOKEN"
 ```
 
 ### 3. Docker Security
