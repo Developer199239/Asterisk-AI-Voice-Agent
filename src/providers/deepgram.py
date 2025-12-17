@@ -875,20 +875,23 @@ class DeepgramProvider(AIProviderInterface):
                     farewell=self._farewell_message
                 )
             
+            # Capture function name BEFORE send_tool_result (which pops it from result)
+            func_name = result.get('function_name')
+            func_params = event_data.get('functions', [{}])[0].get('arguments', '{}')
+            
             # Send result back to Deepgram
             await self.tool_adapter.send_tool_result(result, context)
             
             # Log tool call to session for call history (Milestone 21)
             try:
                 session_store = getattr(self, '_session_store', None)
-                func_name = result.get('function_name') or event_data.get('function_name')
                 if session_store and self.call_id and func_name:
                     from datetime import datetime
                     session = await session_store.get_by_call_id(self.call_id)
                     if session:
                         tool_record = {
                             "name": func_name,
-                            "params": event_data.get("arguments", {}),
+                            "params": func_params,
                             "result": result.get("status", "unknown") if isinstance(result, dict) else "success",
                             "message": result.get("message", "") if isinstance(result, dict) else str(result),
                             "timestamp": datetime.now().isoformat(),
