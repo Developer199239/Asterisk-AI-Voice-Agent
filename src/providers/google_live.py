@@ -121,6 +121,10 @@ class GoogleLiveProvider(AIProviderInterface):
         self._input_transcription_buffer: str = ""
         self._output_transcription_buffer: str = ""
         
+        # Turn latency tracking (Milestone 21 - Call History)
+        self._turn_start_time: Optional[float] = None
+        self._turn_first_audio_received: bool = False
+        
         # Golden Baseline: Simple input buffer for 20ms chunking
         self._input_buffer = bytearray()
         
@@ -683,6 +687,10 @@ class GoogleLiveProvider(AIProviderInterface):
         if input_transcription:
             text = input_transcription.get("text", "")
             if text:
+                # Track turn start time on first user input (Milestone 21)
+                if self._turn_start_time is None:
+                    self._turn_start_time = time.time()
+                    self._turn_first_audio_received = False
                 # Concatenate fragments (not replace!)
                 self._input_transcription_buffer += text
                 logger.debug(
@@ -731,6 +739,10 @@ class GoogleLiveProvider(AIProviderInterface):
                 )
                 await self._track_conversation_message("assistant", self._output_transcription_buffer)
                 self._output_transcription_buffer = ""
+            
+            # Reset turn tracking for next turn (Milestone 21)
+            self._turn_start_time = None
+            self._turn_first_audio_received = False
         
         # Extract parts (using camelCase keys from actual API)
         for part in content.get("modelTurn", {}).get("parts", []):
@@ -764,6 +776,25 @@ class GoogleLiveProvider(AIProviderInterface):
         try:
             # Decode base64
             pcm16_provider = base64.b64decode(audio_b64)
+            
+            # Track turn latency on first audio output (Milestone 21 - Call History)
+            if self._turn_start_time is not None and not self._turn_first_audio_received:
+                self._turn_first_audio_received = True
+                turn_latency_ms = (time.time() - self._turn_start_time) * 1000
+                # Save to session for call history
+                if self._session_store:
+                    try:
+                        session = await self._session_store.get_by_call_id(self._call_id)
+                        if session:
+                            session.turn_latencies_ms.append(turn_latency_ms)
+                            await self._session_store.upsert_call(session)
+                    except Exception:
+                        pass
+                logger.debug(
+                    "Turn latency recorded",
+                    call_id=self._call_id,
+                    latency_ms=round(turn_latency_ms, 1),
+                )
             
             _GOOGLE_LIVE_AUDIO_RECEIVED.labels(call_id=self._call_id).inc(len(pcm16_provider))
 
