@@ -144,7 +144,7 @@ class CallHistoryStore:
         """
         self._db_path = db_path or os.getenv(
             "CALL_HISTORY_DB_PATH", 
-            "data/call_history.db"
+            "/app/data/call_history.db"
         )
         self._retention_days = int(os.getenv("CALL_HISTORY_RETENTION_DAYS", "0"))
         self._enabled = os.getenv("CALL_HISTORY_ENABLED", "true").lower() in ("true", "1", "yes")
