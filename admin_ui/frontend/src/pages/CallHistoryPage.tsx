@@ -453,6 +453,7 @@ const CallHistoryPage = () => {
                                     <th className="text-left px-4 py-3 text-sm font-medium">Duration</th>
                                     <th className="text-left px-4 py-3 text-sm font-medium">Provider</th>
                                     <th className="text-left px-4 py-3 text-sm font-medium">Pipeline</th>
+                                    <th className="text-left px-4 py-3 text-sm font-medium">Context</th>
                                     <th className="text-left px-4 py-3 text-sm font-medium">Outcome</th>
                                     <th className="text-left px-4 py-3 text-sm font-medium">Turns</th>
                                     <th className="text-right px-4 py-3 text-sm font-medium">Actions</th>
@@ -475,6 +476,7 @@ const CallHistoryPage = () => {
                                         <td className="px-4 py-3 text-sm">{formatDuration(call.duration_seconds)}</td>
                                         <td className="px-4 py-3 text-sm">{call.provider_name}</td>
                                         <td className="px-4 py-3 text-sm">{call.pipeline_name || '-'}</td>
+                                        <td className="px-4 py-3 text-sm">{call.context_name || '-'}</td>
                                         <td className="px-4 py-3">
                                             <div className="flex items-center gap-2">
                                                 <OutcomeIcon outcome={call.outcome} />
@@ -571,6 +573,27 @@ const CallHistoryPage = () => {
                                 </div>
                             </div>
 
+                            {/* Tool Calls Summary */}
+                            <div>
+                                <h3 className="font-semibold mb-2">Tool Executions ({selectedCall.tool_calls.length})</h3>
+                                {selectedCall.tool_calls.length === 0 ? (
+                                    <p className="text-muted-foreground text-sm">No tools were called during this call</p>
+                                ) : (
+                                    <div className="flex flex-wrap gap-2">
+                                        {selectedCall.tool_calls.map((tool, i) => (
+                                            <div key={i} className="bg-muted/30 rounded-lg px-3 py-2 text-sm flex items-center gap-2">
+                                                <Wrench className="w-4 h-4" />
+                                                <span className="font-medium">{tool.name}</span>
+                                                <span className={`text-xs ${tool.result === 'success' ? 'text-green-500' : 'text-red-500'}`}>
+                                                    {tool.result}
+                                                </span>
+                                                <span className="text-xs text-muted-foreground">{Math.round(tool.duration_ms)}ms</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+
                             {/* Configuration */}
                             <div>
                                 <h3 className="font-semibold mb-2">Configuration</h3>
@@ -622,10 +645,10 @@ const CallHistoryPage = () => {
                                 </div>
                             </div>
 
-                            {/* Tool Calls */}
+                            {/* Tool Call Details */}
                             {selectedCall.tool_calls.length > 0 && (
                                 <div>
-                                    <h3 className="font-semibold mb-2">Tool Executions ({selectedCall.tool_calls.length})</h3>
+                                    <h3 className="font-semibold mb-2">Tool Call Details</h3>
                                     <div className="space-y-2">
                                         {selectedCall.tool_calls.map((tool, i) => (
                                             <div key={i} className="bg-muted/30 rounded-lg p-3 text-sm">
@@ -641,7 +664,7 @@ const CallHistoryPage = () => {
                                                         </span>
                                                     </div>
                                                 </div>
-                                                {Object.keys(tool.params).length > 0 && (
+                                                {tool.params && Object.keys(tool.params).length > 0 && (
                                                     <pre className="mt-2 text-xs bg-background/50 rounded p-2 overflow-x-auto">
                                                         {JSON.stringify(tool.params, null, 2)}
                                                     </pre>
