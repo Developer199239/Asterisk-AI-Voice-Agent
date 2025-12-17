@@ -7675,7 +7675,8 @@ class Engine:
     async def _ready_handler(self, request):
         """Readiness probe: 200 only if ARI, transport, and default provider are ready."""
         try:
-            ari_connected = bool(self.ari_client and self.ari_client.running)
+            # Use is_connected property which reflects true WebSocket state (AAVA-136)
+            ari_connected = bool(self.ari_client and self.ari_client.is_connected)
             transport_ok = True
             if self.config.audio_transport == 'audiosocket':
                 transport_ok = self.audio_socket_server is not None
