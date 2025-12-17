@@ -805,6 +805,8 @@ class Engine:
                         continue
 
                     provider = DeepgramProvider(deepgram_config, self.config.llm, self.on_provider_event)
+                    # Set session store for turn latency tracking (Milestone 21)
+                    provider.set_session_store(self.session_store)
                     self.providers[name] = provider
                     logger.info("Provider 'deepgram' loaded successfully with OpenAI LLM dependency.")
 
@@ -849,6 +851,8 @@ class Engine:
                         self.on_provider_event,
                         gating_manager=self.audio_gating_manager
                     )
+                    # Set session store for turn latency tracking (Milestone 21)
+                    provider._session_store = self.session_store
                     self.providers[name] = provider
                     logger.info(
                         "Provider 'google_live' loaded successfully",

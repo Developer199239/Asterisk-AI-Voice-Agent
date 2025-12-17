@@ -459,14 +459,13 @@ const CallHistoryPage = () => {
             {!loading && !error && calls.length > 0 && (
                 <>
                     <div className="bg-card border rounded-lg overflow-x-auto">
-                        <table className="w-full min-w-[1200px]">
+                        <table className="w-full min-w-[1000px]">
                             <thead className="bg-muted/50">
                                 <tr>
                                     <th className="text-left px-4 py-3 text-sm font-medium">Caller</th>
                                     <th className="text-left px-4 py-3 text-sm font-medium">Time</th>
                                     <th className="text-left px-4 py-3 text-sm font-medium">Duration</th>
-                                    <th className="text-left px-4 py-3 text-sm font-medium">Provider</th>
-                                    <th className="text-left px-4 py-3 text-sm font-medium">Pipeline</th>
+                                    <th className="text-left px-4 py-3 text-sm font-medium">Provider / Pipeline</th>
                                     <th className="text-left px-4 py-3 text-sm font-medium">Context</th>
                                     <th className="text-left px-4 py-3 text-sm font-medium">Outcome</th>
                                     <th className="text-left px-4 py-3 text-sm font-medium">Turns</th>
@@ -490,8 +489,7 @@ const CallHistoryPage = () => {
                                         </td>
                                         <td className="px-4 py-3 text-sm">{formatDate(call.start_time)}</td>
                                         <td className="px-4 py-3 text-sm">{formatDuration(call.duration_seconds)}</td>
-                                        <td className="px-4 py-3 text-sm">{call.provider_name}</td>
-                                        <td className="px-4 py-3 text-sm">{call.pipeline_name || '-'}</td>
+                                        <td className="px-4 py-3 text-sm">{call.pipeline_name || call.provider_name}</td>
                                         <td className="px-4 py-3 text-sm">{call.context_name || '-'}</td>
                                         <td className="px-4 py-3">
                                             <div className="flex items-center gap-2">

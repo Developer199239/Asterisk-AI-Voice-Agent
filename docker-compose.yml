@@ -43,8 +43,8 @@ services:
     environment:
       - PYTHONPATH=/app
       - PYTHONUNBUFFERED=1
-      # HEALTH_BIND_HOST defaults to 127.0.0.1 (secure). Set explicitly to 0.0.0.0 only if needed.
-      # - HEALTH_BIND_HOST=0.0.0.0
+      # Enable health endpoint access from other containers (admin-ui needs /sessions/stats)
+      - HEALTH_BIND_HOST=0.0.0.0
       - ASTERISK_HOST=${ASTERISK_HOST:-127.0.0.1}
     tty: true
     stdin_open: true

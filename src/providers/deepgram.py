@@ -156,6 +156,11 @@ class DeepgramProvider(AIProviderInterface):
         self._closed: bool = False
         # Maintain resample state for smoother conversion
         self._input_resample_state = None
+        
+        # Turn latency tracking (Milestone 21 - Call History)
+        self._turn_start_time: Optional[float] = None
+        self._turn_first_audio_received: bool = False
+        self._session_store = None  # Will be set via set_session_store()
         # Settings/stream readiness
         self._settings_sent: bool = False
         # Only set to True on explicit SettingsApplied lifecycle event
@@ -201,6 +206,10 @@ class DeepgramProvider(AIProviderInterface):
         self._settings_retry_attempted: bool = False
         self._last_settings_payload: Optional[dict] = None
         self._last_settings_minimal: Optional[dict] = None
+
+    def set_session_store(self, session_store):
+        """Set the session store for turn latency tracking (Milestone 21)."""
+        self._session_store = session_store
 
     @property
     def supported_codecs(self) -> List[str]:
@@ -1168,6 +1177,10 @@ class DeepgramProvider(AIProviderInterface):
                                     call_id=self.call_id,
                                     request_id=getattr(self, "request_id", None),
                                 )
+                                # Track turn start time (Milestone 21 - Call History)
+                                if self._turn_start_time is None:
+                                    self._turn_start_time = time.time()
+                                    self._turn_first_audio_received = False
                             elif et == "UserStoppedSpeaking":
                                 logger.info(
                                     "🔇 Deepgram UserStoppedSpeaking",
@@ -1349,6 +1362,27 @@ class DeepgramProvider(AIProviderInterface):
                         logger.error("Failed to parse JSON message from Deepgram", message=message)
                 elif isinstance(message, bytes):
                     self._ready_to_stream = True
+                    
+                    # Track turn latency on first audio output (Milestone 21 - Call History)
+                    if self._turn_start_time is not None and not self._turn_first_audio_received:
+                        self._turn_first_audio_received = True
+                        turn_latency_ms = (time.time() - self._turn_start_time) * 1000
+                        # Save to session for call history
+                        if self._session_store and self.call_id:
+                            try:
+                                import asyncio
+                                async def save_latency():
+                                    session = await self._session_store.get_by_call_id(self.call_id)
+                                    if session:
+                                        session.turn_latencies_ms.append(turn_latency_ms)
+                                        await self._session_store.upsert_call(session)
+                                asyncio.create_task(save_latency())
+                            except Exception:
+                                pass
+                        logger.debug("Turn latency recorded", call_id=self.call_id, latency_ms=round(turn_latency_ms, 1))
+                        # Reset for next turn
+                        self._turn_start_time = None
+                    
                     # One-time runtime probe: infer output encoding/rate from first bytes
                     can_autodetect = getattr(self, "allow_output_autodetect", False)
                     try:
