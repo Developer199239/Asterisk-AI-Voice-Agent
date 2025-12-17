@@ -171,11 +171,11 @@ class CallHistoryStore:
                         cursor.execute(idx_sql)
                     conn.commit()
                     self._initialized = True
-                    logger.info("Call history database initialized", db_path=self._db_path)
+                    logger.info(f"Call history database initialized: {self._db_path}")
                 finally:
                     conn.close()
         except Exception as e:
-            logger.error("Failed to initialize call history database", error=str(e), exc_info=True)
+            logger.error(f"Failed to initialize call history database: {e}", exc_info=True)
             self._enabled = False
     
     def _get_connection(self) -> sqlite3.Connection:
@@ -239,7 +239,7 @@ class CallHistoryStore:
                     conn.commit()
                     return True
                 except Exception as e:
-                    logger.error("Failed to save call record", call_id=record.call_id, error=str(e))
+                    logger.error(f"Failed to save call record {record.call_id}: {e}")
                     return False
                 finally:
                     conn.close()
@@ -658,11 +658,7 @@ class CallHistoryStore:
         cutoff = datetime.now() - timedelta(days=self._retention_days)
         deleted = await self.delete_before(cutoff)
         if deleted > 0:
-            logger.info(
-                "Cleaned up old call history records",
-                deleted_count=deleted,
-                retention_days=self._retention_days,
-            )
+            logger.info(f"Cleaned up {deleted} old call history records (retention: {self._retention_days} days)")
         return deleted
     
     async def get_distinct_values(self, column: str) -> List[str]:
