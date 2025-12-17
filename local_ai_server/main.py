@@ -20,6 +20,9 @@ from websockets.exceptions import ConnectionClosed, ConnectionClosedError, Conne
 from websockets.asyncio.server import serve
 import websockets.client as ws_client
 
+# Suppress noisy websockets handshake errors (health checks, scanners, incomplete connections)
+logging.getLogger("websockets.server").setLevel(logging.WARNING)
+
 from constants import (
     _level_name,
     DEBUG_AUDIO_FLOW,
@@ -3001,6 +3004,4 @@ async def main():
 
 
 if __name__ == "__main__":
-    # Suppress noisy websockets handshake errors (e.g., health checks, scanners)
-    logging.getLogger("websockets.server").setLevel(logging.WARNING)
     asyncio.run(main())
