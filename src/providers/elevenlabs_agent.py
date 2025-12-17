@@ -79,6 +79,11 @@ class ElevenLabsAgentProvider(AIProviderInterface, ProviderCapabilitiesMixin):
         self._resample_state_in = None  # For input resampling
         self._resample_state_out = None  # For output resampling
         
+        # Turn latency tracking (Milestone 21 - Call History)
+        self._turn_start_time: Optional[float] = None
+        self._turn_first_audio_received: bool = False
+        self._session_store = None  # Set via engine for latency tracking
+        
         logger.info(f"[elevenlabs] Provider initialized with agent_id={config.agent_id[:8]}...")
     
     @property

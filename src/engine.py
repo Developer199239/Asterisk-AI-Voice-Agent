@@ -823,6 +823,8 @@ class Engine:
                         self.on_provider_event,
                         gating_manager=self.audio_gating_manager
                     )
+                    # Set session store for turn latency tracking (Milestone 21)
+                    provider._session_store = self.session_store
                     self.providers[name] = provider
                     logger.info(
                         "Provider 'openai_realtime' loaded successfully",
@@ -871,6 +873,8 @@ class Engine:
                         elevenlabs_cfg, 
                         self.on_provider_event,
                     )
+                    # Set session store for turn latency tracking (Milestone 21)
+                    provider._session_store = self.session_store
                     self.providers[name] = provider
                     logger.info(
                         "Provider 'elevenlabs_agent' loaded successfully"

@@ -114,6 +114,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         # Turn latency tracking (Milestone 21 - Call History)
         self._turn_start_time: Optional[float] = None
         self._turn_first_audio_received: bool = False
+        self._session_store = None  # Set via engine for latency tracking
         # Aggregate provider-rate PCM16 bytes (24 kHz default) and commit in >=100ms chunks
         self._pending_audio_provider_rate: bytearray = bytearray()
         
@@ -1078,6 +1079,11 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         This contains the actual audio sending logic that was previously inline in send_audio.
         It handles both VAD-enabled and manual commit modes.
         """
+        # Track turn start time on first audio input (Milestone 21 - Call History)
+        if self._turn_start_time is None:
+            self._turn_start_time = time.time()
+            self._turn_first_audio_received = False
+        
         # If server VAD is enabled, just append frames; do not commit.
         vad_enabled = getattr(self.config, "turn_detection", None) is not None
         if vad_enabled:
@@ -1660,6 +1666,25 @@ class OpenAIRealtimeProvider(AIProviderInterface):
 
         if not raw_bytes:
             return
+
+        # Track turn latency on first audio output (Milestone 21 - Call History)
+        if self._turn_start_time is not None and not self._turn_first_audio_received:
+            self._turn_first_audio_received = True
+            turn_latency_ms = (time.time() - self._turn_start_time) * 1000
+            # Save to session for call history
+            if self._session_store and self._call_id:
+                try:
+                    async def save_latency():
+                        session = await self._session_store.get_by_call_id(self._call_id)
+                        if session:
+                            session.turn_latencies_ms.append(turn_latency_ms)
+                            await self._session_store.upsert_call(session)
+                    asyncio.create_task(save_latency())
+                except Exception:
+                    pass
+            logger.debug("Turn latency recorded", call_id=self._call_id, latency_ms=round(turn_latency_ms, 1))
+            # Reset for next turn
+            self._turn_start_time = None
 
         # Always update the output meter with provider-native bytes
         self._update_output_meter(len(raw_bytes))
