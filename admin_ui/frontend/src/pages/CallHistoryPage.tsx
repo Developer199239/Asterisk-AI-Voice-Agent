@@ -281,16 +281,24 @@ const CallHistoryPage = () => {
                     <div className="bg-card border rounded-lg p-4">
                         <div className="flex items-center gap-2 text-muted-foreground text-sm">
                             <PieChart className="w-4 h-4" />
-                            Success Rate
+                            Success / Failed
                         </div>
                         <div className="text-2xl font-bold mt-1">
-                            {stats.total_calls > 0 
-                                ? Math.round(((stats.outcomes?.completed || 0) / stats.total_calls) * 100) 
-                                : 0}%
+                            {stats.outcomes?.completed || 0} / {stats.outcomes?.error || 0}
                         </div>
                         <div className="text-xs text-muted-foreground">
-                            {stats.outcomes?.completed || 0} / {stats.outcomes?.error || 0} failed
+                            {stats.total_calls > 0 
+                                ? Math.round(((stats.outcomes?.completed || 0) / stats.total_calls) * 100) 
+                                : 0}% success rate
                         </div>
+                    </div>
+                    <div className="bg-card border rounded-lg p-4">
+                        <div className="flex items-center gap-2 text-muted-foreground text-sm">
+                            <Activity className="w-4 h-4" />
+                            Active Calls
+                        </div>
+                        <div className="text-2xl font-bold mt-1 text-muted-foreground">-</div>
+                        <div className="text-xs text-muted-foreground">Requires live API</div>
                     </div>
                     <div className="bg-card border rounded-lg p-4">
                         <div className="flex items-center gap-2 text-muted-foreground text-sm">
@@ -298,13 +306,6 @@ const CallHistoryPage = () => {
                             Avg Duration
                         </div>
                         <div className="text-2xl font-bold mt-1">{formatDuration(stats.avg_duration_seconds)}</div>
-                    </div>
-                    <div className="bg-card border rounded-lg p-4">
-                        <div className="flex items-center gap-2 text-muted-foreground text-sm">
-                            <Activity className="w-4 h-4" />
-                            Avg Latency
-                        </div>
-                        <div className="text-2xl font-bold mt-1">{Math.round(stats.avg_latency_ms)}ms</div>
                     </div>
                     <div className="bg-card border rounded-lg p-4">
                         <div className="flex items-center gap-2 text-muted-foreground text-sm">
@@ -318,9 +319,10 @@ const CallHistoryPage = () => {
                     <div className="bg-card border rounded-lg p-4">
                         <div className="flex items-center gap-2 text-muted-foreground text-sm">
                             <Wrench className="w-4 h-4" />
-                            Calls with Tools
+                            Top Tool
                         </div>
-                        <div className="text-2xl font-bold mt-1">{stats.calls_with_tools}</div>
+                        <div className="text-lg font-bold mt-1 truncate">-</div>
+                        <div className="text-xs text-muted-foreground">{stats.calls_with_tools} calls used tools</div>
                     </div>
                 </div>
             )}
@@ -453,8 +455,8 @@ const CallHistoryPage = () => {
             {/* Call List */}
             {!loading && !error && calls.length > 0 && (
                 <>
-                    <div className="bg-card border rounded-lg overflow-hidden">
-                        <table className="w-full">
+                    <div className="bg-card border rounded-lg overflow-x-auto">
+                        <table className="w-full min-w-[1200px]">
                             <thead className="bg-muted/50">
                                 <tr>
                                     <th className="text-left px-4 py-3 text-sm font-medium">Caller</th>
@@ -467,7 +469,7 @@ const CallHistoryPage = () => {
                                     <th className="text-left px-4 py-3 text-sm font-medium">Turns</th>
                                     <th className="text-left px-4 py-3 text-sm font-medium">Latency</th>
                                     <th className="text-left px-4 py-3 text-sm font-medium">Barge-ins</th>
-                                    <th className="text-right px-4 py-3 text-sm font-medium">Actions</th>
+                                    <th className="text-center px-4 py-3 text-sm font-medium w-20">Actions</th>
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-border">
@@ -497,10 +499,10 @@ const CallHistoryPage = () => {
                                         <td className="px-4 py-3 text-sm">{call.total_turns}</td>
                                         <td className="px-4 py-3 text-sm">{Math.round(call.avg_turn_latency_ms)}ms</td>
                                         <td className="px-4 py-3 text-sm">{call.barge_in_count}</td>
-                                        <td className="px-4 py-3 text-right">
+                                        <td className="px-4 py-3 text-center w-20">
                                             <button
                                                 onClick={(e) => { e.stopPropagation(); handleDelete(call.id); }}
-                                                className="p-1 hover:bg-destructive/10 rounded text-destructive"
+                                                className="p-2 hover:bg-destructive/10 rounded text-destructive"
                                                 title="Delete"
                                             >
                                                 <Trash2 className="w-4 h-4" />
