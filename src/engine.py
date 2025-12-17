@@ -753,8 +753,15 @@ class Engine:
 
     async def _load_providers(self):
         """Load and initialize AI providers from the configuration."""
+        # Pipeline adapter suffixes - these are loaded by PipelineOrchestrator, not Engine
+        ADAPTER_SUFFIXES = ('_stt', '_llm', '_tts')
+        
         logger.info("Loading AI providers...", provider_names=list(self.config.providers.keys()))
         for name, provider_config_data in self.config.providers.items():
+            # Skip pipeline adapters - they're handled by PipelineOrchestrator
+            if any(name.endswith(suffix) for suffix in ADAPTER_SUFFIXES):
+                logger.debug("Skipping pipeline adapter '%s' (loaded by PipelineOrchestrator)", name)
+                continue
             if isinstance(provider_config_data, dict) and not provider_config_data.get("enabled", True):
                 logger.info("Provider '%s' disabled in configuration; skipping initialization.", name)
                 continue
