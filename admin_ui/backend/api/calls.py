@@ -79,6 +79,8 @@ class CallStatsResponse(BaseModel):
     calls_per_day: list = []
     top_callers: list = []
     calls_with_tools: int = 0
+    top_tools: dict = {}
+    active_calls: int = 0
 
 
 class FilterOptionsResponse(BaseModel):
@@ -232,6 +234,21 @@ async def get_call_stats(
             raise HTTPException(status_code=400, detail="Invalid end_date format")
     
     stats = await store.get_stats(start_date=parsed_start, end_date=parsed_end)
+    
+    # Fetch active calls from ai_engine health endpoint (Milestone 21)
+    active_calls = 0
+    try:
+        import aiohttp
+        ai_engine_url = os.getenv("AI_ENGINE_HEALTH_URL", "http://ai-engine:15000")
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"{ai_engine_url}/sessions/stats", timeout=aiohttp.ClientTimeout(total=2)) as resp:
+                if resp.status == 200:
+                    session_stats = await resp.json()
+                    active_calls = session_stats.get("active_calls", 0)
+    except Exception as e:
+        logger.debug(f"Failed to fetch active calls from ai_engine: {e}")
+    
+    stats["active_calls"] = active_calls
     
     return CallStatsResponse(**stats)
 

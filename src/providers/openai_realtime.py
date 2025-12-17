@@ -110,6 +110,10 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         self._transcript_buffer: str = ""
         self._input_info_logged: bool = False
         self._allowed_tools: Optional[List[str]] = None
+        
+        # Turn latency tracking (Milestone 21 - Call History)
+        self._turn_start_time: Optional[float] = None
+        self._turn_first_audio_received: bool = False
         # Aggregate provider-rate PCM16 bytes (24 kHz default) and commit in >=100ms chunks
         self._pending_audio_provider_rate: bytearray = bytearray()
         

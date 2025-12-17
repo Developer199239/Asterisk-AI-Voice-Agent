@@ -645,6 +645,22 @@ class CallHistoryStore:
                     """, params)
                     stats["calls_with_tools"] = cursor.fetchone()[0]
                     
+                    # Top tools aggregation (parse JSON tool_calls field)
+                    cursor.execute(f"""
+                        SELECT tool_calls FROM call_records 
+                        WHERE {date_filter} AND tool_calls != '[]'
+                    """, params)
+                    tool_counts: Dict[str, int] = {}
+                    for row in cursor.fetchall():
+                        try:
+                            tools = json.loads(row[0]) if row[0] else []
+                            for tool in tools:
+                                name = tool.get("name", "unknown")
+                                tool_counts[name] = tool_counts.get(name, 0) + 1
+                        except (json.JSONDecodeError, TypeError):
+                            pass
+                    stats["top_tools"] = dict(sorted(tool_counts.items(), key=lambda x: x[1], reverse=True)[:10])
+                    
                     return stats
                 finally:
                     conn.close()

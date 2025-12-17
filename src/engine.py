@@ -7486,6 +7486,7 @@ class Engine:
             app.router.add_post('/reload', self._reload_handler)
             app.router.add_get('/mcp/status', self._mcp_status_handler)
             app.router.add_post('/mcp/test/{server_id}', self._mcp_test_handler)
+            app.router.add_get('/sessions/stats', self._sessions_stats_handler)
             runner = web.AppRunner(app)
             await runner.setup()
             # Host/port configurable via YAML health block with environment overrides (AAVA-30)
@@ -7509,6 +7510,15 @@ class Engine:
             logger.info("Health endpoint started", host=health_host, port=health_port)
         except Exception as exc:
             logger.error("Failed to start health endpoint", error=str(exc), exc_info=True)
+
+    async def _sessions_stats_handler(self, request):
+        """Return active session statistics for Admin UI (Milestone 21)."""
+        try:
+            stats = await self.session_store.get_session_stats()
+            return web.json_response(stats, status=200)
+        except Exception as exc:
+            logger.debug("Sessions stats handler failed", error=str(exc), exc_info=True)
+            return web.json_response({"active_calls": 0, "error": str(exc)}, status=500)
 
     async def _mcp_status_handler(self, request):
         """Return MCP server/tool status for Admin UI (sanitized)."""

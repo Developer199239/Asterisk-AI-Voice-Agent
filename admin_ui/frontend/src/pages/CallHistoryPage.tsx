@@ -47,6 +47,8 @@ interface CallStats {
     calls_per_day: Array<{ date: string; count: number }>;
     top_callers: Array<{ number: string; count: number }>;
     calls_with_tools: number;
+    top_tools: Record<string, number>;
+    active_calls: number;
 }
 
 interface FilterOptions {
@@ -297,8 +299,7 @@ const CallHistoryPage = () => {
                             <Activity className="w-4 h-4" />
                             Active Calls
                         </div>
-                        <div className="text-2xl font-bold mt-1 text-muted-foreground">-</div>
-                        <div className="text-xs text-muted-foreground">Requires live API</div>
+                        <div className="text-2xl font-bold mt-1">{stats.active_calls || 0}</div>
                     </div>
                     <div className="bg-card border rounded-lg p-4">
                         <div className="flex items-center gap-2 text-muted-foreground text-sm">
@@ -321,7 +322,9 @@ const CallHistoryPage = () => {
                             <Wrench className="w-4 h-4" />
                             Top Tool
                         </div>
-                        <div className="text-lg font-bold mt-1 truncate">-</div>
+                        <div className="text-lg font-bold mt-1 truncate">
+                            {Object.entries(stats.top_tools || {}).sort((a, b) => b[1] - a[1])[0]?.[0] || '-'}
+                        </div>
                         <div className="text-xs text-muted-foreground">{stats.calls_with_tools} calls used tools</div>
                     </div>
                 </div>
