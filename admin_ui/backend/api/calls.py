@@ -239,7 +239,7 @@ async def get_call_stats(
     active_calls = 0
     try:
         import aiohttp
-        ai_engine_url = os.getenv("AI_ENGINE_HEALTH_URL", "http://ai-engine:15000")
+        ai_engine_url = os.getenv("AI_ENGINE_HEALTH_URL", "http://localhost:15000")
         logger.info(f"Fetching active calls from {ai_engine_url}/sessions/stats")
         async with aiohttp.ClientSession() as session:
             async with session.get(f"{ai_engine_url}/sessions/stats", timeout=aiohttp.ClientTimeout(total=2)) as resp:
