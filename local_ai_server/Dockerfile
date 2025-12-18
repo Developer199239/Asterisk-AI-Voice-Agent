@@ -57,7 +57,10 @@ RUN if [ "$INCLUDE_MELOTTS" = "true" ]; then \
         echo "📦 Installing MeloTTS..." && \
         pip install --no-cache-dir git+https://github.com/myshell-ai/MeloTTS.git && \
         python -m unidic download && \
-        python -c "import nltk; nltk.download('averaged_perceptron_tagger_eng')"; \
+        python -c "import nltk; nltk.download('averaged_perceptron_tagger_eng')" && \
+        echo "📦 Pre-downloading MeloTTS BERT model..." && \
+        python -c "from transformers import AutoTokenizer; AutoTokenizer.from_pretrained('bert-base-uncased')" && \
+        python -c "from melo.api import TTS; tts = TTS(language='EN', device='cpu'); print('MeloTTS ready')"; \
     fi
 
 RUN if [ "$INCLUDE_LLAMA" = "true" ]; then \
