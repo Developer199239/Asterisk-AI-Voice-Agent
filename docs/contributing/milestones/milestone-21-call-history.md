@@ -261,6 +261,47 @@ session.conversation_history.append({
 })
 ```
 
+## Deferred Items (v4.5.4+)
+
+The following items were identified during implementation but deferred for future releases:
+
+### Date Filtering Timezone Handling
+- **Issue**: UI sends `YYYY-MM-DD`, backend parses to naive datetime, DB stores UTC offset strings and compares lexicographically - end_date may exclude the entire day
+- **Impact**: Low - edge case, lexicographic compare works for ISO strings
+- **Fix**: Normalize date-only inputs to UTC start/end-of-day, or store numeric timestamps
+- **Effort**: Medium
+
+### List API Returns Full Conversation History
+- **Issue**: `/api/calls` returns full `conversation_history` + `tool_calls` for every row
+- **Impact**: Performance concern as transcripts grow; unnecessary data in list view
+- **Fix**: Split into "summary list" (exclude transcripts) vs "detail fetch" (use existing `/api/calls/{id}`)
+- **Effort**: Low - add `exclude_transcripts` query param
+
+### Transcript Timestamps Missing
+- **Issue**: Some conversation history appends don't include `timestamp` field
+- **Impact**: Data quality - UI expects timestamps for display
+- **Fix**: Audit all `conversation_history.append()` calls in `engine.py` and add timestamps
+- **Files**: `src/engine.py` lines ~4984, ~4995, ~5529
+- **Effort**: Low
+
+### Retention Scheduler Not Implemented
+- **Issue**: `cleanup_old_records()` exists but nothing schedules it
+- **Impact**: Database grows unbounded even with `CALL_HISTORY_RETENTION_DAYS` set
+- **Fix**: Add background task to periodically run cleanup (daily)
+- **Effort**: Low
+
+### Tool Duration Always 0ms
+- **Issue**: Tool call records have `duration_ms: 0` - actual execution time not tracked
+- **Impact**: Nice-to-have debugging info
+- **Fix**: Wrap tool execution with timing in each provider's `_handle_function_call`
+- **Effort**: Medium
+
+### Tool Params May Be String vs Object
+- **Issue**: Some providers store `params` as JSON string, UI assumes object for pretty printing
+- **Impact**: Inconsistent display in call details
+- **Fix**: Normalize to always store parsed object (or always parse in UI)
+- **Effort**: Low
+
 ## References
 
 - Current session model: `src/core/models.py` (CallSession)
