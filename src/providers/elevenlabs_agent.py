@@ -562,28 +562,23 @@ class ElevenLabsAgentProvider(AIProviderInterface, ProviderCapabilitiesMixin):
     
     async def _handle_user_transcript(self, data: Dict[str, Any]) -> None:
         """Handle user transcript (STT result)."""
-        # ElevenLabs sends user_transcript directly in the message, not nested
-        # Try both formats for compatibility
-        transcript_event = data.get("user_transcription_event", data)
-        text = transcript_event.get("user_transcript", "") or data.get("user_transcript", "")
-        is_final = transcript_event.get("is_final", True)
+        # ElevenLabs sends user_transcript directly in the message
+        # Format: {"type": "user_transcript", "user_transcript": "text"}
+        text = data.get("user_transcript", "")
         
-        # Track turn start time when user STOPS speaking (Milestone 21)
-        # Start timer on final transcript - measures: speech end → first AI audio
-        if text and is_final:
+        # ElevenLabs user_transcript messages are always final (no interim transcripts)
+        # Start timer on every user transcript - measures: speech end → first AI audio
+        if text:
             import time
             self._turn_start_time = time.time()
             self._turn_first_audio_received = False
-            logger.debug(f"[elevenlabs] [{self._call_id}] Turn latency timer started (user transcript final)")
-        
-        if text:
-            logger.info(f"[elevenlabs] [{self._call_id}] User: {text[:100]}...")
+            logger.info(f"[elevenlabs] [{self._call_id}] User: {text[:100]}... (latency timer started)")
             
             await self.on_event({
                 "type": "transcript",
                 "call_id": self._call_id,
                 "text": text,
-                "is_final": is_final,
+                "is_final": True,  # ElevenLabs sends final transcripts only
                 "role": "user",
             })
     
