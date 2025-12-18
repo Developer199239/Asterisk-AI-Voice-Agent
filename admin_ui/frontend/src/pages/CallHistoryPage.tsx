@@ -589,12 +589,21 @@ const CallHistoryPage = () => {
                                 <h2 className="text-xl font-bold">Call Details</h2>
                                 <p className="text-sm text-muted-foreground">{modalCall.call_id}</p>
                             </div>
-                            <button
-                                onClick={() => { setSelectedCall(null); setSelectedCallSummary(null); }}
-                                className="p-2 hover:bg-muted rounded-lg"
-                            >
-                                <X className="w-5 h-5" />
-                            </button>
+                            <div className="flex items-center gap-2">
+                                <button
+                                    onClick={() => handleDelete(modalCall.id)}
+                                    className="p-2 hover:bg-destructive/10 rounded-lg text-destructive"
+                                    title="Delete this call"
+                                >
+                                    <Trash2 className="w-5 h-5" />
+                                </button>
+                                <button
+                                    onClick={() => { setSelectedCall(null); setSelectedCallSummary(null); }}
+                                    className="p-2 hover:bg-muted rounded-lg"
+                                >
+                                    <X className="w-5 h-5" />
+                                </button>
+                            </div>
                         </div>
 
                         {/* Modal Content */}
