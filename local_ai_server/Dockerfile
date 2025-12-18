@@ -56,7 +56,8 @@ RUN if [ "$INCLUDE_KOKORO" = "true" ]; then \
 RUN if [ "$INCLUDE_MELOTTS" = "true" ]; then \
         echo "📦 Installing MeloTTS..." && \
         pip install --no-cache-dir git+https://github.com/myshell-ai/MeloTTS.git && \
-        python -m unidic download; \
+        python -m unidic download && \
+        python -c "import nltk; nltk.download('averaged_perceptron_tagger_eng')"; \
     fi
 
 RUN if [ "$INCLUDE_LLAMA" = "true" ]; then \
