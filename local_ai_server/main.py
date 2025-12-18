@@ -1328,7 +1328,57 @@ class LocalAIServer:
                 raise
 
     async def process_stt_buffered(self, audio_data: bytes) -> str:
-        """Process STT with buffering for 20ms chunks"""
+        """Process STT with buffering for 20ms chunks - routes to appropriate backend."""
+        # Route to the correct backend
+        if self.stt_backend == "faster_whisper":
+            return await self._process_stt_buffered_faster_whisper(audio_data)
+        # Default to Vosk
+        return await self._process_stt_buffered_vosk(audio_data)
+
+    async def _process_stt_buffered_faster_whisper(self, audio_data: bytes) -> str:
+        """Process buffered STT using Faster-Whisper backend."""
+        try:
+            if not self.faster_whisper_backend:
+                logging.error("Faster-Whisper STT backend not initialized")
+                return ""
+
+            self.audio_buffer += audio_data
+            logging.debug(
+                "🎵 STT BUFFER - Added %s bytes, buffer now %s bytes",
+                len(audio_data),
+                len(self.audio_buffer),
+            )
+
+            if len(self.audio_buffer) < self.buffer_size_bytes:
+                logging.debug(
+                    "🎵 STT BUFFER - Not enough audio yet (%s/%s bytes)",
+                    len(self.audio_buffer),
+                    self.buffer_size_bytes,
+                )
+                return ""
+
+            logging.info("🎵 STT PROCESSING - Faster-Whisper processing buffered audio: %s bytes", len(self.audio_buffer))
+
+            # Process with Faster-Whisper
+            transcript = await asyncio.to_thread(
+                self.faster_whisper_backend.transcribe,
+                self.audio_buffer
+            )
+
+            if transcript:
+                logging.info("📝 STT RESULT - Faster-Whisper transcript: '%s'", transcript)
+            else:
+                logging.debug("📝 STT RESULT - Faster-Whisper transcript empty after buffering")
+
+            self.audio_buffer = b""
+            return transcript
+
+        except Exception as exc:
+            logging.error("Faster-Whisper buffered STT processing failed: %s", exc, exc_info=True)
+            return ""
+
+    async def _process_stt_buffered_vosk(self, audio_data: bytes) -> str:
+        """Process buffered STT using Vosk backend."""
         try:
             if not self.stt_model:
                 logging.error("STT model not loaded")
