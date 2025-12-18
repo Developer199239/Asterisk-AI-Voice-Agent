@@ -1940,16 +1940,18 @@ class LocalAIServer:
         
         try:
             # Process buffered audio with Faster-Whisper
-            transcript = await asyncio.to_thread(
-                self.faster_whisper_backend.transcribe,
+            result = await asyncio.to_thread(
+                self.faster_whisper_backend.process_audio,
                 session.fw_audio_buffer
             )
             
-            if transcript:
-                logging.info("📝 STT RESULT - Faster-Whisper transcript: '%s'", transcript)
+            if result and result.get("text"):
+                transcript = result["text"].strip()
+                is_final = result.get("type") == "final"
+                logging.info("📝 STT RESULT - Faster-Whisper transcript: '%s' (final=%s)", transcript, is_final)
                 updates.append({
                     "type": "stt_result",
-                    "is_final": True,
+                    "is_final": is_final,
                     "text": transcript,
                     "transcript": transcript,
                 })
