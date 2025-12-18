@@ -562,8 +562,10 @@ class ElevenLabsAgentProvider(AIProviderInterface, ProviderCapabilitiesMixin):
     
     async def _handle_user_transcript(self, data: Dict[str, Any]) -> None:
         """Handle user transcript (STT result)."""
-        transcript_event = data.get("user_transcription_event", {})
-        text = transcript_event.get("user_transcript", "")
+        # ElevenLabs sends user_transcript directly in the message, not nested
+        # Try both formats for compatibility
+        transcript_event = data.get("user_transcription_event", data)
+        text = transcript_event.get("user_transcript", "") or data.get("user_transcript", "")
         is_final = transcript_event.get("is_final", True)
         
         # Track turn start time when user STOPS speaking (Milestone 21)
@@ -572,9 +574,10 @@ class ElevenLabsAgentProvider(AIProviderInterface, ProviderCapabilitiesMixin):
             import time
             self._turn_start_time = time.time()
             self._turn_first_audio_received = False
+            logger.debug(f"[elevenlabs] [{self._call_id}] Turn latency timer started (user transcript final)")
         
         if text:
-            logger.debug(f"[elevenlabs] [{self._call_id}] User: {text[:100]}...")
+            logger.info(f"[elevenlabs] [{self._call_id}] User: {text[:100]}...")
             
             await self.on_event({
                 "type": "transcript",
