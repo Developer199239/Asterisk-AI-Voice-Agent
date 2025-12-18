@@ -725,9 +725,15 @@ async def rebuild_local_ai_server(request: RebuildRequest):
             phase="error"
         )
     
-    # Update .env file with new backend settings BEFORE rebuild
+    # Update .env file with new backend settings AND build args BEFORE rebuild
     env_file = os.path.join(PROJECT_ROOT, ".env")
     env_updates = {}
+    
+    # Set build args in .env so docker-compose.yml picks them up
+    if request.include_faster_whisper:
+        env_updates["INCLUDE_FASTER_WHISPER"] = "true"
+    if request.include_melotts:
+        env_updates["INCLUDE_MELOTTS"] = "true"
     
     if request.stt_backend:
         env_updates["LOCAL_STT_BACKEND"] = request.stt_backend

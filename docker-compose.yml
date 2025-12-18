@@ -61,6 +61,8 @@ services:
       dockerfile: Dockerfile
       args:
         - INCLUDE_KROKO_EMBEDDED=${INCLUDE_KROKO_EMBEDDED:-false}
+        - INCLUDE_FASTER_WHISPER=${INCLUDE_FASTER_WHISPER:-false}
+        - INCLUDE_MELOTTS=${INCLUDE_MELOTTS:-false}
     container_name: local_ai_server
     network_mode: host
     env_file:
