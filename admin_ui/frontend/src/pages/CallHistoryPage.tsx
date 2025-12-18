@@ -498,7 +498,7 @@ const CallHistoryPage = () => {
                                             </div>
                                         </td>
                                         <td className="px-4 py-3 text-sm">{call.total_turns}</td>
-                                        <td className="px-4 py-3 text-sm">{Math.round(call.avg_turn_latency_ms)}ms</td>
+                                        <td className="px-4 py-3 text-sm">{(call.avg_turn_latency_ms / 1000).toFixed(1)}s</td>
                                         <td className="px-4 py-3 text-sm">{call.barge_in_count}</td>
                                         <td className="px-4 py-3 text-center w-20">
                                             <button
@@ -589,7 +589,7 @@ const CallHistoryPage = () => {
                                 </div>
                                 <div>
                                     <div className="text-sm text-muted-foreground">Avg Latency</div>
-                                    <div className="font-medium">{Math.round(selectedCall.avg_turn_latency_ms)}ms</div>
+                                    <div className="font-medium">{(selectedCall.avg_turn_latency_ms / 1000).toFixed(2)}s</div>
                                 </div>
                                 <div>
                                     <div className="text-sm text-muted-foreground">Barge-ins</div>
