@@ -169,7 +169,18 @@ class MeloTTSBackend:
             lang = "EN"  # All our voices are English variants
             
             self.model = TTS(language=lang, device=self.device)
-            self.speaker_ids = self.model.hps.data.spk2id
+            # spk2id might be dict or HParams - convert to dict
+            spk2id_raw = self.model.hps.data.spk2id
+            if hasattr(spk2id_raw, '__dict__'):
+                # HParams object - convert to dict
+                self.speaker_ids = dict(spk2id_raw.__dict__) if hasattr(spk2id_raw, '__dict__') else {}
+            elif isinstance(spk2id_raw, dict):
+                self.speaker_ids = spk2id_raw
+            else:
+                # Fallback: try to iterate
+                self.speaker_ids = {k: getattr(spk2id_raw, k) for k in dir(spk2id_raw) if not k.startswith('_')}
+            
+            logging.debug("🎙️ MELOTTS - Speaker IDs: %s", self.speaker_ids)
             
             # Verify the voice exists
             voice_key = self.VOICES.get(self.voice, self.voice)

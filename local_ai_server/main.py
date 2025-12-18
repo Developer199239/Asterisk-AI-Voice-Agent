@@ -2965,7 +2965,7 @@ class LocalAIServer:
                 stt_display = os.path.basename(self.sherpa_model_path)
             elif self.stt_backend == "faster_whisper":
                 stt_loaded = self.faster_whisper_backend is not None
-                stt_path = f"faster-whisper:{self.faster_whisper_model}"
+                stt_path = self.faster_whisper_model  # Just the model name (base, tiny, small, etc.)
                 stt_display = f"Faster-Whisper ({self.faster_whisper_model})"
             
             # Determine TTS loaded state based on active backend
@@ -2991,7 +2991,7 @@ class LocalAIServer:
                     tts_display = f"Kokoro ({self.kokoro_voice})"
             elif self.tts_backend == "melotts":
                 tts_loaded = self.melotts_backend is not None
-                tts_path = f"melotts:{self.melotts_voice}"
+                tts_path = self.melotts_voice  # Just the voice name (EN-US, EN-BR, etc.)
                 tts_display = f"MeloTTS ({self.melotts_voice})"
 
             llm_display = os.path.basename(self.llm_model_path)
