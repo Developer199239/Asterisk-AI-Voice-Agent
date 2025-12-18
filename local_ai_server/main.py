@@ -1375,7 +1375,57 @@ class LocalAIServer:
             return ""
 
     async def process_stt(self, audio_data: bytes, input_rate: int = PCM16_TARGET_RATE) -> str:
-        """Process STT with Vosk only - optimized for telephony audio"""
+        """Process STT - routes to appropriate backend (vosk, faster_whisper, etc.)"""
+        # Route to the correct backend
+        if self.stt_backend == "faster_whisper":
+            return await self._process_stt_faster_whisper(audio_data, input_rate)
+        # Default to Vosk
+        return await self._process_stt_vosk(audio_data, input_rate)
+
+    async def _process_stt_faster_whisper(self, audio_data: bytes, input_rate: int = PCM16_TARGET_RATE) -> str:
+        """Process STT using Faster-Whisper backend."""
+        try:
+            if not self.faster_whisper_backend:
+                logging.error("Faster-Whisper STT backend not initialized")
+                return ""
+
+            logging.debug("🎤 STT INPUT - Faster-Whisper %s bytes at %s Hz", len(audio_data), input_rate)
+
+            # Resample to 16kHz if needed (Faster-Whisper expects 16kHz)
+            if input_rate != PCM16_TARGET_RATE:
+                resampled_audio = await asyncio.to_thread(
+                    self.audio_processor.resample_audio,
+                    audio_data,
+                    input_rate,
+                    PCM16_TARGET_RATE,
+                    "raw",
+                    "raw",
+                )
+            else:
+                resampled_audio = audio_data
+
+            # Process with Faster-Whisper
+            transcript = await asyncio.to_thread(
+                self.faster_whisper_backend.transcribe,
+                resampled_audio
+            )
+
+            if transcript:
+                logging.info(
+                    "📝 STT RESULT - Faster-Whisper transcript: '%s' (length: %s)",
+                    transcript,
+                    len(transcript),
+                )
+            else:
+                logging.debug("📝 STT RESULT - Faster-Whisper transcript empty")
+            return transcript
+
+        except Exception as exc:
+            logging.error("Faster-Whisper STT processing failed: %s", exc, exc_info=True)
+            return ""
+
+    async def _process_stt_vosk(self, audio_data: bytes, input_rate: int = PCM16_TARGET_RATE) -> str:
+        """Process STT with Vosk - optimized for telephony audio"""
         try:
             if not self.stt_model:
                 logging.error("STT model not loaded")
@@ -1527,8 +1577,52 @@ class LocalAIServer:
         """Process TTS with 8kHz uLaw generation - routes to appropriate backend."""
         if self.tts_backend == "kokoro":
             return await self._process_tts_kokoro(text)
+        elif self.tts_backend == "melotts":
+            return await self._process_tts_melotts(text)
         else:
             return await self._process_tts_piper(text)
+
+    async def _process_tts_melotts(self, text: str) -> bytes:
+        """Process TTS using MeloTTS backend (44100Hz output)."""
+        try:
+            if not self.melotts_backend:
+                logging.error("MeloTTS backend not initialized")
+                return b""
+
+            logging.debug("🔊 TTS INPUT - MeloTTS generating audio for: '%s'", text)
+
+            # Get PCM16 audio at 44100Hz from MeloTTS
+            pcm16_data = self.melotts_backend.synthesize(text)
+            
+            if not pcm16_data:
+                logging.warning("⚠️ MeloTTS returned empty audio")
+                return b""
+
+            # Write to temp WAV file for conversion
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as wav_file:
+                wav_path = wav_file.name
+
+            with wave.open(wav_path, "wb") as wav_file:
+                wav_file.setnchannels(1)
+                wav_file.setsampwidth(2)
+                wav_file.setframerate(44100)  # MeloTTS native rate
+                wav_file.writeframes(pcm16_data)
+
+            with open(wav_path, "rb") as wav_file:
+                wav_data = wav_file.read()
+
+            # Convert 44100Hz to 8kHz uLaw
+            ulaw_data = await asyncio.to_thread(
+                self.audio_processor.convert_to_ulaw_8k, wav_data, 44100
+            )
+            os.unlink(wav_path)
+
+            logging.info("🔊 TTS RESULT - MeloTTS generated uLaw 8kHz audio: %s bytes", len(ulaw_data))
+            return ulaw_data
+
+        except Exception as exc:
+            logging.error("MeloTTS processing failed: %s", exc, exc_info=True)
+            return b""
 
     async def _process_tts_piper(self, text: str) -> bytes:
         """Process TTS using Piper backend (22kHz output)."""
