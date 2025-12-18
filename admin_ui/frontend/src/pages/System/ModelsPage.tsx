@@ -19,6 +19,8 @@ interface ModelInfo {
     installed?: boolean;
     quality?: string;
     gender?: string;
+    auto_download?: boolean;  // Models that auto-download from HuggingFace on first use
+    note?: string;  // Info note about the model
 }
 
 interface InstalledModel {
@@ -476,6 +478,12 @@ const ModelsPage = () => {
                                                     Download
                                                 </button>
                                             )}
+                                            {!isModelInstalled(model.model_path || '') && model.auto_download && !model.download_url && (
+                                                <span className="px-3 py-2 rounded-md bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 text-sm flex items-center gap-2" title={model.note || 'Downloads automatically when backend is enabled'}>
+                                                    <RefreshCw className="w-4 h-4" />
+                                                    Auto-download
+                                                </span>
+                                            )}
                                         </div>
                                     </ConfigCard>
                                 ))}
@@ -524,6 +532,12 @@ const ModelsPage = () => {
                                                     )}
                                                     Download
                                                 </button>
+                                            )}
+                                            {!isModelInstalled(model.model_path || '') && model.auto_download && !model.download_url && (
+                                                <span className="px-3 py-2 rounded-md bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 text-sm flex items-center gap-2" title={model.note || 'Downloads automatically when backend is enabled'}>
+                                                    <RefreshCw className="w-4 h-4" />
+                                                    Auto-download
+                                                </span>
                                             )}
                                         </div>
                                     </ConfigCard>

@@ -1214,6 +1214,7 @@ const Wizard = () => {
                                                         <>
                                                             <option value="vosk">Vosk (Local)</option>
                                                             <option value="kroko_cloud">Kroko (Cloud)</option>
+                                                            <option value="faster_whisper">Faster-Whisper (Local)</option>
                                                         </>
                                                     )}
                                                 </select>
@@ -1272,6 +1273,7 @@ const Wizard = () => {
                                                         <>
                                                             <option value="piper">Piper (Local)</option>
                                                             <option value="kokoro">Kokoro (Premium)</option>
+                                                            <option value="melotts">MeloTTS (Local)</option>
                                                         </>
                                                     )}
                                                 </select>
