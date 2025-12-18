@@ -11,7 +11,7 @@ import audioop
 import base64
 import json
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any, Optional, List, Set, Tuple
 
 # Simple audio capture system removed - not used in production
@@ -1222,7 +1222,7 @@ class Engine:
                 provider_name=self.config.default_provider,
                 audio_capture_enabled=True,  # FIX #1: Start with capture enabled, only disable when TTS actually starts
                 status="connected",
-                start_time=datetime.now()  # Track call start time for email tools
+                start_time=datetime.now(timezone.utc)  # Track call start time (UTC for consistent storage)
             )
             session.enhanced_vad_enabled = bool(self.vad_manager)
             await self._save_session(session, new=True)
