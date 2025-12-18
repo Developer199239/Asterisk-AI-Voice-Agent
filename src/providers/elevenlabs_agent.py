@@ -562,15 +562,22 @@ class ElevenLabsAgentProvider(AIProviderInterface, ProviderCapabilitiesMixin):
     
     async def _handle_user_transcript(self, data: Dict[str, Any]) -> None:
         """Handle user transcript (STT result)."""
-        # ElevenLabs API format: {"type": "user_transcript", "user_transcript_event": {"user_transcript": "text"}}
-        # Or direct format: {"type": "user_transcript", "user_transcript": "text"}
-        # Try nested first, then direct
-        transcript_event = data.get("user_transcript_event", {})
-        text = transcript_event.get("user_transcript", "") or data.get("user_transcript", "") or data.get("transcript", "")
+        # ElevenLabs API format: {"type": "user_transcript", "user_transcription_event": {...}}
+        # The nested event contains the actual transcript
+        transcript_event = data.get("user_transcription_event", {})
         
-        # Debug: log raw data if no text found
+        # Try multiple possible field names for the transcript text
+        text = (
+            transcript_event.get("user_transcript", "") or
+            transcript_event.get("transcript", "") or
+            transcript_event.get("text", "") or
+            data.get("user_transcript", "") or
+            data.get("transcript", "")
+        )
+        
+        # Debug: log nested structure if no text found
         if not text:
-            logger.warning(f"[elevenlabs] [{self._call_id}] user_transcript no text found, keys: {list(data.keys())}")
+            logger.warning(f"[elevenlabs] [{self._call_id}] user_transcript no text, event_keys: {list(transcript_event.keys())}, data_keys: {list(data.keys())}")
         
         # ElevenLabs user_transcript messages are always final (no interim transcripts)
         # Start timer on every user transcript - measures: speech end → first AI audio
