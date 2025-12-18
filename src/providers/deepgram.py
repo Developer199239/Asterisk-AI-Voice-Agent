@@ -1277,6 +1277,13 @@ class DeepgramProvider(AIProviderInterface):
                                         segments=event_data.get("segments"),
                                     )
                                     
+                                    # Track turn start time on user ConversationText (Milestone 21)
+                                    # Deepgram Voice Agent doesn't send UserStoppedSpeaking,
+                                    # so we use ConversationText with role="user" as speech end signal
+                                    if role == "user" and text:
+                                        self._turn_start_time = time.time()
+                                        self._turn_first_audio_received = False
+                                    
                                     # Track conversation for email tools
                                     # Debug: Check conditions
                                     has_call_id = bool(self.call_id)
