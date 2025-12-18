@@ -446,8 +446,7 @@ class ElevenLabsAgentProvider(AIProviderInterface, ProviderCapabilitiesMixin):
             await self._handle_error(data)
         
         else:
-            # Log ALL unhandled message types at info level to catch tool calls
-            logger.info(f"[elevenlabs] [{self._call_id}] Unhandled message type: {msg_type}, keys: {list(data.keys())}")
+            logger.debug(f"[elevenlabs] [{self._call_id}] Unhandled message type: {msg_type}")
     
     async def _handle_conversation_init(self, data: Dict[str, Any]) -> None:
         """Handle conversation initialization metadata."""
