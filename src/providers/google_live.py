@@ -687,10 +687,11 @@ class GoogleLiveProvider(AIProviderInterface):
         if input_transcription:
             text = input_transcription.get("text", "")
             if text:
-                # Track turn start time on first user input (Milestone 21)
-                if self._turn_start_time is None:
-                    self._turn_start_time = time.time()
-                    self._turn_first_audio_received = False
+                # Track turn start time on EVERY user input fragment (Milestone 21)
+                # This captures the LAST speech fragment time before AI responds
+                # Measures: last user speech → first AI audio response
+                self._turn_start_time = time.time()
+                self._turn_first_audio_received = False
                 # Concatenate fragments (not replace!)
                 self._input_transcription_buffer += text
                 logger.debug(

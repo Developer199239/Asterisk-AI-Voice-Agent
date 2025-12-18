@@ -1411,10 +1411,8 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             # Reset audio start time when response fully completes - allows interruption for next response
             self._response_audio_start_time = None
             
-            # Start tracking next turn AFTER response completes (Milestone 21 - Call History)
-            # This ensures we count conversational turns, not audio chunks
-            self._turn_start_time = time.time()
-            self._turn_first_audio_received = False
+            # Note: Turn latency timer now starts on input_audio_buffer.speech_stopped
+            # (moved from here for standardized measurement across providers)
             
             await self._emit_audio_done()
             
@@ -1562,8 +1560,14 @@ class OpenAIRealtimeProvider(AIProviderInterface):
 
         # Optional acks/telemetry for audio buffer operations
         if event_type and event_type.startswith("input_audio_buffer"):
+            # Track turn start time when user STOPS speaking (Milestone 21)
+            # This measures: speech end → first AI audio response
+            if event_type == "input_audio_buffer.speech_stopped":
+                self._turn_start_time = time.time()
+                self._turn_first_audio_received = False
+                logger.debug("Turn latency timer started (speech_stopped)", call_id=self._call_id)
             # Handle barge-in: cancel ongoing response when user starts speaking
-            if event_type == "input_audio_buffer.speech_started" and self._current_response_id:
+            elif event_type == "input_audio_buffer.speech_started" and self._current_response_id:
                 # Protect greeting response from barge-in cancellation
                 if self._current_response_id == self._greeting_response_id and not self._greeting_completed:
                     logger.info(

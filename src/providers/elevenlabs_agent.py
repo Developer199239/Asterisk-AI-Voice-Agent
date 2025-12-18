@@ -566,8 +566,9 @@ class ElevenLabsAgentProvider(AIProviderInterface, ProviderCapabilitiesMixin):
         text = transcript_event.get("user_transcript", "")
         is_final = transcript_event.get("is_final", True)
         
-        # Track turn start time when user starts speaking (Milestone 21)
-        if text and self._turn_start_time is None:
+        # Track turn start time when user STOPS speaking (Milestone 21)
+        # Start timer on final transcript - measures: speech end → first AI audio
+        if text and is_final:
             import time
             self._turn_start_time = time.time()
             self._turn_first_audio_received = False

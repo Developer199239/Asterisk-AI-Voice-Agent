@@ -1204,16 +1204,16 @@ class DeepgramProvider(AIProviderInterface):
                                     call_id=self.call_id,
                                     request_id=getattr(self, "request_id", None),
                                 )
-                                # Track turn start time (Milestone 21 - Call History)
-                                if self._turn_start_time is None:
-                                    self._turn_start_time = time.time()
-                                    self._turn_first_audio_received = False
                             elif et == "UserStoppedSpeaking":
                                 logger.info(
                                     "🔇 Deepgram UserStoppedSpeaking",
                                     call_id=self.call_id,
                                     request_id=getattr(self, "request_id", None),
                                 )
+                                # Track turn start time when user STOPS speaking (Milestone 21)
+                                # This measures: speech end → first AI audio response
+                                self._turn_start_time = time.time()
+                                self._turn_first_audio_received = False
                             elif et == "FunctionCallRequest":
                                 # Extract function details for logging (actual Deepgram format)
                                 functions = event_data.get("functions", [])
