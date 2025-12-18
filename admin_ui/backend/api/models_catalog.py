@@ -397,10 +397,7 @@ KOKORO_TTS_MODELS = [
 # ============== LLM Models ==============
 
 LLM_MODELS = [
-    {"id": "phi3_mini", "name": "Phi-3-mini-4K", "size_mb": 2500, "size_display": "2.5 GB",
-     "description": "Good quality, optimized for 4K context", "recommended": True,
-     "download_url": "https://huggingface.co/microsoft/Phi-3-mini-4k-instruct-gguf/resolve/main/Phi-3-mini-4k-instruct-q4.gguf",
-     "model_path": "phi-3-mini-4k-instruct.Q4_K_M.gguf", "recommended_ram_gb": 8},
+    # === Lightweight Models (4-8 GB RAM) ===
     {"id": "tinyllama", "name": "TinyLlama 1.1B", "size_mb": 700, "size_display": "700 MB",
      "description": "Lightweight, for low-resource systems",
      "download_url": "https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
@@ -409,17 +406,54 @@ LLM_MODELS = [
      "description": "Balanced performance and quality",
      "download_url": "https://huggingface.co/lmstudio-community/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
      "model_path": "Llama-3.2-3B-Instruct-Q4_K_M.gguf", "recommended_ram_gb": 8},
-    {"id": "mistral_7b_instruct", "name": "Mistral-7B-Instruct v0.2", "size_mb": 4200, "size_display": "4.2 GB",
-     "description": "Higher quality; slower on CPU (best on GPU/fast CPUs)",
-     "download_url": "https://huggingface.co/TheBloke/Mistral-7B-Instruct-v0.2-GGUF/resolve/main/mistral-7b-instruct-v0.2.Q4_K_M.gguf",
-     "model_path": "mistral-7b-instruct-v0.2.Q4_K_M.gguf", "recommended_ram_gb": 16},
-    {"id": "llama3_8b_instruct", "name": "Meta-Llama-3-8B-Instruct", "size_mb": 4700, "size_display": "4.7 GB",
-     "description": "High quality; requires strong CPU/GPU and more RAM",
-     "download_url": "https://huggingface.co/lmstudio-community/Meta-Llama-3-8B-Instruct-GGUF/resolve/main/Meta-Llama-3-8B-Instruct-Q4_K_M.gguf",
-     "model_path": "Meta-Llama-3-8B-Instruct-Q4_K_M.gguf", "recommended_ram_gb": 24},
-    {"id": "openai_cloud", "name": "OpenAI Cloud", "size_mb": 0, "size_display": "0 (Cloud)",
+    {"id": "phi3_mini", "name": "Phi-3-mini-4K", "size_mb": 2500, "size_display": "2.5 GB",
+     "description": "Good quality, optimized for 4K context", "recommended": True,
+     "download_url": "https://huggingface.co/microsoft/Phi-3-mini-4k-instruct-gguf/resolve/main/Phi-3-mini-4k-instruct-q4.gguf",
+     "model_path": "phi-3-mini-4k-instruct.Q4_K_M.gguf", "recommended_ram_gb": 8},
+    
+    # === Mid-Range Models (8-16 GB RAM) ===
+    {"id": "qwen25_3b", "name": "Qwen 2.5-3B Instruct", "size_mb": 2100, "size_display": "2.1 GB",
+     "description": "Excellent instruction following, multilingual",
+     "download_url": "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf",
+     "model_path": "qwen2.5-3b-instruct-q4_k_m.gguf", "recommended_ram_gb": 8},
+    {"id": "gemma2_2b", "name": "Gemma 2-2B Instruct", "size_mb": 1800, "size_display": "1.8 GB",
+     "description": "Google's efficient on-device model",
+     "download_url": "https://huggingface.co/bartowski/gemma-2-2b-it-GGUF/resolve/main/gemma-2-2b-it-Q4_K_M.gguf",
+     "model_path": "gemma-2-2b-it-Q4_K_M.gguf", "recommended_ram_gb": 6},
+    {"id": "mistral_7b_instruct", "name": "Mistral-7B-Instruct v0.3", "size_mb": 4200, "size_display": "4.2 GB",
+     "description": "Fast and capable, Apache licensed",
+     "download_url": "https://huggingface.co/MaziyarPanahi/Mistral-7B-Instruct-v0.3-GGUF/resolve/main/Mistral-7B-Instruct-v0.3.Q4_K_M.gguf",
+     "model_path": "Mistral-7B-Instruct-v0.3.Q4_K_M.gguf", "recommended_ram_gb": 12},
+    {"id": "qwen25_7b", "name": "Qwen 2.5-7B Instruct", "size_mb": 4700, "size_display": "4.7 GB",
+     "description": "Superior instruction following, tool calling support",
+     "download_url": "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/resolve/main/qwen2.5-7b-instruct-q4_k_m.gguf",
+     "model_path": "qwen2.5-7b-instruct-q4_k_m.gguf", "recommended_ram_gb": 12},
+    
+    # === High-Performance Models (16-24 GB RAM) ===
+    {"id": "llama31_8b", "name": "Llama 3.1-8B Instruct", "size_mb": 4700, "size_display": "4.7 GB",
+     "description": "Strong reasoning and dialogue, 128K context",
+     "download_url": "https://huggingface.co/lmstudio-community/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
+     "model_path": "Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf", "recommended_ram_gb": 16},
+    {"id": "gemma2_9b", "name": "Gemma 2-9B Instruct", "size_mb": 5500, "size_display": "5.5 GB",
+     "description": "Google's powerful on-device model",
+     "download_url": "https://huggingface.co/bartowski/gemma-2-9b-it-GGUF/resolve/main/gemma-2-9b-it-Q4_K_M.gguf",
+     "model_path": "gemma-2-9b-it-Q4_K_M.gguf", "recommended_ram_gb": 16},
+    {"id": "phi4_14b", "name": "Phi-4-14B", "size_mb": 8500, "size_display": "8.5 GB",
+     "description": "Microsoft's latest, beats larger models on benchmarks",
+     "download_url": "https://huggingface.co/bartowski/phi-4-GGUF/resolve/main/phi-4-Q4_K_M.gguf",
+     "model_path": "phi-4-Q4_K_M.gguf", "recommended_ram_gb": 16},
+    {"id": "qwen25_14b", "name": "Qwen 2.5-14B Instruct", "size_mb": 8800, "size_display": "8.8 GB",
+     "description": "Excellent for complex reasoning and coding",
+     "download_url": "https://huggingface.co/Qwen/Qwen2.5-14B-Instruct-GGUF/resolve/main/qwen2.5-14b-instruct-q4_k_m.gguf",
+     "model_path": "qwen2.5-14b-instruct-q4_k_m.gguf", "recommended_ram_gb": 20},
+    
+    # === Cloud Options ===
+    {"id": "openai_cloud", "name": "OpenAI Cloud (GPT-4)", "size_mb": 0, "size_display": "0 (Cloud)",
      "description": "Best quality, requires API key",
      "download_url": None, "model_path": None, "requires_api_key": True, "api_key_name": "OPENAI_API_KEY"},
+    {"id": "groq_cloud", "name": "Groq Cloud (Llama 3)", "size_mb": 0, "size_display": "0 (Cloud)",
+     "description": "Ultra-fast inference, requires API key",
+     "download_url": None, "model_path": None, "requires_api_key": True, "api_key_name": "GROQ_API_KEY"},
 ]
 
 # ============== Combined Catalog ==============
