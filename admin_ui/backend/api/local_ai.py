@@ -104,7 +104,8 @@ async def list_available_models():
     stt_models: Dict[str, List[ModelInfo]] = {
         "vosk": [],
         "sherpa": [],
-        "kroko": []
+        "kroko": [],
+        "faster_whisper": []
     }
     tts_models: Dict[str, List[ModelInfo]] = {
         "piper": [],
@@ -242,7 +243,8 @@ async def get_backend_capabilities():
             "vosk": {"available": False, "reason": ""},
             "sherpa": {"available": False, "reason": ""},
             "kroko_embedded": {"available": False, "reason": ""},
-            "kroko_cloud": {"available": True, "reason": "Cloud API (requires KROKO_API_KEY)"}
+            "kroko_cloud": {"available": True, "reason": "Cloud API (requires KROKO_API_KEY)"},
+            "faster_whisper": {"available": False, "reason": ""}
         },
         "tts": {
             "piper": {"available": False, "reason": ""},
@@ -282,6 +284,10 @@ async def get_backend_capabilities():
                     capabilities["stt"]["kroko_embedded"] = {"available": True, "reason": "Kroko binary installed"}
                 else:
                     capabilities["stt"]["kroko_embedded"]["reason"] = "Rebuild with INCLUDE_KROKO_EMBEDDED=true"
+                if server_caps.get("faster_whisper"):
+                    capabilities["stt"]["faster_whisper"] = {"available": True, "reason": "Faster-Whisper installed"}
+                else:
+                    capabilities["stt"]["faster_whisper"]["reason"] = "Rebuild with INCLUDE_FASTER_WHISPER=true"
                 
                 # TTS backends
                 if server_caps.get("piper"):

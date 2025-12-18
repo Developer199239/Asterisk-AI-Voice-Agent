@@ -720,7 +720,7 @@ class LocalAIServer:
         self.ws_auth_token = (os.getenv("LOCAL_WS_AUTH_TOKEN", "") or "").strip()
 
         # ─────────────────────────────────────────────────────────────────────
-        # STT Backend Selection: vosk (default), kroko, or sherpa
+        # STT Backend Selection: vosk (default), kroko, sherpa, or faster_whisper
         # ─────────────────────────────────────────────────────────────────────
         self.stt_backend = os.getenv("LOCAL_STT_BACKEND", "vosk").lower()
         
@@ -732,6 +732,13 @@ class LocalAIServer:
         self.sherpa_model_path = os.getenv(
             "SHERPA_MODEL_PATH", "/app/models/stt/sherpa"
         )
+        
+        # Faster-Whisper STT settings (if using faster_whisper backend)
+        self.faster_whisper_backend: Optional["FasterWhisperSTTBackend"] = None
+        self.faster_whisper_model = os.getenv("FASTER_WHISPER_MODEL", "base")
+        self.faster_whisper_device = os.getenv("FASTER_WHISPER_DEVICE", "cpu")
+        self.faster_whisper_compute = os.getenv("FASTER_WHISPER_COMPUTE_TYPE", "int8")
+        self.faster_whisper_language = os.getenv("FASTER_WHISPER_LANGUAGE", "en")
         self.kroko_url = os.getenv(
             "KROKO_URL",
             "wss://app.kroko.ai/api/v1/transcripts/streaming"  # Default to hosted API
@@ -840,11 +847,13 @@ class LocalAIServer:
         logging.info("✅ All models loaded successfully for MVP pipeline")
 
     async def _load_stt_model(self):
-        """Load STT model based on configured backend (vosk, kroko, or sherpa)."""
+        """Load STT model based on configured backend (vosk, kroko, sherpa, or faster_whisper)."""
         if self.stt_backend == "kroko":
             await self._load_kroko_backend()
         elif self.stt_backend == "sherpa":
             await self._load_sherpa_backend()
+        elif self.stt_backend == "faster_whisper":
+            await self._load_faster_whisper_backend()
         else:
             await self._load_vosk_backend()
 
@@ -939,6 +948,42 @@ class LocalAIServer:
 
         except Exception as exc:
             logging.error("❌ Failed to initialize Sherpa STT backend: %s", exc)
+            raise
+
+    async def _load_faster_whisper_backend(self):
+        """Initialize Faster-Whisper STT backend for high-accuracy transcription."""
+        try:
+            from stt_backends import FasterWhisperSTTBackend
+            from optional_imports import FasterWhisperModel
+            
+            if FasterWhisperModel is None:
+                raise ImportError(
+                    "Faster-Whisper STT backend requested but faster-whisper is not installed. "
+                    "Build with INCLUDE_FASTER_WHISPER=true or install faster-whisper."
+                )
+            
+            logging.info(
+                "🎤 STT backend: Faster-Whisper (model=%s, device=%s, compute=%s)",
+                self.faster_whisper_model,
+                self.faster_whisper_device,
+                self.faster_whisper_compute,
+            )
+
+            self.faster_whisper_backend = FasterWhisperSTTBackend(
+                model_size=self.faster_whisper_model,
+                device=self.faster_whisper_device,
+                compute_type=self.faster_whisper_compute,
+                language=self.faster_whisper_language,
+                sample_rate=PCM16_TARGET_RATE,
+            )
+
+            if not self.faster_whisper_backend.initialize():
+                raise RuntimeError("Failed to initialize Faster-Whisper")
+
+            logging.info("✅ STT backend: Faster-Whisper initialized")
+
+        except Exception as exc:
+            logging.error("❌ Failed to initialize Faster-Whisper STT backend: %s", exc)
             raise
 
     def _detect_gpu_layers(self) -> int:

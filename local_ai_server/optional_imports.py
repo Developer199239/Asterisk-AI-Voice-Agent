@@ -10,6 +10,11 @@ except ImportError:  # pragma: no cover
     KaldiRecognizer = None  # type: ignore[assignment]
 
 try:
+    from faster_whisper import WhisperModel as FasterWhisperModel  # type: ignore
+except ImportError:  # pragma: no cover
+    FasterWhisperModel = None  # type: ignore[assignment]
+
+try:
     from llama_cpp import Llama  # type: ignore
 except ImportError:  # pragma: no cover
     Llama = None  # type: ignore[assignment]

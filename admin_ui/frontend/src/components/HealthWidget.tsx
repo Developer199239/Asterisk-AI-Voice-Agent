@@ -42,6 +42,7 @@ interface BackendCapabilities {
         sherpa: { available: boolean; reason: string };
         kroko_embedded: { available: boolean; reason: string };
         kroko_cloud: { available: boolean; reason: string };
+        faster_whisper: { available: boolean; reason: string };
     };
     tts: {
         piper: { available: boolean; reason: string };

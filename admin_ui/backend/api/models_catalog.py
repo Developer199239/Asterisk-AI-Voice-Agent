@@ -221,6 +221,36 @@ KROKO_STT_MODELS = [
      "supported_languages": ["en-US", "nl-NL", "fr-FR", "de-DE", "es-ES", "it-IT", "pt-PT", "bg-BG", "sv-SE", "tr-TR", "he-IL"]},
 ]
 
+FASTER_WHISPER_STT_MODELS = [
+    # Faster-Whisper models auto-download from HuggingFace on first use
+    # Requires: docker build --build-arg INCLUDE_FASTER_WHISPER=true
+    {"id": "faster_whisper_tiny", "name": "Whisper Tiny (39M)", "language": "multi", "region": "global", "backend": "faster_whisper",
+     "size_mb": 75, "size_display": "75 MB", "model_path": "tiny",
+     "download_url": None, "auto_download": True,
+     "description": "Fastest, lowest accuracy. Good for quick tests.",
+     "note": "Requires INCLUDE_FASTER_WHISPER=true in Docker build"},
+    {"id": "faster_whisper_base", "name": "Whisper Base (74M)", "language": "multi", "region": "global", "backend": "faster_whisper",
+     "size_mb": 145, "size_display": "145 MB", "model_path": "base",
+     "download_url": None, "auto_download": True, "recommended": True,
+     "description": "Good balance of speed and accuracy for real-time.",
+     "note": "Requires INCLUDE_FASTER_WHISPER=true in Docker build"},
+    {"id": "faster_whisper_small", "name": "Whisper Small (244M)", "language": "multi", "region": "global", "backend": "faster_whisper",
+     "size_mb": 465, "size_display": "465 MB", "model_path": "small",
+     "download_url": None, "auto_download": True,
+     "description": "Better accuracy, still real-time on modern CPUs.",
+     "note": "Requires INCLUDE_FASTER_WHISPER=true in Docker build"},
+    {"id": "faster_whisper_medium", "name": "Whisper Medium (769M)", "language": "multi", "region": "global", "backend": "faster_whisper",
+     "size_mb": 1500, "size_display": "1.5 GB", "model_path": "medium",
+     "download_url": None, "auto_download": True,
+     "description": "High accuracy, needs GPU for real-time.",
+     "note": "Requires INCLUDE_FASTER_WHISPER=true in Docker build"},
+    {"id": "faster_whisper_large_v3", "name": "Whisper Large v3 (1.5B)", "language": "multi", "region": "global", "backend": "faster_whisper",
+     "size_mb": 3000, "size_display": "3 GB", "model_path": "large-v3",
+     "download_url": None, "auto_download": True,
+     "description": "Best accuracy, requires GPU for acceptable speed.",
+     "note": "Requires INCLUDE_FASTER_WHISPER=true in Docker build"},
+]
+
 # ============== TTS Models (Text-to-Speech) ==============
 
 PIPER_TTS_MODELS = [
@@ -461,7 +491,7 @@ LLM_MODELS = [
 def get_full_catalog():
     """Get the complete model catalog organized by type."""
     return {
-        "stt": VOSK_STT_MODELS + SHERPA_STT_MODELS + KROKO_STT_MODELS,
+        "stt": VOSK_STT_MODELS + SHERPA_STT_MODELS + KROKO_STT_MODELS + FASTER_WHISPER_STT_MODELS,
         "tts": PIPER_TTS_MODELS + KOKORO_TTS_MODELS,
         "llm": LLM_MODELS,
     }

@@ -8,6 +8,7 @@ FROM python:3.11 as builder
 # ─────────────────────────────────────────────────────────────────────────────
 ARG INCLUDE_VOSK=true
 ARG INCLUDE_SHERPA=true
+ARG INCLUDE_FASTER_WHISPER=false
 ARG INCLUDE_PIPER=true
 ARG INCLUDE_KOKORO=true
 ARG INCLUDE_LLAMA=true
@@ -34,6 +35,11 @@ RUN if [ "$INCLUDE_VOSK" = "true" ]; then \
 RUN if [ "$INCLUDE_SHERPA" = "true" ]; then \
         echo "📦 Installing Sherpa-ONNX STT..." && \
         pip install --no-cache-dir sherpa-onnx==1.12.19; \
+    fi
+
+RUN if [ "$INCLUDE_FASTER_WHISPER" = "true" ]; then \
+        echo "📦 Installing Faster-Whisper STT..." && \
+        pip install --no-cache-dir faster-whisper==1.0.3; \
     fi
 
 RUN if [ "$INCLUDE_PIPER" = "true" ]; then \

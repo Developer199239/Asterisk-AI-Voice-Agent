@@ -716,6 +716,7 @@ const Wizard = () => {
                                                         <option value="vosk">Vosk (Local)</option>
                                                         <option value="kroko">Kroko (Local/Cloud)</option>
                                                         <option value="sherpa">Sherpa (Local)</option>
+                                                        <option value="faster_whisper">Faster-Whisper (Local)</option>
                                                     </select>
                                                 </div>
                                                 {config.local_stt_backend === 'kroko' && (
