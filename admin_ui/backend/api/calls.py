@@ -167,15 +167,19 @@ async def list_calls(
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid end_date format")
     
-    # Get total count
+    # Get total count (with all filters for accurate pagination)
     total = await store.count(
         start_date=parsed_start,
         end_date=parsed_end,
         caller_number=caller_number,
+        caller_name=caller_name,
         provider_name=provider_name,
         pipeline_name=pipeline_name,
         context_name=context_name,
         outcome=outcome,
+        has_tool_calls=has_tool_calls,
+        min_duration=min_duration,
+        max_duration=max_duration,
     )
     
     # Get paginated records
@@ -355,12 +359,18 @@ async def bulk_delete_calls(
 async def export_calls_csv(
     start_date: Optional[str] = Query(None, description="Filter by start date (ISO format)"),
     end_date: Optional[str] = Query(None, description="Filter by end date (ISO format)"),
+    caller_number: Optional[str] = Query(None, description="Filter by caller number"),
+    caller_name: Optional[str] = Query(None, description="Filter by caller name"),
     provider_name: Optional[str] = Query(None, description="Filter by provider"),
     pipeline_name: Optional[str] = Query(None, description="Filter by pipeline"),
+    context_name: Optional[str] = Query(None, description="Filter by context"),
     outcome: Optional[str] = Query(None, description="Filter by outcome"),
+    has_tool_calls: Optional[bool] = Query(None, description="Filter by tool usage"),
+    min_duration: Optional[float] = Query(None, description="Minimum duration in seconds"),
+    max_duration: Optional[float] = Query(None, description="Maximum duration in seconds"),
 ):
     """
-    Export call records as CSV.
+    Export call records as CSV with all filters matching the UI.
     """
     store = _get_call_history_store()
     
@@ -384,9 +394,15 @@ async def export_calls_csv(
         offset=0,
         start_date=parsed_start,
         end_date=parsed_end,
+        caller_number=caller_number,
+        caller_name=caller_name,
         provider_name=provider_name,
         pipeline_name=pipeline_name,
+        context_name=context_name,
         outcome=outcome,
+        has_tool_calls=has_tool_calls,
+        min_duration=min_duration,
+        max_duration=max_duration,
     )
     
     # Generate CSV
@@ -431,12 +447,18 @@ async def export_calls_csv(
 async def export_calls_json(
     start_date: Optional[str] = Query(None, description="Filter by start date (ISO format)"),
     end_date: Optional[str] = Query(None, description="Filter by end date (ISO format)"),
+    caller_number: Optional[str] = Query(None, description="Filter by caller number"),
+    caller_name: Optional[str] = Query(None, description="Filter by caller name"),
     provider_name: Optional[str] = Query(None, description="Filter by provider"),
     pipeline_name: Optional[str] = Query(None, description="Filter by pipeline"),
+    context_name: Optional[str] = Query(None, description="Filter by context"),
     outcome: Optional[str] = Query(None, description="Filter by outcome"),
+    has_tool_calls: Optional[bool] = Query(None, description="Filter by tool usage"),
+    min_duration: Optional[float] = Query(None, description="Minimum duration in seconds"),
+    max_duration: Optional[float] = Query(None, description="Maximum duration in seconds"),
 ):
     """
-    Export call records as JSON.
+    Export call records as JSON with all filters matching the UI.
     """
     store = _get_call_history_store()
     
@@ -460,9 +482,15 @@ async def export_calls_json(
         offset=0,
         start_date=parsed_start,
         end_date=parsed_end,
+        caller_number=caller_number,
+        caller_name=caller_name,
         provider_name=provider_name,
         pipeline_name=pipeline_name,
+        context_name=context_name,
         outcome=outcome,
+        has_tool_calls=has_tool_calls,
+        min_duration=min_duration,
+        max_duration=max_duration,
     )
     
     # Convert to JSON-serializable format

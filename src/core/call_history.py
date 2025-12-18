@@ -179,9 +179,12 @@ class CallHistoryStore:
             self._enabled = False
     
     def _get_connection(self) -> sqlite3.Connection:
-        """Get a database connection."""
-        conn = sqlite3.connect(self._db_path)
+        """Get a database connection with WAL mode and busy timeout for multi-process safety."""
+        conn = sqlite3.connect(self._db_path, timeout=30.0)  # 30s busy timeout
         conn.row_factory = sqlite3.Row
+        # Enable WAL mode for better concurrent read/write performance
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=30000")  # 30s in milliseconds
         return conn
     
     async def save(self, record: CallRecord) -> bool:
@@ -432,10 +435,14 @@ class CallHistoryStore:
         start_date: Optional[datetime] = None,
         end_date: Optional[datetime] = None,
         caller_number: Optional[str] = None,
+        caller_name: Optional[str] = None,
         provider_name: Optional[str] = None,
         pipeline_name: Optional[str] = None,
         context_name: Optional[str] = None,
         outcome: Optional[str] = None,
+        has_tool_calls: Optional[bool] = None,
+        min_duration: Optional[float] = None,
+        max_duration: Optional[float] = None,
     ) -> int:
         """Count records matching filters."""
         if not self._enabled:
@@ -457,6 +464,9 @@ class CallHistoryStore:
                     if caller_number:
                         conditions.append("caller_number LIKE ?")
                         params.append(f"%{caller_number}%")
+                    if caller_name:
+                        conditions.append("caller_name LIKE ?")
+                        params.append(f"%{caller_name}%")
                     if provider_name:
                         conditions.append("provider_name = ?")
                         params.append(provider_name)
@@ -469,6 +479,17 @@ class CallHistoryStore:
                     if outcome:
                         conditions.append("outcome = ?")
                         params.append(outcome)
+                    if has_tool_calls is not None:
+                        if has_tool_calls:
+                            conditions.append("tool_calls != '[]'")
+                        else:
+                            conditions.append("tool_calls = '[]'")
+                    if min_duration is not None:
+                        conditions.append("duration_seconds >= ?")
+                        params.append(min_duration)
+                    if max_duration is not None:
+                        conditions.append("duration_seconds <= ?")
+                        params.append(max_duration)
                     
                     where_clause = " AND ".join(conditions) if conditions else "1=1"
                     query = f"SELECT COUNT(*) FROM call_records WHERE {where_clause}"
