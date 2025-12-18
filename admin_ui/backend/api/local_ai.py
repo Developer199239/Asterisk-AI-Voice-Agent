@@ -109,7 +109,8 @@ async def list_available_models():
     }
     tts_models: Dict[str, List[ModelInfo]] = {
         "piper": [],
-        "kokoro": []
+        "kokoro": [],
+        "melotts": []
     }
     llm_models: List[ModelInfo] = []
     
@@ -248,7 +249,8 @@ async def get_backend_capabilities():
         },
         "tts": {
             "piper": {"available": False, "reason": ""},
-            "kokoro": {"available": False, "reason": ""}
+            "kokoro": {"available": False, "reason": ""},
+            "melotts": {"available": False, "reason": ""}
         },
         "llm": {"available": False, "reason": ""}
     }
@@ -294,6 +296,10 @@ async def get_backend_capabilities():
                     capabilities["tts"]["piper"] = {"available": True, "reason": "Piper TTS installed"}
                 if server_caps.get("kokoro"):
                     capabilities["tts"]["kokoro"] = {"available": True, "reason": "Kokoro installed"}
+                if server_caps.get("melotts"):
+                    capabilities["tts"]["melotts"] = {"available": True, "reason": "MeloTTS installed"}
+                else:
+                    capabilities["tts"]["melotts"]["reason"] = "Rebuild with INCLUDE_MELOTTS=true"
                 
                 # LLM
                 if server_caps.get("llama"):

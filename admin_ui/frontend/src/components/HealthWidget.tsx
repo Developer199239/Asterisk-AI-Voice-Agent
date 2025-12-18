@@ -47,6 +47,7 @@ interface BackendCapabilities {
     tts: {
         piper: { available: boolean; reason: string };
         kokoro: { available: boolean; reason: string };
+        melotts: { available: boolean; reason: string };
     };
     llm: { available: boolean; reason: string };
 }

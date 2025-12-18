@@ -424,6 +424,37 @@ KOKORO_TTS_MODELS = [
      }},
 ]
 
+MELOTTS_MODELS = [
+    # MeloTTS - lightweight CPU-optimized TTS with multiple English accents
+    # Requires: docker build --build-arg INCLUDE_MELOTTS=true
+    # Models auto-download on first use
+    {"id": "melotts_en_us", "name": "MeloTTS American English", "language": "en-US", "region": "global", "backend": "melotts",
+     "size_mb": 200, "size_display": "200 MB", "model_path": "EN-US",
+     "download_url": None, "auto_download": True, "recommended": True,
+     "description": "Clear American English voice, CPU-optimized",
+     "note": "Requires INCLUDE_MELOTTS=true in Docker build"},
+    {"id": "melotts_en_br", "name": "MeloTTS British English", "language": "en-GB", "region": "europe", "backend": "melotts",
+     "size_mb": 200, "size_display": "200 MB", "model_path": "EN-BR",
+     "download_url": None, "auto_download": True,
+     "description": "British English accent",
+     "note": "Requires INCLUDE_MELOTTS=true in Docker build"},
+    {"id": "melotts_en_au", "name": "MeloTTS Australian English", "language": "en-AU", "region": "oceania", "backend": "melotts",
+     "size_mb": 200, "size_display": "200 MB", "model_path": "EN-AU",
+     "download_url": None, "auto_download": True,
+     "description": "Australian English accent",
+     "note": "Requires INCLUDE_MELOTTS=true in Docker build"},
+    {"id": "melotts_en_in", "name": "MeloTTS Indian English", "language": "en-IN", "region": "asia", "backend": "melotts",
+     "size_mb": 200, "size_display": "200 MB", "model_path": "EN-IN",
+     "download_url": None, "auto_download": True,
+     "description": "Indian English accent",
+     "note": "Requires INCLUDE_MELOTTS=true in Docker build"},
+    {"id": "melotts_en_default", "name": "MeloTTS Default English", "language": "en-US", "region": "global", "backend": "melotts",
+     "size_mb": 200, "size_display": "200 MB", "model_path": "EN-Default",
+     "download_url": None, "auto_download": True,
+     "description": "Default English voice",
+     "note": "Requires INCLUDE_MELOTTS=true in Docker build"},
+]
+
 # ============== LLM Models ==============
 
 LLM_MODELS = [
@@ -492,7 +523,7 @@ def get_full_catalog():
     """Get the complete model catalog organized by type."""
     return {
         "stt": VOSK_STT_MODELS + SHERPA_STT_MODELS + KROKO_STT_MODELS + FASTER_WHISPER_STT_MODELS,
-        "tts": PIPER_TTS_MODELS + KOKORO_TTS_MODELS,
+        "tts": PIPER_TTS_MODELS + KOKORO_TTS_MODELS + MELOTTS_MODELS,
         "llm": LLM_MODELS,
     }
 

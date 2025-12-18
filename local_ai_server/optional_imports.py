@@ -24,3 +24,8 @@ try:
 except ImportError:  # pragma: no cover
     PiperVoice = None  # type: ignore[assignment]
 
+try:
+    from melo.api import TTS as MeloTTS  # type: ignore
+except ImportError:  # pragma: no cover
+    MeloTTS = None  # type: ignore[assignment]
+

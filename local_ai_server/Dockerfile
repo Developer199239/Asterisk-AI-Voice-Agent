@@ -11,6 +11,7 @@ ARG INCLUDE_SHERPA=true
 ARG INCLUDE_FASTER_WHISPER=false
 ARG INCLUDE_PIPER=true
 ARG INCLUDE_KOKORO=true
+ARG INCLUDE_MELOTTS=false
 ARG INCLUDE_LLAMA=true
 
 WORKDIR /usr/src/app
@@ -50,6 +51,12 @@ RUN if [ "$INCLUDE_PIPER" = "true" ]; then \
 RUN if [ "$INCLUDE_KOKORO" = "true" ]; then \
         echo "📦 Installing Kokoro TTS..." && \
         pip install --no-cache-dir "kokoro>=0.9.2"; \
+    fi
+
+RUN if [ "$INCLUDE_MELOTTS" = "true" ]; then \
+        echo "📦 Installing MeloTTS..." && \
+        pip install --no-cache-dir git+https://github.com/myshell-ai/MeloTTS.git && \
+        python -m unidic download; \
     fi
 
 RUN if [ "$INCLUDE_LLAMA" = "true" ]; then \

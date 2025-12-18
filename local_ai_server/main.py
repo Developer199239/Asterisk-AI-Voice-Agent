@@ -763,12 +763,18 @@ class LocalAIServer:
         )
 
         # ─────────────────────────────────────────────────────────────────────
-        # TTS Backend Selection: piper (default) or kokoro
+        # TTS Backend Selection: piper (default), kokoro, or melotts
         # ─────────────────────────────────────────────────────────────────────
         self.tts_backend = os.getenv("LOCAL_TTS_BACKEND", "piper").lower()
         
         # Kokoro TTS settings (if using kokoro backend)
         self.kokoro_backend: Optional[KokoroTTSBackend] = None
+        
+        # MeloTTS settings (if using melotts backend)
+        self.melotts_backend: Optional["MeloTTSBackend"] = None
+        self.melotts_voice = os.getenv("MELOTTS_VOICE", "EN-US")
+        self.melotts_device = os.getenv("MELOTTS_DEVICE", "cpu")
+        self.melotts_speed = float(os.getenv("MELOTTS_SPEED", "1.0"))
         # Back-compat / docs alias: LOCAL_TTS_VOICE is treated as Kokoro voice.
         self.kokoro_voice = os.getenv("KOKORO_VOICE") or os.getenv("LOCAL_TTS_VOICE", "af_heart")
         # Kokoro mode:
@@ -1135,9 +1141,11 @@ class LocalAIServer:
             )
 
     async def _load_tts_model(self):
-        """Load TTS model based on configured backend (piper or kokoro)."""
+        """Load TTS model based on configured backend (piper, kokoro, or melotts)."""
         if self.tts_backend == "kokoro":
             await self._load_kokoro_backend()
+        elif self.tts_backend == "melotts":
+            await self._load_melotts_backend()
         else:
             await self._load_piper_backend()
 
@@ -1214,6 +1222,40 @@ class LocalAIServer:
             logging.error("❌ Failed to initialize Kokoro TTS backend: %s", exc)
             raise
 
+    async def _load_melotts_backend(self):
+        """Initialize MeloTTS backend for lightweight CPU-optimized TTS."""
+        try:
+            from tts_backends import MeloTTSBackend
+            from optional_imports import MeloTTS
+            
+            if MeloTTS is None:
+                raise ImportError(
+                    "MeloTTS backend requested but melo package is not installed. "
+                    "Build with INCLUDE_MELOTTS=true or install melo."
+                )
+            
+            logging.info(
+                "🎙️ TTS backend: MeloTTS (voice=%s, device=%s, speed=%.1f)",
+                self.melotts_voice,
+                self.melotts_device,
+                self.melotts_speed,
+            )
+
+            self.melotts_backend = MeloTTSBackend(
+                voice=self.melotts_voice,
+                device=self.melotts_device,
+                speed=self.melotts_speed,
+            )
+
+            if not self.melotts_backend.initialize():
+                raise RuntimeError("Failed to initialize MeloTTS")
+
+            logging.info("✅ TTS backend: MeloTTS initialized (44100Hz native)")
+
+        except Exception as exc:
+            logging.error("❌ Failed to initialize MeloTTS backend: %s", exc)
+            raise
+
     async def _cleanup_kroko_backend(self) -> None:
         """Stop any embedded Kroko subprocess and clear backend state."""
         if not self.kroko_backend:
@@ -1241,6 +1283,12 @@ class LocalAIServer:
             except Exception as exc:  # pragma: no cover
                 logging.debug("Kokoro backend shutdown failed: %s", exc, exc_info=True)
             self.kokoro_backend = None
+        if self.melotts_backend:
+            try:
+                self.melotts_backend.shutdown()
+            except Exception as exc:  # pragma: no cover
+                logging.debug("MeloTTS backend shutdown failed: %s", exc, exc_info=True)
+            self.melotts_backend = None
         self.stt_model = None
         self.tts_model = None
         self.llm_model = None

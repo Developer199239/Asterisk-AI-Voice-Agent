@@ -774,6 +774,7 @@ const Wizard = () => {
                                                         <option value="piper">Piper (Local)</option>
                                                         <option value="kokoro_local">Kokoro (Local)</option>
                                                         <option value="kokoro_cloud">Kokoro (Cloud/API)</option>
+                                                        <option value="melotts">MeloTTS (Local/CPU)</option>
                                                     </select>
                                                 </div></div>
                                             {config.local_tts_backend === 'kokoro' && config.kokoro_mode === 'api' && (
