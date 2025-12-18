@@ -477,6 +477,18 @@ export const HealthWidget = () => {
                                             // Only show Sherpa if available and has models
                                             if (!capabilities?.stt?.sherpa?.available || models.length === 0) return null;
                                         }
+                                        if (backend === 'faster_whisper') {
+                                            // Show Faster-Whisper option (requires rebuild)
+                                            return (
+                                                <optgroup key="faster_whisper" label="Faster-Whisper">
+                                                    <option key="faster_whisper_base" value="faster_whisper:base">Whisper Base (Recommended)</option>
+                                                    <option key="faster_whisper_tiny" value="faster_whisper:tiny">Whisper Tiny (Fast)</option>
+                                                    <option key="faster_whisper_small" value="faster_whisper:small">Whisper Small</option>
+                                                    <option key="faster_whisper_medium" value="faster_whisper:medium">Whisper Medium</option>
+                                                    <option key="faster_whisper_large" value="faster_whisper:large-v3">Whisper Large v3</option>
+                                                </optgroup>
+                                            );
+                                        }
                                         // Show individual models in optgroup by backend (only if models exist)
                                         return models.length > 0 && (
                                             <optgroup key={backend} label={backend.charAt(0).toUpperCase() + backend.slice(1)}>
@@ -488,6 +500,14 @@ export const HealthWidget = () => {
                                             </optgroup>
                                         );
                                     })}
+                                    {/* Always show Faster-Whisper option even if not in availableModels */}
+                                    {!availableModels?.stt?.faster_whisper && (
+                                        <optgroup key="faster_whisper" label="Faster-Whisper (Requires Rebuild)">
+                                            <option key="faster_whisper_base" value="faster_whisper:base">Whisper Base (Recommended)</option>
+                                            <option key="faster_whisper_tiny" value="faster_whisper:tiny">Whisper Tiny (Fast)</option>
+                                            <option key="faster_whisper_small" value="faster_whisper:small">Whisper Small</option>
+                                        </optgroup>
+                                    )}
                                 </select>
                             </div>
                             <div className="text-xs text-muted-foreground bg-muted/50 p-2 rounded border border-border/50 truncate flex justify-between">
@@ -509,6 +529,19 @@ export const HealthWidget = () => {
                                     </div>
                                     <code className="block bg-black/20 dark:bg-white/10 px-2 py-1 rounded text-[10px] font-mono select-all">
                                         echo "INCLUDE_KROKO_EMBEDDED=true" &gt;&gt; .env && docker compose build --no-cache local-ai-server && docker compose up -d local-ai-server
+                                    </code>
+                                </div>
+                            )}
+                            {/* Warning when Faster-Whisper selected but not available */}
+                            {(pendingChanges.stt?.backend === 'faster_whisper' || getDisplayedBackend('stt').startsWith('faster_whisper')) && 
+                             capabilities && !capabilities.stt?.faster_whisper?.available && (
+                                <div className="text-xs p-2 rounded bg-amber-500/10 border border-amber-500/20 text-amber-600 dark:text-amber-400 space-y-1">
+                                    <div>
+                                        <span className="font-medium">⚠️ Faster-Whisper requires Docker rebuild.</span>
+                                        <span className="opacity-75"> Models auto-download from HuggingFace on first use. Run:</span>
+                                    </div>
+                                    <code className="block bg-black/20 dark:bg-white/10 px-2 py-1 rounded text-[10px] font-mono select-all">
+                                        docker compose build --build-arg INCLUDE_FASTER_WHISPER=true local-ai-server && docker compose up -d local-ai-server
                                     </code>
                                 </div>
                             )}
@@ -637,6 +670,17 @@ export const HealthWidget = () => {
                                                 </optgroup>
                                             );
                                         }
+                                        if (backend === 'melotts') {
+                                            // Show MeloTTS option (requires rebuild)
+                                            return (
+                                                <optgroup key="melotts" label="MeloTTS">
+                                                    <option key="melotts_en_us" value="melotts:EN-US">MeloTTS American English</option>
+                                                    <option key="melotts_en_br" value="melotts:EN-BR">MeloTTS British English</option>
+                                                    <option key="melotts_en_au" value="melotts:EN-AU">MeloTTS Australian English</option>
+                                                    <option key="melotts_en_in" value="melotts:EN-IN">MeloTTS Indian English</option>
+                                                </optgroup>
+                                            );
+                                        }
                                         // Show individual models in optgroup by backend (only if models exist)
                                         return models.length > 0 && (
                                             <optgroup key={backend} label={backend.charAt(0).toUpperCase() + backend.slice(1)}>
@@ -648,6 +692,14 @@ export const HealthWidget = () => {
                                             </optgroup>
                                         );
                                     })}
+                                    {/* Always show MeloTTS option even if not in availableModels */}
+                                    {!availableModels?.tts?.melotts && (
+                                        <optgroup key="melotts" label="MeloTTS (Requires Rebuild)">
+                                            <option key="melotts_en_us" value="melotts:EN-US">MeloTTS American English</option>
+                                            <option key="melotts_en_br" value="melotts:EN-BR">MeloTTS British English</option>
+                                            <option key="melotts_en_au" value="melotts:EN-AU">MeloTTS Australian</option>
+                                        </optgroup>
+                                    )}
                                 </select>
                             </div>
                             <div className="text-xs text-muted-foreground bg-muted/50 p-2 rounded border border-border/50 truncate flex justify-between">
@@ -668,6 +720,19 @@ export const HealthWidget = () => {
                                         Kokoro Cloud/API requires `KOKORO_API_KEY`. Configure it in <Link to="/env" className="underline">Env</Link>.
                                     </div>
                                 )}
+                            {/* Warning when MeloTTS selected but not available */}
+                            {(pendingChanges.tts?.backend === 'melotts' || getDisplayedBackend('tts').startsWith('melotts')) && 
+                             capabilities && !capabilities.tts?.melotts?.available && (
+                                <div className="text-xs p-2 rounded bg-amber-500/10 border border-amber-500/20 text-amber-600 dark:text-amber-400 space-y-1">
+                                    <div>
+                                        <span className="font-medium">⚠️ MeloTTS requires Docker rebuild.</span>
+                                        <span className="opacity-75"> Lightweight CPU-optimized TTS. Run:</span>
+                                    </div>
+                                    <code className="block bg-black/20 dark:bg-white/10 px-2 py-1 rounded text-[10px] font-mono select-all">
+                                        docker compose build --build-arg INCLUDE_MELOTTS=true local-ai-server && docker compose up -d local-ai-server
+                                    </code>
+                                </div>
+                            )}
                         </div>
 
                         {/* Apply Changes Banner */}

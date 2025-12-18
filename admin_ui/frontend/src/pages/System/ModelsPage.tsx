@@ -479,10 +479,15 @@ const ModelsPage = () => {
                                                 </button>
                                             )}
                                             {!isModelInstalled(model.model_path || '') && model.auto_download && !model.download_url && (
-                                                <span className="px-3 py-2 rounded-md bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 text-sm flex items-center gap-2" title={model.note || 'Downloads automatically when backend is enabled'}>
-                                                    <RefreshCw className="w-4 h-4" />
-                                                    Auto-download
-                                                </span>
+                                                <div className="flex flex-col items-end gap-1">
+                                                    <span className="px-3 py-2 rounded-md bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 text-sm flex items-center gap-2">
+                                                        <RefreshCw className="w-4 h-4" />
+                                                        Auto-download
+                                                    </span>
+                                                    <span className="text-[10px] text-amber-600 dark:text-amber-500 max-w-[200px] text-right">
+                                                        {model.note || 'Downloads automatically when backend is enabled'}
+                                                    </span>
+                                                </div>
                                             )}
                                         </div>
                                     </ConfigCard>
@@ -534,10 +539,15 @@ const ModelsPage = () => {
                                                 </button>
                                             )}
                                             {!isModelInstalled(model.model_path || '') && model.auto_download && !model.download_url && (
-                                                <span className="px-3 py-2 rounded-md bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 text-sm flex items-center gap-2" title={model.note || 'Downloads automatically when backend is enabled'}>
-                                                    <RefreshCw className="w-4 h-4" />
-                                                    Auto-download
-                                                </span>
+                                                <div className="flex flex-col items-end gap-1">
+                                                    <span className="px-3 py-2 rounded-md bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 text-sm flex items-center gap-2">
+                                                        <RefreshCw className="w-4 h-4" />
+                                                        Auto-download
+                                                    </span>
+                                                    <span className="text-[10px] text-amber-600 dark:text-amber-500 max-w-[200px] text-right">
+                                                        {model.note || 'Downloads automatically when backend is enabled'}
+                                                    </span>
+                                                </div>
                                             )}
                                         </div>
                                     </ConfigCard>
