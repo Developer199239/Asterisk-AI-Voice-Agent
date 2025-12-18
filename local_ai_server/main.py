@@ -1896,8 +1896,72 @@ class LocalAIServer:
             return await self._process_stt_stream_kroko(session, audio_data, input_rate)
         elif self.stt_backend == "sherpa":
             return await self._process_stt_stream_sherpa(session, audio_data, input_rate)
+        elif self.stt_backend == "faster_whisper":
+            return await self._process_stt_stream_faster_whisper(session, audio_data, input_rate)
         else:
             return await self._process_stt_stream_vosk(session, audio_data, input_rate)
+
+    async def _process_stt_stream_faster_whisper(
+        self,
+        session: SessionContext,
+        audio_data: bytes,
+        input_rate: int,
+    ) -> List[Dict[str, Any]]:
+        """Feed audio into Faster-Whisper and return transcript updates."""
+        if not self.faster_whisper_backend:
+            logging.error("Faster-Whisper STT backend not initialized")
+            return []
+
+        # Buffer audio for Faster-Whisper (needs sufficient audio for transcription)
+        if not hasattr(session, 'fw_audio_buffer'):
+            session.fw_audio_buffer = b""
+        
+        # Resample to 16kHz if needed
+        if input_rate != PCM16_TARGET_RATE:
+            audio_bytes = await asyncio.to_thread(
+                self.audio_processor.resample_audio,
+                audio_data,
+                input_rate,
+                PCM16_TARGET_RATE,
+                "raw",
+                "raw",
+            )
+        else:
+            audio_bytes = audio_data
+
+        session.fw_audio_buffer += audio_bytes
+        
+        # Only process when we have enough audio (e.g., 1 second = 32000 bytes at 16kHz mono 16-bit)
+        MIN_BUFFER_SIZE = 32000  # 1 second of audio
+        if len(session.fw_audio_buffer) < MIN_BUFFER_SIZE:
+            return []
+
+        updates: List[Dict[str, Any]] = []
+        
+        try:
+            # Process buffered audio with Faster-Whisper
+            transcript = await asyncio.to_thread(
+                self.faster_whisper_backend.transcribe,
+                session.fw_audio_buffer
+            )
+            
+            if transcript:
+                logging.info("📝 STT RESULT - Faster-Whisper transcript: '%s'", transcript)
+                updates.append({
+                    "type": "stt_result",
+                    "is_final": True,
+                    "text": transcript,
+                    "transcript": transcript,
+                })
+            
+            # Clear buffer after processing
+            session.fw_audio_buffer = b""
+            
+        except Exception as exc:
+            logging.error("Faster-Whisper STT stream processing failed: %s", exc, exc_info=True)
+            session.fw_audio_buffer = b""
+
+        return updates
 
     async def _process_stt_stream_kroko(
         self,
