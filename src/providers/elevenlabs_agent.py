@@ -562,9 +562,15 @@ class ElevenLabsAgentProvider(AIProviderInterface, ProviderCapabilitiesMixin):
     
     async def _handle_user_transcript(self, data: Dict[str, Any]) -> None:
         """Handle user transcript (STT result)."""
-        # ElevenLabs sends user_transcript directly in the message
-        # Format: {"type": "user_transcript", "user_transcript": "text"}
-        text = data.get("user_transcript", "")
+        # ElevenLabs API format: {"type": "user_transcript", "user_transcript_event": {"user_transcript": "text"}}
+        # Or direct format: {"type": "user_transcript", "user_transcript": "text"}
+        # Try nested first, then direct
+        transcript_event = data.get("user_transcript_event", {})
+        text = transcript_event.get("user_transcript", "") or data.get("user_transcript", "") or data.get("transcript", "")
+        
+        # Debug: log raw data if no text found
+        if not text:
+            logger.warning(f"[elevenlabs] [{self._call_id}] user_transcript no text found, keys: {list(data.keys())}")
         
         # ElevenLabs user_transcript messages are always final (no interim transcripts)
         # Start timer on every user transcript - measures: speech end → first AI audio
