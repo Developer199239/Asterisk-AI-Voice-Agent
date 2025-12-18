@@ -65,6 +65,8 @@ export const HealthWidget = () => {
     const [startingAIEngine, setStartingAIEngine] = useState(false);
     const [defaultProvider, setDefaultProvider] = useState<string | null>(null);
     const [activePipeline, setActivePipeline] = useState<string | null>(null);
+    const [rebuilding, setRebuilding] = useState(false);
+    const [rebuildProgress, setRebuildProgress] = useState<string>('');
 
     const handleStartContainer = async (containerName: string, setStarting: (v: boolean) => void) => {
         setStarting(true);
@@ -280,6 +282,57 @@ export const HealthWidget = () => {
     // Cancel pending changes
     const cancelChanges = () => {
         setPendingChanges({});
+    };
+
+    // Check if pending changes require a rebuild (Faster-Whisper or MeloTTS when not available)
+    const needsRebuild = () => {
+        const needsFasterWhisper = pendingChanges.stt?.backend === 'faster_whisper' && 
+            capabilities && !capabilities.stt?.faster_whisper?.available;
+        const needsMeloTTS = pendingChanges.tts?.backend === 'melotts' && 
+            capabilities && !capabilities.tts?.melotts?.available;
+        return { needsFasterWhisper, needsMeloTTS, any: needsFasterWhisper || needsMeloTTS };
+    };
+
+    // Rebuild and enable new backends
+    const rebuildAndEnable = async () => {
+        const rebuild = needsRebuild();
+        if (!rebuild.any) return;
+
+        setRebuilding(true);
+        setRebuildProgress('Starting Docker rebuild... This may take 5-10 minutes.');
+
+        try {
+            const res = await axios.post('/api/local-ai/rebuild', {
+                include_faster_whisper: rebuild.needsFasterWhisper,
+                include_melotts: rebuild.needsMeloTTS,
+                stt_backend: pendingChanges.stt?.backend,
+                stt_model: pendingChanges.stt?.modelPath?.split(':')[1] || 'base',
+                tts_backend: pendingChanges.tts?.backend,
+                tts_voice: pendingChanges.tts?.modelPath?.split(':')[1] || 'EN-US',
+            });
+
+            if (res.data.success) {
+                setRebuildProgress('✅ ' + res.data.message);
+                // Clear pending changes
+                setPendingChanges({});
+                // Wait a moment then clear progress
+                setTimeout(() => {
+                    setRebuilding(false);
+                    setRebuildProgress('');
+                }, 3000);
+            } else {
+                setRebuildProgress('❌ ' + res.data.message);
+                setTimeout(() => {
+                    setRebuilding(false);
+                }, 5000);
+            }
+        } catch (err: any) {
+            console.error('Rebuild failed', err);
+            setRebuildProgress('❌ Rebuild failed: ' + (err.response?.data?.message || err.message));
+            setTimeout(() => {
+                setRebuilding(false);
+            }, 5000);
+        }
     };
 
 
@@ -736,10 +789,23 @@ export const HealthWidget = () => {
                         </div>
 
                         {/* Apply Changes Banner */}
-                        {(hasPendingChanges || restarting) && (
-                            <div className={`border rounded-lg p-3 space-y-2 ${restarting ? 'bg-blue-500/10 border-blue-500/30' : 'bg-yellow-500/10 border-yellow-500/30'}`}>
-                                <div className={`flex items-center gap-2 text-sm font-medium ${restarting ? 'text-blue-600 dark:text-blue-400' : 'text-yellow-600 dark:text-yellow-400'}`}>
-                                    {restarting ? (
+                        {(hasPendingChanges || restarting || rebuilding) && (
+                            <div className={`border rounded-lg p-3 space-y-2 ${
+                                rebuilding ? 'bg-purple-500/10 border-purple-500/30' :
+                                restarting ? 'bg-blue-500/10 border-blue-500/30' : 
+                                'bg-yellow-500/10 border-yellow-500/30'
+                            }`}>
+                                <div className={`flex items-center gap-2 text-sm font-medium ${
+                                    rebuilding ? 'text-purple-600 dark:text-purple-400' :
+                                    restarting ? 'text-blue-600 dark:text-blue-400' : 
+                                    'text-yellow-600 dark:text-yellow-400'
+                                }`}>
+                                    {rebuilding ? (
+                                        <>
+                                            <RefreshCw className="w-4 h-4 animate-spin" />
+                                            {rebuildProgress || 'Rebuilding Docker image...'}
+                                        </>
+                                    ) : restarting ? (
                                         <>
                                             <RefreshCw className="w-4 h-4 animate-spin" />
                                             Restarting Local AI Server...
@@ -748,31 +814,43 @@ export const HealthWidget = () => {
                                         <>
                                             <AlertCircle className="w-4 h-4" />
                                             {Object.keys(pendingChanges).length} change(s) pending
+                                            {needsRebuild().any && <span className="text-amber-500 ml-1">(requires rebuild)</span>}
                                         </>
                                     )}
                                 </div>
-                                {!restarting && (
+                                {!restarting && !rebuilding && (
                                     <div className="flex gap-2">
-                                        <button
-                                            onClick={applyChanges}
-                                            disabled={applyingChanges}
-                                            className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-green-600 text-white rounded text-sm font-medium hover:bg-green-700 disabled:opacity-50 transition-colors"
-                                        >
-                                            {applyingChanges ? (
-                                                <>
-                                                    <RefreshCw className="w-4 h-4 animate-spin" />
-                                                    Applying...
-                                                </>
-                                            ) : (
-                                                <>
-                                                    <CheckCircle2 className="w-4 h-4" />
-                                                    Apply & Restart
-                                                </>
-                                            )}
-                                        </button>
+                                        {needsRebuild().any ? (
+                                            <button
+                                                onClick={rebuildAndEnable}
+                                                disabled={applyingChanges}
+                                                className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-purple-600 text-white rounded text-sm font-medium hover:bg-purple-700 disabled:opacity-50 transition-colors"
+                                            >
+                                                <Box className="w-4 h-4" />
+                                                Rebuild & Enable (~5-10 min)
+                                            </button>
+                                        ) : (
+                                            <button
+                                                onClick={applyChanges}
+                                                disabled={applyingChanges}
+                                                className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-green-600 text-white rounded text-sm font-medium hover:bg-green-700 disabled:opacity-50 transition-colors"
+                                            >
+                                                {applyingChanges ? (
+                                                    <>
+                                                        <RefreshCw className="w-4 h-4 animate-spin" />
+                                                        Applying...
+                                                    </>
+                                                ) : (
+                                                    <>
+                                                        <CheckCircle2 className="w-4 h-4" />
+                                                        Apply & Restart
+                                                    </>
+                                                )}
+                                            </button>
+                                        )}
                                         <button
                                             onClick={cancelChanges}
-                                            disabled={applyingChanges}
+                                            disabled={applyingChanges || rebuilding}
                                             className="flex items-center gap-1 px-3 py-2 bg-muted text-muted-foreground rounded text-sm font-medium hover:bg-muted/80 disabled:opacity-50 transition-colors"
                                         >
                                             <XCircle className="w-4 h-4" />
@@ -783,6 +861,11 @@ export const HealthWidget = () => {
                                 {restarting && (
                                     <div className="text-xs text-muted-foreground">
                                         Please wait, this may take 10-15 seconds...
+                                    </div>
+                                )}
+                                {rebuilding && (
+                                    <div className="text-xs text-muted-foreground">
+                                        ⚠️ Do not close this page. Building Docker image with new packages...
                                     </div>
                                 )}
                             </div>

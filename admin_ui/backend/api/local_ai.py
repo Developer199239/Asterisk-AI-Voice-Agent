@@ -676,3 +676,119 @@ try:
     import docker
 except ImportError:
     docker = None
+
+
+class RebuildRequest(BaseModel):
+    """Request to rebuild local-ai-server with specific backends."""
+    include_faster_whisper: bool = False
+    include_melotts: bool = False
+    # STT/TTS config to apply after rebuild
+    stt_backend: Optional[str] = None
+    stt_model: Optional[str] = None
+    tts_backend: Optional[str] = None
+    tts_voice: Optional[str] = None
+
+
+class RebuildResponse(BaseModel):
+    """Response from rebuild operation."""
+    success: bool
+    message: str
+    phase: str  # building, restarting, complete, error
+
+
+@router.post("/rebuild", response_model=RebuildResponse)
+async def rebuild_local_ai_server(request: RebuildRequest):
+    """
+    Rebuild local-ai-server Docker image with specific build args.
+    
+    This enables backends like Faster-Whisper and MeloTTS that require
+    packages to be installed at build time.
+    
+    WARNING: This operation takes 5-10 minutes!
+    """
+    import subprocess
+    from settings import PROJECT_ROOT
+    
+    # Build the docker compose build command with build args
+    build_args = []
+    if request.include_faster_whisper:
+        build_args.append("--build-arg")
+        build_args.append("INCLUDE_FASTER_WHISPER=true")
+    if request.include_melotts:
+        build_args.append("--build-arg")
+        build_args.append("INCLUDE_MELOTTS=true")
+    
+    if not build_args:
+        return RebuildResponse(
+            success=False,
+            message="No backends selected for rebuild",
+            phase="error"
+        )
+    
+    # Update .env file with new backend settings BEFORE rebuild
+    env_file = os.path.join(PROJECT_ROOT, ".env")
+    env_updates = {}
+    
+    if request.stt_backend:
+        env_updates["LOCAL_STT_BACKEND"] = request.stt_backend
+        if request.stt_model:
+            env_updates["FASTER_WHISPER_MODEL"] = request.stt_model
+    
+    if request.tts_backend:
+        env_updates["LOCAL_TTS_BACKEND"] = request.tts_backend
+        if request.tts_voice:
+            env_updates["MELOTTS_VOICE"] = request.tts_voice
+    
+    if env_updates:
+        _update_env_file(env_file, env_updates)
+    
+    try:
+        # Run docker compose build with build args
+        cmd = ["docker", "compose", "build"] + build_args + ["local-ai-server"]
+        
+        process = subprocess.Popen(
+            cmd,
+            cwd=PROJECT_ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True
+        )
+        
+        # Wait for build to complete (this can take several minutes)
+        stdout, _ = process.communicate(timeout=600)  # 10 minute timeout
+        
+        if process.returncode != 0:
+            return RebuildResponse(
+                success=False,
+                message=f"Docker build failed: {stdout[-500:] if stdout else 'Unknown error'}",
+                phase="error"
+            )
+        
+        # Now recreate the container to use the new image
+        from api.system import _recreate_via_compose
+        await _recreate_via_compose("local-ai-server")
+        
+        backends_enabled = []
+        if request.include_faster_whisper:
+            backends_enabled.append("Faster-Whisper")
+        if request.include_melotts:
+            backends_enabled.append("MeloTTS")
+        
+        return RebuildResponse(
+            success=True,
+            message=f"Rebuild complete! Enabled: {', '.join(backends_enabled)}",
+            phase="complete"
+        )
+        
+    except subprocess.TimeoutExpired:
+        return RebuildResponse(
+            success=False,
+            message="Build timed out after 10 minutes",
+            phase="error"
+        )
+    except Exception as e:
+        return RebuildResponse(
+            success=False,
+            message=f"Rebuild failed: {str(e)}",
+            phase="error"
+        )
