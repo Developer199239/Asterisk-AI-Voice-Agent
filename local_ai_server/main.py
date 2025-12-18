@@ -2963,6 +2963,10 @@ class LocalAIServer:
                 stt_loaded = self.sherpa_backend is not None
                 stt_path = self.sherpa_model_path
                 stt_display = os.path.basename(self.sherpa_model_path)
+            elif self.stt_backend == "faster_whisper":
+                stt_loaded = self.faster_whisper_backend is not None
+                stt_path = f"faster-whisper:{self.faster_whisper_model}"
+                stt_display = f"Faster-Whisper ({self.faster_whisper_model})"
             
             # Determine TTS loaded state based on active backend
             tts_loaded = False
@@ -2985,6 +2989,10 @@ class LocalAIServer:
                         else "hf://hexgrad/Kokoro-82M"
                     )
                     tts_display = f"Kokoro ({self.kokoro_voice})"
+            elif self.tts_backend == "melotts":
+                tts_loaded = self.melotts_backend is not None
+                tts_path = f"melotts:{self.melotts_voice}"
+                tts_display = f"MeloTTS ({self.melotts_voice})"
 
             llm_display = os.path.basename(self.llm_model_path)
             
@@ -3045,8 +3053,10 @@ class LocalAIServer:
                 "vosk": True,  # Always available (pure Python via vosk package)
                 "sherpa": False,
                 "kroko_embedded": False,
+                "faster_whisper": False,
                 "piper": True,  # Always available via piper-tts
                 "kokoro": False,
+                "melotts": False,
                 "llama": True,  # Always available via llama-cpp-python
             }
             
@@ -3078,6 +3088,20 @@ class LocalAIServer:
                     )
                     if os.path.exists(kokoro_model_path):
                         capabilities["kokoro"] = True
+            
+            # Check if Faster-Whisper is available
+            try:
+                from faster_whisper import WhisperModel  # noqa: F401
+                capabilities["faster_whisper"] = True
+            except ImportError:
+                pass
+            
+            # Check if MeloTTS is available
+            try:
+                from melo.api import TTS  # noqa: F401
+                capabilities["melotts"] = True
+            except ImportError:
+                pass
             
             response = {
                 "type": "capabilities_response",
