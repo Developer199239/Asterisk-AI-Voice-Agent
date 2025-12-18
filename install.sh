@@ -74,6 +74,35 @@ setup_media_paths() {
     fi
 }
 
+# --- Data directory setup (for call history DB) ---
+setup_data_directory() {
+    print_info "Setting up data directory for call history..."
+    
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    DATA_DIR="$SCRIPT_DIR/data"
+    
+    if [ -d "$DATA_DIR" ] && [ -w "$DATA_DIR" ]; then
+        print_success "Data directory ready: $DATA_DIR"
+        return 0
+    fi
+    
+    if [ ! -d "$DATA_DIR" ]; then
+        mkdir -p "$DATA_DIR"
+        chmod 775 "$DATA_DIR"
+        print_success "Created data directory: $DATA_DIR"
+    else
+        chmod 775 "$DATA_DIR"
+        print_success "Fixed data directory permissions: $DATA_DIR"
+    fi
+    
+    # Verify
+    if [ -d "$DATA_DIR" ] && [ -w "$DATA_DIR" ]; then
+        print_success "Data directory ready for call history DB"
+    else
+        print_warning "Data directory may not be writable; call history may fail to initialize"
+    fi
+}
+
 print_success() {
     echo -e "${COLOR_GREEN}SUCCESS: $1${COLOR_RESET}"
 }
@@ -1371,6 +1400,7 @@ main() {
     configure_env
     select_config_template
     setup_media_paths
+    setup_data_directory
     start_services
 }
 

@@ -271,3 +271,7 @@ AVA.mdc
 .agent/
 walkthrough.md
 admin_ui/RELEASE_SUMMARY.md
+
+# Call History Database (Milestone 21)
+data/call_history.db
+data/*.db

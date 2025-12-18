@@ -632,25 +632,49 @@ docker compose "$@"' > /usr/local/bin/docker-compose
 check_directories() {
     # Use AST_MEDIA_DIR (matches .env.example) with repo-local default (matches docker-compose.yml)
     MEDIA_DIR="${AST_MEDIA_DIR:-$SCRIPT_DIR/asterisk_media/ai-generated}"
+    DATA_DIR="$SCRIPT_DIR/data"
     
+    # Check media directory
     if [ -d "$MEDIA_DIR" ] && [ -w "$MEDIA_DIR" ]; then
         log_ok "Media directory: $MEDIA_DIR"
-        return 0
+    else
+        if [ ! -d "$MEDIA_DIR" ]; then
+            log_warn "Media directory missing: $MEDIA_DIR"
+        else
+            log_warn "Media directory not writable: $MEDIA_DIR"
+        fi
+        
+        # Rootless-aware fix commands
+        if [ "$DOCKER_ROOTLESS" = true ]; then
+            FIX_CMDS+=("mkdir -p $MEDIA_DIR")
+            log_info "  Rootless tip: Use volume with :Z suffix for SELinux compatibility"
+        else
+            FIX_CMDS+=("mkdir -p $MEDIA_DIR")
+            FIX_CMDS+=("chown -R \$(id -u):\$(id -g) $MEDIA_DIR")
+        fi
     fi
     
-    if [ ! -d "$MEDIA_DIR" ]; then
-        log_warn "Media directory missing: $MEDIA_DIR"
+    # Check data directory (for call history SQLite DB)
+    if [ -d "$DATA_DIR" ] && [ -w "$DATA_DIR" ]; then
+        log_ok "Data directory: $DATA_DIR"
     else
-        log_warn "Media directory not writable: $MEDIA_DIR"
-    fi
-    
-    # Rootless-aware fix commands
-    if [ "$DOCKER_ROOTLESS" = true ]; then
-        FIX_CMDS+=("mkdir -p $MEDIA_DIR")
-        log_info "  Rootless tip: Use volume with :Z suffix for SELinux compatibility"
-    else
-        FIX_CMDS+=("mkdir -p $MEDIA_DIR")
-        FIX_CMDS+=("chown -R \$(id -u):\$(id -g) $MEDIA_DIR")
+        if [ ! -d "$DATA_DIR" ]; then
+            if [ "$APPLY_FIXES" = true ]; then
+                mkdir -p "$DATA_DIR"
+                chmod 775 "$DATA_DIR"
+                log_ok "Created data directory: $DATA_DIR"
+            else
+                log_warn "Data directory missing: $DATA_DIR (used for call history DB)"
+                FIX_CMDS+=("mkdir -p $DATA_DIR && chmod 775 $DATA_DIR")
+            fi
+        else
+            log_warn "Data directory not writable: $DATA_DIR"
+            if [ "$DOCKER_ROOTLESS" = true ]; then
+                FIX_CMDS+=("chmod 775 $DATA_DIR")
+            else
+                FIX_CMDS+=("chmod 775 $DATA_DIR")
+            fi
+        fi
     fi
 }
 

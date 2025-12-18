@@ -110,6 +110,11 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         self._transcript_buffer: str = ""
         self._input_info_logged: bool = False
         self._allowed_tools: Optional[List[str]] = None
+        
+        # Turn latency tracking (Milestone 21 - Call History)
+        self._turn_start_time: Optional[float] = None
+        self._turn_first_audio_received: bool = False
+        self._session_store = None  # Set via engine for latency tracking
         # Aggregate provider-rate PCM16 bytes (24 kHz default) and commit in >=100ms chunks
         self._pending_audio_provider_rate: bytearray = bytearray()
         
@@ -590,6 +595,29 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             
             # Send result back to OpenAI
             await self.tool_adapter.send_tool_result(result, context)
+            
+            # Log tool call to session for call history (Milestone 21)
+            try:
+                session_store = getattr(self, '_session_store', None)
+                if session_store and self._call_id and function_name:
+                    from datetime import datetime
+                    session = await session_store.get_by_call_id(self._call_id)
+                    if session:
+                        tool_record = {
+                            "name": function_name,
+                            "params": item.get("arguments", {}),
+                            "result": result.get("status", "unknown") if isinstance(result, dict) else "success",
+                            "message": result.get("message", "") if isinstance(result, dict) else str(result),
+                            "timestamp": datetime.now().isoformat(),
+                            "duration_ms": 0,
+                        }
+                        if not hasattr(session, 'tool_calls') or session.tool_calls is None:
+                            session.tool_calls = []
+                        session.tool_calls.append(tool_record)
+                        await session_store.upsert_call(session)
+                        logger.debug("Tool call logged to session", call_id=self._call_id, tool=function_name)
+            except Exception as log_err:
+                logger.debug(f"Failed to log tool call to session: {log_err}", call_id=self._call_id)
             
         except Exception as e:
             logger.error(
@@ -1074,6 +1102,8 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         This contains the actual audio sending logic that was previously inline in send_audio.
         It handles both VAD-enabled and manual commit modes.
         """
+        # Turn start tracking moved to response.done event to count conversational turns correctly
+        
         # If server VAD is enabled, just append frames; do not commit.
         vad_enabled = getattr(self.config, "turn_detection", None) is not None
         if vad_enabled:
@@ -1381,6 +1411,9 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             # Reset audio start time when response fully completes - allows interruption for next response
             self._response_audio_start_time = None
             
+            # Note: Turn latency timer now starts on input_audio_buffer.speech_stopped
+            # (moved from here for standardized measurement across providers)
+            
             await self._emit_audio_done()
             
             # Only emit additional audio_done if this response actually had audio output
@@ -1527,8 +1560,14 @@ class OpenAIRealtimeProvider(AIProviderInterface):
 
         # Optional acks/telemetry for audio buffer operations
         if event_type and event_type.startswith("input_audio_buffer"):
+            # Track turn start time when user STOPS speaking (Milestone 21)
+            # This measures: speech end → first AI audio response
+            if event_type == "input_audio_buffer.speech_stopped":
+                self._turn_start_time = time.time()
+                self._turn_first_audio_received = False
+                logger.debug("Turn latency timer started (speech_stopped)", call_id=self._call_id)
             # Handle barge-in: cancel ongoing response when user starts speaking
-            if event_type == "input_audio_buffer.speech_started" and self._current_response_id:
+            elif event_type == "input_audio_buffer.speech_started" and self._current_response_id:
                 # Protect greeting response from barge-in cancellation
                 if self._current_response_id == self._greeting_response_id and not self._greeting_completed:
                     logger.info(
@@ -1656,6 +1695,31 @@ class OpenAIRealtimeProvider(AIProviderInterface):
 
         if not raw_bytes:
             return
+
+        # Track turn latency on first audio output (Milestone 21 - Call History)
+        if self._turn_start_time is not None and not self._turn_first_audio_received:
+            self._turn_first_audio_received = True
+            turn_latency_ms = (time.time() - self._turn_start_time) * 1000
+            # Save to session for call history
+            if self._session_store and self._call_id:
+                try:
+                    call_id_copy = self._call_id
+                    latency_copy = turn_latency_ms
+                    async def save_latency():
+                        try:
+                            session = await self._session_store.get_by_call_id(call_id_copy)
+                            if session:
+                                session.turn_latencies_ms.append(latency_copy)
+                                await self._session_store.upsert_call(session)
+                                logger.debug("Turn latency saved to session", call_id=call_id_copy, latency_ms=round(latency_copy, 1))
+                            else:
+                                logger.debug("Session not found for latency tracking", call_id=call_id_copy)
+                        except Exception as e:
+                            logger.debug("Failed to save turn latency", call_id=call_id_copy, error=str(e))
+                    asyncio.create_task(save_latency())
+                except Exception as e:
+                    logger.debug("Failed to create latency save task", error=str(e))
+            logger.info("Turn latency recorded", call_id=self._call_id, latency_ms=round(turn_latency_ms, 1))
 
         # Always update the output meter with provider-native bytes
         self._update_output_meter(len(raw_bytes))

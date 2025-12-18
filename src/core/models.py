@@ -144,6 +144,13 @@ class CallSession:
     pending_actions: list = field(default_factory=list)  # Queue of pending actions
     current_action: Optional[Dict[str, Any]] = None      # Currently executing action
     transfer_context: Optional[Dict[str, Any]] = None    # Context to pass to transfer target
+    
+    # Call history tracking (Milestone 21)
+    tool_calls: List[Dict[str, Any]] = field(default_factory=list)  # [{name, params, result, timestamp, duration_ms}]
+    turn_latencies_ms: List[float] = field(default_factory=list)    # Per-turn latency tracking
+    barge_in_count: int = 0                                          # Total barge-in attempts
+    error_message: Optional[str] = None                              # Error if call failed
+    transfer_destination: Optional[str] = None                       # Transfer target if transferred
 
     def __post_init__(self):
         """Initialize default VAD and fallback state."""

@@ -571,6 +571,25 @@ Keep this roadmap updated after each milestone to help any collaborator—or fut
 
 ---
 
+### 🚧 Next: Milestone 21 - Call History & Analytics Dashboard
+
+**Status**: In Progress  
+**Branch**: `feature/call-history`  
+**Estimated Effort**: 7 days
+
+Comprehensive call history with debugging capabilities:
+
+- SQLite persistence for call records
+- Full conversation transcripts with timestamps
+- Tool execution logging and debugging
+- Stats dashboard with charts (calls/day, outcomes, provider usage)
+- Search by caller, provider, pipeline, context, outcome
+- CSV/JSON export
+
+See: `docs/contributing/milestones/milestone-21-call-history.md`
+
+---
+
 ### v4.5 Planning (Q1 2026)
 
 **Testing & Quality**:

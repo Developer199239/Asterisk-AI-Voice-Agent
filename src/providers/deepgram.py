@@ -156,6 +156,11 @@ class DeepgramProvider(AIProviderInterface):
         self._closed: bool = False
         # Maintain resample state for smoother conversion
         self._input_resample_state = None
+        
+        # Turn latency tracking (Milestone 21 - Call History)
+        self._turn_start_time: Optional[float] = None
+        self._turn_first_audio_received: bool = False
+        self._session_store = None  # Will be set via set_session_store()
         # Settings/stream readiness
         self._settings_sent: bool = False
         # Only set to True on explicit SettingsApplied lifecycle event
@@ -201,6 +206,10 @@ class DeepgramProvider(AIProviderInterface):
         self._settings_retry_attempted: bool = False
         self._last_settings_payload: Optional[dict] = None
         self._last_settings_minimal: Optional[dict] = None
+
+    def set_session_store(self, session_store):
+        """Set the session store for turn latency tracking (Milestone 21)."""
+        self._session_store = session_store
 
     @property
     def supported_codecs(self) -> List[str]:
@@ -866,8 +875,35 @@ class DeepgramProvider(AIProviderInterface):
                     farewell=self._farewell_message
                 )
             
+            # Capture function name BEFORE send_tool_result (which pops it from result)
+            func_name = result.get('function_name')
+            func_params = event_data.get('functions', [{}])[0].get('arguments', '{}')
+            
             # Send result back to Deepgram
             await self.tool_adapter.send_tool_result(result, context)
+            
+            # Log tool call to session for call history (Milestone 21)
+            try:
+                session_store = getattr(self, '_session_store', None)
+                if session_store and self.call_id and func_name:
+                    from datetime import datetime
+                    session = await session_store.get_by_call_id(self.call_id)
+                    if session:
+                        tool_record = {
+                            "name": func_name,
+                            "params": func_params,
+                            "result": result.get("status", "unknown") if isinstance(result, dict) else "success",
+                            "message": result.get("message", "") if isinstance(result, dict) else str(result),
+                            "timestamp": datetime.now().isoformat(),
+                            "duration_ms": 0,
+                        }
+                        if not hasattr(session, 'tool_calls') or session.tool_calls is None:
+                            session.tool_calls = []
+                        session.tool_calls.append(tool_record)
+                        await session_store.upsert_call(session)
+                        logger.debug("Tool call logged to session", call_id=self.call_id, tool=func_name)
+            except Exception as log_err:
+                logger.debug(f"Failed to log tool call to session: {log_err}", call_id=self.call_id)
             
         except Exception as e:
             logger.error(
@@ -1174,6 +1210,10 @@ class DeepgramProvider(AIProviderInterface):
                                     call_id=self.call_id,
                                     request_id=getattr(self, "request_id", None),
                                 )
+                                # Track turn start time when user STOPS speaking (Milestone 21)
+                                # This measures: speech end → first AI audio response
+                                self._turn_start_time = time.time()
+                                self._turn_first_audio_received = False
                             elif et == "FunctionCallRequest":
                                 # Extract function details for logging (actual Deepgram format)
                                 functions = event_data.get("functions", [])
@@ -1236,6 +1276,13 @@ class DeepgramProvider(AIProviderInterface):
                                         text=text,
                                         segments=event_data.get("segments"),
                                     )
+                                    
+                                    # Track turn start time on user ConversationText (Milestone 21)
+                                    # Deepgram Voice Agent doesn't send UserStoppedSpeaking,
+                                    # so we use ConversationText with role="user" as speech end signal
+                                    if role == "user" and text:
+                                        self._turn_start_time = time.time()
+                                        self._turn_first_audio_received = False
                                     
                                     # Track conversation for email tools
                                     # Debug: Check conditions
@@ -1349,6 +1396,34 @@ class DeepgramProvider(AIProviderInterface):
                         logger.error("Failed to parse JSON message from Deepgram", message=message)
                 elif isinstance(message, bytes):
                     self._ready_to_stream = True
+                    
+                    # Track turn latency on first audio output (Milestone 21 - Call History)
+                    if self._turn_start_time is not None and not self._turn_first_audio_received:
+                        self._turn_first_audio_received = True
+                        turn_latency_ms = (time.time() - self._turn_start_time) * 1000
+                        # Save to session for call history
+                        if self._session_store and self.call_id:
+                            try:
+                                call_id_copy = self.call_id
+                                latency_copy = turn_latency_ms
+                                async def save_latency():
+                                    try:
+                                        session = await self._session_store.get_by_call_id(call_id_copy)
+                                        if session:
+                                            session.turn_latencies_ms.append(latency_copy)
+                                            await self._session_store.upsert_call(session)
+                                            logger.debug("Turn latency saved to session", call_id=call_id_copy, latency_ms=round(latency_copy, 1))
+                                        else:
+                                            logger.debug("Session not found for latency tracking", call_id=call_id_copy)
+                                    except Exception as e:
+                                        logger.debug("Failed to save turn latency", call_id=call_id_copy, error=str(e))
+                                asyncio.create_task(save_latency())
+                            except Exception as e:
+                                logger.debug("Failed to create latency save task", error=str(e))
+                        logger.info("Turn latency recorded", call_id=self.call_id, latency_ms=round(turn_latency_ms, 1))
+                        # Reset for next turn
+                        self._turn_start_time = None
+                    
                     # One-time runtime probe: infer output encoding/rate from first bytes
                     can_autodetect = getattr(self, "allow_output_autodetect", False)
                     try:

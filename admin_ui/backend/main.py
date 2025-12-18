@@ -9,7 +9,7 @@ import logging
 # Load environment variables (wizard will create .env from .env.example on first Next click)
 load_dotenv(settings.ENV_PATH)
 
-from api import config, system, wizard, logs, local_ai, ollama, mcp
+from api import config, system, wizard, logs, local_ai, ollama, mcp, calls
 import auth
 
 # SECURITY: Enforce JWT_SECRET when binding to non-localhost
@@ -75,6 +75,7 @@ app.include_router(logs.router, prefix="/api/logs", tags=["logs"], dependencies=
 app.include_router(local_ai.router, prefix="/api/local-ai", tags=["local-ai"], dependencies=[Depends(auth.get_current_user)])
 app.include_router(mcp.router, dependencies=[Depends(auth.get_current_user)])
 app.include_router(ollama.router, tags=["ollama"], dependencies=[Depends(auth.get_current_user)])
+app.include_router(calls.router, prefix="/api", tags=["calls"], dependencies=[Depends(auth.get_current_user)])
 
 @app.get("/health")
 async def health_check():
