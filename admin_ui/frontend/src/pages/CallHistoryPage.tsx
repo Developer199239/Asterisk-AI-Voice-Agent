@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 import axios from 'axios';
 
-interface CallRecord {
+interface CallRecordSummary {
     id: string;
     call_id: string;
     caller_number: string | null;
@@ -17,19 +17,22 @@ interface CallRecord {
     duration_seconds: number;
     provider_name: string;
     pipeline_name: string | null;
-    pipeline_components: Record<string, string>;
     context_name: string | null;
-    conversation_history: Array<{ role: string; content: string; timestamp?: string }>;
     outcome: string;
-    transfer_destination: string | null;
     error_message: string | null;
-    tool_calls: Array<{ name: string; params: any; result: string; timestamp: string; duration_ms: number }>;
     avg_turn_latency_ms: number;
-    max_turn_latency_ms: number;
     total_turns: number;
+    barge_in_count: number;
+}
+
+interface CallRecordDetail extends CallRecordSummary {
+    pipeline_components: Record<string, string>;
+    conversation_history: Array<{ role: string; content: string; timestamp?: string }>;
+    transfer_destination: string | null;
+    tool_calls: Array<{ name: string; params: any; result: string; message?: string; timestamp: string; duration_ms: number }>;
+    max_turn_latency_ms: number;
     caller_audio_format: string;
     codec_alignment_ok: boolean;
-    barge_in_count: number;
 }
 
 interface CallStats {
@@ -90,12 +93,14 @@ const OutcomeIcon = ({ outcome }: { outcome: string }) => {
 };
 
 const CallHistoryPage = () => {
-    const [calls, setCalls] = useState<CallRecord[]>([]);
+    const [calls, setCalls] = useState<CallRecordSummary[]>([]);
     const [stats, setStats] = useState<CallStats | null>(null);
     const [filterOptions, setFilterOptions] = useState<FilterOptions | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
-    const [selectedCall, setSelectedCall] = useState<CallRecord | null>(null);
+    const [selectedCallSummary, setSelectedCallSummary] = useState<CallRecordSummary | null>(null);
+    const [selectedCall, setSelectedCall] = useState<CallRecordDetail | null>(null);
+    const [selectedCallLoading, setSelectedCallLoading] = useState(false);
     const [showStats, setShowStats] = useState(true);
     
     // Pagination
@@ -201,8 +206,26 @@ const CallHistoryPage = () => {
             await axios.delete(`/api/calls/${id}`);
             fetchCalls();
             fetchStats();
+            if (selectedCall?.id === id || selectedCallSummary?.id === id) {
+                setSelectedCall(null);
+                setSelectedCallSummary(null);
+            }
         } catch (err) {
             console.error('Failed to delete:', err);
+        }
+    };
+
+    const openCallDetails = async (call: CallRecordSummary) => {
+        setSelectedCallSummary(call);
+        setSelectedCall(null);
+        setSelectedCallLoading(true);
+        try {
+            const res = await axios.get(`/api/calls/${call.id}`);
+            setSelectedCall(res.data);
+        } catch (err) {
+            console.error('Failed to fetch call details:', err);
+        } finally {
+            setSelectedCallLoading(false);
         }
     };
 
@@ -221,6 +244,7 @@ const CallHistoryPage = () => {
     };
 
     const hasActiveFilters = Object.values(filters).some(v => v !== '');
+    const modalCall = selectedCall ?? selectedCallSummary;
 
     return (
         <div className="space-y-6">
@@ -488,11 +512,11 @@ const CallHistoryPage = () => {
                             </thead>
                             <tbody className="divide-y divide-border">
                                 {calls.map((call) => (
-                                    <tr 
-                                        key={call.id} 
-                                        className="hover:bg-muted/30 cursor-pointer"
-                                        onClick={() => setSelectedCall(call)}
-                                    >
+	                                    <tr 
+	                                        key={call.id} 
+	                                        className="hover:bg-muted/30 cursor-pointer"
+	                                        onClick={() => openCallDetails(call)}
+	                                    >
                                         <td className="px-4 py-3">
                                             <div className="font-medium">{call.caller_number || 'Unknown'}</div>
                                             {call.caller_name && (
@@ -556,17 +580,17 @@ const CallHistoryPage = () => {
             )}
 
             {/* Call Detail Modal */}
-            {selectedCall && (
+            {modalCall && (
                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
                     <div className="bg-card border rounded-lg w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
                         {/* Modal Header */}
                         <div className="flex items-center justify-between p-4 border-b">
                             <div>
                                 <h2 className="text-xl font-bold">Call Details</h2>
-                                <p className="text-sm text-muted-foreground">{selectedCall.call_id}</p>
+                                <p className="text-sm text-muted-foreground">{modalCall.call_id}</p>
                             </div>
                             <button
-                                onClick={() => setSelectedCall(null)}
+                                onClick={() => { setSelectedCall(null); setSelectedCallSummary(null); }}
                                 className="p-2 hover:bg-muted rounded-lg"
                             >
                                 <X className="w-5 h-5" />
@@ -575,44 +599,52 @@ const CallHistoryPage = () => {
 
                         {/* Modal Content */}
                         <div className="flex-1 overflow-y-auto p-4 space-y-6">
+                            {selectedCallLoading && (
+                                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                                    <RefreshCw className="w-4 h-4 animate-spin" />
+                                    Loading full call details…
+                                </div>
+                            )}
                             {/* Overview */}
                             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
                                 <div>
                                     <div className="text-sm text-muted-foreground">Caller</div>
-                                    <div className="font-medium">{selectedCall.caller_number || 'Unknown'}</div>
-                                    {selectedCall.caller_name && (
-                                        <div className="text-sm">{selectedCall.caller_name}</div>
+                                    <div className="font-medium">{modalCall.caller_number || 'Unknown'}</div>
+                                    {modalCall.caller_name && (
+                                        <div className="text-sm">{modalCall.caller_name}</div>
                                     )}
                                 </div>
                                 <div>
                                     <div className="text-sm text-muted-foreground">Duration</div>
-                                    <div className="font-medium">{formatDuration(selectedCall.duration_seconds)}</div>
+                                    <div className="font-medium">{formatDuration(modalCall.duration_seconds)}</div>
                                 </div>
                                 <div>
                                     <div className="text-sm text-muted-foreground">Outcome</div>
                                     <div className="flex items-center gap-2">
-                                        <OutcomeIcon outcome={selectedCall.outcome} />
-                                        <span className="font-medium capitalize">{selectedCall.outcome}</span>
+                                        <OutcomeIcon outcome={modalCall.outcome} />
+                                        <span className="font-medium capitalize">{modalCall.outcome}</span>
                                     </div>
                                 </div>
                                 <div>
                                     <div className="text-sm text-muted-foreground">Turns</div>
-                                    <div className="font-medium">{selectedCall.total_turns}</div>
+                                    <div className="font-medium">{modalCall.total_turns}</div>
                                 </div>
                                 <div>
                                     <div className="text-sm text-muted-foreground">Avg Latency</div>
-                                    <div className="font-medium">{(selectedCall.avg_turn_latency_ms / 1000).toFixed(2)}s</div>
+                                    <div className="font-medium">{(modalCall.avg_turn_latency_ms / 1000).toFixed(2)}s</div>
                                 </div>
                                 <div>
                                     <div className="text-sm text-muted-foreground">Barge-ins</div>
-                                    <div className="font-medium">{selectedCall.barge_in_count}</div>
+                                    <div className="font-medium">{modalCall.barge_in_count}</div>
                                 </div>
                             </div>
 
                             {/* Tool Calls Summary */}
                             <div>
-                                <h3 className="font-semibold mb-2">Tool Executions ({selectedCall.tool_calls.length})</h3>
-                                {selectedCall.tool_calls.length === 0 ? (
+                                <h3 className="font-semibold mb-2">Tool Executions ({selectedCall?.tool_calls.length || 0})</h3>
+                                {!selectedCall ? (
+                                    <p className="text-muted-foreground text-sm">Load the call to view tool details</p>
+                                ) : selectedCall.tool_calls.length === 0 ? (
                                     <p className="text-muted-foreground text-sm">No tools were called during this call</p>
                                 ) : (
                                     <div className="flex flex-wrap gap-2">
@@ -636,53 +668,59 @@ const CallHistoryPage = () => {
                                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
                                     <div>
                                         <span className="text-muted-foreground">Provider:</span>{' '}
-                                        <span className="font-medium">{selectedCall.provider_name}</span>
+                                        <span className="font-medium">{modalCall.provider_name}</span>
                                     </div>
                                     <div>
                                         <span className="text-muted-foreground">Pipeline:</span>{' '}
-                                        <span className="font-medium">{selectedCall.pipeline_name || '-'}</span>
+                                        <span className="font-medium">{modalCall.pipeline_name || '-'}</span>
                                     </div>
                                     <div>
                                         <span className="text-muted-foreground">Context:</span>{' '}
-                                        <span className="font-medium">{selectedCall.context_name || '-'}</span>
+                                        <span className="font-medium">{modalCall.context_name || '-'}</span>
                                     </div>
                                     <div>
                                         <span className="text-muted-foreground">Audio:</span>{' '}
-                                        <span className="font-medium">{selectedCall.caller_audio_format}</span>
+                                        <span className="font-medium">{selectedCall?.caller_audio_format || '-'}</span>
                                     </div>
                                 </div>
                             </div>
 
                             {/* Transcript */}
                             <div>
-                                <h3 className="font-semibold mb-2">Conversation ({selectedCall.conversation_history.length} messages)</h3>
-                                <div className="bg-muted/30 rounded-lg p-4 max-h-64 overflow-y-auto space-y-3">
-                                    {selectedCall.conversation_history.length === 0 ? (
-                                        <p className="text-muted-foreground text-sm">No conversation recorded</p>
-                                    ) : (
-                                        selectedCall.conversation_history.map((msg, i) => (
-                                            <div key={i} className={`flex ${msg.role === 'assistant' ? 'justify-start' : 'justify-end'}`}>
-                                                <div className={`max-w-[80%] rounded-lg px-3 py-2 ${
-                                                    msg.role === 'assistant' 
-                                                        ? 'bg-primary/10 text-foreground' 
-                                                        : 'bg-muted text-foreground'
-                                                }`}>
-                                                    <div className="text-xs text-muted-foreground mb-1 capitalize">{msg.role}</div>
-                                                    <div className="text-sm">{msg.content}</div>
-                                                    {msg.timestamp && (
-                                                        <div className="text-xs text-muted-foreground mt-1">
-                                                            {new Date(msg.timestamp).toLocaleTimeString()}
-                                                        </div>
-                                                    )}
+                                <h3 className="font-semibold mb-2">Conversation ({selectedCall?.conversation_history.length || 0} messages)</h3>
+                                {!selectedCall ? (
+                                    <div className="bg-muted/30 rounded-lg p-4 text-sm text-muted-foreground">
+                                        Load the call to view the transcript
+                                    </div>
+                                ) : (
+                                    <div className="bg-muted/30 rounded-lg p-4 max-h-64 overflow-y-auto space-y-3">
+                                        {selectedCall.conversation_history.length === 0 ? (
+                                            <p className="text-muted-foreground text-sm">No conversation recorded</p>
+                                        ) : (
+                                            selectedCall.conversation_history.map((msg, i) => (
+                                                <div key={i} className={`flex ${msg.role === 'assistant' ? 'justify-start' : 'justify-end'}`}>
+                                                    <div className={`max-w-[80%] rounded-lg px-3 py-2 ${
+                                                        msg.role === 'assistant' 
+                                                            ? 'bg-primary/10 text-foreground' 
+                                                            : 'bg-muted text-foreground'
+                                                    }`}>
+                                                        <div className="text-xs text-muted-foreground mb-1 capitalize">{msg.role}</div>
+                                                        <div className="text-sm">{msg.content}</div>
+                                                        {msg.timestamp && (
+                                                            <div className="text-xs text-muted-foreground mt-1">
+                                                                {new Date(msg.timestamp).toLocaleTimeString()}
+                                                            </div>
+                                                        )}
+                                                    </div>
                                                 </div>
-                                            </div>
-                                        ))
-                                    )}
-                                </div>
+                                            ))
+                                        )}
+                                    </div>
+                                )}
                             </div>
 
                             {/* Tool Call Details */}
-                            {selectedCall.tool_calls.length > 0 && (
+                            {selectedCall && selectedCall.tool_calls.length > 0 && (
                                 <div>
                                     <h3 className="font-semibold mb-2">Tool Call Details</h3>
                                     <div className="space-y-2">
@@ -712,11 +750,11 @@ const CallHistoryPage = () => {
                             )}
 
                             {/* Error Message */}
-                            {selectedCall.error_message && (
+                            {modalCall.error_message && (
                                 <div>
                                     <h3 className="font-semibold mb-2 text-destructive">Error</h3>
                                     <div className="bg-destructive/10 border border-destructive/20 rounded-lg p-3 text-sm">
-                                        {selectedCall.error_message}
+                                        {modalCall.error_message}
                                     </div>
                                 </div>
                             )}

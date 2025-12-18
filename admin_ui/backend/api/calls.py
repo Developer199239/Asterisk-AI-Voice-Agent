@@ -9,12 +9,14 @@ import io
 import json
 import logging
 import os
+import re
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Response
 from pydantic import BaseModel
+from zoneinfo import ZoneInfo
 
 # Add project root to path for imports
 project_root = os.environ.get("PROJECT_ROOT", "/app/project")
@@ -24,6 +26,73 @@ if project_root not in sys.path:
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _get_server_timezone():
+    tz_name = (os.getenv("TZ") or "").strip() or "UTC"
+    try:
+        return ZoneInfo(tz_name)
+    except Exception:
+        return timezone.utc
+
+
+_DATE_ONLY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _parse_datetime_param(value: Optional[str], *, end_of_day_if_date_only: bool) -> Optional[datetime]:
+    """
+    Parse query datetime params.
+
+    Supports either:
+      - Date-only: YYYY-MM-DD (interpreted in server TZ, converted to UTC)
+      - ISO datetime: with optional timezone offset/Z
+
+    Returns a timezone-aware UTC datetime suitable for comparing to stored UTC timestamps.
+    """
+    if not value:
+        return None
+    value = value.strip()
+    if not value:
+        return None
+
+    server_tz = _get_server_timezone()
+
+    if _DATE_ONLY_RE.match(value):
+        year, month, day = (int(p) for p in value.split("-"))
+        if end_of_day_if_date_only:
+            dt = datetime(year, month, day, 23, 59, 59, 999999, tzinfo=server_tz)
+        else:
+            dt = datetime(year, month, day, 0, 0, 0, tzinfo=server_tz)
+        return dt.astimezone(timezone.utc)
+
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid datetime format: {value}")
+
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=server_tz)
+    return dt.astimezone(timezone.utc)
+
+
+class CallRecordSummaryResponse(BaseModel):
+    """Summary response model for list views (excludes transcript/tool payloads)."""
+    id: str
+    call_id: str
+    caller_number: Optional[str] = None
+    caller_name: Optional[str] = None
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+    duration_seconds: float = 0.0
+    provider_name: str = "unknown"
+    pipeline_name: Optional[str] = None
+    context_name: Optional[str] = None
+    outcome: str = "completed"
+    error_message: Optional[str] = None
+    avg_turn_latency_ms: float = 0.0
+    total_turns: int = 0
+    barge_in_count: int = 0
+    created_at: Optional[str] = None
 
 
 class CallRecordResponse(BaseModel):
@@ -55,7 +124,7 @@ class CallRecordResponse(BaseModel):
 
 class CallListResponse(BaseModel):
     """Response model for paginated call list."""
-    calls: List[CallRecordResponse]
+    calls: List[CallRecordSummaryResponse]
     total: int
     page: int
     page_size: int
@@ -101,6 +170,24 @@ def _get_call_history_store():
         raise HTTPException(status_code=500, detail="Call history module not available")
 
 
+def _normalize_tool_calls(tool_calls: list) -> list:
+    """Normalize tool call records for UI consumption (params as object when possible)."""
+    normalized: list = []
+    for item in (tool_calls or []):
+        if not isinstance(item, dict):
+            continue
+        entry = dict(item)
+        params = entry.get("params")
+        if isinstance(params, str):
+            try:
+                parsed = json.loads(params)
+                entry["params"] = parsed
+            except Exception:
+                pass
+        normalized.append(entry)
+    return normalized
+
+
 def _record_to_response(record) -> CallRecordResponse:
     """Convert a CallRecord to a response model."""
     return CallRecordResponse(
@@ -119,12 +206,34 @@ def _record_to_response(record) -> CallRecordResponse:
         outcome=record.outcome,
         transfer_destination=record.transfer_destination,
         error_message=record.error_message,
-        tool_calls=record.tool_calls or [],
+        tool_calls=_normalize_tool_calls(record.tool_calls or []),
         avg_turn_latency_ms=record.avg_turn_latency_ms,
         max_turn_latency_ms=record.max_turn_latency_ms,
         total_turns=record.total_turns,
         caller_audio_format=record.caller_audio_format,
         codec_alignment_ok=record.codec_alignment_ok,
+        barge_in_count=record.barge_in_count,
+        created_at=record.created_at.isoformat() if record.created_at else None,
+    )
+
+
+def _record_to_summary_response(record) -> CallRecordSummaryResponse:
+    """Convert a CallRecord to a summary response model."""
+    return CallRecordSummaryResponse(
+        id=record.id,
+        call_id=record.call_id,
+        caller_number=record.caller_number,
+        caller_name=record.caller_name,
+        start_time=record.start_time.isoformat() if record.start_time else None,
+        end_time=record.end_time.isoformat() if record.end_time else None,
+        duration_seconds=record.duration_seconds,
+        provider_name=record.provider_name,
+        pipeline_name=record.pipeline_name,
+        context_name=record.context_name,
+        outcome=record.outcome,
+        error_message=record.error_message,
+        avg_turn_latency_ms=record.avg_turn_latency_ms,
+        total_turns=record.total_turns,
         barge_in_count=record.barge_in_count,
         created_at=record.created_at.isoformat() if record.created_at else None,
     )
@@ -153,19 +262,8 @@ async def list_calls(
     """
     store = _get_call_history_store()
     
-    # Parse dates
-    parsed_start = None
-    parsed_end = None
-    if start_date:
-        try:
-            parsed_start = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid start_date format")
-    if end_date:
-        try:
-            parsed_end = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid end_date format")
+    parsed_start = _parse_datetime_param(start_date, end_of_day_if_date_only=False)
+    parsed_end = _parse_datetime_param(end_date, end_of_day_if_date_only=True)
     
     # Get total count (with all filters for accurate pagination)
     total = await store.count(
@@ -200,12 +298,13 @@ async def list_calls(
         max_duration=max_duration,
         order_by=order_by,
         order_dir=order_dir,
+        include_details=False,
     )
     
     total_pages = (total + page_size - 1) // page_size if total > 0 else 1
     
     return CallListResponse(
-        calls=[_record_to_response(r) for r in records],
+        calls=[_record_to_summary_response(r) for r in records],
         total=total,
         page=page,
         page_size=page_size,
@@ -223,19 +322,8 @@ async def get_call_stats(
     """
     store = _get_call_history_store()
     
-    # Parse dates
-    parsed_start = None
-    parsed_end = None
-    if start_date:
-        try:
-            parsed_start = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid start_date format")
-    if end_date:
-        try:
-            parsed_end = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid end_date format")
+    parsed_start = _parse_datetime_param(start_date, end_of_day_if_date_only=False)
+    parsed_end = _parse_datetime_param(end_date, end_of_day_if_date_only=True)
     
     stats = await store.get_stats(start_date=parsed_start, end_date=parsed_end)
     
@@ -245,8 +333,16 @@ async def get_call_stats(
         import aiohttp
         ai_engine_url = os.getenv("AI_ENGINE_HEALTH_URL", "http://localhost:15000")
         logger.info(f"Fetching active calls from {ai_engine_url}/sessions/stats")
+        headers = {}
+        health_token = (os.getenv("HEALTH_API_TOKEN") or "").strip()
+        if health_token:
+            headers["Authorization"] = f"Bearer {health_token}"
         async with aiohttp.ClientSession() as session:
-            async with session.get(f"{ai_engine_url}/sessions/stats", timeout=aiohttp.ClientTimeout(total=2)) as resp:
+            async with session.get(
+                f"{ai_engine_url}/sessions/stats",
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=2),
+            ) as resp:
                 if resp.status == 200:
                     session_stats = await resp.json()
                     active_calls = session_stats.get("active_calls", 0)
@@ -343,11 +439,10 @@ async def bulk_delete_calls(
     store = _get_call_history_store()
     
     if older_than_days:
-        cutoff = datetime.now() - timedelta(days=older_than_days)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=older_than_days)
     else:
-        try:
-            cutoff = datetime.fromisoformat(before_date.replace('Z', '+00:00'))
-        except ValueError:
+        cutoff = _parse_datetime_param(before_date, end_of_day_if_date_only=False)
+        if cutoff is None:
             raise HTTPException(status_code=400, detail="Invalid before_date format")
     
     deleted = await store.delete_before(cutoff)
@@ -374,19 +469,8 @@ async def export_calls_csv(
     """
     store = _get_call_history_store()
     
-    # Parse dates
-    parsed_start = None
-    parsed_end = None
-    if start_date:
-        try:
-            parsed_start = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid start_date format")
-    if end_date:
-        try:
-            parsed_end = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid end_date format")
+    parsed_start = _parse_datetime_param(start_date, end_of_day_if_date_only=False)
+    parsed_end = _parse_datetime_param(end_date, end_of_day_if_date_only=True)
     
     # Get all matching records (limit to 10000 for safety)
     records = await store.list(
@@ -403,6 +487,7 @@ async def export_calls_csv(
         has_tool_calls=has_tool_calls,
         min_duration=min_duration,
         max_duration=max_duration,
+        include_details=True,
     )
     
     # Generate CSV
@@ -462,19 +547,8 @@ async def export_calls_json(
     """
     store = _get_call_history_store()
     
-    # Parse dates
-    parsed_start = None
-    parsed_end = None
-    if start_date:
-        try:
-            parsed_start = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid start_date format")
-    if end_date:
-        try:
-            parsed_end = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid end_date format")
+    parsed_start = _parse_datetime_param(start_date, end_of_day_if_date_only=False)
+    parsed_end = _parse_datetime_param(end_date, end_of_day_if_date_only=True)
     
     # Get all matching records (limit to 10000 for safety)
     records = await store.list(
@@ -491,6 +565,7 @@ async def export_calls_json(
         has_tool_calls=has_tool_calls,
         min_duration=min_duration,
         max_duration=max_duration,
+        include_details=True,
     )
     
     # Convert to JSON-serializable format

@@ -12,7 +12,7 @@ import sqlite3
 import threading
 import uuid
 from dataclasses import dataclass, field, asdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -62,7 +62,7 @@ class CallRecord:
     barge_in_count: int = 0
     
     # Metadata
-    created_at: Optional[datetime] = field(default_factory=datetime.now)
+    created_at: Optional[datetime] = field(default_factory=lambda: datetime.now(timezone.utc))
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -163,7 +163,7 @@ class CallHistoryStore:
                 Path(db_dir).mkdir(parents=True, exist_ok=True)
             
             with self._lock:
-                conn = sqlite3.connect(self._db_path)
+                conn = self._get_connection()
                 try:
                     cursor = conn.cursor()
                     cursor.execute(self._CREATE_TABLE_SQL)
@@ -180,11 +180,13 @@ class CallHistoryStore:
     
     def _get_connection(self) -> sqlite3.Connection:
         """Get a database connection with WAL mode and busy timeout for multi-process safety."""
-        conn = sqlite3.connect(self._db_path, timeout=30.0)  # 30s busy timeout
+        conn = sqlite3.connect(self._db_path, timeout=30.0, check_same_thread=False)  # 30s busy timeout
         conn.row_factory = sqlite3.Row
         # Enable WAL mode for better concurrent read/write performance
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA busy_timeout=30000")  # 30s in milliseconds
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA synchronous=NORMAL;")
+        conn.execute("PRAGMA busy_timeout=30000;")  # 30s in milliseconds
+        conn.execute("PRAGMA foreign_keys=ON;")
         return conn
     
     async def save(self, record: CallRecord) -> bool:
@@ -332,6 +334,7 @@ class CallHistoryStore:
         max_duration: Optional[float] = None,
         order_by: str = "start_time",
         order_dir: str = "DESC",
+        include_details: bool = True,
     ) -> List[CallRecord]:
         """
         List call records with filtering and pagination.
@@ -352,6 +355,7 @@ class CallHistoryStore:
             max_duration: Maximum duration in seconds
             order_by: Column to order by
             order_dir: ASC or DESC
+            include_details: If False, excludes large payload fields (transcript/tool JSON)
             
         Returns:
             List of CallRecord objects
@@ -393,9 +397,9 @@ class CallHistoryStore:
                         params.append(outcome)
                     if has_tool_calls is not None:
                         if has_tool_calls:
-                            conditions.append("tool_calls != '[]'")
+                            conditions.append("tool_calls IS NOT NULL AND tool_calls != '[]'")
                         else:
-                            conditions.append("tool_calls = '[]'")
+                            conditions.append("(tool_calls IS NULL OR tool_calls = '[]')")
                     if min_duration is not None:
                         conditions.append("duration_seconds >= ?")
                         params.append(min_duration)
@@ -406,14 +410,43 @@ class CallHistoryStore:
                     # Validate order_by to prevent SQL injection
                     valid_columns = [
                         'start_time', 'end_time', 'duration_seconds', 
-                        'caller_number', 'provider_name', 'pipeline_name', 'outcome'
+                        'caller_number', 'caller_name', 'provider_name', 'pipeline_name',
+                        'context_name', 'outcome', 'created_at'
                     ]
                     safe_order_by = order_by if order_by in valid_columns else 'start_time'
                     safe_order_dir = order_dir.upper() if order_dir.upper() in ['ASC', 'DESC'] else 'DESC'
                     
                     where_clause = " AND ".join(conditions) if conditions else "1=1"
+
+                    select_cols = "*"
+                    if not include_details:
+                        # Exclude transcript/tool payloads to keep list views fast and reduce exposure.
+                        select_cols = ", ".join([
+                            "id",
+                            "call_id",
+                            "caller_number",
+                            "caller_name",
+                            "start_time",
+                            "end_time",
+                            "duration_seconds",
+                            "provider_name",
+                            "pipeline_name",
+                            "pipeline_components",
+                            "context_name",
+                            "outcome",
+                            "transfer_destination",
+                            "error_message",
+                            "avg_turn_latency_ms",
+                            "max_turn_latency_ms",
+                            "total_turns",
+                            "caller_audio_format",
+                            "codec_alignment_ok",
+                            "barge_in_count",
+                            "created_at",
+                        ])
+
                     query = f"""
-                        SELECT * FROM call_records 
+                        SELECT {select_cols} FROM call_records 
                         WHERE {where_clause}
                         ORDER BY {safe_order_by} {safe_order_dir}
                         LIMIT ? OFFSET ?
@@ -481,9 +514,9 @@ class CallHistoryStore:
                         params.append(outcome)
                     if has_tool_calls is not None:
                         if has_tool_calls:
-                            conditions.append("tool_calls != '[]'")
+                            conditions.append("tool_calls IS NOT NULL AND tool_calls != '[]'")
                         else:
-                            conditions.append("tool_calls = '[]'")
+                            conditions.append("(tool_calls IS NULL OR tool_calls = '[]')")
                     if min_duration is not None:
                         conditions.append("duration_seconds >= ?")
                         params.append(min_duration)
