@@ -107,6 +107,7 @@ const CallHistoryPage = () => {
     // Filters
     const [filters, setFilters] = useState({
         caller_number: '',
+        caller_name: '',
         provider_name: '',
         pipeline_name: '',
         context_name: '',
@@ -208,6 +209,7 @@ const CallHistoryPage = () => {
     const clearFilters = () => {
         setFilters({
             caller_number: '',
+            caller_name: '',
             provider_name: '',
             pipeline_name: '',
             context_name: '',
@@ -343,12 +345,22 @@ const CallHistoryPage = () => {
                     </div>
                     <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4">
                         <div>
-                            <label className="text-sm text-muted-foreground">Caller</label>
+                            <label className="text-sm text-muted-foreground">Caller Number</label>
                             <input
                                 type="text"
                                 value={filters.caller_number}
                                 onChange={(e) => setFilters({ ...filters, caller_number: e.target.value })}
                                 placeholder="Phone number"
+                                className="w-full mt-1 px-3 py-2 bg-background border rounded-lg text-sm"
+                            />
+                        </div>
+                        <div>
+                            <label className="text-sm text-muted-foreground">Caller Name</label>
+                            <input
+                                type="text"
+                                value={filters.caller_name}
+                                onChange={(e) => setFilters({ ...filters, caller_name: e.target.value })}
+                                placeholder="Name"
                                 className="w-full mt-1 px-3 py-2 bg-background border rounded-lg text-sm"
                             />
                         </div>

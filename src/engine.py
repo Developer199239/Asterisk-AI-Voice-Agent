@@ -7520,7 +7520,16 @@ class Engine:
             logger.error("Failed to start health endpoint", error=str(exc), exc_info=True)
 
     async def _sessions_stats_handler(self, request):
-        """Return active session statistics for Admin UI (Milestone 21)."""
+        """Return active session statistics for Admin UI (Milestone 21).
+        
+        SECURITY: Requires localhost or HEALTH_API_TOKEN.
+        """
+        # SECURITY: Gate sensitive endpoint to prevent operational data leak
+        if not self._is_request_authorized(request):
+            return web.json_response(
+                {"active_calls": 0, "error": "Forbidden: requires localhost or valid HEALTH_API_TOKEN"},
+                status=403
+            )
         try:
             stats = await self.session_store.get_session_stats()
             return web.json_response(stats, status=200)
