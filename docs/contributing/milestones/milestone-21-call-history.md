@@ -1,10 +1,9 @@
 # Milestone 21: Call History & Analytics Dashboard
 
-**Status**: ✅ Complete  
+**Status**: 🟡 Core Complete (Milestone Partially Complete)  
 **Priority**: High  
 **Estimated Effort**: 7 days  
-**Branch**: `feature/call-history`  
-**Completed**: December 18, 2025
+**Branch**: `feature/call-history`
 
 ## Summary
 
@@ -215,9 +214,9 @@ CALL_HISTORY_DB_PATH=data/call_history.db
 - [x] Filters work for all search dimensions
 - [x] Call detail view shows full transcript with timestamps
 - [x] Tool executions visible in call detail
-- [x] Stats dashboard shows aggregate metrics with charts
+- [ ] Stats dashboard shows aggregate metrics with charts *(stat cards implemented, charts deferred)*
 - [x] Export works (CSV/JSON)
-- [x] Retention cleanup works when configured (method exists, scheduler deferred)
+- [ ] Retention cleanup works when configured *(method exists, scheduler not implemented)*
 - [x] No performance impact on active calls
 
 ## Technical Notes
@@ -292,6 +291,7 @@ The following items were identified during implementation but deferred for futur
 - **Effort**: Low
 
 ### Tool Duration Always 0ms
+
 - **Issue**: Tool call records have `duration_ms: 0` - actual execution time not tracked
 - **Impact**: Nice-to-have debugging info
 - **Fix**: Wrap tool execution with timing in each provider's `_handle_function_call`
