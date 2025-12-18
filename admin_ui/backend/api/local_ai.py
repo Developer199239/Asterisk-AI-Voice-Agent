@@ -12,11 +12,50 @@ from pydantic import BaseModel
 from typing import List, Dict, Optional, Any
 import os
 import json
+import yaml
 import asyncio
 import websockets
+import shutil
+import time
 from services.fs import upsert_env_vars
 
 router = APIRouter()
+
+DISK_WARNING_BYTES = 10 * 1024 * 1024 * 1024  # 10 GB
+DISK_BUILD_BLOCK_BYTES = 5 * 1024 * 1024 * 1024  # 5 GB (hard stop for image builds)
+
+
+def _format_bytes(num_bytes: int) -> str:
+    units = ["B", "KB", "MB", "GB", "TB"]
+    size = float(max(0, int(num_bytes)))
+    unit = 0
+    while size >= 1024 and unit < len(units) - 1:
+        size /= 1024.0
+        unit += 1
+    if unit <= 1:
+        return f"{int(size)} {units[unit]}"
+    return f"{size:.1f} {units[unit]}"
+
+
+def _disk_build_preflight(path: str) -> tuple[bool, Optional[str]]:
+    """
+    Returns (ok, warning_or_error_message).
+    - Warns when free space < DISK_WARNING_BYTES.
+    - Blocks when free space < DISK_BUILD_BLOCK_BYTES.
+    """
+    try:
+        total, used, free = shutil.disk_usage(path)
+    except Exception:
+        return True, None
+
+    if free < DISK_BUILD_BLOCK_BYTES:
+        return (
+            False,
+            f"Insufficient disk space for rebuild: free={_format_bytes(free)} required={_format_bytes(DISK_BUILD_BLOCK_BYTES)} (path={path}).",
+        )
+    if free < DISK_WARNING_BYTES:
+        return True, f"Low disk space: only {_format_bytes(free)} free (path={path})."
+    return True, None
 
 
 class ModelInfo(BaseModel):
@@ -365,12 +404,13 @@ async def switch_model(request: SwitchModelRequest):
     then triggers a container restart to reload the model. If the new model
     fails to load, automatically rolls back to the previous configuration.
     """
-    from settings import PROJECT_ROOT, get_setting
+    from settings import PROJECT_ROOT, get_setting, CONFIG_PATH
     from api.config import update_yaml_provider_field
-    
+    from api.system import _recreate_via_compose
+
     env_file = os.path.join(PROJECT_ROOT, ".env")
-    env_updates = {}
-    yaml_updates = {}  # Track YAML updates for sync
+    env_updates: Dict[str, str] = {}
+    yaml_updates: Dict[str, Any] = {}  # Track YAML updates for sync
     requires_restart = False
 
     async def _try_ws_switch(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -392,13 +432,125 @@ async def switch_model(request: SwitchModelRequest):
                 return data
         except Exception:
             return None
+
+    async def _fetch_status() -> Optional[Dict[str, Any]]:
+        ws_url = get_setting("HEALTH_CHECK_LOCAL_AI_URL", "ws://127.0.0.1:8765")
+        async with websockets.connect(ws_url, open_timeout=5) as ws:
+            auth_token = (get_setting("LOCAL_WS_AUTH_TOKEN", os.getenv("LOCAL_WS_AUTH_TOKEN", "")) or "").strip()
+            if auth_token:
+                await ws.send(json.dumps({"type": "auth", "auth_token": auth_token}))
+                raw = await asyncio.wait_for(ws.recv(), timeout=5)
+                auth_data = json.loads(raw)
+                if auth_data.get("type") != "auth_response" or auth_data.get("status") != "ok":
+                    raise RuntimeError(f"Local AI auth failed: {auth_data}")
+
+            await ws.send(json.dumps({"type": "status"}))
+            raw = await asyncio.wait_for(ws.recv(), timeout=5)
+            data = json.loads(raw)
+            if data.get("type") != "status_response":
+                return None
+            return data
+
+    def _status_matches(data: Dict[str, Any]) -> bool:
+        if data.get("type") != "status_response" or data.get("status") != "ok":
+            return False
+
+        models = data.get("models") or {}
+        stt = models.get("stt") or {}
+        llm = models.get("llm") or {}
+        tts = models.get("tts") or {}
+        kroko = data.get("kroko") or {}
+        kokoro = data.get("kokoro") or {}
+
+        if request.model_type == "llm":
+            if not request.model_path:
+                return True
+            return bool(llm.get("loaded")) and llm.get("path") == request.model_path
+
+        if request.model_type == "stt":
+            if request.backend and data.get("stt_backend") != request.backend:
+                return False
+            if not bool(stt.get("loaded")):
+                return False
+            if request.backend == "vosk" and request.model_path:
+                return stt.get("path") == request.model_path
+            if request.backend == "sherpa":
+                expected = request.sherpa_model_path or request.model_path
+                return (not expected) or stt.get("path") == expected
+            if request.backend == "kroko":
+                if request.kroko_embedded is not None and bool(kroko.get("embedded")) != bool(request.kroko_embedded):
+                    return False
+                if request.kroko_port is not None and kroko.get("port") != request.kroko_port:
+                    return False
+                if request.kroko_url and kroko.get("url") != request.kroko_url:
+                    return False
+                if request.language and kroko.get("language") != request.language:
+                    return False
+                if request.model_path and kroko.get("model_path") != request.model_path:
+                    return False
+                return True
+            return True
+
+        if request.model_type == "tts":
+            if request.backend and data.get("tts_backend") != request.backend:
+                return False
+            if not bool(tts.get("loaded")):
+                return False
+            if request.backend == "piper" and request.model_path:
+                return tts.get("path") == request.model_path
+            if request.backend == "kokoro":
+                if request.kokoro_mode and (kokoro.get("mode") or "").lower() != request.kokoro_mode.lower():
+                    return False
+                if request.voice and kokoro.get("voice") != request.voice:
+                    return False
+                if request.kokoro_api_base_url and kokoro.get("api_base_url") != request.kokoro_api_base_url:
+                    return False
+                expected_model = request.kokoro_model_path or request.model_path
+                if expected_model and kokoro.get("model_path") != expected_model:
+                    return False
+                return True
+            return True
+
+        return True
+
+    async def _wait_for_status(timeout_sec: float = 30.0) -> Optional[Dict[str, Any]]:
+        deadline = time.time() + timeout_sec
+        last_error: Optional[str] = None
+        while time.time() < deadline:
+            try:
+                data = await _fetch_status()
+                if data and _status_matches(data):
+                    return data
+            except Exception as e:
+                last_error = str(e)
+            await asyncio.sleep(1.0)
+        return None
+
+    def _read_yaml_provider_fields(provider_name: str, fields: List[str]) -> Dict[str, Any]:
+        if not os.path.exists(CONFIG_PATH):
+            return {f: None for f in fields}
+        try:
+            with open(CONFIG_PATH, "r") as f:
+                cfg = yaml.safe_load(f) or {}
+            prov = (cfg.get("providers") or {}).get(provider_name) or {}
+            if not isinstance(prov, dict):
+                prov = {}
+            result: Dict[str, Any] = {}
+            for field in fields:
+                result[field] = prov.get(field) if field in prov else None
+            return result
+        except Exception:
+            return {f: None for f in fields}
     
     # 1. Save current config for potential rollback
     previous_env = _read_env_values(env_file, [
         "LOCAL_STT_BACKEND", "LOCAL_STT_MODEL_PATH", "SHERPA_MODEL_PATH",
         "KROKO_LANGUAGE", "KROKO_EMBEDDED", "KROKO_PORT", "KROKO_URL", "KROKO_MODEL_PATH",
         "LOCAL_TTS_BACKEND", "LOCAL_TTS_MODEL_PATH",
-        "KOKORO_MODE", "KOKORO_VOICE", "KOKORO_MODEL_PATH", "LOCAL_LLM_MODEL_PATH"
+        "KOKORO_MODE", "KOKORO_VOICE", "KOKORO_MODEL_PATH",
+        "KOKORO_API_BASE_URL", "KOKORO_API_KEY", "KOKORO_API_MODEL",
+        "MELOTTS_VOICE", "FASTER_WHISPER_MODEL",
+        "LOCAL_LLM_MODEL_PATH"
     ])
     
     if request.model_type == "stt":
@@ -462,13 +614,35 @@ async def switch_model(request: SwitchModelRequest):
             ws_resp = await _try_ws_switch({"type": "switch_model", "llm_model_path": request.model_path})
             if ws_resp and ws_resp.get("type") == "switch_response" and ws_resp.get("status") == "success":
                 _update_env_file(env_file, env_updates)
+                verified = await _wait_for_status(timeout_sec=30.0)
+                if verified:
+                    return SwitchModelResponse(
+                        success=True,
+                        message=f"LLM model switched to {request.model_path} via hot-switch",
+                        requires_restart=False,
+                    )
+                # Rollback on verification failure (best-effort hot rollback, then enforce by recreate)
+                try:
+                    _update_env_file(env_file, previous_env)
+                except Exception:
+                    pass
+                prev_llm = (previous_env.get("LOCAL_LLM_MODEL_PATH") or "").strip()
+                if prev_llm:
+                    await _try_ws_switch({"type": "switch_model", "llm_model_path": prev_llm})
+                try:
+                    await _recreate_via_compose("local-ai-server")
+                except Exception:
+                    pass
                 return SwitchModelResponse(
-                    success=True,
-                    message=f"LLM model switched to {request.model_path} via hot-switch",
-                    requires_restart=False,
+                    success=False,
+                    message="LLM switch did not verify as loaded within 30s; rolled back to previous configuration.",
+                    requires_restart=True,
                 )
             requires_restart = True
     
+    # Snapshot previous YAML fields for rollback (only for fields we will touch).
+    previous_yaml = _read_yaml_provider_fields("local", list(yaml_updates.keys())) if yaml_updates else {}
+
     # 2. Try hot-switch for STT/TTS via WS before falling back to recreate.
     if request.model_type in ("stt", "tts") and request.backend:
         payload: Dict[str, Any] = {"type": "switch_model"}
@@ -528,29 +702,54 @@ async def switch_model(request: SwitchModelRequest):
     # 4. Recreate container if needed (restart doesn't reload .env)
     if requires_restart:
         try:
-            from api.system import _recreate_via_compose
-            result = await _recreate_via_compose("local-ai-server")
-            return SwitchModelResponse(
-                success=True,
-                message="Model switch applied by recreating container to load updated settings...",
-                requires_restart=True
-            )
+            await _recreate_via_compose("local-ai-server")
         except Exception as e:
-            # Attempt rollback on any error
+            # Attempt rollback on any error (env + YAML)
             try:
                 _update_env_file(env_file, previous_env)
             except Exception:
                 pass
+            if previous_yaml:
+                for field, value in previous_yaml.items():
+                    try:
+                        update_yaml_provider_field("local", field, value)
+                    except Exception:
+                        pass
             return SwitchModelResponse(
                 success=False,
                 message=f"Failed to recreate container: {str(e)}. Attempted rollback.",
                 requires_restart=True
             )
-    
+
+    # 5. Verify the new model loads; rollback if it doesn't.
+    verified = await _wait_for_status(timeout_sec=30.0)
+    if verified:
+        return SwitchModelResponse(
+            success=True,
+            message="Model switch verified as loaded",
+            requires_restart=requires_restart,
+        )
+
+    # Rollback env + YAML, and enforce rollback by recreating container.
+    try:
+        _update_env_file(env_file, previous_env)
+    except Exception:
+        pass
+    if previous_yaml:
+        for field, value in previous_yaml.items():
+            try:
+                update_yaml_provider_field("local", field, value)
+            except Exception:
+                pass
+    try:
+        await _recreate_via_compose("local-ai-server")
+    except Exception:
+        pass
+
     return SwitchModelResponse(
-        success=True,
-        message="Model configuration updated",
-        requires_restart=False
+        success=False,
+        message="Model switch did not verify as loaded within 30s; rolled back to previous configuration.",
+        requires_restart=True,
     )
 
 
@@ -632,6 +831,14 @@ async def _verify_model_loaded(model_type: str, get_setting) -> bool:
     for ws_url in urls_to_try:
         try:
             async with websockets.connect(ws_url, open_timeout=5) as ws:
+                auth_token = (get_setting("LOCAL_WS_AUTH_TOKEN", os.getenv("LOCAL_WS_AUTH_TOKEN", "")) or "").strip()
+                if auth_token:
+                    await ws.send(json.dumps({"type": "auth", "auth_token": auth_token}))
+                    raw = await asyncio.wait_for(ws.recv(), timeout=5)
+                    auth_data = json.loads(raw)
+                    if auth_data.get("type") != "auth_response" or auth_data.get("status") != "ok":
+                        raise RuntimeError(f"Local AI auth failed: {auth_data}")
+
                 await ws.send(json.dumps({"type": "status"}))
                 response = await asyncio.wait_for(ws.recv(), timeout=10)
                 data = json.loads(response)
@@ -749,6 +956,14 @@ async def rebuild_local_ai_server(request: RebuildRequest):
         _update_env_file(env_file, env_updates)
     
     try:
+        ok, warn_or_err = _disk_build_preflight(PROJECT_ROOT)
+        if not ok:
+            return RebuildResponse(
+                success=False,
+                message=warn_or_err or "Insufficient disk space for rebuild",
+                phase="error",
+            )
+
         # Run docker compose build with build args
         cmd = ["docker", "compose", "build"] + build_args + ["local-ai-server"]
         
@@ -780,9 +995,10 @@ async def rebuild_local_ai_server(request: RebuildRequest):
         if request.include_melotts:
             backends_enabled.append("MeloTTS")
         
+        warning_suffix = f" (Warning: {warn_or_err})" if warn_or_err else ""
         return RebuildResponse(
             success=True,
-            message=f"Rebuild complete! Enabled: {', '.join(backends_enabled)}",
+            message=f"Rebuild complete! Enabled: {', '.join(backends_enabled)}{warning_suffix}",
             phase="complete"
         )
         

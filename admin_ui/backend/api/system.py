@@ -672,12 +672,20 @@ async def get_system_health():
             import websockets
             import json
             import asyncio
+            from settings import get_setting
             
             # With host networking, use localhost instead of container name
             uri = os.getenv("HEALTH_CHECK_LOCAL_AI_URL", "ws://127.0.0.1:8765")
             logger.debug("Checking Local AI at %s", uri)
             async with websockets.connect(uri, open_timeout=5) as websocket:
                 logger.debug("Local AI connected, sending status...")
+                auth_token = (get_setting("LOCAL_WS_AUTH_TOKEN", os.getenv("LOCAL_WS_AUTH_TOKEN", "")) or "").strip()
+                if auth_token:
+                    await websocket.send(json.dumps({"type": "auth", "auth_token": auth_token}))
+                    raw = await asyncio.wait_for(websocket.recv(), timeout=5)
+                    auth_data = json.loads(raw)
+                    if auth_data.get("type") != "auth_response" or auth_data.get("status") != "ok":
+                        raise RuntimeError(f"Local AI auth failed: {auth_data}")
                 await websocket.send(json.dumps({"type": "status"}))
                 logger.debug("Local AI sent, waiting for response...")
                 response = await asyncio.wait_for(websocket.recv(), timeout=5)

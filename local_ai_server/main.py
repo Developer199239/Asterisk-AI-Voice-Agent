@@ -2480,7 +2480,7 @@ class LocalAIServer:
                 prompt_text[:80],
             )
             llm_response = await asyncio.wait_for(
-                self.process_llm(prompt_text), timeout=infer_timeout
+                asyncio.shield(self.process_llm(prompt_text)), timeout=infer_timeout
             )
         except asyncio.TimeoutError:
             logging.warning(
@@ -2772,7 +2772,7 @@ class LocalAIServer:
                 mode or "llm",
             )
             llm_response = await asyncio.wait_for(
-                self.process_llm(text), timeout=infer_timeout
+                asyncio.shield(self.process_llm(text)), timeout=infer_timeout
             )
         except asyncio.TimeoutError:
             logging.warning(

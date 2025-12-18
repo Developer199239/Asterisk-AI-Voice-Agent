@@ -442,12 +442,12 @@ class FasterWhisperSTTBackend:
                 return None
             
             # Transcribe the buffered audio
+            # Disable VAD for telephony audio - it often filters out speech
             segments, info = self.model.transcribe(
                 self._audio_buffer,
                 language=self.language,
                 beam_size=1,  # Faster decoding
-                vad_filter=True,  # Filter out silence
-                vad_parameters=dict(min_silence_duration_ms=500),
+                vad_filter=False,  # Disabled - telephony audio often misdetected as silence
             )
             
             # Collect all segment texts

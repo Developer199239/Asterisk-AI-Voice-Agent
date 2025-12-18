@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { HardDrive, Download, Trash2, RefreshCw, CheckCircle2, XCircle, Loader2, Globe, Mic, Volume2, Brain } from 'lucide-react';
+import { HardDrive, Download, Trash2, RefreshCw, CheckCircle2, XCircle, Loader2, Globe, Mic, Volume2, Brain, AlertTriangle } from 'lucide-react';
 import { ConfigSection } from '../../components/ui/ConfigSection';
 import { ConfigCard } from '../../components/ui/ConfigCard';
 import axios from 'axios';
@@ -33,7 +33,7 @@ interface InstalledModel {
 interface Toast {
     id: number;
     message: string;
-    type: 'success' | 'error';
+    type: 'success' | 'error' | 'warning';
 }
 
 interface DownloadProgress {
@@ -58,7 +58,7 @@ const ModelsPage = () => {
     const [selectedRegion, setSelectedRegion] = useState<string>('all');
     const [toasts, setToasts] = useState<Toast[]>([]);
 
-    const showToast = (message: string, type: 'success' | 'error') => {
+    const showToast = (message: string, type: 'success' | 'error' | 'warning') => {
         const id = Date.now();
         setToasts(prev => [...prev, { id, message, type }]);
         setTimeout(() => {
@@ -149,7 +149,7 @@ const ModelsPage = () => {
         setDownloadingModel(model.id);
         setDownloadProgress(null);
         try {
-            await axios.post('/api/wizard/local/download-model', {
+            const startRes = await axios.post('/api/wizard/local/download-model', {
                 model_id: model.id,
                 type: type,
                 download_url: model.download_url,
@@ -157,11 +157,16 @@ const ModelsPage = () => {
                 config_url: model.config_url,  // For TTS models (Piper JSON config)
                 voice_files: model.voice_files  // For Kokoro TTS voice files
             });
+            const jobId = startRes.data?.job_id;
+            const diskWarning = startRes.data?.disk_warning;
+            if (diskWarning) showToast(diskWarning, 'warning');
             showToast(`Started downloading ${model.name}`, 'success');
             // Poll for completion with progress updates
             const pollDownload = async () => {
                 try {
-                    const res = await axios.get('/api/wizard/local/download-progress');
+                    const res = await axios.get('/api/wizard/local/download-progress', {
+                        params: jobId ? { job_id: jobId } : undefined
+                    });
                     // Update progress state - always set if running to show progress bar
                     if (res.data.running) {
                         setDownloadProgress({
@@ -267,10 +272,18 @@ const ModelsPage = () => {
                         className={`px-4 py-3 rounded-lg shadow-lg flex items-center gap-2 ${
                             toast.type === 'success' 
                                 ? 'bg-green-600 text-white' 
-                                : 'bg-red-600 text-white'
+                                : toast.type === 'warning'
+                                    ? 'bg-yellow-600 text-white'
+                                    : 'bg-red-600 text-white'
                         }`}
                     >
-                        {toast.type === 'success' ? <CheckCircle2 className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
+                        {toast.type === 'success' ? (
+                            <CheckCircle2 className="w-4 h-4" />
+                        ) : toast.type === 'warning' ? (
+                            <AlertTriangle className="w-4 h-4" />
+                        ) : (
+                            <XCircle className="w-4 h-4" />
+                        )}
                         {toast.message}
                     </div>
                 ))}
