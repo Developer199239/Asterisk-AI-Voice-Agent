@@ -3646,7 +3646,15 @@ class Engine:
 
             # Check for pipeline mode FIRST (before continuous_input provider routing)
             # Pipeline adapters need audio in their queue, not sent to monolithic providers
-            if self._pipeline_forced.get(caller_channel_id):
+            pipeline_forced = self._pipeline_forced.get(caller_channel_id)
+            logger.debug(
+                "RTP audio routing check",
+                call_id=caller_channel_id,
+                pipeline_forced=pipeline_forced,
+                audio_capture_enabled=session.audio_capture_enabled,
+                has_queue=caller_channel_id in self._pipeline_queues,
+            )
+            if pipeline_forced:
                 # AAVA-28: Check gating to prevent agent from hearing its own TTS output
                 if not session.audio_capture_enabled:
                     # Drop audio during TTS playback (gating active)
