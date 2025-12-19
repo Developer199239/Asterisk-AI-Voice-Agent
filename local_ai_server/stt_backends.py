@@ -516,3 +516,157 @@ class FasterWhisperSTTBackend:
         self._audio_buffer = np.array([], dtype=np.float32)
         logging.info("🛑 FASTER-WHISPER - Model shutdown")
 
+
+class WhisperCppSTTBackend:
+    """
+    Whisper.cpp STT backend using ggml-optimized Whisper.
+    
+    Uses the same ggml backend as llama-cpp-python, avoiding library conflicts
+    that cause segfaults with CTranslate2 (faster-whisper).
+    
+    Model sizes: tiny, base, small, medium, large
+    """
+    
+    def __init__(
+        self,
+        model_path: str = "/app/models/stt/ggml-base.en.bin",
+        language: str = "en",
+        sample_rate: int = 16000,
+    ):
+        """
+        Initialize Whisper.cpp backend.
+        
+        Args:
+            model_path: Path to ggml Whisper model file (.bin)
+            language: Language code for transcription
+            sample_rate: Audio sample rate (default 16000 Hz)
+        """
+        self.model_path = model_path
+        self.language = language
+        self.sample_rate = sample_rate
+        self.model = None
+        self._initialized = False
+        # Audio buffer for chunked processing
+        self._audio_buffer = np.array([], dtype=np.float32)
+        # Minimum audio length for processing (1.5 seconds)
+        self._min_audio_length = int(sample_rate * 1.5)
+        # Last transcript to detect changes
+        self._last_text = ""
+    
+    def initialize(self) -> bool:
+        """Initialize the Whisper.cpp model."""
+        try:
+            from pywhispercpp.model import Model
+            
+            logging.info(
+                "🎤 WHISPER.CPP - Loading model from %s",
+                self.model_path
+            )
+            
+            if not os.path.exists(self.model_path):
+                logging.error("❌ WHISPER.CPP - Model file not found: %s", self.model_path)
+                return False
+            
+            self.model = Model(self.model_path, n_threads=4)
+            
+            self._initialized = True
+            logging.info("✅ WHISPER.CPP - Model loaded successfully")
+            return True
+            
+        except ImportError:
+            logging.error("❌ WHISPER.CPP - pywhispercpp not installed")
+            return False
+        except Exception as exc:
+            logging.error("❌ WHISPER.CPP - Failed to initialize: %s", exc)
+            return False
+    
+    def process_audio(self, pcm16_audio: bytes) -> Optional[Dict[str, Any]]:
+        """
+        Process PCM16 audio and return transcript.
+        
+        Args:
+            pcm16_audio: Audio in PCM16 format, 16kHz mono
+            
+        Returns:
+            Dict with keys: type ("partial"|"final"), text
+            None if no result yet
+        """
+        if not self._initialized or self.model is None:
+            return None
+        
+        try:
+            # Convert PCM16 to float32
+            samples = np.frombuffer(pcm16_audio, dtype=np.int16)
+            float_samples = samples.astype(np.float32) / 32768.0
+            
+            # Add to buffer
+            self._audio_buffer = np.concatenate([self._audio_buffer, float_samples])
+            
+            # Only process if we have enough audio
+            if len(self._audio_buffer) < self._min_audio_length:
+                return None
+            
+            # Transcribe the buffered audio
+            segments = self.model.transcribe(self._audio_buffer)
+            
+            # Collect all segment texts
+            text = " ".join(seg.text.strip() for seg in segments if seg.text)
+            
+            if not text:
+                return None
+            
+            # Check if text changed (indicates ongoing speech)
+            if text != self._last_text:
+                self._last_text = text
+                return {"type": "partial", "text": text}
+            
+            return None
+            
+        except Exception as exc:
+            logging.error("❌ WHISPER.CPP - Transcription error: %s", exc)
+            return None
+    
+    def finalize(self) -> Optional[Dict[str, Any]]:
+        """
+        Finalize transcription and return final result.
+        
+        Called when speech ends (silence detected).
+        Clears the buffer and returns final transcript.
+        """
+        if not self._initialized or self.model is None:
+            return None
+        
+        if len(self._audio_buffer) == 0:
+            return None
+        
+        try:
+            # Transcribe remaining audio
+            segments = self.model.transcribe(self._audio_buffer)
+            
+            text = " ".join(seg.text.strip() for seg in segments if seg.text)
+            
+            # Clear buffer
+            self._audio_buffer = np.array([], dtype=np.float32)
+            self._last_text = ""
+            
+            if text:
+                return {"type": "final", "text": text}
+            return None
+            
+        except Exception as exc:
+            logging.error("❌ WHISPER.CPP - Finalize error: %s", exc)
+            self._audio_buffer = np.array([], dtype=np.float32)
+            return None
+    
+    def reset(self) -> None:
+        """Reset the audio buffer."""
+        self._audio_buffer = np.array([], dtype=np.float32)
+        self._last_text = ""
+    
+    def shutdown(self) -> None:
+        """Shutdown the model."""
+        self.model = None
+        self._initialized = False
+        self._audio_buffer = np.array([], dtype=np.float32)
+        logging.info("🛑 WHISPER.CPP - Model shutdown")
+

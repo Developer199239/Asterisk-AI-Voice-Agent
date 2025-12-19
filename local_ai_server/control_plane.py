@@ -15,7 +15,7 @@ def apply_switch_model_request(
 
     if "stt_backend" in data:
         backend = (data["stt_backend"] or "").strip().lower()
-        if backend in ("vosk", "sherpa", "kroko", "faster_whisper"):
+        if backend in ("vosk", "sherpa", "kroko", "faster_whisper", "whisper_cpp"):
             new_config = replace(new_config, stt_backend=backend)
             changed.append(f"stt_backend={backend}")
 

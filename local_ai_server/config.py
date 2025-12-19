@@ -34,6 +34,9 @@ class LocalAIConfig:
     faster_whisper_compute: str = "int8"
     faster_whisper_language: str = "en"
 
+    whisper_cpp_model_path: str = "/app/models/stt/ggml-base.en.bin"
+    whisper_cpp_language: str = "en"
+
     kroko_url: str = "wss://app.kroko.ai/api/v1/transcripts/streaming"
     kroko_api_key: str = ""
     kroko_language: str = "en-US"
@@ -103,6 +106,10 @@ class LocalAIConfig:
             faster_whisper_device=os.getenv("FASTER_WHISPER_DEVICE", "cpu"),
             faster_whisper_compute=os.getenv("FASTER_WHISPER_COMPUTE_TYPE", "int8"),
             faster_whisper_language=os.getenv("FASTER_WHISPER_LANGUAGE", "en"),
+            whisper_cpp_model_path=os.getenv(
+                "WHISPER_CPP_MODEL_PATH", "/app/models/stt/ggml-base.en.bin"
+            ),
+            whisper_cpp_language=os.getenv("WHISPER_CPP_LANGUAGE", "en"),
             kroko_url=os.getenv(
                 "KROKO_URL",
                 "wss://app.kroko.ai/api/v1/transcripts/streaming",

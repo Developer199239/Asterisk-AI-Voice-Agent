@@ -9,6 +9,7 @@ FROM python:3.11 as builder
 ARG INCLUDE_VOSK=true
 ARG INCLUDE_SHERPA=true
 ARG INCLUDE_FASTER_WHISPER=false
+ARG INCLUDE_WHISPER_CPP=true
 ARG INCLUDE_PIPER=true
 ARG INCLUDE_KOKORO=true
 ARG INCLUDE_MELOTTS=false
@@ -41,6 +42,11 @@ RUN if [ "$INCLUDE_SHERPA" = "true" ]; then \
 RUN if [ "$INCLUDE_FASTER_WHISPER" = "true" ]; then \
         echo "📦 Installing Faster-Whisper STT..." && \
         pip install --no-cache-dir faster-whisper==1.0.3; \
+    fi
+
+RUN if [ "$INCLUDE_WHISPER_CPP" = "true" ]; then \
+        echo "📦 Installing Whisper.cpp (pywhispercpp)..." && \
+        pip install --no-cache-dir pywhispercpp==1.2.0; \
     fi
 
 RUN if [ "$INCLUDE_PIPER" = "true" ]; then \

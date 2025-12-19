@@ -730,6 +730,7 @@ class LocalAIServer:
         self.kroko_backend: Optional[KrokoSTTBackend] = None
         self.sherpa_backend: Optional[SherpaONNXSTTBackend] = None
         self.faster_whisper_backend: Optional["FasterWhisperSTTBackend"] = None
+        self.whisper_cpp_backend: Optional["WhisperCppSTTBackend"] = None
         self.kokoro_backend: Optional[KokoroTTSBackend] = None
         self.melotts_backend: Optional["MeloTTSBackend"] = None
         self._apply_config(self.config)
@@ -761,6 +762,8 @@ class LocalAIServer:
         self.faster_whisper_device = config.faster_whisper_device
         self.faster_whisper_compute = config.faster_whisper_compute
         self.faster_whisper_language = config.faster_whisper_language
+        self.whisper_cpp_model_path = config.whisper_cpp_model_path
+        self.whisper_cpp_language = config.whisper_cpp_language
         self.kroko_url = config.kroko_url
         self.kroko_api_key = config.kroko_api_key
         self.kroko_language = config.kroko_language
@@ -847,13 +850,15 @@ class LocalAIServer:
             logging.info("✅ All models loaded successfully for MVP pipeline")
 
     async def _load_stt_model(self):
-        """Load STT model based on configured backend (vosk, kroko, sherpa, or faster_whisper)."""
+        """Load STT model based on configured backend (vosk, kroko, sherpa, faster_whisper, or whisper_cpp)."""
         if self.stt_backend == "kroko":
             await self._load_kroko_backend()
         elif self.stt_backend == "sherpa":
             await self._load_sherpa_backend()
         elif self.stt_backend == "faster_whisper":
             await self._load_faster_whisper_backend()
+        elif self.stt_backend == "whisper_cpp":
+            await self._load_whisper_cpp_backend()
         else:
             await self._load_vosk_backend()
 
@@ -994,6 +999,34 @@ class LocalAIServer:
         except Exception as exc:
             logging.error("❌ Failed to initialize Faster-Whisper STT backend: %s", exc)
             self.faster_whisper_backend = None
+            self.startup_errors["stt"] = str(exc)
+            if self.fail_fast:
+                raise
+
+    async def _load_whisper_cpp_backend(self):
+        """Initialize Whisper.cpp STT backend using ggml (same as llama-cpp-python)."""
+        try:
+            from stt_backends import WhisperCppSTTBackend
+            
+            logging.info(
+                "🎤 STT backend: Whisper.cpp (model=%s)",
+                self.whisper_cpp_model_path,
+            )
+
+            self.whisper_cpp_backend = WhisperCppSTTBackend(
+                model_path=self.whisper_cpp_model_path,
+                language=self.whisper_cpp_language,
+                sample_rate=PCM16_TARGET_RATE,
+            )
+
+            if not self.whisper_cpp_backend.initialize():
+                raise RuntimeError("Failed to initialize Whisper.cpp")
+
+            logging.info("✅ STT backend: Whisper.cpp initialized")
+
+        except Exception as exc:
+            logging.error("❌ Failed to initialize Whisper.cpp STT backend: %s", exc)
+            self.whisper_cpp_backend = None
             self.startup_errors["stt"] = str(exc)
             if self.fail_fast:
                 raise
@@ -1935,6 +1968,8 @@ class LocalAIServer:
             return await self._process_stt_stream_sherpa(session, audio_data, input_rate)
         elif self.stt_backend == "faster_whisper":
             return await self._process_stt_stream_faster_whisper(session, audio_data, input_rate)
+        elif self.stt_backend == "whisper_cpp":
+            return await self._process_stt_stream_whisper_cpp(session, audio_data, input_rate)
         else:
             return await self._process_stt_stream_vosk(session, audio_data, input_rate)
 
@@ -2008,6 +2043,76 @@ class LocalAIServer:
         except Exception as exc:
             logging.error("Faster-Whisper STT stream processing failed: %s", exc, exc_info=True)
             session.fw_audio_buffer = b""
+
+        return updates
+
+    async def _process_stt_stream_whisper_cpp(
+        self,
+        session: SessionContext,
+        audio_data: bytes,
+        input_rate: int,
+    ) -> List[Dict[str, Any]]:
+        """Feed audio into Whisper.cpp and return transcript updates."""
+        if not self.whisper_cpp_backend:
+            logging.error("Whisper.cpp STT backend not initialized")
+            return []
+
+        # Buffer audio for Whisper.cpp (needs sufficient audio for transcription)
+        if not hasattr(session, 'wcpp_audio_buffer'):
+            session.wcpp_audio_buffer = b""
+        
+        # Resample to 16kHz if needed
+        if input_rate != PCM16_TARGET_RATE:
+            audio_bytes = await asyncio.to_thread(
+                self.audio_processor.resample_audio,
+                audio_data,
+                input_rate,
+                PCM16_TARGET_RATE,
+                "raw",
+                "raw",
+            )
+        else:
+            audio_bytes = audio_data
+
+        session.wcpp_audio_buffer += audio_bytes
+        
+        # Only process when we have enough audio (e.g., 1 second = 32000 bytes at 16kHz mono 16-bit)
+        MIN_BUFFER_SIZE = 32000  # 1 second of audio
+        if len(session.wcpp_audio_buffer) < MIN_BUFFER_SIZE:
+            return []
+
+        updates: List[Dict[str, Any]] = []
+        
+        try:
+            # Reset backend's internal buffer since we manage our own buffer
+            await asyncio.to_thread(self.whisper_cpp_backend.reset)
+            
+            # Process buffered audio with Whisper.cpp
+            await asyncio.to_thread(
+                self.whisper_cpp_backend.process_audio,
+                session.wcpp_audio_buffer
+            )
+            
+            # Call finalize() to get the final transcript
+            result = await asyncio.to_thread(self.whisper_cpp_backend.finalize)
+            
+            if result and result.get("text"):
+                transcript = result["text"].strip()
+                is_final = result.get("type") == "final"
+                logging.info("📝 STT RESULT - Whisper.cpp transcript: '%s' (final=%s)", transcript, is_final)
+                updates.append({
+                    "type": "stt_result",
+                    "is_final": is_final,
+                    "text": transcript,
+                    "transcript": transcript,
+                })
+            
+            # Clear buffer after processing
+            session.wcpp_audio_buffer = b""
+            
+        except Exception as exc:
+            logging.error("Whisper.cpp STT stream processing failed: %s", exc, exc_info=True)
+            session.wcpp_audio_buffer = b""
 
         return updates
 
