@@ -449,6 +449,61 @@ export const HealthWidget = () => {
 
                 {health.local_ai_server.status === 'connected' && (
                     <div className="space-y-4">
+                        {/* Degraded / mock-mode banner */}
+                        {(() => {
+                            const degraded = !!health?.local_ai_server?.details?.config?.degraded;
+                            const mockModels = !!health?.local_ai_server?.details?.config?.mock_models;
+                            const startupErrors = health?.local_ai_server?.details?.config?.startup_errors || {};
+                            const startupErrorEntries = Object.entries(startupErrors || {});
+
+                            if (!degraded && !mockModels) return null;
+
+                            return (
+                                <div className="space-y-2">
+                                    {mockModels && (
+                                        <div className="p-3 bg-blue-500/10 border border-blue-500/30 rounded-lg text-sm text-blue-700 dark:text-blue-300 flex items-start gap-2">
+                                            <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                                            <div>
+                                                <div className="font-medium">Mock models enabled</div>
+                                                <div className="text-xs opacity-80">
+                                                    `LOCAL_AI_MOCK_MODELS=1` is set; status may not reflect real model loading.
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {degraded && (
+                                        <div className="p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg text-sm text-yellow-700 dark:text-yellow-300">
+                                            <div className="flex items-start gap-2">
+                                                <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                                                <div className="flex-1">
+                                                    <div className="font-medium">Degraded mode</div>
+                                                    <div className="text-xs opacity-80">
+                                                        Local AI Server started but some components failed to initialize.
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            {startupErrorEntries.length > 0 && (
+                                                <details className="mt-2">
+                                                    <summary className="cursor-pointer text-xs opacity-90">
+                                                        Startup errors ({startupErrorEntries.length})
+                                                    </summary>
+                                                    <ul className="mt-2 space-y-1 text-xs opacity-90">
+                                                        {startupErrorEntries.map(([k, v]) => (
+                                                            <li key={k} className="flex gap-2">
+                                                                <span className="font-mono">{k}:</span>
+                                                                <span className="break-words">{String(v)}</span>
+                                                            </li>
+                                                        ))}
+                                                    </ul>
+                                                </details>
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        })()}
+
                         {/* STT Section */}
                         <div className="space-y-2">
                             <div className="flex justify-between items-center text-sm">
