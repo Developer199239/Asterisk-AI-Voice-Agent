@@ -580,6 +580,29 @@ class WhisperCppSTTBackend:
             logging.error("❌ WHISPER.CPP - Failed to initialize: %s", exc)
             return False
     
+    # Known Whisper hallucinations to filter out
+    HALLUCINATION_PATTERNS = {
+        "[BLANK_AUDIO]", "[MUSIC]", "[APPLAUSE]", "[LAUGHTER]",
+        "you", "You", "YOU", "Thank you.", "Thanks for watching.",
+        "Bye.", "Goodbye.", "See you.", "Subscribe.",
+    }
+    
+    def _compute_energy(self, samples: np.ndarray) -> float:
+        """Compute RMS energy of audio samples."""
+        return float(np.sqrt(np.mean(samples ** 2)))
+    
+    def _is_hallucination(self, text: str) -> bool:
+        """Check if text is a known Whisper hallucination."""
+        text_clean = text.strip()
+        # Exact match hallucinations
+        if text_clean in self.HALLUCINATION_PATTERNS:
+            return True
+        # Short repetitive patterns (e.g., "you you you")
+        words = text_clean.lower().split()
+        if len(words) >= 2 and len(set(words)) == 1:
+            return True
+        return False
+    
     def process_audio(self, pcm16_audio: bytes) -> Optional[Dict[str, Any]]:
         """
         Process PCM16 audio and return transcript.
@@ -599,11 +622,22 @@ class WhisperCppSTTBackend:
             samples = np.frombuffer(pcm16_audio, dtype=np.int16)
             float_samples = samples.astype(np.float32) / 32768.0
             
+            # Energy-based VAD: skip silence
+            energy = self._compute_energy(float_samples)
+            if energy < 0.01:  # Silence threshold
+                return None
+            
             # Add to buffer
             self._audio_buffer = np.concatenate([self._audio_buffer, float_samples])
             
             # Only process if we have enough audio
             if len(self._audio_buffer) < self._min_audio_length:
+                return None
+            
+            # Check buffer energy before processing
+            buffer_energy = self._compute_energy(self._audio_buffer)
+            if buffer_energy < 0.02:  # Buffer too quiet
+                self._audio_buffer = np.array([], dtype=np.float32)
                 return None
             
             # Transcribe the buffered audio
@@ -613,6 +647,11 @@ class WhisperCppSTTBackend:
             text = " ".join(seg.text.strip() for seg in segments if seg.text)
             
             if not text:
+                return None
+            
+            # Filter out hallucinations
+            if self._is_hallucination(text):
+                logging.debug("🔇 WHISPER.CPP - Filtered hallucination: '%s'", text)
                 return None
             
             # Check if text changed (indicates ongoing speech)
@@ -640,6 +679,13 @@ class WhisperCppSTTBackend:
             return None
         
         try:
+            # Check buffer energy - skip if too quiet
+            buffer_energy = self._compute_energy(self._audio_buffer)
+            if buffer_energy < 0.02:
+                self._audio_buffer = np.array([], dtype=np.float32)
+                self._last_text = ""
+                return None
+            
             # Transcribe remaining audio
             segments = self.model.transcribe(self._audio_buffer)
             
@@ -650,6 +696,10 @@ class WhisperCppSTTBackend:
             self._last_text = ""
             
             if text:
+                # Filter out hallucinations
+                if self._is_hallucination(text):
+                    logging.debug("🔇 WHISPER.CPP - Filtered hallucination in finalize: '%s'", text)
+                    return None
                 return {"type": "final", "text": text}
             return None
             
