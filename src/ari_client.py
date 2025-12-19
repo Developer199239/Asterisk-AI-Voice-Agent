@@ -436,6 +436,17 @@ class ARIClient:
                 if 200 <= int(status) < 300:
                     logger.info("Channel added to bridge", bridge_id=bridge_id, channel_id=channel_id, status=status)
                     return True
+                # Idempotency: Asterisk can return a conflict if the channel is already in the bridge.
+                # Treat this as success to make attach retries safe.
+                reason = str(response.get("reason", "") or "")
+                if int(status) in (409, 422) and ("already" in reason.lower()) and ("bridge" in reason.lower()):
+                    logger.info(
+                        "Channel already in bridge (treated as success)",
+                        bridge_id=bridge_id,
+                        channel_id=channel_id,
+                        status=status,
+                    )
+                    return True
                 else:
                     logger.error("Failed to add channel to bridge", bridge_id=bridge_id, channel_id=channel_id, status=status, response=response)
                     return False
@@ -992,4 +1003,3 @@ class ARIClient:
         except Exception as e:
             logger.error("Error destroying bridge", bridge_id=bridge_id, error=str(e))
             return False
-

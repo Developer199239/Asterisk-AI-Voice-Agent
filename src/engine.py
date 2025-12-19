@@ -1130,13 +1130,16 @@ class Engine:
                 # Fallback: search all sessions for external_media_id
                 sessions = await self.session_store.get_all_sessions()
                 for s in sessions:
-                    if s.external_media_id == external_media_id:
+                    if s.external_media_id == external_media_id or s.pending_external_media_id == external_media_id:
                         session = s
                         break
             
             if not session:
-                logger.warning("ExternalMedia channel entered Stasis but no caller found", 
-                             external_media_id=external_media_id)
+                logger.warning(
+                    "ExternalMedia channel entered Stasis but no caller found (will retry attach)",
+                    external_media_id=external_media_id,
+                )
+                asyncio.create_task(self._retry_attach_external_media_channel(external_media_id))
                 return
             
             caller_channel_id = session.caller_channel_id
@@ -1155,7 +1158,8 @@ class Engine:
                                caller_channel_id=caller_channel_id)
                     
                     # Start the provider session now that media path is connected
-                    await self._start_provider_session(caller_channel_id)
+                    if not session.provider_session_active:
+                        await self._start_provider_session(caller_channel_id)
                 else:
                     logger.error("🎯 EXTERNAL MEDIA - Failed to add ExternalMedia channel to bridge", 
                                external_media_id=external_media_id,
@@ -1170,6 +1174,60 @@ class Engine:
                         external_media_id=external_media_id, 
                         error=str(e), 
                         exc_info=True)
+
+    async def _retry_attach_external_media_channel(
+        self,
+        external_media_id: str,
+        *,
+        attempts: int = 25,
+        delay_seconds: float = 0.1,
+    ) -> None:
+        """
+        Best-effort retry for attaching an ExternalMedia channel to its call bridge.
+
+        Mitigates an ARI event-order race where the ExternalMedia channel's StasisStart
+        can arrive before the call session has been updated with external_media_id.
+        """
+        for attempt in range(1, max(1, attempts) + 1):
+            try:
+                session = await self.session_store.get_by_channel_id(external_media_id)
+                if not session:
+                    sessions = await self.session_store.get_all_sessions()
+                    for s in sessions:
+                        if s.external_media_id == external_media_id or s.pending_external_media_id == external_media_id:
+                            session = s
+                            break
+
+                if session and session.bridge_id:
+                    success = await self.ari_client.add_channel_to_bridge(session.bridge_id, external_media_id)
+                    if success:
+                        session.external_media_id = external_media_id
+                        session.pending_external_media_id = None
+                        await self._save_session(session)
+                        logger.info(
+                            "🎯 EXTERNAL MEDIA - ExternalMedia channel attached after retry",
+                            external_media_id=external_media_id,
+                            bridge_id=session.bridge_id,
+                            caller_channel_id=session.caller_channel_id,
+                            attempt=attempt,
+                        )
+                        if not session.provider_session_active:
+                            await self._start_provider_session(session.caller_channel_id)
+                        return
+            except Exception:
+                logger.debug(
+                    "ExternalMedia attach retry failed",
+                    external_media_id=external_media_id,
+                    attempt=attempt,
+                    exc_info=True,
+                )
+            await asyncio.sleep(delay_seconds)
+
+        logger.error(
+            "🎯 EXTERNAL MEDIA - ExternalMedia attach retry exhausted",
+            external_media_id=external_media_id,
+            attempts=attempts,
+        )
 
     async def _handle_caller_stasis_start_hybrid(self, caller_channel_id: str, channel: dict):
         """Handle caller channel entering Stasis - Hybrid ARI approach."""
@@ -1386,6 +1444,35 @@ class Engine:
                     logger.info("🎯 EXTERNAL MEDIA - ExternalMedia channel created, session updated", 
                                channel_id=caller_channel_id, 
                                external_media_id=external_media_id)
+
+                    # Attach immediately to avoid reliance on ExternalMedia StasisStart ordering.
+                    if session.bridge_id:
+                        attached = False
+                        for attempt in range(1, 26):
+                            added = await self.ari_client.add_channel_to_bridge(session.bridge_id, external_media_id)
+                            if added:
+                                attached = True
+                                session.pending_external_media_id = None
+                                await self._save_session(session)
+                                logger.info(
+                                    "🎯 EXTERNAL MEDIA - ExternalMedia channel added to bridge (direct attach)",
+                                    external_media_id=external_media_id,
+                                    bridge_id=session.bridge_id,
+                                    caller_channel_id=caller_channel_id,
+                                    attempt=attempt,
+                                )
+                                break
+                            await asyncio.sleep(0.1)
+
+                        if attached and not session.provider_session_active:
+                            await self._start_provider_session(caller_channel_id)
+                        elif not attached:
+                            logger.error(
+                                "🎯 EXTERNAL MEDIA - Failed to add ExternalMedia channel to bridge (direct attach)",
+                                external_media_id=external_media_id,
+                                bridge_id=session.bridge_id,
+                                caller_channel_id=caller_channel_id,
+                            )
                 else:
                     logger.error("🎯 EXTERNAL MEDIA - Failed to create ExternalMedia channel", channel_id=caller_channel_id)
             else:
