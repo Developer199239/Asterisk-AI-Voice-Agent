@@ -572,10 +572,19 @@ async def get_docker_disk_usage():
             except:
                 return 0
         
+        def safe_int(val, default=0):
+            """Safely convert value to int."""
+            if val is None:
+                return default
+            try:
+                return int(val)
+            except (ValueError, TypeError):
+                return default
+        
         # Calculate image stats
         img_total_size = sum(parse_size(img.get("Size", "0B")) for img in images)
-        img_reclaimable = sum(parse_size(img.get("Size", "0B")) for img in images if img.get("Containers", 0) == 0)
-        img_active = sum(1 for img in images if img.get("Containers", 0) > 0)
+        img_reclaimable = sum(parse_size(img.get("Size", "0B")) for img in images if safe_int(img.get("Containers")) == 0)
+        img_active = sum(1 for img in images if safe_int(img.get("Containers")) > 0)
         
         # Calculate container stats  
         cont_total_size = sum(parse_size(c.get("Size", "0B")) for c in containers)
@@ -584,7 +593,7 @@ async def get_docker_disk_usage():
         
         # Calculate volume stats
         vol_total_size = sum(parse_size(v.get("Size", "0B")) for v in volumes)
-        vol_active = sum(1 for v in volumes if v.get("Links", 0) > 0)
+        vol_active = sum(1 for v in volumes if safe_int(v.get("Links")) > 0)
         
         # Calculate build cache stats
         bc_total_size = sum(parse_size(bc.get("Size", "0B")) for bc in build_cache)
