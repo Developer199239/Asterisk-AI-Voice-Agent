@@ -1951,6 +1951,8 @@ class LocalAIServer:
             return self.sherpa_backend is not None
         if self.stt_backend == "faster_whisper":
             return self.faster_whisper_backend is not None
+        if self.stt_backend == "whisper_cpp":
+            return self.whisper_cpp_backend is not None
         # Default: Vosk
         return self.stt_model is not None and KaldiRecognizer is not None
 
