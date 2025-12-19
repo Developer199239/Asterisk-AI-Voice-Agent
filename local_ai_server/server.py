@@ -721,6 +721,8 @@ class LocalAIServer:
         
         # Lock to serialize LLM inference (llama-cpp is NOT thread-safe)
         self._llm_lock = asyncio.Lock()
+        # Lock to serialize Faster-Whisper inference (CTranslate2 is NOT thread-safe)
+        self._faster_whisper_lock = asyncio.Lock()
         # Component -> last startup error (used for degraded mode status/logging)
         self.startup_errors: Dict[str, str] = {}
 
@@ -1381,11 +1383,12 @@ class LocalAIServer:
 
             logging.info("🎵 STT PROCESSING - Faster-Whisper processing buffered audio: %s bytes", len(self.audio_buffer))
 
-            # Process with Faster-Whisper
-            transcript = await asyncio.to_thread(
-                self.faster_whisper_backend.transcribe,
-                self.audio_buffer
-            )
+            # Process with Faster-Whisper (acquire lock - CTranslate2 is NOT thread-safe)
+            async with self._faster_whisper_lock:
+                transcript = await asyncio.to_thread(
+                    self.faster_whisper_backend.transcribe,
+                    self.audio_buffer
+                )
 
             if transcript:
                 logging.info("📝 STT RESULT - Faster-Whisper transcript: '%s'", transcript)
@@ -1973,18 +1976,20 @@ class LocalAIServer:
         updates: List[Dict[str, Any]] = []
         
         try:
-            # Reset backend's internal buffer since we manage our own buffer
-            await asyncio.to_thread(self.faster_whisper_backend.reset)
-            
-            # Process buffered audio with Faster-Whisper
-            await asyncio.to_thread(
-                self.faster_whisper_backend.process_audio,
-                session.fw_audio_buffer
-            )
-            
-            # Call finalize() to get the final transcript
-            # (Whisper is a batch model, each chunk is effectively final)
-            result = await asyncio.to_thread(self.faster_whisper_backend.finalize)
+            # Acquire lock to prevent concurrent access (CTranslate2 is NOT thread-safe)
+            async with self._faster_whisper_lock:
+                # Reset backend's internal buffer since we manage our own buffer
+                await asyncio.to_thread(self.faster_whisper_backend.reset)
+                
+                # Process buffered audio with Faster-Whisper
+                await asyncio.to_thread(
+                    self.faster_whisper_backend.process_audio,
+                    session.fw_audio_buffer
+                )
+                
+                # Call finalize() to get the final transcript
+                # (Whisper is a batch model, each chunk is effectively final)
+                result = await asyncio.to_thread(self.faster_whisper_backend.finalize)
             
             if result and result.get("text"):
                 transcript = result["text"].strip()
