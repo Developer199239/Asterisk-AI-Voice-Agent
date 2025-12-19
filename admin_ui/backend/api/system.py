@@ -667,9 +667,10 @@ async def prune_docker_resources(request: PruneRequest):
     
     try:
         # Always prune build cache first (safest, often largest)
+        # Use -a to remove ALL build cache, not just unused layers
         if request.prune_build_cache:
             result = subprocess.run(
-                ["docker", "builder", "prune", "-f"],
+                ["docker", "builder", "prune", "-a", "-f"],
                 capture_output=True,
                 text=True,
                 timeout=120
@@ -685,13 +686,14 @@ async def prune_docker_resources(request: PruneRequest):
             else:
                 details["build_cache"] = f"error: {result.stderr}"
         
-        # Prune unused images
+        # Prune unused images (all images not used by containers)
+        # Use -a to remove ALL unused images, not just dangling ones
         if request.prune_images:
             result = subprocess.run(
-                ["docker", "image", "prune", "-f"],
+                ["docker", "image", "prune", "-a", "-f"],
                 capture_output=True,
                 text=True,
-                timeout=60
+                timeout=120
             )
             if result.returncode == 0:
                 details["images"] = "pruned"
