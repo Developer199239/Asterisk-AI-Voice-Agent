@@ -564,9 +564,11 @@ async def get_docker_disk_usage():
             if not size_str or size_str == "0B":
                 return 0
             try:
-                units = {'B': 1, 'KB': 1024, 'MB': 1024**2, 'GB': 1024**3, 'TB': 1024**4}
-                for unit, multiplier in units.items():
-                    if size_str.upper().endswith(unit):
+                # Check longer units first to avoid "GB" matching "B"
+                units = [('TB', 1024**4), ('GB', 1024**3), ('MB', 1024**2), ('KB', 1024), ('B', 1)]
+                size_upper = size_str.upper()
+                for unit, multiplier in units:
+                    if size_upper.endswith(unit):
                         return float(size_str[:-len(unit)]) * multiplier
                 return float(size_str)
             except:
