@@ -538,10 +538,85 @@ async def get_docker_disk_usage():
             
             return usage
         
-        # Parse JSON output if available
+        # Parse JSON output and transform to expected format
         import json
         data = json.loads(result.stdout)
-        return data
+        
+        # Transform the verbose JSON format to our expected structure
+        def format_bytes(size_bytes):
+            """Convert bytes to human readable string."""
+            if size_bytes == 0:
+                return "0B"
+            for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+                if abs(size_bytes) < 1024.0:
+                    return f"{size_bytes:.1f}{unit}"
+                size_bytes /= 1024.0
+            return f"{size_bytes:.1f}PB"
+        
+        # Calculate totals from the detailed JSON data
+        images = data.get("Images", []) or []
+        containers = data.get("Containers", []) or []
+        volumes = data.get("Volumes", []) or []
+        build_cache = data.get("BuildCache", []) or []
+        
+        def parse_size(size_str):
+            """Parse size string like '10.2GB' to bytes."""
+            if not size_str or size_str == "0B":
+                return 0
+            try:
+                units = {'B': 1, 'KB': 1024, 'MB': 1024**2, 'GB': 1024**3, 'TB': 1024**4}
+                for unit, multiplier in units.items():
+                    if size_str.upper().endswith(unit):
+                        return float(size_str[:-len(unit)]) * multiplier
+                return float(size_str)
+            except:
+                return 0
+        
+        # Calculate image stats
+        img_total_size = sum(parse_size(img.get("Size", "0B")) for img in images)
+        img_reclaimable = sum(parse_size(img.get("Size", "0B")) for img in images if img.get("Containers", 0) == 0)
+        img_active = sum(1 for img in images if img.get("Containers", 0) > 0)
+        
+        # Calculate container stats  
+        cont_total_size = sum(parse_size(c.get("Size", "0B")) for c in containers)
+        cont_reclaimable = sum(parse_size(c.get("Size", "0B")) for c in containers if c.get("State") != "running")
+        cont_active = sum(1 for c in containers if c.get("State") == "running")
+        
+        # Calculate volume stats
+        vol_total_size = sum(parse_size(v.get("Size", "0B")) for v in volumes)
+        vol_active = sum(1 for v in volumes if v.get("Links", 0) > 0)
+        
+        # Calculate build cache stats
+        bc_total_size = sum(parse_size(bc.get("Size", "0B")) for bc in build_cache)
+        bc_reclaimable = sum(parse_size(bc.get("Size", "0B")) for bc in build_cache if bc.get("InUse") == "false")
+        bc_active = sum(1 for bc in build_cache if bc.get("InUse") == "true")
+        
+        return {
+            "images": {
+                "total": len(images),
+                "active": img_active,
+                "size": format_bytes(img_total_size),
+                "reclaimable": format_bytes(img_reclaimable)
+            },
+            "containers": {
+                "total": len(containers),
+                "active": cont_active,
+                "size": format_bytes(cont_total_size),
+                "reclaimable": format_bytes(cont_reclaimable)
+            },
+            "volumes": {
+                "total": len(volumes),
+                "active": vol_active,
+                "size": format_bytes(vol_total_size),
+                "reclaimable": "0B"  # Volumes shouldn't be auto-reclaimed
+            },
+            "build_cache": {
+                "total": len(build_cache),
+                "active": bc_active,
+                "size": format_bytes(bc_total_size),
+                "reclaimable": format_bytes(bc_reclaimable)
+            }
+        }
         
     except subprocess.TimeoutExpired:
         raise HTTPException(status_code=500, detail="Timeout getting Docker disk usage")
