@@ -12,6 +12,7 @@ def detect_capabilities(config: LocalAIConfig) -> Dict[str, Any]:
         "sherpa": False,
         "kroko_embedded": False,
         "faster_whisper": False,
+        "whisper_cpp": False,
         "piper": True,
         "kokoro": False,
         "melotts": False,
@@ -46,6 +47,12 @@ def detect_capabilities(config: LocalAIConfig) -> Dict[str, Any]:
     try:
         from melo.api import TTS  # noqa: F401
         capabilities["melotts"] = True
+    except ImportError:
+        pass
+
+    try:
+        from pywhispercpp.model import Model  # noqa: F401
+        capabilities["whisper_cpp"] = True
     except ImportError:
         pass
 
