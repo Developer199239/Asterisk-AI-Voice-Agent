@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import logging
 import math
 import os
@@ -12,7 +13,7 @@ import base64
 import json
 from collections import deque
 from datetime import datetime, timezone
-from typing import Dict, Any, Optional, List, Set, Tuple
+from typing import Dict, Any, Optional, List, Set, Tuple, Callable
 
 # Simple audio capture system removed - not used in production
 
@@ -314,7 +315,15 @@ class Engine:
             default=self.transport_orchestrator.default_profile_name,
         )
         
+        # Provider templates are safe to use for readiness/capability inspection, but
+        # MUST NOT be used for per-call sessions (providers keep call-specific state).
         self.providers: Dict[str, AIProviderInterface] = {}
+        # Factories for creating per-call provider instances (supports concurrent calls).
+        self.provider_factories: Dict[str, Callable[[], AIProviderInterface]] = {}
+        # Active provider instances keyed by call_id (one provider instance per call).
+        self._call_providers: Dict[str, AIProviderInterface] = {}
+        # Single-flight start tasks keyed by call_id (prevents duplicate start_session races).
+        self._provider_start_tasks: Dict[str, asyncio.Task] = {}
         # Track static codec/sample-rate validation issues per provider
         self.provider_alignment_issues: Dict[str, List[str]] = {}
         # Per-call provider streaming queues (AgentAudio -> streaming playback)
@@ -756,6 +765,11 @@ class Engine:
         # Pipeline adapter suffixes - these are loaded by PipelineOrchestrator, not Engine
         ADAPTER_SUFFIXES = ('_stt', '_llm', '_tts')
         
+        # Provider templates are for readiness/capability checks only.
+        # Per-call provider sessions are created via provider_factories.
+        self.providers.clear()
+        self.provider_factories.clear()
+        
         logger.info("Loading AI providers...", provider_names=list(self.config.providers.keys()))
         for name, provider_config_data in self.config.providers.items():
             # Skip pipeline adapters - they're handled by PipelineOrchestrator
@@ -777,6 +791,8 @@ class Engine:
                     config = LocalProviderConfig(**resolved_config)
                     provider = LocalProvider(config, self.on_provider_event)
                     self.providers[name] = provider
+                    # Per-call factory (supports concurrent calls).
+                    self.provider_factories[name] = lambda cfg=config: LocalProvider(self._clone_config(cfg), self.on_provider_event)
                     logger.info(f"Provider '{name}' loaded successfully.")
 
                     # Provide initial greeting from global LLM config
@@ -785,11 +801,6 @@ class Engine:
                             provider.set_initial_greeting(getattr(self.config.llm, 'initial_greeting', None))
                     except Exception:
                         logger.debug("Failed to set initial greeting on LocalProvider", exc_info=True)
-
-                    # Initialize persistent connection for local provider
-                    if hasattr(provider, 'initialize'):
-                        await provider.initialize()
-                        logger.info(f"Provider '{name}' connection initialized.")
 
                     runtime_issues = self._describe_provider_alignment(name, provider)
                     if runtime_issues:
@@ -808,6 +819,8 @@ class Engine:
                     # Set session store for turn latency tracking (Milestone 21)
                     provider.set_session_store(self.session_store)
                     self.providers[name] = provider
+                    # Per-call factory (supports concurrent calls).
+                    self.provider_factories[name] = lambda cfg=deepgram_config: DeepgramProvider(self._clone_config(cfg), self.config.llm, self.on_provider_event)
                     logger.info("Provider 'deepgram' loaded successfully with OpenAI LLM dependency.")
 
                     runtime_issues = self._describe_provider_alignment(name, provider)
@@ -819,13 +832,17 @@ class Engine:
                         continue
 
                     provider = OpenAIRealtimeProvider(
-                        openai_cfg, 
+                        openai_cfg,
                         self.on_provider_event,
                         gating_manager=self.audio_gating_manager
                     )
                     # Set session store for turn latency tracking (Milestone 21)
                     provider._session_store = self.session_store
                     self.providers[name] = provider
+                    # Per-call factory (supports concurrent calls).
+                    self.provider_factories[name] = (
+                        lambda cfg=openai_cfg: OpenAIRealtimeProvider(self._clone_config(cfg), self.on_provider_event, gating_manager=self.audio_gating_manager)
+                    )
                     logger.info(
                         "Provider 'openai_realtime' loaded successfully",
                         audio_gating_enabled=self.audio_gating_manager is not None
@@ -856,6 +873,10 @@ class Engine:
                     # Set session store for turn latency tracking (Milestone 21)
                     provider._session_store = self.session_store
                     self.providers[name] = provider
+                    # Per-call factory (supports concurrent calls).
+                    self.provider_factories[name] = (
+                        lambda cfg=google_cfg: GoogleLiveProvider(self._clone_config(cfg), self.on_provider_event, gating_manager=self.audio_gating_manager)
+                    )
                     logger.info(
                         "Provider 'google_live' loaded successfully",
                         audio_gating_enabled=self.audio_gating_manager is not None
@@ -876,6 +897,10 @@ class Engine:
                     # Set session store for turn latency tracking (Milestone 21)
                     provider._session_store = self.session_store
                     self.providers[name] = provider
+                    # Per-call factory (supports concurrent calls).
+                    self.provider_factories[name] = (
+                        lambda cfg=elevenlabs_cfg: ElevenLabsAgentProvider(self._clone_config(cfg), self.on_provider_event)
+                    )
                     logger.info(
                         "Provider 'elevenlabs_agent' loaded successfully"
                     )
@@ -1159,7 +1184,7 @@ class Engine:
                     
                     # Start the provider session now that media path is connected
                     if not session.provider_session_active:
-                        await self._start_provider_session(caller_channel_id)
+                        await self._ensure_provider_session_started(caller_channel_id)
                 else:
                     logger.error("🎯 EXTERNAL MEDIA - Failed to add ExternalMedia channel to bridge", 
                                external_media_id=external_media_id,
@@ -1212,7 +1237,7 @@ class Engine:
                             attempt=attempt,
                         )
                         if not session.provider_session_active:
-                            await self._start_provider_session(session.caller_channel_id)
+                            await self._ensure_provider_session_started(session.caller_channel_id)
                         return
             except Exception:
                 logger.debug(
@@ -1465,7 +1490,7 @@ class Engine:
                             await asyncio.sleep(0.1)
 
                         if attached and not session.provider_session_active:
-                            await self._start_provider_session(caller_channel_id)
+                            await self._ensure_provider_session_started(caller_channel_id)
                         elif not attached:
                             logger.error(
                                 "🎯 EXTERNAL MEDIA - Failed to add ExternalMedia channel to bridge (direct attach)",
@@ -1527,7 +1552,7 @@ class Engine:
                 
                 
                 # Start provider session now that media path is connected
-                await self._start_provider_session(caller_channel_id)
+                await self._ensure_provider_session_started(caller_channel_id)
             else:
                 logger.error("🎯 HYBRID ARI - Failed to add Local channel to bridge", 
                            local_channel_id=local_channel_id,
@@ -1636,7 +1661,7 @@ class Engine:
             self.bridges[audiosocket_channel_id] = bridge_id
 
             if not session.provider_session_active:
-                await self._start_provider_session(caller_channel_id)
+                await self._ensure_provider_session_started(caller_channel_id)
 
             # Start ARI channel recording on the AudioSocket channel (only when diagnostics enabled)
             # Check if diagnostic taps are enabled
@@ -1799,8 +1824,14 @@ class Engine:
             except Exception as e:
                 logger.warning(f"Failed to remove AudioSocket channel: {e}")
         
-        # Step 2: Stop AI provider session
-        provider = self.providers.get(session.provider_name)
+        # Step 2: Stop AI provider session (per-call instance)
+        try:
+            start_task = self._provider_start_tasks.pop(session.call_id, None)
+            if start_task:
+                start_task.cancel()
+        except Exception:
+            pass
+        provider = self._call_providers.pop(session.call_id, None)
         if provider:
             try:
                 # Stop the provider's session for this call
@@ -2092,10 +2123,15 @@ class Engine:
             except Exception:
                 logger.debug("Background music stop failed during cleanup", call_id=call_id, exc_info=True)
 
-            # Stop the active provider session if one exists.
+            # Stop the active provider session if one exists (per-call instance).
             try:
-                provider_name = session.provider_name
-                provider = self.providers.get(provider_name)
+                start_task = self._provider_start_tasks.pop(call_id, None)
+                if start_task:
+                    start_task.cancel()
+            except Exception:
+                pass
+            try:
+                provider = self._call_providers.pop(call_id, None)
                 if provider and hasattr(provider, "stop_session"):
                     await provider.stop_session()
             except Exception:
@@ -2849,16 +2885,18 @@ class Engine:
             # NOTE: Only applies to monolithic providers, not pipelines (handled above)
             try:
                 provider_name = getattr(session, 'provider_name', None) or self.config.default_provider
-                provider = self.providers.get(provider_name)
+                provider = self._call_providers.get(caller_channel_id)
+                provider_caps_source = provider or self.providers.get(provider_name)
             except Exception:
                 provider = None
+                provider_caps_source = None
             continuous_input = False
             try:
                 # Use provider capabilities instead of hardcoded names
                 capabilities = None
-                if provider and hasattr(provider, 'get_capabilities'):
+                if provider_caps_source and hasattr(provider_caps_source, 'get_capabilities'):
                     try:
-                        capabilities = provider.get_capabilities()
+                        capabilities = provider_caps_source.get_capabilities()
                     except Exception:
                         pass
                 
@@ -2874,7 +2912,14 @@ class Engine:
             except Exception:
                 continuous_input = False
             
-            if continuous_input and provider and hasattr(provider, 'send_audio'):
+            if continuous_input:
+                # Ensure a per-call provider instance exists; never send on the global template.
+                if not provider or not hasattr(provider, 'send_audio'):
+                    if caller_channel_id not in self._provider_start_tasks and not getattr(session, "provider_session_active", False):
+                        self._kickoff_provider_session_start(caller_channel_id)
+                    return
+                if not getattr(session, "provider_session_active", False):
+                    return
                 # CRITICAL FIX: Google Live needs gating, but OpenAI/Deepgram don't
                 # - Google Live: Bidirectional audio, NO server-side echo cancellation → NEEDS gating
                 # - OpenAI Realtime: Server-side AEC → gating harmful
@@ -3014,18 +3059,20 @@ class Engine:
                 # Determine provider and continuous-input capability FIRST to allow forwarding during greeting guard
                 try:
                     provider_name = getattr(session, 'provider_name', None) or self.config.default_provider
-                    provider = self.providers.get(provider_name)
+                    provider = self._call_providers.get(caller_channel_id)
+                    provider_caps_source = provider or self.providers.get(provider_name)
                 except Exception:
                     provider = None
+                    provider_caps_source = None
                 continuous_input = False
                 try:
                     # CRITICAL: Use provider capabilities to determine continuous audio requirement
                     # Providers with native VAD (full agents) need continuous audio stream
                     # Pipeline providers use engine-side VAD (gated audio)
                     capabilities = None
-                    if provider and hasattr(provider, 'get_capabilities'):
+                    if provider_caps_source and hasattr(provider_caps_source, 'get_capabilities'):
                         try:
-                            capabilities = provider.get_capabilities()
+                            capabilities = provider_caps_source.get_capabilities()
                         except Exception:
                             pass
                     
@@ -3042,7 +3089,13 @@ class Engine:
                 except Exception:
                     continuous_input = False
                 # If provider supports continuous input, forward provider-encoded PCM immediately (during TTS guard)
-                if continuous_input and provider and hasattr(provider, 'send_audio'):
+                if continuous_input:
+                    if not provider or not hasattr(provider, 'send_audio'):
+                        if caller_channel_id not in self._provider_start_tasks and not getattr(session, "provider_session_active", False):
+                            self._kickoff_provider_session_start(caller_channel_id)
+                        return
+                    if not getattr(session, "provider_session_active", False):
+                        return
                     try:
                         # Diagnostics on the PCM payload we are about to send
                         self._update_audio_diagnostics(session, "provider_in", pcm_bytes, "slin16", pcm_rate)
@@ -3219,7 +3272,7 @@ class Engine:
                     )
                     # Notify OpenAI to cancel any in-progress response generation
                     try:
-                        provider = self.providers.get('openai_realtime')
+                        provider = self._call_providers.get(caller_channel_id)
                         if provider and hasattr(provider, 'cancel_response'):
                             await provider.cancel_response()
                     except Exception:
@@ -3399,13 +3452,10 @@ class Engine:
                     pcm_payload_bytes=len(pcm_payload) if pcm_payload else 0,
                 )
             
-            provider = self.providers.get(provider_name)
+            provider = self._call_providers.get(caller_channel_id)
             if not provider:
-                logger.warning(
-                    "Provider object is None!",
-                    provider_name=provider_name,
-                    call_id=caller_channel_id,
-                )
+                if caller_channel_id not in self._provider_start_tasks and not getattr(session, "provider_session_active", False):
+                    self._kickoff_provider_session_start(caller_channel_id)
                 return
             if not hasattr(provider, 'send_audio'):
                 logger.warning(
@@ -3413,6 +3463,8 @@ class Engine:
                     provider_name=provider_name,
                     call_id=caller_channel_id,
                 )
+                return
+            if not getattr(session, "provider_session_active", False):
                 return
             
             # DEBUG: Provider ready check (OpenAI troubleshooting)
@@ -3761,20 +3813,21 @@ class Engine:
             # Check if provider requires continuous audio input using capabilities
             # Full agents with native VAD need uninterrupted audio flow for turn-taking
             provider_name = getattr(session, 'provider_name', None) or self.config.default_provider
-            provider = self.providers.get(provider_name)
+            provider = self._call_providers.get(caller_channel_id)
+            provider_caps_source = provider or self.providers.get(provider_name)
             continuous_input = False
             try:
                 capabilities = None
-                if provider and hasattr(provider, 'get_capabilities'):
+                if provider_caps_source and hasattr(provider_caps_source, 'get_capabilities'):
                     try:
-                        capabilities = provider.get_capabilities()
+                        capabilities = provider_caps_source.get_capabilities()
                     except Exception:
                         pass
                 
                 if capabilities and capabilities.requires_continuous_audio:
                     continuous_input = True
                 else:
-                    pcfg = getattr(provider, 'config', None)
+                    pcfg = getattr(provider_caps_source, 'config', None)
                     if isinstance(pcfg, dict):
                         continuous_input = bool(pcfg.get('continuous_input', False))
                     else:
@@ -3787,7 +3840,8 @@ class Engine:
             # to prevent the provider from hearing its own audio as "user speech"
             if continuous_input:
                 if not provider or not hasattr(provider, 'send_audio'):
-                    logger.debug("Provider unavailable for continuous RTP audio", provider=provider_name)
+                    if caller_channel_id not in self._provider_start_tasks and not getattr(session, "provider_session_active", False):
+                        self._kickoff_provider_session_start(caller_channel_id)
                     return
                 
                 # CRITICAL: Check if audio capture is disabled (TTS playing)
@@ -3811,6 +3865,8 @@ class Engine:
                         call_id=caller_channel_id,
                         provider=provider_name,
                     )
+                    return
+                if not getattr(session, "provider_session_active", False):
                     return
                 # Encode audio for provider (same as AudioSocket path)
                 try:
@@ -3973,9 +4029,13 @@ class Engine:
                         return
 
             provider_name = session.provider_name or self.config.default_provider
-            provider = self.providers.get(provider_name)
+            provider = self._call_providers.get(caller_channel_id)
             if not provider or not hasattr(provider, 'send_audio'):
+                if not provider and caller_channel_id not in self._provider_start_tasks and not getattr(session, "provider_session_active", False):
+                    self._kickoff_provider_session_start(caller_channel_id)
                 logger.debug("Provider unavailable for RTP audio", provider=provider_name)
+                return
+            if not getattr(session, "provider_session_active", False):
                 return
 
             # Forward PCM16 16k frames to provider
@@ -4582,14 +4642,14 @@ class Engine:
                         if not source_sample_rate:
                             # Fallback: use provider's configured output rate (prevents 8kHz default)
                             try:
-                                provider = self.providers.get(session.provider_name)
+                                provider = self._call_providers.get(call_id) or self.providers.get(session.provider_name)
                                 if provider and hasattr(provider, '_dg_output_rate'):
                                     source_sample_rate = provider._dg_output_rate
                                     logger.debug(
                                         "Using provider configured output rate as source_sample_rate fallback",
                                         call_id=call_id,
                                         rate=source_sample_rate,
-                                        reason="fmt_info empty"
+                                        reason="fmt_info empty",
                                     )
                             except Exception:
                                 pass
@@ -4668,8 +4728,10 @@ class Engine:
                             if remediation:
                                 session.audio_diagnostics["codec_remediation"] = remediation
                             src_encoding = fmt_info.get("encoding") or encoding
-                            provider_obj = self.providers.get(session.provider_name)
-                            src_rate = fmt_info.get("sample_rate") or sample_rate_int or (getattr(provider_obj, "_dg_output_rate", None) if provider_obj else None)
+                            provider_obj = self._call_providers.get(call_id) or self.providers.get(session.provider_name)
+                            src_rate = fmt_info.get("sample_rate") or sample_rate_int or (
+                                getattr(provider_obj, "_dg_output_rate", None) if provider_obj else None
+                            )
                             
                             # DOWNSTREAM_MODE GATING: Check if streaming playback is allowed
                             use_streaming = self.config.downstream_mode != "file"
@@ -4993,7 +5055,7 @@ class Engine:
                             # For local provider, we need to synthesize farewell via TTS
                             farewell = "Goodbye"  # Keep it simple and short
                             provider_name = getattr(session, 'provider_name', None)
-                            local_provider = self.providers.get(provider_name) if provider_name else None
+                            local_provider = self._call_providers.get(call_id) if provider_name else None
                             
                             logger.info(
                                 "🎤 Preparing farewell TTS",
@@ -6228,7 +6290,7 @@ class Engine:
             provider_name = session.provider_name or self.config.default_provider
         
         # Get provider instance
-        provider = self.providers.get(provider_name)
+        provider = self._call_providers.get(session.call_id) or self.providers.get(provider_name)
         if not provider:
             logger.warning(
                 "Provider not found for audio profile resolution (pipeline mode will use context_name)",
@@ -6289,68 +6351,25 @@ class Engine:
                     error=str(exc),
                 )
             
-            # CRITICAL FIX: Apply wire format settings to provider's target config
-            # The provider needs to emit the same format/rate that AudioSocket expects
-            # BUT: P1 continuous_input providers (OpenAI Realtime, Deepgram Voice Agent)
-            # handle their own internal format needs and should NOT be overridden
+            # Store per-call provider overrides (do NOT mutate global provider templates).
             try:
-                provider = self.providers.get(provider_name)
-                if provider and hasattr(provider, 'config'):
-                    # Check if this is a continuous_input provider using capabilities
-                    is_continuous_input = False
-                    try:
-                        capabilities = None
-                        if hasattr(provider, 'get_capabilities'):
-                            try:
-                                capabilities = provider.get_capabilities()
-                            except Exception:
-                                pass
-                        
-                        if capabilities and capabilities.requires_continuous_audio:
-                            is_continuous_input = True
-                        else:
-                            # Fallback for legacy providers
-                            pcfg = getattr(provider, 'config', None)
-                            if isinstance(pcfg, dict):
-                                is_continuous_input = bool(pcfg.get('continuous_input', False))
-                            else:
-                                is_continuous_input = bool(getattr(pcfg, 'continuous_input', False))
-                    except Exception:
-                        is_continuous_input = False
-                    
-                    if not is_continuous_input:
-                        # Only update target config for P2/hybrid providers
-                        # Wire format = what AudioSocket channel expects = what provider should emit
-                        provider.config.target_encoding = transport.wire_encoding
-                        provider.config.target_sample_rate_hz = transport.wire_sample_rate
-                        logger.info(
-                            "Applied wire format to provider target config",
-                            call_id=session.call_id,
-                            provider=provider_name,
-                            target_encoding=transport.wire_encoding,
-                            target_sample_rate_hz=transport.wire_sample_rate,
-                        )
-                    else:
-                        logger.debug(
-                            "Skipping wire format override for continuous_input provider",
-                            call_id=session.call_id,
-                            provider=provider_name,
-                            reason="P1 provider manages its own format needs"
-                        )
-            except Exception as exc:
-                logger.warning(
-                    "Failed to apply transport settings to provider config",
+                session.provider_overrides = dict(getattr(session, "provider_overrides", {}) or {})
+                session.provider_overrides["target_encoding"] = transport.wire_encoding
+                session.provider_overrides["target_sample_rate_hz"] = transport.wire_sample_rate
+                await self._save_session(session)
+            except Exception:
+                logger.debug(
+                    "Failed to store transport overrides on session",
                     call_id=session.call_id,
-                    provider=provider_name,
-                    error=str(exc),
+                    exc_info=True,
                 )
-            
-            # Get context config for prompt/greeting and apply to provider
+
+            # Get context config for prompt/greeting and store as per-call overrides.
             context_config = None
             logger.debug(
                 "Checking context config",
                 call_id=session.call_id,
-                transport_context=transport.context if hasattr(transport, 'context') else None,
+                transport_context=transport.context if hasattr(transport, "context") else None,
             )
             if transport.context:
                 context_config = self.transport_orchestrator.get_context_config(transport.context)
@@ -6363,100 +6382,58 @@ class Engine:
                     has_prompt=context_config.prompt if context_config else None,
                 )
                 if context_config:
-                    # Inject context greeting/prompt into provider config NOW (not later)
                     try:
-                        # Apply template substitution for personalized greetings
                         greeting_to_apply = context_config.greeting
                         if greeting_to_apply:
                             try:
-                                caller_name = getattr(session, 'caller_name', None) or "there"
-                                caller_number = getattr(session, 'caller_number', None) or "unknown"
+                                caller_name = getattr(session, "caller_name", None) or "there"
+                                caller_number = getattr(session, "caller_number", None) or "unknown"
                                 greeting_to_apply = greeting_to_apply.format(
                                     caller_name=caller_name,
-                                    caller_number=caller_number
+                                    caller_number=caller_number,
                                 )
                                 logger.debug(
                                     "Applied greeting template substitution for provider",
                                     call_id=session.call_id,
-                                    caller_name=caller_name
+                                    caller_name=caller_name,
                                 )
                             except (KeyError, ValueError) as e:
                                 logger.warning(
                                     "Greeting template substitution failed for provider",
                                     call_id=session.call_id,
-                                    error=str(e)
+                                    error=str(e),
                                 )
-                        
-                        if isinstance(provider.config, dict):
-                            if greeting_to_apply:
-                                provider.config['greeting'] = greeting_to_apply
-                                logger.info(
-                                    "Applied context greeting to provider",
-                                    call_id=session.call_id,
-                                    context=transport.context,
-                                    greeting_preview=greeting_to_apply[:50] + "...",
-                                )
-                            if context_config.prompt:
-                                provider.config['prompt'] = context_config.prompt
-                                logger.info(
-                                    "Applied context prompt to provider",
-                                    call_id=session.call_id,
-                                    context=transport.context,
-                                    prompt_length=len(context_config.prompt),
-                                )
-                        elif hasattr(provider.config, '__dict__'):
-                            if greeting_to_apply and hasattr(provider.config, 'greeting'):
-                                setattr(provider.config, 'greeting', greeting_to_apply)
-                                logger.info(
-                                    "Applied context greeting to provider",
-                                    call_id=session.call_id,
-                                    context=transport.context,
-                                    greeting_preview=greeting_to_apply[:50] + "...",
-                                )
-                        
-                        # Also update LocalProvider's _initial_greeting directly (for play_initial_greeting)
-                        if greeting_to_apply and hasattr(provider, 'set_initial_greeting'):
-                            provider.set_initial_greeting(greeting_to_apply)
-                            logger.debug(
-                                "Updated LocalProvider initial greeting",
+
+                        if greeting_to_apply:
+                            session.provider_overrides["greeting"] = greeting_to_apply
+                            logger.info(
+                                "Stored context greeting for provider session",
                                 call_id=session.call_id,
                                 context=transport.context,
+                                greeting_preview=(
+                                    (greeting_to_apply[:50] + "...")
+                                    if len(greeting_to_apply) > 50
+                                    else greeting_to_apply
+                                ),
                             )
-                        
                         if context_config.prompt:
-                            # Try 'prompt' field first, then 'instructions' (OpenAI uses this)
-                            if hasattr(provider.config, 'prompt'):
-                                setattr(provider.config, 'prompt', context_config.prompt)
-                                logger.info(
-                                    "Applied context prompt to provider",
-                                    call_id=session.call_id,
-                                    context=transport.context,
-                                    prompt_length=len(context_config.prompt),
-                                )
-                            elif hasattr(provider.config, 'instructions'):
-                                setattr(provider.config, 'instructions', context_config.prompt)
-                                logger.info(
-                                    "Applied context prompt to provider (as instructions)",
-                                    call_id=session.call_id,
-                                    context=transport.context,
-                                    prompt_length=len(context_config.prompt),
-                                )
-                            else:
-                                logger.debug(
-                                    "Provider config does not support prompt or instructions field",
-                                    call_id=session.call_id,
-                                    provider=provider_name,
-                                    context=transport.context,
-                                )
+                            session.provider_overrides["prompt"] = context_config.prompt
+                            logger.info(
+                                "Stored context prompt for provider session",
+                                call_id=session.call_id,
+                                context=transport.context,
+                                prompt_length=len(context_config.prompt),
+                            )
+                        await self._save_session(session)
                     except Exception as exc:
                         logger.error(
-                            "Failed to apply context config to provider",
+                            "Failed to store context config for provider",
                             call_id=session.call_id,
                             context=transport.context,
                             error=str(exc),
                             exc_info=True,
                         )
-                    
+
                     # Start background music if configured for this context (AAVA-89)
                     if context_config.background_music:
                         await self._start_background_music(session, context_config.background_music)
@@ -6602,6 +6579,17 @@ class Engine:
             "slin16": "slin16",
         }
         return mapping.get(token, token)
+
+    @staticmethod
+    def _clone_config(obj: Any) -> Any:
+        """Best-effort deep clone for provider config objects (Pydantic, dicts, dataclasses)."""
+        try:
+            copier = getattr(obj, "model_copy", None)
+            if callable(copier):
+                return copier(deep=True)
+        except Exception:
+            pass
+        return copy.deepcopy(obj)
 
     @staticmethod
     def _should_force_mulaw(force_flag: bool, audiosocket_fmt: Optional[str]) -> bool:
@@ -7153,7 +7141,7 @@ class Engine:
             "sample_rate": transport_rate,
         }
 
-        provider = self.providers.get(provider_name)
+        provider = self._call_providers.get(session.call_id) or self.providers.get(provider_name)
         
         # CRITICAL FIX: Read provider INPUT format (what provider receives)
         # NOT target format (what provider outputs)
@@ -7321,12 +7309,104 @@ class Engine:
  
         return resolution
  
+    async def _ensure_provider_session_started(self, call_id: str) -> None:
+        """Single-flight wrapper around _start_provider_session (prevents duplicate concurrent starts)."""
+        task = self._provider_start_tasks.get(call_id)
+        if task:
+            await task
+            return
+        task = asyncio.create_task(self._start_provider_session(call_id), name=f"provider-start-{call_id}")
+        self._provider_start_tasks[call_id] = task
+        try:
+            await task
+        finally:
+            if self._provider_start_tasks.get(call_id) is task:
+                self._provider_start_tasks.pop(call_id, None)
+
+    def _kickoff_provider_session_start(self, call_id: str) -> None:
+        """Fire-and-forget provider start with exception swallowing (used from audio hot paths)."""
+        if call_id in self._provider_start_tasks:
+            return
+        bg_task = asyncio.create_task(self._ensure_provider_session_started(call_id), name=f"provider-start-bg-{call_id}")
+
+        def _done(t: asyncio.Task, *, _call_id: str = call_id) -> None:
+            try:
+                t.result()
+            except Exception:
+                logger.debug("Background provider start failed", call_id=_call_id, exc_info=True)
+
+        bg_task.add_done_callback(_done)
+
+    def _apply_provider_overrides(self, provider: AIProviderInterface, session: CallSession) -> None:
+        """Apply per-call overrides (greeting/prompt/target format) to a provider instance."""
+        overrides = {}
+        try:
+            overrides = dict(getattr(session, "provider_overrides", {}) or {})
+        except Exception:
+            overrides = {}
+
+        # Always align provider output target to the resolved transport for this call.
+        try:
+            transport = getattr(session, "transport_profile", None)
+            if transport:
+                overrides.setdefault("target_encoding", getattr(transport, "wire_encoding", None))
+                overrides.setdefault("target_sample_rate_hz", getattr(transport, "wire_sample_rate", None))
+        except Exception:
+            pass
+
+        cfg = getattr(provider, "config", None)
+        if not cfg:
+            return
+
+        greeting = overrides.get("greeting")
+        prompt = overrides.get("prompt")
+        target_encoding = overrides.get("target_encoding")
+        target_rate = overrides.get("target_sample_rate_hz")
+
+        try:
+            if isinstance(cfg, dict):
+                if greeting:
+                    cfg["greeting"] = greeting
+                if prompt:
+                    # Some providers call this "prompt", others "instructions"
+                    cfg.setdefault("prompt", prompt)
+                    cfg.setdefault("instructions", prompt)
+                if target_encoding:
+                    cfg["target_encoding"] = target_encoding
+                if target_rate:
+                    cfg["target_sample_rate_hz"] = target_rate
+            else:
+                if greeting and hasattr(cfg, "greeting"):
+                    setattr(cfg, "greeting", greeting)
+                if prompt:
+                    if hasattr(cfg, "prompt"):
+                        setattr(cfg, "prompt", prompt)
+                    if hasattr(cfg, "instructions"):
+                        setattr(cfg, "instructions", prompt)
+                if target_encoding and hasattr(cfg, "target_encoding"):
+                    setattr(cfg, "target_encoding", target_encoding)
+                if target_rate and hasattr(cfg, "target_sample_rate_hz"):
+                    setattr(cfg, "target_sample_rate_hz", target_rate)
+        except Exception:
+            logger.debug("Failed applying provider overrides", call_id=session.call_id, exc_info=True)
+
+        # LocalProvider uses an explicit initial greeting helper.
+        try:
+            if greeting and hasattr(provider, "set_initial_greeting"):
+                provider.set_initial_greeting(greeting)
+        except Exception:
+            logger.debug("Provider set_initial_greeting failed", call_id=session.call_id, exc_info=True)
+
     async def _start_provider_session(self, call_id: str) -> None:
         """Start the provider session for a call when media path is ready."""
+        provider: Optional[AIProviderInterface] = None
         try:
             session = await self.session_store.get_by_call_id(call_id)
             if not session:
                 logger.error("Start provider session called for unknown call", call_id=call_id)
+                return
+            # Idempotent fast-path.
+            if getattr(session, "provider_session_active", False) and call_id in self._call_providers:
                 return
 
             # Preserve any per-call override previously applied. Only assign a pipeline
@@ -7357,12 +7437,12 @@ class Engine:
                 return
 
             provider_name = session.provider_name or self.config.default_provider
-            provider = self.providers.get(provider_name)
+            factory = self.provider_factories.get(provider_name)
 
-            if not provider:
+            if not factory:
                 fallback_name = self.config.default_provider
-                fallback_provider = self.providers.get(fallback_name)
-                if fallback_provider:
+                fallback_factory = self.provider_factories.get(fallback_name)
+                if fallback_factory:
                     logger.warning(
                         "Milestone7 pipeline provider unavailable; falling back to default provider",
                         call_id=call_id,
@@ -7370,7 +7450,7 @@ class Engine:
                         fallback_provider=fallback_name,
                     )
                     provider_name = fallback_name
-                    provider = fallback_provider
+                    factory = fallback_factory
                     if session.provider_name != fallback_name:
                         session.provider_name = fallback_name
                         await self._save_session(session)
@@ -7382,6 +7462,26 @@ class Engine:
                         fallback_provider=fallback_name,
                     )
                     return
+
+            # Create a per-call provider instance (providers are NOT concurrency-safe across calls).
+            provider = factory()
+            # Apply per-call context/prompt/transport overrides before start_session reads config.
+            self._apply_provider_overrides(provider, session)
+            # Inject shared runtime helpers (latency tracking, tool context helpers).
+            try:
+                if hasattr(provider, "set_session_store"):
+                    provider.set_session_store(self.session_store)
+                elif hasattr(provider, "_session_store"):
+                    provider._session_store = self.session_store
+            except Exception:
+                logger.debug("Provider session_store injection failed", call_id=call_id, provider=provider_name, exc_info=True)
+            try:
+                if hasattr(provider, "_ari_client"):
+                    provider._ari_client = self.ari_client
+            except Exception:
+                logger.debug("Provider ari_client injection failed", call_id=call_id, provider=provider_name, exc_info=True)
+            # Make provider instance discoverable during start_session (providers can emit events while starting).
+            self._call_providers[call_id] = provider
 
             if pipeline_resolution:
                 logger.info(
@@ -7534,6 +7634,16 @@ class Engine:
                 logger.debug("Failed to record call metadata", call_id=call_id, error=str(e))
                 
         except Exception as exc:
+            # Best-effort cleanup if provider was partially started.
+            try:
+                self._call_providers.pop(call_id, None)
+            except Exception:
+                pass
+            if provider and hasattr(provider, "stop_session"):
+                try:
+                    await provider.stop_session()
+                except Exception:
+                    pass
             logger.error("Failed to start provider session", call_id=call_id, error=str(exc), exc_info=True)
 
     async def _on_playback_finished(self, event: Dict[str, Any]):
@@ -7691,7 +7801,7 @@ class Engine:
         from src.tools.registry import tool_registry
         
         provider_name = getattr(session, 'provider_name', None) or self.config.default_provider
-        provider = self.providers.get(provider_name)
+        provider = self._call_providers.get(call_id)
 
         result = {"status": "error", "message": f"Tool '{function_name}' not found"}
         tool_start_time = time.time()

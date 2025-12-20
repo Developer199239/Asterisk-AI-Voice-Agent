@@ -70,6 +70,8 @@ class CallSession:
     pipeline_name: Optional[str] = None
     pipeline_components: Dict[str, str] = field(default_factory=dict)
     context_name: Optional[str] = None  # AI_CONTEXT from dialplan (for pipeline greeting/prompt resolution)
+    # Per-call provider config overrides (do NOT mutate global provider templates).
+    provider_overrides: Dict[str, Any] = field(default_factory=dict)
     conversation_state: str = "greeting"  # greeting | listening | processing
     status: str = "initializing"
     last_transcript: Optional[str] = None
