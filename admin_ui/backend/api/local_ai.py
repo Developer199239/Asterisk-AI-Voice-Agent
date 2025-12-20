@@ -1014,3 +1014,45 @@ async def rebuild_local_ai_server(request: RebuildRequest):
             message=f"Rebuild failed: {str(e)}",
             phase="error"
         )
+
+
+@router.get("/backends")
+async def list_backends():
+    """Get available backends from local-ai-server registry."""
+    ws_url = get_setting("LOCAL_AI_WS_URL", "ws://127.0.0.1:8765")
+    auth_token = get_setting("LOCAL_WS_AUTH_TOKEN", "")
+    try:
+        async with websockets.connect(ws_url, close_timeout=5) as ws:
+            if auth_token:
+                await ws.send(json.dumps({"type": "auth", "token": auth_token}))
+                await ws.recv()
+            await ws.send(json.dumps({"type": "backends"}))
+            response = json.loads(await ws.recv())
+            return response
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Failed to connect to local-ai-server: {e}")
+
+
+@router.get("/backends/{backend_type}/{backend_name}/schema")
+async def get_backend_schema(backend_type: str, backend_name: str):
+    """Get config schema for a specific backend."""
+    ws_url = get_setting("LOCAL_AI_WS_URL", "ws://127.0.0.1:8765")
+    auth_token = get_setting("LOCAL_WS_AUTH_TOKEN", "")
+    try:
+        async with websockets.connect(ws_url, close_timeout=5) as ws:
+            if auth_token:
+                await ws.send(json.dumps({"type": "auth", "token": auth_token}))
+                await ws.recv()
+            await ws.send(json.dumps({
+                "type": "backend_schema",
+                "backend_type": backend_type,
+                "backend_name": backend_name,
+            }))
+            response = json.loads(await ws.recv())
+            if "error" in response:
+                raise HTTPException(status_code=404, detail=response["error"])
+            return response
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Failed to connect to local-ai-server: {e}")

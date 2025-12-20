@@ -149,6 +149,60 @@ class WebSocketProtocol:
             )
             return
 
+        if msg_type == "backends":
+            from backends import load_builtin_backends
+            from backends.registry import STT_REGISTRY, TTS_REGISTRY, LLM_REGISTRY
+            load_builtin_backends()
+            await self._server._send_json(
+                websocket,
+                {
+                    "type": "backends_response",
+                    "stt": STT_REGISTRY.info(),
+                    "tts": TTS_REGISTRY.info(),
+                    "llm": LLM_REGISTRY.info(),
+                },
+            )
+            return
+
+        if msg_type == "backend_schema":
+            backend_type = data.get("backend_type", "").strip().lower()
+            backend_name = data.get("backend_name", "").strip().lower()
+            from backends import load_builtin_backends
+            from backends.registry import STT_REGISTRY, TTS_REGISTRY, LLM_REGISTRY
+            load_builtin_backends()
+            registry_map = {"stt": STT_REGISTRY, "tts": TTS_REGISTRY, "llm": LLM_REGISTRY}
+            registry = registry_map.get(backend_type)
+            if not registry:
+                await self._server._send_json(
+                    websocket,
+                    {"type": "backend_schema_response", "error": f"Unknown backend type: {backend_type}"},
+                )
+                return
+            cls = registry.get(backend_name)
+            if not cls:
+                await self._server._send_json(
+                    websocket,
+                    {"type": "backend_schema_response", "error": f"Unknown backend: {backend_name}"},
+                )
+                return
+            try:
+                schema = cls.config_schema()
+                available = cls.is_available()
+            except Exception as e:
+                schema = {}
+                available = False
+            await self._server._send_json(
+                websocket,
+                {
+                    "type": "backend_schema_response",
+                    "backend_type": backend_type,
+                    "backend_name": backend_name,
+                    "schema": schema,
+                    "available": available,
+                },
+            )
+            return
+
         logging.warning("❓ Unknown message type: %s", msg_type)
 
     async def handle_binary_message(self, websocket, session: SessionContext, message: bytes) -> None:

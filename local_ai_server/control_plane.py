@@ -7,11 +7,100 @@ from typing import Any, Dict, List, Tuple
 from config import LocalAIConfig
 
 
+_STT_CONFIG_MAP = {
+    "model_path": "stt_model_path",
+    "sherpa_model_path": "sherpa_model_path",
+    "kroko_model_path": "kroko_model_path",
+    "kroko_url": "kroko_url",
+    "kroko_language": "kroko_language",
+    "kroko_port": "kroko_port",
+    "kroko_embedded": "kroko_embedded",
+    "url": "kroko_url",
+    "language": "kroko_language",
+    "port": "kroko_port",
+    "embedded": "kroko_embedded",
+    "model": "faster_whisper_model",
+    "device": "faster_whisper_device",
+    "compute_type": "faster_whisper_compute",
+}
+
+_TTS_CONFIG_MAP = {
+    "model_path": "tts_model_path",
+    "voice": None,
+    "lang": "kokoro_lang",
+    "mode": "kokoro_mode",
+    "api_base_url": "kokoro_api_base_url",
+    "api_key": "kokoro_api_key",
+    "api_model": "kokoro_api_model",
+    "speed": "melotts_speed",
+    "device": "melotts_device",
+}
+
+_LLM_CONFIG_MAP = {
+    "model_path": "llm_model_path",
+    "threads": "llm_threads",
+    "context": "llm_context",
+    "batch": "llm_batch",
+    "max_tokens": "llm_max_tokens",
+    "temperature": "llm_temperature",
+    "top_p": "llm_top_p",
+    "repeat_penalty": "llm_repeat_penalty",
+    "gpu_layers": "llm_gpu_layers",
+    "system_prompt": "llm_system_prompt",
+    "use_mlock": "llm_use_mlock",
+}
+
+
+def _apply_config_dict(
+    config: LocalAIConfig,
+    cfg_dict: Dict[str, Any],
+    mapping: Dict[str, str],
+    changed: List[str],
+    backend_name: str,
+) -> LocalAIConfig:
+    for key, value in cfg_dict.items():
+        target = mapping.get(key)
+        if target is None:
+            if key == "voice" and backend_name == "kokoro":
+                config = replace(config, kokoro_voice=str(value))
+                changed.append(f"kokoro_voice={value}")
+            elif key == "voice" and backend_name == "melotts":
+                config = replace(config, melotts_voice=str(value))
+                changed.append(f"melotts_voice={value}")
+            continue
+        current = getattr(config, target, None)
+        if isinstance(current, bool):
+            if isinstance(value, str):
+                value = value.strip().lower() in ("1", "true", "yes", "y", "on")
+            value = bool(value)
+        elif isinstance(current, int):
+            value = int(value)
+        elif isinstance(current, float):
+            value = float(value)
+        else:
+            value = str(value)
+        config = replace(config, **{target: value})
+        display = os.path.basename(str(value)) if "path" in target else value
+        changed.append(f"{target}={display}")
+    return config
+
+
 def apply_switch_model_request(
     config: LocalAIConfig, data: Dict[str, Any]
 ) -> Tuple[LocalAIConfig, List[str]]:
     changed: List[str] = []
     new_config = config
+
+    if "stt_config" in data and isinstance(data["stt_config"], dict):
+        backend = (data.get("stt_backend") or new_config.stt_backend or "").strip().lower()
+        new_config = _apply_config_dict(new_config, data["stt_config"], _STT_CONFIG_MAP, changed, backend)
+
+    if "tts_config" in data and isinstance(data["tts_config"], dict):
+        backend = (data.get("tts_backend") or new_config.tts_backend or "").strip().lower()
+        new_config = _apply_config_dict(new_config, data["tts_config"], _TTS_CONFIG_MAP, changed, backend)
+
+    if "llm_config" in data and isinstance(data["llm_config"], dict):
+        new_config = _apply_config_dict(new_config, data["llm_config"], _LLM_CONFIG_MAP, changed, "llama_cpp")
 
     if "stt_backend" in data:
         backend = (data["stt_backend"] or "").strip().lower()
