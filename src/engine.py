@@ -116,25 +116,27 @@ _TURN_RESPONSE_SECONDS = Histogram(
 _CFG_BARGE_MS = Gauge(
     "ai_agent_config_barge_in_ms",
     "Configured barge-in timing values (ms)",
-    labelnames=("param",),
+    labelnames=("call_id", "param"),
 )
 _CFG_BARGE_THRESHOLD = Gauge(
     "ai_agent_config_barge_in_threshold",
     "Configured barge-in energy threshold",
+    labelnames=("call_id",),
 )
 _CFG_STREAM_MS = Gauge(
     "ai_agent_config_streaming_ms",
     "Configured streaming timing values (ms)",
-    labelnames=("param",),
+    labelnames=("call_id", "param"),
 )
 _CFG_TD_MS = Gauge(
     "ai_agent_config_turn_detection_ms",
     "Configured provider turn detection timing values (ms)",
-    labelnames=("param",),
+    labelnames=("call_id", "param"),
 )
 _CFG_TD_THRESHOLD = Gauge(
     "ai_agent_config_turn_detection_threshold",
     "Configured provider turn detection threshold",
+    labelnames=("call_id",),
 )
 
 # Barge-in reaction latency (seconds) from first energy to trigger
@@ -142,41 +144,41 @@ _BARGE_REACTION_SECONDS = Histogram(
     "ai_agent_barge_in_reaction_seconds",
     "Time from first speech energy to barge-in trigger",
     buckets=(0.1, 0.2, 0.3, 0.5, 0.8, 1.2, 2.0),
-    labelnames=("provider", "transport"),
+    labelnames=("call_id",),
 )
 
 # Per-call audio byte counters (ingress)
 _STREAM_RX_BYTES = Counter(
     "ai_agent_stream_rx_bytes_total",
-    "Inbound audio bytes from caller",
-    labelnames=("transport",),
+    "Inbound audio bytes from caller (per call)",
+    labelnames=("call_id",),
 )
 _CODEC_ALIGNMENT = Gauge(
     "ai_agent_codec_alignment",
     "Codec/sample-rate alignment status per call/provider (1=aligned,0=degraded)",
-    labelnames=("provider", "transport"),
+    labelnames=("call_id", "provider"),
 )
 _AUDIO_RMS_GAUGE = Gauge(
     "ai_agent_audio_rms",
     "Observed RMS levels for audio stages",
-    labelnames=("stage",),
+    labelnames=("call_id", "stage"),
 )
 _AUDIO_DC_OFFSET = Gauge(
     "ai_agent_audio_dc_offset",
     "Observed DC offset (mean sample value) for audio stages",
-    labelnames=("stage",),
+    labelnames=("call_id", "stage"),
 )
 
-# Call counts and duration tracking for dashboard (no per-call labels)
-_CALLS_TOTAL = Counter(
-    "ai_agent_calls_total",
-    "Total calls handled by pipeline/provider/context",
-    labelnames=("pipeline", "provider", "context"),
+# Call metadata and duration tracking for dashboard
+_CALL_METADATA = Gauge(
+    "ai_agent_call_metadata",
+    "Call metadata including caller info, pipeline, provider, and context selection",
+    labelnames=("call_id", "caller_name", "caller_number", "pipeline", "provider", "context"),
 )
 _CALL_DURATION = Histogram(
     "ai_agent_call_duration_seconds",
     "Total call duration from start to end",
-    labelnames=("pipeline", "provider"),
+    labelnames=("call_id", "pipeline", "provider"),
     buckets=(10, 30, 60, 120, 180, 300, 600, 900, 1800, 3600),
 )
 # Track call start times for duration calculation
@@ -391,7 +393,19 @@ class Engine:
         except Exception:
             logger.error("Failed to initialize VAD components", exc_info=True)
         
-        # AudioGatingManager removed: it was unused and implied behavior that did not exist.
+        # Initialize Audio Gating Manager (for echo prevention in OpenAI Realtime)
+        self.audio_gating_manager = None
+        try:
+            # Only initialize if VAD is available (needed for interrupt detection)
+            if self.vad_manager:
+                from src.core.audio_gating_manager import AudioGatingManager
+                self.audio_gating_manager = AudioGatingManager(vad_manager=self.vad_manager)
+                logger.info("🎛️ Audio gating manager initialized (OpenAI echo prevention)")
+            else:
+                logger.debug("Audio gating manager not initialized (VAD not available)")
+        except Exception:
+            logger.error("Failed to initialize audio gating manager", exc_info=True)
+            self.audio_gating_manager = None
         
         # Map our synthesized UUID extension to the real ARI caller channel id
         self.uuidext_to_channel: Dict[str, str] = {}
@@ -804,12 +818,17 @@ class Engine:
                     if not openai_cfg:
                         continue
 
-                    provider = OpenAIRealtimeProvider(openai_cfg, self.on_provider_event)
+                    provider = OpenAIRealtimeProvider(
+                        openai_cfg, 
+                        self.on_provider_event,
+                        gating_manager=self.audio_gating_manager
+                    )
                     # Set session store for turn latency tracking (Milestone 21)
                     provider._session_store = self.session_store
                     self.providers[name] = provider
                     logger.info(
                         "Provider 'openai_realtime' loaded successfully",
+                        audio_gating_enabled=self.audio_gating_manager is not None
                     )
 
                     runtime_issues = self._describe_provider_alignment(name, provider)
@@ -829,12 +848,17 @@ class Engine:
                         logger.error(f"Failed to build GoogleProviderConfig for google_live: {e}", exc_info=True)
                         continue
 
-                    provider = GoogleLiveProvider(google_cfg, self.on_provider_event)
+                    provider = GoogleLiveProvider(
+                        google_cfg,
+                        self.on_provider_event,
+                        gating_manager=self.audio_gating_manager
+                    )
                     # Set session store for turn latency tracking (Milestone 21)
                     provider._session_store = self.session_store
                     self.providers[name] = provider
                     logger.info(
                         "Provider 'google_live' loaded successfully",
+                        audio_gating_enabled=self.audio_gating_manager is not None
                     )
 
                     runtime_issues = self._describe_provider_alignment(name, provider)
@@ -2026,7 +2050,11 @@ class Engine:
                     pipeline_name = getattr(session, 'pipeline_name', None) or "default"
                     provider_name = getattr(session, 'provider_name', None) or "unknown"
                     
-                    _CALL_DURATION.labels(pipeline=pipeline_name, provider=provider_name).observe(duration)
+                    _CALL_DURATION.labels(
+                        call_id=call_id,
+                        pipeline=pipeline_name,
+                        provider=provider_name
+                    ).observe(duration)
                     
                     # Clean up start time
                     del _call_start_times[call_id]
@@ -2268,6 +2296,13 @@ class Engine:
                 except Exception:
                     logger.debug("VAD cleanup failed during call cleanup", call_id=call_id, exc_info=True)
             
+            # Clean up audio gating manager state for this call
+            if self.audio_gating_manager:
+                try:
+                    await self.audio_gating_manager.cleanup_call(call_id)
+                except Exception:
+                    logger.debug("Audio gating cleanup failed during call cleanup", call_id=call_id, exc_info=True)
+
             try:
                 # If the session still exists in store (rare race), mark completed; otherwise ignore
                 sess2 = await self.session_store.get_by_call_id(call_id)
@@ -2658,7 +2693,7 @@ class Engine:
 
             # Per-call RX bytes
             try:
-                _STREAM_RX_BYTES.labels("audiosocket").inc(len(audio_bytes))
+                _STREAM_RX_BYTES.labels(caller_channel_id).inc(len(audio_bytes))
             except Exception:
                 pass
 
@@ -3182,16 +3217,6 @@ class Engine:
                         energy=energy,
                         criteria_met=criteria_met,
                     )
-                    # Stop streaming playback immediately (if active) to avoid buffered “late” audio
-                    try:
-                        if getattr(self, "streaming_playback_manager", None):
-                            await self.streaming_playback_manager.stop_streaming_playback(caller_channel_id)
-                    except Exception:
-                        logger.debug(
-                            "Streaming stop error during OpenAI barge-in",
-                            call_id=caller_channel_id,
-                            exc_info=True,
-                        )
                     # Notify OpenAI to cancel any in-progress response generation
                     try:
                         provider = self.providers.get('openai_realtime')
@@ -3208,17 +3233,6 @@ class Engine:
                 if should_trigger:
                     # Trigger barge-in: stop active playback(s), clear gating, and continue forwarding audio
                     try:
-                        # Stop streaming playback immediately (if active) to avoid “late” barge-in
-                        try:
-                            if getattr(self, "streaming_playback_manager", None):
-                                await self.streaming_playback_manager.stop_streaming_playback(caller_channel_id)
-                        except Exception:
-                            logger.debug(
-                                "Streaming stop error during barge-in",
-                                call_id=caller_channel_id,
-                                exc_info=True,
-                            )
-
                         playback_ids = await self.session_store.list_playbacks_for_call(caller_channel_id)
                         for pid in playback_ids:
                             try:
@@ -3241,8 +3255,7 @@ class Engine:
                         try:
                             if float(getattr(session, 'barge_start_ts', 0.0) or 0.0) > 0.0:
                                 reaction_s = max(0.0, now - float(session.barge_start_ts))
-                                prov = getattr(session, "provider_name", None) or self.config.default_provider
-                                _BARGE_REACTION_SECONDS.labels(prov, "audiosocket").observe(reaction_s)
+                                _BARGE_REACTION_SECONDS.labels(caller_channel_id).observe(reaction_s)
                                 session.barge_start_ts = 0.0
                         except Exception:
                             pass
@@ -3610,31 +3623,31 @@ class Engine:
         try:
             b = getattr(self.config, 'barge_in', None)
             if b:
-                _CFG_BARGE_MS.labels("initial_protection_ms").set(int(getattr(b, 'initial_protection_ms', 0)))
-                _CFG_BARGE_MS.labels("min_ms").set(int(getattr(b, 'min_ms', 0)))
-                _CFG_BARGE_MS.labels("post_tts_end_protection_ms").set(int(getattr(b, 'post_tts_end_protection_ms', 0)))
-                _CFG_BARGE_MS.labels("greeting_protection_ms").set(int(getattr(b, 'greeting_protection_ms', 0)))
-                _CFG_BARGE_THRESHOLD.set(int(getattr(b, 'energy_threshold', 0)))
+                _CFG_BARGE_MS.labels(call_id, "initial_protection_ms").set(int(getattr(b, 'initial_protection_ms', 0)))
+                _CFG_BARGE_MS.labels(call_id, "min_ms").set(int(getattr(b, 'min_ms', 0)))
+                _CFG_BARGE_MS.labels(call_id, "post_tts_end_protection_ms").set(int(getattr(b, 'post_tts_end_protection_ms', 0)))
+                _CFG_BARGE_MS.labels(call_id, "greeting_protection_ms").set(int(getattr(b, 'greeting_protection_ms', 0)))
+                _CFG_BARGE_THRESHOLD.labels(call_id).set(int(getattr(b, 'energy_threshold', 0)))
         except Exception:
             pass
         try:
             s = getattr(self.config, 'streaming', None)
             if s:
-                _CFG_STREAM_MS.labels("min_start_ms").set(int(getattr(s, 'min_start_ms', 0)))
-                _CFG_STREAM_MS.labels("greeting_min_start_ms").set(int(getattr(s, 'greeting_min_start_ms', 0)))
-                _CFG_STREAM_MS.labels("low_watermark_ms").set(int(getattr(s, 'low_watermark_ms', 0)))
-                _CFG_STREAM_MS.labels("jitter_buffer_ms").set(int(getattr(s, 'jitter_buffer_ms', 0)))
-                _CFG_STREAM_MS.labels("fallback_timeout_ms").set(int(getattr(s, 'fallback_timeout_ms', 0)))
+                _CFG_STREAM_MS.labels(call_id, "min_start_ms").set(int(getattr(s, 'min_start_ms', 0)))
+                _CFG_STREAM_MS.labels(call_id, "greeting_min_start_ms").set(int(getattr(s, 'greeting_min_start_ms', 0)))
+                _CFG_STREAM_MS.labels(call_id, "low_watermark_ms").set(int(getattr(s, 'low_watermark_ms', 0)))
+                _CFG_STREAM_MS.labels(call_id, "jitter_buffer_ms").set(int(getattr(s, 'jitter_buffer_ms', 0)))
+                _CFG_STREAM_MS.labels(call_id, "fallback_timeout_ms").set(int(getattr(s, 'fallback_timeout_ms', 0)))
         except Exception:
             pass
         try:
             pblock = (getattr(self.config, 'providers', {}) or {}).get('openai_realtime', {})
             td = (pblock or {}).get('turn_detection') or {}
             if td:
-                _CFG_TD_MS.labels("silence_duration_ms").set(int(td.get('silence_duration_ms', 0)))
-                _CFG_TD_MS.labels("prefix_padding_ms").set(int(td.get('prefix_padding_ms', 0)))
+                _CFG_TD_MS.labels(call_id, "silence_duration_ms").set(int(td.get('silence_duration_ms', 0)))
+                _CFG_TD_MS.labels(call_id, "prefix_padding_ms").set(int(td.get('prefix_padding_ms', 0)))
                 try:
-                    _CFG_TD_THRESHOLD.set(float(td.get('threshold', 0.0)))
+                    _CFG_TD_THRESHOLD.labels(call_id).set(float(td.get('threshold', 0.0)))
                 except Exception:
                     pass
         except Exception:
@@ -3717,12 +3730,6 @@ class Engine:
             if not session:
                 logger.debug("No session for caller; dropping RTP audio", ssrc=ssrc, caller_channel_id=caller_channel_id)
                 return
-
-            # Ingress bytes (aggregated by transport)
-            try:
-                _STREAM_RX_BYTES.labels("externalmedia").inc(len(pcm_16k))
-            except Exception:
-                pass
 
             # Check for pipeline mode FIRST (before continuous_input provider routing)
             # Pipeline adapters need audio in their queue, not sent to monolithic providers
@@ -3910,17 +3917,6 @@ class Engine:
                 min_ms = int(getattr(cfg, 'min_ms', 250))
                 if not in_cooldown and session.barge_in_candidate_ms >= min_ms:
                     try:
-                        # Stop streaming playback immediately (if active) to avoid “late” barge-in
-                        try:
-                            if getattr(self, "streaming_playback_manager", None):
-                                await self.streaming_playback_manager.stop_streaming_playback(caller_channel_id)
-                        except Exception:
-                            logger.debug(
-                                "Streaming stop error during RTP barge-in",
-                                call_id=caller_channel_id,
-                                exc_info=True,
-                            )
-
                         playback_ids = await self.session_store.list_playbacks_for_call(caller_channel_id)
                         for pid in playback_ids:
                             try:
@@ -3941,8 +3937,7 @@ class Engine:
                         try:
                             if float(getattr(session, 'barge_start_ts', 0.0) or 0.0) > 0.0:
                                 reaction_s = max(0.0, now - float(session.barge_start_ts))
-                                prov = getattr(session, "provider_name", None) or self.config.default_provider
-                                _BARGE_REACTION_SECONDS.labels(prov, "externalmedia").observe(reaction_s)
+                                _BARGE_REACTION_SECONDS.labels(caller_channel_id).observe(reaction_s)
                                 session.barge_start_ts = 0.0
                         except Exception:
                             pass
@@ -6975,8 +6970,8 @@ class Engine:
                 "sample_rate": sample_rate,
                 "updated": time.time(),
             }
-            _AUDIO_RMS_GAUGE.labels(stage).set(rms)
-            _AUDIO_DC_OFFSET.labels(stage).set(dc_offset)
+            _AUDIO_RMS_GAUGE.labels(session.call_id, stage).set(rms)
+            _AUDIO_DC_OFFSET.labels(session.call_id, stage).set(dc_offset)
             first_sample_key = f"{stage}_first_sample_logged"
             if not session.audio_diagnostics.get(first_sample_key):
                 session.audio_diagnostics[first_sample_key] = True
@@ -7208,9 +7203,7 @@ class Engine:
         session.codec_alignment_ok = aligned
         session.codec_alignment_message = remediation
         try:
-            _CODEC_ALIGNMENT.labels(provider_name, str(getattr(self.config, "audio_transport", "unknown"))).set(
-                1 if aligned else 0
-            )
+            _CODEC_ALIGNMENT.labels(session.call_id, provider_name).set(1 if aligned else 0)
         except Exception:
             pass
 
@@ -7514,25 +7507,31 @@ class Engine:
                     pass
             logger.info("Provider session started", call_id=call_id, provider=provider_name)
             
-            # Record aggregate call counters for dashboards/alerts (avoid per-call labels / PII).
+            # Record call metadata for dashboard
             try:
+                caller_name = getattr(session, 'caller_name', None) or "Unknown"
+                caller_number = getattr(session, 'caller_number', None) or "Unknown"
                 pipeline_name = getattr(session, 'pipeline_name', None) or "default"
                 context_name = getattr(session, 'context_name', None) or "default"
-
-                _CALLS_TOTAL.labels(
+                
+                # Set call metadata gauge (value=1 means active)
+                _CALL_METADATA.labels(
+                    call_id=call_id,
+                    caller_name=caller_name,
+                    caller_number=caller_number,
                     pipeline=pipeline_name,
                     provider=provider_name,
-                    context=context_name,
-                ).inc()
-
-                logger.debug(
-                    "Incremented calls total",
-                    pipeline=pipeline_name,
-                    provider=provider_name,
-                    context=context_name,
-                )
+                    context=context_name
+                ).set(1)
+                
+                logger.debug("Recorded call metadata", 
+                            call_id=call_id,
+                            caller_name=caller_name,
+                            pipeline=pipeline_name,
+                            provider=provider_name,
+                            context=context_name)
             except Exception as e:
-                logger.debug("Failed to increment calls total", call_id=call_id, error=str(e))
+                logger.debug("Failed to record call metadata", call_id=call_id, error=str(e))
                 
         except Exception as exc:
             logger.error("Failed to start provider session", call_id=call_id, error=str(exc), exc_info=True)

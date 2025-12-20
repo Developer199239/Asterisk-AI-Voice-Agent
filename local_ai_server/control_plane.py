@@ -114,35 +114,5 @@ def apply_switch_model_request(
         new_config = replace(new_config, kokoro_api_model=value)
         changed.append(f"kokoro_api_model={value}")
 
-    # MeloTTS parameters
-    if "melotts_voice" in data:
-        value = (data["melotts_voice"] or "EN-US").strip()
-        new_config = replace(new_config, melotts_voice=value)
-        changed.append(f"melotts_voice={value}")
-
-    if "melotts_speed" in data:
-        try:
-            speed = float(data["melotts_speed"])
-            new_config = replace(new_config, melotts_speed=speed)
-            changed.append(f"melotts_speed={speed}")
-        except Exception:
-            pass
-
-    if "melotts_device" in data:
-        value = (data["melotts_device"] or "auto").strip().lower()
-        new_config = replace(new_config, melotts_device=value)
-        changed.append(f"melotts_device={value}")
-
-    # Whisper.cpp parameters
-    if "whisper_cpp_model_path" in data:
-        value = data["whisper_cpp_model_path"]
-        new_config = replace(new_config, whisper_cpp_model_path=value)
-        changed.append(f"whisper_cpp_model_path={os.path.basename(value)}")
-
-    if "whisper_cpp_language" in data:
-        value = (data["whisper_cpp_language"] or "en").strip()
-        new_config = replace(new_config, whisper_cpp_language=value)
-        changed.append(f"whisper_cpp_language={value}")
-
     return new_config, changed
 

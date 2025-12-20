@@ -44,19 +44,23 @@ _KEEPALIVE_INTERVAL_SEC = 15.0
 
 _OPENAI_ASSUMED_OUTPUT_RATE = Gauge(
     "ai_agent_openai_assumed_output_sample_rate_hz",
-    "Configured OpenAI Realtime output sample rate (last observed)",
+    "Configured OpenAI Realtime output sample rate per call",
+    labelnames=("call_id",),
 )
 _OPENAI_PROVIDER_OUTPUT_RATE = Gauge(
     "ai_agent_openai_provider_output_sample_rate_hz",
-    "Provider-advertised OpenAI Realtime output sample rate (last observed)",
+    "Provider-advertised OpenAI Realtime output sample rate per call",
+    labelnames=("call_id",),
 )
 _OPENAI_MEASURED_OUTPUT_RATE = Gauge(
     "ai_agent_openai_measured_output_sample_rate_hz",
-    "Measured OpenAI Realtime output sample rate (last observed)",
+    "Measured OpenAI Realtime output sample rate per call",
+    labelnames=("call_id",),
 )
 _OPENAI_SESSION_AUDIO_INFO = Info(
     "ai_agent_openai_session_audio",
     "OpenAI Realtime session audio format assumptions and provider acknowledgements",
+    labelnames=("call_id",),
 )
 
 
@@ -77,6 +81,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         self,
         config: OpenAIRealtimeProviderConfig,
         on_event,
+        gating_manager=None,
     ):
         super().__init__(on_event)
         self.config = config
@@ -112,7 +117,13 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         self._session_store = None  # Set via engine for latency tracking
         # Aggregate provider-rate PCM16 bytes (24 kHz default) and commit in >=100ms chunks
         self._pending_audio_provider_rate: bytearray = bytearray()
-
+        
+        # Audio gating for echo prevention
+        self._gating_manager = gating_manager
+        if self._gating_manager:
+            logger.info("🎛️ Audio gating enabled for OpenAI Realtime (echo prevention)")
+        else:
+            logger.debug("Audio gating not available for OpenAI Realtime")
         self._last_commit_ts: float = 0.0
         # Serialize append/commit to avoid empty commits from races
         self._audio_lock: asyncio.Lock = asyncio.Lock()
@@ -2022,7 +2033,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
 
         assumed_output = int(getattr(self.config, "output_sample_rate_hz", 0) or 0)
         try:
-            _OPENAI_ASSUMED_OUTPUT_RATE.set(assumed_output)
+            _OPENAI_ASSUMED_OUTPUT_RATE.labels(call_id).set(assumed_output)
         except Exception:
             pass
 
@@ -2038,7 +2049,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         }
 
         try:
-            _OPENAI_SESSION_AUDIO_INFO.info(info_payload)
+            _OPENAI_SESSION_AUDIO_INFO.labels(call_id).info(info_payload)
         except Exception:
             pass
 
@@ -2069,7 +2080,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         if provider_rate:
             self._provider_reported_output_rate = provider_rate
             try:
-                _OPENAI_PROVIDER_OUTPUT_RATE.set(provider_rate)
+                _OPENAI_PROVIDER_OUTPUT_RATE.labels(call_id).set(provider_rate)
             except Exception:
                 pass
             try:
@@ -2103,7 +2114,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         }
 
         try:
-            _OPENAI_SESSION_AUDIO_INFO.info(info_payload)
+            _OPENAI_SESSION_AUDIO_INFO.labels(call_id).info(info_payload)
         except Exception:
             pass
 
@@ -2145,7 +2156,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         confirmed_pcm = bool(self._outfmt_acknowledged and self._provider_output_format == "pcm16")
 
         try:
-            _OPENAI_MEASURED_OUTPUT_RATE.set(measured_rate)
+            _OPENAI_MEASURED_OUTPUT_RATE.labels(self._call_id).set(measured_rate)
         except Exception:
             pass
 

@@ -79,7 +79,7 @@ class AvailableModels(BaseModel):
 class SwitchModelRequest(BaseModel):
     """Request to switch model."""
     model_type: str  # stt, tts, llm
-    backend: Optional[str] = None  # For STT/TTS: vosk, sherpa, kroko, piper, kokoro, melotts, whisper_cpp
+    backend: Optional[str] = None  # For STT/TTS: vosk, sherpa, kroko, piper, kokoro
     model_path: Optional[str] = None  # For models with paths
     voice: Optional[str] = None  # For Kokoro TTS
     language: Optional[str] = None  # For Kroko STT
@@ -95,13 +95,6 @@ class SwitchModelRequest(BaseModel):
     kokoro_api_base_url: Optional[str] = None
     kokoro_api_key: Optional[str] = None
     kokoro_api_model: Optional[str] = None
-    # MeloTTS controls (optional)
-    melotts_voice: Optional[str] = None  # EN-US, EN-BR, EN-AU, EN-IN, EN-Default
-    melotts_speed: Optional[float] = None  # 0.5-2.0
-    melotts_device: Optional[str] = None  # cpu, cuda, auto
-    # Whisper.cpp controls (optional)
-    whisper_cpp_model_path: Optional[str] = None
-    whisper_cpp_language: Optional[str] = None
 
 
 class SwitchModelResponse(BaseModel):
@@ -672,13 +665,6 @@ async def switch_model(request: SwitchModelRequest):
                     payload["kroko_embedded"] = request.kroko_embedded
                 if request.model_path:
                     payload["kroko_model_path"] = request.model_path
-            if request.backend == "whisper_cpp":
-                if request.whisper_cpp_model_path:
-                    payload["whisper_cpp_model_path"] = request.whisper_cpp_model_path
-                elif request.model_path:
-                    payload["whisper_cpp_model_path"] = request.model_path
-                if request.whisper_cpp_language:
-                    payload["whisper_cpp_language"] = request.whisper_cpp_language
         else:
             payload["tts_backend"] = request.backend
             if request.backend == "piper" and request.model_path:
@@ -697,13 +683,6 @@ async def switch_model(request: SwitchModelRequest):
                     payload["kokoro_api_key"] = request.kokoro_api_key
                 if request.kokoro_api_model:
                     payload["kokoro_api_model"] = request.kokoro_api_model
-            if request.backend == "melotts":
-                if request.melotts_voice:
-                    payload["melotts_voice"] = request.melotts_voice
-                if request.melotts_speed is not None:
-                    payload["melotts_speed"] = request.melotts_speed
-                if request.melotts_device:
-                    payload["melotts_device"] = request.melotts_device
 
         ws_resp = await _try_ws_switch(payload)
         if ws_resp and ws_resp.get("type") == "switch_response" and ws_resp.get("status") == "success":

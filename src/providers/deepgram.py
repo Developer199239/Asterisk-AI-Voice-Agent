@@ -27,19 +27,23 @@ logger = get_logger(__name__)
 
 _DEEPGRAM_INPUT_RATE = Gauge(
     "ai_agent_deepgram_input_sample_rate_hz",
-    "Configured Deepgram input sample rate (last observed)",
+    "Configured Deepgram input sample rate per call",
+    labelnames=("call_id",),
 )
 _DEEPGRAM_OUTPUT_RATE = Gauge(
     "ai_agent_deepgram_output_sample_rate_hz",
-    "Configured Deepgram output sample rate (last observed)",
+    "Configured Deepgram output sample rate per call",
+    labelnames=("call_id",),
 )
 _DEEPGRAM_SESSION_AUDIO_INFO = Info(
     "ai_agent_deepgram_session_audio",
     "Deepgram session audio encodings/sample rates",
+    labelnames=("call_id",),
 )
 _DEEPGRAM_SETTINGS_ACK_LATENCY_MS = Gauge(
     "ai_agent_deepgram_settings_ack_latency_ms",
     "Latency from Settings send to SettingsApplied ACK (ms)",
+    labelnames=("call_id",),
 )
 
 class DeepgramProvider(AIProviderInterface):
@@ -294,11 +298,11 @@ class DeepgramProvider(AIProviderInterface):
         if not call_id:
             return
         try:
-            _DEEPGRAM_INPUT_RATE.set(int(input_sample_rate_hz))
+            _DEEPGRAM_INPUT_RATE.labels(call_id).set(int(input_sample_rate_hz))
         except Exception:
             pass
         try:
-            _DEEPGRAM_OUTPUT_RATE.set(int(output_sample_rate_hz))
+            _DEEPGRAM_OUTPUT_RATE.labels(call_id).set(int(output_sample_rate_hz))
         except Exception:
             pass
         info_payload = {
@@ -308,7 +312,7 @@ class DeepgramProvider(AIProviderInterface):
             "output_sample_rate_hz": str(output_sample_rate_hz),
         }
         try:
-            _DEEPGRAM_SESSION_AUDIO_INFO.info(info_payload)
+            _DEEPGRAM_SESSION_AUDIO_INFO.labels(call_id).info(info_payload)
         except Exception:
             pass
 
@@ -1052,7 +1056,7 @@ class DeepgramProvider(AIProviderInterface):
                                 if self._settings_ts:
                                     latency_ms = max(0.0, (time.monotonic() - float(self._settings_ts)) * 1000.0)
                                     if self.call_id:
-                                        _DEEPGRAM_SETTINGS_ACK_LATENCY_MS.set(latency_ms)
+                                        _DEEPGRAM_SETTINGS_ACK_LATENCY_MS.labels(self.call_id).set(latency_ms)
                                         logger.info("Deepgram settings ACK latency", call_id=self.call_id, latency_ms=round(latency_ms, 1))
                             except Exception:
                                 logger.debug("Failed to record settings ACK latency", exc_info=True)

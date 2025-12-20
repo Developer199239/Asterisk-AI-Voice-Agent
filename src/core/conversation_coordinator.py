@@ -23,22 +23,25 @@ logger = structlog.get_logger(__name__)
 
 # Prometheus metrics are defined at module scope so they are registered
 # exactly once even if the coordinator is instantiated multiple times.
-_TTS_GATING_ACTIVE_CALLS = Gauge(
-    "ai_agent_tts_gating_active_calls",
-    "Number of active calls with TTS gating enabled",
+_TTS_GATING_GAUGE = Gauge(
+    "ai_agent_tts_gating_active",
+    "Whether TTS gating is currently active for a call (1 = gated)",
+    labelnames=("call_id",),
 )
-_AUDIO_CAPTURE_DISABLED_CALLS = Gauge(
-    "ai_agent_audio_capture_disabled_calls",
-    "Number of active calls with upstream audio capture disabled",
+_AUDIO_CAPTURE_GAUGE = Gauge(
+    "ai_agent_audio_capture_enabled",
+    "Whether upstream audio capture is enabled for a call (1 = enabled)",
+    labelnames=("call_id",),
 )
-_CONVERSATION_STATE_CALLS = Gauge(
-    "ai_agent_conversation_state_calls",
-    "Number of active calls in each conversation state",
-    labelnames=("state",),
+_CONVERSATION_STATE_GAUGE = Gauge(
+    "ai_agent_conversation_state",
+    "Conversation state indicator gauge (1 = state active)",
+    labelnames=("call_id", "state"),
 )
 _BARGE_IN_COUNTER = Counter(
     "ai_agent_barge_in_events_total",
     "Count of barge-in attempts detected while TTS playback is active",
+    labelnames=("call_id",),
 )
 
 # Accepted conversation states for the simple state gauge.
@@ -62,11 +65,13 @@ class ConversationCoordinator:
     async def register_call(self, session: CallSession) -> None:
         """Initialise metrics for a newly tracked call session."""
         logger.debug("ConversationCoordinator registering call", call_id=session.call_id)
+        _AUDIO_CAPTURE_GAUGE.labels(session.call_id).set(1 if session.audio_capture_enabled else 0)
+        _TTS_GATING_GAUGE.labels(session.call_id).set(1 if session.tts_playing else 0)
+        self._set_state_metric(session.call_id, session.conversation_state)
         self._barge_in_seen[session.call_id] = False
         self._barge_in_totals.setdefault(session.call_id, 0)
         # Ensure we do not leak old fallback tasks
         await self._cancel_capture_fallback(session.call_id)
-        await self._refresh_metrics()
 
     async def unregister_call(self, call_id: str) -> None:
         """Remove metrics and timers associated with a call session."""
@@ -74,19 +79,34 @@ class ConversationCoordinator:
         await self._cancel_capture_fallback(call_id)
         self._barge_in_seen.pop(call_id, None)
         self._barge_in_totals.pop(call_id, None)
-        await self._refresh_metrics()
+        try:
+            _AUDIO_CAPTURE_GAUGE.remove(call_id)
+        except KeyError:
+            pass
+        try:
+            _TTS_GATING_GAUGE.remove(call_id)
+        except KeyError:
+            pass
+        for state in _CONVERSATION_STATES:
+            try:
+                _CONVERSATION_STATE_GAUGE.remove(call_id, state)
+            except KeyError:
+                pass
 
     async def sync_from_session(self, session: CallSession) -> None:
         """Synchronise gauges to reflect the latest session values."""
-        await self._refresh_metrics()
+        _AUDIO_CAPTURE_GAUGE.labels(session.call_id).set(1 if session.audio_capture_enabled else 0)
+        _TTS_GATING_GAUGE.labels(session.call_id).set(1 if session.tts_playing else 0)
+        self._set_state_metric(session.call_id, session.conversation_state)
 
     async def on_tts_start(self, call_id: str, playback_id: str) -> bool:
         """Disable audio capture for the duration of a TTS playback."""
         logger.info("🔇 ConversationCoordinator gating audio", call_id=call_id, playback_id=playback_id)
         success = await self._session_store.set_gating_token(call_id, playback_id)
         if success:
+            _TTS_GATING_GAUGE.labels(call_id).set(1)
+            _AUDIO_CAPTURE_GAUGE.labels(call_id).set(0)
             self._barge_in_seen[call_id] = False
-            await self._refresh_metrics()
         return success
 
     async def on_tts_end(self, call_id: str, playback_id: str, reason: str = "playback-finished") -> bool:
@@ -99,8 +119,13 @@ class ConversationCoordinator:
         )
         success = await self._session_store.clear_gating_token(call_id, playback_id)
         if success:
+            _TTS_GATING_GAUGE.labels(call_id).set(0)
+            session = await self._session_store.get_by_call_id(call_id)
+            capture_enabled = True
+            if session:
+                capture_enabled = session.audio_capture_enabled
+            _AUDIO_CAPTURE_GAUGE.labels(call_id).set(1 if capture_enabled else 0)
             self._barge_in_seen[call_id] = False
-            await self._refresh_metrics()
         return success
 
     async def cancel_tts(self, call_id: str, playback_id: str) -> None:
@@ -114,7 +139,7 @@ class ConversationCoordinator:
             self._barge_in_totals.setdefault(call_id, 0)
         if not self._barge_in_seen[call_id]:
             logger.debug("🎧 Barge-in attempt detected", call_id=call_id)
-            _BARGE_IN_COUNTER.inc()
+            _BARGE_IN_COUNTER.labels(call_id).inc()
             self._barge_in_totals[call_id] = self._barge_in_totals.get(call_id, 0) + 1
             self._barge_in_seen[call_id] = True
 
@@ -130,7 +155,7 @@ class ConversationCoordinator:
             return
         session.conversation_state = state
         await self._session_store.upsert_call(session)
-        await self._refresh_metrics()
+        self._set_state_metric(call_id, state)
 
     def get_pending_timer_count(self) -> int:
         """Return the number of pending fallback timers."""
@@ -156,7 +181,7 @@ class ConversationCoordinator:
                     return
                 session.audio_capture_enabled = True
                 await self._session_store.upsert_call(session)
-                await self._refresh_metrics()
+                _AUDIO_CAPTURE_GAUGE.labels(call_id).set(1)
                 logger.info(
                     "[TIMER] Executed: action=capture_fallback",
                     call_id=call_id,
@@ -195,24 +220,9 @@ class ConversationCoordinator:
             except asyncio.CancelledError:
                 pass
 
-    async def _refresh_metrics(self) -> None:
-        """Refresh aggregated metrics derived from SessionStore state."""
-        try:
-            sessions = await self._session_store.get_all_sessions()
-        except Exception:
-            logger.debug("ConversationCoordinator metrics refresh failed (session read)", exc_info=True)
-            return
-
-        try:
-            gating_active = sum(1 for session in sessions if session.tts_playing)
-            capture_disabled = sum(1 for session in sessions if not session.audio_capture_enabled)
-            _TTS_GATING_ACTIVE_CALLS.set(gating_active)
-            _AUDIO_CAPTURE_DISABLED_CALLS.set(capture_disabled)
-            for state in _CONVERSATION_STATES:
-                _CONVERSATION_STATE_CALLS.labels(state).set(
-                    sum(1 for session in sessions if session.conversation_state == state)
-                )
-        except Exception:
-            logger.debug("ConversationCoordinator metrics refresh failed", exc_info=True)
+    def _set_state_metric(self, call_id: str, state: str) -> None:
+        for known_state in _CONVERSATION_STATES:
+            gauge = _CONVERSATION_STATE_GAUGE.labels(call_id, known_state)
+            gauge.set(1 if known_state == state else 0)
 
 __all__ = ["ConversationCoordinator"]

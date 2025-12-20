@@ -30,11 +30,6 @@ def _stt_status(server) -> Tuple[bool, Optional[str], Optional[str]]:
         path = server.faster_whisper_model
         display = f"Faster-Whisper ({server.faster_whisper_model})"
         return loaded, path, display
-    if server.stt_backend == "whisper_cpp":
-        loaded = server.mock_models or server.whisper_cpp_backend is not None
-        path = server.whisper_cpp_model_path
-        display = f"Whisper.cpp ({os.path.basename(server.whisper_cpp_model_path)})"
-        return loaded, path, display
     return False, None, None
 
 
