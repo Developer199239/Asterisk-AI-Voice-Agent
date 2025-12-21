@@ -83,23 +83,47 @@ setup_data_directory() {
     
     if [ -d "$DATA_DIR" ] && [ -w "$DATA_DIR" ]; then
         print_success "Data directory ready: $DATA_DIR"
-        return 0
+    else
+        if [ ! -d "$DATA_DIR" ]; then
+            mkdir -p "$DATA_DIR"
+            chmod 775 "$DATA_DIR"
+            print_success "Created data directory: $DATA_DIR"
+        else
+            chmod 775 "$DATA_DIR"
+            print_success "Fixed data directory permissions: $DATA_DIR"
+        fi
     fi
     
-    if [ ! -d "$DATA_DIR" ]; then
-        mkdir -p "$DATA_DIR"
-        chmod 775 "$DATA_DIR"
-        print_success "Created data directory: $DATA_DIR"
-    else
-        chmod 775 "$DATA_DIR"
-        print_success "Fixed data directory permissions: $DATA_DIR"
+    # Ensure .gitkeep exists to maintain directory in git
+    if [ ! -f "$DATA_DIR/.gitkeep" ]; then
+        touch "$DATA_DIR/.gitkeep"
+        print_info "Created .gitkeep placeholder in data directory"
+    fi
+    
+    # Handle SELinux context on RHEL-family systems (Sangoma/FreePBX)
+    if command -v getenforce &>/dev/null; then
+        SELINUX_MODE=$(getenforce 2>/dev/null || echo "Disabled")
+        if [ "$SELINUX_MODE" = "Enforcing" ]; then
+            print_info "SELinux is Enforcing - setting container context for data directory..."
+            if command -v semanage &>/dev/null; then
+                # Add SELinux context for container access
+                $SUDO semanage fcontext -a -t container_file_t "$DATA_DIR(/.*)?" 2>/dev/null || true
+                $SUDO restorecon -Rv "$DATA_DIR" 2>/dev/null || true
+                print_success "SELinux context applied to data directory"
+            else
+                print_warning "semanage not found - SELinux context not set"
+                print_info "  Install with: $SUDO yum install -y policycoreutils-python-utils"
+                print_info "  Then run: $SUDO semanage fcontext -a -t container_file_t '$DATA_DIR(/.*)?'"
+                print_info "            $SUDO restorecon -Rv '$DATA_DIR'"
+            fi
+        fi
     fi
     
     # Verify
     if [ -d "$DATA_DIR" ] && [ -w "$DATA_DIR" ]; then
         print_success "Data directory ready for call history DB"
     else
-        print_warning "Data directory may not be writable; call history may fail to initialize"
+        print_warning "Data directory may not be writable; call history will NOT be recorded!"
     fi
 }
 

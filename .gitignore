@@ -273,5 +273,10 @@ walkthrough.md
 admin_ui/RELEASE_SUMMARY.md
 
 # Call History Database (Milestone 21)
-data/call_history.db
+# Exclude database files but keep the directory structure
 data/*.db
+data/*.sqlite
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
+!data/.gitkeep

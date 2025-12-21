@@ -662,16 +662,23 @@ check_directories() {
             if [ "$APPLY_FIXES" = true ]; then
                 mkdir -p "$DATA_DIR"
                 chmod 775 "$DATA_DIR"
+                # Ensure .gitkeep exists to maintain directory in git
+                touch "$DATA_DIR/.gitkeep"
                 log_ok "Created data directory: $DATA_DIR"
             else
-                log_warn "Data directory missing: $DATA_DIR (used for call history DB)"
-                FIX_CMDS+=("mkdir -p $DATA_DIR && chmod 775 $DATA_DIR")
+                log_warn "Data directory missing: $DATA_DIR"
+                log_info "  ⚠️  Call history will NOT be recorded without this directory!"
+                log_info "  Run: ./preflight.sh --apply-fixes to create it automatically"
+                FIX_CMDS+=("mkdir -p $DATA_DIR && chmod 775 $DATA_DIR && touch $DATA_DIR/.gitkeep")
             fi
         else
-            log_warn "Data directory not writable: $DATA_DIR"
-            if [ "$DOCKER_ROOTLESS" = true ]; then
-                FIX_CMDS+=("chmod 775 $DATA_DIR")
+            if [ "$APPLY_FIXES" = true ]; then
+                chmod 775 "$DATA_DIR"
+                log_ok "Fixed data directory permissions: $DATA_DIR"
             else
+                log_warn "Data directory not writable: $DATA_DIR"
+                log_info "  ⚠️  Call history will NOT be recorded without write access!"
+                log_info "  Run: ./preflight.sh --apply-fixes to fix permissions"
                 FIX_CMDS+=("chmod 775 $DATA_DIR")
             fi
         fi
@@ -688,6 +695,7 @@ check_selinux() {
     SELINUX_MODE=$(getenforce 2>/dev/null || echo "Disabled")
     # Use consistent AST_MEDIA_DIR with repo-local default
     MEDIA_DIR="${AST_MEDIA_DIR:-$SCRIPT_DIR/asterisk_media/ai-generated}"
+    DATA_DIR="$SCRIPT_DIR/data"
     
     if [ "$SELINUX_MODE" = "Enforcing" ]; then
         # Check if semanage is available
@@ -707,16 +715,27 @@ check_selinux() {
             print_fix_and_docs "$SELINUX_TOOLS_CMD" "$(github_docs_url "$(platform_yaml_get selinux.aava_docs || echo "docs/INSTALLATION.md")" 2>/dev/null || true)"
         fi
         
-        log_warn "SELinux: Enforcing (context fix may be needed for media directory)"
+        log_warn "SELinux: Enforcing (context fix may be needed for media and data directories)"
         local SELINUX_CONTEXT_CMD
         local SELINUX_RESTORE_CMD
+        
+        # Media directory SELinux context
         SELINUX_CONTEXT_CMD="$(platform_yaml_get selinux.context_cmd || echo "sudo semanage fcontext -a -t container_file_t '{path}(/.*)?'")"
         SELINUX_RESTORE_CMD="$(platform_yaml_get selinux.restore_cmd || echo "sudo restorecon -Rv {path}")"
-        SELINUX_CONTEXT_CMD="${SELINUX_CONTEXT_CMD//\{path\}/$MEDIA_DIR}"
-        SELINUX_RESTORE_CMD="${SELINUX_RESTORE_CMD//\{path\}/$MEDIA_DIR}"
-        FIX_CMDS+=("$SELINUX_CONTEXT_CMD")
-        FIX_CMDS+=("$SELINUX_RESTORE_CMD")
-        print_fix_and_docs "$SELINUX_CONTEXT_CMD"$'\n'"$SELINUX_RESTORE_CMD" "$(github_docs_url "$(platform_yaml_get selinux.aava_docs || echo "docs/INSTALLATION.md")" 2>/dev/null || true)"
+        local MEDIA_CONTEXT_CMD="${SELINUX_CONTEXT_CMD//\{path\}/$MEDIA_DIR}"
+        local MEDIA_RESTORE_CMD="${SELINUX_RESTORE_CMD//\{path\}/$MEDIA_DIR}"
+        FIX_CMDS+=("$MEDIA_CONTEXT_CMD")
+        FIX_CMDS+=("$MEDIA_RESTORE_CMD")
+        
+        # Data directory SELinux context (for call history DB)
+        local DATA_CONTEXT_CMD="${SELINUX_CONTEXT_CMD//\{path\}/$DATA_DIR}"
+        local DATA_RESTORE_CMD="${SELINUX_RESTORE_CMD//\{path\}/$DATA_DIR}"
+        FIX_CMDS+=("$DATA_CONTEXT_CMD")
+        FIX_CMDS+=("$DATA_RESTORE_CMD")
+        
+        log_info "  Media directory: $MEDIA_DIR"
+        log_info "  Data directory: $DATA_DIR (call history)"
+        print_fix_and_docs "$MEDIA_CONTEXT_CMD"$'\n'"$MEDIA_RESTORE_CMD"$'\n'"$DATA_CONTEXT_CMD"$'\n'"$DATA_RESTORE_CMD" "$(github_docs_url "$(platform_yaml_get selinux.aava_docs || echo "docs/INSTALLATION.md")" 2>/dev/null || true)"
     else
         log_ok "SELinux: $SELINUX_MODE"
     fi

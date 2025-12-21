@@ -187,6 +187,106 @@ CALL_HISTORY_RETENTION_DAYS=0      # 0 = unlimited
 CALL_HISTORY_DB_PATH=data/call_history.db
 ```
 
+## Data Directory Persistence
+
+The call history database is stored in `data/call_history.db`. This directory must exist and be writable for call records to persist.
+
+### Directory Structure
+
+```
+project/
+├── data/
+│   ├── .gitkeep           # Ensures directory exists in repo (empty file)
+│   └── call_history.db    # SQLite database (gitignored, created at runtime)
+```
+
+### How It Works
+
+1. **`.gitkeep`** - An empty placeholder file that ensures the `data/` directory is tracked by git. Without it, git would ignore the empty directory and it wouldn't exist after cloning.
+
+2. **`.gitignore` rules** - Database files (`*.db`, `*.sqlite`, journal files) are excluded from version control. Only `.gitkeep` is committed.
+
+3. **Volume mounts** - Both `ai-engine` and `admin-ui` containers mount `./data:/app/data` to share the same database.
+
+### Setup Flow
+
+The data directory is created at multiple points to ensure it exists and persists across reboots:
+
+| Component | Action | When |
+|-----------|--------|------|
+| `data/.gitkeep` | Directory exists after clone | Git clone |
+| `preflight.sh` | Creates dir, sets permissions, adds SELinux context | Pre-install check |
+| `install.sh` | Creates dir, sets permissions, adds SELinux context | Installation |
+| `Dockerfile` | Creates `/app/data` inside container | Container build |
+| `docker-compose.yml` | Mounts `./data:/app/data` | Container start |
+
+### SELinux Support (RHEL/Sangoma/FreePBX)
+
+On systems with SELinux enforcing, the scripts automatically set the `container_file_t` context:
+
+```bash
+# What the scripts do automatically:
+semanage fcontext -a -t container_file_t '/path/to/project/data(/.*)?'
+restorecon -Rv /path/to/project/data
+```
+
+This allows Docker containers to read/write the database even with SELinux enforcing.
+
+### Persistence Across Reboots
+
+The data directory persists because:
+
+1. **Host filesystem** - `./data/` is a regular directory on the host filesystem (not tmpfs)
+2. **Bind mount** - Docker mounts the host directory into containers
+3. **SELinux context** - Persists in SELinux policy database
+4. **Git tracking** - `.gitkeep` ensures directory survives `git clean` operations
+
+### Troubleshooting
+
+If call history shows empty after calls:
+
+1. **Check directory exists on host**:
+   ```bash
+   ls -la ./data/
+   # Should show call_history.db after first call
+   ```
+
+2. **Check container can write**:
+   ```bash
+   docker exec ai_engine ls -la /app/data/
+   ```
+
+3. **Check permissions** (should be writable by container user):
+   ```bash
+   # Fix if needed
+   chmod 775 ./data/
+   ```
+
+4. **Verify database has records**:
+   ```bash
+   docker exec ai_engine python3 -c "
+   import asyncio
+   from src.core.call_history import get_call_history_store
+   async def check():
+       store = get_call_history_store()
+       count = await store.count()
+       print(f'Records: {count}')
+   asyncio.run(check())
+   "
+   ```
+
+### Backup Recommendations
+
+The SQLite database can be backed up while the system is running:
+
+```bash
+# Simple copy (safe for SQLite in WAL mode)
+cp data/call_history.db data/call_history.db.backup
+
+# Or use sqlite3 backup command
+sqlite3 data/call_history.db ".backup 'data/call_history.db.backup'"
+```
+
 ## Files to Create
 
 | File | Description |
@@ -196,6 +296,7 @@ CALL_HISTORY_DB_PATH=data/call_history.db
 | `admin_ui/frontend/src/pages/CallHistoryPage.tsx` | Main page |
 | `admin_ui/frontend/src/components/CallDetailModal.tsx` | Detail view |
 | `admin_ui/frontend/src/components/CallStatsWidget.tsx` | Stats dashboard |
+| `data/.gitkeep` | Placeholder to ensure data directory exists in repo |
 
 ## Files to Modify
 
@@ -206,7 +307,7 @@ CALL_HISTORY_DB_PATH=data/call_history.db
 | `admin_ui/backend/main.py` | Register calls router |
 | `admin_ui/frontend/src/App.tsx` | Add route |
 | `.env.example` | Add config vars |
-| `.gitignore` | Add `data/call_history.db` |
+| `.gitignore` | Exclude `data/*.db` but include `data/.gitkeep` |
 
 ## Acceptance Criteria
 
@@ -315,4 +416,4 @@ The following items were identified during implementation but deferred for futur
 
 **Linear Issue**: AAVA-138 (to be created manually)  
 **Created**: December 17, 2025  
-**Last Updated**: December 18, 2025
+**Last Updated**: December 20, 2025
