@@ -1646,7 +1646,25 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                     await self._cancel_response(self._current_response_id)
                     await self._emit_provider_barge_in(event_type=event_type)
             else:
-                logger.info("OpenAI input_audio_buffer ack", call_id=self._call_id, event_type=event_type)
+                # IMPORTANT: even when there's no cancellable response (e.g., output buffered locally),
+                # we still want the platform to flush local playback immediately on speech_started.
+                if event_type == "input_audio_buffer.speech_started":
+                    # Never interrupt the greeting turn via platform flush.
+                    if self._greeting_response_id and not self._greeting_completed:
+                        logger.info(
+                            "🛡️  Barge-in blocked - protecting greeting response",
+                            call_id=self._call_id,
+                            response_id=self._greeting_response_id,
+                        )
+                    else:
+                        logger.info(
+                            "🎤 User speech started (no active response); requesting platform flush",
+                            call_id=self._call_id,
+                            event_type=event_type,
+                        )
+                        await self._emit_provider_barge_in(event_type=event_type)
+                else:
+                    logger.info("OpenAI input_audio_buffer ack", call_id=self._call_id, event_type=event_type)
             return
 
         # Additional transcript variants per guide

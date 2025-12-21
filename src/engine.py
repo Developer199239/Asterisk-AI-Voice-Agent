@@ -5119,6 +5119,35 @@ class Engine:
             # - ElevenLabs emits `interruption` when it detects barge-in.
             if etype in ("ProviderBargeIn", "interruption"):
                 try:
+                    # Guard against provider VAD noise when we're not actually outputting audio.
+                    # This matters for OpenAI AudioSocket: `input_audio_buffer.speech_started` can occur
+                    # even when there is no cancellable response, while local output may or may not be active.
+                    try:
+                        cfg = getattr(self.config, "barge_in", None)
+                        cooldown_ms = int(getattr(cfg, "cooldown_ms", 500)) if cfg else 500
+                        import time
+                        now = time.time()
+                        last_barge_in_ts = float(getattr(session, "last_barge_in_ts", 0.0) or 0.0)
+                        if last_barge_in_ts and (now - last_barge_in_ts) * 1000 < cooldown_ms:
+                            return
+                    except Exception:
+                        pass
+
+                    output_active = False
+                    try:
+                        output_active = bool(self.streaming_playback_manager.is_stream_active(call_id))
+                    except Exception:
+                        output_active = False
+                    if not output_active:
+                        try:
+                            playback_ids = await self.session_store.list_playbacks_for_call(call_id)
+                            output_active = bool(playback_ids)
+                        except Exception:
+                            output_active = False
+                    if not output_active and not bool(getattr(session, "tts_playing", False)):
+                        # No local output to flush; ignore noisy provider barge-in signals.
+                        return
+
                     provider_evt = event.get("event") or event.get("reason") or ""
                     reason = provider_evt if etype == "ProviderBargeIn" else (provider_evt or etype)
                     await self._apply_barge_in_action(
