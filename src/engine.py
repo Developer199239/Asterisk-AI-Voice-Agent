@@ -2560,10 +2560,9 @@ class Engine:
             avg_latency = sum(turn_latencies) / len(turn_latencies) if turn_latencies else 0.0
             max_latency = max(turn_latencies) if turn_latencies else 0.0
             
-            # Get barge-in count from coordinator
-            barge_in_count = getattr(session, 'barge_in_count', 0)
-            if self.conversation_coordinator:
-                barge_in_count = self.conversation_coordinator._barge_in_totals.get(call_id, 0)
+            # Barge-in count: number of times we applied a barge-in action (user interrupted agent output).
+            # This is the value the UI should display as "Barge-ins".
+            barge_in_count = int(getattr(session, 'barge_in_count', 0) or 0)
             
             record = CallRecord(
                 call_id=call_id,
