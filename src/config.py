@@ -317,10 +317,30 @@ class BargeInConfig(BaseModel):
     min_ms: int = Field(default=250)
     energy_threshold: int = Field(default=1000)
     cooldown_ms: int = Field(default=500)
+    # Pipeline (hybrid/local) barge-in tuning: pipelines play TTS locally (file playback),
+    # so we can use a more sensitive detector without colliding with provider-owned VAD.
+    pipeline_min_ms: int = Field(default=120)
+    pipeline_energy_threshold: int = Field(default=300)
+    # Pipelines: prefer Asterisk-side talk detection (TALK_DETECT) for robust barge-in,
+    # because ExternalMedia RTP can be paused/altered during channel playback.
+    pipeline_talk_detect_enabled: bool = Field(default=True)
+    # TALK_DETECT(set)=<dsp_silence_threshold_ms>,<dsp_talking_threshold>
+    pipeline_talk_detect_silence_ms: int = Field(default=1200)
+    pipeline_talk_detect_talking_threshold: int = Field(default=128)
     # New: short guard window after TTS ends to avoid self-echo re-capture
     post_tts_end_protection_ms: int = Field(default=250)
     # Extra protection during the first greeting turn
     greeting_protection_ms: int = Field(default=0)
+    # Provider-owned mode: local VAD fallback only for providers that don't emit explicit interruption events.
+    provider_fallback_enabled: bool = Field(default=True)
+    provider_fallback_providers: List[str] = Field(default_factory=lambda: ["google_live", "deepgram"])
+    # Provider-owned mode: suppress outbound provider audio locally after barge-in so continuing provider audio
+    # doesn't immediately restart streaming playback.
+    provider_output_suppress_ms: int = Field(default=1200)
+    provider_output_suppress_extend_ms: int = Field(default=600)
+    # While suppressed, extend the suppression window when provider chunks keep arriving.
+    # This prevents "tail resume" if a provider keeps streaming already-generated audio after barge-in.
+    provider_output_suppress_chunk_extend_ms: int = Field(default=250)
 
 
 class LLMConfig(BaseModel):

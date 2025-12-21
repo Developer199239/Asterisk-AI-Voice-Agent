@@ -95,6 +95,8 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         self._current_response_id: Optional[str] = None  # Track active response for cancellation
         self._greeting_response_id: Optional[str] = None  # Track greeting to protect from barge-in
         self._greeting_completed: bool = False  # Track if greeting has finished
+        # Debounce engine-level barge-in signals (prevents flush storms).
+        self._last_barge_in_emit_ts: float = 0.0
         self._farewell_response_id: Optional[str] = None  # Track farewell response for hangup
         self._hangup_after_response: bool = False  # Flag to trigger hangup after next response
         self._farewell_timeout_task: Optional[asyncio.Task] = None  # Timeout fallback for hangup
@@ -1075,7 +1077,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         """
         if not self.websocket or self.websocket.state.name != "OPEN":
             return
-        
+
         try:
             cancel_payload = {
                 "type": "response.cancel",
@@ -1088,6 +1090,23 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                 call_id=self._call_id,
                 response_id=response_id
             )
+            # Local egress can have buffered audio (pacer/outbuf). Flush it immediately so the interrupted
+            # sentence does not resume locally even if OpenAI continues sending a few in-flight frames.
+            try:
+                await self._emit_audio_done()
+            except Exception:
+                logger.debug("Failed emitting AgentAudioDone during barge-in cancel", call_id=self._call_id, exc_info=True)
+            try:
+                async with self._pacer_lock:
+                    self._outbuf.clear()
+            except Exception:
+                logger.debug("Failed clearing pacer buffer during barge-in cancel", call_id=self._call_id, exc_info=True)
+            try:
+                self._pacer_running = False
+                if self._pacer_task and not self._pacer_task.done():
+                    self._pacer_task.cancel()
+            except Exception:
+                logger.debug("Failed stopping pacer during barge-in cancel", call_id=self._call_id, exc_info=True)
         except Exception:
             logger.error(
                 "Failed to cancel OpenAI response",
@@ -1095,6 +1114,28 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                 response_id=response_id,
                 exc_info=True
             )
+
+    async def _emit_provider_barge_in(self, *, event_type: str) -> None:
+        """Notify the engine that provider-side VAD detected user interruption.
+
+        Engine uses this to flush local playback immediately (Option 2),
+        while OpenAI remains responsible for response cancellation/turn-taking.
+        """
+        try:
+            now = time.time()
+            if now - float(self._last_barge_in_emit_ts or 0.0) < 0.25:
+                return
+            self._last_barge_in_emit_ts = now
+            await self.on_event(
+                {
+                    "type": "ProviderBargeIn",
+                    "call_id": self._call_id,
+                    "provider": "openai_realtime",
+                    "event": event_type,
+                }
+            )
+        except Exception:
+            logger.debug("Failed to emit ProviderBargeIn", call_id=self._call_id, exc_info=True)
     
     async def _send_audio_to_openai(self, pcm16: bytes):
         """Helper method to send PCM16 audio to OpenAI (extracted for gating logic).
@@ -1594,6 +1635,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                             elapsed_seconds=round(elapsed, 2)
                         )
                         await self._cancel_response(self._current_response_id)
+                        await self._emit_provider_barge_in(event_type=event_type)
                 else:
                     # No audio started yet, still cancel text-only responses
                     logger.info(
@@ -1602,8 +1644,40 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                         response_id=self._current_response_id
                     )
                     await self._cancel_response(self._current_response_id)
+                    await self._emit_provider_barge_in(event_type=event_type)
             else:
-                logger.info("OpenAI input_audio_buffer ack", call_id=self._call_id, event_type=event_type)
+                # IMPORTANT: even when there's no cancellable response (e.g., output buffered locally),
+                # we still want the platform to flush local playback immediately on speech_started.
+                if event_type == "input_audio_buffer.speech_started":
+                    # Never interrupt the greeting turn via platform flush.
+                    if self._greeting_response_id and not self._greeting_completed:
+                        logger.info(
+                            "🛡️  Barge-in blocked - protecting greeting response",
+                            call_id=self._call_id,
+                            response_id=self._greeting_response_id,
+                        )
+                    else:
+                        # AudioSocket+streaming: a response can be "done" at the provider while
+                        # we're still draining buffered audio locally (pacer/outbuf).
+                        # If the caller starts speaking, we must stop emitting any remaining buffered
+                        # audio immediately so the next turn can proceed normally.
+                        try:
+                            async with self._pacer_lock:
+                                self._outbuf.clear()
+                        except Exception:
+                            logger.debug("Failed to clear OpenAI egress buffer on barge-in", call_id=self._call_id, exc_info=True)
+                        try:
+                            await self._emit_audio_done()
+                        except Exception:
+                            logger.debug("Failed to stop OpenAI egress pacer on barge-in", call_id=self._call_id, exc_info=True)
+                        logger.info(
+                            "🎤 User speech started (no active response); requesting platform flush",
+                            call_id=self._call_id,
+                            event_type=event_type,
+                        )
+                        await self._emit_provider_barge_in(event_type=event_type)
+                else:
+                    logger.info("OpenAI input_audio_buffer ack", call_id=self._call_id, event_type=event_type)
             return
 
         # Additional transcript variants per guide
