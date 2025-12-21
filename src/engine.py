@@ -4867,6 +4867,15 @@ class Engine:
                     sup = session.vad_state.get("output_suppression") or {}
                     until_ts = float(sup.get("until_ts", 0.0) or 0.0)
                     if until_ts and now < until_ts:
+                        # Keep suppression alive while chunks keep arriving so we don't unmute mid-tail.
+                        try:
+                            cfg = getattr(self.config, "barge_in", None)
+                            extend_ms = int(getattr(cfg, "provider_output_suppress_chunk_extend_ms", 0)) if cfg else 0
+                            if extend_ms > 0:
+                                sup["until_ts"] = max(until_ts, now + (extend_ms / 1000.0))
+                                until_ts = float(sup.get("until_ts", until_ts) or until_ts)
+                        except Exception:
+                            pass
                         sup["active"] = True
                         sup["dropped_chunks"] = int(sup.get("dropped_chunks", 0) or 0) + 1
                         sup["dropped_bytes"] = int(sup.get("dropped_bytes", 0) or 0) + len(chunk)

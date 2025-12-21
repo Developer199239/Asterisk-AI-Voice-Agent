@@ -1077,7 +1077,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         """
         if not self.websocket or self.websocket.state.name != "OPEN":
             return
-        
+
         try:
             cancel_payload = {
                 "type": "response.cancel",
@@ -1090,6 +1090,23 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                 call_id=self._call_id,
                 response_id=response_id
             )
+            # Local egress can have buffered audio (pacer/outbuf). Flush it immediately so the interrupted
+            # sentence does not resume locally even if OpenAI continues sending a few in-flight frames.
+            try:
+                await self._emit_audio_done()
+            except Exception:
+                logger.debug("Failed emitting AgentAudioDone during barge-in cancel", call_id=self._call_id, exc_info=True)
+            try:
+                async with self._pacer_lock:
+                    self._outbuf.clear()
+            except Exception:
+                logger.debug("Failed clearing pacer buffer during barge-in cancel", call_id=self._call_id, exc_info=True)
+            try:
+                self._pacer_running = False
+                if self._pacer_task and not self._pacer_task.done():
+                    self._pacer_task.cancel()
+            except Exception:
+                logger.debug("Failed stopping pacer during barge-in cancel", call_id=self._call_id, exc_info=True)
         except Exception:
             logger.error(
                 "Failed to cancel OpenAI response",

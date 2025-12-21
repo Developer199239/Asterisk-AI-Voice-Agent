@@ -328,6 +328,9 @@ class BargeInConfig(BaseModel):
     # doesn't immediately restart streaming playback.
     provider_output_suppress_ms: int = Field(default=1200)
     provider_output_suppress_extend_ms: int = Field(default=600)
+    # While suppressed, extend the suppression window when provider chunks keep arriving.
+    # This prevents "tail resume" if a provider keeps streaming already-generated audio after barge-in.
+    provider_output_suppress_chunk_extend_ms: int = Field(default=250)
 
 
 class LLMConfig(BaseModel):
