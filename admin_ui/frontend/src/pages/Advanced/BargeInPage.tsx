@@ -128,6 +128,7 @@ const BargeInPage = () => {
                         <FormSwitch
                             label="Enable Barge-in"
                             description="Allow users to interrupt the AI agent during TTS playback."
+                            tooltip="When enabled, the engine immediately flushes/stops local agent audio when it detects caller speech during an agent response."
                             checked={bargeInConfig.enabled ?? true}
                             onChange={(e) => updateBargeInConfig('enabled', e.target.checked)}
                         />
@@ -138,35 +139,35 @@ const BargeInPage = () => {
                                 type="number"
                                 value={bargeInConfig.energy_threshold ?? 1000}
                                 onChange={(e) => updateBargeInConfig('energy_threshold', parseInt(e.target.value))}
-                                tooltip="Caller energy threshold (RMS over PCM16) required to trigger a barge-in."
+                                tooltip="Caller energy threshold (RMS over PCM16). Higher = less sensitive (fewer false barge-ins), lower = more sensitive (better for quiet callers)."
                             />
                             <FormInput
                                 label="Minimum Duration (ms)"
                                 type="number"
                                 value={bargeInConfig.min_ms ?? 250}
                                 onChange={(e) => updateBargeInConfig('min_ms', parseInt(e.target.value))}
-                                tooltip="Minimum sustained speech time required before triggering a barge-in."
+                                tooltip="Minimum sustained caller speech time required before triggering barge-in. Higher reduces false triggers but feels less responsive."
                             />
                             <FormInput
                                 label="Cooldown (ms)"
                                 type="number"
                                 value={bargeInConfig.cooldown_ms ?? 500}
                                 onChange={(e) => updateBargeInConfig('cooldown_ms', parseInt(e.target.value))}
-                                tooltip="Minimum time between barge-in triggers (prevents flapping)."
+                                tooltip="Minimum time between barge-in triggers. Prevents repeated triggers from echo/noise after an interruption."
                             />
                             <FormInput
                                 label="Post-TTS Protection (ms)"
                                 type="number"
                                 value={bargeInConfig.post_tts_end_protection_ms ?? 250}
                                 onChange={(e) => updateBargeInConfig('post_tts_end_protection_ms', parseInt(e.target.value))}
-                                tooltip="Guard window after TTS ends to prevent echo/self-capture from triggering a new barge-in."
+                                tooltip="Guard window after agent audio ends. Helps avoid self-echo or tail audio being mistaken as caller speech."
                             />
                             <FormInput
                                 label="Provider Output Suppress (ms)"
                                 type="number"
                                 value={bargeInConfig.provider_output_suppress_ms ?? 1200}
                                 onChange={(e) => updateBargeInConfig('provider_output_suppress_ms', parseInt(e.target.value))}
-                                tooltip="After a barge-in, locally suppress provider audio briefly so previously generated speech doesn't resume immediately."
+                                tooltip="After a barge-in, locally suppress provider audio briefly so previously generated speech doesn’t “resume” mid-sentence."
                             />
                         </div>
 
@@ -203,14 +204,14 @@ const BargeInPage = () => {
                                         type="number"
                                         value={bargeInConfig.initial_protection_ms ?? 200}
                                         onChange={(e) => updateBargeInConfig('initial_protection_ms', parseInt(e.target.value))}
-                                        tooltip="Protection window at the start of each response."
+                                        tooltip="Short guard window at the start of agent output to avoid triggering on initial burst/codec artifacts."
                                     />
                                     <FormInput
                                         label="Greeting Protection (ms)"
                                         type="number"
                                         value={bargeInConfig.greeting_protection_ms ?? 0}
                                         onChange={(e) => updateBargeInConfig('greeting_protection_ms', parseInt(e.target.value))}
-                                        tooltip="Extra guard window during the initial greeting turn."
+                                        tooltip="Extra guard window during the initial greeting turn (useful if greetings are short and prone to false triggers)."
                                     />
                                 </div>
                             </div>
@@ -221,6 +222,7 @@ const BargeInPage = () => {
                                     <FormSwitch
                                         label="Provider Fallback Enabled"
                                         description="Use local VAD fallback only for providers that don’t emit explicit interruption events."
+                                        tooltip="If enabled, the engine can trigger barge-in using local VAD only after media is confirmed and only for the providers listed below."
                                         checked={bargeInConfig.provider_fallback_enabled ?? true}
                                         onChange={(e) => updateBargeInConfig('provider_fallback_enabled', e.target.checked)}
                                     />
@@ -237,21 +239,21 @@ const BargeInPage = () => {
                                                     .filter(Boolean)
                                             )
                                         }
-                                        tooltip="Comma-separated provider names (e.g., google_live, deepgram)."
+                                        tooltip="Comma-separated provider names where local fallback may apply (e.g., google_live, deepgram)."
                                     />
                                     <FormInput
                                         label="Suppress Extend (ms)"
                                         type="number"
                                         value={bargeInConfig.provider_output_suppress_extend_ms ?? 600}
                                         onChange={(e) => updateBargeInConfig('provider_output_suppress_extend_ms', parseInt(e.target.value))}
-                                        tooltip="While caller keeps speaking after a barge-in, extend suppression so agent doesn’t resume early."
+                                        tooltip="While caller keeps speaking after a barge-in, extend suppression so agent doesn’t resume too early."
                                     />
                                     <FormInput
                                         label="Chunk Extend (ms)"
                                         type="number"
                                         value={bargeInConfig.provider_output_suppress_chunk_extend_ms ?? 250}
                                         onChange={(e) => updateBargeInConfig('provider_output_suppress_chunk_extend_ms', parseInt(e.target.value))}
-                                        tooltip="While suppressed, extend suppression when provider chunks keep arriving (prevents tail resume)."
+                                        tooltip="While suppressed, extend suppression when provider chunks keep arriving (prevents tail audio from restarting output)."
                                     />
                                 </div>
                             </div>
@@ -262,6 +264,7 @@ const BargeInPage = () => {
                                     <FormSwitch
                                         label="Enable TALK_DETECT"
                                         description="Use Asterisk TALK_DETECT for robust barge-in during local file playback."
+                                        tooltip="Recommended for local_hybrid: Asterisk DSP detects caller speech even during ARI file playback."
                                         checked={bargeInConfig.pipeline_talk_detect_enabled ?? true}
                                         onChange={(e) => updateBargeInConfig('pipeline_talk_detect_enabled', e.target.checked)}
                                     />
@@ -284,14 +287,14 @@ const BargeInPage = () => {
                                         type="number"
                                         value={bargeInConfig.pipeline_talk_detect_silence_ms ?? 1200}
                                         onChange={(e) => updateBargeInConfig('pipeline_talk_detect_silence_ms', parseInt(e.target.value))}
-                                        tooltip="Asterisk DSP silence threshold passed to TALK_DETECT(set)."
+                                        tooltip="Asterisk TALK_DETECT(set) silence threshold in ms. Higher treats more audio as ‘silence’."
                                     />
                                     <FormInput
                                         label="TALK_DETECT Talking Threshold"
                                         type="number"
                                         value={bargeInConfig.pipeline_talk_detect_talking_threshold ?? 128}
                                         onChange={(e) => updateBargeInConfig('pipeline_talk_detect_talking_threshold', parseInt(e.target.value))}
-                                        tooltip="Asterisk DSP talking threshold passed to TALK_DETECT(set)."
+                                        tooltip="Asterisk TALK_DETECT(set) talking threshold (DSP energy). Higher requires louder speech to trigger."
                                     />
                                 </div>
                             </div>
