@@ -324,6 +324,10 @@ class BargeInConfig(BaseModel):
     # Provider-owned mode: local VAD fallback only for providers that don't emit explicit interruption events.
     provider_fallback_enabled: bool = Field(default=True)
     provider_fallback_providers: List[str] = Field(default_factory=lambda: ["google_live", "deepgram"])
+    # Provider-owned mode: suppress outbound provider audio locally after barge-in so continuing provider audio
+    # doesn't immediately restart streaming playback.
+    provider_output_suppress_ms: int = Field(default=1200)
+    provider_output_suppress_extend_ms: int = Field(default=600)
 
 
 class LLMConfig(BaseModel):

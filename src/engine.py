@@ -3800,6 +3800,18 @@ class Engine:
             else:
                 session.barge_in_candidate_ms = 0
 
+            # If a barge-in already happened (output suppression active), keep suppression alive while caller speaks.
+            try:
+                sup = session.vad_state.get("output_suppression") or {}
+                until_ts = float(sup.get("until_ts", 0.0) or 0.0)
+                if until_ts > now and criteria_met >= 1:
+                    extend_ms = int(getattr(cfg, "provider_output_suppress_extend_ms", 600))
+                    sup["until_ts"] = max(until_ts, now + (extend_ms / 1000.0))
+                    sup["active"] = True
+                    session.vad_state["output_suppression"] = sup
+            except Exception:
+                pass
+
             cooldown_ms = int(getattr(cfg, "cooldown_ms", 500))
             last_barge_in_ts = float(getattr(session, "last_barge_in_ts", 0.0) or 0.0)
             in_cooldown = (now - last_barge_in_ts) * 1000 < cooldown_ms if last_barge_in_ts else False
@@ -3957,12 +3969,30 @@ class Engine:
             # Reset candidate window and record observability.
             try:
                 import time
+                now = time.time()
                 session.barge_in_candidate_ms = 0
-                session.last_barge_in_ts = time.time()
+                session.last_barge_in_ts = now
                 session.barge_in_count = int(getattr(session, "barge_in_count", 0) or 0) + 1
                 session.audio_diagnostics["barge_in_last_source"] = source
                 session.audio_diagnostics["barge_in_last_reason"] = reason
                 session.audio_diagnostics["barge_in_last_ts"] = float(session.last_barge_in_ts)
+
+                # Provider-owned mode: suppress outbound provider audio briefly so flush isn't immediately undone
+                # by continued provider streaming of the previous sentence.
+                try:
+                    cfg = getattr(self.config, "barge_in", None)
+                    suppress_ms = int(getattr(cfg, "provider_output_suppress_ms", 0)) if cfg else 0
+                    if suppress_ms > 0:
+                        sup = session.vad_state.setdefault("output_suppression", {})
+                        prev_until = float(sup.get("until_ts", 0.0) or 0.0)
+                        until_ts = max(prev_until, now + (suppress_ms / 1000.0))
+                        sup["until_ts"] = until_ts
+                        sup["active"] = True
+                        sup["source"] = source
+                        sup["reason"] = reason
+                        sup["set_ts"] = now
+                except Exception:
+                    logger.debug("Failed to set output suppression during barge-in", call_id=call_id, exc_info=True)
                 await self._save_session(session)
             except Exception:
                 logger.debug("Failed to record barge-in state", call_id=call_id, exc_info=True)
@@ -4821,6 +4851,45 @@ class Engine:
                 chunk: bytes = event.get("data") or b""
                 if not chunk:
                     return
+                # If barge-in fired, suppress provider audio locally for a short window so streaming
+                # doesn't immediately restart with the remainder of the previous sentence.
+                try:
+                    import time
+
+                    now = time.time()
+                    sup = session.vad_state.get("output_suppression") or {}
+                    until_ts = float(sup.get("until_ts", 0.0) or 0.0)
+                    if until_ts and now < until_ts:
+                        sup["active"] = True
+                        sup["dropped_chunks"] = int(sup.get("dropped_chunks", 0) or 0) + 1
+                        sup["dropped_bytes"] = int(sup.get("dropped_bytes", 0) or 0) + len(chunk)
+                        last_log = float(sup.get("last_log_ts", 0.0) or 0.0)
+                        if (now - last_log) > 0.75:
+                            remaining_ms = int(max(0.0, (until_ts - now)) * 1000)
+                            logger.info(
+                                "🔇 OUTPUT SUPPRESSED - Dropping provider audio",
+                                call_id=call_id,
+                                provider=getattr(session, "provider_name", None),
+                                remaining_ms=remaining_ms,
+                                dropped_chunks=sup.get("dropped_chunks"),
+                                dropped_bytes=sup.get("dropped_bytes"),
+                            )
+                            sup["last_log_ts"] = now
+                        session.vad_state["output_suppression"] = sup
+                        return
+                    if until_ts and now >= until_ts and bool(sup.get("active", False)):
+                        sup["active"] = False
+                        sup["until_ts"] = 0.0
+                        session.vad_state["output_suppression"] = sup
+                        logger.info(
+                            "🔈 OUTPUT SUPPRESSION ended",
+                            call_id=call_id,
+                            provider=getattr(session, "provider_name", None),
+                            dropped_chunks=sup.get("dropped_chunks"),
+                            dropped_bytes=sup.get("dropped_bytes"),
+                        )
+                except Exception:
+                    logger.debug("Output suppression check failed", call_id=call_id, exc_info=True)
                 encoding = event.get("encoding")
                 if isinstance(encoding, bytes):
                     try:
