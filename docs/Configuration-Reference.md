@@ -106,6 +106,10 @@ Notes (pipelines / `local_hybrid`):
 - With ExternalMedia, Asterisk channel playback may pause/alter the inbound RTP stream; `TALK_DETECT` is the preferred trigger source for pipeline barge-in.
 - Prereqs: Asterisk must have talk detection available (`app_talkdetect.so` / `func_talkdetect.so`). Verify with `asterisk -rx 'module show like talkdetect'` and `asterisk -rx 'core show function TALK_DETECT'`.
 
+Notes (OpenAI Realtime / AudioSocket):
+
+- OpenAI can emit `input_audio_buffer.speech_started` when the provider has no cancellable response but the platform is still draining buffered audio; the platform treats this as a barge-in trigger to flush local output immediately.
+
 Tuning guidance:
 
 - Noisy lines: raise `energy_threshold` and `min_ms`.
