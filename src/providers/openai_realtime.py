@@ -1657,6 +1657,19 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                             response_id=self._greeting_response_id,
                         )
                     else:
+                        # AudioSocket+streaming: a response can be "done" at the provider while
+                        # we're still draining buffered audio locally (pacer/outbuf).
+                        # If the caller starts speaking, we must stop emitting any remaining buffered
+                        # audio immediately so the next turn can proceed normally.
+                        try:
+                            async with self._pacer_lock:
+                                self._outbuf.clear()
+                        except Exception:
+                            logger.debug("Failed to clear OpenAI egress buffer on barge-in", call_id=self._call_id, exc_info=True)
+                        try:
+                            await self._emit_audio_done()
+                        except Exception:
+                            logger.debug("Failed to stop OpenAI egress pacer on barge-in", call_id=self._call_id, exc_info=True)
                         logger.info(
                             "🎤 User speech started (no active response); requesting platform flush",
                             call_id=self._call_id,
