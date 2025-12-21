@@ -4156,6 +4156,9 @@ class Engine:
                         self._kickoff_provider_session_start(caller_channel_id)
                     return
                 
+                # Preserve original inbound audio for local barge-in fallback checks (never run VAD on silence-substituted frames).
+                pcm_for_barge_in = pcm_16k
+
                 # CRITICAL: Check if audio capture is disabled (TTS playing)
                 # For Google Live: Send silence frames to maintain stream continuity (like AudioSocket)
                 # For OpenAI/Deepgram: Can drop audio (they handle gaps gracefully)
@@ -4207,6 +4210,18 @@ class Engine:
                     await provider.send_audio(prov_payload, sample_rate=prov_rate, encoding=prov_enc)
                 except Exception as exc:
                     logger.debug("Continuous-input RTP forward error", call_id=caller_channel_id, error=str(exc))
+
+                # Provider-owned mode: local VAD fallback may flush local output (never cancels provider).
+                try:
+                    await self._maybe_provider_barge_in_fallback(
+                        session,
+                        pcm16=pcm_for_barge_in,
+                        pcm_rate_hz=int(getattr(self.rtp_server, 'sample_rate', 16000) if self.rtp_server else 16000),
+                        audiosocket_wire=None,
+                        source="externalmedia",
+                    )
+                except Exception:
+                    logger.debug("Provider barge-in fallback check failed (ExternalMedia/continuous)", call_id=caller_channel_id, exc_info=True)
                 return
 
             # Below: standard gating/barge-in logic for hybrid (P2) providers only
