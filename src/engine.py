@@ -3793,6 +3793,12 @@ class Engine:
             if webrtc_positive:
                 criteria_met += 1
 
+            # In provider-fallback mode, require energy above threshold to avoid false positives on near-silence
+            # (webrtc-vad can occasionally fire "speech" on low-energy telephony noise).
+            if energy < threshold:
+                session.barge_in_candidate_ms = 0
+                return
+
             if criteria_met >= (2 if vad_result else 1):
                 if int(getattr(session, "barge_in_candidate_ms", 0) or 0) == 0:
                     session.barge_start_ts = now
@@ -3804,7 +3810,8 @@ class Engine:
             try:
                 sup = session.vad_state.get("output_suppression") or {}
                 until_ts = float(sup.get("until_ts", 0.0) or 0.0)
-                if until_ts > now and criteria_met >= 1:
+                # Only extend on real speech energy (avoid prolonging suppression on silence).
+                if until_ts > now and energy >= threshold:
                     extend_ms = int(getattr(cfg, "provider_output_suppress_extend_ms", 600))
                     sup["until_ts"] = max(until_ts, now + (extend_ms / 1000.0))
                     sup["active"] = True
@@ -5202,6 +5209,23 @@ class Engine:
                     except asyncio.QueueFull:
                         logger.debug("Provider streaming queue full; dropping chunk", call_id=call_id)
             elif etype == "AgentAudioDone":
+                # If we were suppressing output due to barge-in, end suppression at a segment boundary.
+                # This prevents cutting into the next (new) response once the provider finishes the interrupted one.
+                try:
+                    sup = session.vad_state.get("output_suppression") or {}
+                    if bool(sup.get("active", False)) or float(sup.get("until_ts", 0.0) or 0.0) > 0.0:
+                        sup["active"] = False
+                        sup["until_ts"] = 0.0
+                        session.vad_state["output_suppression"] = sup
+                        logger.info(
+                            "🔈 OUTPUT SUPPRESSION cleared on AgentAudioDone",
+                            call_id=call_id,
+                            provider=getattr(session, "provider_name", None),
+                            dropped_chunks=sup.get("dropped_chunks"),
+                            dropped_bytes=sup.get("dropped_bytes"),
+                        )
+                except Exception:
+                    logger.debug("Failed clearing output suppression on AgentAudioDone", call_id=call_id, exc_info=True)
                 continuous = bool(getattr(self.streaming_playback_manager, 'continuous_stream', False))
                 q = self._provider_stream_queues.get(call_id)
                 if continuous:
