@@ -306,9 +306,9 @@ export const HealthWidget = () => {
                 include_faster_whisper: rebuild.needsFasterWhisper,
                 include_melotts: rebuild.needsMeloTTS,
                 stt_backend: pendingChanges.stt?.backend,
-                stt_model: pendingChanges.stt?.modelPath?.split(':')[1] || 'base',
+                stt_model: pendingChanges.stt?.modelPath || 'base',
                 tts_backend: pendingChanges.tts?.backend,
-                tts_voice: pendingChanges.tts?.modelPath?.split(':')[1] || 'EN-US',
+                tts_voice: pendingChanges.tts?.modelPath || 'EN-US',
             });
 
             if (res.data.success) {

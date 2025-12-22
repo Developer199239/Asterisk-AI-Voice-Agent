@@ -759,7 +759,7 @@ For new deployments:
 - **Repository**: https://github.com/hkjarral/Asterisk-AI-Voice-Agent
 - **Documentation**: [docs/README.md](docs/README.md)
 - **FreePBX Guide**: [docs/FreePBX-Integration-Guide.md](docs/FreePBX-Integration-Guide.md)
-- **Monitoring**: [monitoring/README.md](monitoring/README.md)
+- **Metrics/Observability**: [docs/MONITORING_GUIDE.md](docs/MONITORING_GUIDE.md)
 
 ---
 

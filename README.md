@@ -369,11 +369,9 @@ ASTERISK_ARI_USERNAME=asterisk
 ASTERISK_ARI_PASSWORD=your-password
 ```
 
-### Optional: Enterprise Monitoring
-Access Grafana at `http://your-server-ip:3000` (default: admin/admin).
-```bash
-docker compose -f docker-compose.monitoring.yml up -d
-```
+### Optional: Metrics (Bring Your Own Prometheus)
+The engine exposes Prometheus-format metrics at `http://<engine-host>:15000/metrics`.
+Per-call debugging is handled via **Admin UI → Call History**.
 
 ---
 

@@ -45,22 +45,18 @@ _KEEPALIVE_INTERVAL_SEC = 15.0
 _OPENAI_ASSUMED_OUTPUT_RATE = Gauge(
     "ai_agent_openai_assumed_output_sample_rate_hz",
     "Configured OpenAI Realtime output sample rate per call",
-    labelnames=("call_id",),
 )
 _OPENAI_PROVIDER_OUTPUT_RATE = Gauge(
     "ai_agent_openai_provider_output_sample_rate_hz",
     "Provider-advertised OpenAI Realtime output sample rate per call",
-    labelnames=("call_id",),
 )
 _OPENAI_MEASURED_OUTPUT_RATE = Gauge(
     "ai_agent_openai_measured_output_sample_rate_hz",
     "Measured OpenAI Realtime output sample rate per call",
-    labelnames=("call_id",),
 )
 _OPENAI_SESSION_AUDIO_INFO = Info(
     "ai_agent_openai_session_audio",
     "OpenAI Realtime session audio format assumptions and provider acknowledgements",
-    labelnames=("call_id",),
 )
 
 
@@ -2107,7 +2103,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
 
         assumed_output = int(getattr(self.config, "output_sample_rate_hz", 0) or 0)
         try:
-            _OPENAI_ASSUMED_OUTPUT_RATE.labels(call_id).set(assumed_output)
+            _OPENAI_ASSUMED_OUTPUT_RATE.set(assumed_output)
         except Exception:
             pass
 
@@ -2123,7 +2119,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         }
 
         try:
-            _OPENAI_SESSION_AUDIO_INFO.labels(call_id).info(info_payload)
+            _OPENAI_SESSION_AUDIO_INFO.info(info_payload)
         except Exception:
             pass
 
@@ -2154,7 +2150,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         if provider_rate:
             self._provider_reported_output_rate = provider_rate
             try:
-                _OPENAI_PROVIDER_OUTPUT_RATE.labels(call_id).set(provider_rate)
+                _OPENAI_PROVIDER_OUTPUT_RATE.set(provider_rate)
             except Exception:
                 pass
             try:
@@ -2188,7 +2184,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         }
 
         try:
-            _OPENAI_SESSION_AUDIO_INFO.labels(call_id).info(info_payload)
+            _OPENAI_SESSION_AUDIO_INFO.info(info_payload)
         except Exception:
             pass
 
@@ -2230,7 +2226,7 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         confirmed_pcm = bool(self._outfmt_acknowledged and self._provider_output_format == "pcm16")
 
         try:
-            _OPENAI_MEASURED_OUTPUT_RATE.labels(self._call_id).set(measured_rate)
+            _OPENAI_MEASURED_OUTPUT_RATE.set(measured_rate)
         except Exception:
             pass
 
@@ -2502,15 +2498,4 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         return None
 
     def _clear_metrics(self, call_id: Optional[str]) -> None:
-        if not call_id:
-            return
-        for metric in (_OPENAI_ASSUMED_OUTPUT_RATE, _OPENAI_PROVIDER_OUTPUT_RATE, _OPENAI_MEASURED_OUTPUT_RATE):
-            try:
-                metric.remove(call_id)
-            except (KeyError, ValueError):
-                pass
-        try:
-            _OPENAI_SESSION_AUDIO_INFO.remove(call_id)
-        except (KeyError, ValueError):
-            pass
         self._reset_output_meter()

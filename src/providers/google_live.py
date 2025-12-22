@@ -62,12 +62,10 @@ _GOOGLE_LIVE_SESSIONS = Gauge(
 _GOOGLE_LIVE_AUDIO_SENT = Counter(
     "ai_agent_google_live_audio_bytes_sent",
     "Total audio bytes sent to Google Live API",
-    labelnames=("call_id",),
 )
 _GOOGLE_LIVE_AUDIO_RECEIVED = Counter(
     "ai_agent_google_live_audio_bytes_received",
     "Total audio bytes received from Google Live API",
-    labelnames=("call_id",),
 )
 
 
@@ -543,7 +541,7 @@ class GoogleLiveProvider(AIProviderInterface):
                 }
                 
                 await self._send_message(message)
-                _GOOGLE_LIVE_AUDIO_SENT.labels(call_id=self._call_id).inc(len(chunk_to_send))
+                _GOOGLE_LIVE_AUDIO_SENT.inc(len(chunk_to_send))
 
         except Exception as e:
             logger.error(
@@ -797,7 +795,7 @@ class GoogleLiveProvider(AIProviderInterface):
                     latency_ms=round(turn_latency_ms, 1),
                 )
             
-            _GOOGLE_LIVE_AUDIO_RECEIVED.labels(call_id=self._call_id).inc(len(pcm16_provider))
+            _GOOGLE_LIVE_AUDIO_RECEIVED.inc(len(pcm16_provider))
 
             # Resample from provider output rate to target wire rate (from config)
             provider_output_rate = self.config.output_sample_rate_hz

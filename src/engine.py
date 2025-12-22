@@ -11,6 +11,7 @@ import uuid
 import audioop
 import base64
 import json
+import ipaddress
 from collections import deque
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional, List, Set, Tuple, Callable
@@ -117,27 +118,25 @@ _TURN_RESPONSE_SECONDS = Histogram(
 _CFG_BARGE_MS = Gauge(
     "ai_agent_config_barge_in_ms",
     "Configured barge-in timing values (ms)",
-    labelnames=("call_id", "param"),
+    labelnames=("param",),
 )
 _CFG_BARGE_THRESHOLD = Gauge(
     "ai_agent_config_barge_in_threshold",
     "Configured barge-in energy threshold",
-    labelnames=("call_id",),
 )
 _CFG_STREAM_MS = Gauge(
     "ai_agent_config_streaming_ms",
     "Configured streaming timing values (ms)",
-    labelnames=("call_id", "param"),
+    labelnames=("param",),
 )
 _CFG_TD_MS = Gauge(
     "ai_agent_config_turn_detection_ms",
     "Configured provider turn detection timing values (ms)",
-    labelnames=("call_id", "param"),
+    labelnames=("param",),
 )
 _CFG_TD_THRESHOLD = Gauge(
     "ai_agent_config_turn_detection_threshold",
     "Configured provider turn detection threshold",
-    labelnames=("call_id",),
 )
 
 # Barge-in reaction latency (seconds) from first energy to trigger
@@ -145,41 +144,34 @@ _BARGE_REACTION_SECONDS = Histogram(
     "ai_agent_barge_in_reaction_seconds",
     "Time from first speech energy to barge-in trigger",
     buckets=(0.1, 0.2, 0.3, 0.5, 0.8, 1.2, 2.0),
-    labelnames=("call_id",),
 )
 
 # Per-call audio byte counters (ingress)
 _STREAM_RX_BYTES = Counter(
     "ai_agent_stream_rx_bytes_total",
     "Inbound audio bytes from caller (per call)",
-    labelnames=("call_id",),
 )
 _CODEC_ALIGNMENT = Gauge(
     "ai_agent_codec_alignment",
     "Codec/sample-rate alignment status per call/provider (1=aligned,0=degraded)",
-    labelnames=("call_id", "provider"),
+    labelnames=("provider",),
 )
 _AUDIO_RMS_GAUGE = Gauge(
     "ai_agent_audio_rms",
     "Observed RMS levels for audio stages",
-    labelnames=("call_id", "stage"),
+    labelnames=("stage",),
 )
 _AUDIO_DC_OFFSET = Gauge(
     "ai_agent_audio_dc_offset",
     "Observed DC offset (mean sample value) for audio stages",
-    labelnames=("call_id", "stage"),
+    labelnames=("stage",),
 )
 
-# Call metadata and duration tracking for dashboard
-_CALL_METADATA = Gauge(
-    "ai_agent_call_metadata",
-    "Call metadata including caller info, pipeline, provider, and context selection",
-    labelnames=("call_id", "caller_name", "caller_number", "pipeline", "provider", "context"),
-)
+# Call duration tracking (aggregate)
 _CALL_DURATION = Histogram(
     "ai_agent_call_duration_seconds",
     "Total call duration from start to end",
-    labelnames=("call_id", "pipeline", "provider"),
+    labelnames=("pipeline", "provider"),
     buckets=(10, 30, 60, 120, 180, 300, 600, 900, 1800, 3600),
 )
 # Track call start times for duration calculation
@@ -599,7 +591,25 @@ class Engine:
                     else:  # ulaw, alaw
                         sample_rate = 8000
                 
-                port_range = self._parse_port_range(getattr(self.config.external_media, "port_range", None), rtp_port)
+                
+                port_range = self._parse_port_range(
+                    getattr(self.config.external_media, "port_range", None),
+                    rtp_port,
+                )
+                allowed_remote_hosts = getattr(self.config.external_media, "allowed_remote_hosts", None)
+                if not allowed_remote_hosts:
+                    try:
+                        ipaddress.ip_address(str(self.config.asterisk.host))
+                        allowed_remote_hosts = [str(self.config.asterisk.host)]
+                        logger.info(
+                            "ExternalMedia RTP allowlist defaulted to Asterisk host IP",
+                            allowed_remote_hosts=allowed_remote_hosts,
+                        )
+                    except Exception:
+                        allowed_remote_hosts = None
+                lock_remote_endpoint = bool(
+                    getattr(self.config.external_media, "lock_remote_endpoint", True)
+                )
                 
                 # Create RTP server with callback to route audio to providers
                 self.rtp_server = RTPServer(
@@ -610,6 +620,8 @@ class Engine:
                     format=format,
                     sample_rate=sample_rate,
                     port_range=port_range,
+                    allowed_remote_hosts=allowed_remote_hosts,
+                    lock_remote_endpoint=lock_remote_endpoint,
                 )
                 
                 # Start RTP server
@@ -2238,9 +2250,8 @@ class Engine:
                     provider_name = getattr(session, 'provider_name', None) or "unknown"
                     
                     _CALL_DURATION.labels(
-                        call_id=call_id,
                         pipeline=pipeline_name,
-                        provider=provider_name
+                        provider=provider_name,
                     ).observe(duration)
                     
                     # Clean up start time
@@ -2899,7 +2910,7 @@ class Engine:
 
             # Per-call RX bytes
             try:
-                _STREAM_RX_BYTES.labels(caller_channel_id).inc(len(audio_bytes))
+                _STREAM_RX_BYTES.inc(len(audio_bytes))
             except Exception:
                 pass
 
@@ -3107,7 +3118,7 @@ class Engine:
                             try:
                                 if float(getattr(session, "barge_start_ts", 0.0) or 0.0) > 0.0:
                                     reaction_s = max(0.0, now - float(session.barge_start_ts))
-                                    _BARGE_REACTION_SECONDS.labels(caller_channel_id).observe(reaction_s)
+                                    _BARGE_REACTION_SECONDS.observe(reaction_s)
                                     session.barge_start_ts = 0.0
                             except Exception:
                                 pass
@@ -3570,7 +3581,7 @@ class Engine:
                         try:
                             if float(getattr(session, 'barge_start_ts', 0.0) or 0.0) > 0.0:
                                 reaction_s = max(0.0, now - float(session.barge_start_ts))
-                                _BARGE_REACTION_SECONDS.labels(caller_channel_id).observe(reaction_s)
+                                _BARGE_REACTION_SECONDS.observe(reaction_s)
                                 session.barge_start_ts = 0.0
                         except Exception:
                             pass
@@ -4085,7 +4096,7 @@ class Engine:
             try:
                 if float(getattr(session, "barge_start_ts", 0.0) or 0.0) > 0.0:
                     reaction_s = max(0.0, now - float(session.barge_start_ts))
-                    _BARGE_REACTION_SECONDS.labels(call_id).observe(reaction_s)
+                    _BARGE_REACTION_SECONDS.observe(reaction_s)
                     session.barge_start_ts = 0.0
             except Exception:
                 pass
@@ -4263,35 +4274,35 @@ class Engine:
             logger.error("Barge-in action failed", call_id=call_id, source=source, reason=reason, exc_info=True)
 
     async def _export_config_metrics(self, call_id: str) -> None:
-        """Expose configured knobs as Prometheus gauges for this call."""
+        """Expose configured knobs as Prometheus gauges (aggregate, no per-call labels)."""
         try:
             b = getattr(self.config, 'barge_in', None)
             if b:
-                _CFG_BARGE_MS.labels(call_id, "initial_protection_ms").set(int(getattr(b, 'initial_protection_ms', 0)))
-                _CFG_BARGE_MS.labels(call_id, "min_ms").set(int(getattr(b, 'min_ms', 0)))
-                _CFG_BARGE_MS.labels(call_id, "post_tts_end_protection_ms").set(int(getattr(b, 'post_tts_end_protection_ms', 0)))
-                _CFG_BARGE_MS.labels(call_id, "greeting_protection_ms").set(int(getattr(b, 'greeting_protection_ms', 0)))
-                _CFG_BARGE_THRESHOLD.labels(call_id).set(int(getattr(b, 'energy_threshold', 0)))
+                _CFG_BARGE_MS.labels("initial_protection_ms").set(int(getattr(b, 'initial_protection_ms', 0)))
+                _CFG_BARGE_MS.labels("min_ms").set(int(getattr(b, 'min_ms', 0)))
+                _CFG_BARGE_MS.labels("post_tts_end_protection_ms").set(int(getattr(b, 'post_tts_end_protection_ms', 0)))
+                _CFG_BARGE_MS.labels("greeting_protection_ms").set(int(getattr(b, 'greeting_protection_ms', 0)))
+                _CFG_BARGE_THRESHOLD.set(int(getattr(b, 'energy_threshold', 0)))
         except Exception:
             pass
         try:
             s = getattr(self.config, 'streaming', None)
             if s:
-                _CFG_STREAM_MS.labels(call_id, "min_start_ms").set(int(getattr(s, 'min_start_ms', 0)))
-                _CFG_STREAM_MS.labels(call_id, "greeting_min_start_ms").set(int(getattr(s, 'greeting_min_start_ms', 0)))
-                _CFG_STREAM_MS.labels(call_id, "low_watermark_ms").set(int(getattr(s, 'low_watermark_ms', 0)))
-                _CFG_STREAM_MS.labels(call_id, "jitter_buffer_ms").set(int(getattr(s, 'jitter_buffer_ms', 0)))
-                _CFG_STREAM_MS.labels(call_id, "fallback_timeout_ms").set(int(getattr(s, 'fallback_timeout_ms', 0)))
+                _CFG_STREAM_MS.labels("min_start_ms").set(int(getattr(s, 'min_start_ms', 0)))
+                _CFG_STREAM_MS.labels("greeting_min_start_ms").set(int(getattr(s, 'greeting_min_start_ms', 0)))
+                _CFG_STREAM_MS.labels("low_watermark_ms").set(int(getattr(s, 'low_watermark_ms', 0)))
+                _CFG_STREAM_MS.labels("jitter_buffer_ms").set(int(getattr(s, 'jitter_buffer_ms', 0)))
+                _CFG_STREAM_MS.labels("fallback_timeout_ms").set(int(getattr(s, 'fallback_timeout_ms', 0)))
         except Exception:
             pass
         try:
             pblock = (getattr(self.config, 'providers', {}) or {}).get('openai_realtime', {})
             td = (pblock or {}).get('turn_detection') or {}
             if td:
-                _CFG_TD_MS.labels(call_id, "silence_duration_ms").set(int(td.get('silence_duration_ms', 0)))
-                _CFG_TD_MS.labels(call_id, "prefix_padding_ms").set(int(td.get('prefix_padding_ms', 0)))
+                _CFG_TD_MS.labels("silence_duration_ms").set(int(td.get('silence_duration_ms', 0)))
+                _CFG_TD_MS.labels("prefix_padding_ms").set(int(td.get('prefix_padding_ms', 0)))
                 try:
-                    _CFG_TD_THRESHOLD.labels(call_id).set(float(td.get('threshold', 0.0)))
+                    _CFG_TD_THRESHOLD.set(float(td.get('threshold', 0.0)))
                 except Exception:
                     pass
         except Exception:
@@ -4331,49 +4342,30 @@ class Engine:
         except Exception as exc:
             logger.error("Error handling AudioSocket DTMF", conn_id=conn_id, error=str(exc), exc_info=True)
 
-    async def _on_rtp_audio(self, ssrc: int, pcm_16k: bytes) -> None:
-        """Route inbound ExternalMedia RTP audio (PCM16 @ 16 kHz) to the active provider.
+    async def _on_rtp_audio(self, caller_channel_id: str, ssrc: int, pcm_16k: bytes) -> None:
+        """Route inbound ExternalMedia RTP audio to the active provider.
 
-        This mirrors the gating/barge-in logic of `_audiosocket_handle_audio` and
-        establishes an SSRC→call_id mapping the first time we see a new SSRC.
+        IMPORTANT: `caller_channel_id` must be provided by RTPServer (per-session context).
+        Do not infer SSRC→call mappings in the engine; that is not concurrency-safe.
         """
         try:
-            # Resolve call_id from SSRC mapping or infer from sessions awaiting SSRC
-            caller_channel_id = self.ssrc_to_caller.get(ssrc)
-            if not caller_channel_id:
-                # Choose the most recent session that has an ExternalMedia channel and no SSRC yet
-                sessions = await self.session_store.get_all_sessions()
-                candidate = None
-                for s in sessions:
-                    try:
-                        if getattr(s, 'external_media_id', None) and not getattr(s, 'ssrc', None):
-                            if candidate is None or float(getattr(s, 'created_at', 0.0)) > float(getattr(candidate, 'created_at', 0.0)):
-                                candidate = s
-                    except Exception:
-                        continue
-                if candidate:
-                    caller_channel_id = candidate.caller_channel_id
-                    self.ssrc_to_caller[ssrc] = caller_channel_id
-                    try:
-                        candidate.ssrc = ssrc
-                        await self._save_session(candidate)
-                    except Exception:
-                        pass
-                    try:
-                        if getattr(self, 'rtp_server', None) and hasattr(self.rtp_server, 'map_ssrc_to_call_id'):
-                            self.rtp_server.map_ssrc_to_call_id(ssrc, caller_channel_id)
-                        
-                    except Exception:
-                        pass
-
-            if not caller_channel_id:
-                logger.debug("RTP audio received for unknown SSRC", ssrc=ssrc, bytes=len(pcm_16k))
-                return
-
             session = await self.session_store.get_by_call_id(caller_channel_id)
             if not session:
-                logger.debug("No session for caller; dropping RTP audio", ssrc=ssrc, caller_channel_id=caller_channel_id)
+                logger.debug(
+                    "No session for call; dropping RTP audio",
+                    caller_channel_id=caller_channel_id,
+                    ssrc=ssrc,
+                    bytes=len(pcm_16k),
+                )
                 return
+
+            # Record SSRC on the session for diagnostics (RTPServer maintains SSRC mapping internally).
+            try:
+                if not getattr(session, "ssrc", None):
+                    session.ssrc = ssrc
+                    await self._save_session(session)
+            except Exception:
+                pass
 
             # Media-path confirmation: first inbound audio frame observed.
             # Used to gate barge-in actions so we don't trigger during setup races.
@@ -4470,7 +4462,7 @@ class Engine:
                             try:
                                 if float(getattr(session, "barge_start_ts", 0.0) or 0.0) > 0.0:
                                     reaction_s = max(0.0, now - float(session.barge_start_ts))
-                                    _BARGE_REACTION_SECONDS.labels(caller_channel_id).observe(reaction_s)
+                                    _BARGE_REACTION_SECONDS.observe(reaction_s)
                                     session.barge_start_ts = 0.0
                             except Exception:
                                 pass
@@ -4683,7 +4675,7 @@ class Engine:
                         try:
                             if float(getattr(session, 'barge_start_ts', 0.0) or 0.0) > 0.0:
                                 reaction_s = max(0.0, now - float(session.barge_start_ts))
-                                _BARGE_REACTION_SECONDS.labels(caller_channel_id).observe(reaction_s)
+                                _BARGE_REACTION_SECONDS.observe(reaction_s)
                                 session.barge_start_ts = 0.0
                         except Exception:
                             pass
@@ -7804,8 +7796,8 @@ class Engine:
                 "sample_rate": sample_rate,
                 "updated": time.time(),
             }
-            _AUDIO_RMS_GAUGE.labels(session.call_id, stage).set(rms)
-            _AUDIO_DC_OFFSET.labels(session.call_id, stage).set(dc_offset)
+            _AUDIO_RMS_GAUGE.labels(stage).set(rms)
+            _AUDIO_DC_OFFSET.labels(stage).set(dc_offset)
             first_sample_key = f"{stage}_first_sample_logged"
             if not session.audio_diagnostics.get(first_sample_key):
                 session.audio_diagnostics[first_sample_key] = True
@@ -8037,7 +8029,7 @@ class Engine:
         session.codec_alignment_ok = aligned
         session.codec_alignment_message = remediation
         try:
-            _CODEC_ALIGNMENT.labels(session.call_id, provider_name).set(1 if aligned else 0)
+            _CODEC_ALIGNMENT.labels(provider_name).set(1 if aligned else 0)
         except Exception:
             pass
 
@@ -8453,31 +8445,7 @@ class Engine:
                     pass
             logger.info("Provider session started", call_id=call_id, provider=provider_name)
             
-            # Record call metadata for dashboard
-            try:
-                caller_name = getattr(session, 'caller_name', None) or "Unknown"
-                caller_number = getattr(session, 'caller_number', None) or "Unknown"
-                pipeline_name = getattr(session, 'pipeline_name', None) or "default"
-                context_name = getattr(session, 'context_name', None) or "default"
-                
-                # Set call metadata gauge (value=1 means active)
-                _CALL_METADATA.labels(
-                    call_id=call_id,
-                    caller_name=caller_name,
-                    caller_number=caller_number,
-                    pipeline=pipeline_name,
-                    provider=provider_name,
-                    context=context_name
-                ).set(1)
-                
-                logger.debug("Recorded call metadata", 
-                            call_id=call_id,
-                            caller_name=caller_name,
-                            pipeline=pipeline_name,
-                            provider=provider_name,
-                            context=context_name)
-            except Exception as e:
-                logger.debug("Failed to record call metadata", call_id=call_id, error=str(e))
+            # Call metadata is persisted to Call History (SQLite); do not export per-call labels to Prometheus.
                 
         except Exception as exc:
             # Best-effort cleanup if provider was partially started.

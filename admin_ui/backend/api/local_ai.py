@@ -104,6 +104,138 @@ class SwitchModelResponse(BaseModel):
     requires_restart: bool = False
 
 
+def _build_local_ai_env_and_yaml_updates(request: SwitchModelRequest) -> tuple[Dict[str, str], Dict[str, Any]]:
+    """
+    Pure mapping from SwitchModelRequest -> env_updates/yaml_updates.
+
+    Keep this logic side-effect free so we can unit test switch mapping without
+    needing Docker/websockets.
+    """
+    env_updates: Dict[str, str] = {}
+    yaml_updates: Dict[str, Any] = {}
+
+    if request.model_type == "stt":
+        if request.backend:
+            env_updates["LOCAL_STT_BACKEND"] = request.backend
+            yaml_updates["stt_backend"] = request.backend
+
+            if request.backend == "vosk" and request.model_path:
+                env_updates["LOCAL_STT_MODEL_PATH"] = request.model_path
+                yaml_updates["stt_model"] = request.model_path
+            elif request.backend == "kroko":
+                if request.language:
+                    env_updates["KROKO_LANGUAGE"] = request.language
+                    yaml_updates["kroko_language"] = request.language
+                if request.kroko_url:
+                    env_updates["KROKO_URL"] = request.kroko_url
+                if request.kroko_embedded is not None:
+                    env_updates["KROKO_EMBEDDED"] = "1" if request.kroko_embedded else "0"
+                if request.kroko_port is not None:
+                    env_updates["KROKO_PORT"] = str(request.kroko_port)
+                if request.model_path:
+                    env_updates["KROKO_MODEL_PATH"] = request.model_path
+            elif request.backend == "sherpa":
+                sherpa_path = request.sherpa_model_path or request.model_path
+                if sherpa_path:
+                    env_updates["SHERPA_MODEL_PATH"] = sherpa_path
+                    yaml_updates["sherpa_model_path"] = sherpa_path
+            elif request.backend == "faster_whisper":
+                if request.model_path:
+                    env_updates["FASTER_WHISPER_MODEL"] = request.model_path
+                    yaml_updates["stt_model"] = request.model_path
+
+    elif request.model_type == "tts":
+        if request.backend:
+            env_updates["LOCAL_TTS_BACKEND"] = request.backend
+            yaml_updates["tts_backend"] = request.backend
+
+            if request.backend == "piper" and request.model_path:
+                env_updates["LOCAL_TTS_MODEL_PATH"] = request.model_path
+                yaml_updates["tts_voice"] = request.model_path
+            elif request.backend == "melotts":
+                if request.model_path:
+                    env_updates["MELOTTS_VOICE"] = request.model_path
+                    yaml_updates["tts_voice"] = request.model_path
+            elif request.backend == "kokoro":
+                if request.kokoro_mode:
+                    env_updates["KOKORO_MODE"] = request.kokoro_mode
+                if request.kokoro_api_base_url:
+                    env_updates["KOKORO_API_BASE_URL"] = request.kokoro_api_base_url
+                if request.kokoro_api_key:
+                    env_updates["KOKORO_API_KEY"] = request.kokoro_api_key
+                if request.kokoro_api_model:
+                    env_updates["KOKORO_API_MODEL"] = request.kokoro_api_model
+                if request.voice:
+                    env_updates["KOKORO_VOICE"] = request.voice
+                    yaml_updates["kokoro_voice"] = request.voice
+                kokoro_model_path = request.kokoro_model_path or request.model_path
+                if kokoro_model_path:
+                    env_updates["KOKORO_MODEL_PATH"] = kokoro_model_path
+                    yaml_updates["kokoro_model_path"] = kokoro_model_path
+
+    elif request.model_type == "llm":
+        if request.model_path:
+            env_updates["LOCAL_LLM_MODEL_PATH"] = request.model_path
+
+    return env_updates, yaml_updates
+
+
+def _build_local_ai_ws_switch_payload(request: SwitchModelRequest) -> Optional[Dict[str, Any]]:
+    """
+    Pure mapping from SwitchModelRequest -> local-ai-server WS payload.
+
+    Returns None if the request does not map to a WS switch payload.
+    """
+    if request.model_type not in ("stt", "tts") or not request.backend:
+        return None
+
+    payload: Dict[str, Any] = {"type": "switch_model"}
+
+    if request.model_type == "stt":
+        payload["stt_backend"] = request.backend
+        if request.backend == "vosk" and request.model_path:
+            payload["stt_model_path"] = request.model_path
+        if request.backend == "sherpa":
+            sherpa_path = request.sherpa_model_path or request.model_path
+            if sherpa_path:
+                payload["sherpa_model_path"] = sherpa_path
+        if request.backend == "faster_whisper" and request.model_path:
+            payload["stt_config"] = {"model": request.model_path}
+        if request.backend == "kroko":
+            if request.language:
+                payload["kroko_language"] = request.language
+            if request.kroko_url:
+                payload["kroko_url"] = request.kroko_url
+            if request.kroko_port is not None:
+                payload["kroko_port"] = request.kroko_port
+            if request.kroko_embedded is not None:
+                payload["kroko_embedded"] = request.kroko_embedded
+            if request.model_path:
+                payload["kroko_model_path"] = request.model_path
+        return payload
+
+    payload["tts_backend"] = request.backend
+    if request.backend == "piper" and request.model_path:
+        payload["tts_model_path"] = request.model_path
+    if request.backend == "melotts" and request.model_path:
+        payload["tts_config"] = {"voice": request.model_path}
+    if request.backend == "kokoro":
+        if request.voice:
+            payload["kokoro_voice"] = request.voice
+        if request.kokoro_mode:
+            payload["kokoro_mode"] = request.kokoro_mode
+        kokoro_model_path = request.kokoro_model_path or request.model_path
+        if kokoro_model_path:
+            payload["kokoro_model_path"] = kokoro_model_path
+        if request.kokoro_api_base_url:
+            payload["kokoro_api_base_url"] = request.kokoro_api_base_url
+        if request.kokoro_api_key:
+            payload["kokoro_api_key"] = request.kokoro_api_key
+        if request.kokoro_api_model:
+            payload["kokoro_api_model"] = request.kokoro_api_model
+    return payload
+
+
 def get_dir_size_mb(path: str) -> float:
     """Get directory size in MB."""
     total = 0
@@ -477,6 +609,8 @@ async def switch_model(request: SwitchModelRequest):
             if request.backend == "sherpa":
                 expected = request.sherpa_model_path or request.model_path
                 return (not expected) or stt.get("path") == expected
+            if request.backend == "faster_whisper" and request.model_path:
+                return stt.get("path") == request.model_path
             if request.backend == "kroko":
                 if request.kroko_embedded is not None and bool(kroko.get("embedded")) != bool(request.kroko_embedded):
                     return False
@@ -497,6 +631,8 @@ async def switch_model(request: SwitchModelRequest):
             if not bool(tts.get("loaded")):
                 return False
             if request.backend == "piper" and request.model_path:
+                return tts.get("path") == request.model_path
+            if request.backend == "melotts" and request.model_path:
                 return tts.get("path") == request.model_path
             if request.backend == "kokoro":
                 if request.kokoro_mode and (kokoro.get("mode") or "").lower() != request.kokoro_mode.lower():
@@ -553,62 +689,15 @@ async def switch_model(request: SwitchModelRequest):
         "LOCAL_LLM_MODEL_PATH"
     ])
     
-    if request.model_type == "stt":
-        if request.backend:
-            env_updates["LOCAL_STT_BACKEND"] = request.backend
-            yaml_updates["stt_backend"] = request.backend
-            # Prefer hot switching via WS; fallback to recreate if needed.
-            
-            if request.backend == "vosk" and request.model_path:
-                env_updates["LOCAL_STT_MODEL_PATH"] = request.model_path
-                yaml_updates["stt_model"] = request.model_path
-            elif request.backend == "kroko":
-                if request.language:
-                    env_updates["KROKO_LANGUAGE"] = request.language
-                    yaml_updates["kroko_language"] = request.language
-                if request.kroko_url:
-                    env_updates["KROKO_URL"] = request.kroko_url
-                if request.kroko_embedded is not None:
-                    env_updates["KROKO_EMBEDDED"] = "1" if request.kroko_embedded else "0"
-                if request.kroko_port is not None:
-                    env_updates["KROKO_PORT"] = str(request.kroko_port)
-                if request.model_path:
-                    # Kroko embedded model path (ONNX)
-                    env_updates["KROKO_MODEL_PATH"] = request.model_path
-            elif request.backend == "sherpa":
-                sherpa_path = request.sherpa_model_path or request.model_path
-                if sherpa_path:
-                    env_updates["SHERPA_MODEL_PATH"] = sherpa_path
-                    yaml_updates["sherpa_model_path"] = sherpa_path
-                
-    elif request.model_type == "tts":
-        if request.backend:
-            env_updates["LOCAL_TTS_BACKEND"] = request.backend
-            yaml_updates["tts_backend"] = request.backend
-            # Prefer hot switching via WS; fallback to recreate if needed.
-            
-            if request.backend == "piper" and request.model_path:
-                env_updates["LOCAL_TTS_MODEL_PATH"] = request.model_path
-                yaml_updates["tts_voice"] = request.model_path
-            elif request.backend == "kokoro":
-                if request.kokoro_mode:
-                    env_updates["KOKORO_MODE"] = request.kokoro_mode
-                if request.kokoro_api_base_url:
-                    env_updates["KOKORO_API_BASE_URL"] = request.kokoro_api_base_url
-                if request.kokoro_api_key:
-                    env_updates["KOKORO_API_KEY"] = request.kokoro_api_key
-                if request.kokoro_api_model:
-                    env_updates["KOKORO_API_MODEL"] = request.kokoro_api_model
-                if request.voice:
-                    env_updates["KOKORO_VOICE"] = request.voice
-                    yaml_updates["kokoro_voice"] = request.voice
-                kokoro_model_path = request.kokoro_model_path or request.model_path
-                if kokoro_model_path:
-                    env_updates["KOKORO_MODEL_PATH"] = kokoro_model_path
-                    yaml_updates["kokoro_model_path"] = kokoro_model_path
-                    
+    env_updates, yaml_updates = _build_local_ai_env_and_yaml_updates(request)
+
+    if request.model_type in ("stt", "tts") and request.backend:
+        # Prefer hot switching via WS; fallback to recreate if needed.
+        requires_restart = False
+
     elif request.model_type == "llm":
         if request.model_path:
+            # LLM flow supports best-effort hot switch + verification before falling back to recreate.
             env_updates["LOCAL_LLM_MODEL_PATH"] = request.model_path
             # Prefer model switch without restart.
             ws_resp = await _try_ws_switch({"type": "switch_model", "llm_model_path": request.model_path})
@@ -645,46 +734,8 @@ async def switch_model(request: SwitchModelRequest):
 
     # 2. Try hot-switch for STT/TTS via WS before falling back to recreate.
     if request.model_type in ("stt", "tts") and request.backend:
-        payload: Dict[str, Any] = {"type": "switch_model"}
-        if request.model_type == "stt":
-            payload["stt_backend"] = request.backend
-            if request.backend == "vosk" and request.model_path:
-                payload["stt_model_path"] = request.model_path
-            if request.backend == "sherpa":
-                sherpa_path = request.sherpa_model_path or request.model_path
-                if sherpa_path:
-                    payload["sherpa_model_path"] = sherpa_path
-            if request.backend == "kroko":
-                if request.language:
-                    payload["kroko_language"] = request.language
-                if request.kroko_url:
-                    payload["kroko_url"] = request.kroko_url
-                if request.kroko_port is not None:
-                    payload["kroko_port"] = request.kroko_port
-                if request.kroko_embedded is not None:
-                    payload["kroko_embedded"] = request.kroko_embedded
-                if request.model_path:
-                    payload["kroko_model_path"] = request.model_path
-        else:
-            payload["tts_backend"] = request.backend
-            if request.backend == "piper" and request.model_path:
-                payload["tts_model_path"] = request.model_path
-            if request.backend == "kokoro":
-                if request.voice:
-                    payload["kokoro_voice"] = request.voice
-                if request.kokoro_mode:
-                    payload["kokoro_mode"] = request.kokoro_mode
-                kokoro_model_path = request.kokoro_model_path or request.model_path
-                if kokoro_model_path:
-                    payload["kokoro_model_path"] = kokoro_model_path
-                if request.kokoro_api_base_url:
-                    payload["kokoro_api_base_url"] = request.kokoro_api_base_url
-                if request.kokoro_api_key:
-                    payload["kokoro_api_key"] = request.kokoro_api_key
-                if request.kokoro_api_model:
-                    payload["kokoro_api_model"] = request.kokoro_api_model
-
-        ws_resp = await _try_ws_switch(payload)
+        payload = _build_local_ai_ws_switch_payload(request)
+        ws_resp = await _try_ws_switch(payload or {"type": "switch_model"})
         if ws_resp and ws_resp.get("type") == "switch_response" and ws_resp.get("status") == "success":
             requires_restart = False
         else:

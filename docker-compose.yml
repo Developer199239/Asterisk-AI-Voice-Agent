@@ -11,10 +11,8 @@
 #   docker compose build ai-engine
 #   docker compose up -d
 #
-# For optional monitoring (Prometheus + Grafana), use:
-#   docker compose -f docker-compose.monitoring.yml up -d
-#
-# See monitoring/README.md for details.
+# Prometheus-format metrics are available at `http://<host>:15000/metrics`.
+# Per-call debugging is via Admin UI → Call History.
 
 services:
   ai-engine:
@@ -62,6 +60,7 @@ services:
       args:
         - INCLUDE_KROKO_EMBEDDED=${INCLUDE_KROKO_EMBEDDED:-false}
         - INCLUDE_FASTER_WHISPER=${INCLUDE_FASTER_WHISPER:-false}
+        - INCLUDE_WHISPER_CPP=${INCLUDE_WHISPER_CPP:-false}
         - INCLUDE_MELOTTS=${INCLUDE_MELOTTS:-false}
     container_name: local_ai_server
     network_mode: host

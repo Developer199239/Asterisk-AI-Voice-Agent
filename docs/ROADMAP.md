@@ -369,26 +369,24 @@ Each milestone includes scope, implementation details, and verification criteria
 - **Dependencies**: Milestones 5–7 in place so streaming telemetry, pipeline metadata, and configuration hot-reload already work.
 - **Workstreams & Tasks**:
   1. **Observability Foundation**
-     - Add Prometheus & Grafana services to `docker-compose.yml` with persistent volumes and optional compose profile.
-     - Expose Make targets (`monitor-up`, `monitor-down`, `monitor-logs`, `monitor-status`) plus SSH-friendly variants in `tools/ide/Makefile.ide` if needed.
-     - Ensure `ai-engine` and `local-ai-server` `/metrics` export call/pipeline labels (`session_uuid`, `pipeline_name`, `provider_id`, `model_variant`).
+     - Keep `/metrics` strictly low-cardinality (no per-call identifiers like `session_uuid`/`call_id`).
+     - Document a bring-your-own Prometheus/Grafana stack for operators who want time-series monitoring.
   2. **Call Analytics & Storage**
      - Extend `SessionStore` (or dedicated collector) to emit end-of-call summaries: duration, turn count, fallback/jitter totals, sentiment score placeholder, pipeline + model names.
-     - Archive transcripts and the associated config snapshot per call (e.g., `monitoring/call_sessions/<uuid>.jsonl` + `settings.json`).
-     - Publish Prometheus metrics for recommendations (`ai_agent_setting_recommendation_total{field="streaming.low_watermark_ms"}`) and sentiment/quality trends.
+     - Archive transcripts and the associated config snapshot per call in Call History storage (avoid per-call time-series labels).
+     - Publish aggregate Prometheus metrics for recommendations (`ai_agent_setting_recommendation_total{field="streaming.low_watermark_ms"}`) and sentiment/quality trends.
   3. **Recommendations & Feedback Loop**
      - Implement rule-based analyzer that inspects call summaries and suggests YAML tweaks (buffer warmup, fallback timeouts, pipeline swaps) exposed via Prometheus labels and a lightweight `/feedback/latest` endpoint.
      - Document how to interpret each recommendation and where to edit (`config/ai-agent.yaml`).
   4. **Dashboards & UX**
      - Curate Grafana dashboards: real-time call board, pipeline/model leaderboards, sentiment timeline, recommendation feed, transcript quick links.
-     - Keep dashboards auto-provisioned (`monitoring/dashboards/`) so `make monitor-up` renders data without manual import.
+     - Keep dashboards/provisioning as a bring-your-own workflow (the project no longer ships `monitoring/` assets in the main repo path).
   5. **Guided Setup for Non-Linux Users**
-     - Deliver a helper script (e.g., `scripts/setup_monitoring.py`) that checks Docker, scaffolds `.env`, snapshots current YAML, enables the monitoring profile, and prints Grafana credentials/URL.
+     - Deliver a helper script (e.g., `scripts/setup_observability.py`) that checks Docker, prints scrape endpoints, and links to Call History inspection tools/docs.
      - Update docs/Architecture, Agents.md, `.cursor/…`, `.windsurf/…`, `Gemini.md` to mention the optional workflow.
 - **Acceptance & Fast Verification**:
-  - `make monitor-up` (or helper script) starts Prometheus + Grafana; Grafana reachable on documented port with dashboards populated during a smoke call.
-  - After a call, a transcript + metrics artifact is created and the recommendation endpoint lists at least one actionable suggestion referencing YAML keys.
-  - Disabling the stack (`make monitor-down`) leaves core services unaffected and removes Prometheus/Grafana containers.
+  - After a call, a Call History entry is created (including transcript/metadata), and the recommendation endpoint lists at least one actionable suggestion referencing YAML keys.
+  - Metrics remain low-cardinality under load (no per-call labels).
 
 Keep this roadmap updated after each milestone to help any collaborator—or future AI assistant—pick up where we left off.
 
