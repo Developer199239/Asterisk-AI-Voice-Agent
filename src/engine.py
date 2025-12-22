@@ -8769,14 +8769,18 @@ class Engine:
                     reason = f"error: {str(e)}"
                 providers_info[name] = {"ready": ready, "reason": reason} if reason else {"ready": ready}
 
-            # Compute readiness - default provider must be ready
+            # Compute readiness - default provider OR default pipeline must be ready.
             default_ready = False
-            if self.config and getattr(self.config, 'default_provider', None) in (self.providers or {}):
-                prov = self.providers[self.config.default_provider]
+            default_target = getattr(self.config, "default_provider", None) if self.config else None
+
+            if default_target in (self.providers or {}):
+                prov = self.providers[default_target]
                 try:
-                    default_ready = bool(prov.is_ready()) if hasattr(prov, 'is_ready') else False
+                    default_ready = bool(prov.is_ready()) if hasattr(prov, "is_ready") else False
                 except Exception:
                     default_ready = False
+            elif self.config and hasattr(self.config, "pipelines") and default_target in (self.config.pipelines or {}):
+                default_ready = bool(getattr(self, "pipeline_orchestrator", None) and self.pipeline_orchestrator.started)
             ari_connected = bool(self.ari_client and self.ari_client.running)
             audiosocket_listening = self.audio_socket_server is not None if self.config.audio_transport == 'audiosocket' else True
             is_ready = ari_connected and audiosocket_listening and default_ready
@@ -8834,20 +8838,27 @@ class Engine:
                 transport_ok = self.audio_socket_server is not None
             elif self.config.audio_transport == 'externalmedia':
                 transport_ok = self.rtp_server is not None
+            default_target = getattr(self.config, "default_provider", None) if self.config else None
             provider_ok = False
-            if self.config and getattr(self.config, 'default_provider', None) in (self.providers or {}):
-                prov = self.providers[self.config.default_provider]
+            pipeline_ok = False
+
+            if default_target in (self.providers or {}):
+                prov = self.providers[default_target]
                 try:
-                    provider_ok = bool(prov.is_ready()) if hasattr(prov, 'is_ready') else True
+                    provider_ok = bool(prov.is_ready()) if hasattr(prov, "is_ready") else True
                 except Exception:
                     provider_ok = True
+            elif self.config and hasattr(self.config, "pipelines") and default_target in (self.config.pipelines or {}):
+                pipeline_ok = bool(getattr(self, "pipeline_orchestrator", None) and self.pipeline_orchestrator.started)
 
-            is_ready = ari_connected and transport_ok and provider_ok
+            default_ok = provider_ok or pipeline_ok
+            is_ready = ari_connected and transport_ok and default_ok
             status = 200 if is_ready else 503
             return web.json_response({
                 "ari_connected": ari_connected,
                 "transport_ok": transport_ok,
                 "provider_ok": provider_ok,
+                "pipeline_ok": pipeline_ok,
                 "ready": is_ready,
             }, status=status)
         except Exception as exc:
