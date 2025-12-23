@@ -1,6 +1,6 @@
-# Asterisk AI Voice Agent - Installation Guide (v4.5.2)
+# Asterisk AI Voice Agent - Installation Guide (v4.5.3)
 
-This guide provides detailed instructions for setting up the Asterisk AI Voice Agent v4.5.2 on your server.
+This guide provides detailed instructions for setting up the Asterisk AI Voice Agent v4.5.3 on your server.
 
 ## Three Setup Paths
 
@@ -13,17 +13,23 @@ Choose the path that best fits your experience level:
 ```bash
 git clone https://github.com/hkjarral/Asterisk-AI-Voice-Agent.git
 cd Asterisk-AI-Voice-Agent
-cp .env.example .env
 
-# Preflight (recommended)
-./preflight.sh
+# Run preflight (REQUIRED - creates .env, generates JWT_SECRET)
+sudo ./preflight.sh --apply-fixes
 
-# Start services
-docker compose up -d admin-ui ai-engine
+# Start Admin UI first
+docker compose up -d admin-ui
 
-# Complete setup in the Admin UI
-# Browse to: http://localhost:3003
+# Complete the Setup Wizard in Admin UI, then start ai-engine
+docker compose up -d ai-engine
 ```
+
+**Access the Admin UI:**
+- **Local:** `http://localhost:3003`
+- **Remote server:** `http://<server-ip>:3003`
+
+> ⚠️ **Security:** The Admin UI is accessible on the network by default.  
+> **Change the admin password on first login** and restrict port 3003 (firewall/VPN/reverse proxy) for production.
 
 The Setup Wizard will:
 1. ✅ Guide you through provider selection (OpenAI, Deepgram, Google, ElevenLabs, Local)
@@ -195,9 +201,9 @@ The wizard will prompt you for the following information.
 
 You will be asked to choose an AI provider.
 
-- **[1] OpenAI Realtime (Default, GA)**: Out-of-the-box realtime voice path.
+- **[1] OpenAI Realtime**: Out-of-the-box realtime voice path (cloud).
 - **[2] Deepgram Voice Agent**: Cloud STT/TTS with strong latency/quality.
-- **[3] Local Models**: Offline option (Vosk STT, TinyLlama/other LLM, Piper TTS).
+- **[3] Local Hybrid (Default for v4.5.3)**: Local STT/TTS + cloud LLM (audio stays local).
 
 #### Provider Configuration
 
@@ -272,7 +278,7 @@ Add to `/etc/asterisk/extensions_custom.conf`:
 
 ```asterisk
 [from-ai-agent]
-exten => s,1,NoOp(Asterisk AI Voice Agent v4.5.2)
+exten => s,1,NoOp(Asterisk AI Voice Agent v4.5.3)
  same => n,Stasis(asterisk-ai-voice-agent)
  same => n,Hangup()
 ```

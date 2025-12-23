@@ -42,8 +42,8 @@ services:
       - PYTHONPATH=/app
       - PYTHONUNBUFFERED=1
       # Timezone for consistent timestamp display and call history records
-      # Should match the server/Asterisk timezone for accurate call timing
-      - TZ=America/Phoenix
+      # Configurable via .env (default: America/Phoenix)
+      - TZ=${TZ:-America/Phoenix}
       # Enable health endpoint access from other containers (admin-ui needs /sessions/stats)
       - HEALTH_BIND_HOST=0.0.0.0
       - ASTERISK_HOST=${ASTERISK_HOST:-127.0.0.1}
@@ -177,10 +177,10 @@ services:
       - .env
     environment:
       - PROJECT_ROOT=/app/project
-      - UVICORN_HOST=${UVICORN_HOST:-127.0.0.1}
+      - UVICORN_HOST=${UVICORN_HOST:-0.0.0.0}
       - UVICORN_PORT=${UVICORN_PORT:-3003}
       - JWT_SECRET=${JWT_SECRET:-}
       # Timezone for consistent timestamp display in Admin UI
-      # Should match ai-engine timezone for accurate call history display
-      - TZ=America/Phoenix
+      # Configurable via .env (default: America/Phoenix)
+      - TZ=${TZ:-America/Phoenix}
     restart: unless-stopped

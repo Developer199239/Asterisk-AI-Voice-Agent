@@ -36,6 +36,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Legacy bundled Prometheus/Grafana monitoring stack and `monitoring/` assets from the main repo path (Call History-first debugging; bring-your-own monitoring)
 
+### Improved (Onboarding & DX)
+
+- Preflight is now **required** (not recommended) in all documentation
+- Admin UI Dockerfile default bind aligned to `0.0.0.0` (matches docker-compose.yml for out-of-box accessibility)
+- Prominent ASCII security warning box in `preflight.sh` and `install.sh` post-install output
+- Timezone (`TZ`) now configurable via `.env` with `America/Phoenix` default
+- README Quick Start includes verification step with health check command
+- INSTALLATION.md Path A corrected: preflight required, proper service ordering
+- Remote server access (`http://<server-ip>:3003`) now primary instruction alongside localhost
+
 ## [4.5.2] - 2025-12-16
 
 ### Added

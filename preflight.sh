@@ -749,18 +749,54 @@ check_env() {
         log_ok ".env file exists"
         log_info "  Tip: For local_only pipeline, no API keys needed!"
     elif [ -f "$SCRIPT_DIR/.env.example" ]; then
-        if [ "$APPLY_FIXES" = true ]; then
-            cp "$SCRIPT_DIR/.env.example" "$SCRIPT_DIR/.env"
-            log_ok "Created .env from .env.example"
-            log_info "  Tip: For local_only pipeline, no API keys needed!"
-            log_info "  For cloud providers, edit .env to add your API keys"
-        else
-            log_warn ".env file missing"
-            FIX_CMDS+=("cp $SCRIPT_DIR/.env.example $SCRIPT_DIR/.env")
-            log_info "  Tip: For local_only pipeline, no API keys needed!"
-        fi
+        # Creating .env is repo-local and safe; do it automatically (no sudo needed).
+        cp "$SCRIPT_DIR/.env.example" "$SCRIPT_DIR/.env"
+        log_ok "Created .env from .env.example"
+        log_info "  Tip: For local_only pipeline, no API keys needed!"
+        log_info "  For cloud providers, edit .env to add your API keys"
     else
         log_warn ".env.example not found"
+    fi
+
+    # Ensure JWT_SECRET is non-empty when Admin UI is remotely accessible by default.
+    # This is a repo-local change and safe to apply automatically.
+    if [ -f "$SCRIPT_DIR/.env" ]; then
+        local current_secret
+        current_secret="$(grep -E '^[# ]*JWT_SECRET=' "$SCRIPT_DIR/.env" | tail -n1 | sed -E 's/^[# ]*JWT_SECRET=//')"
+        current_secret="$(echo "$current_secret" | tr -d '\r' | xargs 2>/dev/null || echo "$current_secret")"
+
+        if [ -z "$current_secret" ] || [ "$current_secret" = "change-me-please" ] || [ "$current_secret" = "changeme" ]; then
+            local new_secret=""
+            if command -v openssl >/dev/null 2>&1; then
+                new_secret="$(openssl rand -hex 32 2>/dev/null || true)"
+            fi
+            if [ -z "$new_secret" ] && command -v python3 >/dev/null 2>&1; then
+                new_secret="$(python3 -c 'import secrets; print(secrets.token_hex(32))' 2>/dev/null || true)"
+            fi
+            if [ -z "$new_secret" ] && command -v shasum >/dev/null 2>&1; then
+                new_secret="$(date +%s%N 2>/dev/null | shasum -a 256 | awk '{print $1}' | cut -c1-64)"
+            fi
+            if [ -z "$new_secret" ] && command -v sha256sum >/dev/null 2>&1; then
+                new_secret="$(date +%s%N 2>/dev/null | sha256sum | awk '{print $1}' | cut -c1-64)"
+            fi
+
+            if [ -n "$new_secret" ]; then
+                # Upsert JWT_SECRET in .env (portable sed: GNU + BSD)
+                if grep -qE '^[# ]*JWT_SECRET=' "$SCRIPT_DIR/.env"; then
+                    sed -i.bak "s/^[# ]*JWT_SECRET=.*/JWT_SECRET=${new_secret}/" "$SCRIPT_DIR/.env" 2>/dev/null || \
+                        sed -i '' "s/^[# ]*JWT_SECRET=.*/JWT_SECRET=${new_secret}/" "$SCRIPT_DIR/.env"
+                else
+                    echo "" >> "$SCRIPT_DIR/.env"
+                    echo "JWT_SECRET=${new_secret}" >> "$SCRIPT_DIR/.env"
+                fi
+                rm -f "$SCRIPT_DIR/.env.bak" 2>/dev/null || true
+                log_ok "Generated JWT_SECRET in .env (Admin UI exposed on :3003 by default)"
+                log_warn "SECURITY: Admin UI binds to 0.0.0.0 by default; restrict port 3003 and change admin password on first login"
+            else
+                log_warn "JWT_SECRET is missing and could not be generated automatically"
+                log_info "  Set JWT_SECRET in .env (recommended: openssl rand -hex 32)"
+            fi
+        fi
     fi
 }
 
@@ -1084,18 +1120,33 @@ print_summary() {
         touch "$SCRIPT_DIR/.preflight-ok"
         echo -e "${GREEN}✓ All checks passed!${NC}"
         echo ""
+        echo "╔═══════════════════════════════════════════════════════════════════════════╗"
+        echo "║  ⚠️  SECURITY NOTICE                                                       ║"
+        echo "╠═══════════════════════════════════════════════════════════════════════════╣"
+        echo "║  Admin UI binds to 0.0.0.0:3003 by default (accessible on network).       ║"
+        echo "║                                                                           ║"
+        echo "║  REQUIRED ACTIONS:                                                        ║"
+        echo "║    1. Change default password (admin/admin) on first login                ║"
+        echo "║    2. Restrict port 3003 via firewall, VPN, or reverse proxy              ║"
+        echo "╚═══════════════════════════════════════════════════════════════════════════╝"
+        echo ""
         echo "Next steps:"
         echo ""
         echo "  1. Start the Admin UI:"
         echo "     ${COMPOSE_CMD:-docker compose} up -d admin-ui"
         echo ""
-        echo "  2. Open: http://localhost:3003"
+        if [ -n "${SSH_CONNECTION:-}" ] || [ -n "${SSH_TTY:-}" ]; then
+            echo "  2. Access the Admin UI:"
+            echo "     http://<server-ip>:3003"
+        else
+            echo "  2. Open: http://localhost:3003"
+        fi
         echo ""
-        echo "  3. For local_only pipeline, also start:"
+        echo "  3. Complete the Setup Wizard, then start ai-engine:"
+        echo "     ${COMPOSE_CMD:-docker compose} up -d ai-engine"
+        echo ""
+        echo "  4. For local_hybrid or local_only pipeline, also start:"
         echo "     ${COMPOSE_CMD:-docker compose} up -d local-ai-server"
-        echo ""
-        echo "  4. Deeper diagnostics:"
-        echo "     agent doctor --json   # or: agent doctor"
         echo ""
     elif [ ${#FAILURES[@]} -eq 0 ]; then
         touch "$SCRIPT_DIR/.preflight-ok"
@@ -1103,18 +1154,33 @@ print_summary() {
         echo ""
         echo "You can proceed, but consider addressing the warnings above."
         echo ""
+        echo "╔═══════════════════════════════════════════════════════════════════════════╗"
+        echo "║  ⚠️  SECURITY NOTICE                                                       ║"
+        echo "╠═══════════════════════════════════════════════════════════════════════════╣"
+        echo "║  Admin UI binds to 0.0.0.0:3003 by default (accessible on network).       ║"
+        echo "║                                                                           ║"
+        echo "║  REQUIRED ACTIONS:                                                        ║"
+        echo "║    1. Change default password (admin/admin) on first login                ║"
+        echo "║    2. Restrict port 3003 via firewall, VPN, or reverse proxy              ║"
+        echo "╚═══════════════════════════════════════════════════════════════════════════╝"
+        echo ""
         echo "Next steps:"
         echo ""
         echo "  1. Start the Admin UI:"
         echo "     ${COMPOSE_CMD:-docker compose} up -d admin-ui"
         echo ""
-        echo "  2. Open: http://localhost:3003"
+        if [ -n "${SSH_CONNECTION:-}" ] || [ -n "${SSH_TTY:-}" ]; then
+            echo "  2. Access the Admin UI:"
+            echo "     http://<server-ip>:3003"
+        else
+            echo "  2. Open: http://localhost:3003"
+        fi
         echo ""
-        echo "  3. For local_only pipeline, also start:"
+        echo "  3. Complete the Setup Wizard, then start ai-engine:"
+        echo "     ${COMPOSE_CMD:-docker compose} up -d ai-engine"
+        echo ""
+        echo "  4. For local_hybrid or local_only pipeline, also start:"
         echo "     ${COMPOSE_CMD:-docker compose} up -d local-ai-server"
-        echo ""
-        echo "  4. Deeper diagnostics:"
-        echo "     agent doctor --json   # or: agent doctor"
         echo ""
     else
         echo -e "${RED}Cannot proceed - fix failures above first.${NC}"
