@@ -185,7 +185,7 @@ sudo journalctl -u admin-ui -f
 
 Open your browser to:
 ```
-http://localhost:8000
+http://localhost:3003
 ```
 
 Login with `admin` / `admin` and change the password.

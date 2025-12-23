@@ -34,17 +34,23 @@ Environment variables for selecting local STT/TTS backends:
 
 | Variable | Options | Default | Description |
 |----------|---------|---------|-------------|
-| `LOCAL_STT_BACKEND` | `vosk`, `sherpa`, `kroko` | `vosk` | Speech-to-text engine |
-| `LOCAL_TTS_BACKEND` | `piper`, `kokoro` | `piper` | Text-to-speech engine |
+| `LOCAL_STT_BACKEND` | `vosk`, `sherpa`, `kroko`, `faster_whisper`, `whisper_cpp` | `vosk` | Speech-to-text engine |
+| `LOCAL_TTS_BACKEND` | `piper`, `kokoro`, `melotts` | `piper` | Text-to-speech engine |
 
 **STT Backends**:
 - **Vosk**: Offline ASR with good accuracy, multiple language models
 - **Sherpa-ONNX**: Low-latency streaming ASR using ONNX runtime
 - **Kroko**: High-quality streaming ASR with 12+ languages (requires API key for hosted mode)
+- **Faster-Whisper**: Whisper inference via `faster-whisper` (model IDs like `base`, `small`, etc., or a local model directory depending on your install)
+- **Whisper.cpp**: Whisper inference via `whisper.cpp` (if built into your local-ai-server image)
 
 **TTS Backends**:
 - **Piper**: Fast local TTS with multiple voices
 - **Kokoro**: High-quality neural TTS with natural prosody (voices: af_heart, af_bella, am_michael)
+- **MeloTTS**: High-quality multilingual TTS with voice IDs (depends on installed voices/models)
+
+**Model/voice identifiers**:
+- `providers.local.stt_model` and `providers.local.tts_voice` are treated as **backend-specific identifiers** (paths for some backends, IDs for others) and are used by the Admin UI “switch/rebuild” flows.
 
 See [LOCAL_ONLY_SETUP.md](LOCAL_ONLY_SETUP.md) for detailed configuration.
 
@@ -82,6 +88,10 @@ See [LOCAL_ONLY_SETUP.md](LOCAL_ONLY_SETUP.md) for detailed configuration.
 - external_media.port_range: Optional range (`start:end`) for dynamic per-call RTP allocation; defaults to `rtp_port`.
 - external_media.codec: `ulaw` | `slin16` (8 kHz).
 - external_media.direction: `both` | `sendonly` | `recvonly`.
+- external_media.lock_remote_endpoint: When true (default), **do not** accept mid-call changes to the inbound RTP source `(ip,port)` for that call.
+- external_media.allowed_remote_hosts: Optional list of **IP addresses** allowed as inbound RTP sources. When set, packets from other sources are dropped (recommended when the RTP source IP is stable).
+  - Note: if `asterisk.host` is an IP literal, the engine may default `allowed_remote_hosts` to `[asterisk.host]` unless explicitly configured.
+  - If `asterisk.host` is a **hostname**, set `external_media.allowed_remote_hosts` explicitly (the platform does not auto-allowlist hostnames).
 - Note: `external_media.jitter_buffer_ms` is no longer used (RTP buffering is not configurable here). Use `streaming.jitter_buffer_ms` for downstream playback pacing.
 
 ## Barge‑In
@@ -94,6 +104,21 @@ Controls interruption of TTS playback when the caller speaks.
 - barge_in.energy_threshold: 1000–3000. RMS energy threshold; raise on noisy lines.
 - barge_in.cooldown_ms: 500–1500 ms. Ignore new barge‑ins after one triggers.
 - barge_in.post_tts_end_protection_ms: 250–500 ms. Short guard to avoid clipping the start of the next caller utterance.
+- barge_in.pipeline_min_ms: 80–250 ms. Pipeline-only (local file playback) minimum talk duration before triggering barge-in.
+- barge_in.pipeline_energy_threshold: 200–1200. Pipeline-only RMS threshold (more sensitive than full-agent mode).
+- barge_in.pipeline_talk_detect_enabled: true/false. Pipeline-only; uses Asterisk `TALK_DETECT` (ARI `ChannelTalkingStarted`) to trigger barge-in during channel playback.
+- barge_in.pipeline_talk_detect_silence_ms: 800–2000. Pipeline-only; `TALK_DETECT(set)` silence window.
+- barge_in.pipeline_talk_detect_talking_threshold: 64–256. Pipeline-only; `TALK_DETECT(set)` talking threshold.
+
+Notes (pipelines / `local_hybrid`):
+
+- Pipelines play TTS locally (file playback), so the platform can flush playback on barge-in without colliding with provider-owned VAD/cancellation.
+- With ExternalMedia, Asterisk channel playback may pause/alter the inbound RTP stream; `TALK_DETECT` is the preferred trigger source for pipeline barge-in.
+- Prereqs: Asterisk must have talk detection available (`app_talkdetect.so` / `func_talkdetect.so`). Verify with `asterisk -rx 'module show like talkdetect'` and `asterisk -rx 'core show function TALK_DETECT'`.
+
+Notes (OpenAI Realtime / AudioSocket):
+
+- OpenAI can emit `input_audio_buffer.speech_started` when the provider has no cancellable response but the platform is still draining buffered audio; the platform treats this as a barge-in trigger to flush local output immediately.
 
 Tuning guidance:
 
@@ -155,7 +180,7 @@ Common pitfalls:
 - providers.openai_realtime.output_encoding/output_sample_rate_hz: Provider output; engine resamples to target.
 - providers.openai_realtime.target_encoding/target_sample_rate_hz: Downstream transport expectations (e.g., μ‑law at 8 kHz).
 - providers.openai_realtime.turn_detection: Server‑side VAD (type, silence_duration_ms, threshold, prefix_padding_ms); improves turn handling.
-- Metrics: `ai_agent_openai_assumed_output_sample_rate_hz`, `ai_agent_openai_provider_output_sample_rate_hz`, and `ai_agent_openai_measured_output_sample_rate_hz` expose handshake vs. measured output rates per call.
+  - Metrics: `ai_agent_openai_assumed_output_sample_rate_hz`, `ai_agent_openai_provider_output_sample_rate_hz`, and `ai_agent_openai_measured_output_sample_rate_hz` are **low-cardinality gauges** (latest observed across calls). Use Call History for per-call debugging.
 
 ### Deepgram Voice Agent
 
@@ -164,7 +189,7 @@ Common pitfalls:
 - providers.deepgram.instructions: Persona override for the “think” stage; leave empty to inherit `llm.prompt`.
 - providers.deepgram.input_encoding/input_sample_rate_hz: Keep `input_encoding=ulaw` at 8 kHz when AudioSocket runs μ-law transport.
 - providers.deepgram.continuous_input: true to stream audio continuously.
-- Metrics: `ai_agent_deepgram_input_sample_rate_hz` and `ai_agent_deepgram_output_sample_rate_hz` confirm negotiated codec settings per call.
+  - Metrics: `ai_agent_deepgram_input_sample_rate_hz` and `ai_agent_deepgram_output_sample_rate_hz` are **low-cardinality gauges** (latest observed across calls). Use Call History for per-call debugging.
 
 ### Google (pipelines)
 

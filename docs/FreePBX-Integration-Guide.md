@@ -586,7 +586,7 @@ netstat -tuln | grep -E "8090|18080|15000"
 For additional troubleshooting:
 - Check `docs/Configuration-Reference.md` for tuning parameters
 - Review `docs/Transport-Mode-Compatibility.md` for transport issues
-- See monitoring dashboards: `monitoring/README.md`
+- Use **Admin UI → Call History** to debug specific calls
 - Report issues: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/issues
 
 ## 6. Queue Setup for Call Transfers (Optional)
@@ -638,7 +638,7 @@ Then reload dialplan: `asterisk -rx "dialplan reload"`
 Once your integration is working:
 
 1. **Customize for your use case**: Add context-specific routing per department
-2. **Monitor performance**: Enable Prometheus + Grafana monitoring (see `monitoring/README.md`)
+2. **Monitor performance (optional)**: Scrape `/metrics` with your Prometheus; use Call History for per-call debugging
 3. **Scale up**: Test with higher call volumes
 4. **Explore features**: Try different AI providers, tune VAD/barge-in settings
 5. **Production hardening**: Review `docs/PRODUCTION_DEPLOYMENT.md`
