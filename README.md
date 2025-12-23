@@ -137,17 +137,35 @@ docker compose logs -f ai-engine
 <details open>
 <summary><b>Latest Updates</b></summary>
 
+### 📊 Call History & Analytics
+- **Full Call Logging**: Every call saved with conversation history, timing, and outcome
+- **Per-Call Debugging**: Review transcripts, tool executions, and errors from Admin UI
+- **Search & Filter**: Find calls by caller, provider, context, or date range
+- **Export**: Download call data as CSV or JSON
+
+### 🎤 Barge-In Improvements
+- **Immediate Interruption**: Agent audio stops instantly when caller speaks
+- **Provider-Owned Turn-Taking**: Full agents (Google, Deepgram, OpenAI, ElevenLabs) handle VAD natively
+- **Platform Flush**: Local playback clears immediately on interruption signal
+- **Transport Parity**: Works with both ExternalMedia RTP and AudioSocket
+
+### 🧠 Additional Model Support
+- **Faster Whisper**: High-accuracy STT backend with GPU acceleration
+- **MeloTTS**: New neural TTS option for local pipelines
+- **Model Hot-Swap**: Switch models via Dashboard without container restart
+
 ### 🔌 MCP Tool Integration
 - **External Tools Framework**: Connect AI agents to external services via Model Context Protocol
 - **Admin UI Config**: Configure MCP servers from the web interface
 
-### 🔄 Model Hot-Swap
-- **No Restart Required**: Switch STT/TTS/LLM models via WebSocket command
-- **Live Model Switching**: Change models mid-operation from Dashboard
+### 🔒 RTP Security Hardening
+- **Remote Endpoint Pinning**: Lock RTP streams to prevent audio hijacking
+- **Allowlist Support**: Restrict allowed remote hosts for ExternalMedia
+- **Cross-Talk Prevention**: SSRC-based routing ensures call isolation
 
-### 🎤 Local AI Improvements
-- **Kokoro API Mode**: Use OpenAI-compatible TTS endpoints (`KOKORO_MODE=api`)
-- **Kroko Embedded Models**: Download Kroko ASR models directly from Admin UI Models Page
+### 🚀 Pipeline-First Default
+- **`local_hybrid` Default**: Privacy-focused pipeline is now the out-of-box default
+- **Pipeline-Aware Readiness**: Health probes correctly reflect pipeline component status
 
 </details>
 
