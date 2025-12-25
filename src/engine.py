@@ -970,13 +970,27 @@ class Engine:
         
         # Validate that default provider is available
         available_providers = list(self.providers.keys())
-        if self.config.default_provider not in available_providers:
-            logger.error(
-                f"Default provider '{self.config.default_provider}' not loaded. "
-                f"Check provider configuration and API keys. Available providers: {available_providers}"
+        default_target = getattr(self.config, "default_provider", None)
+        pipelines_cfg = getattr(self.config, "pipelines", None) or {}
+        available_pipelines = list(pipelines_cfg.keys()) if isinstance(pipelines_cfg, dict) else []
+
+        if default_target in available_providers:
+            logger.info(f"Default provider '{default_target}' is available and ready.")
+        elif default_target in available_pipelines:
+            # Note: default_provider may point at a pipeline name for pipeline-first deployments.
+            # Startup should not error in that case; readiness depends on pipeline orchestrator startup.
+            pipeline_ready = bool(getattr(self, "pipeline_orchestrator", None) and getattr(self.pipeline_orchestrator, "started", False))
+            logger.info(
+                "Default pipeline is configured",
+                default_pipeline=default_target,
+                pipeline_orchestrator_started=pipeline_ready,
             )
         else:
-            logger.info(f"Default provider '{self.config.default_provider}' is available and ready.")
+            logger.error(
+                f"Default provider '{default_target}' not loaded. "
+                f"Check provider configuration and API keys. Available providers: {available_providers}. "
+                f"Available pipelines: {available_pipelines}"
+            )
             
             # Validate provider connectivity (full agent mode)
             for provider_name, provider in self.providers.items():
