@@ -233,10 +233,19 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             )
 
         provider_rate = int(self.config.provider_input_sample_rate_hz or 0)
-        if provider_rate and provider_rate < 24000:
-            issues.append(
-                f"OpenAI provider_input_sample_rate_hz={provider_rate}; recommend 24000 for realtime streaming."
-            )
+        provider_enc = (getattr(self.config, "provider_input_encoding", None) or "linear16").lower()
+        if provider_rate:
+            if provider_enc in ("ulaw", "mulaw", "g711_ulaw", "mu-law", "alaw", "g711_alaw") and provider_rate != 8000:
+                issues.append(
+                    f"OpenAI provider_input_sample_rate_hz={provider_rate}; G.711 (μ-law/a-law) should be 8000 Hz."
+                )
+            elif provider_enc in ("slin16", "linear16", "pcm16"):
+                # Telephony deployments commonly run an internal 16 kHz PCM pipeline; 24 kHz PCM is also supported.
+                # Only warn when configured to an unusual PCM rate.
+                if provider_rate not in (16000, 24000):
+                    issues.append(
+                        f"OpenAI provider_input_sample_rate_hz={provider_rate}; for PCM16 use 16000 Hz (telephony) or 24000 Hz (wideband)."
+                    )
 
         return issues
 
