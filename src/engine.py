@@ -968,16 +968,16 @@ class Engine:
             except Exception as e:
                 logger.error(f"Failed to load provider '{name}': {e}", exc_info=True)
         
-        # Validate that default provider is available
+        # Validate that default provider is available.
+        # Note: default_provider may also point at a pipeline name for pipeline-first deployments.
         available_providers = list(self.providers.keys())
-        if self.config.default_provider not in available_providers:
-            logger.error(
-                f"Default provider '{self.config.default_provider}' not loaded. "
-                f"Check provider configuration and API keys. Available providers: {available_providers}"
-            )
-        else:
-            logger.info(f"Default provider '{self.config.default_provider}' is available and ready.")
-            
+        default_target = getattr(self.config, "default_provider", None)
+        pipelines_cfg = getattr(self.config, "pipelines", None) or {}
+        available_pipelines = list(pipelines_cfg.keys()) if isinstance(pipelines_cfg, dict) else []
+
+        if default_target in available_providers:
+            logger.info(f"Default provider '{default_target}' is available and ready.")
+
             # Validate provider connectivity (full agent mode)
             for provider_name, provider in self.providers.items():
                 # Check basic readiness - providers must have is_ready() and return True
@@ -1009,6 +1009,17 @@ class Engine:
                         error=str(exc),
                         exc_info=True
                     )
+        elif default_target in available_pipelines:
+            logger.info(
+                "Default pipeline is configured",
+                default_pipeline=default_target,
+            )
+        else:
+            logger.error(
+                f"Default provider '{default_target}' not loaded. "
+                f"Check provider configuration and API keys. Available providers: {available_providers}. "
+                f"Available pipelines: {available_pipelines}"
+            )
             
             # Check codec/sample alignment
             for provider_name in self.providers:
