@@ -638,17 +638,54 @@ class Engine:
                     for prov_name, provider in self.providers.items():
                         if hasattr(provider, 'config'):
                             cfg = provider.config
-                            # Check provider input sample rate
-                            provider_input_rate = getattr(cfg, 'provider_input_sample_rate_hz', None) or getattr(cfg, 'input_sample_rate_hz', None)
-                            if provider_input_rate and provider_input_rate != sample_rate:
+                            # Check provider input alignment.
+                            # ExternalMedia "codec" reflects the RTP wire codec (e.g., ulaw@8k),
+                            # while "sample_rate" here is the engine's internal PCM rate derived from external_media.format.
+                            def _enc_class(enc: Any) -> str:
+                                e = str(enc or "").strip().lower()
+                                if e in ("ulaw", "mulaw", "g711_ulaw", "mu-law"):
+                                    return "g711_ulaw"
+                                if e in ("alaw", "g711_alaw"):
+                                    return "g711_alaw"
+                                if e in ("slin", "slin16", "linear16", "pcm16", "pcm"):
+                                    return "pcm16"
+                                return e
+
+                            transport_codec_class = _enc_class(codec)
+                            provider_in_enc = getattr(cfg, "provider_input_encoding", None) or getattr(cfg, "input_encoding", None)
+                            provider_in_class = _enc_class(provider_in_enc)
+
+                            provider_rate_key = (
+                                "provider_input_sample_rate_hz"
+                                if getattr(cfg, "provider_input_sample_rate_hz", None) is not None
+                                else "input_sample_rate_hz"
+                            )
+                            provider_input_rate = getattr(cfg, provider_rate_key, None)
+                            try:
+                                provider_input_rate = int(provider_input_rate) if provider_input_rate else None
+                            except Exception:
+                                provider_input_rate = None
+
+                            # If the provider expects G.711, 8 kHz is correct regardless of internal PCM rate.
+                            # If the provider expects PCM, align to the internal PCM rate to avoid resampling.
+                            expected_rate = None
+                            if provider_in_class in ("g711_ulaw", "g711_alaw"):
+                                expected_rate = 8000
+                            elif provider_in_class == "pcm16":
+                                expected_rate = int(sample_rate or 0) or None
+
+                            if provider_input_rate and expected_rate and provider_input_rate != expected_rate:
                                 logger.warning(
                                     "⚠️  TRANSPORT/PROVIDER MISMATCH",
                                     provider=prov_name,
                                     transport="ExternalMedia",
-                                    transport_rate=sample_rate,
+                                    transport_codec=codec,
+                                    transport_internal_rate=sample_rate,
+                                    provider_input_encoding=str(provider_in_enc or ""),
                                     provider_rate=provider_input_rate,
+                                    expected_rate=expected_rate,
                                     impact="Extra resampling step - slight quality loss",
-                                    suggestion=f"Consider updating providers.{prov_name}.input_sample_rate_hz to {sample_rate} for optimal quality"
+                                    suggestion=f"Consider updating providers.{prov_name}.{provider_rate_key} to {expected_rate} to avoid resampling",
                                 )
                 except Exception:
                     logger.debug("Provider format validation failed", exc_info=True)
