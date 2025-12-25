@@ -2295,9 +2295,15 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                     except Exception:
                         logger.debug("Failed to log OpenAI output rate info", exc_info=True)
 
-            # Fallback trigger: if stream has been running >10s and measured rate remains <7.6–8 kHz, switch to PCM16@24k
+            # Fallback trigger: if stream has been running >10s and measured rate remains <7.6–8 kHz, switch to PCM16@24k.
+            # Guardrail: when the server has ACKed G.711 (μ-law/a-law) output, this heuristic is unreliable because
+            # the "measured_rate" is an average over wall-clock time and naturally drops during user-speech/silence.
+            # Switching formats mid-call can introduce audible artifacts, so only allow the fallback when we are not
+            # currently in an ACKed G.711 mode.
             try:
                 if not self._fallback_pcm24k_done:
+                    if self._outfmt_acknowledged and self._provider_output_format in ("g711_ulaw", "g711_alaw"):
+                        return
                     # Use pacer start when available, otherwise meter start as a conservative window
                     window_anchor = self._pacer_start_ts if self._pacer_start_ts > 0.0 else self._output_meter_start_ts
                     window = now - window_anchor if window_anchor > 0.0 else elapsed
