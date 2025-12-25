@@ -978,12 +978,10 @@ class Engine:
             logger.info(f"Default provider '{default_target}' is available and ready.")
         elif default_target in available_pipelines:
             # Note: default_provider may point at a pipeline name for pipeline-first deployments.
-            # Startup should not error in that case; readiness depends on pipeline orchestrator startup.
-            pipeline_ready = bool(getattr(self, "pipeline_orchestrator", None) and getattr(self.pipeline_orchestrator, "started", False))
+            # Startup should not error in that case; the orchestrator will initialize shortly after startup.
             logger.info(
                 "Default pipeline is configured",
                 default_pipeline=default_target,
-                pipeline_orchestrator_started=pipeline_ready,
             )
         else:
             logger.error(
