@@ -530,7 +530,8 @@ check_docker() {
 
     # Detect Podman - skip Docker-specific version checks
     if is_podman; then
-        PODMAN_VERSION=$(docker --version 2>/dev/null | grep -oP 'podman version \K[0-9.]+' || echo "unknown")
+        PODMAN_VERSION=$(docker --version 2>/dev/null | sed -n 's/.*podman version \([0-9.]*\).*/\1/ip' || echo "unknown")
+        [ -z "$PODMAN_VERSION" ] && PODMAN_VERSION="unknown"
         log_warn "Podman detected (version $PODMAN_VERSION) - Docker checks skipped"
         log_info "  Podman compatibility is community-supported"
         log_info "  Some Docker-specific features may not work as expected"
