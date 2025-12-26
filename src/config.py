@@ -152,6 +152,8 @@ class DeepgramProviderConfig(BaseModel):
     voice_agent_base_url: str = Field(
         default="wss://agent.deepgram.com/v1/agent/converse"
     )
+    # Provider-specific farewell hangup delay (overrides global)
+    farewell_hangup_delay_sec: Optional[float] = None
 
 
 class OpenAIProviderConfig(BaseModel):
@@ -174,6 +176,8 @@ class OpenAIProviderConfig(BaseModel):
     target_sample_rate_hz: int = Field(default=8000)
     chunk_size_ms: int = Field(default=20)
     response_timeout_sec: float = Field(default=5.0)
+    # Provider-specific farewell hangup delay (overrides global)
+    farewell_hangup_delay_sec: Optional[float] = None
 
 
 class GoogleProviderConfig(BaseModel):
@@ -219,6 +223,8 @@ class GoogleProviderConfig(BaseModel):
     websocket_endpoint: str = Field(
         default="wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
     )
+    # Provider-specific farewell hangup delay (overrides global)
+    farewell_hangup_delay_sec: Optional[float] = None
 
 
 class ElevenLabsProviderConfig(BaseModel):
@@ -239,6 +245,8 @@ class ElevenLabsProviderConfig(BaseModel):
     similarity_boost: float = Field(default=0.75)
     style: float = Field(default=0.0)
     use_speaker_boost: bool = Field(default=True)
+    # Provider-specific farewell hangup delay (overrides global)
+    farewell_hangup_delay_sec: Optional[float] = None
 
 
 class MCPToolConfig(BaseModel):

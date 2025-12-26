@@ -5808,8 +5808,26 @@ class Engine:
                 
                 # Delay to ensure audio completes through RTP pipeline
                 # Accounts for: RTP transmission, jitter buffer, and playback
-                # Configurable via farewell_hangup_delay_sec (default 2.5s)
+                # Check provider-specific delay first, then fall back to global config
                 hangup_delay = getattr(self.config, 'farewell_hangup_delay_sec', 2.5)
+                try:
+                    session = await self.session_store.get_by_call_id(call_id)
+                    if session:
+                        provider_name = getattr(session, 'provider', None)
+                        if provider_name and provider_name in self.config.providers:
+                            provider_cfg = self.config.providers.get(provider_name, {})
+                            provider_delay = provider_cfg.get('farewell_hangup_delay_sec') if isinstance(provider_cfg, dict) else getattr(provider_cfg, 'farewell_hangup_delay_sec', None)
+                            if provider_delay is not None:
+                                hangup_delay = provider_delay
+                                logger.debug(
+                                    "Using provider-specific farewell delay",
+                                    call_id=call_id,
+                                    provider=provider_name,
+                                    delay=hangup_delay
+                                )
+                except Exception as e:
+                    logger.debug(f"Could not get provider delay, using global: {e}")
+                
                 await asyncio.sleep(hangup_delay)
                 
                 try:
