@@ -177,6 +177,9 @@ _CALL_DURATION = Histogram(
 # Track call start times for duration calculation
 _call_start_times = {}  # call_id -> timestamp
 
+# In-memory set to prevent duplicate cleanup (race condition guard)
+_cleanup_in_progress: set = set()  # call_ids currently being cleaned up
+
 
 class Engine:
     """The main application engine."""
@@ -2278,6 +2281,7 @@ class Engine:
 
     async def _cleanup_call(self, channel_or_call_id: str) -> None:
         """Shared cleanup for StasisEnd/ChannelDestroyed paths."""
+        resolved_call_id = None  # Track for finally block cleanup
         try:
             # Resolve session by call_id first, then fallback to channel lookup.
             session = await self.session_store.get_by_call_id(channel_or_call_id)
@@ -2288,6 +2292,14 @@ class Engine:
                 return
 
             call_id = session.call_id
+            resolved_call_id = call_id  # Save for finally block
+            
+            # In-memory re-entrancy guard (atomic, no race condition)
+            if call_id in _cleanup_in_progress:
+                logger.debug("Cleanup already in progress (in-memory guard)", call_id=call_id)
+                return
+            _cleanup_in_progress.add(call_id)
+            
             logger.info("Cleaning up call", call_id=call_id)
             
             # Record call duration if we have start time
@@ -2313,19 +2325,6 @@ class Engine:
                                provider=provider_name)
             except Exception as e:
                 logger.debug("Failed to record call duration", call_id=call_id, error=str(e))
-
-            # Idempotent re-entrancy guard
-            if getattr(session, "cleanup_completed", False):
-                logger.debug("Cleanup already completed", call_id=call_id)
-                return
-            if getattr(session, "cleanup_in_progress", False):
-                logger.debug("Cleanup already in progress", call_id=call_id)
-                return
-            try:
-                session.cleanup_in_progress = True
-                await self.session_store.upsert_call(session)
-            except Exception:
-                pass
 
             # Stop any active streaming playback.
             try:
@@ -2576,16 +2575,9 @@ class Engine:
         except Exception as exc:
             logger.error("Error cleaning up call", identifier=channel_or_call_id, error=str(exc), exc_info=True)
         finally:
-            # Best-effort: if session still exists and we marked in-progress, clear it to unblock future attempts
-            try:
-                sess3 = await self.session_store.get_by_call_id(channel_or_call_id)
-                if not sess3:
-                    sess3 = await self.session_store.get_by_channel_id(channel_or_call_id)
-                if sess3 and getattr(sess3, "cleanup_in_progress", False) and not getattr(sess3, "cleanup_completed", False):
-                    sess3.cleanup_in_progress = False
-                    await self.session_store.upsert_call(sess3)
-            except Exception:
-                pass
+            # Clean up in-memory guard
+            if resolved_call_id:
+                _cleanup_in_progress.discard(resolved_call_id)
 
     async def _persist_call_history(self, session: CallSession, call_id: str) -> None:
         """Persist call record to history database (Milestone 21)."""
