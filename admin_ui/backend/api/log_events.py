@@ -94,8 +94,6 @@ def classify_event(msg: str, component: Optional[str]) -> Tuple[str, bool]:
         return "transport", True
     if "transportcard" in text:
         return "transport", True
-    if "encode config - reading provider config" in text or "encode resample" in text:
-        return "audio", True
     if "call cleanup completed" in text or text.startswith("cleaning up call"):
         return "call", True
 
