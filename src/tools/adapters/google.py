@@ -147,6 +147,15 @@ class GoogleToolAdapter:
         
         logger.debug(f"Formatted {len(function_declarations)} tools for Google Live")
         
+        # Debug: Log tool schema sample to verify format
+        if function_declarations:
+            import json
+            logger.info(
+                "Google Live tool schema sample (format_tools)",
+                first_tool_name=function_declarations[0].get("name"),
+                first_tool_params=json.dumps(function_declarations[0].get("parameters", {}), default=str)[:300]
+            )
+        
         return [{
             "functionDeclarations": function_declarations  # camelCase per official API
         }] if function_declarations else []
