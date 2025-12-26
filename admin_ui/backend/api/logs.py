@@ -293,7 +293,9 @@ async def get_container_log_events(
                 continue
             if wanted_levels and event.level not in wanted_levels:
                 continue
-            if wanted_categories and event.category not in wanted_categories:
+            # If a focused category filter is requested, still keep warning/error so
+            # troubleshooting keeps critical context.
+            if wanted_categories and event.category not in wanted_categories and event.level not in ("warning", "error"):
                 continue
             if q_norm and q_norm not in (event.raw or "").lower() and q_norm not in (event.msg or "").lower():
                 continue

@@ -196,11 +196,28 @@ const LogsPage = () => {
     const fetchEvents = async () => {
         setLoading(true);
         try {
+            const viewCategories = (() => {
+                switch (view) {
+                    case 'provider':
+                        return ['provider'];
+                    case 'media':
+                        return ['audio', 'transport'];
+                    case 'vad':
+                        return ['vad'];
+                    case 'tools':
+                        return ['tools'];
+                    default:
+                        return [];
+                }
+            })();
             const params: Record<string, any> = {
-                limit: 500,
+                limit: includeDebug ? 2000 : 500,
                 hide_payloads: hidePayloads,
             };
             if (callId.trim()) params.call_id = callId.trim();
+            // Focused views should fetch focused categories server-side so mid-call events
+            // aren't dropped by window/limit slicing.
+            if (viewCategories.length) params.categories = viewCategories.join(',');
             // Reduce payload size unless user explicitly opts into debug.
             if (!includeDebug) params.levels = 'error,warning,info';
             if (since.trim()) params.since = since.trim();
@@ -277,7 +294,7 @@ const LogsPage = () => {
             fetchEvents();
         }, 3000);
         return () => clearInterval(interval);
-    }, [autoRefresh, container, mode, callId, hidePayloads, since, until, includeDebug]);
+    }, [autoRefresh, container, mode, callId, hidePayloads, since, until, includeDebug, view]);
 
     useEffect(() => {
         if (autoRefresh && isPinnedToBottom) {
