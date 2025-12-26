@@ -1,3 +1,4 @@
+import math
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -9,7 +10,7 @@ from api.log_events import LogEvent, parse_log_line, should_hide_payload
 router = APIRouter()
 
 
-def _parse_iso_to_epoch_seconds(value: Optional[str]) -> Optional[int]:
+def _parse_iso_to_epoch_seconds(value: Optional[str], *, round_up: bool = False) -> Optional[int]:
     if not value:
         return None
     v = value.strip()
@@ -19,7 +20,10 @@ def _parse_iso_to_epoch_seconds(value: Optional[str]) -> Optional[int]:
         dt = datetime.fromisoformat(v.replace("Z", "+00:00"))
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
-        return int(dt.timestamp())
+        ts = dt.timestamp()
+        # Docker expects second-resolution integers; for `until`, round up so we don't
+        # accidentally exclude events that share the same second as the provided ISO.
+        return int(math.ceil(ts)) if round_up else int(math.floor(ts))
     except Exception:
         return None
 
@@ -64,7 +68,7 @@ async def _resolve_call_history_window(
         end = _ensure_utc(record.end_time) or datetime.now(timezone.utc)
         pad = timedelta(seconds=max(0, int(pad_seconds)))
         since_epoch = int((start - pad).timestamp()) if start else None
-        until_epoch = int((end + pad).timestamp()) if end else None
+        until_epoch = int(math.ceil((end + pad).timestamp())) if end else None
 
         call_meta: Dict[str, Any] = {
             "call_id": record.call_id,
@@ -193,7 +197,8 @@ async def get_container_logs(
                 continue
             if q_norm and q_norm not in (event.raw or "").lower() and q_norm not in (event.msg or "").lower():
                 continue
-            out_lines.append(event.raw)
+            # Preserve original ANSI formatting for the Raw Logs view.
+            out_lines.append(line)
 
         return {"logs": "\n".join(out_lines), "container_id": container.id, "name": container.name}
 
@@ -238,8 +243,8 @@ async def get_container_log_events(
         wanted_levels = {v.strip().lower() for v in _split_csv(levels)} if levels else set()
         wanted_categories = {v.strip().lower() for v in _split_csv(categories)} if categories else set()
 
-        since_epoch = _parse_iso_to_epoch_seconds(since)
-        until_epoch = _parse_iso_to_epoch_seconds(until)
+        since_epoch = _parse_iso_to_epoch_seconds(since, round_up=False)
+        until_epoch = _parse_iso_to_epoch_seconds(until, round_up=True)
         window_source = "query" if (since_epoch or until_epoch) else "tail"
         call_meta: Optional[Dict[str, Any]] = None
 

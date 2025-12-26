@@ -133,7 +133,11 @@ const LogsPage = () => {
     const [hidePayloads, setHidePayloads] = useState(searchParams.get('hide_payloads') !== 'false');
     const [since, setSince] = useState(searchParams.get('since') || '');
     const [until, setUntil] = useState(searchParams.get('until') || '');
-    const [includeDebug, setIncludeDebug] = useState(searchParams.get('include_debug') === 'true');
+    const [includeDebug, setIncludeDebug] = useState(() => {
+        const v = searchParams.get('include_debug');
+        if (v === null) return true;
+        return v === 'true';
+    });
     const [hideRepeats, setHideRepeats] = useState(searchParams.get('hide_repeats') !== 'false');
     const [showCallFinder, setShowCallFinder] = useState(!callId);
     const [callFilters, setCallFilters] = useState({
