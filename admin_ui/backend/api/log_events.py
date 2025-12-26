@@ -61,6 +61,7 @@ class LogEvent:
     pipeline: Optional[str]
     category: str
     milestone: bool
+    meta: Dict[str, str]
     raw: str
 
     def to_dict(self) -> Dict[str, Any]:
@@ -75,6 +76,7 @@ class LogEvent:
             "pipeline": self.pipeline,
             "category": self.category,
             "milestone": self.milestone,
+            "meta": dict(self.meta or {}),
             "raw": self.raw,
         }
 
@@ -90,6 +92,10 @@ def classify_event(msg: str, component: Optional[str]) -> Tuple[str, bool]:
         return "provider", True
     if "rtp server started for externalmedia transport" in text or "externalmedia channel created" in text:
         return "transport", True
+    if "transportcard" in text:
+        return "transport", True
+    if "encode config - reading provider config" in text or "encode resample" in text:
+        return "audio", True
     if "call cleanup completed" in text or text.startswith("cleaning up call"):
         return "call", True
 
@@ -108,6 +114,59 @@ def classify_event(msg: str, component: Optional[str]) -> Tuple[str, bool]:
         return "config", False
 
     return "call", False
+
+
+def _build_meta(msg: str, kv: Dict[str, str]) -> Dict[str, str]:
+    text = (msg or "").lower()
+    meta: Dict[str, str] = {}
+
+    def pick(*keys: str) -> None:
+        for k in keys:
+            v = kv.get(k)
+            if v:
+                meta[k] = v
+
+    if "audio profile resolved and applied" in text:
+        pick("profile", "wire_format", "context", "provider")
+        return meta
+
+    if "openai session.updated ack received" in text or "session.updated ack received" in text:
+        pick("input_format", "output_format", "sample_rate", "acknowledged")
+        return meta
+
+    if "transportcard" in text:
+        pick(
+            "wire_encoding",
+            "wire_sample_rate_hz",
+            "transport_encoding",
+            "transport_sample_rate_hz",
+            "target_encoding",
+            "target_sample_rate_hz",
+            "provider_encoding",
+            "provider_sample_rate_hz",
+            "chunk_size_ms",
+            "idle_cutoff_ms",
+            "transport_source",
+        )
+        return meta
+
+    if "encode config - reading provider config" in text:
+        pick(
+            "wire_enc",
+            "wire_rate",
+            "provider_enc",
+            "provider_rate",
+            "expected_enc",
+            "expected_rate",
+            "pcm_rate",
+        )
+        return meta
+
+    if "encode resample" in text:
+        pick("expected_rate", "pcm_rate", "provider")
+        return meta
+
+    return meta
 
 
 def parse_log_line(line: str) -> Optional[Tuple[LogEvent, Dict[str, str]]]:
@@ -131,6 +190,7 @@ def parse_log_line(line: str) -> Optional[Tuple[LogEvent, Dict[str, str]]]:
             pipeline=None,
             category=category,
             milestone=milestone,
+            meta={},
             raw=raw,
         )
         return event, {}
@@ -158,6 +218,7 @@ def parse_log_line(line: str) -> Optional[Tuple[LogEvent, Dict[str, str]]]:
         component = kv.get("component") or None
 
     category, milestone = classify_event(msg, component)
+    meta = _build_meta(msg, kv)
     return (
         LogEvent(
             ts=_parse_ts(ts_s),
@@ -170,6 +231,7 @@ def parse_log_line(line: str) -> Optional[Tuple[LogEvent, Dict[str, str]]]:
             pipeline=pipeline,
             category=category,
             milestone=milestone,
+            meta=meta,
             raw=raw,
         ),
         kv,

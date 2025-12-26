@@ -18,6 +18,7 @@ type LogEvent = {
     pipeline: string | null;
     category: LogCategory;
     milestone: boolean;
+    meta?: Record<string, string>;
     raw: string;
 };
 
@@ -143,6 +144,17 @@ const LogsPage = () => {
             return false;
         });
     }, [events, mode, preset]);
+
+    const formatMeta = (meta?: Record<string, string>) => {
+        if (!meta) return '';
+        const entries = Object.entries(meta).filter(([_, v]) => v !== undefined && v !== null && String(v).trim() !== '');
+        if (!entries.length) return '';
+        // Keep compact: show up to 6 fields in the row.
+        return entries
+            .slice(0, 6)
+            .map(([k, v]) => `${k}=${v}`)
+            .join(' ');
+    };
 
     const levelBadge = (lvl: LogLevel) => {
         const cls =
@@ -344,10 +356,21 @@ const LogsPage = () => {
                                         {e.category}
                                     </span>
                                 </div>
+                                {e.milestone && (
+                                    <div className="shrink-0">
+                                        <span className="inline-flex items-center rounded border border-emerald-800 px-2 py-0.5 text-[10px] text-emerald-200 bg-emerald-600/10">
+                                            milestone
+                                        </span>
+                                    </div>
+                                )}
                                 <div className="flex-1 break-words">
                                     <div className="text-gray-200">{e.msg}</div>
                                     <div className="text-[10px] text-gray-500 mt-0.5">
-                                        {e.call_id ? `call_id=${e.call_id} ` : ''}{e.provider ? `provider=${e.provider} ` : ''}{e.context ? `context=${e.context} ` : ''}{e.component ? `component=${e.component}` : ''}
+                                        {e.call_id ? `call_id=${e.call_id} ` : ''}
+                                        {e.provider ? `provider=${e.provider} ` : ''}
+                                        {e.context ? `context=${e.context} ` : ''}
+                                        {formatMeta(e.meta) ? `${formatMeta(e.meta)} ` : ''}
+                                        {e.component ? `component=${e.component}` : ''}
                                     </div>
                                 </div>
                             </div>
