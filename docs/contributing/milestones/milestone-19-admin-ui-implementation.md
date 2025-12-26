@@ -187,6 +187,115 @@ Implemented a production-ready web-based administration interface for the Asteri
 - ✅ Route protection on all APIs
 - ✅ CORS configuration correct
 
+---
+
+## Addendum: Log Filtering for Fast Troubleshooting (vNext)
+
+**Goal**: Make troubleshooting calls dramatically faster by turning raw container logs into a call-centric, filterable timeline of “important events”, with one-click jump from Call History.
+
+This addendum builds on the existing **Logs Viewer** (raw tail) and **Call History** pages by adding:
+- a structured “Events” view over Docker logs
+- presets that surface key milestones (even at info level)
+- filters by call/session identifiers and caller number (via Call History)
+
+### Problem Statement
+
+Today, users troubleshooting an issue must manually scroll raw logs and grep mentally for:
+- which call they are looking at
+- key milestones (transport start, provider session ACK, audio profile, call end)
+- signal quality issues (resampling, underruns, format switches)
+
+This is slow and error-prone, especially for new users.
+
+### Definitions
+
+- **call_id** (canonical): The Asterisk caller channel id for a call session. In this codebase, `call_id == caller_channel_id`.
+- **Caller ID**: The phone identity (number/name). In Call History: `caller_number`, `caller_name`.
+
+Caller ID is not guaranteed to appear in container logs, so the UI workflow is:
+1) search calls by Caller ID in Call History
+2) select a specific call record → use its `call_id` to filter logs
+
+### User Experience (UX)
+
+#### A) Logs → Events mode
+
+Admin UI Logs page gains a mode toggle:
+- **Events** (default): a structured timeline with filters/presets
+- **Raw**: existing raw log text view (kept for deep debugging)
+
+Filters in **Events** mode:
+- Container (`ai_engine`, `local_ai_server`, `admin_ui`)
+- `call_id` (exact)
+- Levels (multi): `error`, `warning`, `info`, `debug`
+- Categories (multi): `call`, `provider`, `audio`, `transport`, `vad`, `tools`, `config`
+- Free-text search (`q`)
+- Toggle: **Hide transcripts / large payloads** (default ON)
+- Optional time range: `since` / `until` (for “focus around a call”)
+
+Presets:
+- **Important Only** (default): warnings + errors + *info* milestones
+  - includes: audio profile applied, provider ACK, transport start, call end
+- **Audio Quality**: resample, underruns/silence insertion, format switches, normalizer/gating signals
+- **Provider Session**: connect/reconnect, session.update, ACKs, provider errors
+- **Transport**: RTP start, ExternalMedia created, codec detection, mismatches
+- **Barge-in/VAD**: talk detection, server_vad events, cancel_response
+- **Tools/MCP**: tool call start/end, failures/timeouts
+
+#### B) Call History → “Troubleshoot” (one click)
+
+In Call History call details, add a **Troubleshoot** action:
+- Opens Logs page in **Events** mode
+- Pre-fills:
+  - `container=ai_engine`
+  - `call_id=<selected call_id>`
+  - `since=<start_time - padding>` and `until=<end_time + padding>` when available
+  - preset = **Important Only**
+
+### Backend API (FastAPI)
+
+Keep existing raw logs endpoint intact:
+- `GET /api/logs/{container}?tail=500` → raw text
+
+Add a new parsed events endpoint:
+- `GET /api/logs/{container}/events`
+
+Query parameters:
+- `call_id` (optional)
+- `levels` (repeatable) or comma-separated
+- `categories` (repeatable) or comma-separated
+- `q` (optional contains match)
+- `hide_payloads=true|false` (default true)
+- `since` / `until` (ISO 8601; optional)
+- `since_seconds_ago` (optional, convenience)
+- `limit` (default 500)
+
+Response:
+- `events: [ { ts, level, msg, component, call_id, provider, context, pipeline, category, milestone, raw } ]`
+
+Parsing requirements:
+- Strip ANSI codes server-side.
+- Parse structured log format best-effort:
+  - timestamp, level, message, component/logger, and key=value fields (extract `call_id`, `provider`, `context`, `pipeline` when present).
+- Categorize events using a small, explicit pattern table (maintainable).
+- Mark `milestone=true` for known info-level milestones.
+
+### Acceptance Criteria
+
+- Logs page defaults to **Events** view and **Important Only** preset.
+- A user can troubleshoot a call in <30 seconds by:
+  1) finding call in Call History
+  2) clicking **Troubleshoot**
+  3) seeing provider ACK, transport start, audio profile, call end, and any warnings/errors
+- Filtering by `call_id` yields stable, correct results.
+- “Hide transcripts / payloads” removes transcript/control spam by default.
+- Raw logs view remains available.
+
+### Phase 2 (Deferred)
+
+- Persist event timelines to Call History DB for long retention (outside scope).
+- Multi-container correlation (ai_engine + local_ai_server) in a single merged timeline (outside scope).
+
 **Browser Compatibility**:
 - ✅ Chrome 120+ (primary)
 - ✅ Firefox 121+
