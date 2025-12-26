@@ -126,6 +126,8 @@ def classify_event(msg: str, component: Optional[str]) -> Tuple[str, bool]:
     # Tools/MCP: avoid overly-broad "tool" matching (provider logs often contain "tool support")
     if "mcp" in text:
         return "tools", False
+    if "initialized" in text and "tools" in text:
+        return "tools", False
     if any(
         k in text
         for k in (
@@ -135,7 +137,6 @@ def classify_event(msg: str, component: Optional[str]) -> Tuple[str, bool]:
             "tool invoked",
             "registered tool",
             "initializing default tools",
-            "initialized",
             "discovered mcp tools",
             "registered mcp tools",
         )
