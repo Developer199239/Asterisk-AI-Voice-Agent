@@ -146,7 +146,12 @@ def _compute_related_ids(parsed: List[Tuple[LogEvent, Dict[str, str]]], seed_cal
 
 
 @router.get("/{container_name}")
-async def get_container_logs(container_name: str, tail: int = 100):
+async def get_container_logs(
+    container_name: str,
+    tail: int = 100,
+    levels: Optional[List[str]] = Query(default=None),
+    q: Optional[str] = None,
+):
     """
     Fetch logs from a specific container.
     """
@@ -167,9 +172,30 @@ async def get_container_logs(container_name: str, tail: int = 100):
         # Pick the first match (usually the most relevant one if unique enough)
         container = containers[0]
         
+        wanted_levels = {v.strip().lower() for v in _split_csv(levels)} if levels else set()
+        q_norm = (q or "").strip().lower() or None
+
         # Get logs
-        logs = container.logs(tail=tail).decode('utf-8')
-        return {"logs": logs, "container_id": container.id, "name": container.name}
+        logs = (container.logs(tail=tail) or b"").decode("utf-8", errors="replace")
+        if not (wanted_levels or q_norm):
+            return {"logs": logs, "container_id": container.id, "name": container.name}
+
+        out_lines: List[str] = []
+        for line in logs.splitlines():
+            parsed = parse_log_line(line)
+            # If we can't parse a line, keep it only when no level filter is specified.
+            if not parsed:
+                if not wanted_levels and (not q_norm or q_norm in line.lower()):
+                    out_lines.append(line)
+                continue
+            event, _kv = parsed
+            if wanted_levels and event.level not in wanted_levels:
+                continue
+            if q_norm and q_norm not in (event.raw or "").lower() and q_norm not in (event.msg or "").lower():
+                continue
+            out_lines.append(event.raw)
+
+        return {"logs": "\n".join(out_lines), "container_id": container.id, "name": container.name}
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

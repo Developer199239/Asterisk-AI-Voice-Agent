@@ -235,7 +235,7 @@ const CallHistoryPage = () => {
         const end = (call as any).end_time;
         const params = new URLSearchParams();
         params.set('container', 'ai_engine');
-        params.set('mode', 'events');
+        params.set('mode', 'troubleshoot');
         params.set('preset', 'important');
         params.set('call_id', callId);
         if (start) params.set('since', start);

@@ -6,6 +6,7 @@ import { parseAnsi } from '../../utils/ansi';
 
 type LogLevel = 'error' | 'warning' | 'info' | 'debug';
 type LogCategory = 'call' | 'provider' | 'audio' | 'transport' | 'vad' | 'tools' | 'config';
+type LogsMode = 'troubleshoot' | 'raw';
 
 type LogEvent = {
     ts: string | null;
@@ -47,6 +48,39 @@ type EventsResponse = {
     related_bridge_ids?: string[];
 };
 
+type CallRecordSummary = {
+    id: string;
+    call_id: string;
+    caller_number: string | null;
+    caller_name: string | null;
+    start_time: string | null;
+    end_time: string | null;
+    duration_seconds: number;
+    provider_name: string;
+    pipeline_name: string | null;
+    context_name: string | null;
+    outcome: string;
+    error_message: string | null;
+    avg_turn_latency_ms: number;
+    total_turns: number;
+    barge_in_count: number;
+};
+
+type CallListResponse = {
+    calls: CallRecordSummary[];
+    total: number;
+    page: number;
+    page_size: number;
+    total_pages: number;
+};
+
+type FilterOptions = {
+    providers: string[];
+    pipelines: string[];
+    contexts: string[];
+    outcomes: string[];
+};
+
 type Preset = 'important' | 'audio' | 'provider' | 'transport' | 'vad' | 'tools' | 'config';
 
 const PRESET_DEFAULT_LEVELS: Record<Preset, LogLevel[]> = {
@@ -79,15 +113,41 @@ const LogsPage = () => {
     const [loading, setLoading] = useState(false);
     const [autoRefresh, setAutoRefresh] = useState(true);
     const [container, setContainer] = useState(searchParams.get('container') || 'ai_engine');
-    const [mode, setMode] = useState<'events' | 'raw'>((searchParams.get('mode') as any) || 'events');
+    const [mode, setMode] = useState<LogsMode>(() => {
+        const rawMode = (searchParams.get('mode') || '').toLowerCase();
+        if (rawMode === 'raw') return 'raw';
+        // Back-compat: old URLs used mode=events
+        return 'troubleshoot';
+    });
     const [preset, setPreset] = useState<Preset>((searchParams.get('preset') as any) || 'important');
     const [callId, setCallId] = useState(searchParams.get('call_id') || '');
     const [q, setQ] = useState(searchParams.get('q') || '');
+    const [rawLevels, setRawLevels] = useState<LogLevel[]>(() => {
+        const v = (searchParams.get('raw_levels') || '').trim();
+        if (!v) return ['error', 'warning', 'info'];
+        return v.split(',').map(s => s.trim().toLowerCase() as LogLevel).filter(Boolean);
+    });
     const [hidePayloads, setHidePayloads] = useState(searchParams.get('hide_payloads') !== 'false');
     const [since, setSince] = useState(searchParams.get('since') || '');
     const [until, setUntil] = useState(searchParams.get('until') || '');
     const [levels, setLevels] = useState<LogLevel[]>(PRESET_DEFAULT_LEVELS[preset]);
     const [categories, setCategories] = useState<LogCategory[] | null>(PRESET_DEFAULT_CATEGORIES[preset]);
+    const [showCallFinder, setShowCallFinder] = useState(!callId);
+    const [callFilters, setCallFilters] = useState({
+        caller_number: '',
+        caller_name: '',
+        provider_name: '',
+        pipeline_name: '',
+        context_name: '',
+        outcome: '',
+        start_date: '',
+        end_date: '',
+    });
+    const [callFilterOptions, setCallFilterOptions] = useState<FilterOptions | null>(null);
+    const [callResults, setCallResults] = useState<CallRecordSummary[]>([]);
+    const [callPage, setCallPage] = useState(1);
+    const [callTotalPages, setCallTotalPages] = useState(1);
+    const [callLoading, setCallLoading] = useState(false);
     const logsEndRef = useRef<HTMLDivElement>(null);
     const scrollRef = useRef<HTMLDivElement>(null);
     const [isPinnedToBottom, setIsPinnedToBottom] = useState(true);
@@ -112,7 +172,10 @@ const LogsPage = () => {
     const fetchLogs = async () => {
         setLoading(true);
         try {
-            const res = await axios.get(`/api/logs/${container}?tail=500`);
+            const params: Record<string, any> = { tail: 500 };
+            if (rawLevels.length) params.levels = rawLevels;
+            if (q.trim()) params.q = q.trim();
+            const res = await axios.get(`/api/logs/${container}`, { params });
             setLogs(res.data.logs);
         } catch (err: any) {
             console.error("Failed to fetch logs", err);
@@ -149,17 +212,63 @@ const LogsPage = () => {
         }
     };
 
+    const fetchCallFilterOptions = useCallback(async () => {
+        try {
+            const res = await axios.get<FilterOptions>('/api/calls/filters');
+            setCallFilterOptions(res.data);
+        } catch (err) {
+            console.error('Failed to fetch call filter options', err);
+        }
+    }, []);
+
+    const fetchCalls = useCallback(async () => {
+        try {
+            setCallLoading(true);
+            const params: Record<string, any> = { page: callPage, page_size: 20 };
+            Object.entries(callFilters).forEach(([k, v]) => {
+                if (v) params[k] = v;
+            });
+            const res = await axios.get<CallListResponse>('/api/calls', { params });
+            setCallResults(res.data.calls || []);
+            setCallTotalPages(res.data.total_pages || 1);
+        } catch (err) {
+            console.error('Failed to fetch calls', err);
+            setCallResults([]);
+        } finally {
+            setCallLoading(false);
+        }
+    }, [callFilters, callPage]);
+
     useEffect(() => {
-        if (mode === 'events') fetchEvents();
-        else fetchLogs();
+        if (mode === 'troubleshoot') {
+            fetchCallFilterOptions();
+            if (showCallFinder) fetchCalls();
+        }
+    }, [mode, fetchCallFilterOptions, fetchCalls, showCallFinder]);
+
+    useEffect(() => {
+        // Keep call finder in sync with URL-provided call_id
+        setShowCallFinder(!callId);
+    }, [callId]);
+
+    useEffect(() => {
+        if (mode === 'troubleshoot') {
+            if (!callId) return;
+            fetchEvents();
+        } else {
+            fetchLogs();
+        }
         const interval = setInterval(() => {
-            if (autoRefresh) {
-                if (mode === 'events') fetchEvents();
-                else fetchLogs();
+            if (!autoRefresh) return;
+            if (mode === 'troubleshoot') {
+                if (!callId) return;
+                fetchEvents();
+            } else {
+                fetchLogs();
             }
         }, 3000);
         return () => clearInterval(interval);
-    }, [autoRefresh, container, mode, callId, q, hidePayloads, since, until, levels.join(','), (categories || []).join(',')]);
+    }, [autoRefresh, container, mode, callId, q, rawLevels.join(','), hidePayloads, since, until, levels.join(','), (categories || []).join(',')]);
 
     useEffect(() => {
         if (autoRefresh && isPinnedToBottom) {
@@ -174,7 +283,7 @@ const LogsPage = () => {
     }, [preset]);
 
     const filteredEvents = useMemo(() => {
-        if (mode !== 'events') return [];
+        if (mode !== 'troubleshoot') return [];
         if (preset !== 'important') return events;
         // Important Only: show all warnings/errors, and info milestones only
         return events.filter(e => {
@@ -231,7 +340,7 @@ const LogsPage = () => {
                 <div>
                     <h1 className="text-3xl font-bold tracking-tight">System Logs</h1>
                     <p className="text-muted-foreground mt-1">
-                        Real-time logs from system services (raw) and a filterable Events view for troubleshooting.
+                        Raw container logs (quick level filter) and a call-centric Troubleshoot view.
                     </p>
                 </div>
                 <div className="flex space-x-2 items-center">
@@ -275,13 +384,13 @@ const LogsPage = () => {
                         className="h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                         value={mode}
                         onChange={e => {
-                            const nextMode = e.target.value as any;
+                            const nextMode = e.target.value as LogsMode;
                             setMode(nextMode);
                             updateUrlParams({ mode: nextMode });
                         }}
-                        title="Logs Mode"
+                        title="Logs View"
                     >
-                        <option value="events">Events</option>
+                        <option value="troubleshoot">Troubleshoot</option>
                         <option value="raw">Raw</option>
                     </select>
 
@@ -299,8 +408,12 @@ const LogsPage = () => {
 
                     <button
                         onClick={() => {
-                            if (mode === 'events') fetchEvents();
-                            else fetchLogs();
+                            if (mode === 'troubleshoot') {
+                                if (showCallFinder) fetchCalls();
+                                else fetchEvents();
+                            } else {
+                                fetchLogs();
+                            }
                         }}
                         className="inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 border border-input bg-background shadow-sm hover:bg-accent hover:text-accent-foreground h-9 px-3"
                         title="Refresh Now"
@@ -310,7 +423,205 @@ const LogsPage = () => {
                 </div>
             </div>
 
-            {mode === 'events' && (
+            {mode === 'raw' && (
+                <div className="flex flex-wrap items-center gap-3 border rounded-lg p-3 bg-background">
+                    <div className="flex items-center gap-2">
+                        <span className="text-xs text-muted-foreground">Levels</span>
+                        {(['error', 'warning', 'info', 'debug'] as LogLevel[]).map(lvl => (
+                            <label key={lvl} className="flex items-center gap-1 text-xs">
+                                <input
+                                    type="checkbox"
+                                    checked={rawLevels.includes(lvl)}
+                                    onChange={e => {
+                                        const next = e.target.checked
+                                            ? Array.from(new Set([...rawLevels, lvl]))
+                                            : rawLevels.filter(x => x !== lvl);
+                                        setRawLevels(next);
+                                        updateUrlParams({ raw_levels: next.join(',') });
+                                    }}
+                                />
+                                {lvl}
+                            </label>
+                        ))}
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <span className="text-xs text-muted-foreground">Search</span>
+                        <input
+                            className="h-8 w-[280px] rounded-md border border-input bg-background px-2 py-1 text-xs"
+                            placeholder="text match…"
+                            value={q}
+                            onChange={e => {
+                                setQ(e.target.value);
+                                updateUrlParams({ q: e.target.value });
+                            }}
+                        />
+                    </div>
+                </div>
+            )}
+
+            {mode === 'troubleshoot' && showCallFinder && (
+                <div className="border rounded-lg p-4 bg-background space-y-3">
+                    <div className="flex items-center justify-between">
+                        <div className="font-semibold">Find a Call</div>
+                        <div className="text-xs text-muted-foreground">Uses Call History (fast and reliable)</div>
+                    </div>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                        <div>
+                            <div className="text-xs text-muted-foreground mb-1">Caller Number</div>
+                            <input
+                                className="h-8 w-full rounded-md border border-input bg-background px-2 py-1 text-xs"
+                                placeholder="Phone number"
+                                value={callFilters.caller_number}
+                                onChange={e => { setCallPage(1); setCallFilters(f => ({ ...f, caller_number: e.target.value })); }}
+                            />
+                        </div>
+                        <div>
+                            <div className="text-xs text-muted-foreground mb-1">Caller Name</div>
+                            <input
+                                className="h-8 w-full rounded-md border border-input bg-background px-2 py-1 text-xs"
+                                placeholder="Name"
+                                value={callFilters.caller_name}
+                                onChange={e => { setCallPage(1); setCallFilters(f => ({ ...f, caller_name: e.target.value })); }}
+                            />
+                        </div>
+                        <div>
+                            <div className="text-xs text-muted-foreground mb-1">Provider</div>
+                            <select
+                                className="h-8 w-full rounded-md border border-input bg-background px-2 py-1 text-xs"
+                                value={callFilters.provider_name}
+                                onChange={e => { setCallPage(1); setCallFilters(f => ({ ...f, provider_name: e.target.value })); }}
+                            >
+                                <option value="">All</option>
+                                {(callFilterOptions?.providers || []).map(p => <option key={p} value={p}>{p}</option>)}
+                            </select>
+                        </div>
+                        <div>
+                            <div className="text-xs text-muted-foreground mb-1">Pipeline</div>
+                            <select
+                                className="h-8 w-full rounded-md border border-input bg-background px-2 py-1 text-xs"
+                                value={callFilters.pipeline_name}
+                                onChange={e => { setCallPage(1); setCallFilters(f => ({ ...f, pipeline_name: e.target.value })); }}
+                            >
+                                <option value="">All</option>
+                                {(callFilterOptions?.pipelines || []).map(p => <option key={p} value={p}>{p}</option>)}
+                            </select>
+                        </div>
+                        <div>
+                            <div className="text-xs text-muted-foreground mb-1">Context</div>
+                            <select
+                                className="h-8 w-full rounded-md border border-input bg-background px-2 py-1 text-xs"
+                                value={callFilters.context_name}
+                                onChange={e => { setCallPage(1); setCallFilters(f => ({ ...f, context_name: e.target.value })); }}
+                            >
+                                <option value="">All</option>
+                                {(callFilterOptions?.contexts || []).map(c => <option key={c} value={c}>{c}</option>)}
+                            </select>
+                        </div>
+                        <div>
+                            <div className="text-xs text-muted-foreground mb-1">Outcome</div>
+                            <select
+                                className="h-8 w-full rounded-md border border-input bg-background px-2 py-1 text-xs"
+                                value={callFilters.outcome}
+                                onChange={e => { setCallPage(1); setCallFilters(f => ({ ...f, outcome: e.target.value })); }}
+                            >
+                                <option value="">All</option>
+                                {(callFilterOptions?.outcomes || []).map(o => <option key={o} value={o}>{o}</option>)}
+                            </select>
+                        </div>
+                        <div>
+                            <div className="text-xs text-muted-foreground mb-1">From Date</div>
+                            <input
+                                type="date"
+                                className="h-8 w-full rounded-md border border-input bg-background px-2 py-1 text-xs"
+                                value={callFilters.start_date}
+                                onChange={e => { setCallPage(1); setCallFilters(f => ({ ...f, start_date: e.target.value })); }}
+                            />
+                        </div>
+                        <div>
+                            <div className="text-xs text-muted-foreground mb-1">To Date</div>
+                            <input
+                                type="date"
+                                className="h-8 w-full rounded-md border border-input bg-background px-2 py-1 text-xs"
+                                value={callFilters.end_date}
+                                onChange={e => { setCallPage(1); setCallFilters(f => ({ ...f, end_date: e.target.value })); }}
+                            />
+                        </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <button
+                            onClick={fetchCalls}
+                            className="inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors border border-input bg-background shadow-sm hover:bg-accent hover:text-accent-foreground h-9 px-3"
+                        >
+                            Search
+                        </button>
+                        <button
+                            onClick={() => { setCallPage(1); setCallFilters({ caller_number: '', caller_name: '', provider_name: '', pipeline_name: '', context_name: '', outcome: '', start_date: '', end_date: '' }); }}
+                            className="inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors border border-input bg-background shadow-sm hover:bg-accent hover:text-accent-foreground h-9 px-3"
+                        >
+                            Clear
+                        </button>
+                        <div className="text-xs text-muted-foreground">{callLoading ? 'Loading…' : `${callResults.length} results`}</div>
+                    </div>
+
+                    <div className="border rounded-lg overflow-hidden">
+                        <div className="grid grid-cols-6 gap-2 px-3 py-2 text-xs bg-muted/40 text-muted-foreground">
+                            <div>Caller</div>
+                            <div>Time</div>
+                            <div>Duration</div>
+                            <div>Provider</div>
+                            <div>Context</div>
+                            <div>Actions</div>
+                        </div>
+                        {callResults.map(r => (
+                            <div key={r.id} className="grid grid-cols-6 gap-2 px-3 py-2 text-xs border-t">
+                                <div className="truncate">{r.caller_number || 'Unknown'}{r.caller_name ? ` (${r.caller_name})` : ''}</div>
+                                <div className="truncate">{r.start_time ? new Date(r.start_time).toLocaleString() : '-'}</div>
+                                <div>{Math.round(r.duration_seconds)}s</div>
+                                <div className="truncate">{r.provider_name}</div>
+                                <div className="truncate">{r.context_name || '-'}</div>
+                                <div>
+                                    <button
+                                        onClick={() => {
+                                            setCallId(r.call_id);
+                                            setSince(r.start_time || '');
+                                            setUntil(r.end_time || '');
+                                            setShowCallFinder(false);
+                                            setAutoRefresh(false);
+                                            updateUrlParams({ mode: 'troubleshoot', call_id: r.call_id, since: r.start_time || '', until: r.end_time || '' });
+                                        }}
+                                        className="inline-flex items-center justify-center whitespace-nowrap rounded-md text-xs font-medium transition-colors border border-input bg-background shadow-sm hover:bg-accent hover:text-accent-foreground h-8 px-2"
+                                    >
+                                        Troubleshoot
+                                    </button>
+                                </div>
+                            </div>
+                        ))}
+                        {!callResults.length && !callLoading && (
+                            <div className="px-3 py-4 text-xs text-muted-foreground">No calls match the current filters.</div>
+                        )}
+                    </div>
+
+                    <div className="flex items-center justify-end gap-2 text-xs">
+                        <button
+                            disabled={callPage <= 1}
+                            onClick={() => setCallPage(p => Math.max(1, p - 1))}
+                            className="rounded-md border px-2 py-1 disabled:opacity-50"
+                        >
+                            Prev
+                        </button>
+                        <span className="text-muted-foreground">Page {callPage} / {callTotalPages}</span>
+                        <button
+                            disabled={callPage >= callTotalPages}
+                            onClick={() => setCallPage(p => Math.min(callTotalPages, p + 1))}
+                            className="rounded-md border px-2 py-1 disabled:opacity-50"
+                        >
+                            Next
+                        </button>
+                    </div>
+                </div>
+            )}
+
+            {mode === 'troubleshoot' && !showCallFinder && (
                 <div className="flex flex-wrap items-center gap-2 border rounded-lg p-3 bg-background">
                     <div className="flex items-center gap-2">
                         <span className="text-xs text-muted-foreground">Preset</span>
@@ -334,16 +645,29 @@ const LogsPage = () => {
                     </div>
 
                     <div className="flex items-center gap-2">
-                        <span className="text-xs text-muted-foreground">Call ID</span>
+                        <span className="text-xs text-muted-foreground">Call</span>
                         <input
                             className="h-8 w-[280px] rounded-md border border-input bg-background px-2 py-1 text-xs"
-                            placeholder="e.g. 1766692793.2077"
+                            placeholder="Call ID"
                             value={callId}
                             onChange={e => {
                                 setCallId(e.target.value);
                                 updateUrlParams({ call_id: e.target.value });
                             }}
                         />
+                        <button
+                            onClick={() => {
+                                setCallId('');
+                                setSince('');
+                                setUntil('');
+                                setShowCallFinder(true);
+                                updateUrlParams({ call_id: '', since: '', until: '' });
+                            }}
+                            className="inline-flex items-center justify-center whitespace-nowrap rounded-md text-xs font-medium transition-colors border border-input bg-background shadow-sm hover:bg-accent hover:text-accent-foreground h-8 px-2"
+                            title="Pick a different call"
+                        >
+                            Find Call
+                        </button>
                     </div>
 
                     <div className="flex items-center gap-2">
@@ -399,7 +723,7 @@ const LogsPage = () => {
                 </div>
             )}
 
-            {mode === 'events' && (eventsMeta?.call || eventsMeta?.window || (eventsMeta?.related_ids && eventsMeta.related_ids.length > 1)) && (
+            {mode === 'troubleshoot' && !showCallFinder && (eventsMeta?.call || eventsMeta?.window || (eventsMeta?.related_ids && eventsMeta.related_ids.length > 1)) && (
                 <div className="border rounded-lg p-3 bg-background text-xs">
                     {eventsMeta?.call && (
                         <div className="flex flex-wrap gap-x-4 gap-y-1">
@@ -433,7 +757,7 @@ const LogsPage = () => {
                 <div className="absolute top-2 right-2 opacity-50 pointer-events-none">
                     <Terminal className="w-6 h-6" />
                 </div>
-                {mode === 'events' && autoRefresh && !isPinnedToBottom && (
+                {mode === 'troubleshoot' && autoRefresh && !isPinnedToBottom && (
                     <button
                         onClick={() => logsEndRef.current?.scrollIntoView({ behavior: "smooth" })}
                         className="absolute bottom-3 right-3 z-10 inline-flex items-center justify-center rounded-md border border-gray-700 bg-black/60 px-3 py-1 text-[10px] text-gray-200 hover:bg-black/80"
@@ -442,7 +766,7 @@ const LogsPage = () => {
                         Jump to latest
                     </button>
                 )}
-                {mode === 'events' ? (
+                {mode === 'troubleshoot' ? (
                     <div className="space-y-1">
                         {(displayEvents.length ? displayEvents : []).map((e, idx) => (
                             <div key={idx} className="flex gap-2 items-start hover:bg-white/5 px-2 py-1 rounded">
@@ -482,7 +806,7 @@ const LogsPage = () => {
                             </div>
                         ))}
                         {!displayEvents.length && (
-                            <div className="text-gray-400">No events match the current filters.</div>
+                            <div className="text-gray-400">{showCallFinder ? 'Pick a call to troubleshoot.' : 'No events match the current filters.'}</div>
                         )}
                     </div>
                 ) : (
