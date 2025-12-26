@@ -86,6 +86,9 @@ def classify_event(msg: str, component: Optional[str]) -> Tuple[str, bool]:
     text = (msg or "").lower()
     comp = (component or "").lower()
 
+    if comp.startswith("src.tools."):
+        return "tools", False
+
     # Milestones (info-level) + categories
     if "stasisstart event received" in text:
         return "call", True

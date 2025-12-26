@@ -7,6 +7,7 @@ import { parseAnsi } from '../../utils/ansi';
 type LogLevel = 'error' | 'warning' | 'info' | 'debug';
 type LogCategory = 'call' | 'provider' | 'audio' | 'transport' | 'vad' | 'tools' | 'config';
 type LogsMode = 'troubleshoot' | 'raw';
+type TroubleshootView = 'overview' | 'issues' | 'provider' | 'media' | 'vad' | 'tools' | 'all';
 
 type LogEvent = {
     ts: string | null;
@@ -81,28 +82,26 @@ type FilterOptions = {
     outcomes: string[];
 };
 
-type Preset = 'important' | 'audio' | 'provider' | 'transport' | 'vad' | 'tools' | 'config';
-
-const PRESET_DEFAULT_LEVELS: Record<Preset, LogLevel[]> = {
-    important: ['error', 'warning', 'info'],
-    // For non-important presets, include debug so dev environments remain useful.
-    // In production (info-level logs), this does not expand volume.
-    audio: ['error', 'warning', 'info', 'debug'],
-    provider: ['error', 'warning', 'info', 'debug'],
-    transport: ['error', 'warning', 'info', 'debug'],
-    vad: ['error', 'warning', 'info', 'debug'],
-    tools: ['error', 'warning', 'info', 'debug'],
-    config: ['error', 'warning', 'info', 'debug'],
-};
-
-const PRESET_DEFAULT_CATEGORIES: Record<Preset, LogCategory[] | null> = {
-    important: null, // all categories, backend will tag milestones
-    audio: ['audio'],
-    provider: ['provider'],
-    transport: ['transport'],
-    vad: ['vad'],
-    tools: ['tools'],
-    config: ['config'],
+// Back-compat: old URLs used `preset=important|audio|provider|transport|vad|tools|config`
+const mapLegacyPresetToView = (preset: string | null): TroubleshootView => {
+    switch ((preset || '').toLowerCase()) {
+        case 'important':
+            return 'overview';
+        case 'audio':
+            return 'media';
+        case 'provider':
+            return 'provider';
+        case 'transport':
+            return 'media';
+        case 'vad':
+            return 'vad';
+        case 'tools':
+            return 'tools';
+        case 'config':
+            return 'issues';
+        default:
+            return 'overview';
+    }
 };
 
 const LogsPage = () => {
@@ -119,7 +118,11 @@ const LogsPage = () => {
         // Back-compat: old URLs used mode=events
         return 'troubleshoot';
     });
-    const [preset, setPreset] = useState<Preset>((searchParams.get('preset') as any) || 'important');
+    const [view, setView] = useState<TroubleshootView>(() => {
+        const v = (searchParams.get('view') || '').trim();
+        if (v) return v as any;
+        return mapLegacyPresetToView(searchParams.get('preset'));
+    });
     const [callId, setCallId] = useState(searchParams.get('call_id') || '');
     const [q, setQ] = useState(searchParams.get('q') || '');
     const [rawLevels, setRawLevels] = useState<LogLevel[]>(() => {
@@ -130,8 +133,8 @@ const LogsPage = () => {
     const [hidePayloads, setHidePayloads] = useState(searchParams.get('hide_payloads') !== 'false');
     const [since, setSince] = useState(searchParams.get('since') || '');
     const [until, setUntil] = useState(searchParams.get('until') || '');
-    const [levels, setLevels] = useState<LogLevel[]>(PRESET_DEFAULT_LEVELS[preset]);
-    const [categories, setCategories] = useState<LogCategory[] | null>(PRESET_DEFAULT_CATEGORIES[preset]);
+    const [includeDebug, setIncludeDebug] = useState(searchParams.get('include_debug') === 'true');
+    const [hideRepeats, setHideRepeats] = useState(searchParams.get('hide_repeats') !== 'false');
     const [showCallFinder, setShowCallFinder] = useState(!callId);
     const [callFilters, setCallFilters] = useState({
         caller_number: '',
@@ -277,23 +280,68 @@ const LogsPage = () => {
     }, [logs, events, autoRefresh, isPinnedToBottom]);
 
     useEffect(() => {
-        // Apply preset defaults when preset changes (without stomping URL-provided customizations on first load)
-        setLevels(PRESET_DEFAULT_LEVELS[preset]);
-        setCategories(PRESET_DEFAULT_CATEGORIES[preset]);
-    }, [preset]);
+        // Keep legacy `preset` in sync for old links, but prefer `view`
+        updateUrlParams({ view });
+    }, [view]);
+
+    const isIssueSignal = (e: LogEvent) => {
+        if (e.level !== 'info') return false;
+        const t = (e.msg || '').toLowerCase();
+        // Avoid high-frequency "everything is fine" spam.
+        if (t.includes('encode resample') && t.includes('no resampling needed')) return false;
+        if (t.includes('encode config - reading provider config')) return false;
+        // Useful signals for narrowing issues
+        const keywords = [
+            'mismatch',
+            'resampling',
+            'drift',
+            'buffer',
+            'underflow',
+            'overflow',
+            'dropped',
+            'gap',
+            'jitter',
+            'loss',
+            'rtt',
+            'timeout',
+            'retry',
+            'reconnect',
+            'fallback',
+            'no active streaming',
+        ];
+        return keywords.some(k => t.includes(k));
+    };
 
     const filteredEvents = useMemo(() => {
         if (mode !== 'troubleshoot') return [];
-        if (preset !== 'important') return events;
-        // Important Only: show all warnings/errors, and info milestones only
-        return events.filter(e => {
-            if (e.level === 'error' || e.level === 'warning') return true;
-            if (e.level === 'info' && e.milestone) return true;
-            return false;
-        });
-    }, [events, mode, preset]);
+        const base = includeDebug ? events : events.filter(e => e.level !== 'debug');
+        const viewFiltered = (() => {
+            switch (view) {
+                case 'overview':
+                    return base.filter(e => e.level === 'error' || e.level === 'warning' || (e.level === 'info' && e.milestone));
+                case 'issues':
+                    return base.filter(e => e.level === 'error' || e.level === 'warning' || isIssueSignal(e));
+                case 'provider':
+                    return base.filter(e => e.category === 'provider' || e.level === 'error' || e.level === 'warning');
+                case 'media':
+                    return base.filter(e => e.category === 'audio' || e.category === 'transport' || e.level === 'error' || e.level === 'warning');
+                case 'vad':
+                    return base.filter(e => e.category === 'vad' || e.level === 'error' || e.level === 'warning');
+                case 'tools':
+                    return base.filter(e => e.category === 'tools' || e.level === 'error' || e.level === 'warning');
+                case 'all':
+                default:
+                    return base;
+            }
+        })();
+
+        if (!q.trim()) return viewFiltered;
+        const qn = q.trim().toLowerCase();
+        return viewFiltered.filter(e => (e.raw || '').toLowerCase().includes(qn) || (e.msg || '').toLowerCase().includes(qn));
+    }, [events, mode, view, includeDebug, q]);
 
     const displayEvents = useMemo(() => {
+        if (!hideRepeats) return (filteredEvents as any);
         const out: Array<LogEvent & { repeat?: number }> = [];
         for (const e of filteredEvents) {
             const prev = out[out.length - 1];
@@ -312,7 +360,7 @@ const LogsPage = () => {
             }
         }
         return out;
-    }, [filteredEvents]);
+    }, [filteredEvents, hideRepeats]);
 
     const formatMeta = (meta?: Record<string, string>) => {
         if (!meta) return '';
@@ -624,23 +672,23 @@ const LogsPage = () => {
             {mode === 'troubleshoot' && !showCallFinder && (
                 <div className="flex flex-wrap items-center gap-2 border rounded-lg p-3 bg-background">
                     <div className="flex items-center gap-2">
-                        <span className="text-xs text-muted-foreground">Preset</span>
+                        <span className="text-xs text-muted-foreground">View</span>
                         <select
                             className="h-8 rounded-md border border-input bg-background px-2 py-1 text-xs"
-                            value={preset}
+                            value={view}
                             onChange={e => {
-                                const nextPreset = e.target.value as Preset;
-                                setPreset(nextPreset);
-                                updateUrlParams({ preset: nextPreset });
+                                const nextView = e.target.value as TroubleshootView;
+                                setView(nextView);
+                                updateUrlParams({ view: nextView });
                             }}
                         >
-                            <option value="important">Important Only</option>
-                            <option value="audio">Audio Quality</option>
-                            <option value="provider">Provider Session</option>
-                            <option value="transport">Transport</option>
-                            <option value="vad">Barge-in / VAD</option>
-                            <option value="tools">Tools / MCP</option>
-                            <option value="config">Config</option>
+                            <option value="overview">Overview</option>
+                            <option value="issues">Issues</option>
+                            <option value="provider">Provider</option>
+                            <option value="media">Media</option>
+                            <option value="vad">VAD</option>
+                            <option value="tools">Tools</option>
+                            <option value="all">All</option>
                         </select>
                     </div>
 
@@ -719,6 +767,30 @@ const LogsPage = () => {
                             }}
                         />
                         Hide transcripts / payloads
+                    </label>
+
+                    <label className="flex items-center gap-2 text-xs">
+                        <input
+                            type="checkbox"
+                            checked={includeDebug}
+                            onChange={e => {
+                                setIncludeDebug(e.target.checked);
+                                updateUrlParams({ include_debug: e.target.checked ? 'true' : 'false' });
+                            }}
+                        />
+                        Include debug
+                    </label>
+
+                    <label className="flex items-center gap-2 text-xs">
+                        <input
+                            type="checkbox"
+                            checked={hideRepeats}
+                            onChange={e => {
+                                setHideRepeats(e.target.checked);
+                                updateUrlParams({ hide_repeats: e.target.checked ? 'true' : 'false' });
+                            }}
+                        />
+                        Hide repeats
                     </label>
                 </div>
             )}
