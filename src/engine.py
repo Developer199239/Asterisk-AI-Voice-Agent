@@ -5808,7 +5808,9 @@ class Engine:
                 
                 # Delay to ensure audio completes through RTP pipeline
                 # Accounts for: RTP transmission, jitter buffer, and playback
-                await asyncio.sleep(1.0)
+                # Configurable via farewell_hangup_delay_sec (default 2.5s)
+                hangup_delay = getattr(self.config, 'farewell_hangup_delay_sec', 2.5)
+                await asyncio.sleep(hangup_delay)
                 
                 try:
                     session = await self.session_store.get_by_call_id(call_id)

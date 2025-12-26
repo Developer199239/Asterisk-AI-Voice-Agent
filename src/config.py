@@ -91,6 +91,10 @@ class LocalProviderConfig(BaseModel):
     # Set based on your hardware speed (see LLM warmup time in logs)
     # Fast hardware: 5-10s, Slow hardware: 30-60s
     farewell_timeout_sec: float = Field(default=30.0)
+    # Farewell hangup delay - seconds to wait after farewell audio completes before hangup
+    # Ensures farewell message fully plays through RTP pipeline before disconnecting
+    # Increase if farewell gets cut off (typical farewells need 2-4 seconds)
+    farewell_hangup_delay_sec: float = Field(default=2.5)
     chunk_ms: int = Field(default=200)
     max_tokens: int = Field(default=150)
     temperature: float = Field(default=0.4)
@@ -504,6 +508,10 @@ class AppConfig(BaseModel):
     tools: Dict[str, Any] = Field(default_factory=dict)
     # MCP tool configuration (experimental)
     mcp: Optional[MCPConfig] = None
+    # Farewell hangup delay - seconds to wait after farewell audio completes before hangup
+    # Ensures farewell message fully plays through RTP pipeline before disconnecting
+    # Increase if farewell gets cut off (typical farewells need 2-4 seconds)
+    farewell_hangup_delay_sec: float = Field(default=2.5)
 
     # Ensure tests that construct AppConfig(**dict) directly still get normalized pipelines
     # similar to load_config(), which calls _normalize_pipelines().
