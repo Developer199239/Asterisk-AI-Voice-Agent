@@ -124,7 +124,7 @@ const LogsPage = () => {
     const [q, setQ] = useState(searchParams.get('q') || '');
     const [rawLevels, setRawLevels] = useState<LogLevel[]>(() => {
         const v = (searchParams.get('raw_levels') || '').trim();
-        if (!v) return ['error', 'warning', 'info'];
+        if (!v) return ['error', 'warning'];
         return v.split(',').map(s => s.trim().toLowerCase() as LogLevel).filter(Boolean);
     });
     const [hidePayloads, setHidePayloads] = useState(searchParams.get('hide_payloads') !== 'false');
