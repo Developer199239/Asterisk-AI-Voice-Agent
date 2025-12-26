@@ -196,9 +196,8 @@ const LogsPage = () => {
                 hide_payloads: hidePayloads,
             };
             if (callId.trim()) params.call_id = callId.trim();
-            if (q.trim()) params.q = q.trim();
-            if (levels.length) params.levels = levels;
-            if (categories && categories.length) params.categories = categories;
+            // Reduce payload size unless user explicitly opts into debug.
+            if (!includeDebug) params.levels = ['error', 'warning', 'info'];
             if (since.trim()) params.since = since.trim();
             if (until.trim()) params.until = until.trim();
 
@@ -255,23 +254,25 @@ const LogsPage = () => {
     }, [callId]);
 
     useEffect(() => {
-        if (mode === 'troubleshoot') {
-            if (!callId) return;
-            fetchEvents();
-        } else {
-            fetchLogs();
-        }
+        if (mode !== 'raw') return;
+        fetchLogs();
         const interval = setInterval(() => {
-            if (!autoRefresh) return;
-            if (mode === 'troubleshoot') {
-                if (!callId) return;
-                fetchEvents();
-            } else {
-                fetchLogs();
-            }
+            if (autoRefresh) fetchLogs();
         }, 3000);
         return () => clearInterval(interval);
-    }, [autoRefresh, container, mode, callId, q, rawLevels.join(','), hidePayloads, since, until, levels.join(','), (categories || []).join(',')]);
+    }, [autoRefresh, container, mode, q, rawLevels.join(',')]);
+
+    useEffect(() => {
+        if (mode !== 'troubleshoot') return;
+        if (!callId) return;
+        fetchEvents();
+        const interval = setInterval(() => {
+            if (!autoRefresh) return;
+            if (!callId) return;
+            fetchEvents();
+        }, 3000);
+        return () => clearInterval(interval);
+    }, [autoRefresh, container, mode, callId, hidePayloads, since, until, includeDebug]);
 
     useEffect(() => {
         if (autoRefresh && isPinnedToBottom) {
