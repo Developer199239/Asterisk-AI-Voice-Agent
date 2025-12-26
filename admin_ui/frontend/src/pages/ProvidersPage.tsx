@@ -339,6 +339,22 @@ const ProvidersPage: React.FC = () => {
             return <LocalProviderForm config={providerForm} onChange={updateForm} />;
         }
         
+        // Check by provider NAME first (for full agents that have type='full')
+        // This ensures Deepgram, Google Live, etc. use their specific forms
+        if (providerName === 'deepgram' || providerName.includes('deepgram')) {
+            return <DeepgramProviderForm config={providerForm} onChange={updateForm} />;
+        }
+        if (providerName === 'google_live' || providerName.includes('google') || providerName.includes('gemini')) {
+            return <GoogleLiveProviderForm config={providerForm} onChange={updateForm} />;
+        }
+        if (providerName === 'openai_realtime' || providerName.includes('realtime')) {
+            return <OpenAIRealtimeProviderForm config={providerForm} onChange={updateForm} />;
+        }
+        if (providerName.includes('elevenlabs')) {
+            return <ElevenLabsProviderForm config={providerForm} onChange={updateForm} />;
+        }
+        
+        // Fall back to type-based selection
         switch (providerForm.type) {
             case 'openai_realtime':
                 return <OpenAIRealtimeProviderForm config={providerForm} onChange={updateForm} />;
