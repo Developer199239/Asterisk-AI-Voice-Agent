@@ -232,13 +232,29 @@ class OpenAIToolAdapter:
             logger.info(f"✅ Sent function output to OpenAI: {safe_result.get('status')}", 
                        call_id=call_id)
             
-            # Step 2: Trigger response generation with audio modality
-            # Explicitly request audio+text output to ensure farewell messages are spoken
+            # Step 2: Trigger response generation with audio modality AND instructions
+            # CRITICAL: Must include explicit instructions to speak, otherwise OpenAI may respond
+            # with text-only. This matches how greeting works which always produces audio.
+            # Extract any message from the tool result to use as speech instruction
+            tool_message = safe_result.get('message', '')
+            ai_should_speak = safe_result.get('ai_should_speak', True)
+            
+            response_config = {
+                "modalities": ["text", "audio"]
+            }
+            
+            # If tool has a message and AI should speak, add instructions to verbalize it
+            if tool_message and ai_should_speak:
+                response_config["instructions"] = (
+                    f"Respond naturally to the user about this tool result. "
+                    f"The tool says: {tool_message}"
+                )
+                logger.info(f"✅ Added speech instructions for tool response", 
+                           call_id=call_id, message_preview=tool_message[:50])
+            
             response_event = {
                 "type": "response.create",
-                "response": {
-                    "modalities": ["text", "audio"]
-                }
+                "response": response_config
             }
             await websocket.send(json.dumps(response_event))
             logger.info(f"✅ Triggered OpenAI response generation (audio+text)", call_id=call_id)
