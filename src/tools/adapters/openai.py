@@ -232,12 +232,16 @@ class OpenAIToolAdapter:
             logger.info(f"✅ Sent function output to OpenAI: {safe_result.get('status')}", 
                        call_id=call_id)
             
-            # Step 2: Trigger response generation
+            # Step 2: Trigger response generation with audio modality
+            # Explicitly request audio+text output to ensure farewell messages are spoken
             response_event = {
-                "type": "response.create"
+                "type": "response.create",
+                "response": {
+                    "modalities": ["text", "audio"]
+                }
             }
             await websocket.send(json.dumps(response_event))
-            logger.info(f"✅ Triggered OpenAI response generation", call_id=call_id)
+            logger.info(f"✅ Triggered OpenAI response generation (audio+text)", call_id=call_id)
             
         except Exception as e:
             logger.error(f"Failed to send tool result to OpenAI: {e}", exc_info=True)
