@@ -193,6 +193,14 @@ const ToolForm = ({ config, onChange }: ToolFormProps) => {
                                 checked={config.hangup_call?.require_confirmation ?? false}
                                 onChange={(e) => updateNestedConfig('hangup_call', 'require_confirmation', e.target.checked)}
                             />
+                            <FormInput
+                                label="Farewell Hangup Delay (seconds)"
+                                type="number"
+                                step="0.5"
+                                value={config.farewell_hangup_delay_sec ?? 2.5}
+                                onChange={(e) => updateConfig('farewell_hangup_delay_sec', parseFloat(e.target.value) || 2.5)}
+                                tooltip="Time to wait after farewell audio before hanging up. Increase if farewell gets cut off."
+                            />
                         </div>
                     )}
                 </div>

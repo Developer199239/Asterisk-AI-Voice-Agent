@@ -41,7 +41,15 @@ const ToolsPage = () => {
     };
 
     const updateToolsConfig = (newToolsConfig: any) => {
-        setConfig({ ...config, tools: newToolsConfig });
+        // Extract root-level settings that should not be nested under tools
+        const { farewell_hangup_delay_sec, ...toolsOnly } = newToolsConfig;
+        
+        // Update both tools config and root-level farewell_hangup_delay_sec
+        const updatedConfig = { ...config, tools: toolsOnly };
+        if (farewell_hangup_delay_sec !== undefined) {
+            updatedConfig.farewell_hangup_delay_sec = farewell_hangup_delay_sec;
+        }
+        setConfig(updatedConfig);
     };
 
     if (loading) return <div className="p-8 text-center text-muted-foreground">Loading configuration...</div>;
@@ -68,7 +76,7 @@ const ToolsPage = () => {
             <ConfigSection title="Global Tool Settings" description="Configure tools available across all contexts.">
                 <ConfigCard>
                     <ToolForm
-                        config={config.tools || {}}
+                        config={{ ...(config.tools || {}), farewell_hangup_delay_sec: config.farewell_hangup_delay_sec }}
                         onChange={updateToolsConfig}
                     />
                 </ConfigCard>
