@@ -114,9 +114,11 @@ const LogsPage = () => {
     const [container, setContainer] = useState(searchParams.get('container') || 'ai_engine');
     const [mode, setMode] = useState<LogsMode>(() => {
         const rawMode = (searchParams.get('mode') || '').toLowerCase();
-        if (rawMode === 'raw') return 'raw';
         // Back-compat: old URLs used mode=events
-        return 'troubleshoot';
+        if (rawMode === 'events') return 'troubleshoot';
+        if (rawMode === 'troubleshoot') return 'troubleshoot';
+        // Default is Raw for fast scanning; Troubleshoot is the call-centric flow.
+        return 'raw';
     });
     const [view, setView] = useState<TroubleshootView>(() => {
         const v = (searchParams.get('view') || '').trim();
