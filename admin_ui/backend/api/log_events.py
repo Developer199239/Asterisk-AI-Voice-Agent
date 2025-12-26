@@ -86,8 +86,15 @@ def classify_event(msg: str, component: Optional[str]) -> Tuple[str, bool]:
     text = (msg or "").lower()
     comp = (component or "").lower()
 
-    if comp.startswith("src.tools."):
+    # Strong component-based categorization first (least ambiguous)
+    if comp.startswith("src.tools.") or comp.startswith("src.mcp."):
         return "tools", False
+
+    if comp.startswith("src.providers."):
+        return "provider", False
+
+    if "vad" in comp or "vad_manager" in comp:
+        return "vad", False
 
     # Milestones (info-level) + categories
     if "stasisstart event received" in text:
@@ -116,7 +123,23 @@ def classify_event(msg: str, component: Optional[str]) -> Tuple[str, bool]:
         return "transport", False
     if "vad" in text or "talk detect" in text or "barge" in text:
         return "vad", False
-    if "tool" in text or "mcp" in text:
+    # Tools/MCP: avoid overly-broad "tool" matching (provider logs often contain "tool support")
+    if "mcp" in text:
+        return "tools", False
+    if any(
+        k in text
+        for k in (
+            "tool calling",
+            "tool execution",
+            "tool executed",
+            "tool invoked",
+            "registered tool",
+            "initializing default tools",
+            "initialized",
+            "discovered mcp tools",
+            "registered mcp tools",
+        )
+    ):
         return "tools", False
     if "encode" in text or "resample" in text or "normalizer" in text or "gating" in text:
         return "audio", False

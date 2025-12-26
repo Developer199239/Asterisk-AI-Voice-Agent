@@ -176,7 +176,8 @@ const LogsPage = () => {
         setLoading(true);
         try {
             const params: Record<string, any> = { tail: 500 };
-            if (rawLevels.length) params.levels = rawLevels;
+            // Send as CSV for FastAPI list parsing (avoid axios `levels[]=...` serialization).
+            if (rawLevels.length) params.levels = rawLevels.join(',');
             if (q.trim()) params.q = q.trim();
             const res = await axios.get(`/api/logs/${container}`, { params });
             setLogs(res.data.logs);
@@ -197,7 +198,7 @@ const LogsPage = () => {
             };
             if (callId.trim()) params.call_id = callId.trim();
             // Reduce payload size unless user explicitly opts into debug.
-            if (!includeDebug) params.levels = ['error', 'warning', 'info'];
+            if (!includeDebug) params.levels = 'error,warning,info';
             if (since.trim()) params.since = since.trim();
             if (until.trim()) params.until = until.trim();
 
@@ -687,7 +688,7 @@ const LogsPage = () => {
                             <option value="issues">Issues</option>
                             <option value="provider">Provider</option>
                             <option value="media">Media</option>
-                            <option value="vad">VAD</option>
+                            <option value="vad">Barge-in / VAD</option>
                             <option value="tools">Tools</option>
                             <option value="all">All</option>
                         </select>
