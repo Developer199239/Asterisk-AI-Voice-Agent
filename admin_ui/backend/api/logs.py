@@ -274,7 +274,12 @@ async def get_container_log_events(
             key=lambda e: (e.ts is None, e.ts or datetime.min.replace(tzinfo=timezone.utc)),
         )
         if limit and limit > 0:
-            events_sorted = events_sorted[-int(limit):]
+            lim = int(limit)
+            # For call-centric views, prefer the beginning of the call timeline.
+            if call_id_norm:
+                events_sorted = events_sorted[:lim]
+            else:
+                events_sorted = events_sorted[-lim:]
 
         return {
             "events": [e.to_dict() for e in events_sorted],
