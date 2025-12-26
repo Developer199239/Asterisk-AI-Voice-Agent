@@ -1,3 +1,4 @@
+import ast
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -86,6 +87,16 @@ def classify_event(msg: str, component: Optional[str]) -> Tuple[str, bool]:
     comp = (component or "").lower()
 
     # Milestones (info-level) + categories
+    if "stasisstart event received" in text:
+        return "call", True
+    if text.startswith("stasis ended") or "stasis ended" in text:
+        return "call", True
+    if text.startswith("hanging up channel") or "hanging up channel" in text:
+        return "call", True
+    if text.startswith("channel destroyed") or "channel destroyed" in text:
+        return "call", True
+    if text.startswith("bridge destroyed") or "bridge destroyed" in text:
+        return "call", True
     if "audio profile resolved and applied" in text:
         return "audio", True
     if "openai session.updated ack received" in text or "session.updated ack received" in text:
@@ -132,6 +143,10 @@ def _build_meta(msg: str, kv: Dict[str, str]) -> Dict[str, str]:
         pick("input_format", "output_format", "sample_rate", "acknowledged")
         return meta
 
+    if "externalmedia channel created" in text:
+        pick("external_media_id", "channel_id")
+        return meta
+
     if "transportcard" in text:
         pick(
             "wire_encoding",
@@ -164,6 +179,85 @@ def _build_meta(msg: str, kv: Dict[str, str]) -> Dict[str, str]:
         pick("expected_rate", "pcm_rate", "provider")
         return meta
 
+    return meta
+
+
+def _extract_balanced_braces(text: str, start: int) -> Optional[str]:
+    depth = 0
+    end = None
+    for i in range(start, len(text)):
+        ch = text[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+    if end is None or end <= start:
+        return None
+    return text[start:end]
+
+
+def _parse_event_data_dict(raw_line: str) -> Optional[Dict[str, Any]]:
+    """
+    Parse `event_data={...}` that is logged as a Python dict literal.
+
+    This avoids changing ai-engine logging while still enabling call-centric fields
+    (caller id, dialplan context, channel ids) in the Admin UI.
+    """
+    idx = raw_line.find("event_data=")
+    if idx < 0:
+        return None
+    brace_start = raw_line.find("{", idx)
+    if brace_start < 0:
+        return None
+    blob = _extract_balanced_braces(raw_line, brace_start)
+    if not blob:
+        return None
+    try:
+        parsed = ast.literal_eval(blob)
+        return parsed if isinstance(parsed, dict) else None
+    except Exception:
+        return None
+
+
+def _meta_from_event_data(data: Dict[str, Any]) -> Dict[str, str]:
+    meta: Dict[str, str] = {}
+    channel = data.get("channel") or {}
+    if isinstance(channel, dict):
+        ch_id = channel.get("id")
+        ch_name = channel.get("name")
+        if ch_id:
+            meta["ari_channel_id"] = str(ch_id)
+        if ch_name:
+            meta["ari_channel_name"] = str(ch_name)
+
+        caller = channel.get("caller") or {}
+        if isinstance(caller, dict):
+            if caller.get("number"):
+                meta["caller_number"] = str(caller.get("number"))
+            if caller.get("name"):
+                meta["caller_name"] = str(caller.get("name"))
+
+        dialplan = channel.get("dialplan") or {}
+        if isinstance(dialplan, dict):
+            if dialplan.get("context"):
+                meta["dialplan_context"] = str(dialplan.get("context"))
+            if dialplan.get("exten"):
+                meta["dialplan_exten"] = str(dialplan.get("exten"))
+            if dialplan.get("priority") is not None:
+                meta["dialplan_priority"] = str(dialplan.get("priority"))
+            if dialplan.get("app_name"):
+                meta["dialplan_app"] = str(dialplan.get("app_name"))
+
+        if channel.get("protocol_id"):
+            meta["ari_protocol_id"] = str(channel.get("protocol_id"))
+
+    if data.get("application"):
+        meta["stasis_app"] = str(data.get("application"))
+    if data.get("type"):
+        meta["ari_event_type"] = str(data.get("type"))
     return meta
 
 
@@ -217,6 +311,15 @@ def parse_log_line(line: str) -> Optional[Tuple[LogEvent, Dict[str, str]]]:
 
     category, milestone = classify_event(msg, component)
     meta = _build_meta(msg, kv)
+
+    # Parse ARI event_data payloads when present (StasisStart carries caller/dialplan)
+    if "stasisstart event received" in (msg or "").lower():
+        event_data = _parse_event_data_dict(raw)
+        if event_data:
+            meta.update(_meta_from_event_data(event_data))
+            if not call_id:
+                call_id = meta.get("ari_channel_id") or call_id
+
     return (
         LogEvent(
             ts=_parse_ts(ts_s),

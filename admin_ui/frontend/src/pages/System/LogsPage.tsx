@@ -22,6 +22,31 @@ type LogEvent = {
     raw: string;
 };
 
+type CallMeta = {
+    call_id: string;
+    caller_number: string | null;
+    caller_name: string | null;
+    start_time: string | null;
+    end_time: string | null;
+    duration_seconds: number;
+    provider_name: string;
+    pipeline_name: string | null;
+    context_name: string | null;
+    outcome: string;
+    error_message: string | null;
+    barge_in_count: number;
+    avg_turn_latency_ms: number;
+    total_turns: number;
+};
+
+type EventsResponse = {
+    events: LogEvent[];
+    call?: CallMeta | null;
+    window?: { source: string; since: string | null; until: string | null } | null;
+    related_ids?: string[];
+    related_bridge_ids?: string[];
+};
+
 type Preset = 'important' | 'audio' | 'provider' | 'transport' | 'vad' | 'tools' | 'config';
 
 const PRESET_DEFAULT_LEVELS: Record<Preset, LogLevel[]> = {
@@ -48,6 +73,7 @@ const LogsPage = () => {
     const [searchParams, setSearchParams] = useSearchParams();
     const [logs, setLogs] = useState('');
     const [events, setEvents] = useState<LogEvent[]>([]);
+    const [eventsMeta, setEventsMeta] = useState<EventsResponse | null>(null);
     const [loading, setLoading] = useState(false);
     const [autoRefresh, setAutoRefresh] = useState(true);
     const [container, setContainer] = useState(searchParams.get('container') || 'ai_engine');
@@ -99,11 +125,13 @@ const LogsPage = () => {
             if (since.trim()) params.since = since.trim();
             if (until.trim()) params.until = until.trim();
 
-            const res = await axios.get(`/api/logs/${container}/events`, { params });
+            const res = await axios.get<EventsResponse>(`/api/logs/${container}/events`, { params });
             setEvents(res.data.events || []);
+            setEventsMeta(res.data || null);
         } catch (err: any) {
             console.error("Failed to fetch events", err);
             setEvents([]);
+            setEventsMeta(null);
             setLogs(`Failed to fetch log events for ${container}. Details: ${err?.message || err}`);
         } finally {
             setLoading(false);
@@ -144,6 +172,27 @@ const LogsPage = () => {
             return false;
         });
     }, [events, mode, preset]);
+
+    const displayEvents = useMemo(() => {
+        const out: Array<LogEvent & { repeat?: number }> = [];
+        for (const e of filteredEvents) {
+            const prev = out[out.length - 1];
+            const same =
+                prev &&
+                prev.level === e.level &&
+                prev.category === e.category &&
+                prev.msg === e.msg &&
+                prev.call_id === e.call_id &&
+                prev.provider === e.provider &&
+                prev.milestone === e.milestone;
+            if (same) {
+                prev.repeat = (prev.repeat || 1) + 1;
+            } else {
+                out.push({ ...e, repeat: 1 });
+            }
+        }
+        return out;
+    }, [filteredEvents]);
 
     const formatMeta = (meta?: Record<string, string>) => {
         if (!meta) return '';
@@ -339,13 +388,39 @@ const LogsPage = () => {
                 </div>
             )}
 
+            {mode === 'events' && (eventsMeta?.call || eventsMeta?.window || (eventsMeta?.related_ids && eventsMeta.related_ids.length > 1)) && (
+                <div className="border rounded-lg p-3 bg-background text-xs">
+                    {eventsMeta?.call && (
+                        <div className="flex flex-wrap gap-x-4 gap-y-1">
+                            <div><span className="text-muted-foreground">Caller</span> {eventsMeta.call.caller_number || 'unknown'}{eventsMeta.call.caller_name ? ` (${eventsMeta.call.caller_name})` : ''}</div>
+                            <div><span className="text-muted-foreground">Provider</span> {eventsMeta.call.provider_name}</div>
+                            <div><span className="text-muted-foreground">Pipeline</span> {eventsMeta.call.pipeline_name || 'default'}</div>
+                            <div><span className="text-muted-foreground">Context</span> {eventsMeta.call.context_name || 'unknown'}</div>
+                            <div><span className="text-muted-foreground">Outcome</span> {eventsMeta.call.outcome}</div>
+                            {eventsMeta.call.error_message && <div className="text-red-600"><span className="text-muted-foreground">Error</span> {eventsMeta.call.error_message}</div>}
+                        </div>
+                    )}
+                    {eventsMeta?.window && (
+                        <div className="mt-2 text-muted-foreground">
+                            Window: {eventsMeta.window.source}{eventsMeta.window.since ? ` since=${eventsMeta.window.since}` : ''}{eventsMeta.window.until ? ` until=${eventsMeta.window.until}` : ''}
+                        </div>
+                    )}
+                    {eventsMeta?.related_ids && eventsMeta.related_ids.length > 1 && (
+                        <div className="mt-2">
+                            <span className="text-muted-foreground">Related IDs</span>{' '}
+                            <span className="font-mono">{eventsMeta.related_ids.join(', ')}</span>
+                        </div>
+                    )}
+                </div>
+            )}
+
             <div className="flex-1 min-h-0 border rounded-lg bg-[#09090b] text-gray-300 font-mono text-xs p-4 overflow-auto shadow-inner relative">
                 <div className="absolute top-2 right-2 opacity-50 pointer-events-none">
                     <Terminal className="w-6 h-6" />
                 </div>
                 {mode === 'events' ? (
                     <div className="space-y-1">
-                        {(filteredEvents.length ? filteredEvents : []).map((e, idx) => (
+                        {(displayEvents.length ? displayEvents : []).map((e, idx) => (
                             <div key={idx} className="flex gap-2 items-start hover:bg-white/5 px-2 py-1 rounded">
                                 <div className="w-[90px] text-gray-500 shrink-0">
                                     {e.ts ? new Date(e.ts).toLocaleTimeString() : '--:--:--'}
@@ -363,6 +438,13 @@ const LogsPage = () => {
                                         </span>
                                     </div>
                                 )}
+                                {(e.repeat || 1) > 1 && (
+                                    <div className="shrink-0">
+                                        <span className="inline-flex items-center rounded border border-gray-700 px-2 py-0.5 text-[10px] text-gray-300 bg-gray-600/10">
+                                            x{e.repeat}
+                                        </span>
+                                    </div>
+                                )}
                                 <div className="flex-1 break-words">
                                     <div className="text-gray-200">{e.msg}</div>
                                     <div className="text-[10px] text-gray-500 mt-0.5">
@@ -375,7 +457,7 @@ const LogsPage = () => {
                                 </div>
                             </div>
                         ))}
-                        {!filteredEvents.length && (
+                        {!displayEvents.length && (
                             <div className="text-gray-400">No events match the current filters.</div>
                         )}
                     </div>
