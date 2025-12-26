@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect, useRef } from 'react';
+import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 import { RefreshCw, Pause, Play, Terminal } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
@@ -51,12 +51,14 @@ type Preset = 'important' | 'audio' | 'provider' | 'transport' | 'vad' | 'tools'
 
 const PRESET_DEFAULT_LEVELS: Record<Preset, LogLevel[]> = {
     important: ['error', 'warning', 'info'],
-    audio: ['error', 'warning', 'info'],
-    provider: ['error', 'warning', 'info'],
-    transport: ['error', 'warning', 'info'],
-    vad: ['error', 'warning', 'info'],
-    tools: ['error', 'warning', 'info'],
-    config: ['error', 'warning', 'info'],
+    // For non-important presets, include debug so dev environments remain useful.
+    // In production (info-level logs), this does not expand volume.
+    audio: ['error', 'warning', 'info', 'debug'],
+    provider: ['error', 'warning', 'info', 'debug'],
+    transport: ['error', 'warning', 'info', 'debug'],
+    vad: ['error', 'warning', 'info', 'debug'],
+    tools: ['error', 'warning', 'info', 'debug'],
+    config: ['error', 'warning', 'info', 'debug'],
 };
 
 const PRESET_DEFAULT_CATEGORIES: Record<Preset, LogCategory[] | null> = {
@@ -87,6 +89,15 @@ const LogsPage = () => {
     const [levels, setLevels] = useState<LogLevel[]>(PRESET_DEFAULT_LEVELS[preset]);
     const [categories, setCategories] = useState<LogCategory[] | null>(PRESET_DEFAULT_CATEGORIES[preset]);
     const logsEndRef = useRef<HTMLDivElement>(null);
+    const scrollRef = useRef<HTMLDivElement>(null);
+    const [isPinnedToBottom, setIsPinnedToBottom] = useState(true);
+
+    const recomputePinned = useCallback(() => {
+        const el = scrollRef.current;
+        if (!el) return;
+        const remaining = el.scrollHeight - el.scrollTop - el.clientHeight;
+        setIsPinnedToBottom(remaining < 80);
+    }, []);
 
     const updateUrlParams = (next: Record<string, string>) => {
         const merged: Record<string, string> = {};
@@ -151,10 +162,10 @@ const LogsPage = () => {
     }, [autoRefresh, container, mode, callId, q, hidePayloads, since, until, levels.join(','), (categories || []).join(',')]);
 
     useEffect(() => {
-        if (autoRefresh) {
-            logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
+        if (autoRefresh && isPinnedToBottom) {
+            logsEndRef.current?.scrollIntoView({ behavior: "instant" as any });
         }
-    }, [logs, events, autoRefresh]);
+    }, [logs, events, autoRefresh, isPinnedToBottom]);
 
     useEffect(() => {
         // Apply preset defaults when preset changes (without stomping URL-provided customizations on first load)
@@ -414,10 +425,23 @@ const LogsPage = () => {
                 </div>
             )}
 
-            <div className="flex-1 min-h-0 border rounded-lg bg-[#09090b] text-gray-300 font-mono text-xs p-4 overflow-auto shadow-inner relative">
+            <div
+                ref={scrollRef}
+                onScroll={recomputePinned}
+                className="flex-1 min-h-0 border rounded-lg bg-[#09090b] text-gray-300 font-mono text-xs p-4 overflow-auto shadow-inner relative"
+            >
                 <div className="absolute top-2 right-2 opacity-50 pointer-events-none">
                     <Terminal className="w-6 h-6" />
                 </div>
+                {mode === 'events' && autoRefresh && !isPinnedToBottom && (
+                    <button
+                        onClick={() => logsEndRef.current?.scrollIntoView({ behavior: "smooth" })}
+                        className="absolute bottom-3 right-3 z-10 inline-flex items-center justify-center rounded-md border border-gray-700 bg-black/60 px-3 py-1 text-[10px] text-gray-200 hover:bg-black/80"
+                        title="Jump to latest"
+                    >
+                        Jump to latest
+                    </button>
+                )}
                 {mode === 'events' ? (
                     <div className="space-y-1">
                         {(displayEvents.length ? displayEvents : []).map((e, idx) => (

@@ -275,9 +275,25 @@ async def get_container_log_events(
         )
         if limit and limit > 0:
             lim = int(limit)
-            # For call-centric views, prefer the beginning of the call timeline.
+            # For call-centric views, prefer a balanced slice (start + end) so users
+            # see both setup and teardown without extra paging.
             if call_id_norm:
-                events_sorted = events_sorted[:lim]
+                if len(events_sorted) > lim:
+                    head_n = max(1, lim // 2)
+                    tail_n = lim - head_n
+                    head = events_sorted[:head_n]
+                    tail = events_sorted[-tail_n:] if tail_n > 0 else []
+                    seen = set()
+                    merged: List[LogEvent] = []
+                    for e in head + tail:
+                        k = (e.ts, e.level, e.category, e.msg, e.call_id, e.component)
+                        if k in seen:
+                            continue
+                        seen.add(k)
+                        merged.append(e)
+                    events_sorted = merged
+                else:
+                    events_sorted = events_sorted
             else:
                 events_sorted = events_sorted[-lim:]
 

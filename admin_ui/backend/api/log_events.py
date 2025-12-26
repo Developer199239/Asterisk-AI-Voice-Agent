@@ -261,6 +261,24 @@ def _meta_from_event_data(data: Dict[str, Any]) -> Dict[str, str]:
     return meta
 
 
+def _infer_provider_from_component(component: Optional[str]) -> Optional[str]:
+    """
+    Best-effort provider inference when logs don't include `provider=...`.
+    We rely only on existing ai-engine log `component` names.
+    """
+    if not component:
+        return None
+    comp = component.strip()
+    if comp.startswith("src.providers."):
+        # e.g. src.providers.openai_realtime -> openai_realtime
+        rest = comp[len("src.providers.") :]
+        # drop any class/function suffixes if present (rare)
+        rest = rest.split(":", 1)[0]
+        rest = rest.split(".", 1)[0]
+        return rest or None
+    return None
+
+
 def parse_log_line(line: str) -> Optional[Tuple[LogEvent, Dict[str, str]]]:
     raw = strip_ansi(line.rstrip("\n"))
     if not raw.strip():
@@ -308,6 +326,8 @@ def parse_log_line(line: str) -> Optional[Tuple[LogEvent, Dict[str, str]]]:
     pipeline = _first_present(kv, ("pipeline", "pipeline_name"))
     if not component:
         component = kv.get("component") or None
+    if not provider:
+        provider = _infer_provider_from_component(component)
 
     category, milestone = classify_event(msg, component)
     meta = _build_meta(msg, kv)
