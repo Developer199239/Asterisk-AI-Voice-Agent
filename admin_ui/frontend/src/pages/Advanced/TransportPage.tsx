@@ -201,6 +201,19 @@ const TransportPage = () => {
                                     placeholder="18080:18099"
                                     tooltip="Range of UDP ports for concurrent calls (format: start:end, e.g., 18080:18099)."
                                 />
+                                <FormInput
+                                    label="Allowed Remote Hosts"
+                                    value={Array.isArray(externalMediaConfig.allowed_remote_hosts) 
+                                        ? externalMediaConfig.allowed_remote_hosts.join(', ') 
+                                        : (externalMediaConfig.allowed_remote_hosts || '')}
+                                    onChange={(e) => {
+                                        const value = e.target.value.trim();
+                                        const hosts = value ? value.split(',').map(h => h.trim()).filter(h => h) : [];
+                                        updateSectionConfig('external_media', 'allowed_remote_hosts', hosts.length > 0 ? hosts : null);
+                                    }}
+                                    placeholder="e.g., 192.168.1.100, 10.0.0.5"
+                                    tooltip="IP addresses allowed to send RTP packets. Required when ASTERISK_HOST is a hostname. Comma-separated for multiple IPs."
+                                />
                             </div>
 
                             <div className="border-t border-border my-4"></div>

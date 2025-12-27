@@ -11,6 +11,7 @@ interface SetupConfig {
     asterisk_port?: number;
     asterisk_scheme?: string;
     asterisk_app?: string;
+    asterisk_server_ip?: string;  // Required when asterisk_host is a hostname (for RTP security)
     openai_key?: string;
     groq_key?: string;
     deepgram_key?: string;
@@ -53,6 +54,7 @@ const Wizard = () => {
         asterisk_port: 8088,
         asterisk_scheme: 'http',
         asterisk_app: 'asterisk-ai-voice-agent',
+        asterisk_server_ip: '',
         openai_key: '',
         groq_key: '',
         deepgram_key: '',
@@ -85,6 +87,19 @@ const Wizard = () => {
 
     const [showSkipConfirm, setShowSkipConfirm] = useState(false);
     const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'warning' } | null>(null);
+
+    // Helper to detect if asterisk_host is an IP address or hostname
+    const isIPAddress = (host: string): boolean => {
+        if (!host) return false;
+        // IPv4 pattern
+        const ipv4Pattern = /^(\d{1,3}\.){3}\d{1,3}$/;
+        // IPv6 pattern (simplified)
+        const ipv6Pattern = /^([0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}$/;
+        return ipv4Pattern.test(host) || ipv6Pattern.test(host);
+    };
+
+    // Check if hostname is being used (requires server IP for RTP security)
+    const isUsingHostname = !isIPAddress(config.asterisk_host) && config.asterisk_host !== 'localhost';
 
     const showToast = (message: string, type: 'success' | 'error' | 'warning') => {
         setToast({ message, type });
@@ -337,8 +352,19 @@ const Wizard = () => {
             if (!config.asterisk_username) missing.push('ARI username');
             if (!config.asterisk_password) missing.push('ARI password');
 
+            // Require server IP when using hostname (for RTP security)
+            if (isUsingHostname && !config.asterisk_server_ip) {
+                missing.push('Asterisk Server IP (required when using hostname)');
+            }
+
             if (missing.length) {
                 setError(`${missing.join(', ')} ${missing.length === 1 ? 'is' : 'are'} required.`);
+                return;
+            }
+
+            // Validate server IP format if provided
+            if (config.asterisk_server_ip && !isIPAddress(config.asterisk_server_ip)) {
+                setError('Asterisk Server IP must be a valid IP address (e.g., 192.168.1.100)');
                 return;
             }
 
@@ -1629,6 +1655,37 @@ const Wizard = () => {
                                 />
                             </div>
                         </div>
+
+                        {/* Show Server IP field when using hostname for RTP security */}
+                        {isUsingHostname && (
+                            <div className="p-4 rounded-md border border-yellow-500/50 bg-yellow-500/10">
+                                <div className="flex items-start gap-2 mb-3">
+                                    <AlertTriangle className="w-5 h-5 text-yellow-500 mt-0.5" />
+                                    <div>
+                                        <p className="text-sm font-medium text-yellow-500">Remote Asterisk Detected</p>
+                                        <p className="text-xs text-muted-foreground mt-1">
+                                            You're using a hostname ({config.asterisk_host}). For RTP audio security, 
+                                            please enter the actual IP address of your Asterisk server.
+                                        </p>
+                                    </div>
+                                </div>
+                                <div className="space-y-2">
+                                    <label className="text-sm font-medium">Asterisk Server IP Address</label>
+                                    <input
+                                        type="text"
+                                        placeholder="e.g., 192.168.1.100 or 203.0.113.50"
+                                        className="w-full p-2 rounded-md border border-input bg-background"
+                                        value={config.asterisk_server_ip || ''}
+                                        onChange={e => setConfig({ ...config, asterisk_server_ip: e.target.value })}
+                                    />
+                                    <p className="text-xs text-muted-foreground">
+                                        This IP will be used for RTP packet validation (allowed_remote_hosts).
+                                        {config.asterisk_scheme === 'https' && ' Using HTTPS/WSS for secure ARI connection.'}
+                                    </p>
+                                </div>
+                            </div>
+                        )}
+
                         <div className="space-y-2">
                             <label className="text-sm font-medium">ARI Password</label>
                             <input

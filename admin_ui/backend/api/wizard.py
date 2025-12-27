@@ -2238,6 +2238,7 @@ class SetupConfig(BaseModel):
     asterisk_port: int = 8088
     asterisk_scheme: str = "http"
     asterisk_app: str = "asterisk-ai-voice-agent"
+    asterisk_server_ip: Optional[str] = None  # Required when asterisk_host is a hostname (for RTP security)
     openai_key: Optional[str] = None
     groq_key: Optional[str] = None
     deepgram_key: Optional[str] = None
@@ -2532,6 +2533,10 @@ async def save_setup_config(config: SetupConfig):
                 "provider": config.provider if config.provider != "local_hybrid" else "local",
                 "profile": "telephony_ulaw_8k"
             }
+
+            # Set allowed_remote_hosts when using hostname (for RTP security)
+            if config.asterisk_server_ip:
+                yaml_config.setdefault("external_media", {})["allowed_remote_hosts"] = [config.asterisk_server_ip]
 
             atomic_write_text(
                 CONFIG_PATH,
