@@ -1408,18 +1408,6 @@ class Engine:
                 status="connected",
                 start_time=datetime.now(timezone.utc)  # Track call start time (UTC for consistent storage)
             )
-            # Optional dialplan/ops flag: disable auto email summaries for this call (useful for smoke tests).
-            try:
-                resp = await self.ari_client.send_command(
-                    "GET",
-                    f"channels/{caller_channel_id}/variable",
-                    params={"variable": "AI_DISABLE_AUTO_EMAIL_SUMMARY"},
-                )
-                if isinstance(resp, dict):
-                    raw = (resp.get("value") or "").strip().lower()
-                    session.disable_auto_email_summary = raw in ("1", "true", "yes", "on")
-            except Exception:
-                session.disable_auto_email_summary = False
             session.enhanced_vad_enabled = bool(self.vad_manager)
             await self._save_session(session, new=True)
             
@@ -2483,8 +2471,6 @@ class Engine:
             # Auto-send email summary if enabled (before session is removed)
             try:
                 # Auto-trigger email summary if configured and session has conversation history
-                if getattr(session, "disable_auto_email_summary", False):
-                    raise RuntimeError("Auto email summary disabled for this call")
                 email_tool_config = self.config.tools.get('send_email_summary', {})
                 if email_tool_config.get('enabled', False):
                     from src.tools.registry import tool_registry
@@ -2514,10 +2500,7 @@ class Engine:
                             logger.info("📧 Auto-triggered email summary", call_id=call_id)
             except RuntimeError as e:
                 # Session not found is expected in concurrent cleanup scenarios
-                msg = str(e)
-                if "Auto email summary disabled for this call" in msg:
-                    logger.debug("Auto email summary disabled", call_id=call_id)
-                elif "Session not found" in msg:
+                if "Session not found" in str(e):
                     logger.debug(
                         "Email summary skipped - session already cleaned up",
                         call_id=call_id
