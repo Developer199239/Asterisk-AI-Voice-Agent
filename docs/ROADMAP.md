@@ -522,6 +522,14 @@ Keep this roadmap updated after each milestone to help any collaborator—or fut
 
 ### v4.5 Planning (Q1 2026)
 
+**Reality Check (Current State)**:
+
+- **Primary operator workflow**: Admin UI → Call History + Troubleshoot; CLI parity via `agent doctor`, `agent demo`, `agent troubleshoot`.
+- **Observability stance**: Call History–first; `/metrics` is supported but must remain low-cardinality (BYO dashboards; no repo-shipped Prometheus/Grafana stack).
+- **Core runtime**: Asterisk 18+ ARI + Stasis app (`asterisk-ai-voice-agent`), ExternalMedia RTP default; AudioSocket supported; per-call overrides via `AI_PROVIDER` / `AI_AUDIO_PROFILE` / `AI_CONTEXT`.
+- **Providers/pipelines in GA**: full-agent providers (`deepgram`, `openai_realtime`, `google_live`, `elevenlabs_agent`) + modular pipelines (including `local_hybrid`; adapters include Google STT/TTS and ElevenLabs TTS for pipelines).
+- **Change-safety today**: GitHub Actions CI is intentionally scoped to `staging`/`main`; CI validates Python tests + coverage baseline, plus regression hardening checks (CLI/Admin UI build + Docker build sanity). Live Asterisk/PSTN calls are not part of CI by default.
+
 **Testing & Quality**:
 
 - ✅ Unit tests for tool adapters and email tools (111 tests, 27-29% coverage - Milestone 16)
