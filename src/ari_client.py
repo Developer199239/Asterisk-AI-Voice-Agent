@@ -65,7 +65,16 @@ class ARIClient:
 
     async def connect(self):
         """Connect to the ARI WebSocket and establish an HTTP session."""
-        logger.info("Connecting to ARI...", attempt=self._reconnect_attempt + 1)
+        # Log connection details for troubleshooting
+        ws_scheme = "wss" if self.ws_url.startswith("wss://") else "ws"
+        http_scheme = "https" if self.http_url.startswith("https://") else "http"
+        logger.info(
+            "Connecting to ARI...",
+            attempt=self._reconnect_attempt + 1,
+            http_scheme=http_scheme,
+            ws_scheme=ws_scheme,
+            http_url=self.http_url,
+        )
         self._connected = False
         try:
             # First, test HTTP connection to ensure ARI is available
@@ -75,14 +84,14 @@ class ARIClient:
             async with self.http_session.get(f"{self.http_url}/asterisk/info") as response:
                 if response.status != 200:
                     raise ConnectionError(f"Failed to connect to ARI HTTP endpoint. Status: {response.status}")
-                logger.info("Successfully connected to ARI HTTP endpoint.")
+                logger.info("Successfully connected to ARI HTTP endpoint.", scheme=http_scheme)
 
             # Then, connect to the WebSocket
             self.websocket = await websockets.connect(self.ws_url)
             self.running = True
             self._connected = True
             self._reconnect_attempt = 0  # Reset on successful connect
-            logger.info("Successfully connected to ARI WebSocket.")
+            logger.info("Successfully connected to ARI WebSocket.", scheme=ws_scheme)
         except Exception as e:
             self._connected = False
             logger.error("Failed to connect to ARI", error=str(e), attempt=self._reconnect_attempt + 1)
