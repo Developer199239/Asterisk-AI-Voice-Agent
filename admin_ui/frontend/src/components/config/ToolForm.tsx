@@ -85,11 +85,6 @@ const ToolForm = ({ config, onChange }: ToolFormProps) => {
                         onChange={(e) => updateConfig('default_action_timeout', parseInt(e.target.value))}
                         tooltip="Time to wait for tool execution before timing out."
                     />
-                    {config.extensions && (
-                        <div className="text-sm text-muted-foreground">
-                            Extensions (read-only): {Object.keys(config.extensions.internal || {}).length} configured. Edit via YAML for now.
-                        </div>
-                    )}
                 </div>
             </div>
 
