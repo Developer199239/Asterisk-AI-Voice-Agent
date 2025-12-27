@@ -607,16 +607,6 @@ See: `docs/contributing/milestones/milestone-21-call-history.md`
 
 ---
 
-### 🚧 Next (Proposed): Integration Tests + Automated Regression Suite
-
-This is the highest ROI “production hardening” follow-up now that multi-provider + multi-pipeline GA is stable.
-
-- Integration tests for transfer workflows (ARI + tool execution end-to-end, not just unit tests)
-- Automated regression test suite (golden baseline replay + health assertions)
-- CI coverage threshold to 30% then 40% (currently ~27%)
-
----
-
 ### v4.5 Planning (Q1 2026)
 
 **Testing & Quality**:

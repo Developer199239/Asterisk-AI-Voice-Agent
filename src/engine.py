@@ -1104,38 +1104,8 @@ class Engine:
             logger.info("🎯 HYBRID ARI - Processing caller channel", channel_id=channel_id)
             await self._handle_caller_stasis_start_hybrid(channel_id, channel)
         elif self._is_local_channel(channel):
-            # Local channels are normally used as a helper leg (e.g. transfers) and must
-            # be mapped back to a real caller channel. However, for automated smoke tests
-            # (and some controlled dialplan flows), we intentionally originate a Local
-            # channel directly into an AI-agent context. In that case we want to treat
-            # the Local channel itself as the caller so we can inject audio via bridge
-            # playback and validate end-to-end behavior without a human endpoint.
-            dialplan_ctx = (channel.get("dialplan", {}) or {}).get("context", "") or ""
-            local_caller_contexts = {
-                "ava-test",
-                "from-ai-agent-google",
-                "from-ai-agent-deepgram",
-                "from-ai-agent-openai",
-                "from-ai-agent-local",
-                "from-ai-agent-custom",
-                "from-ai-agent-mcp",
-                "from-ai-agent-elevlabs",
-            }
-
-            if dialplan_ctx in local_caller_contexts:
-                # Smoke/dialplan test: treat the Local channel as the caller so we can
-                # inject audio via bridge playback and validate end-to-end behavior
-                # without a registered SIP endpoint.
-                logger.info(
-                    "🎯 HYBRID ARI - Treating Local channel as caller (smoke/dialplan test)",
-                    channel_id=channel_id,
-                    channel_name=channel_name,
-                    context=dialplan_ctx,
-                )
-                await self._handle_caller_stasis_start_hybrid(channel_id, channel)
-                return
-
-            # This is the Local channel entering Stasis - legacy path
+            # Local channels are helper legs (e.g., transfers) and should be mapped back
+            # to a real caller channel.
             logger.info(
                 "🎯 HYBRID ARI - Local channel entered Stasis",
                 channel_id=channel_id,
@@ -1408,18 +1378,6 @@ class Engine:
                 status="connected",
                 start_time=datetime.now(timezone.utc)  # Track call start time (UTC for consistent storage)
             )
-            # Optional dialplan/ops flag: disable auto email summaries for this call (useful for smoke tests).
-            try:
-                resp = await self.ari_client.send_command(
-                    "GET",
-                    f"channels/{caller_channel_id}/variable",
-                    params={"variable": "AI_DISABLE_AUTO_EMAIL_SUMMARY"},
-                )
-                if isinstance(resp, dict):
-                    raw = (resp.get("value") or "").strip().lower()
-                    session.disable_auto_email_summary = raw in ("1", "true", "yes", "on")
-            except Exception:
-                session.disable_auto_email_summary = False
             session.enhanced_vad_enabled = bool(self.vad_manager)
             await self._save_session(session, new=True)
             
@@ -2483,8 +2441,6 @@ class Engine:
             # Auto-send email summary if enabled (before session is removed)
             try:
                 # Auto-trigger email summary if configured and session has conversation history
-                if getattr(session, "disable_auto_email_summary", False):
-                    raise RuntimeError("Auto email summary disabled for this call")
                 email_tool_config = self.config.tools.get('send_email_summary', {})
                 if email_tool_config.get('enabled', False):
                     from src.tools.registry import tool_registry
@@ -2514,10 +2470,7 @@ class Engine:
                             logger.info("📧 Auto-triggered email summary", call_id=call_id)
             except RuntimeError as e:
                 # Session not found is expected in concurrent cleanup scenarios
-                msg = str(e)
-                if "Auto email summary disabled for this call" in msg:
-                    logger.debug("Auto email summary disabled", call_id=call_id)
-                elif "Session not found" in msg:
+                if "Session not found" in str(e):
                     logger.debug(
                         "Email summary skipped - session already cleaned up",
                         call_id=call_id
