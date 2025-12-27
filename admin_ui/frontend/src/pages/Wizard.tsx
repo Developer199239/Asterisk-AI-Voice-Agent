@@ -12,6 +12,7 @@ interface SetupConfig {
     asterisk_scheme?: string;
     asterisk_app?: string;
     asterisk_server_ip?: string;  // Required when asterisk_host is a hostname (for RTP security)
+    asterisk_ssl_verify?: boolean;  // Skip SSL cert verification for self-signed certs
     openai_key?: string;
     groq_key?: string;
     deepgram_key?: string;
@@ -55,6 +56,7 @@ const Wizard = () => {
         asterisk_scheme: 'http',
         asterisk_app: 'asterisk-ai-voice-agent',
         asterisk_server_ip: '',
+        asterisk_ssl_verify: true,
         openai_key: '',
         groq_key: '',
         deepgram_key: '',
@@ -1645,6 +1647,22 @@ const Wizard = () => {
                                     <option value="https">https</option>
                                 </select>
                             </div>
+                            {config.asterisk_scheme === 'https' && (
+                                <div className="space-y-2">
+                                    <label className="flex items-center gap-2 text-sm font-medium cursor-pointer">
+                                        <input
+                                            type="checkbox"
+                                            className="w-4 h-4 rounded border border-input"
+                                            checked={config.asterisk_ssl_verify !== false}
+                                            onChange={e => setConfig({ ...config, asterisk_ssl_verify: e.target.checked })}
+                                        />
+                                        Verify SSL Certificate
+                                    </label>
+                                    <p className="text-xs text-muted-foreground">
+                                        Uncheck for self-signed certificates or IP/hostname mismatches
+                                    </p>
+                                </div>
+                            )}
                             <div className="space-y-2">
                                 <label className="text-sm font-medium">Stasis App Name</label>
                                 <input

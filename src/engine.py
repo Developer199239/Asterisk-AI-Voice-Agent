@@ -189,7 +189,8 @@ class Engine:
             username=config.asterisk.username,
             password=config.asterisk.password,
             base_url=base_url,
-            app_name=config.asterisk.app_name
+            app_name=config.asterisk.app_name,
+            ssl_verify=config.asterisk.ssl_verify
         )
         # Set engine reference for event propagation
         self.ari_client.engine = self

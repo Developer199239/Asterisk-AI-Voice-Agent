@@ -64,6 +64,7 @@ def inject_asterisk_credentials(config_data: Dict[str, Any]) -> None:
     - ASTERISK_HOST (default: 127.0.0.1)
     - ASTERISK_ARI_PORT (default: 8088)
     - ASTERISK_ARI_SCHEME (default: http, use https for WSS)
+    - ASTERISK_ARI_SSL_VERIFY (default: true, set to false to skip SSL cert verification)
     - ASTERISK_ARI_USERNAME or ARI_USERNAME (required)
     - ASTERISK_ARI_PASSWORD or ARI_PASSWORD (required)
     
@@ -74,10 +75,15 @@ def inject_asterisk_credentials(config_data: Dict[str, Any]) -> None:
     """
     asterisk_yaml = (config_data.get('asterisk') or {}) if isinstance(config_data.get('asterisk'), dict) else {}
     
+    # Parse ssl_verify from env (accepts true/false/1/0)
+    ssl_verify_str = os.getenv("ASTERISK_ARI_SSL_VERIFY", "true").lower()
+    ssl_verify = ssl_verify_str not in ("false", "0", "no")
+    
     config_data['asterisk'] = {
         "host": os.getenv("ASTERISK_HOST", "127.0.0.1"),
         "port": int(os.getenv("ASTERISK_ARI_PORT", "8088")),
         "scheme": os.getenv("ASTERISK_ARI_SCHEME", "http"),
+        "ssl_verify": ssl_verify,
         "username": os.getenv("ASTERISK_ARI_USERNAME") or os.getenv("ARI_USERNAME"),
         "password": os.getenv("ASTERISK_ARI_PASSWORD") or os.getenv("ARI_PASSWORD"),
         "app_name": asterisk_yaml.get("app_name", "asterisk-ai-voice-agent")
