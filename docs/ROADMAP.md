@@ -365,24 +365,24 @@ Each milestone includes scope, implementation details, and verification criteria
 
 ## Milestone 17 — Monitoring, Feedback & Guided Setup (Planned)
 
-- **Goal**: Ship an opt-in monitoring + analytics experience that is turnkey, captures per-call transcripts/metrics, and surfaces actionable YAML tuning guidance. Implementation details live in `docs/contributing/milestones/milestone-14-monitoring-stack.md`.
+- **Goal**: Ship an opt-in ops/debugging experience that is **Call History–first** (per-call), with **Troubleshoot** workflows in Admin UI + CLI, and **low-cardinality** Prometheus metrics (optional BYO dashboards). Implementation details live in `docs/contributing/milestones/milestone-14-monitoring-stack.md`.
 - **Dependencies**: Milestones 5–7 in place so streaming telemetry, pipeline metadata, and configuration hot-reload already work.
 - **Workstreams & Tasks**:
   1. **Observability Foundation**
      - Keep `/metrics` strictly low-cardinality (no per-call identifiers like `session_uuid`/`call_id`).
-     - Document a bring-your-own Prometheus/Grafana stack for operators who want time-series monitoring.
+     - Document a bring-your-own metrics stack for operators who want time-series monitoring.
   2. **Call Analytics & Storage**
      - Extend `SessionStore` (or dedicated collector) to emit end-of-call summaries: duration, turn count, fallback/jitter totals, sentiment score placeholder, pipeline + model names.
      - Archive transcripts and the associated config snapshot per call in Call History storage (avoid per-call time-series labels).
      - Publish aggregate Prometheus metrics for recommendations (`ai_agent_setting_recommendation_total{field="streaming.low_watermark_ms"}`) and sentiment/quality trends.
   3. **Recommendations & Feedback Loop**
-     - Implement rule-based analyzer that inspects call summaries and suggests YAML tweaks (buffer warmup, fallback timeouts, pipeline swaps) exposed via Prometheus labels and a lightweight `/feedback/latest` endpoint.
+     - Implement rule-based analyzer that inspects stored call summaries and suggests YAML tweaks (buffer warmup, fallback timeouts, pipeline swaps); surface the output in Admin UI and optionally publish aggregate counts to `/metrics`.
      - Document how to interpret each recommendation and where to edit (`config/ai-agent.yaml`).
   4. **Dashboards & UX**
-     - Curate Grafana dashboards: real-time call board, pipeline/model leaderboards, sentiment timeline, recommendation feed, transcript quick links.
-     - Keep dashboards/provisioning as a bring-your-own workflow (the project no longer ships `monitoring/` assets in the main repo path).
+     - Admin UI is the default UX: Call History + Troubleshoot views for per-call debugging.
+     - Keep dashboards/provisioning as a bring-your-own workflow (the project does not ship `monitoring/` assets in the main repo path).
   5. **Guided Setup for Non-Linux Users**
-     - Deliver a helper script (e.g., `scripts/setup_observability.py`) that checks Docker, prints scrape endpoints, and links to Call History inspection tools/docs.
+     - Deliver helper tooling/docs that print scrape endpoints and link to Call History + Troubleshoot workflows.
      - Update docs/Architecture, Agents.md, `.cursor/…`, `.windsurf/…`, `Gemini.md` to mention the optional workflow.
 - **Acceptance & Fast Verification**:
   - After a call, a Call History entry is created (including transcript/metadata), and the recommendation endpoint lists at least one actionable suggestion referencing YAML keys.
@@ -615,7 +615,8 @@ See: `docs/contributing/milestones/milestone-21-call-history.md`
 - ✅ AudioSocket + Pipeline validation (4-call test suite - Milestone 15)
 - ⏳ Integration tests for transfer workflows (unit tests complete, full workflow pending)
 - 🎯 Increase CI coverage threshold to 30% then 40% (currently 27%)
-- ⏳ Automated regression test suite (foundation in place)
+- ✅ GitHub Actions CI is branch-scoped to `staging`/`main` with a baseline coverage gate (`.github/workflows/ci.yml`)
+- ⏳ Regression hardening workflow for `staging`/`main` merges (extended checks: CLI + Admin UI build + Docker builds) (`.github/workflows/regression-hardening.yml`)
 
 **Admin UI Adoption Readiness** (AAVA-130 - ✅ COMPLETED Dec 2025):
 
@@ -641,8 +642,10 @@ See: `docs/contributing/milestones/milestone-21-call-history.md`
 - ✅ ElevenLabs - elevenlabs_agent provider - IMPLEMENTED (v4.4.1)
 - ✅ Google Cloud Speech - google_stt/google_tts adapters - IMPLEMENTED (src/pipelines/google.py)
 - ✅ ElevenLabs TTS adapter - elevenlabs_tts for pipelines - IMPLEMENTED (AAVA-114)
-- ⏳ Azure Speech Services for STT/TTS
-- ⏳ Anthropic Claude integration for LLM
+- 🚧 Next (Planned): Azure + Claude, after regression hardening
+  - **Azure Speech Services (STT/TTS)**: implement as modular adapters first (pipelines) with streaming support and codec/profile alignment via `TransportOrchestrator`.
+  - **Anthropic Claude (LLM)**: add as a pipeline LLM adapter with tool calling parity and consistent error handling.
+  - **Prerequisite**: expand provider/pipeline contract tests so merges to `staging`/`main` have reliable regression signal without requiring live Asterisk calls.
 
 **Advanced Features**:
 
