@@ -415,6 +415,10 @@ class Engine:
         self.uuidext_to_channel: Dict[str, str] = {}
         # NEW: Caller channel tracking for dual StasisStart handling
         self.pending_local_channels: Dict[str, str] = {}  # local_channel_id -> caller_channel_id
+        # For smoke/dialplan-driven test calls that originate a Local channel directly into
+        # an AI-agent context, track the Local channel "base" so we can treat only one
+        # half as the caller and map the other half as the Local helper leg.
+        self._smoke_local_base_to_caller: Dict[str, str] = {}  # base_name -> caller_channel_id
         self.pending_audiosocket_channels: Dict[str, str] = {}  # audiosocket_channel_id -> caller_channel_id
         self._audio_rx_debug: Dict[str, int] = {}
         self._keepalive_tasks: Dict[str, asyncio.Task] = {}
@@ -1123,6 +1127,31 @@ class Engine:
             }
 
             if dialplan_ctx in local_caller_contexts:
+                # Local channels always have two halves (";1" and ";2"). For smoke calls we
+                # want exactly one CallSession + one call history record. Treat the first
+                # half we see as the caller and map the other half back to it.
+                base_name = (channel_name.split(";", 1)[0] if ";" in channel_name else channel_name) or channel_name
+                suffix = channel_name.rsplit(";", 1)[-1] if ";" in channel_name else ""
+
+                if suffix == "2":
+                    caller_id = self._smoke_local_base_to_caller.get(base_name)
+                    if caller_id and caller_id != channel_id:
+                        self.pending_local_channels[channel_id] = caller_id
+                        logger.info(
+                            "🎯 HYBRID ARI - Smoke Local helper leg mapped",
+                            local_channel_id=channel_id,
+                            caller_channel_id=caller_id,
+                            base=base_name,
+                            context=dialplan_ctx,
+                        )
+                        # Route as a Local helper leg (adds to the caller's bridge).
+                        await self._handle_local_stasis_start_hybrid(channel_id, channel)
+                        # Mapping no longer needed once the helper leg has entered.
+                        self._smoke_local_base_to_caller.pop(base_name, None)
+                        return
+
+                # Caller leg (or fallback if we saw ;2 first)
+                self._smoke_local_base_to_caller.setdefault(base_name, channel_id)
                 logger.info(
                     "🎯 HYBRID ARI - Treating Local channel as caller (smoke/dialplan test)",
                     channel_id=channel_id,
@@ -2422,6 +2451,13 @@ class Engine:
             if session.local_channel_id:
                 self.pending_local_channels.pop(session.local_channel_id, None)
                 self.local_channels.pop(session.caller_channel_id, None)
+            # Smoke Local mapping cleanup (best-effort)
+            try:
+                for base, cid in list(getattr(self, "_smoke_local_base_to_caller", {}).items()):
+                    if cid == call_id:
+                        self._smoke_local_base_to_caller.pop(base, None)
+            except Exception:
+                logger.debug("Smoke Local mapping cleanup failed", call_id=call_id, exc_info=True)
             if session.audiosocket_channel_id:
                 self.pending_audiosocket_channels.pop(session.audiosocket_channel_id, None)
                 self.audiosocket_channels.pop(session.caller_channel_id, None)
