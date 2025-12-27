@@ -2239,6 +2239,7 @@ class SetupConfig(BaseModel):
     asterisk_scheme: str = "http"
     asterisk_app: str = "asterisk-ai-voice-agent"
     asterisk_server_ip: Optional[str] = None  # Required when asterisk_host is a hostname (for RTP security)
+    asterisk_ssl_verify: bool = True  # Set to False to skip SSL certificate verification
     openai_key: Optional[str] = None
     groq_key: Optional[str] = None
     deepgram_key: Optional[str] = None
@@ -2298,6 +2299,7 @@ async def save_setup_config(config: SetupConfig):
             "ASTERISK_ARI_PASSWORD": config.asterisk_password,
             "ASTERISK_ARI_PORT": str(config.asterisk_port),
             "ASTERISK_ARI_SCHEME": config.asterisk_scheme,
+            "ASTERISK_ARI_SSL_VERIFY": "true" if config.asterisk_ssl_verify else "false",
             "ASTERISK_APP_NAME": config.asterisk_app,
             "AI_NAME": config.ai_name,
             "AI_ROLE": config.ai_role,
