@@ -62,6 +62,7 @@ def inject_asterisk_credentials(config_data: Dict[str, Any]) -> None:
     
     Environment variables:
     - ASTERISK_HOST (default: 127.0.0.1)
+    - ASTERISK_ARI_PORT (default: 8088)
     - ASTERISK_ARI_USERNAME or ARI_USERNAME (required)
     - ASTERISK_ARI_PASSWORD or ARI_PASSWORD (required)
     
@@ -74,6 +75,7 @@ def inject_asterisk_credentials(config_data: Dict[str, Any]) -> None:
     
     config_data['asterisk'] = {
         "host": os.getenv("ASTERISK_HOST", "127.0.0.1"),
+        "port": int(os.getenv("ASTERISK_ARI_PORT", "8088")),
         "username": os.getenv("ASTERISK_ARI_USERNAME") or os.getenv("ARI_USERNAME"),
         "password": os.getenv("ASTERISK_ARI_PASSWORD") or os.getenv("ARI_PASSWORD"),
         "app_name": asterisk_yaml.get("app_name", "asterisk-ai-voice-agent")
