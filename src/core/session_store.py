@@ -137,10 +137,12 @@ class SessionStore:
                     session.tts_playing = True
                     session.audio_capture_enabled = False
             
-            logger.info("🔇 TTS GATING - Audio capture disabled (token added)",
+            logger.info("🔇 TTS GATING - Token added",
                        call_id=call_id,
                        playback_id=playback_id,
                        active_count=session.tts_active_count,
+                       audio_capture_enabled=session.audio_capture_enabled,
+                       tts_playing=session.tts_playing,
                        already_present=already_present)
             
             return True
@@ -185,11 +187,12 @@ class SessionStore:
                     session.tts_playing = True
                     session.audio_capture_enabled = False
             
-            logger.info("🔊 TTS GATING - Audio capture enabled (token removed)",
+            logger.info("🔊 TTS GATING - Token removed",
                        call_id=call_id,
                        playback_id=playback_id,
                        active_count=session.tts_active_count,
                        audio_capture_enabled=session.audio_capture_enabled,
+                       tts_playing=session.tts_playing,
                        was_present=was_present)
             
             return True
