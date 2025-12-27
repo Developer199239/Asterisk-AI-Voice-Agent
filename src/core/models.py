@@ -80,6 +80,8 @@ class CallSession:
     # Conversation tracking for email tools
     conversation_history: List[Dict[str, Any]] = field(default_factory=list)
     start_time: Optional[datetime] = None
+    # Ops/testing controls
+    disable_auto_email_summary: bool = False
     
     # Audio capture and TTS gating
     audio_capture_enabled: bool = False
