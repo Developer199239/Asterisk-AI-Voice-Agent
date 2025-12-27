@@ -415,6 +415,13 @@ class Engine:
         self.uuidext_to_channel: Dict[str, str] = {}
         # NEW: Caller channel tracking for dual StasisStart handling
         self.pending_local_channels: Dict[str, str] = {}  # local_channel_id -> caller_channel_id
+        # For smoke/dialplan-driven test calls that originate a Local channel directly into
+        # an AI-agent context, track the Local channel "base" so we can treat only one
+        # half as the caller and map the other half as the Local helper leg.
+        self._smoke_local_base_to_caller: Dict[str, str] = {}  # base_name -> caller_channel_id
+        # Track the non-caller half of the Local channel. In practice, the dialplan side
+        # is typically `;2` (caller leg for our smoke tests) and `;1` is the paired leg.
+        self._smoke_local_base_to_leg1: Dict[str, str] = {}  # base_name -> local_channel_id (leg1)
         self.pending_audiosocket_channels: Dict[str, str] = {}  # audiosocket_channel_id -> caller_channel_id
         self._audio_rx_debug: Dict[str, int] = {}
         self._keepalive_tasks: Dict[str, asyncio.Task] = {}
@@ -1123,9 +1130,39 @@ class Engine:
             }
 
             if dialplan_ctx in local_caller_contexts:
-                # Smoke/dialplan test: treat the Local channel as the caller so we can
-                # inject audio via bridge playback and validate end-to-end behavior
-                # without a registered SIP endpoint.
+                # Local channels always have two halves (";1" and ";2"). For smoke calls we
+                # want exactly one CallSession + one call history record. Treat the first
+                # half we see as the caller and map the other half back to it.
+                base_name = (channel_name.split(";", 1)[0] if ";" in channel_name else channel_name) or channel_name
+                suffix = channel_name.rsplit(";", 1)[-1] if ";" in channel_name else ""
+
+                if suffix == "1":
+                    caller_id = self._smoke_local_base_to_caller.get(base_name)
+                    if caller_id and caller_id != channel_id:
+                        self.pending_local_channels[channel_id] = caller_id
+                        logger.info(
+                            "🎯 HYBRID ARI - Smoke Local helper leg mapped",
+                            local_channel_id=channel_id,
+                            caller_channel_id=caller_id,
+                            base=base_name,
+                            context=dialplan_ctx,
+                        )
+                        await self._handle_local_stasis_start_hybrid(channel_id, channel)
+                        self._smoke_local_base_to_leg1.pop(base_name, None)
+                        return
+
+                    # Park leg1 until the dialplan/caller leg (;2) arrives.
+                    self._smoke_local_base_to_leg1[base_name] = channel_id
+                    logger.info(
+                        "🎯 HYBRID ARI - Smoke Local leg1 parked (waiting for leg2)",
+                        local_channel_id=channel_id,
+                        base=base_name,
+                        context=dialplan_ctx,
+                    )
+                    return
+
+                # Caller leg (prefer ;2 / dialplan side)
+                self._smoke_local_base_to_caller[base_name] = channel_id
                 logger.info(
                     "🎯 HYBRID ARI - Treating Local channel as caller (smoke/dialplan test)",
                     channel_id=channel_id,
@@ -1133,6 +1170,24 @@ class Engine:
                     context=dialplan_ctx,
                 )
                 await self._handle_caller_stasis_start_hybrid(channel_id, channel)
+
+                # If leg1 was parked, join it now as the Local helper leg.
+                leg1_id = self._smoke_local_base_to_leg1.pop(base_name, None)
+                if leg1_id and leg1_id != channel_id:
+                    try:
+                        self.pending_local_channels[leg1_id] = channel_id
+                        await self._handle_local_stasis_start_hybrid(
+                            leg1_id,
+                            {"id": leg1_id, "name": f"{base_name};1", "dialplan": {"context": dialplan_ctx}},
+                        )
+                    except Exception:
+                        logger.debug(
+                            "Smoke Local leg2 join failed",
+                            caller_channel_id=channel_id,
+                            local_channel_id=leg1_id,
+                            context=dialplan_ctx,
+                            exc_info=True,
+                        )
                 return
 
             # This is the Local channel entering Stasis - legacy path
@@ -2425,6 +2480,16 @@ class Engine:
             if session.local_channel_id:
                 self.pending_local_channels.pop(session.local_channel_id, None)
                 self.local_channels.pop(session.caller_channel_id, None)
+            # Smoke Local mapping cleanup (best-effort)
+            try:
+                for base, cid in list(getattr(self, "_smoke_local_base_to_caller", {}).items()):
+                    if cid == call_id:
+                        self._smoke_local_base_to_caller.pop(base, None)
+                for base, cid in list(getattr(self, "_smoke_local_base_to_leg1", {}).items()):
+                    if cid == call_id:
+                        self._smoke_local_base_to_leg1.pop(base, None)
+            except Exception:
+                logger.debug("Smoke Local mapping cleanup failed", call_id=call_id, exc_info=True)
             if session.audiosocket_channel_id:
                 self.pending_audiosocket_channels.pop(session.audiosocket_channel_id, None)
                 self.audiosocket_channels.pop(session.caller_channel_id, None)
