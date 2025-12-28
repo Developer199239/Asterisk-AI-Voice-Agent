@@ -2203,11 +2203,19 @@ async def validate_asterisk_connection(conn: AsteriskConnection):
             else:
                 return {"valid": False, "error": f"Connection failed: HTTP {response.status_code}"}
                 
-    except httpx.ConnectError:
+    except httpx.ConnectError as e:
+        error_str = str(e).lower()
+        # Check for SSL-specific errors
+        if "ssl" in error_str or "certificate" in error_str:
+            return {"valid": False, "error": f"SSL certificate verification failed - uncheck 'Verify SSL Certificate' for self-signed certs or hostname/IP mismatches"}
         return {"valid": False, "error": f"Cannot connect to {conn.host}:{conn.port} - Is Asterisk running?"}
     except httpx.TimeoutException:
         return {"valid": False, "error": "Connection timeout"}
     except Exception as e:
+        error_str = str(e).lower()
+        # Check for SSL-specific errors in generic exceptions
+        if "ssl" in error_str or "certificate" in error_str or "verify" in error_str:
+            return {"valid": False, "error": f"SSL certificate verification failed - uncheck 'Verify SSL Certificate' for self-signed certs or hostname/IP mismatches"}
         return {"valid": False, "error": str(e)}
 
 @router.get("/status")
