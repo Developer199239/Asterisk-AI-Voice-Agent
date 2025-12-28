@@ -291,7 +291,8 @@ const Wizard = () => {
                 username: config.asterisk_username,
                 password: config.asterisk_password,
                 port: config.asterisk_port,
-                scheme: config.asterisk_scheme
+                scheme: config.asterisk_scheme,
+                ssl_verify: config.asterisk_ssl_verify !== false
             });
             if (!res.data.valid) {
                 throw new Error(res.data.error || 'Connection failed');

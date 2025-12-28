@@ -2016,6 +2016,7 @@ class AsteriskConnection(BaseModel):
     password: str
     port: int = 8088
     scheme: str = "http"
+    ssl_verify: bool = True  # Set to False for self-signed certs or IP/hostname mismatches
     app: str = "asterisk-ai-voice-agent"
 
 @router.post("/validate-key")
@@ -2181,7 +2182,10 @@ async def validate_asterisk_connection(conn: AsteriskConnection):
         # Try to connect to ARI interface
         base_url = f"{conn.scheme}://{conn.host}:{conn.port}/ari"
         
-        async with httpx.AsyncClient() as client:
+        # Configure SSL verification (disable for self-signed certs)
+        verify = conn.ssl_verify if conn.scheme == "https" else True
+        
+        async with httpx.AsyncClient(verify=verify) as client:
             response = await client.get(
                 f"{base_url}/asterisk/info",
                 auth=(conn.username, conn.password),
