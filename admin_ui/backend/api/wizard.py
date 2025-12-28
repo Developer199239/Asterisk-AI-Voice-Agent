@@ -2205,18 +2205,37 @@ async def validate_asterisk_connection(conn: AsteriskConnection):
                 
     except httpx.ConnectError as e:
         error_str = str(e).lower()
-        # Check for SSL-specific errors
+        error_detail = str(e)
+        
+        # Categorize SSL errors more precisely
         if "ssl" in error_str or "certificate" in error_str:
-            return {"valid": False, "error": f"SSL certificate verification failed - uncheck 'Verify SSL Certificate' for self-signed certs or hostname/IP mismatches"}
-        return {"valid": False, "error": f"Cannot connect to {conn.host}:{conn.port} - Is Asterisk running?"}
+            # Certificate verification errors (only suggest unchecking if verify is ON)
+            if conn.ssl_verify and ("certificate verify" in error_str or "certificate_verify" in error_str or "self-signed" in error_str or "hostname" in error_str):
+                return {"valid": False, "error": f"SSL certificate verification failed: {error_detail}. Try unchecking 'Verify SSL Certificate' for self-signed certs or hostname mismatches."}
+            # SSL protocol/handshake errors (server may not support HTTPS)
+            elif "record layer" in error_str or "handshake" in error_str or "wrong version" in error_str:
+                return {"valid": False, "error": f"SSL handshake failed: {error_detail}. The server may not support HTTPS on port {conn.port}. Try using 'http' scheme or a different port."}
+            # Generic SSL error - show details
+            else:
+                return {"valid": False, "error": f"SSL error: {error_detail}"}
+        
+        return {"valid": False, "error": f"Cannot connect to {conn.host}:{conn.port} - Is Asterisk running? Details: {error_detail}"}
     except httpx.TimeoutException:
-        return {"valid": False, "error": "Connection timeout"}
+        return {"valid": False, "error": f"Connection timeout to {conn.host}:{conn.port} - Check if the server is reachable and the port is correct."}
     except Exception as e:
         error_str = str(e).lower()
-        # Check for SSL-specific errors in generic exceptions
-        if "ssl" in error_str or "certificate" in error_str or "verify" in error_str:
-            return {"valid": False, "error": f"SSL certificate verification failed - uncheck 'Verify SSL Certificate' for self-signed certs or hostname/IP mismatches"}
-        return {"valid": False, "error": str(e)}
+        error_detail = str(e)
+        
+        # Categorize SSL errors more precisely
+        if "ssl" in error_str or "certificate" in error_str:
+            if conn.ssl_verify and ("certificate verify" in error_str or "self-signed" in error_str):
+                return {"valid": False, "error": f"SSL certificate verification failed: {error_detail}. Try unchecking 'Verify SSL Certificate'."}
+            elif "record layer" in error_str or "handshake" in error_str:
+                return {"valid": False, "error": f"SSL handshake failed: {error_detail}. The server may not support HTTPS on this port."}
+            else:
+                return {"valid": False, "error": f"SSL error: {error_detail}"}
+        
+        return {"valid": False, "error": f"Connection failed: {error_detail}"}
 
 @router.get("/status")
 async def get_setup_status():
