@@ -1,6 +1,6 @@
 # Production Deployment Guide
 
-Best practices and recommendations for deploying Asterisk AI Voice Agent `v4.5+` in production environments.
+Best practices and recommendations for deploying Asterisk AI Voice Agent `v4.6+` in production environments.
 
 ## Overview
 
@@ -325,66 +325,54 @@ Docker offers two primary networking modes with different security and performan
 
 | Mode | Security | Performance | Use Case |
 |------|----------|-------------|----------|
-| **Bridge** (Recommended) | ✅ Higher | Good | Production with port isolation |
-| **Host** | ⚠️ Lower | Best | High-performance or testing |
+| **Host** (Default in `docker-compose.yml`) | ⚠️ Lower | Best | Telephony-first deployments, same-host Asterisk |
+| **Bridge** (Optional) | ✅ Higher | Good | Hardened deployments with explicit port isolation |
 
-**Default Configuration: Bridge Network** (Secure)
+**Default Configuration: Host Network** (Telephony-first)
 
-The default `docker-compose.yml` uses bridge networking with localhost binds:
+The default `docker-compose.yml` uses host networking:
 
 ```yaml
 # docker-compose.yml (default)
 services:
   ai-engine:
-    networks:
-      - ai-network
-    environment:
-      EXTERNAL_MEDIA_RTP_HOST: 127.0.0.1
-      HEALTH_BIND_HOST: 127.0.0.1
-
-networks:
-  ai-network:
-    driver: bridge
+    network_mode: host
 ```
 
 **Benefits**:
-- Services isolated from host network
-- Port mapping explicit and controlled
-- Better security posture
-- Works with firewall rules
+- No port mapping required (simpler for Asterisk integrations)
+- Lowest latency for RTP/telephony paths
+- Fewer “Docker networking surprises” on PBX distros
 
 **Trade-offs**:
-- Requires port mappings
-- Asterisk and AI engine must communicate via mapped ports
-- Slightly more network overhead
+- Reduced container isolation (shared host network namespace)
+- Requires strict firewall rules and access controls
+- Not recommended for multi-tenant environments
 
 ---
 
-**Host Network Mode** (Opt-In Only)
+**Bridge Network Mode** (Opt-In / Advanced)
 
-For high-performance scenarios or when bridge networking isn't suitable:
+For deployments that require explicit port isolation and tighter security posture, use bridge networking (custom compose required):
 
 ```yaml
-# docker-compose.host.yml (opt-in)
+# Example (bridge mode)
 services:
   ai-engine:
-    network_mode: host
-    environment:
-      EXTERNAL_MEDIA_RTP_HOST: 127.0.0.1
-      HEALTH_BIND_HOST: 127.0.0.1
+    ports:
+      - "8090:8090"        # AudioSocket
+      - "18080:18080/udp"  # ExternalMedia RTP
+      - "15000:15000"      # Health
 ```
 
 **When to Use**:
-- Very high call volume (>100 concurrent)
-- Minimizing RTP latency
-- Development/testing environments
-- Same-host Asterisk deployment
+- Environments requiring explicit port isolation
+- Multi-tenant hosts
+- Strict firewall policy requirements
 
 **Security Considerations**:
-- ⚠️ Container shares host network stack
-- ⚠️ All host ports accessible to container
-- ⚠️ Requires strict firewall rules
-- ⚠️ Not recommended for multi-tenant environments
+- Ensure only the required ports are exposed
+- Restrict exposure to the Asterisk IP(s) only
 
 **If Using Host Mode**:
 ```bash
