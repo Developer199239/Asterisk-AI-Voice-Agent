@@ -5,8 +5,10 @@ import { Save, Wrench, AlertCircle, RefreshCw, Loader2 } from 'lucide-react';
 import { ConfigSection } from '../components/ui/ConfigSection';
 import { ConfigCard } from '../components/ui/ConfigCard';
 import ToolForm from '../components/config/ToolForm';
+import { useAuth } from '../auth/AuthContext';
 
 const ToolsPage = () => {
+    const { token } = useAuth();
     const [config, setConfig] = useState<any>({});
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
@@ -32,12 +34,16 @@ const ToolsPage = () => {
     const handleSave = async () => {
         setSaving(true);
         try {
-            await axios.post('/api/config/yaml', { content: yaml.dump(config) });
+            await axios.post('/api/config/yaml', { content: yaml.dump(config) }, {
+                headers: { Authorization: `Bearer ${token}` },
+                timeout: 30000  // 30 second timeout
+            });
             setPendingRestart(true);
             alert('Tools configuration saved successfully');
-        } catch (err) {
+        } catch (err: any) {
             console.error('Failed to save config', err);
-            alert('Failed to save configuration');
+            const detail = err.response?.data?.detail || err.message || 'Unknown error';
+            alert(`Failed to save configuration: ${detail}`);
         } finally {
             setSaving(false);
         }
@@ -46,7 +52,9 @@ const ToolsPage = () => {
     const handleRestartAIEngine = async (force: boolean = false) => {
         setRestartingEngine(true);
         try {
-            const response = await axios.post(`/api/system/containers/ai_engine/restart?force=${force}`);
+            const response = await axios.post(`/api/system/containers/ai_engine/restart?force=${force}`, {}, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
 
             if (response.data.status === 'warning') {
                 const confirmForce = window.confirm(

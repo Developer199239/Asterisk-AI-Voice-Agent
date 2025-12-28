@@ -424,12 +424,19 @@ async def update_env(env_data: Dict[str, Optional[str]]):
         # SECURITY: Track all occurrences so we can remove duplicates that might contain old secrets
         from collections import defaultdict
         key_occurrences = defaultdict(list)  # key -> [line_idx, line_idx, ...]
+        existing_values = {}  # key -> current value (for change detection)
         for i, line in enumerate(lines):
             stripped = line.strip()
             if stripped and not stripped.startswith('#'):
                 if '=' in stripped:
-                    key = stripped.split('=', 1)[0].strip()
+                    key, raw_val = stripped.split('=', 1)
+                    key = key.strip()
                     key_occurrences[key].append(i)
+                    # Parse existing value for change detection (strip quotes)
+                    val = raw_val.strip()
+                    if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
+                        val = val[1:-1]
+                    existing_values[key] = val
 
         # Update existing keys or append new ones
         new_lines = lines.copy()
@@ -454,8 +461,16 @@ async def update_env(env_data: Dict[str, Optional[str]]):
                 keys_to_delete.add(key)
                 continue
             
-            keys_to_update.add(key)
             str_value = str(value)
+            
+            # Only track as changed if value actually differs from existing
+            existing_val = existing_values.get(key)
+            # Normalize for comparison: strip quotes from incoming if present
+            cmp_value = str_value
+            if (cmp_value.startswith('"') and cmp_value.endswith('"')) or (cmp_value.startswith("'") and cmp_value.endswith("'")):
+                cmp_value = cmp_value[1:-1]
+            if existing_val != cmp_value:
+                keys_to_update.add(key)
             
             # Check if value is already properly quoted (from UI round-trip)
             # Don't double-quote values that are already quoted
