@@ -8,7 +8,7 @@ import tempfile
 import sys
 from contextlib import contextmanager
 from pydantic import BaseModel
-from typing import Dict, Any
+from typing import Dict, Any, Optional, Union
 import settings
 
 # A11: Maximum number of backups to keep
@@ -279,10 +279,47 @@ async def update_yaml_config(update: ConfigUpdate):
             os.chmod(temp_path, original_mode)
         
         os.replace(temp_path, settings.CONFIG_PATH)  # Atomic on POSIX
+        
+        # Determine recommended apply method based on what changed
+        # hot_reload: contexts, MCP servers, greetings/instructions only
+        # restart: most YAML changes (providers, pipelines, transport, VAD, etc.)
+        # recreate: .env changes (handled separately in /env endpoint)
+        recommended_method = "restart"  # Default for YAML changes
+        
+        # Check if change is limited to hot-reloadable sections
+        try:
+            old_content = None
+            # Read the backup we just created to compare
+            import glob
+            backups = sorted(glob.glob(f"{settings.CONFIG_PATH}.bak.*"), reverse=True)
+            if backups:
+                with open(backups[0], 'r') as f:
+                    old_content = f.read()
+            
+            if old_content:
+                old_parsed = yaml.safe_load(old_content) or {}
+                new_parsed = yaml.safe_load(update.content) or {}
+                
+                # Keys that can be hot-reloaded
+                hot_reload_keys = {'contexts', 'mcp'}
+                
+                # Check if only hot-reloadable keys changed
+                all_keys = set(old_parsed.keys()) | set(new_parsed.keys())
+                changed_keys = set()
+                for key in all_keys:
+                    if old_parsed.get(key) != new_parsed.get(key):
+                        changed_keys.add(key)
+                
+                if changed_keys and changed_keys.issubset(hot_reload_keys):
+                    recommended_method = "hot_reload"
+        except Exception:
+            pass  # Fall back to restart if comparison fails
+        
         return {
             "status": "success",
-            "restart_required": True,
-            "message": "Configuration saved. Restart AI Engine to apply changes.",
+            "restart_required": recommended_method != "hot_reload",
+            "recommended_apply_method": recommended_method,
+            "message": f"Configuration saved. {'Hot reload' if recommended_method == 'hot_reload' else 'Restart'} AI Engine to apply changes.",
             "warnings": warnings,
         }
     except HTTPException:
@@ -308,28 +345,56 @@ async def get_yaml_config():
 
 @router.get("/env")
 async def get_env_config():
+    """
+    Read .env file and return parsed key-value pairs.
+    Uses dotenv_values for correct parsing of quoted/escaped values.
+    """
     env_vars = {}
     if os.path.exists(settings.ENV_PATH):
         try:
+            # Use dotenv_values for proper parsing of quoted values
+            from dotenv import dotenv_values
+            env_vars = dotenv_values(settings.ENV_PATH)
+            # Convert to regular dict (dotenv_values returns OrderedDict)
+            # and filter out None values (unset keys)
+            env_vars = {k: v for k, v in env_vars.items() if v is not None}
+        except ImportError:
+            # Fallback to manual parsing if python-dotenv not available
             with open(settings.ENV_PATH, 'r') as f:
                 for line in f:
                     line = line.strip()
                     if line and not line.startswith('#'):
-                        key, value = line.split('=', 1)
-                        env_vars[key] = value
+                        if '=' in line:
+                            key, value = line.split('=', 1)
+                            # Strip surrounding quotes if present
+                            value = value.strip()
+                            if (value.startswith('"') and value.endswith('"')) or \
+                               (value.startswith("'") and value.endswith("'")):
+                                value = value[1:-1]
+                            env_vars[key.strip()] = value
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
     return env_vars
 
 @router.post("/env")
-async def update_env(env_data: Dict[str, str]):
+async def update_env(env_data: Dict[str, Optional[str]]):
+    """
+    Update .env file with provided key-value pairs.
+    
+    - Pass a string value to set/update a key
+    - Pass None or "__DELETE__" to remove a key entirely (line is removed, not commented)
+    - Values with spaces, #, quotes, $, etc. are automatically quoted
+    - Already-quoted values from UI are stored as-is (no double-quoting)
+    """
     try:
         # A12: Validate env data before writing
         for key, value in env_data.items():
             if not key or not key.strip():
                 raise HTTPException(status_code=400, detail="Empty key not allowed")
-            if '\n' in key or '\n' in str(value):
-                raise HTTPException(status_code=400, detail=f"Newlines not allowed in key or value: {key}")
+            if value is not None and '\n' in str(value):
+                raise HTTPException(status_code=400, detail=f"Newlines not allowed in value: {key}")
+            if '\n' in key:
+                raise HTTPException(status_code=400, detail=f"Newlines not allowed in key: {key}")
             if '=' in key:
                 raise HTTPException(status_code=400, detail=f"Key cannot contain '=': {key}")
         
@@ -350,14 +415,16 @@ async def update_env(env_data: Dict[str, str]):
             with open(settings.ENV_PATH, 'r') as f:
                 lines = f.readlines()
 
-        # Create a map of keys to line numbers
-        key_line_map = {}
+        # Create a map of keys to ALL their line indices (handles duplicates)
+        # SECURITY: Track all occurrences so we can remove duplicates that might contain old secrets
+        from collections import defaultdict
+        key_occurrences = defaultdict(list)  # key -> [line_idx, line_idx, ...]
         for i, line in enumerate(lines):
-            line = line.strip()
-            if line and not line.startswith('#'):
-                if '=' in line:
-                    key = line.split('=', 1)[0].strip()
-                    key_line_map[key] = i
+            stripped = line.strip()
+            if stripped and not stripped.startswith('#'):
+                if '=' in stripped:
+                    key = stripped.split('=', 1)[0].strip()
+                    key_occurrences[key].append(i)
 
         # Update existing keys or append new ones
         new_lines = lines.copy()
@@ -366,21 +433,74 @@ async def update_env(env_data: Dict[str, str]):
         if new_lines and not new_lines[-1].endswith('\n'):
             new_lines[-1] += '\n'
 
+        # Track keys to delete (value is None or special marker)
+        keys_to_delete = set()
+        # Track keys being updated (to remove duplicate earlier occurrences)
+        keys_to_update = set()
+        
         for key, value in env_data.items():
             # Skip empty keys
             if not key:
                 continue
-                
-            line_content = f"{key}={value}\n"
             
-            if key in key_line_map:
-                # Update existing line
-                new_lines[key_line_map[key]] = line_content
+            # Support deletion: None or special "__DELETE__" marker removes the key
+            # SECURITY: Actually remove the line to avoid leaking old secrets
+            if value is None or value == "__DELETE__":
+                keys_to_delete.add(key)
+                continue
+            
+            keys_to_update.add(key)
+            str_value = str(value)
+            
+            # Check if value is already properly quoted (from UI round-trip)
+            # Don't double-quote values that are already quoted
+            already_quoted = (
+                (str_value.startswith('"') and str_value.endswith('"') and len(str_value) >= 2) or
+                (str_value.startswith("'") and str_value.endswith("'") and len(str_value) >= 2)
+            )
+            
+            if already_quoted:
+                # Value is already quoted, use as-is
+                line_content = f"{key}={str_value}\n"
+            else:
+                # Determine if quoting is needed
+                needs_quoting = (
+                    not str_value or  # Empty string
+                    ' ' in str_value or  # Spaces
+                    '#' in str_value or  # Comments
+                    '"' in str_value or  # Internal quotes need escaping
+                    "'" in str_value or  # Single quotes
+                    '$' in str_value or  # Variable expansion
+                    '`' in str_value or  # Command substitution
+                    '\\' in str_value    # Backslashes
+                )
+                
+                if needs_quoting:
+                    # Escape internal double quotes and backslashes, then wrap in quotes
+                    escaped_value = str_value.replace('\\', '\\\\').replace('"', '\\"')
+                    line_content = f'{key}="{escaped_value}"\n'
+                else:
+                    line_content = f"{key}={str_value}\n"
+            
+            occurrences = key_occurrences.get(key, [])
+            if occurrences:
+                # Update the LAST occurrence, mark earlier ones for removal
+                last_idx = occurrences[-1]
+                new_lines[last_idx] = line_content
+                # SECURITY: Remove all earlier occurrences (may contain old secrets)
+                for idx in occurrences[:-1]:
+                    new_lines[idx] = None  # Mark for removal
             else:
                 # Append new key
                 new_lines.append(line_content)
-                # Update map for subsequent iterations (though not strictly needed for this simple logic)
-                key_line_map[key] = len(new_lines) - 1
+        
+        # SECURITY: Remove ALL occurrences of deleted keys (not just last)
+        for key in keys_to_delete:
+            for idx in key_occurrences.get(key, []):
+                new_lines[idx] = None  # Mark for removal
+        
+        # Filter out removed lines
+        new_lines = [line for line in new_lines if line is not None]
 
         # A8: Atomic write via temp file + rename (preserve permissions)
         dir_path = os.path.dirname(settings.ENV_PATH)
@@ -399,7 +519,14 @@ async def update_env(env_data: Dict[str, str]):
         
         os.replace(temp_path, settings.ENV_PATH)  # Atomic on POSIX
         
-        return {"status": "success"}
+        return {
+            "status": "success",
+            "restart_required": True,
+            "recommended_apply_method": "recreate",
+            "message": "Environment saved. Recreate AI Engine container to apply changes.",
+        }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -440,20 +567,19 @@ async def test_provider_connection(request: ProviderTestRequest):
                 def replace(match):
                     var_name = match.group(1)
                     default_value = match.group(2)
-                    # Check env var first
-                    val = os.getenv(var_name)
-                    if val is not None and val != "":
-                        return val
-                    # Then check .env file (Admin UI backend typically runs without env vars)
+                    # Check .env file FIRST - this has the latest values from UI edits
+                    # The Admin UI container's os.environ may be stale (from container start)
                     val = get_env_key(var_name)
                     if val:
+                        return val
+                    # Fall back to os.environ (for vars not in .env or set at container start)
+                    val = os.getenv(var_name)
+                    if val is not None and val != "":
                         return val
                     # Then check if we have a default value
                     if default_value is not None:
                         return default_value
-                    # If neither, keep original string (or empty?)
-                    # Keeping original helps debug missing vars, but might break URLs.
-                    # Standard behavior would be empty string if no default.
+                    # If neither, return empty string (standard shell behavior)
                     return "" 
                 
                 return re.sub(pattern, replace, item)

@@ -187,6 +187,8 @@ class Engine:
     def __init__(self, config: AppConfig):
         self.config = config
         self._start_time = time.time()  # Track engine start time for uptime
+        self._config_hash = self._compute_config_hash()
+        self._config_loaded_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         base_url = f"{config.asterisk.scheme}://{config.asterisk.host}:{config.asterisk.port}/ari"
         self.ari_client = ARIClient(
             username=config.asterisk.username,
@@ -7464,6 +7466,26 @@ class Engine:
         
         session.music_snoop_channel_id = None
     
+    def _compute_config_hash(self) -> str:
+        """Compute a hash of the current config for pending-changes detection."""
+        import hashlib
+        import json
+        try:
+            # Convert config to dict and hash it
+            if hasattr(self.config, 'model_dump'):
+                config_dict = self.config.model_dump()
+            elif hasattr(self.config, 'dict'):
+                config_dict = self.config.dict()
+            else:
+                config_dict = {}
+            
+            # Create a stable JSON representation (sorted keys)
+            config_json = json.dumps(config_dict, sort_keys=True, default=str)
+            return hashlib.sha256(config_json.encode()).hexdigest()[:16]
+        except Exception as e:
+            logger.debug(f"Failed to compute config hash: {e}")
+            return "unknown"
+    
     @staticmethod
     def _canonicalize_encoding(value: Optional[str]) -> str:
         """Normalize codec tokens to canonical engine values."""
@@ -8856,6 +8878,10 @@ class Engine:
             active_sessions = await self.session_store.get_all_sessions()
             uptime_seconds = int(time.time() - self._start_time)
 
+            # Compute config hash for pending-changes detection
+            config_hash = getattr(self, '_config_hash', None)
+            config_loaded_at = getattr(self, '_config_loaded_at', None)
+            
             payload = {
                 "status": "healthy" if is_ready else "degraded",
                 "ari_connected": ari_connected,
@@ -8866,6 +8892,8 @@ class Engine:
                 "pending_timers": pending_timers,
                 "uptime_seconds": uptime_seconds,
                 "active_playbacks": 0,
+                "config_hash": config_hash,
+                "config_loaded_at": config_loaded_at,
                 "providers": providers_info,
                 "pipelines": pipelines_info,
                 "rtp_server": {},
@@ -8980,6 +9008,9 @@ class Engine:
             # Update config reference
             old_config = self.config
             self.config = new_config
+            # Recompute config hash after reload so health endpoint shows current state
+            self._config_hash = self._compute_config_hash()
+            self._config_loaded_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
             changes.append("Configuration updated")
             
             # Step 3: Reinitialize providers that have changed

@@ -123,14 +123,31 @@ const EnvPage = () => {
         setShowSecrets(prev => ({ ...prev, [key]: !prev[key] }));
     };
 
-    const handleReloadAIEngine = async () => {
+    const handleReloadAIEngine = async (force: boolean = false) => {
         setRestartingEngine(true);
         try {
             // Environment variable changes require a full container restart (not just config reload)
             // because env vars are read at container startup
-            const response = await axios.post('/api/system/containers/ai_engine/restart', {}, {
+            const response = await axios.post(`/api/system/containers/ai_engine/restart?force=${force}`, {}, {
                 headers: { Authorization: `Bearer ${token}` }
             });
+
+            if (response.data.status === 'warning') {
+                const confirmForce = window.confirm(
+                    `${response.data.message}\n\nDo you want to force restart anyway? This may disconnect active calls.`
+                );
+                if (confirmForce) {
+                    setRestartingEngine(false);
+                    return handleReloadAIEngine(true);
+                }
+                return;
+            }
+
+            if (response.data.status === 'degraded') {
+                alert(`AI Engine restarted but may not be fully healthy: ${response.data.output || 'Health check issue'}\n\nPlease verify manually.`);
+                return;
+            }
+
             if (response.data.status === 'success') {
                 setPendingRestart(false);
                 alert('AI Engine restarted! Environment changes are now active.');
