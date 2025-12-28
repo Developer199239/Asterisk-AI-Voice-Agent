@@ -899,22 +899,14 @@ class ARIClient:
             
         Returns:
             Channel information dict or None if failed
-            
-        Note:
-            Uses 'endpoint' parameter with 'UnicastRTP/' prefix for compatibility
-            with both older (Asterisk 13+) and newer Asterisk versions.
         """
         try:
-            # Format endpoint for Asterisk compatibility (works with Asterisk 13+)
-            # Asterisk expects: endpoint=UnicastRTP/host:port
-            endpoint = f"UnicastRTP/{external_host}"
-            
             response = await self.send_command(
                 "POST",
                 "channels/externalMedia",
                 data={
                     "app": app,
-                    "endpoint": endpoint,
+                    "external_host": external_host,
                     "format": format,
                     "direction": direction,
                     "encapsulation": encapsulation
@@ -924,7 +916,7 @@ class ARIClient:
             if response and response.get("id"):
                 logger.info("External Media channel created", 
                            channel_id=response["id"], 
-                           endpoint=endpoint,
+                           external_host=external_host,
                            format=format)
                 return response
             else:
@@ -933,7 +925,7 @@ class ARIClient:
                 
         except Exception as e:
             logger.error("Error creating External Media channel", 
-                        endpoint=f"UnicastRTP/{external_host}", 
+                        external_host=external_host, 
                         error=str(e))
             return None
 
