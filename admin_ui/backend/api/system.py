@@ -1955,6 +1955,7 @@ class AriTestRequest(BaseModel):
     username: str
     password: str
     scheme: str = "http"
+    ssl_verify: bool = True  # Set to False for self-signed certs
 
 
 @router.post("/test-ari")
@@ -1966,7 +1967,10 @@ async def test_ari_connection(request: AriTestRequest):
         # Build ARI URL
         ari_url = f"{request.scheme}://{request.host}:{request.port}/ari/asterisk/info"
         
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        # Configure SSL verification (disable for self-signed certs)
+        verify = request.ssl_verify if request.scheme == "https" else True
+        
+        async with httpx.AsyncClient(timeout=10.0, verify=verify) as client:
             response = await client.get(
                 ari_url,
                 auth=(request.username, request.password)
@@ -1996,7 +2000,14 @@ async def test_ari_connection(request: AriTestRequest):
                     "error": f"Unexpected response: HTTP {response.status_code}"
                 }
                 
-    except httpx.ConnectError:
+    except httpx.ConnectError as e:
+        error_str = str(e).lower()
+        # Check for SSL-specific errors
+        if "ssl" in error_str or "certificate" in error_str:
+            return {
+                "success": False,
+                "error": f"SSL certificate error - try disabling 'Verify SSL Certificate' for self-signed certs. Details: {str(e)}"
+            }
         return {
             "success": False,
             "error": f"Connection refused - is Asterisk running at {request.host}:{request.port}?"
@@ -2007,6 +2018,13 @@ async def test_ari_connection(request: AriTestRequest):
             "error": f"Connection timeout - check if {request.host}:{request.port} is reachable"
         }
     except Exception as e:
+        error_str = str(e).lower()
+        # Check for SSL-specific errors in generic exceptions
+        if "ssl" in error_str or "certificate" in error_str or "verify" in error_str:
+            return {
+                "success": False,
+                "error": f"SSL certificate verification failed - uncheck 'Verify SSL Certificate' for self-signed certs or hostname mismatches. Details: {str(e)}"
+            }
         return {
             "success": False,
             "error": f"Connection failed: {str(e)}"

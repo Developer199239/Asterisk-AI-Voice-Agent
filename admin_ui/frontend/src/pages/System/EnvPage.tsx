@@ -152,7 +152,8 @@ const EnvPage = () => {
                 port: parseInt(env['ASTERISK_ARI_PORT'] || '8088'),
                 username: env['ASTERISK_ARI_USERNAME'] || '',
                 password: env['ASTERISK_ARI_PASSWORD'] || '',
-                scheme: env['ASTERISK_ARI_WEBSOCKET_SCHEME'] === 'wss' ? 'https' : 'http'
+                scheme: env['ASTERISK_ARI_WEBSOCKET_SCHEME'] === 'wss' ? 'https' : 'http',
+                ssl_verify: env['ASTERISK_ARI_SSL_VERIFY'] !== 'false'
             }, {
                 headers: { Authorization: `Bearer ${token}` }
             });
@@ -321,6 +322,22 @@ const EnvPage = () => {
                                 { value: 'wss', label: 'WSS (Encrypted)' },
                             ]}
                         />
+                        {env['ASTERISK_ARI_WEBSOCKET_SCHEME'] === 'wss' && (
+                            <div className="space-y-2">
+                                <label className="flex items-center gap-2 text-sm font-medium cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        className="w-4 h-4 rounded border border-input"
+                                        checked={env['ASTERISK_ARI_SSL_VERIFY'] !== 'false'}
+                                        onChange={(e) => updateEnv('ASTERISK_ARI_SSL_VERIFY', e.target.checked ? 'true' : 'false')}
+                                    />
+                                    Verify SSL Certificate
+                                </label>
+                                <p className="text-xs text-muted-foreground">
+                                    Uncheck for self-signed certificates or IP/hostname mismatches
+                                </p>
+                            </div>
+                        )}
                     </div>
                     
                     {/* Test Connection Button */}
