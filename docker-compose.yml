@@ -46,7 +46,8 @@ services:
       - TZ=${TZ:-America/Phoenix}
       # Enable health endpoint access from other containers (admin-ui needs /sessions/stats)
       - HEALTH_BIND_HOST=0.0.0.0
-      - ASTERISK_HOST=${ASTERISK_HOST:-127.0.0.1}
+      # Note: ASTERISK_HOST is loaded from .env via env_file directive above
+      # Do NOT add ASTERISK_HOST here - it prevents UI env changes from taking effect
     tty: true
     stdin_open: true
     restart: unless-stopped
