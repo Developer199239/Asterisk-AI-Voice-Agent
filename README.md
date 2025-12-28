@@ -12,7 +12,7 @@
 
 The most powerful, flexible open-source AI voice agent for Asterisk/FreePBX. Featuring a **modular pipeline architecture** that lets you mix and match STT, LLM, and TTS providers, plus **5 production-ready golden baselines** validated for enterprise deployment.
 
-[Quick Start](#-quick-start) • [Features](#-features) • [Demo](#-demo) • [Documentation](#-documentation) • [Community](#-community)
+[Quick Start](#-quick-start) • [Features](#-features) • [Demo](#-demo) • [Docs](docs/README.md) • [Community](#-community)
 
 </div>
 
@@ -411,7 +411,7 @@ agent demo                # Demo features
 
 ---
 
-## ⚙️ Configuration
+## ⚙ Configuration
 
 ### Two-File Configuration
 - **[`config/ai-agent.yaml`](config/ai-agent.yaml)** - Golden baseline configs.
@@ -431,7 +431,7 @@ Per-call debugging is handled via **Admin UI → Call History**.
 
 ---
 
-## 🏗️ Project Architecture
+## 🏗 Project Architecture
 
 Two-container architecture for performance and scalability:
 
@@ -487,7 +487,7 @@ The `preflight.sh` script handles initial setup:
 
 ---
 
-## 🗺️ Documentation
+## 🗺 Documentation
 
 ### Getting Started
 - **[Docs Index](docs/README.md)**
