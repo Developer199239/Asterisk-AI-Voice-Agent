@@ -301,7 +301,7 @@ async def update_yaml_config(update: ConfigUpdate):
                 new_parsed = yaml.safe_load(update.content) or {}
                 
                 # Keys that can be hot-reloaded
-                hot_reload_keys = {'contexts', 'mcp'}
+                hot_reload_keys = {'contexts', 'profiles', 'mcp'}
                 
                 # Check if only hot-reloadable keys changed
                 all_keys = set(old_parsed.keys()) | set(new_parsed.keys())
@@ -315,10 +315,15 @@ async def update_yaml_config(update: ConfigUpdate):
         except Exception:
             pass  # Fall back to restart if comparison fails
         
+        apply_plan = ([{"service": "ai-engine", "method": "hot_reload", "endpoint": "/api/system/containers/ai_engine/reload"}]
+                     if recommended_method == "hot_reload"
+                     else [{"service": "ai-engine", "method": "restart", "endpoint": "/api/system/containers/ai_engine/restart"}])
+
         return {
             "status": "success",
             "restart_required": recommended_method != "hot_reload",
             "recommended_apply_method": recommended_method,
+            "apply_plan": apply_plan,
             "message": f"Configuration saved. {'Hot reload' if recommended_method == 'hot_reload' else 'Restart'} AI Engine to apply changes.",
             "warnings": warnings,
         }
@@ -519,11 +524,53 @@ async def update_env(env_data: Dict[str, Optional[str]]):
         
         os.replace(temp_path, settings.ENV_PATH)  # Atomic on POSIX
         
+        changed_keys = sorted(set(keys_to_update) | set(keys_to_delete))
+
+        def _is_prefix(key: str, prefixes: tuple[str, ...]) -> bool:
+            return any(key.startswith(p) for p in prefixes)
+
+        def _ai_engine_env_key(key: str) -> bool:
+            return (
+                _is_prefix(key, ("ASTERISK_", "LOG_", "DIAG_", "CALL_HISTORY_", "HEALTH_"))
+                or key in ("OPENAI_API_KEY", "DEEPGRAM_API_KEY", "GOOGLE_API_KEY", "ELEVENLABS_API_KEY", "ELEVENLABS_AGENT_ID", "TZ", "STREAMING_LOG_LEVEL")
+                or _is_prefix(key, ("AUDIO_TRANSPORT", "DOWNSTREAM_MODE", "AUDIOSOCKET_", "EXTERNAL_MEDIA_", "BARGE_IN_"))
+            )
+
+        def _local_ai_env_key(key: str) -> bool:
+            return (
+                _is_prefix(key, ("LOCAL_", "KROKO_", "FASTER_WHISPER_", "WHISPER_CPP_", "MELOTTS_", "KOKORO_"))
+                or key in ("SHERPA_MODEL_PATH",)
+            )
+
+        def _admin_ui_env_key(key: str) -> bool:
+            return (
+                key in ("JWT_SECRET", "DOCKER_SOCK")
+                or _is_prefix(key, ("UVICORN_", "ADMIN_UI_"))
+            )
+
+        impacts_ai_engine = any(_ai_engine_env_key(k) for k in changed_keys)
+        impacts_local_ai = any(_local_ai_env_key(k) for k in changed_keys)
+        impacts_admin_ui = any(_admin_ui_env_key(k) for k in changed_keys)
+
+        apply_plan = []
+        if impacts_ai_engine:
+            apply_plan.append({"service": "ai-engine", "method": "restart", "endpoint": "/api/system/containers/ai_engine/restart"})
+        if impacts_local_ai:
+            apply_plan.append({"service": "local-ai-server", "method": "restart", "endpoint": "/api/system/containers/local_ai_server/restart"})
+        if impacts_admin_ui:
+            apply_plan.append({"service": "admin-ui", "method": "restart", "endpoint": "/api/system/containers/admin_ui/restart"})
+
+        message = "Environment saved. Restart impacted services to apply changes."
+        if impacts_admin_ui:
+            message += " (Restarting Admin UI will invalidate sessions if JWT_SECRET changed.)"
+
         return {
             "status": "success",
-            "restart_required": True,
+            "restart_required": bool(apply_plan),
             "recommended_apply_method": "recreate",
-            "message": "Environment saved. Recreate AI Engine container to apply changes.",
+            "apply_plan": apply_plan,
+            "changed_keys": changed_keys,
+            "message": message,
         }
     except HTTPException:
         raise
@@ -1019,50 +1066,75 @@ async def import_configuration(file: UploadFile = File(...)):
 def update_yaml_provider_field(provider_name: str, field: str, value: Any) -> bool:
     """
     Update a single field in a provider's YAML config.
-    
-    Args:
-        provider_name: Name of the provider (e.g., 'local')
-        field: Field name to update (e.g., 'stt_backend')
-        value: New value for the field
-        
-    Returns:
-        True if successful, False otherwise
+
+    This helper is used by model-management flows (local-ai sync).
+
+    Safety properties (aligned with update_yaml_config):
+    - Creates a timestamped backup and rotates old backups
+    - Validates resulting YAML against the canonical AppConfig schema
+    - Writes atomically (temp file + rename) and preserves file mode
     """
     try:
         if not os.path.exists(settings.CONFIG_PATH):
             return False
-            
+
         with open(settings.CONFIG_PATH, 'r') as f:
             config = yaml.safe_load(f)
-        
-        if not config:
+
+        if not isinstance(config, dict):
             return False
-            
-        # Ensure providers section exists
-        if 'providers' not in config:
-            config['providers'] = {}
-        
-        # Ensure provider exists
-        if provider_name not in config['providers']:
-            config['providers'][provider_name] = {}
-        
-        # Update the field (allow deletion by passing None)
+
+        providers = config.get('providers')
+        if not isinstance(providers, dict):
+            providers = {}
+        provider_block = providers.get(provider_name)
+        if not isinstance(provider_block, dict):
+            provider_block = {}
+
         if value is None:
-            if isinstance(config['providers'].get(provider_name), dict):
-                config['providers'][provider_name].pop(field, None)
+            provider_block.pop(field, None)
         else:
-            config['providers'][provider_name][field] = value
-        
-        # Write back
-        with open(settings.CONFIG_PATH, 'w') as f:
-            yaml.dump(config, f, default_flow_style=False, sort_keys=False)
-        
+            provider_block[field] = value
+
+        providers[provider_name] = provider_block
+        config['providers'] = providers
+
+        content = yaml.dump(config, default_flow_style=False, sort_keys=False)
+
+        # Validate before writing
+        _validate_ai_agent_config(content)
+
+        # Backup + rotate
+        if os.path.exists(settings.CONFIG_PATH):
+            import datetime
+            timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+            backup_path = f"{settings.CONFIG_PATH}.bak.{timestamp}"
+            with open(settings.CONFIG_PATH, 'r') as src:
+                with open(backup_path, 'w') as dst:
+                    dst.write(src.read())
+            _rotate_backups(settings.CONFIG_PATH)
+
+        # Atomic write (preserve permissions)
+        dir_path = os.path.dirname(settings.CONFIG_PATH)
+        original_mode = os.stat(settings.CONFIG_PATH).st_mode if os.path.exists(settings.CONFIG_PATH) else None
+
+        with tempfile.NamedTemporaryFile('w', dir=dir_path, delete=False, suffix='.tmp') as tf:
+            tf.write(content)
+            temp_path = tf.name
+
+        if original_mode is not None:
+            os.chmod(temp_path, original_mode)
+
+        os.replace(temp_path, settings.CONFIG_PATH)
+
         return True
     except Exception as e:
         print(f"Error updating YAML provider field: {e}")
         return False
 
+
 @router.get("/options/{provider_type}")
+
 async def get_provider_options(provider_type: str):
     """Get available options (models, voices) for a specific provider."""
     

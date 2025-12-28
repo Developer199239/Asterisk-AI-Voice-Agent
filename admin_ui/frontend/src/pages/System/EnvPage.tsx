@@ -52,6 +52,8 @@ const EnvPage = () => {
     const [ariTesting, setAriTesting] = useState(false);
     const [pendingRestart, setPendingRestart] = useState(false);
     const [restartingEngine, setRestartingEngine] = useState(false);
+    const [applyPlan, setApplyPlan] = useState<Array<{ service: string; method: string; endpoint: string }>>([]);
+    const [changedKeys, setChangedKeys] = useState<string[]>([]);
     const [showAdvancedKokoro, setShowAdvancedKokoro] = useState(false);
 
     const [error, setError] = useState<string | null>(null);
@@ -98,11 +100,20 @@ const EnvPage = () => {
 
         setSaving(true);
         try {
-            await axios.post('/api/config/env', env, {
+            const response = await axios.post('/api/config/env', env, {
                 headers: { Authorization: `Bearer ${token}` }
             });
-            setPendingRestart(true);
-            alert('Environment variables saved successfully. Restart AI Engine for changes to take effect.');
+            const plan = (response.data?.apply_plan || []) as Array<{ service: string; method: string; endpoint: string }>;
+            const keys = (response.data?.changed_keys || []) as string[];
+            setApplyPlan(plan);
+            setChangedKeys(keys);
+            setPendingRestart(plan.length > 0);
+            const services = Array.from(new Set(plan.map((p) => p.service))).sort();
+            alert(
+                plan.length > 0
+                    ? `Environment saved. Apply changes by restarting: ${services.join(', ')}`
+                    : 'Environment saved.'
+            );
         } catch (err: any) {
             console.error('Failed to save env', err);
             if (err.response && err.response.status === 401) {
@@ -123,37 +134,59 @@ const EnvPage = () => {
         setShowSecrets(prev => ({ ...prev, [key]: !prev[key] }));
     };
 
-    const handleReloadAIEngine = async (force: boolean = false) => {
+    const handleApplyChanges = async (force: boolean = false) => {
         setRestartingEngine(true);
         try {
-            // Environment variable changes require a full container restart (not just config reload)
-            // because env vars are read at container startup
-            const response = await axios.post(`/api/system/containers/ai_engine/restart?force=${force}`, {}, {
-                headers: { Authorization: `Bearer ${token}` }
-            });
+            // Apply in safe order: local-ai-server → ai-engine → admin-ui
+            const ordered = ['local-ai-server', 'ai-engine', 'admin-ui'];
+            const planByService = new Map(applyPlan.map((p) => [p.service, p]));
 
-            if (response.data.status === 'warning') {
-                const confirmForce = window.confirm(
-                    `${response.data.message}\n\nDo you want to force restart anyway? This may disconnect active calls.`
-                );
-                if (confirmForce) {
-                    setRestartingEngine(false);
-                    return handleReloadAIEngine(true);
+            // Warn if applying includes admin-ui restart (can invalidate sessions)
+            const touchesAdminUI = planByService.has('admin-ui');
+            const jwtChanged = changedKeys.includes('JWT_SECRET');
+            if (touchesAdminUI) {
+                const msg = jwtChanged
+                    ? 'This will restart Admin UI and JWT_SECRET changed. You will be logged out. Continue?'
+                    : 'This will restart Admin UI and may interrupt your session. Continue?';
+                if (!window.confirm(msg)) return;
+            }
+
+            for (const service of ordered) {
+                const step = planByService.get(service);
+                if (!step) continue;
+
+                if (service === 'ai-engine') {
+                    const response = await axios.post(`${step.endpoint}?force=${force}`, {}, {
+                        headers: { Authorization: `Bearer ${token}` }
+                    });
+
+                    if (response.data.status === 'warning') {
+                        const confirmForce = window.confirm(
+                            `${response.data.message}\n\nDo you want to force restart anyway? This may disconnect active calls.`
+                        );
+                        if (confirmForce) {
+                            setRestartingEngine(false);
+                            return handleApplyChanges(true);
+                        }
+                        return;
+                    }
+
+                    if (response.data.status === 'degraded') {
+                        alert(`AI Engine restarted but may not be fully healthy: ${response.data.output || 'Health check issue'}\n\nPlease verify manually.`);
+                        return;
+                    }
+                } else {
+                    await axios.post(step.endpoint, {}, {
+                        headers: { Authorization: `Bearer ${token}` }
+                    });
                 }
-                return;
             }
 
-            if (response.data.status === 'degraded') {
-                alert(`AI Engine restarted but may not be fully healthy: ${response.data.output || 'Health check issue'}\n\nPlease verify manually.`);
-                return;
-            }
-
-            if (response.data.status === 'success') {
-                setPendingRestart(false);
-                alert('AI Engine restarted! Environment changes are now active.');
-            }
+            setPendingRestart(false);
+            setApplyPlan([]);
+            alert('Changes applied.');
         } catch (error: any) {
-            alert(`Failed to restart AI Engine: ${error.response?.data?.detail || error.message}`);
+            alert(`Failed to apply changes: ${error.response?.data?.detail || error.message}`);
         } finally {
             setRestartingEngine(false);
         }
@@ -253,10 +286,12 @@ const EnvPage = () => {
             <div className={`${pendingRestart ? 'bg-orange-500/15 border-orange-500/30' : 'bg-yellow-500/10 border-yellow-500/20'} border text-yellow-600 dark:text-yellow-500 p-4 rounded-md flex items-center justify-between`}>
                 <div className="flex items-center">
                     <AlertCircle className="w-5 h-5 mr-2" />
-                    Changes to environment variables require an AI Engine restart to take effect.
+                    {pendingRestart && applyPlan.length > 0
+                        ? `Pending changes require restart of: ${Array.from(new Set(applyPlan.map((p) => p.service))).sort().join(', ')}`
+                        : 'Changes to environment variables require a service restart to take effect.'}
                 </div>
                 <button
-                    onClick={() => handleReloadAIEngine(false)}
+                    onClick={() => handleApplyChanges(false)}
                     disabled={restartingEngine}
                     className={`flex items-center text-xs px-3 py-1.5 rounded transition-colors ${
                         pendingRestart 
@@ -269,7 +304,7 @@ const EnvPage = () => {
                     ) : (
                         <RefreshCw className="w-3 h-3 mr-1.5" />
                     )}
-                    {restartingEngine ? 'Restarting...' : 'Reload AI Engine'}
+                    {restartingEngine ? 'Applying...' : 'Apply Changes'}
                 </button>
             </div>
             <div className="flex justify-between items-center">

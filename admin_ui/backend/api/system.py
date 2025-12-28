@@ -280,8 +280,8 @@ async def restart_container(container_id: str, force: bool = False):
             }
 
     # NOTE: docker restart does NOT reload env_file changes.
-    # For ai_engine/local_ai_server, prefer force-recreate so updated .env keys apply.
-    if container_name in ("ai_engine", "local_ai_server"):
+    # For ai_engine/local_ai_server/admin_ui, prefer force-recreate so updated .env keys apply.
+    if container_name in ("ai_engine", "local_ai_server", "admin_ui"):
         service_name = service_map.get(container_name, container_name)
         return await _recreate_via_compose(service_name)
     

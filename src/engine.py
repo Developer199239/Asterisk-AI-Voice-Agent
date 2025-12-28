@@ -9012,6 +9012,15 @@ class Engine:
             self._config_hash = self._compute_config_hash()
             self._config_loaded_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
             changes.append("Configuration updated")
+
+            # Step 2b: Rebuild TransportOrchestrator so contexts/profiles changes apply to new calls.
+            # The orchestrator is created once at startup and otherwise holds stale copies of profiles/contexts.
+            try:
+                cfg_dict = new_config.dict() if hasattr(new_config, "dict") else new_config.__dict__
+                self.transport_orchestrator = TransportOrchestrator(cfg_dict)
+                changes.append("TransportOrchestrator rebuilt (profiles/contexts refreshed)")
+            except Exception as e:
+                errors.append(f"Error rebuilding TransportOrchestrator: {str(e)}")
             
             # Step 3: Reinitialize providers that have changed
             try:

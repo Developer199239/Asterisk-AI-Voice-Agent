@@ -443,6 +443,7 @@ async def load_existing_config():
     Used to pre-populate wizard fields if config already exists.
     """
     from dotenv import dotenv_values
+    import re
     
     config = {}
     
@@ -455,7 +456,12 @@ async def load_existing_config():
             "asterisk_password": env_values.get("ASTERISK_ARI_PASSWORD", ""),
             "asterisk_port": int(env_values.get("ASTERISK_ARI_PORT", "8088")),
             "asterisk_scheme": env_values.get("ASTERISK_ARI_SCHEME", "http"),
-            "asterisk_app": env_values.get("ASTERISK_ARI_APP", "asterisk-ai-voice-agent"),
+            # App name is YAML-owned (asterisk.app_name). Keep env fallbacks for legacy setups only.
+            "asterisk_app": (
+                env_values.get("ASTERISK_APP_NAME")
+                or env_values.get("ASTERISK_ARI_APP")
+                or "asterisk-ai-voice-agent"
+            ),
             "openai_key": env_values.get("OPENAI_API_KEY", ""),
             "groq_key": env_values.get("GROQ_API_KEY", ""),
             "deepgram_key": env_values.get("DEEPGRAM_API_KEY", ""),
@@ -468,12 +474,31 @@ async def load_existing_config():
         try:
             with open(CONFIG_PATH, 'r') as f:
                 yaml_config = yaml.safe_load(f)
+
+            # Canonical: app name lives in YAML (asterisk.app_name)
+            asterisk_yaml = (yaml_config.get("asterisk") or {}) if isinstance(yaml_config.get("asterisk"), dict) else {}
+            if asterisk_yaml.get("app_name"):
+                config["asterisk_app"] = asterisk_yaml.get("app_name")
             
             # Get default context settings
             default_ctx = yaml_config.get("contexts", {}).get("default", {})
-            config["ai_name"] = default_ctx.get("ai_name", "Asterisk Agent")
-            config["ai_role"] = default_ctx.get("ai_role", "")
-            config["greeting"] = default_ctx.get("greeting", "")
+            prompt = (default_ctx.get("prompt") or "").strip()
+            greeting = (default_ctx.get("greeting") or "").strip()
+
+            # Wizard stores prompt as: "You are <ai_name>, a <ai_role>. ..."
+            # Best-effort parse to prepopulate ai_name/ai_role without inventing new YAML keys.
+            ai_name = "Asterisk Agent"
+            ai_role = "Helpful Assistant"
+            if prompt:
+                match = re.match(r"^You are\s+(?P<name>[^,]+),\s*a\s+(?P<role>[^.]+)\.", prompt, flags=re.IGNORECASE)
+                if match:
+                    ai_name = (match.group("name") or "").strip() or ai_name
+                    ai_role = (match.group("role") or "").strip() or ai_role
+
+            config["ai_name"] = ai_name
+            config["ai_role"] = ai_role
+            if greeting:
+                config["greeting"] = greeting
             
             # Try to detect provider from config
             if default_ctx.get("provider"):
@@ -2331,7 +2356,6 @@ async def save_setup_config(config: SetupConfig):
             "ASTERISK_ARI_PORT": str(config.asterisk_port),
             "ASTERISK_ARI_SCHEME": config.asterisk_scheme,
             "ASTERISK_ARI_SSL_VERIFY": "true" if config.asterisk_ssl_verify else "false",
-            "ASTERISK_APP_NAME": config.asterisk_app,
             "AI_NAME": config.ai_name,
             "AI_ROLE": config.ai_role,
             "GREETING": config.greeting,
@@ -2566,6 +2590,13 @@ async def save_setup_config(config: SetupConfig):
                 "provider": config.provider if config.provider != "local_hybrid" else "local",
                 "profile": "telephony_ulaw_8k"
             }
+
+            # Canonical: ARI application name is YAML-owned (asterisk.app_name).
+            asterisk_block = yaml_config.get("asterisk")
+            if not isinstance(asterisk_block, dict):
+                asterisk_block = {}
+                yaml_config["asterisk"] = asterisk_block
+            asterisk_block["app_name"] = config.asterisk_app
 
             # Set allowed_remote_hosts when using hostname (for RTP security)
             if config.asterisk_server_ip:
