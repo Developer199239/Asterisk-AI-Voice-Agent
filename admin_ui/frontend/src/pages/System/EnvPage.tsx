@@ -316,7 +316,12 @@ const EnvPage = () => {
                         <FormSelect
                             label="WebSocket Scheme"
                             value={env['ASTERISK_ARI_WEBSOCKET_SCHEME'] || 'ws'}
-                            onChange={(e) => updateEnv('ASTERISK_ARI_WEBSOCKET_SCHEME', e.target.value)}
+                            onChange={(e) => {
+                                const wsScheme = e.target.value;
+                                updateEnv('ASTERISK_ARI_WEBSOCKET_SCHEME', wsScheme);
+                                // Sync HTTP scheme: wss requires https, ws uses http
+                                updateEnv('ASTERISK_ARI_SCHEME', wsScheme === 'wss' ? 'https' : 'http');
+                            }}
                             options={[
                                 { value: 'ws', label: 'WS (Unencrypted)' },
                                 { value: 'wss', label: 'WSS (Encrypted)' },
