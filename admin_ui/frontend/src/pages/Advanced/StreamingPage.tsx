@@ -98,7 +98,7 @@ const StreamingPage = () => {
                     Changes to streaming configurations require an AI Engine restart to take effect.
                 </div>
                 <button
-                    onClick={handleReloadAIEngine}
+                    onClick={() => handleReloadAIEngine(false)}
                     disabled={restartingEngine}
                     className={`flex items-center text-xs px-3 py-1.5 rounded transition-colors ${
                         pendingRestart 
