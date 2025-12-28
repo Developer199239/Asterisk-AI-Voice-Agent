@@ -110,6 +110,20 @@ This performs comprehensive system checks:
 - `1` - Warnings (non-critical issues)
 - `2` - Failures (critical issues)
 
+### Call History DB (if missing or empty)
+
+Call History is stored in a SQLite DB under `./data` on the host (mounted into `ai-engine` as `/app/data`).
+
+Quick checks:
+```bash
+ls -la ./data
+docker compose logs ai-engine | grep -i \"call history\" | tail -n 20
+```
+
+Common fixes:
+- Run `sudo ./preflight.sh --apply-fixes` (creates `./data`, fixes permissions, applies SELinux contexts where applicable).
+- Avoid non-local filesystems for `./data` (some NFS setups can break SQLite locking).
+
 ### Step 2: Analyze Recent Call
 
 ```bash
@@ -177,13 +191,15 @@ audio_transport: audiosocket
 audiosocket:
   host: "0.0.0.0"
   port: 8090
-  format: "slin"
+  format: "ulaw"  # or "slin16"
 
 # For pipelines (hybrid, local_only)
 audio_transport: externalmedia
 external_media:
-  host: "0.0.0.0"
-  base_port: 18000
+  rtp_host: "0.0.0.0"
+  rtp_port: 18080
+  # Optional: allocate per-call RTP ports
+  # port_range: "18080:18099"
 ```
 
 #### Dialplan Not Passing to Stasis

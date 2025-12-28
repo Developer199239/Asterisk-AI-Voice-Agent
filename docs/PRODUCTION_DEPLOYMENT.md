@@ -40,7 +40,7 @@ This guide covers production deployment considerations, security hardening, scal
 
 - [ ] **`.env` file**: All required environment variables set
 - [ ] **`config/ai-agent.yaml`**: Production configuration selected
-- [ ] **Shared Storage**: `/mnt/asterisk_media/ai-generated` configured (for Local Hybrid)
+- [ ] **Shared Storage**: `./asterisk_media/ai-generated` configured (mounted into `ai-engine` as `/mnt/asterisk_media/ai-generated`) (for Local Hybrid)
 - [ ] **Call History**: `./data` volume persisted (default DB: `./data/call_history.db`)
 - [ ] **Monitoring (optional)**: Prometheus scraping `/metrics` (aggregate metrics only)
 
@@ -416,48 +416,44 @@ services:
 
 **Recommended Deployment Patterns**
 
-**Pattern 1: Same Host (Simple)**
+**Pattern 1: Same Host (Default)**
 ```
 ┌─────────────────────────────┐
 │  Single Server              │
 │  ┌────────┐   ┌──────────┐ │
 │  │Asterisk├───┤ai-engine │ │
-│  │        │   │(bridge)  │ │
+│  │        │   │ (host)   │ │
 │  └────────┘   └──────────┘ │
 │  Via: 127.0.0.1             │
 └─────────────────────────────┘
 ```
-- **Network**: Bridge (default)
-- **Binds**: 127.0.0.1 (default)
-- **Security**: Excellent
+- **Network**: Host (default)
+- **Ports**: No port mapping required
+- **Security**: Requires firewall discipline (see section 3.1)
 
-**Pattern 2: Separate Hosts (Secure)**
+**Pattern 2: Separate Hosts (Remote Asterisk)**
 ```
 ┌──────────────┐    Network    ┌──────────────┐
 │ Asterisk     │◄─────────────►│  AI Engine   │
 │ Server       │   Firewall    │  Server      │
-│              │               │  (bridge)    │
+│              │               │  (host)      │
 └──────────────┘               └──────────────┘
 ```
-- **Network**: Bridge
-- **Binds**: 0.0.0.0 (explicit)
-- **Ports**: Mapped (8090, 18080)
+- **Network**: Host
+- **Ports**: Open only what you need (8090/TCP, ExternalMedia UDP ports, health/admin UI as appropriate)
 - **Firewall**: Required
 
-**Pattern 3: High Performance (Advanced)**
+**Pattern 3: Hardened Port Isolation (Advanced)**
 ```
-┌─────────────────────────────┐
-│  High-Performance Server    │
-│  ┌────────┐   ┌──────────┐ │
-│  │Asterisk├───┤ai-engine │ │
-│  │        │   │ (host)   │ │
-│  └────────┘   └──────────┘ │
-│  Network: host mode         │
-└─────────────────────────────┘
+┌──────────────┐    Network    ┌──────────────┐
+│ Asterisk     │◄─────────────►│  AI Engine   │
+│ Server       │   Firewall    │  Server      │
+│              │               │ (bridge)     │
+└──────────────┘               └──────────────┘
 ```
-- **Network**: Host (opt-in)
-- **Binds**: 127.0.0.1 (critical!)
-- **Security**: Requires strict firewall
+- **Network**: Bridge (opt-in)
+- **Ports**: Explicitly mapped (tightest port control)
+- **Security**: Strongest isolation when configured correctly
 
 ---
 
@@ -561,7 +557,7 @@ If you run Prometheus/Grafana, back up their persistent storage per your monitor
 
 **Generated Audio Files** (optional):
 ```
-/mnt/asterisk_media/ai-generated/
+./asterisk_media/ai-generated/  # default host path (mounted as /mnt/asterisk_media/ai-generated in ai-engine)
 ```
 
 **Logs** (for compliance):
@@ -800,7 +796,7 @@ echo
 
 # Disk usage
 echo "Disk Usage:"
-df -h / /mnt/asterisk_media
+df -h . ./asterisk_media
 echo
 
 echo "=== End Health Check ==="
@@ -932,10 +928,10 @@ If handling Protected Health Information (PHI):
 **Audio Retention Policy**:
 ```bash
 # Delete audio files older than 30 days
-find /mnt/asterisk_media/ai-generated -type f -mtime +30 -delete
+find ./asterisk_media/ai-generated -type f -mtime +30 -delete
 
 # Schedule with cron (daily at 3 AM)
-0 3 * * * find /mnt/asterisk_media/ai-generated -type f -mtime +30 -delete
+0 3 * * * find ./asterisk_media/ai-generated -type f -mtime +30 -delete
 ```
 
 ---

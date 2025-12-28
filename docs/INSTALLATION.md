@@ -445,7 +445,7 @@ asterisk -rx "dialplan reload"
   - Check that your API keys in the `.env` file are correct.
 - **Audio Quality Issues**:
   - Confirm AudioSocket is connected (see Asterisk CLI and `ai-engine` logs).
-  - Use a tmpfs for media files (e.g., `/mnt/asterisk_media`) to minimize I/O latency for file-based playback.
+  - Use a tmpfs/SSD for the media volume (default: `./asterisk_media` on host, mounted as `/mnt/asterisk_media` in `ai-engine`) to minimize I/O latency for file-based playback.
   - Verify you are not appending file extensions to ARI `sound:` URIs (Asterisk will add them automatically).
 
 - **No host Python 3 installed (scripts/Makefile)**:

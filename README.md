@@ -21,7 +21,7 @@ The most powerful, flexible open-source AI voice agent for Asterisk/FreePBX. Fea
 ## 📖 Table of Contents
 
 - [🚀 Quick Start](#-quick-start)
-- [🎉 What's New](#-whats-new-in-v453)
+- [🎉 What's New](#-whats-new-in-v460)
 - [🌟 Why Asterisk AI Voice Agent?](#-why-asterisk-ai-voice-agent)
 - [✨ Features](#-features)
 - [🎥 Demo](#-demo)
@@ -460,6 +460,7 @@ The `preflight.sh` script handles initial setup:
 ## 🗺️ Documentation
 
 ### Getting Started
+- **[Docs Index](docs/README.md)**
 - **[FreePBX Integration Guide](docs/FreePBX-Integration-Guide.md)**
 - **[Installation Guide](docs/INSTALLATION.md)**
 

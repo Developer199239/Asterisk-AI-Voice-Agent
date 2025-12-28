@@ -723,6 +723,26 @@ check_directories() {
     # Check data directory (for call history SQLite DB)
     if [ -d "$DATA_DIR" ] && [ -w "$DATA_DIR" ]; then
         log_ok "Data directory: $DATA_DIR"
+        # Best-effort: validate we can create an SQLite file inside the data directory.
+        # Avoid touching the real call_history.db here; use a temp file and delete it.
+        if command -v python3 &>/dev/null; then
+            if python3 - "$DATA_DIR" <<'PY' 2>/dev/null; then
+import os, sqlite3, sys
+data_dir = sys.argv[1]
+path = os.path.join(data_dir, ".call_history_sqlite_test.db")
+conn = sqlite3.connect(path, timeout=1.0)
+conn.execute("CREATE TABLE IF NOT EXISTS __preflight_test (id INTEGER PRIMARY KEY)")
+conn.commit()
+conn.close()
+os.remove(path)
+PY
+                log_ok "Call history DB: writable (SQLite test passed)"
+            else
+                log_warn "Call history DB: may fail (SQLite file test failed)"
+                log_info "  If call history fails at runtime, check container logs for: 'Failed to initialize call history database'"
+                log_info "  Common causes: permissions, SELinux contexts, or non-local filesystems that break SQLite locking"
+            fi
+        fi
     else
         if [ ! -d "$DATA_DIR" ]; then
             if [ "$APPLY_FIXES" = true ]; then
@@ -744,6 +764,7 @@ check_directories() {
             else
                 log_warn "Data directory not writable: $DATA_DIR"
                 log_info "  ⚠️  Call history will NOT be recorded without write access!"
+                log_info "  If you see call history DB errors at runtime, check SELinux contexts and filesystem support for SQLite locks"
                 log_info "  Run: ./preflight.sh --apply-fixes to fix permissions"
                 FIX_CMDS+=("chmod 775 $DATA_DIR")
             fi
