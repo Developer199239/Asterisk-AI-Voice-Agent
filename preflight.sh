@@ -176,38 +176,38 @@ fi
 # ============================================================================
 detect_os() {
     IS_SANGOMA=false
-    
-    # Check for Sangoma/FreePBX first (it's RHEL/CentOS-based)
-    if [ -f /etc/sangoma/pbx ] || [ -f /etc/freepbx.conf ]; then
-        IS_SANGOMA=true
-        OS_ID="sangoma"
-        OS_FAMILY="rhel"  # Sangoma Linux is CentOS 7 based
-    fi
-    
+
+    # Always detect the host OS from /etc/os-release first.
+    # IMPORTANT: FreePBX can run on Debian-family distros; do not override OS detection based on /etc/freepbx.conf.
     if [ -f /etc/os-release ]; then
         . /etc/os-release
-        if [ "$IS_SANGOMA" = false ]; then
-            OS_ID="$ID"
-        fi
+        OS_ID="${ID:-unknown}"
         OS_VERSION="${VERSION_ID:-unknown}"
-        if [ "$IS_SANGOMA" = false ]; then
-            case "$ID" in
-                ubuntu|debian|linuxmint) OS_FAMILY="debian" ;;
-                centos|rhel|rocky|almalinux|fedora|sangoma) OS_FAMILY="rhel" ;;
-            esac
-            # Best-effort: infer family from ID_LIKE for derivatives (e.g., some Debian 12 variants).
-            if [ "$OS_FAMILY" = "unknown" ] && [ -n "${ID_LIKE:-}" ]; then
-                local id_like
-                id_like="$(echo "${ID_LIKE:-}" | tr '[:upper:]' '[:lower:]')"
-                if [[ "$id_like" == *debian* || "$id_like" == *ubuntu* ]]; then
-                    OS_FAMILY="debian"
-                    log_warn "OS family inferred from ID_LIKE ($ID_LIKE) - best-effort support"
-                elif [[ "$id_like" == *rhel* || "$id_like" == *fedora* || "$id_like" == *centos* ]]; then
-                    OS_FAMILY="rhel"
-                    log_warn "OS family inferred from ID_LIKE ($ID_LIKE) - best-effort support"
-                fi
+
+        case "$OS_ID" in
+            ubuntu|debian|linuxmint) OS_FAMILY="debian" ;;
+            centos|rhel|rocky|almalinux|fedora) OS_FAMILY="rhel" ;;
+        esac
+
+        # Best-effort: infer family from ID_LIKE for derivatives (e.g., some Debian 12 variants).
+        if [ "$OS_FAMILY" = "unknown" ] && [ -n "${ID_LIKE:-}" ]; then
+            local id_like
+            id_like="$(echo "${ID_LIKE:-}" | tr '[:upper:]' '[:lower:]')"
+            if [[ "$id_like" == *debian* || "$id_like" == *ubuntu* ]]; then
+                OS_FAMILY="debian"
+                log_warn "OS family inferred from ID_LIKE ($ID_LIKE) - best-effort support"
+            elif [[ "$id_like" == *rhel* || "$id_like" == *fedora* || "$id_like" == *centos* ]]; then
+                OS_FAMILY="rhel"
+                log_warn "OS family inferred from ID_LIKE ($ID_LIKE) - best-effort support"
             fi
         fi
+    fi
+
+    # Sangoma Linux is CentOS 7 based; only treat as "sangoma" when Sangoma markers exist.
+    if [ -f /etc/sangoma/pbx ]; then
+        IS_SANGOMA=true
+        OS_ID="sangoma"
+        OS_FAMILY="rhel"
     fi
     
     # Check architecture (HARD FAIL for non-x86_64)
@@ -305,6 +305,13 @@ install_docker_rhel() {
     # Detect package manager (dnf for RHEL 8+/Fedora, yum for CentOS 7/Sangoma)
     local PKG_MGR="yum"
     local PKG_MGR_CONFIG="yum-config-manager"
+
+    if ! command -v dnf &>/dev/null && ! command -v yum &>/dev/null; then
+        log_fail "No RHEL-family package manager found (dnf/yum missing)"
+        log_info "  Detected OS: $OS_ID $OS_VERSION ($OS_FAMILY family)"
+        log_info "  Install Docker manually: https://docs.docker.com/engine/install/"
+        return 1
+    fi
     
     if command -v dnf &>/dev/null; then
         PKG_MGR="dnf"
@@ -337,9 +344,10 @@ install_docker_rhel() {
     
     # For Sangoma/FreePBX Distro, we need to create the repo manually
     # because the distro version string which Docker doesn't recognize
-    if [ "$OS_ID" = "sangoma" ] || [ -f /etc/sangoma/pbx ]; then
+    if [ "${IS_SANGOMA:-false}" = true ] || [ "$OS_ID" = "sangoma" ] || [ -f /etc/sangoma/pbx ]; then
         log_info "Detected Sangoma/FreePBX - using CentOS 7 Docker repo"
         DOCKER_REPO_VERSION="7"
+        mkdir -p /etc/yum.repos.d
         cat > /etc/yum.repos.d/docker-ce.repo << 'EOF'
 [docker-ce-stable]
 name=Docker CE Stable - $basearch
@@ -664,18 +672,26 @@ docker compose "$@"' > /usr/local/bin/docker-compose
         fi
     elif command -v docker-compose &>/dev/null; then
         COMPOSE_CMD="docker-compose"
-        COMPOSE_VER=$(docker-compose version --short 2>/dev/null | sed 's/^v//')
-        # Compose v1 is HARD FAIL - offer to upgrade
-        log_fail "Docker Compose v1 detected - EOL July 2023, security risk"
-        
-        # Manual install works on all distros (including Sangoma/FreePBX)
-        local MANUAL_COMPOSE_V2_CMD
-        MANUAL_COMPOSE_V2_CMD=$'sudo curl -L \"https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64\" -o /usr/local/bin/docker-compose\nsudo chmod +x /usr/local/bin/docker-compose\nsudo mkdir -p /usr/local/lib/docker/cli-plugins\nsudo ln -sf /usr/local/bin/docker-compose /usr/local/lib/docker/cli-plugins/docker-compose'
-        print_fix_and_docs "$MANUAL_COMPOSE_V2_CMD" "$COMPOSE_AAVA_DOCS_URL"
-        
-        # Add to FIX_CMDS for --apply-fixes
-        FIX_CMDS+=("sudo curl -L 'https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64' -o /usr/local/bin/docker-compose && sudo chmod +x /usr/local/bin/docker-compose && sudo mkdir -p /usr/local/lib/docker/cli-plugins && sudo ln -sf /usr/local/bin/docker-compose /usr/local/lib/docker/cli-plugins/docker-compose")
-        return 1
+        local compose_raw
+        compose_raw="$(docker-compose version --short 2>/dev/null || true)"
+        COMPOSE_VER="$(echo "$compose_raw" | sed 's/^v//')"
+
+        # docker-compose may be either v1 (EOL) or v2 standalone binary.
+        # Only hard-fail on v1.
+        if [[ "$compose_raw" =~ ^v?2\. ]]; then
+            log_ok "Docker Compose: $COMPOSE_VER"
+        else
+            log_fail "Docker Compose v1 detected - EOL July 2023, security risk"
+
+            # Manual install works on all distros (including Sangoma/FreePBX)
+            local MANUAL_COMPOSE_V2_CMD
+            MANUAL_COMPOSE_V2_CMD=$'sudo curl -L \"https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64\" -o /usr/local/bin/docker-compose\nsudo chmod +x /usr/local/bin/docker-compose\nsudo mkdir -p /usr/local/lib/docker/cli-plugins\nsudo ln -sf /usr/local/bin/docker-compose /usr/local/lib/docker/cli-plugins/docker-compose'
+            print_fix_and_docs "$MANUAL_COMPOSE_V2_CMD" "$COMPOSE_AAVA_DOCS_URL"
+
+            # Add to FIX_CMDS for --apply-fixes
+            FIX_CMDS+=("sudo curl -L 'https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64' -o /usr/local/bin/docker-compose && sudo chmod +x /usr/local/bin/docker-compose && sudo mkdir -p /usr/local/lib/docker/cli-plugins && sudo ln -sf /usr/local/bin/docker-compose /usr/local/lib/docker/cli-plugins/docker-compose")
+            return 1
+        fi
     fi
     
     if [ -z "$COMPOSE_CMD" ]; then
