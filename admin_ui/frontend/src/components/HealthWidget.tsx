@@ -457,6 +457,11 @@ export const HealthWidget = () => {
 
                 {health.local_ai_server.status === 'connected' && (
                     <div className="space-y-4">
+                        {health?.local_ai_server?.warning && (
+                            <div className="p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg text-xs text-yellow-700 dark:text-yellow-300">
+                                {String(health.local_ai_server.warning)}
+                            </div>
+                        )}
                         {/* Degraded / mock-mode banner */}
                         {(() => {
                             const degraded = !!health?.local_ai_server?.details?.config?.degraded;
@@ -987,6 +992,11 @@ export const HealthWidget = () => {
 
                 {(health.ai_engine.status === 'connected' || health.ai_engine.status === 'degraded') && (
                     <div className="space-y-6">
+                        {health?.ai_engine?.warning && (
+                            <div className="p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg text-xs text-yellow-700 dark:text-yellow-300">
+                                {String(health.ai_engine.warning)}
+                            </div>
+                        )}
                         {/* ARI Status */}
                         <div className="flex justify-between items-center p-3 bg-muted/30 rounded-lg border border-border/50">
                             <span className="text-sm font-medium text-muted-foreground">ARI Connection</span>
