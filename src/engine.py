@@ -2391,6 +2391,14 @@ class Engine:
         except Exception:
             logger.debug("Failed to save attended transfer completion", call_id=call_id, exc_info=True)
 
+        logger.info(
+            "🔀 ATTENDED TRANSFER COMPLETE - Caller bridged to destination; AI removed from audio",
+            call_id=call_id,
+            destination=destination_description,
+            bridge_id=getattr(session, "bridge_id", None),
+            agent_channel_id=agent_channel_id,
+        )
+
     
     async def _handle_transfer_failed(self, channel_id: str, args: list):
         """
@@ -2778,6 +2786,12 @@ class Engine:
             if not session:
                 session = await self.session_store.get_by_channel_id(channel_or_call_id)
             if not session:
+                # Attended transfer agent leg is a separate SIP channel that is not tracked in SessionStore.
+                # We keep an in-memory mapping so that if either side hangs up, we can clean up the other leg.
+                mapped_call_id = self._attended_transfer_agent_channel_to_call_id.get(channel_or_call_id)
+                if mapped_call_id:
+                    session = await self.session_store.get_by_call_id(mapped_call_id)
+            if not session:
                 logger.debug("No session found during cleanup", identifier=channel_or_call_id)
                 return
 
@@ -3024,6 +3038,17 @@ class Engine:
 
             # Finally remove the session.
             await self.session_store.remove_call(call_id)
+
+            # Best-effort cleanup of attended transfer agent channel mappings for this call.
+            try:
+                stale = [
+                    ch for ch, cid in self._attended_transfer_agent_channel_to_call_id.items()
+                    if cid == call_id
+                ]
+                for ch in stale:
+                    self._unregister_attended_transfer_agent_channel(ch)
+            except Exception:
+                pass
 
             try:
                 self.audio_capture.close_call(call_id)
