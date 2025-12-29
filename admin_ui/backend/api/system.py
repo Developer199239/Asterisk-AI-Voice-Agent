@@ -976,6 +976,12 @@ async def get_system_health():
                             data["kokoro_mode"] = kokoro_mode
                             data["kokoro_voice"] = kokoro_voice
                             
+                            warning = None
+                            if env_uri and uri != env_uri:
+                                warning = (
+                                    f"HEALTH_CHECK_LOCAL_AI_URL is set but unreachable ({env_uri}); "
+                                    f"connected via fallback ({uri})."
+                                )
                             return {
                                 "status": "connected",
                                 "details": data,
@@ -983,6 +989,8 @@ async def get_system_health():
                                     "selected": uri,
                                     "attempted": candidates,
                                 }
+                                ,
+                                "warning": warning,
                             }
                         else:
                             last_error = "Invalid response type"
@@ -1028,6 +1036,12 @@ async def get_system_health():
                         resp = await client.get(url)
                         logger.debug("AI Engine response: %s", resp.status_code)
                         if resp.status_code == 200:
+                            warning = None
+                            if env_url and url != env_url:
+                                warning = (
+                                    f"HEALTH_CHECK_AI_ENGINE_URL is set but unreachable ({env_url}); "
+                                    f"connected via fallback ({url})."
+                                )
                             return {
                                 "status": "connected",
                                 "details": resp.json(),
@@ -1035,6 +1049,8 @@ async def get_system_health():
                                     "selected": url,
                                     "attempted": candidates,
                                 }
+                                ,
+                                "warning": warning,
                             }
                         last_error = f"HTTP {resp.status_code}"
                     except Exception as e:
