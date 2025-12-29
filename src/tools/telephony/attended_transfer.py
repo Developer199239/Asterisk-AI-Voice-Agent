@@ -55,8 +55,21 @@ class AttendedTransferTool(Tool):
 
         transfer_cfg = context.get_config_value("tools.transfer") or {}
         destinations = (transfer_cfg.get("destinations") or {}) if isinstance(transfer_cfg, dict) else {}
-        if destination not in destinations:
-            return {"status": "failed", "message": f"Unknown destination: {destination}"}
+        destination = str(destination).strip()
+        allowed_attended = self._allowed_attended_destinations(destinations)
+        resolved_key = self._resolve_destination_key(destination, destinations, allowed_attended)
+        if not resolved_key:
+            allowed = sorted(allowed_attended.keys())
+            return {
+                "status": "failed",
+                "message": (
+                    f"Unknown destination: {destination}. "
+                    + (f"Allowed attended destinations: {', '.join(allowed)}. " if allowed else "")
+                    + "Use one of the configured destination keys (Tools → Transfer Destinations)."
+                ),
+            }
+
+        destination = resolved_key
 
         dest_cfg = destinations[destination] or {}
         if dest_cfg.get("type") != "extension":
@@ -197,6 +210,84 @@ class AttendedTransferTool(Tool):
             "destination": destination,
             "type": "attended_transfer",
         }
+
+    def _allowed_attended_destinations(self, destinations: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+        allowed: Dict[str, Dict[str, Any]] = {}
+        for key, cfg in (destinations or {}).items():
+            if not isinstance(cfg, dict):
+                continue
+            if cfg.get("type") != "extension":
+                continue
+            if not bool(cfg.get("attended_allowed", False)):
+                continue
+            allowed[str(key)] = cfg
+        return allowed
+
+    def _resolve_destination_key(
+        self,
+        user_value: str,
+        destinations: Dict[str, Any],
+        allowed_attended: Dict[str, Dict[str, Any]],
+    ) -> Optional[str]:
+        # Exact key match.
+        if user_value in destinations:
+            return user_value
+
+        raw = (user_value or "").strip()
+        if not raw:
+            return None
+        raw_lower = raw.lower()
+
+        # Case-insensitive exact key match.
+        for key in destinations.keys():
+            if str(key).lower() == raw_lower:
+                return str(key)
+
+        # Prefer matching only against attended-allowed extension destinations.
+        candidates = allowed_attended if allowed_attended else {
+            str(k): v for k, v in (destinations or {}).items() if isinstance(v, dict)
+        }
+
+        # If user provides an extension number (target), match by target.
+        for key, cfg in candidates.items():
+            target = str(cfg.get("target") or "").strip()
+            if target and (raw == target or raw_lower == target.lower()):
+                return key
+
+        # If user uses common shorthand like "sales"/"support"/"agent", match by key/description.
+        matches = []
+        for key, cfg in candidates.items():
+            key_lower = key.lower()
+            desc_lower = str(cfg.get("description") or "").lower()
+            if raw_lower in key_lower or raw_lower in desc_lower:
+                matches.append(key)
+
+        # Common aliases (non-exhaustive) to reduce first-attempt failures.
+        if not matches:
+            alias_map = {
+                "sales": ["sales"],
+                "support": ["support", "tech"],
+                "agent": ["agent", "human", "representative", "rep", "person", "operator"],
+                "human": ["agent", "human", "representative", "rep", "person", "operator"],
+                "real person": ["agent", "human", "representative", "rep", "person", "operator"],
+                "live agent": ["agent", "human", "representative", "rep", "person", "operator"],
+            }
+            tokens = alias_map.get(raw_lower)
+            if tokens:
+                for key, cfg in candidates.items():
+                    key_lower = key.lower()
+                    desc_lower = str(cfg.get("description") or "").lower()
+                    if any(t in key_lower or t in desc_lower for t in tokens):
+                        matches.append(key)
+
+        # Deterministic: if exactly one match, use it; if multiple, prefer *_agent if present.
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            preferred = [m for m in matches if m.lower().endswith("_agent")]
+            if len(preferred) == 1:
+                return preferred[0]
+        return None
 
     def _resolve_dial_endpoint(
         self,
