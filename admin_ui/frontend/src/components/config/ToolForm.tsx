@@ -8,6 +8,12 @@ interface ToolFormProps {
     onChange: (newConfig: any) => void;
 }
 
+const DEFAULT_ATTENDED_ANNOUNCEMENT_TEMPLATE =
+    "Hi, this is Ava. I'm transferring {caller_display} regarding {context_name}.";
+const DEFAULT_ATTENDED_AGENT_DTMF_PROMPT_TEMPLATE =
+    "Press 1 to accept this transfer, or 2 to decline.";
+const DEFAULT_ATTENDED_CALLER_CONNECTED_PROMPT = "Connecting you now.";
+
 const ToolForm = ({ config, onChange }: ToolFormProps) => {
     const [editingDestination, setEditingDestination] = useState<string | null>(null);
     const [destinationForm, setDestinationForm] = useState<any>({});
@@ -24,6 +30,24 @@ const ToolForm = ({ config, onChange }: ToolFormProps) => {
                 [field]: value
             }
         });
+    };
+
+    const handleAttendedTransferToggle = (enabled: boolean) => {
+        const existing = config.attended_transfer || {};
+        const next: any = { ...existing, enabled };
+        if (enabled) {
+            // Populate sensible defaults out of the box (user can override).
+            if (next.moh_class == null) next.moh_class = 'default';
+            if (next.dial_timeout_seconds == null) next.dial_timeout_seconds = 30;
+            if (next.accept_timeout_seconds == null) next.accept_timeout_seconds = 15;
+            if (next.tts_timeout_seconds == null) next.tts_timeout_seconds = 8;
+            if (next.accept_digit == null) next.accept_digit = '1';
+            if (next.decline_digit == null) next.decline_digit = '2';
+            if (next.announcement_template == null) next.announcement_template = DEFAULT_ATTENDED_ANNOUNCEMENT_TEMPLATE;
+            if (next.agent_accept_prompt_template == null) next.agent_accept_prompt_template = DEFAULT_ATTENDED_AGENT_DTMF_PROMPT_TEMPLATE;
+            if (next.caller_connected_prompt == null) next.caller_connected_prompt = DEFAULT_ATTENDED_CALLER_CONNECTED_PROMPT;
+        }
+        onChange({ ...config, attended_transfer: next });
     };
 
     // Transfer Destinations Management
@@ -154,7 +178,7 @@ const ToolForm = ({ config, onChange }: ToolFormProps) => {
                         label="Attended Transfer (Warm)"
                         description="Warm transfer with MOH, one-way announcement to the agent, and DTMF accept/decline. Requires Local AI Server for TTS."
                         checked={config.attended_transfer?.enabled ?? false}
-                        onChange={(e) => updateNestedConfig('attended_transfer', 'enabled', e.target.checked)}
+                        onChange={(e) => handleAttendedTransferToggle(e.target.checked)}
                         className="mb-0 border-0 p-0 bg-transparent"
                     />
                     {config.attended_transfer?.enabled && (
@@ -205,7 +229,7 @@ const ToolForm = ({ config, onChange }: ToolFormProps) => {
                                 </FormLabel>
                                 <textarea
                                     className="w-full p-3 rounded-md border border-input bg-transparent text-sm min-h-[100px] focus:outline-none focus:ring-1 focus:ring-ring"
-                                    value={config.attended_transfer?.announcement_template || ''}
+                                    value={config.attended_transfer?.announcement_template ?? DEFAULT_ATTENDED_ANNOUNCEMENT_TEMPLATE}
                                     onChange={(e) => updateNestedConfig('attended_transfer', 'announcement_template', e.target.value)}
                                     placeholder="Hi, this is Ava. I'm transferring {caller_display} regarding {context_name}."
                                 />
@@ -217,7 +241,7 @@ const ToolForm = ({ config, onChange }: ToolFormProps) => {
                                 </FormLabel>
                                 <textarea
                                     className="w-full p-3 rounded-md border border-input bg-transparent text-sm min-h-[80px] focus:outline-none focus:ring-1 focus:ring-ring"
-                                    value={config.attended_transfer?.agent_accept_prompt_template || ''}
+                                    value={config.attended_transfer?.agent_accept_prompt_template ?? DEFAULT_ATTENDED_AGENT_DTMF_PROMPT_TEMPLATE}
                                     onChange={(e) => updateNestedConfig('attended_transfer', 'agent_accept_prompt_template', e.target.value)}
                                     placeholder="Press 1 to accept this transfer, or 2 to decline."
                                 />
@@ -225,7 +249,7 @@ const ToolForm = ({ config, onChange }: ToolFormProps) => {
 
                             <FormInput
                                 label="Caller Connected Prompt (Optional)"
-                                value={config.attended_transfer?.caller_connected_prompt || ''}
+                                value={config.attended_transfer?.caller_connected_prompt ?? DEFAULT_ATTENDED_CALLER_CONNECTED_PROMPT}
                                 onChange={(e) => updateNestedConfig('attended_transfer', 'caller_connected_prompt', e.target.value)}
                                 tooltip="Optional phrase spoken to the caller right before bridging to the destination (e.g., 'Connecting you now.')."
                                 placeholder="Connecting you now."

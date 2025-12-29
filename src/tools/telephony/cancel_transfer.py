@@ -68,6 +68,7 @@ class CancelTransferTool(Tool):
             
             action = session.current_action
             channel_id = action.get('channel_id') or action.get('agent_channel_id')
+            engine = getattr(context.ari_client, "engine", None)
             
             # Check if transfer was answered
             # (If we're here and it was answered, the engine would have already
@@ -81,12 +82,18 @@ class CancelTransferTool(Tool):
             # Hangup the transfer channel if it exists
             if channel_id:
                 try:
+                    # If this is an attended transfer agent leg, unregister the in-memory mapping
+                    # BEFORE hanging up so the agent leg teardown doesn't trigger full call cleanup.
+                    if action.get("type") == "attended_transfer" and engine and hasattr(engine, "_unregister_attended_transfer_agent_channel"):
+                        engine._unregister_attended_transfer_agent_channel(channel_id)
+                except Exception:
+                    pass
+                try:
                     await context.ari_client.hangup_channel(channel_id)
                     logger.info(f"Hung up transfer channel: {channel_id}")
                 except Exception as e:
                     logger.warning(f"Failed to hangup transfer channel: {e}")
                 try:
-                    engine = getattr(context.ari_client, "engine", None)
                     if engine and hasattr(engine, "_unregister_attended_transfer_agent_channel"):
                         engine._unregister_attended_transfer_agent_channel(channel_id)
                 except Exception:

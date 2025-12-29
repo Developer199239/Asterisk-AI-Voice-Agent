@@ -1962,6 +1962,8 @@ class Engine:
             await asyncio.sleep(max(0.0, float(timeout_sec)) + 2.0)
             session = await self.session_store.get_by_call_id(call_id)
             if not session:
+                # Session may have already been cleaned up; avoid leaking mappings.
+                self._unregister_attended_transfer_agent_channel(agent_channel_id)
                 return
             action = getattr(session, "current_action", None) or {}
             if action.get("type") != "attended_transfer":
@@ -1969,9 +1971,16 @@ class Engine:
             if str(action.get("agent_channel_id") or "") != str(agent_channel_id):
                 return
             if bool(action.get("answered", False)):
+                # The agent leg has answered; do not unregister mappings here because
+                # we still need DTMF routing and/or hangup supervision for the transfer.
                 return
 
             logger.info("Attended transfer timed out before answer; resuming caller", call_id=call_id, agent_channel_id=agent_channel_id)
+
+            # IMPORTANT: unregister mapping before hanging up the agent leg so that the resulting
+            # ChannelDestroyed/StasisEnd does not get resolved back to the caller session and tear down the call.
+            self._unregister_attended_transfer_agent_channel(agent_channel_id)
+
             try:
                 await self.ari_client.hangup_channel(agent_channel_id)
             except Exception:
@@ -1988,8 +1997,6 @@ class Engine:
             await self._save_session(session)
         except Exception:
             logger.debug("Attended transfer timeout guard failed", call_id=call_id, exc_info=True)
-        finally:
-            self._unregister_attended_transfer_agent_channel(agent_channel_id)
 
     def _unregister_attended_transfer_agent_channel(self, agent_channel_id: str) -> None:
         if agent_channel_id:
@@ -2171,8 +2178,10 @@ class Engine:
                     call_id=caller_id,
                     channel_id=channel_id,
                 )
-                await self.ari_client.hangup_channel(channel_id)
+                # Unregister before hangup to avoid agent-leg teardown being resolved back to the caller
+                # and triggering full call cleanup.
                 self._unregister_attended_transfer_agent_channel(channel_id)
+                await self.ari_client.hangup_channel(channel_id)
                 return
             session.current_action["answered"] = True
             session.current_action["agent_channel_id"] = channel_id
@@ -2218,6 +2227,12 @@ class Engine:
         decline_digit = str(attended_cfg.get("decline_digit", "2") or "2")
         accept_timeout = float(attended_cfg.get("accept_timeout_seconds", 15) or 15)
         tts_timeout = float(attended_cfg.get("tts_timeout_seconds", 8) or 8)
+
+        # Treat blank templates as "use defaults" (UI may persist empty strings).
+        if not announcement_template.strip():
+            announcement_template = "Hi, this is Ava. I'm transferring {caller_display} regarding {context_name}."
+        if not prompt_template.strip():
+            prompt_template = "Press 1 to accept this transfer, or 2 to decline."
 
         try:
             announcement_text = announcement_template.format(**template_vars)
@@ -2294,6 +2309,9 @@ class Engine:
 
     async def _attended_transfer_abort_and_resume(self, session: "CallSession", agent_channel_id: str, *, reason: str) -> None:
         call_id = session.call_id
+        # IMPORTANT: unregister mapping before hanging up the agent leg so that the resulting
+        # ChannelDestroyed/StasisEnd does not get resolved back to the caller session and tear down the call.
+        self._unregister_attended_transfer_agent_channel(agent_channel_id)
         try:
             await self.ari_client.hangup_channel(agent_channel_id)
         except Exception:
@@ -2315,6 +2333,7 @@ class Engine:
         except Exception:
             logger.debug("Failed to resume caller after attended transfer abort", call_id=call_id, reason=reason, exc_info=True)
         finally:
+            # Idempotent safety: ensure mapping is removed even if we returned early.
             self._unregister_attended_transfer_agent_channel(agent_channel_id)
 
     async def _attended_transfer_finalize_bridge(
@@ -2375,7 +2394,6 @@ class Engine:
             await self.ari_client.add_channel_to_bridge(session.bridge_id, agent_channel_id)
         except Exception:
             logger.error("Failed to bridge agent channel during attended transfer", call_id=call_id, agent_channel_id=agent_channel_id, exc_info=True)
-            await self.ari_client.hangup_channel(agent_channel_id)
             await self._attended_transfer_abort_and_resume(session, agent_channel_id, reason="bridge-failed")
             return
 
