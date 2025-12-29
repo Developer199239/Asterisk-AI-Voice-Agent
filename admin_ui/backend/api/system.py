@@ -910,6 +910,16 @@ async def get_system_health():
     """
     Aggregate health status from Local AI Server and AI Engine.
     """
+    def _dedupe_preserve_order(items: List[str]) -> List[str]:
+        seen = set()
+        out: List[str] = []
+        for item in items:
+            if not item or item in seen:
+                continue
+            seen.add(item)
+            out.append(item)
+        return out
+
     async def check_local_ai():
         try:
             import websockets
@@ -917,85 +927,134 @@ async def get_system_health():
             import asyncio
             from settings import get_setting
             
-            # With host networking, use localhost instead of container name
-            uri = os.getenv("HEALTH_CHECK_LOCAL_AI_URL", "ws://127.0.0.1:8765")
-            logger.debug("Checking Local AI at %s", uri)
-            async with websockets.connect(uri, open_timeout=5) as websocket:
-                logger.debug("Local AI connected, sending status...")
-                auth_token = (get_setting("LOCAL_WS_AUTH_TOKEN", os.getenv("LOCAL_WS_AUTH_TOKEN", "")) or "").strip()
-                if auth_token:
-                    await websocket.send(json.dumps({"type": "auth", "auth_token": auth_token}))
-                    raw = await asyncio.wait_for(websocket.recv(), timeout=5)
-                    auth_data = json.loads(raw)
-                    if auth_data.get("type") != "auth_response" or auth_data.get("status") != "ok":
-                        raise RuntimeError(f"Local AI auth failed: {auth_data}")
-                await websocket.send(json.dumps({"type": "status"}))
-                logger.debug("Local AI sent, waiting for response...")
-                response = await asyncio.wait_for(websocket.recv(), timeout=5)
-                logger.debug("Local AI response: %s...", response[:100])
-                data = json.loads(response)
-                if data.get("type") == "status_response":
-                    # Prefer explicit fields from local-ai-server (v2 protocol), fallback to heuristics.
-                    kroko = data.get("kroko") or {}
-                    kokoro = data.get("kokoro") or {}
+            env_uri = (os.getenv("HEALTH_CHECK_LOCAL_AI_URL") or "").strip()
+            candidates = _dedupe_preserve_order([
+                env_uri,
+                "ws://127.0.0.1:8765",
+                "ws://local_ai_server:8765",
+                "ws://local-ai-server:8765",
+                "ws://host.docker.internal:8765",
+            ])
 
-                    kroko_embedded = bool(kroko.get("embedded", False))
-                    kroko_port = kroko.get("port")
+            last_error: Optional[str] = None
+            for uri in candidates:
+                logger.debug("Checking Local AI at %s", uri)
+                try:
+                    async with websockets.connect(uri, open_timeout=2.5) as websocket:
+                        logger.debug("Local AI connected, sending status...")
+                        auth_token = (get_setting("LOCAL_WS_AUTH_TOKEN", os.getenv("LOCAL_WS_AUTH_TOKEN", "")) or "").strip()
+                        if auth_token:
+                            await websocket.send(json.dumps({"type": "auth", "auth_token": auth_token}))
+                            raw = await asyncio.wait_for(websocket.recv(), timeout=5)
+                            auth_data = json.loads(raw)
+                            if auth_data.get("type") != "auth_response" or auth_data.get("status") != "ok":
+                                raise RuntimeError(f"Local AI auth failed: {auth_data}")
+                        await websocket.send(json.dumps({"type": "status"}))
+                        logger.debug("Local AI sent, waiting for response...")
+                        response = await asyncio.wait_for(websocket.recv(), timeout=5)
+                        logger.debug("Local AI response: %s...", response[:100])
+                        data = json.loads(response)
+                        if data.get("type") == "status_response":
+                            # Prefer explicit fields from local-ai-server (v2 protocol), fallback to heuristics.
+                            kroko = data.get("kroko") or {}
+                            kokoro = data.get("kokoro") or {}
 
-                    kokoro_mode = (kokoro.get("mode") or "local").lower()
-                    kokoro_voice = kokoro.get("voice")
+                            kroko_embedded = bool(kroko.get("embedded", False))
+                            kroko_port = kroko.get("port")
 
-                    # Back-compat for older payloads that didn't include structured metadata
-                    if not kokoro_voice:
-                        tts_display = data.get("models", {}).get("tts", {}).get("display") or ""
-                        if "(" in tts_display and ")" in tts_display:
-                            kokoro_voice = tts_display.split("(")[1].rstrip(")")
+                            kokoro_mode = (kokoro.get("mode") or "local").lower()
+                            kokoro_voice = kokoro.get("voice")
 
-                    data["kroko_embedded"] = kroko_embedded
-                    data["kroko_port"] = kroko_port
-                    data["kokoro_mode"] = kokoro_mode
-                    data["kokoro_voice"] = kokoro_voice
-                    
-                    return {
-                        "status": "connected",
-                        "details": data
-                    }
-                else:
-                    return {
-                        "status": "error",
-                        "details": {"error": "Invalid response type"}
-                    }
+                            # Back-compat for older payloads that didn't include structured metadata
+                            if not kokoro_voice:
+                                tts_display = data.get("models", {}).get("tts", {}).get("display") or ""
+                                if "(" in tts_display and ")" in tts_display:
+                                    kokoro_voice = tts_display.split("(")[1].rstrip(")")
+
+                            data["kroko_embedded"] = kroko_embedded
+                            data["kroko_port"] = kroko_port
+                            data["kokoro_mode"] = kokoro_mode
+                            data["kokoro_voice"] = kokoro_voice
+                            
+                            return {
+                                "status": "connected",
+                                "details": data,
+                                "probe": {
+                                    "selected": uri,
+                                    "attempted": candidates,
+                                }
+                            }
+                        else:
+                            last_error = "Invalid response type"
+                except Exception as e:
+                    last_error = f"{type(e).__name__}: {str(e)}"
+                    continue
+
+            return {
+                "status": "error",
+                "details": {"error": last_error or "Unreachable"},
+                "probe": {
+                    "selected": None,
+                    "attempted": candidates,
+                    "error": last_error or "Unreachable",
+                }
+            }
         except Exception as e:
             logger.debug("Local AI Check Error: %s: %s", type(e).__name__, str(e))
             return {
                 "status": "error",
-                "details": {"error": f"{type(e).__name__}: {str(e)}"}
+                "details": {"error": f"{type(e).__name__}: {str(e)}"},
             }
 
     async def check_ai_engine():
         try:
             import httpx
-            # With host networking, use localhost instead of container name
-            url = os.getenv("HEALTH_CHECK_AI_ENGINE_URL", "http://127.0.0.1:15000/health")
-            logger.debug("Checking AI Engine at %s", url)
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.get(url)
-                logger.debug("AI Engine response: %s", resp.status_code)
-                if resp.status_code == 200:
-                    return {
-                        "status": "connected",
-                        "details": resp.json()
-                    }
-                else:
-                    return {
-                        "status": "error",
-                        "details": {"status_code": resp.status_code}
-                    }
+            env_url = (os.getenv("HEALTH_CHECK_AI_ENGINE_URL") or "").strip()
+            candidates = _dedupe_preserve_order([
+                env_url,
+                "http://127.0.0.1:15000/health",
+                "http://ai_engine:15000/health",
+                "http://ai-engine:15000/health",
+                "http://host.docker.internal:15000/health",
+            ])
+
+            timeout = httpx.Timeout(5.0, connect=1.5)
+            last_error: Optional[str] = None
+
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                for url in candidates:
+                    logger.debug("Checking AI Engine at %s", url)
+                    try:
+                        resp = await client.get(url)
+                        logger.debug("AI Engine response: %s", resp.status_code)
+                        if resp.status_code == 200:
+                            return {
+                                "status": "connected",
+                                "details": resp.json(),
+                                "probe": {
+                                    "selected": url,
+                                    "attempted": candidates,
+                                }
+                            }
+                        last_error = f"HTTP {resp.status_code}"
+                    except Exception as e:
+                        last_error = f"{type(e).__name__}: {str(e)}"
+                        continue
+
+            return {
+                "status": "error",
+                "details": {"error": last_error or "Unreachable"},
+                "probe": {
+                    "selected": None,
+                    "attempted": candidates,
+                    "error": last_error or "Unreachable",
+                }
+            }
         except Exception as e:
             logger.debug("AI Engine Check Error: %s: %s", type(e).__name__, str(e))
             return {
                 "status": "error",
-                "details": {"error": f"{type(e).__name__}: {str(e)}"}
+                "details": {"error": f"{type(e).__name__}: {str(e)}"},
             }
 
     import asyncio
@@ -1402,6 +1461,7 @@ def _detect_docker():
         "message": "Docker not detected",
         "socket_present": os.path.exists("/var/run/docker.sock"),
         "cli_present": shutil.which("docker") is not None,
+        "is_docker_desktop": False,
     }
     
     try:
@@ -1412,6 +1472,17 @@ def _detect_docker():
         docker_info["api_version"] = version_info.get("ApiVersion", "unknown")
         docker_info["status"] = "ok"
         docker_info["message"] = None
+
+        # Docker Desktop / Engine metadata (helps Tier-3 messaging)
+        try:
+            info = client.info()
+            operating_system = info.get("OperatingSystem") or ""
+            docker_info["operating_system"] = operating_system or None
+            docker_info["engine_arch"] = info.get("Architecture") or None
+            docker_info["os_type"] = info.get("OSType") or None
+            docker_info["is_docker_desktop"] = "Docker Desktop" in operating_system
+        except Exception:
+            pass
         
         # Check version
         try:
@@ -1713,13 +1784,22 @@ def _build_checks(os_info, docker_info, compose_info, selinux_info, dir_info, as
     
     # Architecture check
     if os_info["arch"] != "x86_64":
-        checks.append({
-            "id": "architecture",
-            "status": "error",
-            "message": f"Unsupported architecture: {os_info['arch']} (x86_64 required)",
-            "blocking": True,
-            "action": None
-        })
+        if docker_info.get("is_docker_desktop"):
+            checks.append({
+                "id": "architecture",
+                "status": "warning",
+                "message": f"Architecture: {os_info['arch']} (Tier 3 best-effort on Docker Desktop; production requires x86_64 Linux)",
+                "blocking": False,
+                "action": None
+            })
+        else:
+            checks.append({
+                "id": "architecture",
+                "status": "error",
+                "message": f"Unsupported architecture: {os_info['arch']} (x86_64 required)",
+                "blocking": True,
+                "action": None
+            })
     else:
         checks.append({
             "id": "architecture",
@@ -1727,6 +1807,20 @@ def _build_checks(os_info, docker_info, compose_info, selinux_info, dir_info, as
             "message": f"Architecture: {os_info['arch']}",
             "blocking": False,
             "action": None
+        })
+
+    # Tier 3 note (Docker Desktop): common source of confusion is "running but not reachable" due to networking differences.
+    if docker_info.get("is_docker_desktop"):
+        checks.append({
+            "id": "tier3_docker_desktop",
+            "status": "warning",
+            "message": "Docker Desktop detected (Tier 3 best-effort). If services are running but show as unreachable, set HEALTH_CHECK_* URLs and ensure DOCKER_SOCK is correct.",
+            "blocking": False,
+            "action": {
+                "type": "link",
+                "label": "Troubleshooting (Tier 3 / Docker Desktop)",
+                "value": _github_docs_url("docs/TROUBLESHOOTING_GUIDE.md"),
+            }
         })
     
     # OS EOL check

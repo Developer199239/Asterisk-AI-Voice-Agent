@@ -425,7 +425,15 @@ export const HealthWidget = () => {
                 {health.local_ai_server.status === 'error' && (
                     <div className="mt-4 p-4 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
                         <p className="text-sm text-yellow-600 dark:text-yellow-400 mb-3">
-                            Local AI Server is not running. Start it to use local STT/TTS models.
+                            Local AI Server is not reachable from Admin UI. The container may still be running.
+                        </p>
+                        {health?.local_ai_server?.details?.error && (
+                            <div className="mb-3 text-xs text-muted-foreground break-words">
+                                <span className="font-mono">{String(health.local_ai_server.details.error)}</span>
+                            </div>
+                        )}
+                        <p className="text-xs text-muted-foreground mb-3">
+                            Tier 3/best-effort hosts may require custom health URLs. Set <span className="font-mono">HEALTH_CHECK_LOCAL_AI_URL</span> and <span className="font-mono">HEALTH_CHECK_AI_ENGINE_URL</span> in <span className="font-mono">.env</span> (see Env page).
                         </p>
                         <button
                             onClick={() => handleStartContainer('local_ai_server', setStartingLocalAI)}
@@ -947,7 +955,15 @@ export const HealthWidget = () => {
                 {health.ai_engine.status === 'error' && (
                     <div className="mt-4 p-4 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
                         <p className="text-sm text-yellow-600 dark:text-yellow-400 mb-3">
-                            AI Engine is not running. Start it to handle voice calls.
+                            AI Engine is not reachable from Admin UI. The container may still be running.
+                        </p>
+                        {health?.ai_engine?.details?.error && (
+                            <div className="mb-3 text-xs text-muted-foreground break-words">
+                                <span className="font-mono">{String(health.ai_engine.details.error)}</span>
+                            </div>
+                        )}
+                        <p className="text-xs text-muted-foreground mb-3">
+                            Tier 3/best-effort hosts may require custom health URLs. Set <span className="font-mono">HEALTH_CHECK_AI_ENGINE_URL</span> in <span className="font-mono">.env</span> (see Env page).
                         </p>
                         <button
                             onClick={() => handleStartContainer('ai_engine', setStartingAIEngine)}

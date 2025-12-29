@@ -124,6 +124,39 @@ Common fixes:
 - Run `sudo ./preflight.sh --apply-fixes` (creates `./data`, fixes permissions, applies SELinux contexts where applicable).
 - Avoid non-local filesystems for `./data` (some NFS setups can break SQLite locking).
 
+### Admin UI Shows “AI Engine/Local AI Server Error” But Containers Are Running (Tier 3 / Best-effort)
+
+This is most common on Tier 3 hosts (Docker Desktop, Podman, unsupported distros) where:
+- the Admin UI can’t reach the Docker API socket, and/or
+- the Admin UI health probes are using URLs that aren’t reachable from inside the `admin_ui` container.
+
+Quick checks:
+```bash
+docker compose ps
+```
+
+If container control (start/stop/restart) fails from the UI:
+- Ensure the Docker socket is mounted and set in `.env` (varies by host):
+  - Docker Desktop: `DOCKER_SOCK=/var/run/docker.sock`
+  - Rootless Docker/Podman: often `DOCKER_SOCK=/run/user/<uid>/docker.sock`
+- Then recreate the Admin UI container so the mount updates:
+```bash
+docker compose up -d --force-recreate admin-ui
+```
+
+If containers are running but the UI shows “unreachable”:
+- Set explicit health probe URLs in `.env` (values must be reachable from `admin_ui`):
+```bash
+HEALTH_CHECK_AI_ENGINE_URL=http://ai_engine:15000/health
+HEALTH_CHECK_LOCAL_AI_URL=ws://local_ai_server:8765
+```
+
+Notes:
+- The **Local AI Server is optional** unless you plan to use local STT/TTS models.
+- If you run **bridge networking** and want Local AI Server reachable across containers, set:
+  - `LOCAL_WS_HOST=0.0.0.0`
+  - `LOCAL_WS_AUTH_TOKEN=...` (required; server refuses to start if exposed without auth)
+
 ### Step 2: Analyze Recent Call
 
 ```bash
