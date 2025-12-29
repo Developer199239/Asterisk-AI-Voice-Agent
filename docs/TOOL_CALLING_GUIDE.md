@@ -170,6 +170,7 @@ AI: "Transferring you to Sales team ring group now."
 - Destination must press **DTMF** to accept/decline:
   - Default: `1 = accept`, `2 = decline`, timeout = decline.
 - On accept: AI audio is removed and the engine bridges **caller ↔ destination** directly.
+- On decline/timeout: MOH stops and the AI resumes with the caller (optionally plays a short “unable to transfer” prompt).
 - Engine remains alive as a passive bridge supervisor until hangup.
 
 **Key constraints**:
@@ -337,6 +338,7 @@ tools:
     announcement_template: "Hi, this is Ava. I'm transferring {caller_display} regarding {context_name}."
     agent_accept_prompt_template: "Press 1 to accept this transfer, or 2 to decline."
     caller_connected_prompt: "Connecting you now."  # Optional
+    caller_declined_prompt: "I’m not able to complete that transfer right now. Would you like me to take a message?"  # Optional
 
   # ----------------------------------------------------------------------------
   # CANCEL_TRANSFER - Cancel in-progress transfer
