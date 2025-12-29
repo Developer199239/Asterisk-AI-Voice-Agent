@@ -2320,6 +2320,36 @@ class Engine:
             await self.ari_client.send_command(method="DELETE", resource=f"channels/{session.caller_channel_id}/moh")
         except Exception:
             pass
+
+        # Optional: play a short caller-facing prompt on decline/timeout so the call doesn't feel "dead".
+        try:
+            tools_cfg = getattr(self.config, "tools", {}) or {}
+            attended_cfg = tools_cfg.get("attended_transfer") if isinstance(tools_cfg, dict) else None
+            if isinstance(attended_cfg, dict) and reason in {"declined", "timeout", "no-answer", "dial-timeout"}:
+                caller_prompt = str(
+                    attended_cfg.get(
+                        "caller_declined_prompt",
+                        "I’m not able to complete that transfer right now. Would you like me to take a message, or is there anything else I can help with?",
+                    )
+                    or ""
+                )
+                tts_timeout = float(attended_cfg.get("tts_timeout_seconds", 8) or 8)
+                if caller_prompt.strip():
+                    # Keep capture disabled while we play this prompt so we don't feed it back into STT.
+                    try:
+                        session.audio_capture_enabled = False
+                    except Exception:
+                        pass
+                    prompt_audio = await self._local_ai_server_tts(call_id=call_id, text=caller_prompt.strip(), timeout_sec=tts_timeout)
+                    if prompt_audio:
+                        await self._play_ulaw_bytes_on_channel_and_wait(
+                            channel_id=session.caller_channel_id,
+                            audio_bytes=prompt_audio,
+                            playback_id_prefix="attx-decline",
+                            timeout_sec=max(3.0, float(tts_timeout) * 4),
+                        )
+        except Exception:
+            logger.debug("Failed to play attended transfer decline prompt", call_id=call_id, reason=reason, exc_info=True)
         try:
             session = await self.session_store.get_by_call_id(call_id) or session
             if session.current_action and session.current_action.get("type") == "attended_transfer":

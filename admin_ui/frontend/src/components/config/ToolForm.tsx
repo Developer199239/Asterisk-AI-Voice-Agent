@@ -13,6 +13,8 @@ const DEFAULT_ATTENDED_ANNOUNCEMENT_TEMPLATE =
 const DEFAULT_ATTENDED_AGENT_DTMF_PROMPT_TEMPLATE =
     "Press 1 to accept this transfer, or 2 to decline.";
 const DEFAULT_ATTENDED_CALLER_CONNECTED_PROMPT = "Connecting you now.";
+const DEFAULT_ATTENDED_CALLER_DECLINED_PROMPT =
+    "I’m not able to complete that transfer right now. Would you like me to take a message, or is there anything else I can help with?";
 
 const ToolForm = ({ config, onChange }: ToolFormProps) => {
     const [editingDestination, setEditingDestination] = useState<string | null>(null);
@@ -46,6 +48,7 @@ const ToolForm = ({ config, onChange }: ToolFormProps) => {
             if (next.announcement_template == null) next.announcement_template = DEFAULT_ATTENDED_ANNOUNCEMENT_TEMPLATE;
             if (next.agent_accept_prompt_template == null) next.agent_accept_prompt_template = DEFAULT_ATTENDED_AGENT_DTMF_PROMPT_TEMPLATE;
             if (next.caller_connected_prompt == null) next.caller_connected_prompt = DEFAULT_ATTENDED_CALLER_CONNECTED_PROMPT;
+            if (next.caller_declined_prompt == null) next.caller_declined_prompt = DEFAULT_ATTENDED_CALLER_DECLINED_PROMPT;
         }
         onChange({ ...config, attended_transfer: next });
     };
@@ -253,6 +256,14 @@ const ToolForm = ({ config, onChange }: ToolFormProps) => {
                                 onChange={(e) => updateNestedConfig('attended_transfer', 'caller_connected_prompt', e.target.value)}
                                 tooltip="Optional phrase spoken to the caller right before bridging to the destination (e.g., 'Connecting you now.')."
                                 placeholder="Connecting you now."
+                            />
+
+                            <FormInput
+                                label="Caller Declined Prompt (Optional)"
+                                value={config.attended_transfer?.caller_declined_prompt ?? DEFAULT_ATTENDED_CALLER_DECLINED_PROMPT}
+                                onChange={(e) => updateNestedConfig('attended_transfer', 'caller_declined_prompt', e.target.value)}
+                                tooltip="Spoken to the caller when the destination declines or the attended transfer times out (keeps the conversation moving)."
+                                placeholder="I’m not able to complete that transfer right now. Would you like me to take a message?"
                             />
                         </div>
                     )}
