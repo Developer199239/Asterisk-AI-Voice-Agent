@@ -679,7 +679,8 @@ docker compose "$@"' > /usr/local/bin/docker-compose
         # docker-compose may be either v1 (EOL) or v2 standalone binary.
         # Only hard-fail on v1.
         if [[ "$compose_raw" =~ ^v?2\. ]]; then
-            log_ok "Docker Compose: $COMPOSE_VER"
+            # v2 standalone binary - OK. Version validation happens below.
+            :
         else
             log_fail "Docker Compose v1 detected - EOL July 2023, security risk"
 
