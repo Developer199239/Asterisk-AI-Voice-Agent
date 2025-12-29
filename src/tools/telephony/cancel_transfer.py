@@ -93,11 +93,6 @@ class CancelTransferTool(Tool):
                     logger.info(f"Hung up transfer channel: {channel_id}")
                 except Exception as e:
                     logger.warning(f"Failed to hangup transfer channel: {e}")
-                try:
-                    if engine and hasattr(engine, "_unregister_attended_transfer_agent_channel"):
-                        engine._unregister_attended_transfer_agent_channel(channel_id)
-                except Exception:
-                    pass
             
             # Stop MOH on caller
             try:

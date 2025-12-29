@@ -2216,16 +2216,24 @@ class Engine:
             or ""
         )
         prompt_template = str(
-            attended_cfg.get(
-                "agent_accept_prompt_template",
-                "Press 1 to accept this transfer, or 2 to decline.",
+            (
+                attended_cfg.get("agent_accept_prompt_template")
+                if "agent_accept_prompt_template" in attended_cfg
+                else attended_cfg.get("agent_accept_prompt")
             )
-            or ""
+            or "Press 1 to accept this transfer, or 2 to decline."
         )
         caller_connected_prompt = str(attended_cfg.get("caller_connected_prompt", "") or "")
         accept_digit = str(attended_cfg.get("accept_digit", "1") or "1")
         decline_digit = str(attended_cfg.get("decline_digit", "2") or "2")
-        accept_timeout = float(attended_cfg.get("accept_timeout_seconds", 15) or 15)
+        accept_timeout = float(
+            (
+                attended_cfg.get("accept_timeout_seconds")
+                if "accept_timeout_seconds" in attended_cfg
+                else attended_cfg.get("agent_accept_timeout_seconds", 15)
+            )
+            or 15
+        )
         tts_timeout = float(attended_cfg.get("tts_timeout_seconds", 8) or 8)
 
         # Treat blank templates as "use defaults" (UI may persist empty strings).

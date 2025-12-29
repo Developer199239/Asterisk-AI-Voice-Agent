@@ -177,6 +177,7 @@ AI: "Transferring you to Sales team ring group now."
 - This tool is separate from `transfer`; it does **not** change existing transfer behavior.
 - Only supported for `type: extension` destinations.
 - Requires **Local AI Server** (announcement/prompt TTS is mandatory).
+- Config compatibility: `agent_accept_prompt_template` is the canonical key; `agent_accept_prompt` is accepted as a legacy alias.
 
 **How destination selection works**:
 - The tool parameter is `destination` and it maps to a key under `tools.transfer.destinations`.
