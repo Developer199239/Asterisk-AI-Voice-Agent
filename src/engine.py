@@ -2870,7 +2870,28 @@ class Engine:
                     logger.debug("Bridge destroy failed", call_id=call_id, bridge_id=bridge_id, exc_info=True)
 
             # Hang up RTP and supporting channels (always)
-            for channel_id in filter(None, [session.local_channel_id, session.external_media_id, session.audiosocket_channel_id]):
+            action_channels = []
+            try:
+                action = getattr(session, "current_action", None) or {}
+                if isinstance(action, dict):
+                    # Attended transfer agent leg (separate SIP channel in Stasis)
+                    if action.get("agent_channel_id"):
+                        action_channels.append(str(action.get("agent_channel_id")))
+                    # Legacy warm transfer path used `channel_id`
+                    if action.get("channel_id"):
+                        action_channels.append(str(action.get("channel_id")))
+            except Exception:
+                action_channels = []
+
+            for channel_id in filter(
+                None,
+                [
+                    session.local_channel_id,
+                    session.external_media_id,
+                    session.audiosocket_channel_id,
+                    *action_channels,
+                ],
+            ):
                 try:
                     await self.ari_client.hangup_channel(channel_id)
                 except Exception:
