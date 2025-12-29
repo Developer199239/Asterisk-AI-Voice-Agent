@@ -12,6 +12,28 @@ from services.fs import upsert_env_vars
 logger = logging.getLogger(__name__)
 
 
+def _dotenv_value(key: str) -> Optional[str]:
+    """
+    Read a key from the project's `.env` file (not the current process environment).
+
+    This is used for diagnostics and Tier-3 friendliness where users edit `.env` directly.
+    Note: Many settings are loaded into the container environment at *container creation time*,
+    so relying on os.environ alone can appear "stale" after editing `.env` without recreating.
+    """
+    try:
+        from settings import ENV_PATH
+        if not os.path.exists(ENV_PATH):
+            return None
+        from dotenv import dotenv_values
+        raw = dotenv_values(ENV_PATH)
+        val = raw.get(key)
+        if val is None:
+            return None
+        return str(val).strip()
+    except Exception:
+        return None
+
+
 def get_docker_compose_cmd() -> List[str]:
     """
     Find docker-compose binary dynamically.
@@ -280,10 +302,35 @@ async def restart_container(container_id: str, force: bool = False):
             }
 
     # NOTE: docker restart does NOT reload env_file changes.
-    # For ai_engine/local_ai_server/admin_ui, prefer force-recreate so updated .env keys apply.
-    if container_name in ("ai_engine", "local_ai_server", "admin_ui"):
+    # For ai_engine/local_ai_server, prefer force-recreate so updated .env keys apply.
+    if container_name in ("ai_engine", "local_ai_server"):
         service_name = service_map.get(container_name, container_name)
         return await _recreate_via_compose(service_name)
+
+    # Special-case: Restarting admin-ui from inside admin-ui is inherently racy if we try to
+    # force-recreate it (the API process is the one being replaced). Use a scheduled Docker-SDK
+    # restart which is significantly more reliable from within the container itself.
+    if container_name == "admin_ui":
+        import asyncio
+
+        async def _restart_admin_ui_later():
+            try:
+                await asyncio.sleep(0.75)
+                client = docker.from_env()
+                client.containers.get("admin_ui").restart(timeout=10)
+            except Exception as e:
+                logger.error("Failed to restart admin_ui via Docker SDK: %s", e)
+
+        asyncio.create_task(_restart_admin_ui_later())
+        return {
+            "status": "success",
+            "method": "docker-sdk",
+            "output": "Admin UI restart scheduled (page will reload shortly)",
+            "note": (
+                "If you need admin-ui env_file changes to apply, run on the host: "
+                "`docker compose up -d --force-recreate admin-ui`."
+            ),
+        }
     
     try:
         # A5: Use Docker SDK for cleaner restart (no stop/rm/up)
@@ -927,7 +974,9 @@ async def get_system_health():
             import asyncio
             from settings import get_setting
             
-            env_uri = (os.getenv("HEALTH_CHECK_LOCAL_AI_URL") or "").strip()
+            env_uri = (_dotenv_value("HEALTH_CHECK_LOCAL_AI_URL") or "").strip()
+            if not env_uri:
+                env_uri = (os.getenv("HEALTH_CHECK_LOCAL_AI_URL") or "").strip()
             candidates = _dedupe_preserve_order([
                 env_uri,
                 "ws://127.0.0.1:8765",
@@ -1017,7 +1066,9 @@ async def get_system_health():
     async def check_ai_engine():
         try:
             import httpx
-            env_url = (os.getenv("HEALTH_CHECK_AI_ENGINE_URL") or "").strip()
+            env_url = (_dotenv_value("HEALTH_CHECK_AI_ENGINE_URL") or "").strip()
+            if not env_url:
+                env_url = (os.getenv("HEALTH_CHECK_AI_ENGINE_URL") or "").strip()
             candidates = _dedupe_preserve_order([
                 env_url,
                 "http://127.0.0.1:15000/health",
