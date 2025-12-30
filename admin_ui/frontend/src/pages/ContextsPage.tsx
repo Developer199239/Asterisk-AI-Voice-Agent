@@ -12,6 +12,7 @@ const ContextsPage = () => {
     const [loading, setLoading] = useState(true);
     const [availableTools, setAvailableTools] = useState<string[]>([
         'transfer',
+        'attended_transfer',
         'cancel_transfer',
         'hangup_call',
         'leave_voicemail',
@@ -48,6 +49,7 @@ const ContextsPage = () => {
             const mcpTools = Object.keys(routes).filter((t) => typeof t === 'string' && t.startsWith('mcp_'));
             const builtin = [
                 'transfer',
+                'attended_transfer',
                 'cancel_transfer',
                 'hangup_call',
                 'leave_voicemail',
