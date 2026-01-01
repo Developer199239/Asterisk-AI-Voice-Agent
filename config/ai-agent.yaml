@@ -971,6 +971,32 @@ providers:
     temperature: 0.7
     tools_enabled: false
     type: openai
+  groq_stt:
+    capabilities:
+      - stt
+    type: groq
+    enabled: false
+    # API key comes from GROQ_API_KEY env var
+    stt_base_url: https://api.groq.com/openai/v1/audio/transcriptions
+    stt_model: whisper-large-v3-turbo
+    response_format: json
+    temperature: 0
+    request_timeout_sec: 15
+  groq_tts:
+    capabilities:
+      - tts
+    type: groq
+    enabled: false
+    # API key comes from GROQ_API_KEY env var
+    tts_base_url: https://api.groq.com/openai/v1/audio/speech
+    tts_model: canopylabs/orpheus-v1-english
+    voice: hannah
+    response_format: wav
+    max_input_chars: 200
+    target_encoding: mulaw
+    target_sample_rate_hz: 8000
+    chunk_size_ms: 20
+    request_timeout_sec: 15
   ollama_llm:
     capabilities:
       - llm
@@ -1047,18 +1073,26 @@ providers:
     input_gain_target_rms: 0
     input_gain_max_db: 0
   openai_stt:
-    chunk_size_ms: 20
     enabled: true
+    capabilities:
+      - stt
     input_encoding: linear16
     input_sample_rate_hz: 16000
+    stt_base_url: https://api.openai.com/v1/audio/transcriptions
     stt_model: whisper-1
+    response_format: json
+    temperature: 0
+    request_timeout_sec: 15
     type: openai
   openai_tts:
     enabled: true
+    capabilities:
+      - tts
+    response_format: wav
     target_encoding: mulaw
     target_sample_rate_hz: 8000
     tts_base_url: https://api.openai.com/v1/audio/speech
-    tts_model: gpt-4o-mini-tts
+    tts_model: tts-1
     type: openai
     voice: alloy
 streaming:

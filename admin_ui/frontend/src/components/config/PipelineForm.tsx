@@ -1,18 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { FormInput, FormLabel } from '../ui/FormComponents';
-import { ensureModularKey, isFullAgentProvider, isRegisteredProvider } from '../../utils/providerNaming';
-import { CheckCircle, AlertCircle, Loader2, Wrench } from 'lucide-react';
-
-// Available tools that can be enabled for pipelines
-const AVAILABLE_TOOLS = [
-    { id: 'transfer', label: 'Transfer Call', description: 'Transfer to extensions, queues, or ring groups' },
-    { id: 'attended_transfer', label: 'Attended Transfer', description: 'Warm transfer with agent announcement + DTMF accept/decline (requires Local AI Server)' },
-    { id: 'cancel_transfer', label: 'Cancel Transfer', description: 'Cancel an in-progress transfer' },
-    { id: 'hangup_call', label: 'Hangup Call', description: 'End the call with a farewell message' },
-    { id: 'leave_voicemail', label: 'Leave Voicemail', description: 'Send caller to voicemail' },
-    { id: 'send_email_summary', label: 'Email Summary', description: 'Email call summary after hangup' },
-    { id: 'request_transcript', label: 'Request Transcript', description: 'Email transcript to caller' },
-];
+import { ensureModularKey, isFullAgentProvider, isRegisteredProvider, capabilityFromKey } from '../../utils/providerNaming';
+import { CheckCircle, AlertCircle, Loader2 } from 'lucide-react';
 
 interface LocalAIStatus {
     stt_backend?: string;
@@ -65,30 +54,56 @@ const PipelineForm: React.FC<PipelineFormProps> = ({ config, providers, onChange
     };
 
     // Helper to filter providers by capability
-    // STRICT: Only use capabilities array. NO name matching.
+    // Prefer capabilities array (authoritative). For legacy configs missing capabilities, infer from key suffix.
     // Only show registered providers that have engine adapter support.
-    const getProvidersByCapability = (cap: 'stt' | 'llm' | 'tts') => {
-        return Object.entries(providers || {})
-            .filter(([_, p]: [string, any]) => {
+    const getProvidersByCapability = (cap: 'stt' | 'llm' | 'tts', selectedProvider?: string) => {
+        const base = Object.entries(providers || {})
+            .filter(([providerKey, p]: [string, any]) => {
                 // Exclude Full Agents from modular slots
                 if (isFullAgentProvider(p)) return false;
 
                 // Exclude unregistered providers (no engine adapter)
                 if (!isRegisteredProvider(p)) return false;
 
-                // Check capability existence
-                return (p.capabilities || []).includes(cap);
+                // Hide disabled providers from choices (but keep them visible if currently selected).
+                if (p.enabled === false) return false;
+
+                const caps = Array.isArray(p.capabilities) ? p.capabilities : [];
+                if (caps.length > 0) {
+                    return caps.includes(cap);
+                }
+
+                // Legacy: infer from provider key suffix (e.g., openai_stt/openai_llm/openai_tts).
+                // This keeps pipelines editable even if capabilities haven't been persisted yet.
+                return capabilityFromKey(providerKey) === cap;
             })
             .map(([name, p]: [string, any]) => ({
                 value: name,
-                label: name,
-                disabled: p.enabled === false
+                label: (Array.isArray(p.capabilities) && p.capabilities.length > 0) ? name : `${name} (inferred)`,
+                disabled: false
             }));
+
+        // If the current pipeline references a disabled provider, keep it visible as the selected value
+        // so users understand why audio may be failing.
+        if (selectedProvider && !base.some((p) => p.value === selectedProvider)) {
+            const selectedCfg = providers?.[selectedProvider];
+            if (selectedCfg && selectedCfg.enabled === false) {
+                const caps = Array.isArray(selectedCfg.capabilities) ? selectedCfg.capabilities : [];
+                const matches =
+                    (caps.length > 0 && caps.includes(cap)) ||
+                    (caps.length === 0 && capabilityFromKey(selectedProvider) === cap);
+                if (matches) {
+                    base.unshift({ value: selectedProvider, label: `${selectedProvider} (Disabled)`, disabled: true });
+                }
+            }
+        }
+
+        return base;
     };
 
-    const sttProviders = getProvidersByCapability('stt');
-    const llmProviders = getProvidersByCapability('llm');
-    const ttsProviders = getProvidersByCapability('tts');
+    const sttProviders = getProvidersByCapability('stt', localConfig.stt);
+    const llmProviders = getProvidersByCapability('llm', localConfig.llm);
+    const ttsProviders = getProvidersByCapability('tts', localConfig.tts);
 
     const handleProviderChange = (cap: 'stt' | 'llm' | 'tts', value: string) => {
         if (!value) {
@@ -206,51 +221,6 @@ const PipelineForm: React.FC<PipelineFormProps> = ({ config, providers, onChange
                 </div>
             </div>
 
-            <div className="space-y-4 border-t border-border pt-6">
-                <div className="flex items-center gap-2">
-                    <Wrench className="h-4 w-4 text-muted-foreground" />
-                    <h4 className="font-semibold">Tool Capabilities</h4>
-                </div>
-                <p className="text-sm text-muted-foreground">
-                    Select which tools the AI can use during calls. These enable actions like transferring calls and sending emails.
-                </p>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    {AVAILABLE_TOOLS.map((tool) => {
-                        const isEnabled = (localConfig.tools || []).includes(tool.id);
-                        return (
-                            <label
-                                key={tool.id}
-                                className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
-                                    isEnabled 
-                                        ? 'border-primary bg-primary/5' 
-                                        : 'border-border hover:border-muted-foreground/50'
-                                }`}
-                            >
-                                <input
-                                    type="checkbox"
-                                    checked={isEnabled}
-                                    onChange={(e) => {
-                                        const currentTools = localConfig.tools || [];
-                                        if (e.target.checked) {
-                                            updateConfig({ tools: [...currentTools, tool.id] });
-                                        } else {
-                                            updateConfig({ tools: currentTools.filter((t: string) => t !== tool.id) });
-                                        }
-                                    }}
-                                    className="mt-1 h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
-                                />
-                                <div className="flex-1">
-                                    <div className="font-medium text-sm">{tool.label}</div>
-                                    <div className="text-xs text-muted-foreground">{tool.description}</div>
-                                </div>
-                            </label>
-                        );
-                    })}
-                </div>
-                <p className="text-xs text-muted-foreground">
-                    <strong>Note:</strong> Some LLM providers (e.g., Groq) may not support tool calling. Check provider documentation.
-                </p>
-            </div>
         </div>
     );
 };

@@ -1,5 +1,7 @@
 from fastapi import APIRouter, HTTPException, UploadFile, File
 import yaml
+from yaml.constructor import ConstructorError
+from yaml.nodes import MappingNode
 import os
 import re
 import asyncio
@@ -15,6 +17,37 @@ import settings
 MAX_BACKUPS = 5
 
 router = APIRouter()
+
+# YAML duplicate-key protection:
+# - PyYAML tolerates duplicate keys (last one wins), but the Admin UI frontend YAML parser rejects them.
+# - Enforce "no duplicate mapping keys" on reads/writes so we fail fast with a clear error.
+class _NoDuplicateSafeLoader(yaml.SafeLoader):
+    pass
+
+
+def _construct_mapping_no_duplicates(loader: yaml.SafeLoader, node: MappingNode, deep: bool = False):
+    mapping = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        if key in mapping:
+            raise ConstructorError(
+                "while constructing a mapping",
+                node.start_mark,
+                f"found duplicate key ({key!r})",
+                key_node.start_mark,
+            )
+        mapping[key] = loader.construct_object(value_node, deep=deep)
+    return mapping
+
+
+_NoDuplicateSafeLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
+    _construct_mapping_no_duplicates,
+)
+
+
+def _safe_load_no_duplicates(content: str):
+    return yaml.load(content, Loader=_NoDuplicateSafeLoader)
 
 # Regex to strip ANSI escape codes from logs
 ANSI_ESCAPE = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
@@ -161,7 +194,7 @@ def _validate_ai_agent_config(content: str) -> Dict[str, Any]:
       HTTPException(400) on validation errors
     """
     try:
-        parsed = yaml.safe_load(content) or {}
+        parsed = _safe_load_no_duplicates(content) or {}
     except yaml.YAMLError as exc:
         raise HTTPException(status_code=400, detail=f"Invalid YAML: {str(exc)}")
 
@@ -297,8 +330,8 @@ async def update_yaml_config(update: ConfigUpdate):
                     old_content = f.read()
             
             if old_content:
-                old_parsed = yaml.safe_load(old_content) or {}
-                new_parsed = yaml.safe_load(update.content) or {}
+                old_parsed = _safe_load_no_duplicates(old_content) or {}
+                new_parsed = _safe_load_no_duplicates(update.content) or {}
                 
                 # Keys that can be hot-reloaded
                 hot_reload_keys = {'contexts', 'profiles', 'mcp'}
@@ -341,7 +374,7 @@ async def get_yaml_config():
     try:
         with open(settings.CONFIG_PATH, 'r') as f:
             config_content = f.read()
-        yaml.safe_load(config_content) # Validate content is still valid YAML
+        _safe_load_no_duplicates(config_content)  # Validate YAML and reject duplicate keys
         return {"content": config_content}
     except yaml.YAMLError as e:
         raise HTTPException(status_code=500, detail=f"Error reading or parsing YAML config: {str(e)}")
@@ -665,12 +698,38 @@ async def test_provider_connection(request: ProviderTestRequest):
                 ws_url = 'ws://127.0.0.1:8765'  # Default fallback
             
             try:
-                async with websockets.connect(ws_url, open_timeout=5.0) as ws:
+                def _fallback_ws_url(url: str) -> str:
+                    """
+                    In host-networked deployments, `local_ai_server` DNS does not resolve because it is not
+                    a Docker bridge network hostname. Fall back to localhost for best compatibility.
+                    """
+                    try:
+                        if 'local_ai_server' in url:
+                            return url.replace('local_ai_server', '127.0.0.1')
+                    except Exception:
+                        pass
+                    return url
+
+                async def _try_connect(url: str):
+                    async with websockets.connect(url, open_timeout=5.0) as ws:
+                        # Send status request to check models
+                        await ws.send(json.dumps({"type": "status"}))
+                        response = await asyncio.wait_for(ws.recv(), timeout=5.0)
+                        data = json.loads(response)
+                        return data
+
+                try:
+                    data = await _try_connect(ws_url)
+                    effective_url = ws_url
+                except Exception as e:
+                    alt = _fallback_ws_url(ws_url)
+                    if alt != ws_url:
+                        data = await _try_connect(alt)
+                        effective_url = alt
+                    else:
+                        raise e
+
                     # Send status request to check models
-                    await ws.send(json.dumps({"type": "status"}))
-                    response = await asyncio.wait_for(ws.recv(), timeout=5.0)
-                    data = json.loads(response)
-                    
                     if data.get("type") == "status_response" and data.get("status") == "ok":
                         models = data.get("models", {})
                         stt_loaded = models.get("stt", {}).get("loaded", False)
@@ -698,7 +757,7 @@ async def test_provider_connection(request: ProviderTestRequest):
                         all_loaded = stt_loaded and llm_loaded and tts_loaded
                         return {
                             "success": all_loaded,
-                            "message": f"Local AI Server connected. {' | '.join(status_parts)}"
+                            "message": f"Local AI Server connected ({effective_url}). {' | '.join(status_parts)}"
                         }
                     else:
                         return {"success": False, "message": "Local AI Server responded but status invalid"}
@@ -751,6 +810,16 @@ async def test_provider_connection(request: ProviderTestRequest):
             chat_base_url = (provider_config.get('chat_base_url') or 'https://api.openai.com/v1').rstrip('/')
             api_key = provider_config.get('api_key')
             if not api_key:
+                inferred_env = None
+                if 'groq' in provider_name or 'api.groq.com' in chat_base_url:
+                    inferred_env = 'GROQ_API_KEY'
+                elif 'openai' in provider_name or 'api.openai.com' in chat_base_url:
+                    inferred_env = 'OPENAI_API_KEY'
+
+                if inferred_env:
+                    api_key = get_env_key(inferred_env) or os.getenv(inferred_env) or ''
+
+            if not api_key:
                 return {"success": False, "message": "API key missing for OpenAI-compatible provider (set api_key or env var)"}
 
             try:
@@ -772,6 +841,42 @@ async def test_provider_connection(request: ProviderTestRequest):
                     return {"success": False, "message": f"Provider API error: HTTP {response.status_code}"}
             except Exception as e:
                 return {"success": False, "message": f"Cannot connect to provider at {chat_base_url}: {str(e)}"}
+
+        # ============================================================
+        # GROQ SPEECH (STT/TTS) - validate via /models (OpenAI-compatible)
+        # ============================================================
+        if provider_config.get('type') == 'groq':
+            api_key = provider_config.get('api_key') or get_env_key('GROQ_API_KEY') or os.getenv('GROQ_API_KEY') or ''
+            if not api_key:
+                return {"success": False, "message": "GROQ_API_KEY not set (set api_key or env var)"}
+
+            # Derive an OpenAI-compatible base URL for validation.
+            # Prefer the configured STT/TTS base URLs if present, otherwise default to Groq.
+            base_url = 'https://api.groq.com/openai/v1'
+            raw_url = (provider_config.get('stt_base_url') or provider_config.get('tts_base_url') or '').strip()
+            if raw_url and '/audio/' in raw_url:
+                base_url = raw_url.rsplit('/audio/', 1)[0]
+            base_url = base_url.rstrip('/')
+
+            try:
+                async with httpx.AsyncClient() as client:
+                    response = await client.get(
+                        f"{base_url}/models",
+                        headers={"Authorization": f"Bearer {api_key}"},
+                        timeout=10.0,
+                    )
+                    if response.status_code == 200:
+                        try:
+                            data = response.json()
+                            models = data.get('data') or []
+                            return {"success": True, "message": f"Connected (Groq Speech). Found {len(models)} models."}
+                        except Exception:
+                            return {"success": True, "message": f"Connected (Groq Speech) (HTTP {response.status_code})"}
+                    if response.status_code == 401:
+                        return {"success": False, "message": "Invalid API key (401)"}
+                    return {"success": False, "message": f"Provider API error: HTTP {response.status_code}"}
+            except Exception as e:
+                return {"success": False, "message": f"Cannot connect to provider at {base_url}: {str(e)}"}
                 
         elif 'google_live' in provider_config or ('llm_model' in provider_config and 'gemini' in provider_config.get('llm_model', '')):
             # Google Live
@@ -1094,7 +1199,7 @@ def update_yaml_provider_field(provider_name: str, field: str, value: Any) -> bo
             return False
 
         with open(settings.CONFIG_PATH, 'r') as f:
-            config = yaml.safe_load(f)
+            config = _safe_load_no_duplicates(f.read())
 
         if not isinstance(config, dict):
             return False
