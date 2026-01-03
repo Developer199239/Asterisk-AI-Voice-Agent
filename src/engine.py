@@ -181,6 +181,7 @@ _call_start_times = {}  # call_id -> timestamp
 
 # In-memory set to prevent duplicate cleanup (race condition guard)
 _cleanup_in_progress: set = set()  # call_ids currently being cleaned up
+_cleanup_completed_at: dict = {}  # call_id -> epoch seconds (best-effort dedupe for repeated StasisEnd/Destroyed)
 
 
 class Engine:
@@ -3939,6 +3940,25 @@ class Engine:
 
             call_id = session.call_id
             resolved_call_id = call_id  # Save for finally block
+
+            # Completed guard: some late events (e.g., streaming/playback teardown) can re-upsert
+            # the session after cleanup, which may cause cleanup (and email sends) to run twice.
+            try:
+                import time as _time
+                now = _time.time()
+                ttl = float(os.getenv("AAVA_CLEANUP_COMPLETED_TTL_SECONDS", "900") or "900")
+                last_done = _cleanup_completed_at.get(call_id)
+                if last_done and (now - float(last_done)) < ttl:
+                    logger.debug("Cleanup already completed (ttl guard)", call_id=call_id)
+                    return
+                # Prune old entries opportunistically.
+                if _cleanup_completed_at and ttl > 0:
+                    cutoff = now - ttl
+                    stale = [cid for cid, ts in _cleanup_completed_at.items() if float(ts) < cutoff]
+                    for cid in stale:
+                        _cleanup_completed_at.pop(cid, None)
+            except Exception:
+                pass
             
             # In-memory re-entrancy guard (atomic, no race condition)
             if call_id in _cleanup_in_progress:
@@ -4248,6 +4268,12 @@ class Engine:
 
             # Reset per-call alignment warning state
             self._runtime_alignment_logged.discard(call_id)
+
+            try:
+                import time as _time
+                _cleanup_completed_at[call_id] = _time.time()
+            except Exception:
+                pass
 
             logger.info("Call cleanup completed", call_id=call_id)
         except Exception as exc:

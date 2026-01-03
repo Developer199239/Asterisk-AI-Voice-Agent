@@ -31,6 +31,8 @@ class _ResendRateLimiter:
 
 _limiter = _ResendRateLimiter(max_per_second=float(os.getenv("RESEND_MAX_RPS", "2") or "2"))
 _api_key_configured: Optional[str] = None
+_dedupe_lock = asyncio.Lock()
+_recent_send_keys: Dict[str, float] = {}
 
 
 def _ensure_api_key() -> bool:
@@ -47,6 +49,27 @@ def _ensure_api_key() -> bool:
 def _is_rate_limit_error(err: Exception) -> bool:
     msg = str(err).lower()
     return "too many requests" in msg or "rate limit" in msg or "429" in msg
+
+
+async def _dedupe_should_send(email_data: Dict[str, Any], *, call_id: str, log_label: str, recipient: str) -> bool:
+    ttl = float(os.getenv("RESEND_DEDUPE_TTL_SECONDS", "900") or "900")
+    if ttl <= 0:
+        return True
+    subject = str(email_data.get("subject") or "")
+    to_addr = str(email_data.get("to") or recipient or "")
+    key = f"{log_label}|{call_id}|{to_addr}|{subject}"
+    now = time.monotonic()
+    async with _dedupe_lock:
+        ts = _recent_send_keys.get(key)
+        if ts is not None and (now - float(ts)) < ttl:
+            return False
+        # prune opportunistically
+        cutoff = now - ttl
+        for k, v in list(_recent_send_keys.items()):
+            if (now - float(v)) > ttl:
+                _recent_send_keys.pop(k, None)
+        _recent_send_keys[key] = now
+    return True
 
 
 async def send_email(
@@ -66,6 +89,15 @@ async def send_email(
     if not _ensure_api_key():
         logger.error("RESEND_API_KEY not configured", call_id=call_id)
         return None
+
+    if not await _dedupe_should_send(email_data, call_id=call_id, log_label=log_label, recipient=recipient):
+        logger.info(
+            f"{log_label} duplicate suppressed",
+            call_id=call_id,
+            recipient=recipient,
+            subject=str(email_data.get("subject") or ""),
+        )
+        return {"skipped": True}
 
     for attempt in range(max_retries + 1):
         await _limiter.wait_turn()
@@ -100,4 +132,3 @@ async def send_email(
                 exc_info=True,
             )
             return None
-
