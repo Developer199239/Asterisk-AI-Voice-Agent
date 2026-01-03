@@ -1131,6 +1131,9 @@ class Engine:
             consent_timeout = 30
         consent_media_uri = str(campaign.get("consent_media_uri") or "").strip()
 
+        caller_id_num = self._outbound_extension_identity
+        caller_id_name = str(os.getenv("AAVA_OUTBOUND_CALLERID_NAME", "Asterisk AI")).strip() or "Asterisk AI"
+
         channel_vars: Dict[str, Any] = {
             "AAVA_OUTBOUND": "1",
             "AAVA_CAMPAIGN_ID": campaign_id,
@@ -1140,12 +1143,20 @@ class Engine:
             "AI_CONTEXT": context_name,
             # Honor context provider by default for outbound calls (unless dialplan overrides later).
             **({"AI_PROVIDER": resolved_context_provider} if resolved_context_provider else {}),
-            "AMPUSER": self._outbound_extension_identity,
-            "CALLERID(num)": self._outbound_extension_identity,
+            # FreePBX routing expects an extension identity for patterns/trunks.
+            "AMPUSER": caller_id_num,
+            "FROMEXTEN": caller_id_num,
+            # Ensure the called party sees our configured outbound identity.
+            "CALLERID(num)": caller_id_num,
+            "CALLERID(name)": caller_id_name,
+            # Local/ dial creates ;1 / ;2 legs; inherit caller-id/identity across the boundary.
+            "__AMPUSER": caller_id_num,
+            "__FROMEXTEN": caller_id_num,
+            "__CALLERID(num)": caller_id_num,
+            "__CALLERID(name)": caller_id_name,
         }
         if lead_name:
             channel_vars["AAVA_LEAD_NAME"] = lead_name
-            channel_vars["CALLERID(name)"] = lead_name
         channel_vars["AAVA_VM_ENABLED"] = "1" if voicemail_enabled else "0"
         channel_vars["AAVA_CONSENT_ENABLED"] = "1" if consent_enabled else "0"
         channel_vars["AAVA_CONSENT_TIMEOUT"] = str(consent_timeout)
