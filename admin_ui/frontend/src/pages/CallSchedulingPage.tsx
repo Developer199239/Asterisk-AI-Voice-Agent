@@ -25,6 +25,17 @@ import { Modal } from '../components/ui/Modal';
 type CampaignStatus = 'draft' | 'running' | 'paused' | 'stopped' | 'archived' | 'completed';
 
 type Notice = { type: 'success' | 'error' | 'info'; message: string };
+type LeadImportIssueRow = { row_number: number; phone_number: string; error_reason?: string; warning_reason?: string };
+type LeadImportResult = {
+    accepted: number;
+    rejected: number;
+    duplicates: number;
+    errors?: LeadImportIssueRow[];
+    error_csv?: string;
+    error_csv_truncated?: boolean;
+    warnings?: LeadImportIssueRow[];
+    warnings_truncated?: boolean;
+};
 
 type OutboundMeta = {
     server_timezone: string;
@@ -245,6 +256,7 @@ const CallSchedulingPage = () => {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [notice, setNotice] = useState<Notice | null>(null);
+    const [lastLeadImport, setLastLeadImport] = useState<LeadImportResult | null>(null);
 
     const [showCampaignModal, setShowCampaignModal] = useState(false);
     const [campaignModalMode, setCampaignModalMode] = useState<'create' | 'edit'>('create');
@@ -615,23 +627,27 @@ const CallSchedulingPage = () => {
                 headers: { 'Content-Type': 'multipart/form-data' }
             });
             const data = res.data;
-            if (data?.rejected > 0 && data?.error_csv) {
-                const blob = new Blob([data.error_csv], { type: 'text/csv;charset=utf-8' });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = `outbound_import_errors_${new Date().toISOString().slice(0, 19)}.csv`;
-                a.click();
-                URL.revokeObjectURL(url);
-            }
+            setLastLeadImport(data);
             await refreshCampaignDetails(campaignId);
+            const warnCount = Array.isArray(data?.warnings) ? data.warnings.length : 0;
             setNotice({
-                type: data.rejected > 0 ? 'info' : 'success',
-                message: `Imported leads: accepted=${data.accepted}, rejected=${data.rejected}, duplicates=${data.duplicates}`
+                type: data.rejected > 0 || warnCount > 0 ? 'info' : 'success',
+                message: `Imported leads: accepted=${data.accepted}, rejected=${data.rejected}, duplicates=${data.duplicates}${warnCount > 0 ? `, warnings=${warnCount}` : ''}`
             });
         } catch (e: any) {
             setNotice({ type: 'error', message: e?.response?.data?.detail || e?.message || 'Failed to import leads' });
         }
+    };
+
+    const downloadImportErrorCsv = () => {
+        if (!lastLeadImport?.error_csv) return;
+        const blob = new Blob([lastLeadImport.error_csv], { type: 'text/csv;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `outbound_import_errors_${new Date().toISOString().slice(0, 19)}.csv`;
+        a.click();
+        URL.revokeObjectURL(url);
     };
 
     const uploadMedia = async (campaignId: string, kind: 'voicemail' | 'consent', file: File) => {
@@ -829,6 +845,89 @@ const CallSchedulingPage = () => {
                             ×
                         </button>
                     </div>
+                </div>
+            )}
+
+            {lastLeadImport && ((lastLeadImport.rejected || 0) > 0 || (lastLeadImport.warnings?.length || 0) > 0) && (
+                <div className="rounded-lg border border-border bg-card p-3 text-sm">
+                    <div className="flex items-center justify-between gap-3">
+                        <div className="font-medium">CSV import details</div>
+                        <button className="text-muted-foreground hover:text-foreground" onClick={() => setLastLeadImport(null)}>
+                            ×
+                        </button>
+                    </div>
+                    <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+                        <span>Accepted: <span className="font-mono text-foreground">{lastLeadImport.accepted}</span></span>
+                        <span>Duplicates: <span className="font-mono text-foreground">{lastLeadImport.duplicates}</span></span>
+                        <span>Rejected: <span className="font-mono text-foreground">{lastLeadImport.rejected}</span></span>
+                        <span>Warnings: <span className="font-mono text-foreground">{lastLeadImport.warnings?.length || 0}</span></span>
+                        {lastLeadImport.rejected > 0 && lastLeadImport.error_csv && (
+                            <button
+                                className="inline-flex items-center gap-1 rounded-md border border-border bg-muted/30 px-2 py-1 text-xs hover:bg-muted/50"
+                                onClick={downloadImportErrorCsv}
+                            >
+                                Download error CSV
+                            </button>
+                        )}
+                    </div>
+                    {lastLeadImport.warnings && lastLeadImport.warnings.length > 0 && (
+                        <div className="mt-3">
+                            <div className="text-xs font-semibold text-muted-foreground">Warnings (first {lastLeadImport.warnings.length})</div>
+                            <div className="mt-1 max-h-44 overflow-auto rounded-md border border-border bg-muted/20">
+                                <table className="w-full text-xs">
+                                    <thead className="sticky top-0 bg-muted/40 text-muted-foreground">
+                                        <tr>
+                                            <th className="px-2 py-1 text-left">Row</th>
+                                            <th className="px-2 py-1 text-left">Phone</th>
+                                            <th className="px-2 py-1 text-left">Reason</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {lastLeadImport.warnings.map((w, i) => (
+                                            <tr key={i} className="border-t border-border/60">
+                                                <td className="px-2 py-1 font-mono">{w.row_number}</td>
+                                                <td className="px-2 py-1 font-mono">{w.phone_number}</td>
+                                                <td className="px-2 py-1">{w.warning_reason || '-'}</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                            {lastLeadImport.warnings_truncated && (
+                                <div className="mt-1 text-xs text-muted-foreground">Warnings truncated. Fix CSV and re-import to see more.</div>
+                            )}
+                        </div>
+                    )}
+                    {lastLeadImport.errors && lastLeadImport.errors.length > 0 && (
+                        <div className="mt-3">
+                            <div className="text-xs font-semibold text-muted-foreground">Errors (first {lastLeadImport.errors.length})</div>
+                            <div className="mt-1 max-h-44 overflow-auto rounded-md border border-border bg-muted/20">
+                                <table className="w-full text-xs">
+                                    <thead className="sticky top-0 bg-muted/40 text-muted-foreground">
+                                        <tr>
+                                            <th className="px-2 py-1 text-left">Row</th>
+                                            <th className="px-2 py-1 text-left">Phone</th>
+                                            <th className="px-2 py-1 text-left">Reason</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {lastLeadImport.errors.map((e, i) => (
+                                            <tr key={i} className="border-t border-border/60">
+                                                <td className="px-2 py-1 font-mono">{e.row_number}</td>
+                                                <td className="px-2 py-1 font-mono">{e.phone_number}</td>
+                                                <td className="px-2 py-1">{e.error_reason || '-'}</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                            {lastLeadImport.error_csv_truncated && (
+                                <div className="mt-1 text-xs text-muted-foreground">
+                                    Errors truncated. Fix the CSV and re-import to see additional rows.
+                                </div>
+                            )}
+                        </div>
+                    )}
                 </div>
             )}
 

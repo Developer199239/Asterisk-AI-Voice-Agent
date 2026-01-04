@@ -147,6 +147,13 @@ class ImportErrorRow:
     error_reason: str
 
 
+@dataclass(frozen=True)
+class ImportWarningRow:
+    row_number: int
+    phone_number: str
+    warning_reason: str
+
+
 class OutboundStore:
     _CREATE_TABLES_SQL = [
         """
@@ -847,6 +854,7 @@ class OutboundStore:
         *,
         skip_existing: bool = True,
         max_error_rows: int = 20,
+        known_contexts: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
         Import leads for a campaign.
@@ -868,6 +876,8 @@ class OutboundStore:
             rejected = 0
             duplicates = 0
             errors: List[ImportErrorRow] = []
+            warnings: List[ImportWarningRow] = []
+            warning_total = 0
 
             # CSV decode
             text = (csv_bytes or b"").decode("utf-8-sig", errors="replace")
@@ -900,6 +910,33 @@ class OutboundStore:
             with self._lock:
                 conn = self._get_connection()
                 try:
+                    # Campaign defaults (applied when CSV field is missing/blank/invalid)
+                    camp = conn.execute(
+                        "SELECT timezone, default_context FROM outbound_campaigns WHERE id=?",
+                        (campaign_id,),
+                    ).fetchone()
+                    if not camp:
+                        raise KeyError("Campaign not found")
+
+                    campaign_timezone_raw = _as_str(camp["timezone"]).strip()
+                    campaign_default_context_raw = _as_str(camp["default_context"]).strip()
+
+                    try:
+                        campaign_timezone = _validate_iana_timezone_name(campaign_timezone_raw or "UTC")
+                    except Exception:
+                        campaign_timezone = "UTC"
+
+                    campaign_default_context = campaign_default_context_raw or "default"
+                    if not re.match(r"^[a-zA-Z0-9_.-]{1,64}$", campaign_default_context):
+                        campaign_default_context = "default"
+
+                    known_ctx: Optional[set[str]] = None
+                    if known_contexts:
+                        try:
+                            known_ctx = {str(x).strip() for x in known_contexts if str(x).strip()}
+                        except Exception:
+                            known_ctx = None
+
                     for idx, row in enumerate(reader, start=2):  # header is row 1
                         raw_phone = _as_str((row or {}).get(phone_key)).strip()
                         try:
@@ -924,23 +961,60 @@ class OutboundStore:
                         else:
                             custom_vars = {}
 
-                        context_override = _as_str((row or {}).get(context_key)).strip() if context_key else ""
-                        context_override = context_override or None
-                        if context_override:
-                            if not re.match(r"^[a-zA-Z0-9_.-]{1,64}$", context_override):
-                                rejected += 1
-                                if len(errors) < max_error_rows:
-                                    errors.append(ImportErrorRow(idx, phone, "Invalid context (use letters/numbers/._- only)"))
-                                continue
+                        # Context:
+                        # - Missing/blank => campaign default_context
+                        # - Invalid/unknown => warn + overwrite to campaign default_context
+                        context_raw = _as_str((row or {}).get(context_key)).strip() if context_key else ""
+                        context_candidate = context_raw.strip()
+                        if not context_candidate:
+                            context_override = campaign_default_context
+                        else:
+                            if not re.match(r"^[a-zA-Z0-9_.-]{1,64}$", context_candidate):
+                                warning_total += 1
+                                if len(warnings) < max_error_rows:
+                                    warnings.append(
+                                        ImportWarningRow(
+                                            idx,
+                                            phone,
+                                            f"Invalid context '{context_candidate}' (overwritten with campaign default '{campaign_default_context}')",
+                                        )
+                                    )
+                                context_override = campaign_default_context
+                            elif known_ctx is not None and context_candidate not in known_ctx:
+                                warning_total += 1
+                                if len(warnings) < max_error_rows:
+                                    warnings.append(
+                                        ImportWarningRow(
+                                            idx,
+                                            phone,
+                                            f"Unknown context '{context_candidate}' (overwritten with campaign default '{campaign_default_context}')",
+                                        )
+                                    )
+                                context_override = campaign_default_context
+                            else:
+                                context_override = context_candidate
 
+                        # Timezone:
+                        # - Missing/blank => campaign timezone
+                        # - Invalid IANA tz => warn + overwrite to campaign timezone
                         tz_override_raw = _as_str((row or {}).get(tz_key)).strip() if tz_key else ""
-                        try:
-                            tz_override = _optional_timezone_or_error(tz_override_raw)
-                        except Exception as exc:
-                            rejected += 1
-                            if len(errors) < max_error_rows:
-                                errors.append(ImportErrorRow(idx, phone, str(exc)))
-                            continue
+                        tz_candidate = (tz_override_raw or "").strip()
+                        if not tz_candidate:
+                            tz_override = campaign_timezone
+                        else:
+                            try:
+                                tz_override = _validate_iana_timezone_name(tz_candidate)
+                            except Exception:
+                                warning_total += 1
+                                if len(warnings) < max_error_rows:
+                                    warnings.append(
+                                        ImportWarningRow(
+                                            idx,
+                                            phone,
+                                            f"Invalid timezone '{tz_candidate}' (overwritten with campaign timezone '{campaign_timezone}')",
+                                        )
+                                    )
+                                tz_override = campaign_timezone
 
                         caller_id_override = _as_str((row or {}).get(caller_id_key)).strip() if caller_id_key else ""
                         caller_id_override = caller_id_override or None
@@ -1019,6 +1093,8 @@ class OutboundStore:
                 "errors": [e.__dict__ for e in errors],
                 "error_csv": error_csv_value,
                 "error_csv_truncated": rejected > len(errors),
+                "warnings": [w.__dict__ for w in warnings],
+                "warnings_truncated": warning_total > len(warnings),
             }
 
         return await self._run(_sync)

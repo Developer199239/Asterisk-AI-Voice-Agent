@@ -25,6 +25,7 @@ from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from pathlib import Path
+import yaml
 try:
     from zoneinfo import ZoneInfo, available_timezones
 except Exception:  # pragma: no cover
@@ -118,6 +119,26 @@ def _detect_server_timezone() -> str:
 
     return "UTC"
 
+def _load_known_context_names() -> List[str]:
+    """
+    Best-effort list of known context names from the active ai-agent.yaml.
+
+    Used to validate CSV-imported contexts and overwrite unknown values with campaign defaults.
+    """
+    try:
+        from settings import CONFIG_PATH
+        if not os.path.exists(CONFIG_PATH):
+            return []
+        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+            parsed = yaml.safe_load(f) or {}
+        if not isinstance(parsed, dict):
+            return []
+        ctxs = parsed.get("contexts") or {}
+        if not isinstance(ctxs, dict):
+            return []
+        return [str(k).strip() for k in ctxs.keys() if str(k).strip()]
+    except Exception:
+        return []
 
 @router.get("/meta")
 async def outbound_meta():
@@ -181,6 +202,8 @@ class LeadImportResponse(BaseModel):
     errors: List[Dict[str, Any]] = Field(default_factory=list)
     error_csv: str = ""
     error_csv_truncated: bool = False
+    warnings: List[Dict[str, Any]] = Field(default_factory=list)
+    warnings_truncated: bool = False
 
 
 @router.get("/sample.csv")
@@ -349,11 +372,13 @@ async def import_leads(
     store = _get_outbound_store()
     try:
         data = await file.read()
+        known_contexts = _load_known_context_names()
         result = await store.import_leads_csv(
             campaign_id,
             data,
             skip_existing=bool(skip_existing),
             max_error_rows=int(max_error_rows),
+            known_contexts=known_contexts or None,
         )
         return LeadImportResponse(**result)
     except KeyError:
