@@ -51,6 +51,14 @@ type RecordingRow = {
     size_bytes?: number;
 };
 
+type AudioPreviewState = {
+    mediaUri: string;
+    url: string;
+    currentTime: number;
+    duration: number;
+    playing: boolean;
+};
+
 interface OutboundCampaign {
     id: string;
     name: string;
@@ -272,6 +280,13 @@ const amdTooltipForKey = (key: string): string => {
     }
 };
 
+const formatSeconds = (secs: number): string => {
+    const s = Math.max(0, Math.floor(secs || 0));
+    const mm = String(Math.floor(s / 60)).padStart(2, '0');
+    const ss = String(s % 60).padStart(2, '0');
+    return `${mm}:${ss}`;
+};
+
 const CallSchedulingPage = () => {
     const [meta, setMeta] = useState<OutboundMeta | null>(null);
     const [serverOffsetMs, setServerOffsetMs] = useState(0);
@@ -293,6 +308,8 @@ const CallSchedulingPage = () => {
     const [notice, setNotice] = useState<Notice | null>(null);
     const [lastLeadImport, setLastLeadImport] = useState<LeadImportResult | null>(null);
     const [recordingsLibrary, setRecordingsLibrary] = useState<RecordingRow[]>([]);
+    const [audioPreview, setAudioPreview] = useState<AudioPreviewState | null>(null);
+    const [audioPreviewTick, setAudioPreviewTick] = useState(0);
 
     const [showCampaignModal, setShowCampaignModal] = useState(false);
     const [campaignModalMode, setCampaignModalMode] = useState<'create' | 'edit'>('create');
@@ -423,6 +440,41 @@ const CallSchedulingPage = () => {
         const id = setInterval(() => setClockTick(t => t + 1), 1000);
         return () => clearInterval(id);
     }, []);
+
+    useEffect(() => {
+        if (!audioPreview?.playing) return;
+        const id = setInterval(() => setAudioPreviewTick(t => t + 1), 200);
+        return () => clearInterval(id);
+    }, [audioPreview?.playing]);
+
+    useEffect(() => {
+        // Keep UI reactive while playing (audio element drives time updates too, but this helps)
+        if (!audioPreview?.playing) return;
+        setAudioPreview(prev => prev ? ({ ...prev }) : prev);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [audioPreviewTick]);
+
+    useEffect(() => {
+        // Stop preview when modal closes (avoids surprising background audio).
+        if (showCampaignModal) return;
+        if (!audioPreview) return;
+        try {
+            const existing = document.getElementById('aava-audio-preview') as HTMLAudioElement | null;
+            if (existing) {
+                existing.pause();
+                existing.currentTime = 0;
+            }
+        } catch {
+            // ignore
+        }
+        try {
+            URL.revokeObjectURL(audioPreview.url);
+        } catch {
+            // ignore
+        }
+        setAudioPreview(null);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [showCampaignModal]);
 
     const refreshMeta = async () => {
         const res = await axios.get('/api/outbound/meta');
@@ -768,16 +820,96 @@ const CallSchedulingPage = () => {
     };
 
     const previewRecordingByUri = async (mediaUri: string) => {
+        const uri = (mediaUri || '').trim();
+        if (!uri) return;
+
+        // Toggle: if already previewing this uri, stop it.
+        if (audioPreview?.mediaUri === uri && audioPreview.playing) {
+            try {
+                const existing = document.getElementById('aava-audio-preview') as HTMLAudioElement | null;
+                if (existing) {
+                    existing.pause();
+                    existing.currentTime = 0;
+                }
+            } catch {
+                // ignore
+            }
+            try {
+                URL.revokeObjectURL(audioPreview.url);
+            } catch {
+                // ignore
+            }
+            setAudioPreview(null);
+            return;
+        }
+
+        // Stop any existing preview.
+        if (audioPreview) {
+            try {
+                const existing = document.getElementById('aava-audio-preview') as HTMLAudioElement | null;
+                if (existing) {
+                    existing.pause();
+                    existing.currentTime = 0;
+                }
+            } catch {
+                // ignore
+            }
+            try {
+                URL.revokeObjectURL(audioPreview.url);
+            } catch {
+                // ignore
+            }
+            setAudioPreview(null);
+        }
+
         try {
             const res = await axios.get('/api/outbound/recordings/preview.wav', {
-                params: { media_uri: mediaUri },
+                params: { media_uri: uri },
                 responseType: 'blob'
             });
             const url = URL.createObjectURL(res.data);
-            const audio = new Audio(url);
-            audio.onended = () => URL.revokeObjectURL(url);
+
+            // Create (or reuse) a single hidden audio element so we can track progress.
+            let audio = document.getElementById('aava-audio-preview') as HTMLAudioElement | null;
+            if (!audio) {
+                audio = document.createElement('audio');
+                audio.id = 'aava-audio-preview';
+                audio.style.display = 'none';
+                document.body.appendChild(audio);
+            }
+            audio.src = url;
+
+            const onEnded = () => {
+                try {
+                    URL.revokeObjectURL(url);
+                } catch {
+                    // ignore
+                }
+                setAudioPreview(null);
+            };
+            const onTimeUpdate = () => {
+                setAudioPreview(prev => {
+                    if (!prev || prev.url !== url) return prev;
+                    return {
+                        ...prev,
+                        currentTime: Number(audio?.currentTime || 0),
+                        duration: Number(audio?.duration || prev.duration || 0),
+                    };
+                });
+            };
+            audio.onended = onEnded;
+            audio.ontimeupdate = onTimeUpdate;
+
+            setAudioPreview({
+                mediaUri: uri,
+                url,
+                currentTime: 0,
+                duration: 0,
+                playing: true,
+            });
             await audio.play();
         } catch (e: any) {
+            setAudioPreview(null);
             setNotice({ type: 'error', message: e?.response?.data?.detail || e?.message || 'Failed to preview recording' });
         }
     };
@@ -1874,14 +2006,36 @@ const CallSchedulingPage = () => {
                                             <Upload className="w-4 h-4" /> Upload
                                         </button>
                                         <button
-                                            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border hover:bg-muted text-sm disabled:opacity-50"
+                                            className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg border text-sm disabled:opacity-50 ${
+                                                audioPreview?.playing &&
+                                                audioPreview?.mediaUri ===
+                                                    String(
+                                                        (campaignModalMode === 'create'
+                                                            ? (createForm as any).consent_media_uri
+                                                            : (editForm as any).consent_media_uri) || ''
+                                                    ).trim()
+                                                    ? 'bg-emerald-600 text-white border-emerald-700 hover:bg-emerald-600'
+                                                    : 'hover:bg-muted'
+                                            }`}
                                             disabled={!modalConsentEnabled || !Boolean(String((campaignModalMode === 'create' ? (createForm as any).consent_media_uri : (editForm as any).consent_media_uri) || '').trim())}
                                             onClick={() => {
                                                 const uri = String((campaignModalMode === 'create' ? (createForm as any).consent_media_uri : (editForm as any).consent_media_uri) || '').trim();
                                                 if (uri) previewRecordingByUri(uri);
                                             }}
                                         >
-                                            Preview
+                                            {(() => {
+                                                const uri = String((campaignModalMode === 'create' ? (createForm as any).consent_media_uri : (editForm as any).consent_media_uri) || '').trim();
+                                                const playing = Boolean(audioPreview?.playing && audioPreview?.mediaUri === uri);
+                                                if (!playing) return <>Preview</>;
+                                                const ct = audioPreview?.currentTime || 0;
+                                                const dur = audioPreview?.duration || 0;
+                                                const pct = dur > 0 ? Math.min(100, Math.round((ct / dur) * 100)) : 0;
+                                                return (
+                                                    <>
+                                                        <Play className="w-4 h-4" /> {formatSeconds(ct)} / {dur ? formatSeconds(dur) : '--:--'} ({pct}%)
+                                                    </>
+                                                );
+                                            })()}
                                         </button>
                                     </div>
                                 </div>
@@ -1972,14 +2126,36 @@ const CallSchedulingPage = () => {
                                             <Upload className="w-4 h-4" /> Upload
                                         </button>
                                         <button
-                                            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border hover:bg-muted text-sm disabled:opacity-50"
+                                            className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg border text-sm disabled:opacity-50 ${
+                                                audioPreview?.playing &&
+                                                audioPreview?.mediaUri ===
+                                                    String(
+                                                        (campaignModalMode === 'create'
+                                                            ? (createForm as any).voicemail_drop_media_uri
+                                                            : (editForm as any).voicemail_drop_media_uri) || ''
+                                                    ).trim()
+                                                    ? 'bg-emerald-600 text-white border-emerald-700 hover:bg-emerald-600'
+                                                    : 'hover:bg-muted'
+                                            }`}
                                             disabled={!modalVoicemailEnabled || !Boolean(String((campaignModalMode === 'create' ? (createForm as any).voicemail_drop_media_uri : (editForm as any).voicemail_drop_media_uri) || '').trim())}
                                             onClick={() => {
                                                 const uri = String((campaignModalMode === 'create' ? (createForm as any).voicemail_drop_media_uri : (editForm as any).voicemail_drop_media_uri) || '').trim();
                                                 if (uri) previewRecordingByUri(uri);
                                             }}
                                         >
-                                            Preview
+                                            {(() => {
+                                                const uri = String((campaignModalMode === 'create' ? (createForm as any).voicemail_drop_media_uri : (editForm as any).voicemail_drop_media_uri) || '').trim();
+                                                const playing = Boolean(audioPreview?.playing && audioPreview?.mediaUri === uri);
+                                                if (!playing) return <>Preview</>;
+                                                const ct = audioPreview?.currentTime || 0;
+                                                const dur = audioPreview?.duration || 0;
+                                                const pct = dur > 0 ? Math.min(100, Math.round((ct / dur) * 100)) : 0;
+                                                return (
+                                                    <>
+                                                        <Play className="w-4 h-4" /> {formatSeconds(ct)} / {dur ? formatSeconds(dur) : '--:--'} ({pct}%)
+                                                    </>
+                                                );
+                                            })()}
                                         </button>
                                     </div>
                                 </div>
