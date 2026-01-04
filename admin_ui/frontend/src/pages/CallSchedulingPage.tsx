@@ -21,6 +21,7 @@ import {
     Upload
 } from 'lucide-react';
 import { Modal } from '../components/ui/Modal';
+import { FormLabel } from '../components/ui/FormComponents';
 
 type CampaignStatus = 'draft' | 'running' | 'paused' | 'stopped' | 'archived' | 'completed';
 
@@ -42,6 +43,12 @@ type OutboundMeta = {
     iana_timezones: string[];
     server_now_iso?: string;
     default_amd_options?: Record<string, any>;
+};
+
+type RecordingRow = {
+    media_uri: string;
+    filename: string;
+    size_bytes?: number;
 };
 
 interface OutboundCampaign {
@@ -95,6 +102,9 @@ const DEFAULT_AMD_OPTIONS = {
     after_greeting_silence_ms: 1000,
     total_analysis_time_ms: 5000
 };
+
+const DEFAULT_CONSENT_MEDIA_URI = 'sound:ai-generated/aava-consent-default';
+const DEFAULT_VOICEMAIL_MEDIA_URI = 'sound:ai-generated/aava-voicemail-default';
 
 const buildDialplanSnippet = (opts: {
     stasisAppName: string;
@@ -237,6 +247,31 @@ const timeStringInZone = (timeZone: string, now: Date): string | null => {
     }
 };
 
+const amdTooltipForKey = (key: string): string => {
+    switch (key) {
+        case 'initial_silence_ms':
+            return 'How long to wait for initial speech/sound before classifying as MACHINE (ms).';
+        case 'greeting_ms':
+            return 'Max length of the greeting/intro phrase (ms).';
+        case 'after_greeting_silence_ms':
+            return 'Silence required after greeting to decide MACHINE (ms).';
+        case 'total_analysis_time_ms':
+            return 'Max total time AMD will spend analyzing audio (ms).';
+        case 'minimum_word_length_ms':
+            return 'Minimum duration of a “word” (ms).';
+        case 'between_words_silence_ms':
+            return 'Silence between words (ms).';
+        case 'maximum_number_of_words':
+            return 'Maximum number of detected “words” before classifying.';
+        case 'silence_threshold':
+            return 'Silence threshold (signal level) used by AMD; lower is more sensitive.';
+        case 'maximum_word_length_ms':
+            return 'Maximum duration of a single “word” (ms).';
+        default:
+            return 'AMD tuning parameter.';
+    }
+};
+
 const CallSchedulingPage = () => {
     const [meta, setMeta] = useState<OutboundMeta | null>(null);
     const [serverOffsetMs, setServerOffsetMs] = useState(0);
@@ -257,6 +292,7 @@ const CallSchedulingPage = () => {
     const [error, setError] = useState<string | null>(null);
     const [notice, setNotice] = useState<Notice | null>(null);
     const [lastLeadImport, setLastLeadImport] = useState<LeadImportResult | null>(null);
+    const [recordingsLibrary, setRecordingsLibrary] = useState<RecordingRow[]>([]);
 
     const [showCampaignModal, setShowCampaignModal] = useState(false);
     const [campaignModalMode, setCampaignModalMode] = useState<'create' | 'edit'>('create');
@@ -341,7 +377,9 @@ const CallSchedulingPage = () => {
         min_interval_seconds_between_calls: 5,
         default_context: 'default',
         voicemail_drop_enabled: true,
+        voicemail_drop_media_uri: DEFAULT_VOICEMAIL_MEDIA_URI,
         consent_enabled: false,
+        consent_media_uri: '',
         consent_timeout_seconds: 5,
         amd_options: { ...DEFAULT_AMD_OPTIONS } as Record<string, any>
     });
@@ -413,6 +451,15 @@ const CallSchedulingPage = () => {
         }
     };
 
+    const refreshRecordingsLibrary = async () => {
+        try {
+            const res = await axios.get('/api/outbound/recordings');
+            setRecordingsLibrary(Array.isArray(res.data) ? res.data : []);
+        } catch {
+            setRecordingsLibrary([]);
+        }
+    };
+
     const refreshCampaigns = async () => {
         const res = await axios.get('/api/outbound/campaigns', { params: { include_archived: showArchived } });
         const list = res.data || [];
@@ -449,6 +496,7 @@ const CallSchedulingPage = () => {
             try {
                 setLoading(true);
                 await refreshMeta();
+                await refreshRecordingsLibrary();
                 await refreshCampaigns();
                 setError(null);
             } catch (e: any) {
@@ -493,6 +541,25 @@ const CallSchedulingPage = () => {
         setCampaignModalMode('create');
         setCampaignModalStep('settings');
         setDialplanNeedsReview(false);
+        setPendingImportFile(null);
+        setPendingVoicemailFile(null);
+        setPendingConsentFile(null);
+        setLastLeadImport(null);
+        setCreateForm({
+            name: '',
+            timezone: serverTz || 'UTC',
+            daily_window_start_local: '09:00',
+            daily_window_end_local: '17:00',
+            max_concurrent: 1,
+            min_interval_seconds_between_calls: 5,
+            default_context: 'default',
+            voicemail_drop_enabled: true,
+            voicemail_drop_media_uri: DEFAULT_VOICEMAIL_MEDIA_URI,
+            consent_enabled: false,
+            consent_media_uri: '',
+            consent_timeout_seconds: 5,
+            amd_options: { ...defaultAmdOptions }
+        });
         setShowCampaignModal(true);
     };
 
@@ -510,7 +577,9 @@ const CallSchedulingPage = () => {
             min_interval_seconds_between_calls: selectedCampaign.min_interval_seconds_between_calls || 5,
             default_context: selectedCampaign.default_context || 'default',
             voicemail_drop_enabled: Boolean((selectedCampaign as any).voicemail_drop_enabled ?? true),
+            voicemail_drop_media_uri: (selectedCampaign.voicemail_drop_media_uri || '').trim(),
             consent_enabled: Boolean((selectedCampaign as any).consent_enabled ?? false),
+            consent_media_uri: String((selectedCampaign as any).consent_media_uri || '').trim(),
             consent_timeout_seconds: Number((selectedCampaign as any).consent_timeout_seconds ?? 5),
             amd_options:
                 Object.keys(((selectedCampaign as any).amd_options || {}) as Record<string, any>).length > 0
@@ -520,17 +589,36 @@ const CallSchedulingPage = () => {
         setShowCampaignModal(true);
     };
 
+    const uploadRecordingToLibrary = async (kind: 'voicemail' | 'consent', file: File): Promise<string> => {
+        const formData = new FormData();
+        formData.append('file', file);
+        const res = await axios.post(`/api/outbound/recordings/upload?kind=${encodeURIComponent(kind)}`, formData, {
+            headers: { 'Content-Type': 'multipart/form-data' }
+        });
+        const mediaUri = String(res.data?.media_uri || '').trim();
+        if (!mediaUri) throw new Error('Upload succeeded but media_uri missing in response');
+        await refreshRecordingsLibrary();
+        return mediaUri;
+    };
+
     const createCampaign = async () => {
         try {
-            const res = await axios.post('/api/outbound/campaigns', createForm);
-            const campaignId = res.data.id as string;
+            const payload: any = { ...createForm };
+            if (payload.voicemail_drop_enabled && !(payload.voicemail_drop_media_uri || '').trim()) {
+                payload.voicemail_drop_media_uri = DEFAULT_VOICEMAIL_MEDIA_URI;
+            }
+            if (payload.consent_enabled && !(payload.consent_media_uri || '').trim()) {
+                payload.consent_media_uri = DEFAULT_CONSENT_MEDIA_URI;
+            }
+            if (payload.consent_enabled && pendingConsentFile) {
+                payload.consent_media_uri = await uploadRecordingToLibrary('consent', pendingConsentFile);
+            }
+            if (payload.voicemail_drop_enabled && pendingVoicemailFile) {
+                payload.voicemail_drop_media_uri = await uploadRecordingToLibrary('voicemail', pendingVoicemailFile);
+            }
 
-            if (createForm.consent_enabled && pendingConsentFile) {
-                await uploadMedia(campaignId, 'consent', pendingConsentFile);
-            }
-            if (createForm.voicemail_drop_enabled && pendingVoicemailFile) {
-                await uploadMedia(campaignId, 'voicemail', pendingVoicemailFile);
-            }
+            const res = await axios.post('/api/outbound/campaigns', payload);
+            const campaignId = res.data.id as string;
             if (pendingImportFile) {
                 await importLeads(campaignId, pendingImportFile);
             }
@@ -552,7 +640,9 @@ const CallSchedulingPage = () => {
                 min_interval_seconds_between_calls: 5,
                 default_context: 'default',
                 voicemail_drop_enabled: true,
+                voicemail_drop_media_uri: DEFAULT_VOICEMAIL_MEDIA_URI,
                 consent_enabled: false,
+                consent_media_uri: '',
                 consent_timeout_seconds: 5,
                 amd_options: {}
             });
@@ -674,6 +764,39 @@ const CallSchedulingPage = () => {
             await audio.play();
         } catch (e: any) {
             setNotice({ type: 'error', message: e?.response?.data?.detail || e?.message || `Failed to preview ${kind}` });
+        }
+    };
+
+    const previewRecordingByUri = async (mediaUri: string) => {
+        try {
+            const res = await axios.get('/api/outbound/recordings/preview.wav', {
+                params: { media_uri: mediaUri },
+                responseType: 'blob'
+            });
+            const url = URL.createObjectURL(res.data);
+            const audio = new Audio(url);
+            audio.onended = () => URL.revokeObjectURL(url);
+            await audio.play();
+        } catch (e: any) {
+            setNotice({ type: 'error', message: e?.response?.data?.detail || e?.message || 'Failed to preview recording' });
+        }
+    };
+
+    const setRecordingUri = async (kind: 'voicemail' | 'consent', mediaUri: string) => {
+        const uri = (mediaUri || '').trim();
+        if (campaignModalMode === 'create') {
+            setCreateForm(prev => ({ ...prev, ...(kind === 'voicemail' ? { voicemail_drop_media_uri: uri } : { consent_media_uri: uri }) }));
+            return;
+        }
+        if (!selectedCampaign) return;
+        try {
+            await axios.patch(`/api/outbound/campaigns/${selectedCampaign.id}`, kind === 'voicemail' ? { voicemail_drop_media_uri: uri } : { consent_media_uri: uri });
+            await refreshCampaigns();
+            await refreshCampaignDetails(selectedCampaign.id);
+            setEditForm(prev => ({ ...prev, ...(kind === 'voicemail' ? { voicemail_drop_media_uri: uri } : { consent_media_uri: uri }) }));
+            setNotice({ type: 'success', message: `${kind === 'voicemail' ? 'Voicemail' : 'Consent'} recording updated` });
+        } catch (e: any) {
+            setNotice({ type: 'error', message: e?.response?.data?.detail || e?.message || 'Failed to update recording' });
         }
     };
 
@@ -1409,7 +1532,7 @@ const CallSchedulingPage = () => {
                             <div className="space-y-3">
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                                     <div>
-                                        <label className="text-sm font-medium">Name</label>
+                                        <FormLabel tooltip="Friendly name shown in the scheduling UI.">Name</FormLabel>
                                         <input
                                             value={campaignModalMode === 'create' ? createForm.name : editForm.name}
                                             onChange={e =>
@@ -1421,7 +1544,7 @@ const CallSchedulingPage = () => {
                                         />
                                     </div>
                                     <div>
-                                        <label className="text-sm font-medium">Timezone</label>
+                                        <FormLabel tooltip="IANA timezone used for daily window scheduling and campaign-local timestamps (e.g., America/Phoenix).">Timezone</FormLabel>
                                         <input
                                             list="aava-iana-timezones"
                                             value={campaignModalMode === 'create' ? createForm.timezone : editForm.timezone}
@@ -1439,7 +1562,7 @@ const CallSchedulingPage = () => {
                                         )}
                                     </div>
                                     <div>
-                                        <label className="text-sm font-medium">Daily Window Start (local)</label>
+                                        <FormLabel tooltip="Daily start time in the campaign timezone. If end is earlier than start, the window crosses midnight.">Daily Window Start (local)</FormLabel>
                                         <input
                                             type="time"
                                             value={campaignModalMode === 'create' ? createForm.daily_window_start_local : editForm.daily_window_start_local}
@@ -1452,7 +1575,7 @@ const CallSchedulingPage = () => {
                                         />
                                     </div>
                                     <div>
-                                        <label className="text-sm font-medium">Daily Window End (local)</label>
+                                        <FormLabel tooltip="Daily end time in the campaign timezone. If end is earlier than start, the window crosses midnight.">Daily Window End (local)</FormLabel>
                                         <input
                                             type="time"
                                             value={campaignModalMode === 'create' ? createForm.daily_window_end_local : editForm.daily_window_end_local}
@@ -1475,7 +1598,7 @@ const CallSchedulingPage = () => {
                                         })()}
                                     </div>
                                     <div>
-                                        <label className="text-sm font-medium">Max Concurrent</label>
+                                        <FormLabel tooltip="Maximum simultaneous outbound calls for this campaign (MVP supports 1–5).">Max Concurrent</FormLabel>
                                         <input
                                             type="number"
                                             min={1}
@@ -1490,7 +1613,7 @@ const CallSchedulingPage = () => {
                                         />
                                     </div>
                                     <div>
-                                        <label className="text-sm font-medium">Min Interval Between Calls (sec)</label>
+                                        <FormLabel tooltip="Minimum delay between starting new calls (helps rate-limit trunk load).">Min Interval Between Calls (sec)</FormLabel>
                                         <input
                                             type="number"
                                             min={0}
@@ -1508,7 +1631,7 @@ const CallSchedulingPage = () => {
                                         />
                                     </div>
                                     <div className="md:col-span-2">
-                                        <label className="text-sm font-medium">Default Context</label>
+                                        <FormLabel tooltip="Default AI context for leads that don’t provide a context override.">Default Context</FormLabel>
                                         <input
                                             value={campaignModalMode === 'create' ? createForm.default_context : editForm.default_context}
                                             onChange={e =>
@@ -1523,8 +1646,12 @@ const CallSchedulingPage = () => {
 
                                 <div className="border rounded-lg p-3 space-y-2">
                                     <div className="font-medium text-sm">Features</div>
-                                    <label className="flex items-center gap-2 text-sm">
-                                        <input
+                                    <FormLabel
+                                        tooltip="When enabled, MACHINE/NOTSURE results play the campaign voicemail recording (if set)."
+                                        className="mb-0"
+                                    >
+                                        <span className="flex items-center gap-2 text-sm">
+                                            <input
                                             type="checkbox"
                                             checked={
                                                 Boolean(
@@ -1535,37 +1662,63 @@ const CallSchedulingPage = () => {
                                                 campaignModalMode === 'create'
                                                     ? setCreateForm(p => {
                                                           setDialplanNeedsReview(true);
-                                                          return { ...p, voicemail_drop_enabled: e.target.checked };
+                                                          const enabled = e.target.checked;
+                                                          const next: any = { ...p, voicemail_drop_enabled: enabled };
+                                                          if (enabled && !(String(next.voicemail_drop_media_uri || '').trim())) {
+                                                              next.voicemail_drop_media_uri = DEFAULT_VOICEMAIL_MEDIA_URI;
+                                                          }
+                                                          return next;
                                                       })
                                                     : setEditForm(p => {
                                                           setDialplanNeedsReview(true);
-                                                          return { ...p, voicemail_drop_enabled: e.target.checked };
+                                                          const enabled = e.target.checked;
+                                                          const next: any = { ...p, voicemail_drop_enabled: enabled };
+                                                          if (enabled && !(String(next.voicemail_drop_media_uri || '').trim())) {
+                                                              next.voicemail_drop_media_uri = DEFAULT_VOICEMAIL_MEDIA_URI;
+                                                          }
+                                                          return next;
                                                       })
                                             }
                                         />
                                         Voicemail drop (AMD MACHINE/NOTSURE → leave voicemail recording)
-                                    </label>
-                                    <label className="flex items-center gap-2 text-sm">
-                                        <input
+                                        </span>
+                                    </FormLabel>
+                                    <FormLabel
+                                        tooltip="When enabled, HUMAN results play a consent prompt and collect DTMF (1 accept / 2 deny) before connecting to AI."
+                                        className="mb-0"
+                                    >
+                                        <span className="flex items-center gap-2 text-sm">
+                                            <input
                                             type="checkbox"
                                             checked={Boolean(campaignModalMode === 'create' ? createForm.consent_enabled : editForm.consent_enabled)}
                                             onChange={e =>
                                                 campaignModalMode === 'create'
                                                     ? setCreateForm(p => {
                                                           setDialplanNeedsReview(true);
-                                                          return { ...p, consent_enabled: e.target.checked };
+                                                          const enabled = e.target.checked;
+                                                          const next: any = { ...p, consent_enabled: enabled };
+                                                          if (enabled && !(String(next.consent_media_uri || '').trim())) {
+                                                              next.consent_media_uri = DEFAULT_CONSENT_MEDIA_URI;
+                                                          }
+                                                          return next;
                                                       })
                                                     : setEditForm(p => {
                                                           setDialplanNeedsReview(true);
-                                                          return { ...p, consent_enabled: e.target.checked };
+                                                          const enabled = e.target.checked;
+                                                          const next: any = { ...p, consent_enabled: enabled };
+                                                          if (enabled && !(String(next.consent_media_uri || '').trim())) {
+                                                              next.consent_media_uri = DEFAULT_CONSENT_MEDIA_URI;
+                                                          }
+                                                          return next;
                                                       })
                                             }
                                         />
                                         Consent gate (HUMAN → play consent prompt, DTMF 1 accept / 2 deny)
-                                    </label>
+                                        </span>
+                                    </FormLabel>
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
                                         <div>
-                                            <label className="text-sm font-medium">Consent timeout (sec)</label>
+                                            <FormLabel tooltip="How long to wait for DTMF after playing the consent prompt.">Consent timeout (sec)</FormLabel>
                                             <input
                                                 type="number"
                                                 min={1}
@@ -1586,7 +1739,12 @@ const CallSchedulingPage = () => {
                         ) : campaignModalStep === 'leads' ? (
                             <div className="space-y-4">
                                 <div className="border rounded-lg p-3 space-y-2">
-                                    <div className="font-medium text-sm">Leads (CSV)</div>
+                                    <FormLabel
+                                        tooltip="Import leads for this campaign. Columns: name, phone_number (required), context, timezone, caller_id, custom_vars (JSON)."
+                                        className="mb-0"
+                                    >
+                                        Leads (CSV)
+                                    </FormLabel>
                                     <div className="text-xs text-muted-foreground">
                                         Import leads from CSV. Default behavior is <span className="font-mono">skip_existing</span>.
                                         {campaignModalMode === 'create' ? ' Choose a CSV now; it will import after Create.' : ''}
@@ -1633,20 +1791,60 @@ const CallSchedulingPage = () => {
                         ) : campaignModalStep === 'recordings' ? (
                             <div className="space-y-4">
                                 <div className="border rounded-lg p-3 space-y-3">
-                                    <div className="font-medium text-sm">Consent prompt</div>
+                                    <FormLabel
+                                        tooltip="Recording used by the consent gate (played after HUMAN detection)."
+                                        className="mb-0"
+                                    >
+                                        Consent prompt
+                                    </FormLabel>
                                     <div className="text-xs text-muted-foreground">
                                         Used only when “Consent gate” is enabled (DTMF 1 accept / 2 deny).
                                     </div>
+                                    {!modalConsentEnabled && (
+                                        <div className="text-xs text-muted-foreground">
+                                            Enable “Consent gate” in <span className="font-medium text-foreground">Settings</span> to select a consent prompt recording.
+                                        </div>
+                                    )}
                                     <div className="text-xs text-muted-foreground">
-                                        {campaignModalMode === 'edit' ? (
+                                        Current:{' '}
+                                        <span className="font-mono">
+                                            {modalConsentEnabled
+                                                ? String((campaignModalMode === 'create' ? (createForm as any).consent_media_uri : (editForm as any).consent_media_uri) || '(not set)')
+                                                : '(disabled)'}
+                                        </span>
+                                        {pendingConsentFile && (
                                             <>
-                                                Current: <span className="font-mono">{(selectedCampaign as any)?.consent_media_uri || '(not set)'}</span>
-                                            </>
-                                        ) : (
-                                            <>
-                                                Queued: <span className="font-mono">{pendingConsentFile?.name || '(none)'}</span>
+                                                {' '}
+                                                · Queued: <span className="font-mono">{pendingConsentFile.name}</span>
                                             </>
                                         )}
+                                    </div>
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                        {(() => {
+                                            const currentUri = String(
+                                                (campaignModalMode === 'create' ? (createForm as any).consent_media_uri : (editForm as any).consent_media_uri) || ''
+                                            ).trim();
+                                            const hasCurrent = Boolean(currentUri);
+                                            const inLibrary = hasCurrent && recordingsLibrary.some(r => r.media_uri === currentUri);
+                                            return (
+                                        <select
+                                            className="px-3 py-2 rounded-lg border bg-background text-sm min-w-[320px] disabled:opacity-50"
+                                            disabled={!modalConsentEnabled}
+                                            value={currentUri}
+                                            onChange={e => setRecordingUri('consent', e.target.value)}
+                                        >
+                                            <option value="">Select a recording…</option>
+                                            {hasCurrent && !inLibrary && (
+                                                <option value={currentUri}>{currentUri}</option>
+                                            )}
+                                            {recordingsLibrary.map(r => (
+                                                <option key={r.media_uri} value={r.media_uri}>
+                                                    {r.filename}
+                                                </option>
+                                            ))}
+                                        </select>
+                                            );
+                                        })()}
                                     </div>
                                     <div className="flex items-center gap-2 flex-wrap">
                                         <input
@@ -1654,25 +1852,34 @@ const CallSchedulingPage = () => {
                                             accept=".wav,.ulaw,audio/wav"
                                             onChange={e => {
                                                 setPendingConsentFile(e.target.files?.[0] || null);
-                                                setDialplanNeedsReview(true);
                                             }}
                                         />
                                         <button
                                             className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border hover:bg-muted text-sm disabled:opacity-50"
-                                            disabled={campaignModalMode === 'create' || !pendingConsentFile || !selectedCampaign}
+                                            disabled={!modalConsentEnabled || !pendingConsentFile}
                                             onClick={async () => {
-                                                if (!pendingConsentFile || !selectedCampaign) return;
-                                                await uploadMedia(selectedCampaign.id, 'consent', pendingConsentFile);
-                                                setPendingConsentFile(null);
-                                                setDialplanNeedsReview(true);
+                                                if (!pendingConsentFile) return;
+                                                try {
+                                                    const uri = await uploadRecordingToLibrary('consent', pendingConsentFile);
+                                                    await setRecordingUri('consent', uri);
+                                                    setPendingConsentFile(null);
+                                                } catch (e: any) {
+                                                    setNotice({
+                                                        type: 'error',
+                                                        message: e?.response?.data?.detail || e?.message || 'Failed to upload consent recording'
+                                                    });
+                                                }
                                             }}
                                         >
                                             <Upload className="w-4 h-4" /> Upload
                                         </button>
                                         <button
                                             className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border hover:bg-muted text-sm disabled:opacity-50"
-                                            disabled={campaignModalMode === 'create' || !selectedCampaign || !Boolean(((selectedCampaign as any)?.consent_media_uri || '').trim())}
-                                            onClick={() => selectedCampaign && previewMedia(selectedCampaign.id, 'consent')}
+                                            disabled={!modalConsentEnabled || !Boolean(String((campaignModalMode === 'create' ? (createForm as any).consent_media_uri : (editForm as any).consent_media_uri) || '').trim())}
+                                            onClick={() => {
+                                                const uri = String((campaignModalMode === 'create' ? (createForm as any).consent_media_uri : (editForm as any).consent_media_uri) || '').trim();
+                                                if (uri) previewRecordingByUri(uri);
+                                            }}
                                         >
                                             Preview
                                         </button>
@@ -1680,20 +1887,62 @@ const CallSchedulingPage = () => {
                                 </div>
 
                                 <div className="border rounded-lg p-3 space-y-3">
-                                    <div className="font-medium text-sm">Voicemail drop</div>
+                                    <FormLabel
+                                        tooltip="Recording left when AMD indicates MACHINE/NOTSURE and voicemail drop is enabled."
+                                        className="mb-0"
+                                    >
+                                        Voicemail drop
+                                    </FormLabel>
                                     <div className="text-xs text-muted-foreground">
                                         Used only when “Voicemail drop” is enabled and AMD indicates MACHINE/NOTSURE.
                                     </div>
+                                    {!modalVoicemailEnabled && (
+                                        <div className="text-xs text-muted-foreground">
+                                            Enable “Voicemail drop” in <span className="font-medium text-foreground">Settings</span> to select a voicemail recording.
+                                        </div>
+                                    )}
                                     <div className="text-xs text-muted-foreground">
-                                        {campaignModalMode === 'edit' ? (
+                                        Current:{' '}
+                                        <span className="font-mono">
+                                            {modalVoicemailEnabled
+                                                ? String((campaignModalMode === 'create' ? (createForm as any).voicemail_drop_media_uri : (editForm as any).voicemail_drop_media_uri) || '(not set)')
+                                                : '(disabled)'}
+                                        </span>
+                                        {pendingVoicemailFile && (
                                             <>
-                                                Current: <span className="font-mono">{selectedCampaign?.voicemail_drop_media_uri || '(not set)'}</span>
-                                            </>
-                                        ) : (
-                                            <>
-                                                Queued: <span className="font-mono">{pendingVoicemailFile?.name || '(none)'}</span>
+                                                {' '}
+                                                · Queued: <span className="font-mono">{pendingVoicemailFile.name}</span>
                                             </>
                                         )}
+                                    </div>
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                        {(() => {
+                                            const currentUri = String(
+                                                (campaignModalMode === 'create'
+                                                    ? (createForm as any).voicemail_drop_media_uri
+                                                    : (editForm as any).voicemail_drop_media_uri) || ''
+                                            ).trim();
+                                            const hasCurrent = Boolean(currentUri);
+                                            const inLibrary = hasCurrent && recordingsLibrary.some(r => r.media_uri === currentUri);
+                                            return (
+                                        <select
+                                            className="px-3 py-2 rounded-lg border bg-background text-sm min-w-[320px] disabled:opacity-50"
+                                            disabled={!modalVoicemailEnabled}
+                                            value={currentUri}
+                                            onChange={e => setRecordingUri('voicemail', e.target.value)}
+                                        >
+                                            <option value="">Select a recording…</option>
+                                            {hasCurrent && !inLibrary && (
+                                                <option value={currentUri}>{currentUri}</option>
+                                            )}
+                                            {recordingsLibrary.map(r => (
+                                                <option key={r.media_uri} value={r.media_uri}>
+                                                    {r.filename}
+                                                </option>
+                                            ))}
+                                        </select>
+                                            );
+                                        })()}
                                     </div>
                                     <div className="flex items-center gap-2 flex-wrap">
                                         <input
@@ -1701,25 +1950,34 @@ const CallSchedulingPage = () => {
                                             accept=".wav,.ulaw,audio/wav"
                                             onChange={e => {
                                                 setPendingVoicemailFile(e.target.files?.[0] || null);
-                                                setDialplanNeedsReview(true);
                                             }}
                                         />
                                         <button
                                             className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border hover:bg-muted text-sm disabled:opacity-50"
-                                            disabled={campaignModalMode === 'create' || !pendingVoicemailFile || !selectedCampaign}
+                                            disabled={!modalVoicemailEnabled || !pendingVoicemailFile}
                                             onClick={async () => {
-                                                if (!pendingVoicemailFile || !selectedCampaign) return;
-                                                await uploadMedia(selectedCampaign.id, 'voicemail', pendingVoicemailFile);
-                                                setPendingVoicemailFile(null);
-                                                setDialplanNeedsReview(true);
+                                                if (!pendingVoicemailFile) return;
+                                                try {
+                                                    const uri = await uploadRecordingToLibrary('voicemail', pendingVoicemailFile);
+                                                    await setRecordingUri('voicemail', uri);
+                                                    setPendingVoicemailFile(null);
+                                                } catch (e: any) {
+                                                    setNotice({
+                                                        type: 'error',
+                                                        message: e?.response?.data?.detail || e?.message || 'Failed to upload voicemail recording'
+                                                    });
+                                                }
                                             }}
                                         >
                                             <Upload className="w-4 h-4" /> Upload
                                         </button>
                                         <button
                                             className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border hover:bg-muted text-sm disabled:opacity-50"
-                                            disabled={campaignModalMode === 'create' || !selectedCampaign || !Boolean((selectedCampaign?.voicemail_drop_media_uri || '').trim())}
-                                            onClick={() => selectedCampaign && previewMedia(selectedCampaign.id, 'voicemail')}
+                                            disabled={!modalVoicemailEnabled || !Boolean(String((campaignModalMode === 'create' ? (createForm as any).voicemail_drop_media_uri : (editForm as any).voicemail_drop_media_uri) || '').trim())}
+                                            onClick={() => {
+                                                const uri = String((campaignModalMode === 'create' ? (createForm as any).voicemail_drop_media_uri : (editForm as any).voicemail_drop_media_uri) || '').trim();
+                                                if (uri) previewRecordingByUri(uri);
+                                            }}
                                         >
                                             Preview
                                         </button>
@@ -1728,7 +1986,7 @@ const CallSchedulingPage = () => {
 
                                 {campaignModalMode === 'create' && (
                                     <div className="text-xs text-muted-foreground">
-                                        Files are queued in this modal and will upload right after campaign creation.
+                                        If you queue new files and don’t click Upload, they will upload to the shared recording library during campaign creation.
                                     </div>
                                 )}
                             </div>
@@ -1813,7 +2071,7 @@ const CallSchedulingPage = () => {
                                             const value = (form.amd_options || {})[key] ?? '';
                                             return (
                                                 <div key={key}>
-                                                    <label className="text-sm font-medium">{label}</label>
+                                                    <FormLabel tooltip={amdTooltipForKey(key)}>{label}</FormLabel>
                                                     <input
                                                         value={value}
                                                         onChange={e => {

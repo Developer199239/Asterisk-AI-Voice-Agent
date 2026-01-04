@@ -65,6 +65,11 @@ def _vm_upload_max_bytes() -> int:
 DEFAULT_CONSENT_MEDIA_URI = "sound:ai-generated/aava-consent-default"
 DEFAULT_VOICEMAIL_MEDIA_URI = "sound:ai-generated/aava-voicemail-default"
 
+class RecordingRow(BaseModel):
+    media_uri: str
+    filename: str
+    size_bytes: int = 0
+
 
 def _media_uri_exists(media_uri: str) -> bool:
     uri = (media_uri or "").strip()
@@ -78,6 +83,144 @@ def _media_uri_exists(media_uri: str) -> bool:
 
 
 _SAFE_NAME_RE = re.compile(r"^[a-zA-Z0-9_.-]+$")
+
+def _ulaw_to_wav_bytes(ulaw_data: bytes) -> bytes:
+    pcm16 = audioop.ulaw2lin(ulaw_data, 2)
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wavf:
+        wavf.setnchannels(1)
+        wavf.setsampwidth(2)
+        wavf.setframerate(8000)
+        wavf.writeframes(pcm16)
+    return buf.getvalue()
+
+def _read_media_ulaw(media_uri: str) -> bytes:
+    media_uri = (media_uri or "").strip()
+    if not media_uri.startswith("sound:ai-generated/"):
+        raise HTTPException(status_code=400, detail="media_uri must be in sound:ai-generated/")
+    base = media_uri.split("sound:ai-generated/", 1)[1].strip()
+    if not base:
+        raise HTTPException(status_code=400, detail="Invalid media_uri")
+    ulaw_path = os.path.join(_media_dir(), f"{base}.ulaw")
+    if not os.path.exists(ulaw_path):
+        raise HTTPException(status_code=404, detail="Media file not found on server")
+    with open(ulaw_path, "rb") as f:
+        return f.read()
+
+def _convert_upload_to_ulaw(data: bytes, ext: str) -> bytes:
+    if not data:
+        raise HTTPException(status_code=400, detail="Empty upload")
+    max_bytes = _vm_upload_max_bytes()
+    if len(data) > max_bytes:
+        raise HTTPException(status_code=400, detail=f"Upload too large (max {max_bytes} bytes)")
+
+    if ext == ".ulaw":
+        return data
+
+    try:
+        with wave.open(io.BytesIO(data), "rb") as wavf:
+            nch = wavf.getnchannels()
+            sampwidth = wavf.getsampwidth()
+            fr = wavf.getframerate()
+            nframes = wavf.getnframes()
+            frames = wavf.readframes(nframes)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid WAV file: {e}")
+
+    if nch not in (1, 2):
+        raise HTTPException(status_code=400, detail="WAV must be mono or stereo (1–2 channels)")
+    if sampwidth not in (1, 2, 3, 4):
+        raise HTTPException(status_code=400, detail="Unsupported WAV sample width")
+
+    if sampwidth != 2:
+        frames = audioop.lin2lin(frames, sampwidth, 2)
+    if nch == 2:
+        frames = audioop.tomono(frames, 2, 0.5, 0.5)
+    if fr != 8000:
+        frames, _ = audioop.ratecv(frames, 2, 1, fr, 8000, None)
+    return audioop.lin2ulaw(frames, 2)
+
+@router.get("/recordings", response_model=List[RecordingRow])
+async def list_recordings():
+    """
+    List available recordings in the shared media directory.
+
+    These are selectable by campaigns and can be reused across campaigns by referencing `media_uri`.
+    """
+    media_dir = _media_dir()
+    try:
+        os.makedirs(media_dir, exist_ok=True)
+    except Exception:
+        pass
+
+    rows: List[RecordingRow] = []
+    try:
+        for entry in sorted(os.listdir(media_dir)):
+            if not entry.endswith(".ulaw"):
+                continue
+            filename = entry
+            base = entry[:-5]
+            path = os.path.join(media_dir, entry)
+            try:
+                size_bytes = int(os.path.getsize(path))
+            except Exception:
+                size_bytes = 0
+            rows.append(
+                RecordingRow(
+                    media_uri=f"sound:ai-generated/{base}",
+                    filename=filename,
+                    size_bytes=size_bytes,
+                )
+            )
+    except Exception:
+        return []
+    return rows
+
+@router.get("/recordings/preview.wav")
+async def preview_recording_wav(media_uri: str = Query(...)):
+    """
+    Preview any `sound:ai-generated/*` recording as WAV (browser-playable).
+    Useful for Create Campaign flow (no campaign_id yet).
+    """
+    ulaw_data = _read_media_ulaw(media_uri)
+    wav_bytes = _ulaw_to_wav_bytes(ulaw_data)
+    return Response(content=wav_bytes, media_type="audio/wav")
+
+@router.post("/recordings/upload")
+async def upload_recording_to_library(kind: str = Query("generic"), file: UploadFile = File(...)):
+    """
+    Upload a recording to the shared library (`AAVA_MEDIA_DIR`), returning its `media_uri`.
+
+    - Accepts `.ulaw` (8kHz μ-law) or `.wav` (PCM; auto-converted to 8kHz μ-law).
+    - Enforces max upload size via `AAVA_VM_UPLOAD_MAX_BYTES`.
+    """
+    filename = (file.filename or "").strip() or "recording.ulaw"
+    ext = os.path.splitext(filename)[1].lower().strip()
+    if ext not in (".ulaw", ".wav"):
+        raise HTTPException(status_code=400, detail="Upload must be .ulaw (8kHz μ-law) or .wav (PCM) audio")
+
+    raw_name = os.path.basename(filename)
+    if raw_name and not _SAFE_NAME_RE.match(raw_name):
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
+    media_dir = _media_dir()
+    os.makedirs(media_dir, exist_ok=True)
+    safe_kind = re.sub(r"[^a-z0-9_-]+", "", (kind or "generic").strip().lower()) or "generic"
+    unique = f"outbound-{safe_kind}-{uuid.uuid4().hex[:10]}.ulaw"
+    path = os.path.join(media_dir, unique)
+
+    data = await file.read()
+    ulaw_data = _convert_upload_to_ulaw(data, ext)
+
+    with open(path, "wb") as f:
+        f.write(ulaw_data)
+    try:
+        os.chmod(path, 0o664)
+    except Exception:
+        pass
+
+    media_uri = f"sound:ai-generated/{unique[:-5]}"
+    return {"media_uri": media_uri}
 
 def _detect_server_timezone() -> str:
     """
@@ -599,14 +742,7 @@ async def preview_voicemail_wav(campaign_id: str):
     with open(ulaw_path, "rb") as f:
         ulaw_data = f.read()
 
-    pcm16 = audioop.ulaw2lin(ulaw_data, 2)
-    buf = io.BytesIO()
-    with wave.open(buf, "wb") as wavf:
-        wavf.setnchannels(1)
-        wavf.setsampwidth(2)
-        wavf.setframerate(8000)
-        wavf.writeframes(pcm16)
-    wav_bytes = buf.getvalue()
+    wav_bytes = _ulaw_to_wav_bytes(ulaw_data)
     return Response(content=wav_bytes, media_type="audio/wav")
 
 
@@ -631,12 +767,5 @@ async def preview_consent_wav(campaign_id: str):
     with open(ulaw_path, "rb") as f:
         ulaw_data = f.read()
 
-    pcm16 = audioop.ulaw2lin(ulaw_data, 2)
-    buf = io.BytesIO()
-    with wave.open(buf, "wb") as wavf:
-        wavf.setnchannels(1)
-        wavf.setsampwidth(2)
-        wavf.setframerate(8000)
-        wavf.writeframes(pcm16)
-    wav_bytes = buf.getvalue()
+    wav_bytes = _ulaw_to_wav_bytes(ulaw_data)
     return Response(content=wav_bytes, media_type="audio/wav")
