@@ -115,11 +115,30 @@ const PipelineForm: React.FC<PipelineFormProps> = ({ config, providers, onChange
 
     const handleProviderChange = (cap: 'stt' | 'llm' | 'tts', value: string) => {
         if (!value) {
-            updateConfig({ [cap]: '' });
+            // If a component is cleared, also clear its option overrides (otherwise stale base_url/model can linger).
+            const existingOptions = localConfig.options || {};
+            const nextOptions = { ...existingOptions };
+            if (cap === 'llm' && nextOptions.llm) {
+                delete nextOptions.llm;
+            }
+            updateConfig({ [cap]: '', options: nextOptions });
             return;
         }
         const normalized = ensureModularKey(value, cap);
-        updateConfig({ [cap]: normalized });
+
+        // IMPORTANT: When switching LLM providers, clear any pipeline-level LLM overrides.
+        // Otherwise, users can end up with an Ollama adapter pointed at an OpenAI base_url (causing 404s).
+        const updates: any = { [cap]: normalized };
+        if (cap === 'llm' && normalized !== localConfig.llm) {
+            const existingOptions = localConfig.options || {};
+            const nextOptions = { ...existingOptions };
+            if (nextOptions.llm) {
+                delete nextOptions.llm;
+            }
+            updates.options = nextOptions;
+        }
+
+        updateConfig(updates);
     };
 
     return (

@@ -88,6 +88,19 @@ class OllamaLLMAdapter(LLMComponent):
         merged.setdefault("timeout_sec", 60)  # Local models may be slower
         merged.setdefault("stream", False)
         merged.setdefault("max_tokens", 200)
+
+        # Guardrail: a common misconfiguration is leaving OpenAI-style pipeline options in place
+        # while selecting the Ollama adapter (which uses /api/* endpoints). That yields nginx 404s.
+        try:
+            base_url = str(merged.get("base_url") or "").strip().lower()
+            if "api.openai.com" in base_url or base_url.rstrip("/").endswith("/v1"):
+                logger.warning(
+                    "Ollama base_url looks like an OpenAI endpoint; this will 404 on /api/chat",
+                    base_url=merged.get("base_url"),
+                    hint="If using Ollama, set base_url to http://<ollama-host>:11434 and remove any pipeline llm overrides",
+                )
+        except Exception:
+            pass
         
         return merged
 
