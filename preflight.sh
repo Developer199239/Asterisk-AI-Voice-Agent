@@ -1076,6 +1076,7 @@ check_asterisk_uid_gid() {
     
     # Set up media directory with setgid bit for group permission inheritance
     MEDIA_DIR="$SCRIPT_DIR/asterisk_media/ai-generated"
+    DATA_DIR="$SCRIPT_DIR/data"
     ASTERISK_SOUNDS_LINK="/var/lib/asterisk/sounds/ai-generated"
 
     # Detect when Asterisk can't traverse the media directory path. Common pitfall:
@@ -1113,6 +1114,23 @@ check_asterisk_uid_gid() {
         MEDIA_PARENT="$SCRIPT_DIR/asterisk_media"
         sudo chgrp "$AST_GID" "$MEDIA_PARENT" 2>/dev/null
         sudo chmod 2775 "$MEDIA_PARENT" 2>/dev/null
+
+        # Ensure data directory is writable by the container runtime user (appuser in asterisk group).
+        # This is required for persistent SQLite call history across container recreates.
+        mkdir -p "$DATA_DIR" 2>/dev/null
+        touch "$DATA_DIR/.gitkeep" 2>/dev/null || true
+        if sudo chgrp "$AST_GID" "$DATA_DIR" 2>/dev/null; then
+            log_ok "Set data directory group to asterisk (GID=$AST_GID)"
+        else
+            log_warn "Could not set data directory group (may need sudo)"
+            FIX_CMDS+=("sudo chgrp $AST_GID $DATA_DIR")
+        fi
+        if sudo chmod 2775 "$DATA_DIR" 2>/dev/null; then
+            log_ok "Set data directory permissions (setgid enabled)"
+        else
+            log_warn "Could not set data directory permissions (may need sudo)"
+            FIX_CMDS+=("sudo chmod 2775 $DATA_DIR")
+        fi
 
         # Create the Asterisk sounds symlink so Asterisk can serve generated audio.
         # Only do this when Asterisk sounds directory exists on host.
@@ -1183,6 +1201,11 @@ check_asterisk_uid_gid() {
         fi
         FIX_CMDS+=("sudo chgrp $AST_GID $MEDIA_DIR")
         FIX_CMDS+=("sudo chmod 2775 $MEDIA_DIR  # setgid for group inheritance")
+        if [ ! -d "$DATA_DIR" ]; then
+            FIX_CMDS+=("mkdir -p $DATA_DIR && touch $DATA_DIR/.gitkeep")
+        fi
+        FIX_CMDS+=("sudo chgrp $AST_GID $DATA_DIR")
+        FIX_CMDS+=("sudo chmod 2775 $DATA_DIR  # setgid for group inheritance (SQLite call history)")
         if [ -d "/var/lib/asterisk/sounds" ]; then
             if [ "$use_bind_mount" = true ]; then
                 FIX_CMDS+=("sudo rm -f $ASTERISK_SOUNDS_LINK && sudo mkdir -p $ASTERISK_SOUNDS_LINK")
@@ -1496,6 +1519,10 @@ print_summary() {
         echo ""
         echo "Next steps:"
         echo ""
+        echo "  Tip (file playback):"
+        echo "     If Asterisk file playback fails with 'File ... does not exist' and your project is under /root,"
+        echo "     run: sudo ./preflight.sh --apply-fixes --persist-media-mount"
+        echo ""
         echo "  1. Start the Admin UI:"
         echo "     ${COMPOSE_CMD:-docker compose} -p asterisk-ai-voice-agent up -d admin_ui"
         echo ""
@@ -1529,6 +1556,10 @@ print_summary() {
         echo "╚═══════════════════════════════════════════════════════════════════════════╝"
         echo ""
         echo "Next steps:"
+        echo ""
+        echo "  Tip (file playback):"
+        echo "     If Asterisk file playback fails with 'File ... does not exist' and your project is under /root,"
+        echo "     run: sudo ./preflight.sh --apply-fixes --persist-media-mount"
         echo ""
         echo "  1. Start the Admin UI:"
         echo "     ${COMPOSE_CMD:-docker compose} -p asterisk-ai-voice-agent up -d admin_ui"
