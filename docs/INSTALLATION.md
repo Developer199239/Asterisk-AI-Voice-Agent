@@ -51,13 +51,13 @@ sudo ./preflight.sh --apply-fixes
 ### 4) Rebuild and recreate containers
 
 ```bash
-docker compose up -d --build --force-recreate admin-ui ai-engine
+docker compose up -d --build --force-recreate admin_ui ai_engine
 ```
 
 If your configuration requires local inference:
 
 ```bash
-docker compose up -d --build --force-recreate local-ai-server
+docker compose up -d --build --force-recreate local_ai_server
 ```
 
 ### 5) Verify
@@ -79,10 +79,10 @@ cd Asterisk-AI-Voice-Agent
 sudo ./preflight.sh --apply-fixes
 
 # Start Admin UI first
-docker compose up -d admin-ui
+docker compose up -d admin_ui
 
-# Complete the Setup Wizard in Admin UI, then start ai-engine
-docker compose up -d ai-engine
+# Complete the Setup Wizard in Admin UI, then start ai_engine
+docker compose up -d ai_engine
 ```
 
 **Access the Admin UI:**
@@ -239,11 +239,11 @@ Before you begin, ensure your system meets the following requirements:
 
 ### Rootless Docker (best-effort)
 
-If your host uses **rootless Docker**, the Admin UI needs the rootless socket mounted. Set `DOCKER_SOCK` before starting `admin-ui`:
+If your host uses **rootless Docker**, the Admin UI needs the rootless socket mounted. Set `DOCKER_SOCK` before starting `admin_ui`:
 
 ```bash
 export DOCKER_SOCK=/run/user/$(id -u)/docker.sock
-docker compose up -d --force-recreate admin-ui
+docker compose up -d --force-recreate admin_ui
 ```
 
 `./preflight.sh` prints the exact command for your system when it detects rootless Docker.
@@ -324,7 +324,7 @@ docker compose up --build -d
 > If you selected a Local or Hybrid workflow, the `local-ai-server` may take 15–20 minutes on first startup to load LLM/TTS models depending on your CPU, RAM, and disk speed. This is expected and readiness may show degraded until models have fully loaded. Monitor with:
 >
 > ```bash
-> docker compose logs -f local-ai-server
+> docker compose logs -f local_ai_server
 > ```
 >
 > Subsequent restarts are typically much faster due to OS page cache. If startup is too slow for your hardware, consider using MEDIUM or LIGHT tier models and update the `.env` model paths accordingly.
@@ -339,7 +339,7 @@ After starting the service, you can check that it is running correctly.
 docker compose ps
 ```
 
-You should see the `ai-engine` container running, and `local-ai-server` if your selected configuration requires local STT/LLM/TTS.
+You should see the `ai_engine` container running, and `local_ai_server` if your selected configuration requires local STT/LLM/TTS.
 
 ## First Successful Call (Canonical Checklist)
 
@@ -355,10 +355,10 @@ Expected: `{"status":"healthy"}`
 
 ### 2) Confirm ARI connectivity
 
-In `ai-engine` logs, look for indicators that ARI is reachable and authenticated.
+In `ai_engine` logs, look for indicators that ARI is reachable and authenticated.
 
 ```bash
-docker compose logs -f ai-engine
+docker compose logs -f ai_engine
 ```
 
 If ARI is not reachable, verify `.env` values and that Asterisk ARI is enabled:
@@ -386,7 +386,7 @@ asterisk -rx "dialplan reload"
 Expected outcomes:
 - You hear a greeting.
 - The call appears in **Admin UI → Call History** (if enabled in your config/release).
-- `ai-engine` logs show the call entering Stasis and starting the configured transport.
+- `ai_engine` logs show the call entering Stasis and starting the configured transport.
 
 If you get “greeting only” or “no audio”, jump to:
 - **[Transport Compatibility](Transport-Mode-Compatibility.md)**
@@ -395,7 +395,7 @@ If you get “greeting only” or “no audio”, jump to:
 ### Check Container Logs
 
 ```bash
-docker compose logs -f ai-engine
+docker compose logs -f ai_engine
 ```
 
 Look for a message indicating a successful connection to Asterisk ARI and that the engine is ready to start the selected transport.
@@ -462,12 +462,12 @@ asterisk -rx "dialplan reload"
 - **AI does not respond**:
   - Check that your API keys in the `.env` file are correct.
 - **Audio Quality Issues**:
-  - Confirm AudioSocket is connected (see Asterisk CLI and `ai-engine` logs).
-  - Use a tmpfs/SSD for the media volume (default: `./asterisk_media` on host, mounted as `/mnt/asterisk_media` in `ai-engine`) to minimize I/O latency for file-based playback.
+  - Confirm AudioSocket is connected (see Asterisk CLI and `ai_engine` logs).
+  - Use a tmpfs/SSD for the media volume (default: `./asterisk_media` on host, mounted as `/mnt/asterisk_media` in `ai_engine`) to minimize I/O latency for file-based playback.
   - Verify you are not appending file extensions to ARI `sound:` URIs (Asterisk will add them automatically).
 
 - **No host Python 3 installed (scripts/Makefile)**:
-  - The Makefile auto-falls back to running helper scripts inside the `ai-engine` container. You’ll see a hint when it does.
+  - The Makefile auto-falls back to running helper scripts inside the `ai_engine` container. You’ll see a hint when it does.
   - Check your environment:
 
         ```bash
@@ -477,11 +477,11 @@ asterisk -rx "dialplan reload"
   - Run helpers directly in the container if desired:
 
         ```bash
-        docker compose exec -T ai-engine python /app/scripts/validate_externalmedia_config.py
-        docker compose exec -T ai-engine python /app/scripts/test_externalmedia_call.py
-        docker compose exec -T ai-engine python /app/scripts/monitor_externalmedia.py
-        docker compose exec -T ai-engine python /app/scripts/capture_test_logs.py --duration 40
-        docker compose exec -T ai-engine python /app/scripts/analyze_logs.py /app/logs/latest.json
+        docker compose exec -T ai_engine python /app/scripts/validate_externalmedia_config.py
+        docker compose exec -T ai_engine python /app/scripts/test_externalmedia_call.py
+        docker compose exec -T ai_engine python /app/scripts/monitor_externalmedia.py
+        docker compose exec -T ai_engine python /app/scripts/capture_test_logs.py --duration 40
+        docker compose exec -T ai_engine python /app/scripts/analyze_logs.py /app/logs/latest.json
         ```
 
 For more advanced troubleshooting, refer to the project's main `README.md` or open an issue in the repository.

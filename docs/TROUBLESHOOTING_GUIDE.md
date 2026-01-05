@@ -112,12 +112,12 @@ This performs comprehensive system checks:
 
 ### Call History DB (if missing or empty)
 
-Call History is stored in a SQLite DB under `./data` on the host (mounted into `ai-engine` as `/app/data`).
+Call History is stored in a SQLite DB under `./data` on the host (mounted into `ai_engine` as `/app/data`).
 
 Quick checks:
 ```bash
 ls -la ./data
-docker compose logs ai-engine | grep -i \"call history\" | tail -n 20
+docker compose logs ai_engine | grep -i \"call history\" | tail -n 20
 ```
 
 Common fixes:
@@ -141,7 +141,7 @@ If container control (start/stop/restart) fails from the UI:
   - Rootless Docker/Podman: often `DOCKER_SOCK=/run/user/<uid>/docker.sock`
 - Then recreate the Admin UI container so the mount updates:
 ```bash
-docker compose up -d --force-recreate admin-ui
+docker compose up -d --force-recreate admin_ui
 ```
 
 If containers are running but the UI shows “unreachable”:
@@ -255,7 +255,7 @@ docker ps | grep ai_engine
 
 **Fix:** Start container:
 ```bash
-docker compose up -d ai-engine
+docker compose up -d ai_engine
 ```
 
 ---
@@ -1337,7 +1337,7 @@ sudo nano /etc/resolv.conf
 **Solution:**
 ```bash
 # Use docker-compose instead
-docker-compose up -d ai-engine admin-ui
+docker compose up -d ai_engine admin_ui
 
 # Or install Docker Compose v2
 sudo apt-get update
@@ -1439,7 +1439,7 @@ agent troubleshoot --last --symptom garbled
 docker logs -f ai_engine
 
 # Restart services
-docker compose restart ai-engine
+docker compose restart ai_engine
 ```
 
 ### Essential Configs

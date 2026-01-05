@@ -272,17 +272,18 @@ async def _check_active_calls() -> dict:
     """
     import httpx
     
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            # Try multiple possible endpoints
-            for url in [
-                "http://127.0.0.1:15000/sessions/stats",
-                "http://ai-engine:15000/sessions/stats",
-            ]:
-                try:
-                    resp = await client.get(url)
-                    if resp.status_code == 200:
-                        data = resp.json()
+	    try:
+	        async with httpx.AsyncClient(timeout=5.0) as client:
+	            # Try multiple possible endpoints
+	            for url in [
+	                "http://127.0.0.1:15000/sessions/stats",
+	                "http://ai_engine:15000/sessions/stats",
+	                "http://ai-engine:15000/sessions/stats",
+	            ]:
+	                try:
+	                    resp = await client.get(url)
+	                    if resp.status_code == 200:
+	                        data = resp.json()
                         active = data.get("active_calls", data.get("active_sessions", 0))
                         return {"active_calls": active, "reachable": True}
                 except httpx.ConnectError:

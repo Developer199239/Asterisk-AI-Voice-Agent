@@ -124,7 +124,7 @@ const ConfigEditor = () => {
                 setApplyMethod(recommended === 'hot_reload' ? 'hot_reload' : 'restart');
                 setPendingApply(true);
             } else if (response.data?.restart_required) {
-                setApplyPlan([{ service: 'ai-engine', method: 'restart', endpoint: '/api/system/containers/ai_engine/restart' }]);
+                setApplyPlan([{ service: 'ai_engine', method: 'restart', endpoint: '/api/system/containers/ai_engine/restart' }]);
                 setApplyMethod('restart');
                 setPendingApply(true);
             } else {
@@ -183,7 +183,7 @@ const ConfigEditor = () => {
                 if (resp.data?.restart_required || resp.data?.status === 'partial') {
                     setWarning('Hot reload completed but some changes still require an AI Engine restart.');
                     setTimeout(() => setWarning(null), 15000);
-                    setApplyPlan([{ service: 'ai-engine', method: 'restart', endpoint: '/api/system/containers/ai_engine/restart' }]);
+                    setApplyPlan([{ service: 'ai_engine', method: 'restart', endpoint: '/api/system/containers/ai_engine/restart' }]);
                     setApplyMethod('restart');
                     setPendingApply(true);
                     return;

@@ -416,26 +416,26 @@ The `./install.sh` script starts the correct services automatically based on you
 
 **For OpenAI Realtime or Deepgram** (cloud-only):
 ```bash
-docker compose up -d --build ai-engine
+docker compose up -d --build ai_engine
 ```
 
 **For Local Hybrid** (needs local models):
 ```bash
-# Start local-ai-server first
-docker compose up -d local-ai-server
+# Start local_ai_server first
+docker compose up -d local_ai_server
 
 # Wait for health (first start may take 5-10 min to load models)
-docker compose logs -f local-ai-server
+docker compose logs -f local_ai_server
 
 # Once healthy, start ai-engine
-docker compose up -d --build ai-engine
+docker compose up -d --build ai_engine
 ```
 
 ### 4.2 Monitor Startup
 
 ```bash
 # Watch ai-engine logs
-docker compose logs -f ai-engine
+docker compose logs -f ai_engine
 
 # Look for these key messages:
 # ✅ "Successfully connected to ARI"
@@ -496,7 +496,7 @@ curl http://127.0.0.1:15000/health
 3. **Monitor logs during the call**:
 
 ```bash
-docker compose logs -f ai-engine | grep -E "Stasis|Audio|Provider|Greeting"
+docker compose logs -f ai_engine | grep -E "Stasis|Audio|Provider|Greeting"
 ```
 
 **Look for**:
@@ -534,7 +534,7 @@ curl http://127.0.0.1:15000/metrics | grep ai_agent
 **Solution**:
 ```bash
 # Check ai-engine logs
-docker compose logs ai-engine | tail -50
+docker compose logs ai_engine | tail -50
 
 # Look for:
 # ✅ "Successfully connected to ARI"
@@ -557,7 +557,7 @@ cat .env | grep API_KEY
 **Solution**:
 ```bash
 # Check STT logs
-docker compose logs ai-engine | grep -E "STT|transcription|utterance"
+docker compose logs ai_engine | grep -E "STT|transcription|utterance"
 
 # Look for:
 # ✅ "Utterance detected" or "Speech segment captured"
@@ -584,7 +584,7 @@ docker compose logs ai-engine | grep -E "STT|transcription|utterance"
 curl http://127.0.0.1:15000/metrics | grep latency
 
 # For Local Hybrid: ensure local-ai-server is healthy
-docker compose logs local-ai-server | tail -20
+docker compose logs local_ai_server | tail -20
 
 # Look for model loading messages
 # Expected: "STT model loaded", "LLM model loaded", "TTS model loaded"

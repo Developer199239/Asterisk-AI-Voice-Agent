@@ -338,7 +338,7 @@ const Wizard = () => {
             const res = await axios.get('/api/system/health');
             const status = res.data?.local_ai_server?.status;
             if (status !== 'connected') {
-                throw new Error('Local AI Server is not reachable. Please start the local-ai-server container and retry.');
+                throw new Error('Local AI Server is not reachable. Please start the local_ai_server container and retry.');
             }
         } catch (err: any) {
             throw new Error(err?.message || 'Local AI Server health check failed.');
@@ -2121,7 +2121,7 @@ exten => s,1,NoOp(AI Agent - Local Full)
                                 </p>
                                 {!engineStatus.exists && (
                                     <pre className="bg-black text-green-400 p-3 rounded-md text-xs font-mono mb-4 overflow-x-auto">
-                                        docker-compose up -d ai-engine
+                                        docker compose up -d ai_engine
                                     </pre>
                                 )}
                                 <button

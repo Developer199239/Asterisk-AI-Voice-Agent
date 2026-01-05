@@ -62,7 +62,7 @@ sudo ./preflight.sh --apply-fixes
 
 ```bash
 # Start the Admin UI container
-docker compose up -d --build admin-ui
+docker compose up -d --build admin_ui
 ```
 
 ### 3. Access the Dashboard
@@ -80,15 +80,15 @@ Follow the **Setup Wizard** to configure your providers and make a test call.
 ### 4. Verify Installation
 
 ```bash
-# Start ai-engine (required for health checks)
-docker compose up -d --build ai-engine
+# Start ai_engine (required for health checks)
+docker compose up -d --build ai_engine
 
-# Check ai-engine health
+# Check ai_engine health
 curl http://localhost:15000/health
 # Expected: {"status":"healthy"}
 
 # View logs for any errors
-docker compose logs ai-engine | tail -20
+docker compose logs ai_engine | tail -20
 ```
 
 ### 5. Connect Asterisk
@@ -137,7 +137,7 @@ agent doctor
 
 **View logs:**
 ```bash
-docker compose logs -f ai-engine
+docker compose logs -f ai_engine
 ```
 
 ---
@@ -279,7 +279,7 @@ active_pipeline: local_ollama
 - **Agent CLI Tools**: `doctor`, `troubleshoot`, `demo`, `init` commands.
 - **Modular Pipeline System**: Independent STT, LLM, and TTS provider selection.
 - **Dual Transport Support**: AudioSocket and ExternalMedia RTP (see Transport Compatibility matrix).
-- **High-Performance Architecture**: Separate `ai-engine` and `local-ai-server` containers.
+- **High-Performance Architecture**: Separate `ai_engine` and `local_ai_server` containers.
 - **Observability**: Built-in **Call History** for per-call debugging + optional `/metrics` scraping.
 - **State Management**: SessionStore for centralized, typed call state.
 - **Barge-In Support**: Interrupt handling with configurable gating.
@@ -290,7 +290,7 @@ Modern web interface for configuration and system management.
 
 **Quick Start:**
 ```bash
-docker compose up -d admin-ui
+docker compose up -d admin_ui
 # Access at: http://localhost:3003
 # Login: admin / admin (change immediately!)
 ```
@@ -406,14 +406,14 @@ Per-call debugging is handled via **Admin UI → Call History**.
 
 Two-container architecture for performance and scalability:
 
-1. **`ai-engine`** (Lightweight orchestrator): Connects to Asterisk via ARI, manages call lifecycle.
-2. **`local-ai-server`** (Optional): Runs local STT/LLM/TTS models (Vosk, Sherpa, Kroko, Piper, Kokoro, llama.cpp).
+1. **`ai_engine`** (Lightweight orchestrator): Connects to Asterisk via ARI, manages call lifecycle.
+2. **`local_ai_server`** (Optional): Runs local STT/LLM/TTS models (Vosk, Sherpa, Kroko, Piper, Kokoro, llama.cpp).
 
 ```mermaid
 graph LR
-    A[Asterisk Server] <-->|ARI, RTP| B[ai-engine]
+    A[Asterisk Server] <-->|ARI, RTP| B[ai_engine]
     B <-->|API| C[AI Provider]
-    B <-->|WS| D[local-ai-server]
+    B <-->|WS| D[local_ai_server]
     
     style A fill:#f9f,stroke:#333,stroke-width:2px
     style B fill:#bbf,stroke:#333,stroke-width:2px

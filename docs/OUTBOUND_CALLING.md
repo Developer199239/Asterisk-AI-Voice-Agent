@@ -62,7 +62,7 @@ Use a local extension (e.g., `2765`) and an external number (E.164) to validate:
 - Admin UI → **Call Scheduling**:
   - Lead “Last Error”, “Outcome”, “AMD”, “DTMF”, and “Call History” modal
 - Engine logs:
-  - `docker compose logs -f ai-engine`
+  - `docker compose logs -f ai_engine`
 - Asterisk console:
   - `asterisk -rvvvvv`
 
