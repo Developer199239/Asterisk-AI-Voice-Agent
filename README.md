@@ -107,8 +107,10 @@ For users who prefer the command line or need headless setup.
 ### Option A: Interactive CLI
 ```bash
 ./install.sh
-agent quickstart
+agent init
 ```
+
+> Note: `agent quickstart` is still available for backward compatibility, but `agent init` is the recommended CLI wizard for v5+.
 
 ### Option B: Manual Setup
 ```bash
@@ -191,7 +193,7 @@ docker compose logs -f ai_engine
 
 #### v4.2 - Google Live API & Enhanced Setup
 - **🤖 Google Live API**: Gemini 2.0 Flash integration.
-- **🚀 Interactive Setup**: `agent quickstart` wizard.
+- **🚀 Interactive Setup**: `agent init` wizard (`agent quickstart` remains available for backward compatibility).
 
 #### v4.1 - Tool Calling & Agent CLI
 - **🔧 Tool Calling System**: Transfer calls, send emails.
@@ -372,7 +374,8 @@ curl -sSL https://raw.githubusercontent.com/hkjarral/Asterisk-AI-Voice-Agent/mai
 
 **Commands:**
 ```bash
-agent quickstart          # Interactive setup wizard
+agent init               # Interactive setup wizard (recommended)
+# agent quickstart        # Backward-compatible legacy wizard
 agent dialplan            # Generate dialplan snippets
 agent config validate     # Validate configuration
 agent doctor --fix        # System health check

@@ -129,10 +129,12 @@ cd Asterisk-AI-Voice-Agent
 ./install.sh
 
 # Run CLI wizard
-agent quickstart
+agent init
 ```
 
 **Best for:** Headless servers, scripted deployments, CLI preference
+
+> Note: `agent quickstart` is still available for backward compatibility, but `agent init` is the recommended CLI wizard for v5+.
 
 ---
 

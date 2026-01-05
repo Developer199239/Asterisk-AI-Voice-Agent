@@ -635,11 +635,9 @@ agent demo -v
 # Run setup wizard
 agent init
 
-# Non-interactive mode (planned)
-agent init --non-interactive
-
-# Use template
-agent init --template openai-agent
+# Flags below are planned; they may exist but are not implemented in v5.0.0:
+# agent init --non-interactive
+# agent init --template <name>
 ```
 
 **What it configures:**
