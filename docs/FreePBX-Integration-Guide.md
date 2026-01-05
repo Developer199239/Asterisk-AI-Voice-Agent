@@ -1,6 +1,6 @@
 # FreePBX Integration Guide
 
-Complete guide for integrating Asterisk AI Voice Agent v4.6.0+ with FreePBX.
+Complete guide for integrating Asterisk AI Voice Agent v5.0.0+ with FreePBX.
 
 ## 1. Overview
 
@@ -11,6 +11,7 @@ If you’re setting this up for the first time, follow the canonical “first su
 - `INSTALLATION.md`
 - `Configuration-Reference.md` → "Call Selection & Precedence (Provider / Pipeline / Context)"
 - `Transport-Mode-Compatibility.md`
+- `OUTBOUND_CALLING.md` (alpha feature: outbound campaign dialer)
 
 This guide focuses on FreePBX integration mechanics (ARI user, dialplan routing, networking).
 

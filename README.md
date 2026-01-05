@@ -2,7 +2,7 @@
 
 # Asterisk AI Voice Agent
 
-![Version](https://img.shields.io/badge/version-4.6.0-blue.svg)
+![Version](https://img.shields.io/badge/version-5.0.0-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![Python](https://img.shields.io/badge/python-3.10+-blue.svg)
 ![Docker](https://img.shields.io/badge/docker-compose-blue.svg)
@@ -21,7 +21,7 @@ The most powerful, flexible open-source AI voice agent for Asterisk/FreePBX. Fea
 ## 📖 Table of Contents
 
 - [🚀 Quick Start](#-quick-start)
-- [🎉 What's New](#-whats-new-in-v460)
+- [🎉 What's New](#-whats-new-in-v500)
 - [🌟 Why Asterisk AI Voice Agent?](#-why-asterisk-ai-voice-agent)
 - [✨ Features](#-features)
 - [🎥 Demo](#-demo)
@@ -124,7 +124,7 @@ docker compose up -d
 Add this to your FreePBX (`extensions_custom.conf`):
 ```asterisk
 [from-ai-agent]
-exten => s,1,NoOp(Asterisk AI Voice Agent v4.6.0)
+exten => s,1,NoOp(Asterisk AI Voice Agent v5.0.0)
  same => n,Stasis(asterisk-ai-voice-agent)
  same => n,Hangup()
 ```
@@ -142,55 +142,26 @@ docker compose logs -f ai-engine
 
 ---
 
-## 🎉 What's New in v4.6.0
+## 🎉 What's New in v5.0.0
 
 <details open>
 <summary><b>Latest Updates</b></summary>
 
-### 🔒 Remote Asterisk + Secure ARI Support
-- **HTTPS/WSS ARI**: Configure `ASTERISK_ARI_SCHEME=https` for secure WebSocket events
-- **Custom ARI port**: `ASTERISK_ARI_PORT` (no longer hardcoded)
-- **SSL verification toggle**: `ASTERISK_ARI_SSL_VERIFY=false` for self-signed or hostname mismatch environments
+### 📞 Outbound Campaign Dialer (Alpha)
+- **Call Scheduling UI**: create campaigns, import leads, view outcomes
+- **Campaign scheduler**: pacing + concurrency (1–5)
+- **Voicemail detection**: Asterisk `AMD()` + voicemail drop
+- **Consent gate (optional)**: DTMF `1` accept / `2` deny
+- Docs: `docs/OUTBOUND_CALLING.md`
 
-### 📊 Call History & Analytics
-- **Full Call Logging**: Every call saved with conversation history, timing, and outcome
-- **Per-Call Debugging**: Review transcripts, tool executions, and errors from Admin UI
-- **Search & Filter**: Find calls by caller, provider, context, or date range
-- **Export**: Download call data as CSV or JSON
+### 🧩 Groq Speech (STT + TTS) for Modular Pipelines
+- Groq STT/TTS pipeline adapters for cloud-only modular pipelines
 
-### 🎤 Barge-In Improvements
-- **Immediate Interruption**: Agent audio stops instantly when caller speaks
-- **Provider-Owned Turn-Taking**: Full agents (Google, Deepgram, OpenAI, ElevenLabs) handle VAD natively
-- **Platform Flush**: Local playback clears immediately on interruption signal
-- **Transport Parity**: Works with both ExternalMedia RTP and AudioSocket
+### 🧠 Ollama & Local Pipeline Improvements
+- Streaming/segment gating improvements and safer fallbacks for Ollama-backed pipelines
 
-### 🧠 Additional Model Support
-- **Faster Whisper**: High-accuracy STT backend with GPU acceleration
-- **MeloTTS**: New neural TTS option for local pipelines
-- **Model Hot-Swap**: Switch models via Dashboard without container restart
-
-### 🔌 MCP Tool Integration
-- **External Tools Framework**: Connect AI agents to external services via Model Context Protocol
-- **Admin UI Config**: Configure MCP servers from the web interface
-
-### 🔒 RTP Security Hardening
-- **Remote Endpoint Pinning**: Lock RTP streams to prevent audio hijacking
-- **Allowlist Support**: Restrict allowed remote hosts for ExternalMedia
-- **Cross-Talk Prevention**: SSRC-based routing ensures call isolation
-
-### ✅ Config Management Determinism (Admin UI)
-- **Clear save vs apply**: apply plans and safer `.env` parsing/writing
-- **Env-driven runtime correctness**: compose avoids `${VAR:-default}` fallbacks that prevent UI env changes from taking effect
-
-### 🧰 Troubleshooting UX Improvements
-- **Call-centric logs/events**: improved filtering and “troubleshoot” flows for faster RCAs
-
-### 📞 Call Quality (Baseline)
-- **OpenAI Realtime audio tweak**: minor baseline adjustment for improved telephony alignment
-
-### 🚀 Pipeline-First Default
-- **`local_hybrid` Default**: Privacy-focused pipeline is now the out-of-box default
-- **Pipeline-Aware Readiness**: Health probes correctly reflect pipeline component status
+### 🔁 Attended (Warm) Transfer
+- DTMF acceptance flow and improved transfer UX
 
 </details>
 

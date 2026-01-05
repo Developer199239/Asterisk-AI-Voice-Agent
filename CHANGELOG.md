@@ -37,7 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Docs
 
-- Upgrade guidance: `v4.5.3 → v4.6.0` checklist in `docs/INSTALLATION.md`
+- Upgrade guidance: `v4.6.0 → v5.0.0` checklist in `docs/INSTALLATION.md`
 - IPv6 policy: warn/recommend disabling IPv6 for GA stability and document mitigation steps
 - Supported platforms: explicit Tier 3 best-effort guidance for openSUSE and Podman
 

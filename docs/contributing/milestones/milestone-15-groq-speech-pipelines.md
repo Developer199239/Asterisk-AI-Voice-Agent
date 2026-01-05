@@ -1,4 +1,4 @@
-# Milestone 22: Groq STT + TTS (Modular Pipelines)
+# Milestone 15: Groq STT + TTS (Modular Pipelines)
 
 **Status**: ✅ Complete  
 **Priority**: High  
