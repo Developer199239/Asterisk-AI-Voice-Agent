@@ -643,7 +643,7 @@ check_docker() {
         ROOTLESS_DOCS="$(github_docs_url "$(platform_yaml_get docker.rootless_docs || echo "docs/CROSS_PLATFORM_PLAN.md")" 2>/dev/null || true)"
         log_info "  Admin UI (rootless) tip:"
         log_info "    export DOCKER_SOCK=$ROOTLESS_SOCKET"
-        log_info "    ${COMPOSE_CMD:-docker compose} up -d --force-recreate admin-ui"
+        log_info "    ${COMPOSE_CMD:-docker compose} -p asterisk-ai-voice-agent up -d --force-recreate admin_ui"
         [ -n "$ROOTLESS_DOCS" ] && log_info "    Docs: $ROOTLESS_DOCS"
     fi
 }
@@ -661,7 +661,7 @@ check_compose() {
         COMPOSE_CMD="docker compose"
         COMPOSE_VER=$(docker compose version --short 2>/dev/null | sed 's/^v//')
         
-        # Create docker-compose wrapper if it doesn't exist (needed for admin-ui)
+        # Create docker-compose wrapper if it doesn't exist (needed for Admin UI)
         if ! command -v docker-compose &>/dev/null; then
             if [ "$APPLY_FIXES" = true ]; then
                 # Remove if it's a directory (broken state)
@@ -672,7 +672,7 @@ docker compose "$@"' > /usr/local/bin/docker-compose
                 chmod +x /usr/local/bin/docker-compose
                 log_ok "Created docker-compose wrapper for compatibility"
             else
-                log_warn "docker-compose command not found (admin-ui needs this)"
+                log_warn "docker-compose command not found (Admin UI needs this)"
                 FIX_CMDS+=("echo '#!/bin/bash\ndocker compose \"\$@\"' > /usr/local/bin/docker-compose && chmod +x /usr/local/bin/docker-compose")
                 log_info "  Docs: $COMPOSE_AAVA_DOCS_URL"
             fi
@@ -923,7 +923,7 @@ check_env() {
             fi
             rm -f "$SCRIPT_DIR/.env.bak" 2>/dev/null || true
             log_ok "Set LOCAL_AI_MODE=${mode} in .env"
-            log_info "  Recreate local-ai-server container to apply .env changes"
+            log_info "  Recreate local_ai_server container to apply .env changes"
         fi
     fi
 
@@ -1267,8 +1267,8 @@ check_gpu() {
         log_info ""
         log_info "  To use GPU for LLM inference (optional, faster responses):"
         log_info "    1. Set LOCAL_LLM_GPU_LAYERS=-1 in .env"
-        log_info "    2. Start local-ai-server with GPU override:"
-        log_info "       ${COMPOSE_CMD:-docker compose} -f docker-compose.yml -f docker-compose.gpu.yml up -d local-ai-server"
+        log_info "    2. Start local_ai_server with GPU override:"
+        log_info "       ${COMPOSE_CMD:-docker compose} -p asterisk-ai-voice-agent -f docker-compose.yml -f docker-compose.gpu.yml up -d local_ai_server"
     else
         log_warn "Docker GPU passthrough test failed"
         log_info "  GPU detected and toolkit installed, but Docker cannot access GPU"
@@ -1428,7 +1428,7 @@ print_summary() {
         echo "Next steps:"
         echo ""
         echo "  1. Start the Admin UI:"
-        echo "     ${COMPOSE_CMD:-docker compose} up -d admin-ui"
+        echo "     ${COMPOSE_CMD:-docker compose} -p asterisk-ai-voice-agent up -d admin_ui"
         echo ""
         if [ -n "${SSH_CONNECTION:-}" ] || [ -n "${SSH_TTY:-}" ]; then
             echo "  2. Access the Admin UI:"
@@ -1437,11 +1437,11 @@ print_summary() {
             echo "  2. Open: http://localhost:3003"
         fi
         echo ""
-        echo "  3. Complete the Setup Wizard, then start ai-engine:"
-        echo "     ${COMPOSE_CMD:-docker compose} up -d ai-engine"
+        echo "  3. Complete the Setup Wizard, then start ai_engine:"
+        echo "     ${COMPOSE_CMD:-docker compose} -p asterisk-ai-voice-agent up -d ai_engine"
         echo ""
         echo "  4. For local_hybrid or local_only pipeline, also start:"
-        echo "     ${COMPOSE_CMD:-docker compose} up -d local-ai-server"
+        echo "     ${COMPOSE_CMD:-docker compose} -p asterisk-ai-voice-agent up -d local_ai_server"
         echo ""
     elif [ ${#FAILURES[@]} -eq 0 ]; then
         touch "$SCRIPT_DIR/.preflight-ok"
@@ -1462,7 +1462,7 @@ print_summary() {
         echo "Next steps:"
         echo ""
         echo "  1. Start the Admin UI:"
-        echo "     ${COMPOSE_CMD:-docker compose} up -d admin-ui"
+        echo "     ${COMPOSE_CMD:-docker compose} -p asterisk-ai-voice-agent up -d admin_ui"
         echo ""
         if [ -n "${SSH_CONNECTION:-}" ] || [ -n "${SSH_TTY:-}" ]; then
             echo "  2. Access the Admin UI:"
@@ -1471,11 +1471,11 @@ print_summary() {
             echo "  2. Open: http://localhost:3003"
         fi
         echo ""
-        echo "  3. Complete the Setup Wizard, then start ai-engine:"
-        echo "     ${COMPOSE_CMD:-docker compose} up -d ai-engine"
+        echo "  3. Complete the Setup Wizard, then start ai_engine:"
+        echo "     ${COMPOSE_CMD:-docker compose} -p asterisk-ai-voice-agent up -d ai_engine"
         echo ""
         echo "  4. For local_hybrid or local_only pipeline, also start:"
-        echo "     ${COMPOSE_CMD:-docker compose} up -d local-ai-server"
+        echo "     ${COMPOSE_CMD:-docker compose} -p asterisk-ai-voice-agent up -d local_ai_server"
         echo ""
     else
         echo -e "${RED}Cannot proceed - fix failures above first.${NC}"

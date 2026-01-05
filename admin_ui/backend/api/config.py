@@ -348,9 +348,9 @@ async def update_yaml_config(update: ConfigUpdate):
         except Exception:
             pass  # Fall back to restart if comparison fails
         
-        apply_plan = ([{"service": "ai-engine", "method": "hot_reload", "endpoint": "/api/system/containers/ai_engine/reload"}]
+        apply_plan = ([{"service": "ai_engine", "method": "hot_reload", "endpoint": "/api/system/containers/ai_engine/reload"}]
                      if recommended_method == "hot_reload"
-                     else [{"service": "ai-engine", "method": "restart", "endpoint": "/api/system/containers/ai_engine/restart"}])
+                     else [{"service": "ai_engine", "method": "restart", "endpoint": "/api/system/containers/ai_engine/restart"}])
 
         return {
             "status": "success",
@@ -602,11 +602,11 @@ async def update_env(env_data: Dict[str, Optional[str]]):
 
         apply_plan = []
         if impacts_ai_engine:
-            apply_plan.append({"service": "ai-engine", "method": "restart", "endpoint": "/api/system/containers/ai_engine/restart"})
+            apply_plan.append({"service": "ai_engine", "method": "restart", "endpoint": "/api/system/containers/ai_engine/restart"})
         if impacts_local_ai:
-            apply_plan.append({"service": "local-ai-server", "method": "restart", "endpoint": "/api/system/containers/local_ai_server/restart"})
+            apply_plan.append({"service": "local_ai_server", "method": "restart", "endpoint": "/api/system/containers/local_ai_server/restart"})
         if impacts_admin_ui:
-            apply_plan.append({"service": "admin-ui", "method": "restart", "endpoint": "/api/system/containers/admin_ui/restart"})
+            apply_plan.append({"service": "admin_ui", "method": "restart", "endpoint": "/api/system/containers/admin_ui/restart"})
 
         message = "Environment saved. Restart impacted services to apply changes."
         if impacts_admin_ui:

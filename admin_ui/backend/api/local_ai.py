@@ -719,7 +719,7 @@ async def switch_model(request: SwitchModelRequest):
                 if prev_llm:
                     await _try_ws_switch({"type": "switch_model", "llm_model_path": prev_llm})
                 try:
-                    await _recreate_via_compose("local-ai-server")
+                    await _recreate_via_compose("local_ai_server")
                 except Exception:
                     pass
                 return SwitchModelResponse(
@@ -753,7 +753,7 @@ async def switch_model(request: SwitchModelRequest):
     # 4. Recreate container if needed (restart doesn't reload .env)
     if requires_restart:
         try:
-            await _recreate_via_compose("local-ai-server")
+            await _recreate_via_compose("local_ai_server")
         except Exception as e:
             # Attempt rollback on any error (env + YAML)
             try:
@@ -793,7 +793,7 @@ async def switch_model(request: SwitchModelRequest):
             except Exception:
                 pass
     try:
-        await _recreate_via_compose("local-ai-server")
+        await _recreate_via_compose("local_ai_server")
     except Exception:
         pass
 
@@ -1016,7 +1016,7 @@ async def rebuild_local_ai_server(request: RebuildRequest):
             )
 
         # Run docker compose build with build args
-        cmd = ["docker", "compose", "build"] + build_args + ["local-ai-server"]
+        cmd = ["docker", "compose", "-p", "asterisk-ai-voice-agent", "build"] + build_args + ["local_ai_server"]
         
         process = subprocess.Popen(
             cmd,
@@ -1038,7 +1038,7 @@ async def rebuild_local_ai_server(request: RebuildRequest):
         
         # Now recreate the container to use the new image
         from api.system import _recreate_via_compose
-        await _recreate_via_compose("local-ai-server")
+        await _recreate_via_compose("local_ai_server")
         
         backends_enabled = []
         if request.include_faster_whisper:

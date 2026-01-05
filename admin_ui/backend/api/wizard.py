@@ -610,7 +610,7 @@ async def start_engine(action: str = "start"):
         if action == "rebuild":
             add_step("rebuild", "running", "Rebuilding AI Engine image...")
             result = subprocess.run(
-                ["docker", "compose", "build", "--no-cache", "ai-engine"],
+                ["docker", "compose", "-p", "asterisk-ai-voice-agent", "build", "--no-cache", "ai_engine"],
                 cwd=PROJECT_ROOT,
                 capture_output=True, text=True, timeout=300
             )
@@ -629,7 +629,7 @@ async def start_engine(action: str = "start"):
         if not container_exists:
             add_step("build", "running", "Building AI Engine image (this may take 1-2 minutes)...")
             build_result = subprocess.run(
-                ["docker", "compose", "build", "ai-engine"],
+                ["docker", "compose", "-p", "asterisk-ai-voice-agent", "build", "ai_engine"],
                 cwd=PROJECT_ROOT,
                 capture_output=True, text=True, timeout=300  # 5 min timeout for build
             )
@@ -651,17 +651,17 @@ async def start_engine(action: str = "start"):
         if action == "restart" and container_running:
             add_step("restart", "running", "Restarting AI Engine...")
             result = subprocess.run(
-                ["docker", "compose", "restart", "ai-engine"],
+                ["docker", "compose", "-p", "asterisk-ai-voice-agent", "restart", "ai_engine"],
                 cwd=PROJECT_ROOT,
                 capture_output=True, text=True, timeout=60
             )
         else:
             add_step("start", "running", "Starting AI Engine container...")
             # Use up -d with --force-recreate if container exists
-            cmd = ["docker", "compose", "up", "-d"]
+            cmd = ["docker", "compose", "-p", "asterisk-ai-voice-agent", "up", "-d"]
             if container_exists:
                 cmd.append("--force-recreate")
-            cmd.append("ai-engine")
+            cmd.append("ai_engine")
             
             result = subprocess.run(
                 cmd,
@@ -1837,7 +1837,7 @@ async def start_local_ai_server():
         if already_running:
             cmd.append("--force-recreate")
             print("DEBUG: Container already running, using --force-recreate")
-        cmd.append("local-ai-server")
+        cmd.append("local_ai_server")
         
         result = subprocess.run(
             cmd,
@@ -2508,9 +2508,9 @@ async def save_setup_config(config: SetupConfig):
                 try:
                     gpu_available = os.environ.get("GPU_AVAILABLE", "").lower() == "true"
                     if gpu_available:
-                        cmd = ["docker", "compose", "-f", "docker-compose.yml", "-f", "docker-compose.gpu.yml", "up", "-d", "local-ai-server"]
+                        cmd = ["docker", "compose", "-p", "asterisk-ai-voice-agent", "-f", "docker-compose.yml", "-f", "docker-compose.gpu.yml", "up", "-d", "local_ai_server"]
                     else:
-                        cmd = ["docker", "compose", "up", "-d", "local-ai-server"]
+                        cmd = ["docker", "compose", "-p", "asterisk-ai-voice-agent", "up", "-d", "local_ai_server"]
                     subprocess.run(cmd, cwd=PROJECT_ROOT, capture_output=True, timeout=120)
                 except Exception as e:
                     print(f"Error starting local_ai_server: {e}")
@@ -2597,9 +2597,9 @@ async def save_setup_config(config: SetupConfig):
                 try:
                     gpu_available = os.environ.get("GPU_AVAILABLE", "").lower() == "true"
                     if gpu_available:
-                        cmd = ["docker", "compose", "-f", "docker-compose.yml", "-f", "docker-compose.gpu.yml", "up", "-d", "local-ai-server"]
+                        cmd = ["docker", "compose", "-p", "asterisk-ai-voice-agent", "-f", "docker-compose.yml", "-f", "docker-compose.gpu.yml", "up", "-d", "local_ai_server"]
                     else:
-                        cmd = ["docker", "compose", "up", "-d", "local-ai-server"]
+                        cmd = ["docker", "compose", "-p", "asterisk-ai-voice-agent", "up", "-d", "local_ai_server"]
                     subprocess.run(cmd, cwd=PROJECT_ROOT, capture_output=True, timeout=120)
                 except Exception as e:
                     print(f"Error starting local_ai_server: {e}")
