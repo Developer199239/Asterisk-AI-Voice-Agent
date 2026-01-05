@@ -136,12 +136,14 @@ print_fix_and_docs() {
 
 # Parse args
 LOCAL_AI_MODE_OVERRIDE=""
+PERSIST_MEDIA_MOUNT=false
 for arg in "$@"; do
     case $arg in
         --apply-fixes) APPLY_FIXES=true ;;
         --local-ai-mode=*) LOCAL_AI_MODE_OVERRIDE="${arg#*=}" ;;
         --local-ai-minimal) LOCAL_AI_MODE_OVERRIDE="minimal" ;;
         --local-ai-full) LOCAL_AI_MODE_OVERRIDE="full" ;;
+        --persist-media-mount) PERSIST_MEDIA_MOUNT=true ;;
         --help|-h) 
             echo "AAVA Pre-flight Check"
             echo ""
@@ -152,6 +154,7 @@ for arg in "$@"; do
             echo "  --local-ai-mode=MODE  Set LOCAL_AI_MODE in .env (MODE=full|minimal)"
             echo "  --local-ai-minimal    Shortcut for --local-ai-mode=minimal"
             echo "  --local-ai-full       Shortcut for --local-ai-mode=full"
+            echo "  --persist-media-mount Persist Asterisk sounds bind mount in /etc/fstab when needed"
             echo "  --help         Show this help message"
             echo ""
             echo "Exit codes:"
@@ -1074,6 +1077,18 @@ check_asterisk_uid_gid() {
     # Set up media directory with setgid bit for group permission inheritance
     MEDIA_DIR="$SCRIPT_DIR/asterisk_media/ai-generated"
     ASTERISK_SOUNDS_LINK="/var/lib/asterisk/sounds/ai-generated"
+
+    # Detect when Asterisk can't traverse the media directory path. Common pitfall:
+    # project lives under /root (0700), so Asterisk sees "file does not exist" for ai-generated sounds.
+    local use_bind_mount=false
+    if [ -d "/var/lib/asterisk/sounds" ] && id asterisk &>/dev/null; then
+        if ! sudo -u asterisk test -x "$MEDIA_DIR" 2>/dev/null; then
+            use_bind_mount=true
+            log_warn "Asterisk user cannot access media directory path; file playback via symlink may fail"
+            log_info "  media_dir=$MEDIA_DIR"
+            log_info "  Fix: use a bind mount at $ASTERISK_SOUNDS_LINK (avoids /root traversal)."
+        fi
+    fi
     if [ "$APPLY_FIXES" = true ]; then
         # Create directory if it doesn't exist
         mkdir -p "$MEDIA_DIR" 2>/dev/null
@@ -1102,15 +1117,62 @@ check_asterisk_uid_gid() {
         # Create the Asterisk sounds symlink so Asterisk can serve generated audio.
         # Only do this when Asterisk sounds directory exists on host.
         if [ -d "/var/lib/asterisk/sounds" ]; then
-            if [ -e "$ASTERISK_SOUNDS_LINK" ] && [ ! -L "$ASTERISK_SOUNDS_LINK" ]; then
-                log_warn "Asterisk sounds path exists but is not a symlink: $ASTERISK_SOUNDS_LINK"
-                log_info "  Fix manually: sudo mv $ASTERISK_SOUNDS_LINK ${ASTERISK_SOUNDS_LINK}.bak && sudo ln -sf $MEDIA_DIR $ASTERISK_SOUNDS_LINK"
+            if [ "$use_bind_mount" = true ]; then
+                # Clean up accidental nested symlink: <media_dir>/ai-generated -> <media_dir>
+                if [ -L "$MEDIA_DIR/ai-generated" ]; then
+                    local resolved
+                    resolved="$(readlink -f "$MEDIA_DIR/ai-generated" 2>/dev/null || true)"
+                    if [ "$resolved" = "$MEDIA_DIR" ]; then
+                        rm -f "$MEDIA_DIR/ai-generated" 2>/dev/null || sudo rm -f "$MEDIA_DIR/ai-generated" 2>/dev/null || true
+                    fi
+                fi
+
+                # Replace any existing symlink at the mountpoint.
+                if [ -L "$ASTERISK_SOUNDS_LINK" ]; then
+                    rm -f "$ASTERISK_SOUNDS_LINK" 2>/dev/null || sudo rm -f "$ASTERISK_SOUNDS_LINK" 2>/dev/null || true
+                fi
+                mkdir -p "$ASTERISK_SOUNDS_LINK" 2>/dev/null || sudo mkdir -p "$ASTERISK_SOUNDS_LINK" 2>/dev/null || true
+
+                if mountpoint -q "$ASTERISK_SOUNDS_LINK" 2>/dev/null; then
+                    log_ok "Asterisk sounds bind mount already present: $ASTERISK_SOUNDS_LINK"
+                elif sudo mount --bind "$MEDIA_DIR" "$ASTERISK_SOUNDS_LINK" 2>/dev/null; then
+                    log_ok "Asterisk sounds bind mount: $ASTERISK_SOUNDS_LINK ⇢ $MEDIA_DIR"
+                else
+                    log_warn "Could not create Asterisk sounds bind mount (may need sudo)"
+                    FIX_CMDS+=("sudo mount --bind $MEDIA_DIR $ASTERISK_SOUNDS_LINK")
+                fi
+
+                # Optional: persist bind mount across reboots.
+                local fstab_line="$MEDIA_DIR $ASTERISK_SOUNDS_LINK none bind 0 0"
+                if [ "$PERSIST_MEDIA_MOUNT" = true ]; then
+                    if [ -f /etc/fstab ] && ! grep -Fqs "$fstab_line" /etc/fstab 2>/dev/null; then
+                        {
+                            echo ""
+                            echo "# AAVA: expose generated audio to Asterisk (bind mount)"
+                            echo "$fstab_line"
+                        } | sudo tee -a /etc/fstab >/dev/null 2>&1 || true
+                        log_ok "Persisted media bind mount in /etc/fstab"
+                    fi
+                else
+                    log_info "To persist this bind mount after reboot, add to /etc/fstab:"
+                    log_info "  $fstab_line"
+                    log_info "Or rerun: ./preflight.sh --apply-fixes --persist-media-mount"
+                fi
             else
-                if ln -sf "$MEDIA_DIR" "$ASTERISK_SOUNDS_LINK" 2>/dev/null; then
+                # Symlink mode (works when Asterisk can traverse MEDIA_DIR)
+                if [ -e "$ASTERISK_SOUNDS_LINK" ] && [ ! -L "$ASTERISK_SOUNDS_LINK" ]; then
+                    if [ -d "$ASTERISK_SOUNDS_LINK" ] && [ -z "$(ls -A "$ASTERISK_SOUNDS_LINK" 2>/dev/null)" ]; then
+                        rmdir "$ASTERISK_SOUNDS_LINK" 2>/dev/null || sudo rmdir "$ASTERISK_SOUNDS_LINK" 2>/dev/null || true
+                    else
+                        log_warn "Asterisk sounds path exists but is not a symlink: $ASTERISK_SOUNDS_LINK"
+                        log_info "  Fix manually: sudo mv $ASTERISK_SOUNDS_LINK ${ASTERISK_SOUNDS_LINK}.bak && sudo ln -sfn $MEDIA_DIR $ASTERISK_SOUNDS_LINK"
+                    fi
+                fi
+                if ln -sfn "$MEDIA_DIR" "$ASTERISK_SOUNDS_LINK" 2>/dev/null; then
                     log_ok "Asterisk sounds symlink: $ASTERISK_SOUNDS_LINK → $MEDIA_DIR"
                 else
                     log_warn "Could not create Asterisk sounds symlink (may need sudo)"
-                    FIX_CMDS+=("sudo ln -sf $MEDIA_DIR $ASTERISK_SOUNDS_LINK")
+                    FIX_CMDS+=("sudo ln -sfn $MEDIA_DIR $ASTERISK_SOUNDS_LINK")
                 fi
             fi
         fi
@@ -1122,7 +1184,14 @@ check_asterisk_uid_gid() {
         FIX_CMDS+=("sudo chgrp $AST_GID $MEDIA_DIR")
         FIX_CMDS+=("sudo chmod 2775 $MEDIA_DIR  # setgid for group inheritance")
         if [ -d "/var/lib/asterisk/sounds" ]; then
-            FIX_CMDS+=("sudo ln -sf $MEDIA_DIR $ASTERISK_SOUNDS_LINK  # allow Asterisk to serve generated audio")
+            if [ "$use_bind_mount" = true ]; then
+                FIX_CMDS+=("sudo rm -f $ASTERISK_SOUNDS_LINK && sudo mkdir -p $ASTERISK_SOUNDS_LINK")
+                FIX_CMDS+=("sudo mount --bind $MEDIA_DIR $ASTERISK_SOUNDS_LINK  # avoid /root traversal issues")
+                FIX_CMDS+=("# Optional persistence:")
+                FIX_CMDS+=("# echo '$MEDIA_DIR $ASTERISK_SOUNDS_LINK none bind 0 0' | sudo tee -a /etc/fstab")
+            else
+                FIX_CMDS+=("sudo ln -sfn $MEDIA_DIR $ASTERISK_SOUNDS_LINK  # allow Asterisk to serve generated audio")
+            fi
         fi
     fi
     
