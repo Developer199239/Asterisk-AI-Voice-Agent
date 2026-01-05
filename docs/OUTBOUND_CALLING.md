@@ -8,7 +8,7 @@ This feature adds a simple, AI-native outbound dialer inspired by Vicidial-style
 
 - **Campaign scheduler** (campaign timezone + daily window)
 - **Lead list import via CSV** (safe default: `skip_existing`)
-- **Pacing + concurrency** (target 1–5 concurrent calls)
+- **Pacing + concurrency** (validated for GA at `max_concurrent=1`; higher values allowed but not validated for GA yet)
 - **Asterisk AMD voicemail detection** (`AMD()`)
 - **Voicemail drop** (play a pre-recorded message and hang up)
 - **Consent gate (optional)**: play a consent prompt and capture DTMF (`1` accept / `2` deny)
@@ -17,7 +17,7 @@ This feature adds a simple, AI-native outbound dialer inspired by Vicidial-style
 ## Key Assumptions
 
 - Your **outbound trunk(s)** and **outbound routes** are already configured in Asterisk/FreePBX.
-- AAVA originates outbound calls using the **extension identity** `6789` by default, so FreePBX routing and caller-ID rules apply consistently.
+- AAVA originates outbound calls using your configured **outbound identity extension** (default `6789`), so FreePBX routing and caller-ID rules apply consistently.
 - This is a **single-node** design.
 
 ## Architecture (High Level)
@@ -37,7 +37,7 @@ See `docs/Configuration-Reference.md` for the full list and semantics. The most 
 
 ## Setup Steps (FreePBX-friendly)
 
-1. Update to AAVA `v5.0.0` (or `develop`) and start `admin-ui` + `ai-engine`.
+1. Update to AAVA `v5.0.0` (or `develop`) and start `admin_ui` + `ai_engine`.
 2. In Admin UI, open **Call Scheduling** and create a campaign.
 3. Configure (optional):
    - Consent gate
@@ -65,6 +65,10 @@ Use a local extension (e.g., `2765`) and an external number (E.164) to validate:
   - `docker compose logs -f ai_engine`
 - Asterisk console:
   - `asterisk -rvvvvv`
+- First-line setup fixes:
+  - `sudo ./preflight.sh --apply-fixes`
+  - `agent doctor`
+  - `docs/TROUBLESHOOTING_GUIDE.md`
 
 ## Reference Implementation Notes
 

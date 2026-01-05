@@ -38,6 +38,11 @@ git pull
 sudo ./preflight.sh --apply-fixes
 ```
 
+If preflight reports warnings or failures, resolve them first, then re-run preflight until it returns clean:
+- Troubleshooting: `docs/TROUBLESHOOTING_GUIDE.md`
+- Re-run: `sudo ./preflight.sh --apply-fixes`
+- Verify: `agent doctor`
+
 ### 3) Upgrade checklist (4.5.3 → 4.6.0)
 
 - `.env`:
@@ -84,6 +89,11 @@ docker compose up -d admin_ui
 # Complete the Setup Wizard in Admin UI, then start ai_engine
 docker compose up -d ai_engine
 ```
+
+If you hit permission/container/health issues during setup, start with:
+- `agent doctor`
+- `sudo ./preflight.sh --apply-fixes`
+- `docs/TROUBLESHOOTING_GUIDE.md`
 
 **Access the Admin UI:**
 - **Local:** `http://localhost:3003`
