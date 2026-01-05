@@ -23,6 +23,7 @@ on:
   schedule:
     # Run weekly on Monday at 7am UTC (after CodeQL)
     - cron: '0 7 * * 1'
+  workflow_dispatch:
 
 jobs:
   scan:
