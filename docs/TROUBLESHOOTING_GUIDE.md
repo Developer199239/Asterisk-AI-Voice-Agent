@@ -197,6 +197,43 @@ agent troubleshoot --list
 
 ## Common Issues
 
+### 0. Docker Build Fails (apt-get / DNS)
+
+**Symptoms:** `docker compose up -d --build ai_engine` fails with errors like:
+- `Temporary failure resolving 'deb.debian.org'`
+- `E: Unable to locate package build-essential`
+
+**Cause:** Docker/BuildKit can’t resolve DNS or doesn’t have outbound internet during image build. This is not related to your host Debian version (Debian inside the image can differ).
+
+**Fix (recommended):**
+```bash
+# Pull latest fixes (pins the base image to Debian 12/bookworm)
+git pull
+
+# Rebuild the engine image
+docker compose build --no-cache --pull ai_engine
+docker compose up -d ai_engine
+```
+
+**If DNS is still failing inside Docker:**
+```bash
+# Quick DNS probe inside a container
+docker run --rm busybox:1.36.1 nslookup deb.debian.org
+```
+
+If the DNS probe fails, set explicit DNS servers for Docker and restart it:
+```bash
+sudo mkdir -p /etc/docker
+printf '{\"dns\":[\"1.1.1.1\",\"8.8.8.8\"]}\n' | sudo tee /etc/docker/daemon.json
+sudo systemctl restart docker
+```
+
+If you’re on a Debian/Ubuntu host using `systemd-resolved`, also confirm Docker isn’t inheriting a loopback resolver (e.g. `127.0.0.53`):
+```bash
+readlink -f /etc/resolv.conf
+cat /etc/resolv.conf
+```
+
 ### 1. No Audio (Complete Silence)
 
 **Symptoms:** Neither caller nor agent can hear anything.

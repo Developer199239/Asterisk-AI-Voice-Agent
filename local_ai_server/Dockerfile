@@ -80,13 +80,13 @@ RUN if [ "$INCLUDE_KOKORO" = "true" ]; then \
     fi
 
 # --- Stage 2: Final Runtime Image ---
-FROM python:3.11-slim
+FROM python:3.11-slim-bookworm
 
 # Build argument to optionally include Kroko embedded server
 ARG INCLUDE_KROKO_EMBEDDED=false
 
 # Install runtime dependencies
-RUN apt-get update && apt-get install -y \
+RUN apt-get -o Acquire::Retries=5 update && apt-get install -y \
     libsndfile1 \
     libasound2 \
     libportaudio2 \

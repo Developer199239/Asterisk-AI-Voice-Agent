@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Additional provider integrations
 - Enhanced monitoring features
 
+### Fixed
+
+- Docker builds: pin Python base images to Debian 12 (`bookworm`) for `ai_engine` and `local_ai_server` to avoid upstream `python:3.11-slim` moving to newer Debian releases unexpectedly.
+
 ## [4.6.0] - 2025-12-29
 
 ### Added
