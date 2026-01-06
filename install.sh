@@ -568,10 +568,29 @@ wait_for_local_ai_health() {
     
     print_info "🔍 Checking local AI server status..."
     echo ""
-    
+
+    local i
+    for ((i=1; i<=max_wait; i++)); do
+        # Check 1: Container running
+        if ! docker ps --format '{{.Names}}' | grep -qx "local_ai_server"; then
+            echo ""  # Clear the progress line
+            print_warning "local_ai_server container is not running yet..."
+            sleep $check_interval
+            continue
+        fi
+
+        # Check 2: Port is open AND logs indicate the service has started
+        # We use a lightweight port check first, then corroborate with logs.
+        local port_open="false"
+        if command -v nc >/dev/null 2>&1; then
+            nc -z 127.0.0.1 8765 >/dev/null 2>&1 && port_open="true"
+        else
+            (echo > /dev/tcp/127.0.0.1/8765) >/dev/null 2>&1 && port_open="true"
+        fi
+
+        if [ "$port_open" = "true" ] && docker logs local_ai_server 2>&1 | tail -100 | grep -Eqi "listening on|server started|uvicorn running|application startup complete"; then
             echo ""  # Clear the progress line
             print_success "✅ local_ai_server is ready and listening on port 8765"
-            print_info "Models loaded successfully (verified from logs)"
             return 0
         fi
         

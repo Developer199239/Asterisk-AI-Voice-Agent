@@ -1,53 +1,61 @@
 from fastapi import APIRouter, HTTPException, UploadFile, File
 import yaml
 from yaml.constructor import ConstructorError
-from yaml.nodes import MappingNode
+from yaml.nodes import MappingNode, SequenceNode, ScalarNode
 import os
 import re
 import asyncio
 import glob
 import tempfile
 import sys
+import logging
 from contextlib import contextmanager
 from pydantic import BaseModel
 from typing import Dict, Any, Optional, Union
+from urllib.parse import urlparse
 import settings
 
 # A11: Maximum number of backups to keep
 MAX_BACKUPS = 5
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
-# YAML duplicate-key protection:
-# - PyYAML tolerates duplicate keys (last one wins), but the Admin UI frontend YAML parser rejects them.
-# - Enforce "no duplicate mapping keys" on reads/writes so we fail fast with a clear error.
-class _NoDuplicateSafeLoader(yaml.SafeLoader):
-    pass
+def _assert_no_duplicate_yaml_keys(node: yaml.Node) -> None:
+    """
+    Detect duplicate mapping keys before calling yaml.safe_load().
 
-
-def _construct_mapping_no_duplicates(loader: yaml.SafeLoader, node: MappingNode, deep: bool = False):
-    mapping = {}
-    for key_node, value_node in node.value:
-        key = loader.construct_object(key_node, deep=deep)
-        if key in mapping:
-            raise ConstructorError(
-                "while constructing a mapping",
-                node.start_mark,
-                f"found duplicate key ({key!r})",
-                key_node.start_mark,
-            )
-        mapping[key] = loader.construct_object(value_node, deep=deep)
-    return mapping
-
-
-_NoDuplicateSafeLoader.add_constructor(
-    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
-    _construct_mapping_no_duplicates,
-)
+    We avoid yaml.load() here to keep CodeQL happy while still enforcing our
+    "no duplicate keys" constraint for Admin UI config edits.
+    """
+    if isinstance(node, MappingNode):
+        seen: dict[str, ScalarNode] = {}
+        for key_node, value_node in node.value:
+            # Config files use string keys; if not, fall back to a stable repr.
+            if isinstance(key_node, ScalarNode):
+                key = str(key_node.value)
+            else:
+                key = str(key_node)
+            if key in seen:
+                raise ConstructorError(
+                    "while constructing a mapping",
+                    node.start_mark,
+                    f"found duplicate key ({key!r})",
+                    key_node.start_mark,
+                )
+            if isinstance(key_node, ScalarNode):
+                seen[key] = key_node
+            _assert_no_duplicate_yaml_keys(value_node)
+    elif isinstance(node, SequenceNode):
+        for item in node.value:
+            _assert_no_duplicate_yaml_keys(item)
 
 
 def _safe_load_no_duplicates(content: str):
-    return yaml.load(content, Loader=_NoDuplicateSafeLoader)
+    node = yaml.compose(content, Loader=yaml.SafeLoader)
+    if node is not None:
+        _assert_no_duplicate_yaml_keys(node)
+    return yaml.safe_load(content)
 
 # Regex to strip ANSI escape codes from logs
 ANSI_ESCAPE = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
@@ -55,6 +63,12 @@ ANSI_ESCAPE = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
 def strip_ansi_codes(text: str) -> str:
     """Remove ANSI escape codes from text for clean log files."""
     return ANSI_ESCAPE.sub('', text)
+
+def _url_host(url: str) -> str:
+    try:
+        return (urlparse(str(url)).hostname or "").lower()
+    except Exception:
+        return ""
 
 
 def _rotate_backups(base_path: str) -> None:
@@ -811,9 +825,10 @@ async def test_provider_connection(request: ProviderTestRequest):
             api_key = provider_config.get('api_key')
             if not api_key:
                 inferred_env = None
-                if 'groq' in provider_name or 'api.groq.com' in chat_base_url:
+                host = _url_host(chat_base_url)
+                if 'groq' in provider_name or host == 'api.groq.com':
                     inferred_env = 'GROQ_API_KEY'
-                elif 'openai' in provider_name or 'api.openai.com' in chat_base_url:
+                elif 'openai' in provider_name or host == 'api.openai.com':
                     inferred_env = 'OPENAI_API_KEY'
 
                 if inferred_env:
@@ -840,7 +855,9 @@ async def test_provider_connection(request: ProviderTestRequest):
                         return {"success": False, "message": "Invalid API key (401)"}
                     return {"success": False, "message": f"Provider API error: HTTP {response.status_code}"}
             except Exception as e:
-                return {"success": False, "message": f"Cannot connect to provider at {chat_base_url}: {str(e)}"}
+                # Avoid leaking exception internals in API responses (CodeQL).
+                logger.debug("OpenAI-compatible provider validation failed", error=str(e), exc_info=True)
+                return {"success": False, "message": f"Cannot connect to provider at {chat_base_url} (see server logs)"}
 
         # ============================================================
         # GROQ SPEECH (STT/TTS) - validate via /models (OpenAI-compatible)
@@ -850,13 +867,9 @@ async def test_provider_connection(request: ProviderTestRequest):
             if not api_key:
                 return {"success": False, "message": "GROQ_API_KEY not set (set api_key or env var)"}
 
-            # Derive an OpenAI-compatible base URL for validation.
-            # Prefer the configured STT/TTS base URLs if present, otherwise default to Groq.
+            # SECURITY: For provider validation, do not call user-provided base URLs.
+            # Keep this check pinned to the official Groq OpenAI-compatible endpoint.
             base_url = 'https://api.groq.com/openai/v1'
-            raw_url = (provider_config.get('stt_base_url') or provider_config.get('tts_base_url') or '').strip()
-            if raw_url and '/audio/' in raw_url:
-                base_url = raw_url.rsplit('/audio/', 1)[0]
-            base_url = base_url.rstrip('/')
 
             try:
                 async with httpx.AsyncClient() as client:
@@ -876,7 +889,8 @@ async def test_provider_connection(request: ProviderTestRequest):
                         return {"success": False, "message": "Invalid API key (401)"}
                     return {"success": False, "message": f"Provider API error: HTTP {response.status_code}"}
             except Exception as e:
-                return {"success": False, "message": f"Cannot connect to provider at {base_url}: {str(e)}"}
+                logger.debug("Groq Speech provider validation failed", error=str(e), exc_info=True)
+                return {"success": False, "message": f"Cannot connect to provider at {base_url} (see server logs)"}
                 
         elif 'google_live' in provider_config or ('llm_model' in provider_config and 'gemini' in provider_config.get('llm_model', '')):
             # Google Live

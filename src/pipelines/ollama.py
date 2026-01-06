@@ -31,6 +31,7 @@ import json
 from typing import Any, Dict, List, Optional, Union
 
 import aiohttp
+from urllib.parse import urlparse
 
 from ..logging_config import get_logger
 from ..tools.registry import tool_registry
@@ -92,8 +93,11 @@ class OllamaLLMAdapter(LLMComponent):
         # Guardrail: a common misconfiguration is leaving OpenAI-style pipeline options in place
         # while selecting the Ollama adapter (which uses /api/* endpoints). That yields nginx 404s.
         try:
-            base_url = str(merged.get("base_url") or "").strip().lower()
-            if "api.openai.com" in base_url or base_url.rstrip("/").endswith("/v1"):
+            base_url_raw = str(merged.get("base_url") or "").strip()
+            parsed = urlparse(base_url_raw)
+            host = (parsed.hostname or "").lower()
+            path = (parsed.path or "").rstrip("/")
+            if host == "api.openai.com" or path.endswith("/v1"):
                 logger.warning(
                     "Ollama base_url looks like an OpenAI endpoint; this will 404 on /api/chat",
                     base_url=merged.get("base_url"),

@@ -3197,7 +3197,7 @@ class Engine:
             with open(audio_file, "wb") as f:
                 f.write(audio_bytes)
             try:
-                os.chmod(audio_file, 0o664)
+                os.chmod(audio_file, 0o660)
             except Exception:
                 pass
 
@@ -10766,7 +10766,7 @@ class Engine:
             return web.json_response(stats, status=200)
         except Exception as exc:
             logger.debug("Sessions stats handler failed", error=str(exc), exc_info=True)
-            return web.json_response({"active_calls": 0, "error": str(exc)}, status=500)
+            return web.json_response({"active_calls": 0, "error": "internal_error"}, status=500)
 
     async def _mcp_status_handler(self, request):
         """Return MCP server/tool status for Admin UI (sanitized)."""
@@ -10776,7 +10776,7 @@ class Engine:
             return web.json_response(self.mcp_manager.get_status(), status=200)
         except Exception as exc:
             logger.debug("MCP status handler failed", error=str(exc), exc_info=True)
-            return web.json_response({"enabled": False, "error": str(exc)}, status=500)
+            return web.json_response({"enabled": False, "error": "internal_error"}, status=500)
 
     async def _mcp_test_handler(self, request):
         """Test an MCP server in the ai-engine container context.
@@ -10800,7 +10800,7 @@ class Engine:
             return web.json_response(result, status=200 if result.get("ok") else 500)
         except Exception as exc:
             logger.debug("MCP test handler failed", error=str(exc), exc_info=True)
-            return web.json_response({"ok": False, "error": str(exc)}, status=500)
+            return web.json_response({"ok": False, "error": "internal_error"}, status=500)
 
     async def _execute_provider_tool(
         self,
@@ -11071,7 +11071,8 @@ class Engine:
                 "ready": is_ready,
             }, status=status)
         except Exception as exc:
-            return web.json_response({"ready": False, "error": str(exc)}, status=500)
+            logger.debug("Ready handler failed", error=str(exc), exc_info=True)
+            return web.json_response({"ready": False, "error": "internal_error"}, status=500)
 
     async def _metrics_handler(self, request):
         """Expose Prometheus metrics."""
@@ -11080,7 +11081,8 @@ class Engine:
             # aiohttp forbids 'charset=' inside content_type arg; pass full header via headers.
             return web.Response(body=data, headers={"Content-Type": CONTENT_TYPE_LATEST})
         except Exception as exc:
-            return web.Response(text=str(exc), status=500)
+            logger.debug("Metrics handler failed", error=str(exc), exc_info=True)
+            return web.Response(text="metrics_error", status=500)
 
     async def _reload_handler(self, request):
         """Hot-reload configuration without restarting the engine.
@@ -11111,7 +11113,8 @@ class Engine:
                 new_config = load_config()
                 changes.append("Configuration file reloaded")
             except Exception as e:
-                errors.append(f"Failed to load config: {str(e)}")
+                logger.debug("Failed to load config on reload", error=str(e), exc_info=True)
+                errors.append("Failed to load config (see server logs)")
                 return web.json_response({
                     "success": False,
                     "message": "Failed to reload configuration",
@@ -11136,7 +11139,8 @@ class Engine:
                 self.transport_orchestrator = TransportOrchestrator(cfg_dict)
                 changes.append("TransportOrchestrator rebuilt (profiles/contexts refreshed)")
             except Exception as e:
-                errors.append(f"Error rebuilding TransportOrchestrator: {str(e)}")
+                logger.debug("Error rebuilding TransportOrchestrator", error=str(e), exc_info=True)
+                errors.append("Error rebuilding TransportOrchestrator (see server logs)")
             
             # Step 3: Reinitialize providers that have changed
             try:

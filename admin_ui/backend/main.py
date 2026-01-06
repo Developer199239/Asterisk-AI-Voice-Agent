@@ -24,7 +24,8 @@ def _ensure_shared_sqlite_perms() -> None:
             except Exception:
                 pass
             try:
-                os.chmod(str(parent), 0o2775)
+                # SECURITY: avoid world-readable perms for DB + WAL/SHM (transcripts/call history).
+                os.chmod(str(parent), 0o2770)
             except Exception:
                 pass
 
@@ -33,8 +34,7 @@ def _ensure_shared_sqlite_perms() -> None:
             if not candidate.exists():
                 continue
             try:
-                mode = candidate.stat().st_mode & 0o777
-                os.chmod(str(candidate), mode | 0o020)  # add g+w
+                os.chmod(str(candidate), 0o660)
             except Exception:
                 pass
     except Exception:
@@ -76,7 +76,7 @@ def _ensure_outbound_prompt_assets() -> None:
                 data = src.read_bytes()
                 dst.write_bytes(data)
                 try:
-                    os.chmod(str(dst), 0o664)
+                    os.chmod(str(dst), 0o660)
                 except Exception:
                     pass
             except Exception:
@@ -90,7 +90,8 @@ load_dotenv(settings.ENV_PATH)
 
 # Ensure files created by this process (SQLite WAL/SHM) are group-writable.
 try:
-    os.umask(0o002)
+    # SECURITY: keep group-writable, but avoid world-readable by default.
+    os.umask(0o007)
 except Exception:
     pass
 

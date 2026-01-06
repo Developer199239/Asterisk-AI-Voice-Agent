@@ -15,6 +15,14 @@ SECURITY POLICY:
 
 import os
 from typing import Any, Dict
+from urllib.parse import urlparse
+
+
+def _url_host(url: Any) -> str:
+    try:
+        return (urlparse(str(url)).hostname or "").lower()
+    except Exception:
+        return ""
 
 
 def _is_nonempty_string(val: Any) -> bool:
@@ -171,12 +179,12 @@ def inject_provider_api_keys(config_data: Dict[str, Any]) -> None:
                     continue
 
                 url_fields = ("chat_base_url", "tts_base_url", "realtime_base_url", "base_url", "ws_url")
-                url_blob = " ".join(str(provider_cfg.get(field, "")) for field in url_fields).lower()
+                url_hosts = {_url_host(provider_cfg.get(field, "")) for field in url_fields}
 
                 # If the provider is explicitly named openai*, always inject. If it's only "type: openai",
                 # inject only when it's actually pointing at OpenAI endpoints to avoid stomping other
                 # OpenAI-compatible providers (e.g., Groq/OpenRouter/etc).
-                if name_lower.startswith("openai") or "api.openai.com" in url_blob:
+                if name_lower.startswith("openai") or "api.openai.com" in url_hosts:
                     provider_cfg["api_key"] = openai_key
                     providers_block[provider_name] = provider_cfg
 
@@ -188,8 +196,8 @@ def inject_provider_api_keys(config_data: Dict[str, Any]) -> None:
                     continue
                 name_lower = str(provider_name).lower()
                 cfg_type = str(provider_cfg.get("type", "")).lower()
-                chat_base_url = str(provider_cfg.get("chat_base_url", "")).lower()
-                if name_lower.startswith("groq") or cfg_type == "groq" or "api.groq.com" in chat_base_url:
+                chat_host = _url_host(provider_cfg.get("chat_base_url", ""))
+                if name_lower.startswith("groq") or cfg_type == "groq" or chat_host == "api.groq.com":
                     provider_cfg["api_key"] = groq_key
                     providers_block[provider_name] = provider_cfg
         

@@ -18,6 +18,7 @@ import wave
 from io import BytesIO
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Callable, Dict, Iterable, Optional
+from urllib.parse import urlparse
 
 import aiohttp
 import websockets
@@ -32,6 +33,12 @@ logger = get_logger(__name__)
 
 
 # Shared helpers -----------------------------------------------------------------
+
+def _url_host(url: str) -> str:
+    try:
+        return (urlparse(str(url)).hostname or "").lower()
+    except Exception:
+        return ""
 
 
 def _merge_dicts(base: Dict[str, Any], override: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -413,7 +420,8 @@ class OpenAILLMAdapter(LLMComponent):
         # If both are present, treat `chat_base_url` as authoritative.
         if "base_url" in options and "chat_base_url" not in options:
             # Avoid applying known cross-provider leftovers (e.g., Groq base_url carried into OpenAI).
-            if "api.groq.com" not in str(options.get("base_url") or ""):
+            legacy_base = str(options.get("base_url") or "").strip()
+            if _url_host(legacy_base) != "api.groq.com":
                 merged["chat_base_url"] = options["base_url"]
         # Avoid validator selecting the wrong URL (it prioritizes `base_url`).
         merged.pop("base_url", None)
@@ -670,7 +678,7 @@ class OpenAILLMAdapter(LLMComponent):
         # ignore them and fall back to OpenAI defaults. This keeps modular providers interchangeable in pipelines.
         chat_base = str(merged.get("chat_base_url") or "")
         chat_model = str(merged.get("chat_model") or "")
-        if "api.groq.com" in chat_base or chat_model.startswith("llama-") or "mixtral" in chat_model:
+        if _url_host(chat_base) == "api.groq.com" or chat_model.startswith("llama-") or "mixtral" in chat_model:
             logger.warning(
                 "OpenAI LLM options look incompatible (likely from a previous provider); falling back to OpenAI defaults",
                 component=self.component_key,

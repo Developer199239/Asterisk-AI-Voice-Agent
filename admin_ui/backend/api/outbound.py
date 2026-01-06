@@ -81,6 +81,25 @@ def _media_uri_exists(media_uri: str) -> bool:
     p = os.path.join(_media_dir(), f"{base}.ulaw")
     return os.path.exists(p)
 
+def _safe_ai_generated_basename(media_uri: str) -> str:
+    uri = (media_uri or "").strip()
+    if not uri.startswith("sound:ai-generated/"):
+        raise HTTPException(status_code=400, detail="media_uri must be in sound:ai-generated/")
+    base = uri.split("sound:ai-generated/", 1)[1].strip()
+    if not base:
+        raise HTTPException(status_code=400, detail="Invalid media_uri")
+    if ("/" in base) or ("\\" in base) or (".." in base) or (not _SAFE_NAME_RE.match(base)):
+        raise HTTPException(status_code=400, detail="Invalid media_uri basename")
+    return base
+
+def _safe_ulaw_path_for_base(base: str) -> str:
+    media_dir = Path(_media_dir()).resolve()
+    candidate = (media_dir / f"{base}.ulaw").resolve()
+    # Prevent path traversal even if media_dir contains symlinks.
+    if candidate != media_dir and media_dir not in candidate.parents:
+        raise HTTPException(status_code=400, detail="Invalid media path")
+    return str(candidate)
+
 
 _SAFE_NAME_RE = re.compile(r"^[a-zA-Z0-9_.-]+$")
 
@@ -95,13 +114,8 @@ def _ulaw_to_wav_bytes(ulaw_data: bytes) -> bytes:
     return buf.getvalue()
 
 def _read_media_ulaw(media_uri: str) -> bytes:
-    media_uri = (media_uri or "").strip()
-    if not media_uri.startswith("sound:ai-generated/"):
-        raise HTTPException(status_code=400, detail="media_uri must be in sound:ai-generated/")
-    base = media_uri.split("sound:ai-generated/", 1)[1].strip()
-    if not base:
-        raise HTTPException(status_code=400, detail="Invalid media_uri")
-    ulaw_path = os.path.join(_media_dir(), f"{base}.ulaw")
+    base = _safe_ai_generated_basename(media_uri)
+    ulaw_path = _safe_ulaw_path_for_base(base)
     if not os.path.exists(ulaw_path):
         raise HTTPException(status_code=404, detail="Media file not found on server")
     with open(ulaw_path, "rb") as f:
@@ -215,7 +229,7 @@ async def upload_recording_to_library(kind: str = Query("generic"), file: Upload
     with open(path, "wb") as f:
         f.write(ulaw_data)
     try:
-        os.chmod(path, 0o664)
+        os.chmod(path, 0o660)
     except Exception:
         pass
 
@@ -646,7 +660,7 @@ async def upload_voicemail_media(campaign_id: str, file: UploadFile = File(...))
     with open(path, "wb") as f:
         f.write(ulaw_data)
     try:
-        os.chmod(path, 0o664)
+        os.chmod(path, 0o660)
     except Exception:
         pass
 
@@ -709,7 +723,7 @@ async def upload_consent_media(campaign_id: str, file: UploadFile = File(...)):
     with open(path, "wb") as f:
         f.write(ulaw_data)
     try:
-        os.chmod(path, 0o664)
+        os.chmod(path, 0o660)
     except Exception:
         pass
 
@@ -732,11 +746,8 @@ async def preview_voicemail_wav(campaign_id: str):
     media_uri = (campaign.get("voicemail_drop_media_uri") or "").strip()
     if not media_uri.startswith("sound:ai-generated/"):
         raise HTTPException(status_code=400, detail="Campaign voicemail media is not in ai-generated")
-    base = media_uri.split("sound:ai-generated/", 1)[1].strip()
-    if not base:
-        raise HTTPException(status_code=400, detail="Invalid media_uri")
-
-    ulaw_path = os.path.join(_media_dir(), f"{base}.ulaw")
+    base = _safe_ai_generated_basename(media_uri)
+    ulaw_path = _safe_ulaw_path_for_base(base)
     if not os.path.exists(ulaw_path):
         raise HTTPException(status_code=404, detail="Voicemail media file not found on server")
     with open(ulaw_path, "rb") as f:
@@ -757,11 +768,8 @@ async def preview_consent_wav(campaign_id: str):
     media_uri = (campaign.get("consent_media_uri") or "").strip()
     if not media_uri.startswith("sound:ai-generated/"):
         raise HTTPException(status_code=400, detail="Campaign consent media is not in ai-generated")
-    base = media_uri.split("sound:ai-generated/", 1)[1].strip()
-    if not base:
-        raise HTTPException(status_code=400, detail="Invalid media_uri")
-
-    ulaw_path = os.path.join(_media_dir(), f"{base}.ulaw")
+    base = _safe_ai_generated_basename(media_uri)
+    ulaw_path = _safe_ulaw_path_for_base(base)
     if not os.path.exists(ulaw_path):
         raise HTTPException(status_code=404, detail="Consent media file not found on server")
     with open(ulaw_path, "rb") as f:
