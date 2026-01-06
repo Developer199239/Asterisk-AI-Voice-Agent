@@ -319,12 +319,16 @@ async def list_available_models():
                         size_mb=get_dir_size_mb(item_path)
                     ))
 
-    # Scan Kroko embedded ONNX models (recommended location: models/kroko/*.onnx)
+    # Scan Kroko embedded models (recommended location: models/kroko/*.data or *.onnx)
     kroko_dir = os.path.join(models_dir, "kroko")
     if os.path.exists(kroko_dir):
         for item in os.listdir(kroko_dir):
             item_path = os.path.join(kroko_dir, item)
-            if os.path.isfile(item_path) and item.lower().endswith(".onnx"):
+            # Kroko models can be .data (sherpa-onnx format) or .onnx files
+            if os.path.isfile(item_path) and (item.lower().endswith(".onnx") or item.lower().endswith(".data")):
+                # Skip .sha256 checksum files
+                if item.lower().endswith(".sha256"):
+                    continue
                 stt_models["kroko"].append(ModelInfo(
                     id=f"kroko_{item}",
                     name=f"Kroko Embedded ({item})",
