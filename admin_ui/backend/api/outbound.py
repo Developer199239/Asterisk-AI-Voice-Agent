@@ -113,11 +113,18 @@ def _ulaw_to_wav_bytes(ulaw_data: bytes) -> bytes:
 
 def _read_media_ulaw(media_uri: str) -> bytes:
     base = _safe_ai_generated_basename(media_uri)
-    ulaw_path = os.path.join(_media_dir(), f"{base}.ulaw")  # lgtm[py/path-injection]
-    if not os.path.exists(ulaw_path):
-        raise HTTPException(status_code=404, detail="Media file not found on server")
-    with open(ulaw_path, "rb") as f:
-        return f.read()
+    media_dir = _media_dir()
+    target = f"{base}.ulaw"
+    try:
+        for entry in os.listdir(media_dir):
+            if entry != target:
+                continue
+            ulaw_path = os.path.join(media_dir, entry)
+            with open(ulaw_path, "rb") as f:
+                return f.read()
+    except FileNotFoundError:
+        pass
+    raise HTTPException(status_code=404, detail="Media file not found on server")
 
 def _convert_upload_to_ulaw(data: bytes, ext: str) -> bytes:
     if not data:
