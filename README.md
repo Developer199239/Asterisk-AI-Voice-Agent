@@ -127,9 +127,18 @@ Add this to your FreePBX (`extensions_custom.conf`):
 ```asterisk
 [from-ai-agent]
 exten => s,1,NoOp(Asterisk AI Voice Agent v5.0.0)
+ ; Optional per-call overrides:
+ ; - AI_PROVIDER selects a provider/pipeline (otherwise uses default_provider from ai-agent.yaml)
+ ; - AI_CONTEXT selects a context/persona (otherwise uses default context)
+ same => n,Set(AI_PROVIDER=google_live)
+ same => n,Set(AI_CONTEXT=sales-agent)
  same => n,Stasis(asterisk-ai-voice-agent)
  same => n,Hangup()
 ```
+Notes:
+- `AI_PROVIDER` is optional. If unset, the engine follows normal precedence (context provider → default_provider).
+- `AI_CONTEXT` is optional. Use it to change greeting/persona without changing your default provider/pipeline.
+- See `docs/FreePBX-Integration-Guide.md` for channel variable precedence and examples.
 
 ### Test Your Agent
 **Health check:**
@@ -154,7 +163,7 @@ docker compose logs -f ai_engine
 - **Campaign scheduler**: pacing + concurrency (1–5)
 - **Voicemail detection**: Asterisk `AMD()` + voicemail drop
 - **Consent gate (optional)**: DTMF `1` accept / `2` deny
-- Docs: `docs/OUTBOUND_CALLING.md`
+- Docs: [docs/OUTBOUND_CALLING.md](docs/OUTBOUND_CALLING.md)
 
 ### 🧩 Groq Speech (STT + TTS) for Modular Pipelines
 - Groq STT/TTS pipeline adapters for cloud-only modular pipelines
