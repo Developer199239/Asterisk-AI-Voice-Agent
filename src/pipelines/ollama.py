@@ -229,12 +229,16 @@ class OllamaLLMAdapter(LLMComponent):
                 elif role == "tool":
                     # Convert tool result to a user-style message Ollama understands
                     tool_content = content or "Tool executed successfully."
-                    # Add as assistant acknowledgment + result - make it VERY explicit
-                    if not any("TOOL RETURNED" in m.get("content", "") for m in messages):
-                        messages.append({
-                            "role": "user",
-                            "content": f"TOOL RETURNED THIS DATA: {tool_content}\n\nIMPORTANT: Read this result to the caller. Do NOT say you cannot access data. The data is above."
-                        })
+                    # Add as assistant message first acknowledging the tool was called
+                    messages.append({
+                        "role": "assistant", 
+                        "content": "I have the information from the tool."
+                    })
+                    # Then add the result as user message with VERY explicit instructions
+                    messages.append({
+                        "role": "user",
+                        "content": f"[SYSTEM] The tool returned: {tool_content}\n\nNow say this information to the caller in a natural way. Do not add extra commentary."
+                    })
                 elif role == "assistant" and pm.get("tool_calls"):
                     # Skip assistant tool_call messages (we handle the result above)
                     continue
