@@ -744,9 +744,9 @@ docker compose "$@"' > /usr/local/bin/docker-compose
         if [[ "$BUILDX_MAJOR" =~ ^[0-9]+$ ]] && [[ "$BUILDX_MINOR" =~ ^[0-9]+$ ]]; then
             if [ "$BUILDX_MAJOR" -eq 0 ] && [ "$BUILDX_MINOR" -lt 17 ]; then
                 log_warn "Docker Buildx $BUILDX_VER - requires 0.17+ for compose build"
-                log_info "  Fix: curl -L https://github.com/docker/buildx/releases/download/v0.17.1/buildx-v0.17.1.linux-amd64 -o /usr/local/lib/docker/cli-plugins/docker-buildx && chmod +x /usr/local/lib/docker/cli-plugins/docker-buildx"
+                log_info "  Fix: mkdir -p /usr/local/lib/docker/cli-plugins && curl -L https://github.com/docker/buildx/releases/download/v0.17.1/buildx-v0.17.1.linux-amd64 -o /usr/local/lib/docker/cli-plugins/docker-buildx && chmod +x /usr/local/lib/docker/cli-plugins/docker-buildx"
                 log_info "  Docs: $COMPOSE_AAVA_DOCS_URL"
-                FIX_CMDS+=("curl -L https://github.com/docker/buildx/releases/download/v0.17.1/buildx-v0.17.1.linux-amd64 -o /usr/local/lib/docker/cli-plugins/docker-buildx && chmod +x /usr/local/lib/docker/cli-plugins/docker-buildx")
+                FIX_CMDS+=("mkdir -p /usr/local/lib/docker/cli-plugins && curl -L https://github.com/docker/buildx/releases/download/v0.17.1/buildx-v0.17.1.linux-amd64 -o /usr/local/lib/docker/cli-plugins/docker-buildx && chmod +x /usr/local/lib/docker/cli-plugins/docker-buildx")
             else
                 log_ok "Docker Buildx: $BUILDX_VER"
             fi
