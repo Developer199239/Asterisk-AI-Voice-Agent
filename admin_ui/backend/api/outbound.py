@@ -736,14 +736,7 @@ async def preview_voicemail_wav(campaign_id: str):
         raise HTTPException(status_code=404, detail="Campaign not found")
 
     media_uri = (campaign.get("voicemail_drop_media_uri") or "").strip()
-    if not media_uri.startswith("sound:ai-generated/"):
-        raise HTTPException(status_code=400, detail="Campaign voicemail media is not in ai-generated")
-    base = _safe_ai_generated_basename(media_uri)
-    ulaw_path = os.path.join(_media_dir(), f"{base}.ulaw")
-    if not os.path.exists(ulaw_path):
-        raise HTTPException(status_code=404, detail="Voicemail media file not found on server")
-    with open(ulaw_path, "rb") as f:
-        ulaw_data = f.read()
+    ulaw_data = _read_media_ulaw(media_uri)
 
     wav_bytes = _ulaw_to_wav_bytes(ulaw_data)
     return Response(content=wav_bytes, media_type="audio/wav")
@@ -758,14 +751,7 @@ async def preview_consent_wav(campaign_id: str):
         raise HTTPException(status_code=404, detail="Campaign not found")
 
     media_uri = (campaign.get("consent_media_uri") or "").strip()
-    if not media_uri.startswith("sound:ai-generated/"):
-        raise HTTPException(status_code=400, detail="Campaign consent media is not in ai-generated")
-    base = _safe_ai_generated_basename(media_uri)
-    ulaw_path = os.path.join(_media_dir(), f"{base}.ulaw")
-    if not os.path.exists(ulaw_path):
-        raise HTTPException(status_code=404, detail="Consent media file not found on server")
-    with open(ulaw_path, "rb") as f:
-        ulaw_data = f.read()
+    ulaw_data = _read_media_ulaw(media_uri)
 
     wav_bytes = _ulaw_to_wav_bytes(ulaw_data)
     return Response(content=wav_bytes, media_type="audio/wav")

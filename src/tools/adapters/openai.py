@@ -90,20 +90,26 @@ class OpenAIToolAdapter:
         Returns:
             Dict with call_id and result for sending back to OpenAI
         """
+        # Extract function call details from OpenAI format
+        item = event.get('item', {})
+
+        function_call_id = item.get('call_id')  # OpenAI uses 'call_id' field
+        function_name = item.get('name')
+
         tools_cfg = (context.get("config") or {}).get("tools") or {}
         if isinstance(tools_cfg, dict) and tools_cfg.get("enabled") is False:
             logger.warning("Tools disabled; rejecting tool call", tool_event_type=event.get("type"))
-            return {"status": "error", "message": "Tools are disabled"}
-
-        # Extract function call details from OpenAI format
-        item = event.get('item', {})
+            return {
+                "call_id": function_call_id,
+                "function_name": function_name,
+                "status": "error",
+                "message": "Tools are disabled",
+                "ai_should_speak": False,
+            }
         
         if item.get('type') != 'function_call':
             logger.error("Item is not a function_call", item_type=item.get('type'))
-            return {"status": "error", "message": "Not a function call"}
-        
-        function_call_id = item.get('call_id')  # OpenAI uses 'call_id' field
-        function_name = item.get('name')
+            return {"call_id": function_call_id, "function_name": function_name, "status": "error", "message": "Not a function call"}
 
         allowed = context.get("allowed_tools", None)
         if allowed is not None and function_name not in allowed:
@@ -133,6 +139,7 @@ class OpenAIToolAdapter:
             logger.error(error_msg)
             return {
                 "call_id": function_call_id,
+                "function_name": function_name,
                 "status": "error",
                 "message": error_msg
             }

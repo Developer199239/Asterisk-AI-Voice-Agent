@@ -743,40 +743,30 @@ async def test_provider_connection(request: ProviderTestRequest):
                     else:
                         raise e
 
-                    # Send status request to check models
-                    if data.get("type") == "status_response" and data.get("status") == "ok":
-                        models = data.get("models", {})
-                        stt_loaded = models.get("stt", {}).get("loaded", False)
-                        llm_loaded = models.get("llm", {}).get("loaded", False)
-                        tts_loaded = models.get("tts", {}).get("loaded", False)
-                        
-                        stt_backend = data.get("stt_backend", "unknown")
-                        tts_backend = data.get("tts_backend", "unknown")
-                        llm_model = models.get("llm", {}).get("path", "").split("/")[-1] if models.get("llm", {}).get("path") else "none"
-                        
-                        status_parts = []
-                        if stt_loaded:
-                            status_parts.append(f"STT: {stt_backend} ✓")
-                        else:
-                            status_parts.append(f"STT: not loaded")
-                        if llm_loaded:
-                            status_parts.append(f"LLM: {llm_model} ✓")
-                        else:
-                            status_parts.append(f"LLM: not loaded")
-                        if tts_loaded:
-                            status_parts.append(f"TTS: {tts_backend} ✓")
-                        else:
-                            status_parts.append(f"TTS: not loaded")
-                        
-                        all_loaded = stt_loaded and llm_loaded and tts_loaded
-                        return {
-                            "success": all_loaded,
-                            "message": f"Local AI Server connected ({effective_url}). {' | '.join(status_parts)}"
-                        }
-                    else:
-                        return {"success": False, "message": "Local AI Server responded but status invalid"}
+                if data.get("type") == "status_response" and data.get("status") == "ok":
+                    models = data.get("models", {})
+                    stt_loaded = models.get("stt", {}).get("loaded", False)
+                    llm_loaded = models.get("llm", {}).get("loaded", False)
+                    tts_loaded = models.get("tts", {}).get("loaded", False)
+
+                    stt_backend = data.get("stt_backend", "unknown")
+                    tts_backend = data.get("tts_backend", "unknown")
+                    llm_model = models.get("llm", {}).get("path", "").split("/")[-1] if models.get("llm", {}).get("path") else "none"
+
+                    status_parts = []
+                    status_parts.append(f"STT: {stt_backend} ✓" if stt_loaded else "STT: not loaded")
+                    status_parts.append(f"LLM: {llm_model} ✓" if llm_loaded else "LLM: not loaded")
+                    status_parts.append(f"TTS: {tts_backend} ✓" if tts_loaded else "TTS: not loaded")
+
+                    all_loaded = stt_loaded and llm_loaded and tts_loaded
+                    return {
+                        "success": all_loaded,
+                        "message": f"Local AI Server connected ({effective_url}). {' | '.join(status_parts)}",
+                    }
+                return {"success": False, "message": "Local AI Server responded but status invalid"}
             except Exception as e:
-                return {"success": False, "message": f"Cannot connect to Local AI Server at {ws_url}: {str(e)}"}
+                logger.debug("Local AI Server validation failed", error=str(e), exc_info=True)
+                return {"success": False, "message": f"Cannot connect to Local AI Server at {ws_url} (see server logs)"}
         
         # ============================================================
         # ELEVENLABS AGENT - check before other providers
