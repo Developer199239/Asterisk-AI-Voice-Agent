@@ -23,6 +23,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      network: host
       args:
         ASTERISK_GID: ${ASTERISK_GID:-995}
     container_name: ai_engine
@@ -59,6 +60,7 @@ services:
     build:
       context: ./local_ai_server
       dockerfile: Dockerfile
+      network: host
       args:
         - INCLUDE_KROKO_EMBEDDED=${INCLUDE_KROKO_EMBEDDED:-false}
         - INCLUDE_FASTER_WHISPER=${INCLUDE_FASTER_WHISPER:-false}
@@ -141,6 +143,7 @@ services:
     build:
       context: ./admin_ui
       dockerfile: Dockerfile
+      network: host
     container_name: admin_ui
     network_mode: host
     volumes:
