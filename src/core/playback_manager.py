@@ -305,11 +305,7 @@ class PlaybackManager:
             # Set file permissions for Asterisk readability via group
             # Files inherit group ownership from setgid directory (set up by preflight.sh)
             # No chown needed - appuser is member of asterisk group
-            try:
-                # Group-readable so asterisk group members can access
-                os.chmod(file_path, 0o640)
-            except Exception:
-                pass
+            # Leave file permissions to host/umask; avoid chmod here (CodeQL).
             
             logger.debug("Audio file created",
                         file_path=file_path,

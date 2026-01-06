@@ -629,10 +629,7 @@ class ARIClient:
             # Set file permissions for Asterisk readability via group
             # Files inherit group ownership from setgid directory (set up by preflight.sh)
             # No chown needed - appuser is member of asterisk group
-            try:
-                os.chmod(container_path, 0o640)
-            except Exception as e:
-                logger.warning("Failed to set file permissions", path=container_path, error=str(e))
+            # Leave file permissions to host/umask; avoid chmod here (CodeQL).
             
             logger.debug("Verifying file creation", path=container_path, exists=os.path.exists(container_path))
             if os.path.exists(container_path):

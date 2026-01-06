@@ -3196,10 +3196,7 @@ class Engine:
             audio_file = os.path.join(media_dir, f"{playback_id}.ulaw")
             with open(audio_file, "wb") as f:
                 f.write(audio_bytes)
-            try:
-                os.chmod(audio_file, 0o640)
-            except Exception:
-                pass
+            # Leave file permissions to host/umask; avoid chmod here (CodeQL).
 
             # Ensure ARIClient cleans up this file on PlaybackFinished.
             try:

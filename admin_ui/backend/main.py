@@ -41,10 +41,6 @@ def _ensure_outbound_prompt_assets() -> None:
             try:
                 data = src.read_bytes()
                 dst.write_bytes(data)
-                try:
-                    os.chmod(str(dst), 0o640)
-                except Exception:
-                    pass
             except Exception:
                 continue
     except Exception:
