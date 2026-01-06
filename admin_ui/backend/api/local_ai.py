@@ -128,12 +128,16 @@ def _build_local_ai_env_and_yaml_updates(request: SwitchModelRequest) -> tuple[D
                     yaml_updates["kroko_language"] = request.language
                 if request.kroko_url:
                     env_updates["KROKO_URL"] = request.kroko_url
-                if request.kroko_embedded is not None:
+                # For embedded mode: always set KROKO_EMBEDDED=1 when model_path is provided
+                # (model_path indicates a local model file, hence embedded mode)
+                if request.model_path:
+                    env_updates["KROKO_MODEL_PATH"] = request.model_path
+                    env_updates["KROKO_EMBEDDED"] = "1"
+                    yaml_updates["kroko_model_path"] = request.model_path
+                elif request.kroko_embedded is not None:
                     env_updates["KROKO_EMBEDDED"] = "1" if request.kroko_embedded else "0"
                 if request.kroko_port is not None:
                     env_updates["KROKO_PORT"] = str(request.kroko_port)
-                if request.model_path:
-                    env_updates["KROKO_MODEL_PATH"] = request.model_path
             elif request.backend == "sherpa":
                 sherpa_path = request.sherpa_model_path or request.model_path
                 if sherpa_path:
