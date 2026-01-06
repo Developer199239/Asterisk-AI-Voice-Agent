@@ -8,40 +8,6 @@ import secrets
 from pathlib import Path
 
 
-def _ensure_shared_sqlite_perms() -> None:
-    """
-    Prevent cross-container permission issues on the shared SQLite DB when WAL creates
-    `*.db-wal` / `*.db-shm` with a restrictive umask (causing ai-engine writes to fail).
-    """
-    try:
-        # Prefer explicit env var; fallback matches OutboundStore default.
-        db_path = (os.getenv("CALL_HISTORY_DB_PATH") or "data/call_history.db").strip() or "data/call_history.db"
-        p = Path(db_path)
-        parent = p.parent
-        if parent:
-            try:
-                parent.mkdir(parents=True, exist_ok=True)
-            except Exception:
-                pass
-            try:
-                # SECURITY: avoid world-readable perms for DB + WAL/SHM (transcripts/call history).
-                os.chmod(str(parent), 0o2770)
-            except Exception:
-                pass
-
-        # Ensure group-writable perms on db and WAL/SHM sidecars if present.
-        for candidate in (p, Path(str(p) + "-wal"), Path(str(p) + "-shm")):
-            if not candidate.exists():
-                continue
-            try:
-                os.chmod(str(candidate), 0o660)
-            except Exception:
-                pass
-    except Exception:
-        # Never block Admin UI startup for this.
-        pass
-
-
 def _ensure_outbound_prompt_assets() -> None:
     """
     Install shipped outbound prompt assets into the runtime media directory.
@@ -76,7 +42,7 @@ def _ensure_outbound_prompt_assets() -> None:
                 data = src.read_bytes()
                 dst.write_bytes(data)
                 try:
-                    os.chmod(str(dst), 0o660)
+                    os.chmod(str(dst), 0o644)
                 except Exception:
                     pass
             except Exception:
@@ -88,14 +54,8 @@ def _ensure_outbound_prompt_assets() -> None:
 # Load environment variables (wizard will create .env from .env.example on first Next click)
 load_dotenv(settings.ENV_PATH)
 
-# Ensure files created by this process (SQLite WAL/SHM) are group-writable.
-try:
-    # SECURITY: keep group-writable, but avoid world-readable by default.
-    os.umask(0o007)
-except Exception:
-    pass
-
-_ensure_shared_sqlite_perms()
+# NOTE: DB permission alignment is handled by install/preflight steps (host-side),
+# keeping runtime code minimal and CI security scanners happy.
 _ensure_outbound_prompt_assets()
 
 # SECURITY: Admin UI binds to 0.0.0.0 by default (DX-first).

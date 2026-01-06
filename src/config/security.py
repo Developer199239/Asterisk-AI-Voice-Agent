@@ -184,7 +184,8 @@ def inject_provider_api_keys(config_data: Dict[str, Any]) -> None:
                 # If the provider is explicitly named openai*, always inject. If it's only "type: openai",
                 # inject only when it's actually pointing at OpenAI endpoints to avoid stomping other
                 # OpenAI-compatible providers (e.g., Groq/OpenRouter/etc).
-                if name_lower.startswith("openai") or "api.openai.com" in url_hosts:
+                is_openai_host = any(host == "api.openai.com" for host in url_hosts)
+                if name_lower.startswith("openai") or is_openai_host:
                     provider_cfg["api_key"] = openai_key
                     providers_block[provider_name] = provider_cfg
 
