@@ -25,6 +25,34 @@ DISK_WARNING_BYTES = 10 * 1024 * 1024 * 1024  # 10 GB
 DISK_BUILD_BLOCK_BYTES = 5 * 1024 * 1024 * 1024  # 5 GB (hard stop for image builds)
 
 
+def _auto_detect_kroko_model() -> Optional[str]:
+    """
+    Auto-detect the first available Kroko model file in models/kroko/.
+    Returns the container path (e.g., /app/models/kroko/model.data) or None.
+    """
+    from settings import PROJECT_ROOT
+    kroko_dir = os.path.join(PROJECT_ROOT, "models", "kroko")
+    if not os.path.exists(kroko_dir):
+        return None
+    for item in os.listdir(kroko_dir):
+        if item.lower().endswith(".data") or item.lower().endswith(".onnx"):
+            # Return container path (models dir is mounted at /app/models)
+            return f"/app/models/kroko/{item}"
+    return None
+
+
+def _auto_detect_kokoro_model() -> Optional[str]:
+    """
+    Auto-detect Kokoro model directory in models/tts/kokoro/.
+    Returns the container path or None.
+    """
+    from settings import PROJECT_ROOT
+    kokoro_dir = os.path.join(PROJECT_ROOT, "models", "tts", "kokoro")
+    if os.path.exists(kokoro_dir) and os.path.isdir(kokoro_dir):
+        return "/app/models/tts/kokoro"
+    return None
+
+
 def _format_bytes(num_bytes: int) -> str:
     units = ["B", "KB", "MB", "GB", "TB"]
     size = float(max(0, int(num_bytes)))
@@ -128,14 +156,20 @@ def _build_local_ai_env_and_yaml_updates(request: SwitchModelRequest) -> tuple[D
                     yaml_updates["kroko_language"] = request.language
                 if request.kroko_url:
                     env_updates["KROKO_URL"] = request.kroko_url
-                # For embedded mode: always set KROKO_EMBEDDED=1 when model_path is provided
-                # (model_path indicates a local model file, hence embedded mode)
+                # For embedded mode: set KROKO_EMBEDDED=1 and auto-detect model if not provided
                 if request.model_path:
                     env_updates["KROKO_MODEL_PATH"] = request.model_path
                     env_updates["KROKO_EMBEDDED"] = "1"
                     yaml_updates["kroko_model_path"] = request.model_path
+                elif request.kroko_embedded:
+                    # Auto-detect Kroko model file when embedded=true but no path specified
+                    env_updates["KROKO_EMBEDDED"] = "1"
+                    detected_path = _auto_detect_kroko_model()
+                    if detected_path:
+                        env_updates["KROKO_MODEL_PATH"] = detected_path
+                        yaml_updates["kroko_model_path"] = detected_path
                 elif request.kroko_embedded is not None:
-                    env_updates["KROKO_EMBEDDED"] = "1" if request.kroko_embedded else "0"
+                    env_updates["KROKO_EMBEDDED"] = "0"  # Cloud mode
                 if request.kroko_port is not None:
                     env_updates["KROKO_PORT"] = str(request.kroko_port)
             elif request.backend == "sherpa":
@@ -172,7 +206,10 @@ def _build_local_ai_env_and_yaml_updates(request: SwitchModelRequest) -> tuple[D
                 if request.voice:
                     env_updates["KOKORO_VOICE"] = request.voice
                     yaml_updates["kokoro_voice"] = request.voice
+                # Auto-detect Kokoro model path for local mode if not provided
                 kokoro_model_path = request.kokoro_model_path or request.model_path
+                if not kokoro_model_path and request.kokoro_mode in ("local", "hf"):
+                    kokoro_model_path = _auto_detect_kokoro_model()
                 if kokoro_model_path:
                     env_updates["KOKORO_MODEL_PATH"] = kokoro_model_path
                     yaml_updates["kokoro_model_path"] = kokoro_model_path
