@@ -297,6 +297,48 @@ upsert_env() {
     fi
 }
 
+ensure_docker_sock_env() {
+    # Admin UI container management requires a Docker API socket mounted at /var/run/docker.sock
+    # inside the admin_ui container. docker-compose.yml mounts:
+    #   ${DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock
+    #
+    # On rootless Docker/Podman, /var/run/docker.sock is usually absent; we must persist DOCKER_SOCK in .env.
+    if [ ! -f .env ]; then
+        return 0
+    fi
+
+    local current_sock=""
+    current_sock="$(grep -E '^[# ]*DOCKER_SOCK=' .env 2>/dev/null | tail -n1 | sed -E 's/^[# ]*DOCKER_SOCK=//')"
+    current_sock="$(echo "$current_sock" | tr -d '\r' | xargs 2>/dev/null || echo "$current_sock")"
+
+    # If an explicit socket is already configured and valid, keep it.
+    if [ -n "$current_sock" ] && [ -S "$current_sock" ]; then
+        return 0
+    fi
+
+    local desired_sock=""
+    if [ -n "${DOCKER_HOST:-}" ] && [[ "${DOCKER_HOST}" == unix://* ]]; then
+        desired_sock="${DOCKER_HOST#unix://}"
+    elif [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -S "$XDG_RUNTIME_DIR/docker.sock" ]; then
+        desired_sock="$XDG_RUNTIME_DIR/docker.sock"
+    elif [ -S "/run/user/$(id -u)/docker.sock" ]; then
+        desired_sock="/run/user/$(id -u)/docker.sock"
+    elif command -v docker >/dev/null 2>&1 && docker --version 2>/dev/null | grep -qi "podman"; then
+        if [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -S "$XDG_RUNTIME_DIR/podman/podman.sock" ]; then
+            desired_sock="$XDG_RUNTIME_DIR/podman/podman.sock"
+        fi
+    fi
+
+    if [ -n "$desired_sock" ] && [ "$desired_sock" != "/var/run/docker.sock" ]; then
+        upsert_env DOCKER_SOCK "$desired_sock"
+        rm -f .env.bak 2>/dev/null || true
+        print_info "Detected rootless container runtime; set DOCKER_SOCK in .env for Admin UI container control"
+        print_info "  DOCKER_SOCK=$desired_sock"
+        print_info "  If admin_ui is already running, recreate it to apply the mount:"
+        print_info "  docker compose -p asterisk-ai-voice-agent up -d --force-recreate admin_ui"
+    fi
+}
+
 # Ensure yq exists on Ubuntu/CentOS, otherwise try to install a static binary; fallback will be used if all fail.
 ensure_yq() {
     if command -v yq >/dev/null 2>&1; then
@@ -608,6 +650,7 @@ configure_env() {
     
     print_info "Starting interactive configuration (.env updates)..."
     ensure_env_file
+    ensure_docker_sock_env
 
     # Ensure JWT_SECRET exists for remotely accessible Admin UI (binds to 0.0.0.0 by default).
     local CURRENT_JWT_SECRET

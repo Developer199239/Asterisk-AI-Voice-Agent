@@ -970,6 +970,53 @@ check_env() {
             fi
         fi
     fi
+
+    # Ensure Admin UI can control containers by mounting the correct Docker socket.
+    # docker-compose.yml mounts `${DOCKER_SOCK:-/var/run/docker.sock}` into admin_ui as `/var/run/docker.sock`.
+    # On rootless Docker/Podman, `/var/run/docker.sock` is usually absent, so we must persist DOCKER_SOCK in `.env`.
+    if [ -f "$SCRIPT_DIR/.env" ]; then
+        local current_sock desired_sock
+        current_sock="$(grep -E '^[# ]*DOCKER_SOCK=' "$SCRIPT_DIR/.env" | tail -n1 | sed -E 's/^[# ]*DOCKER_SOCK=//')"
+        current_sock="$(echo "$current_sock" | tr -d '\r' | xargs 2>/dev/null || echo "$current_sock")"
+
+        desired_sock=""
+        # Prefer explicit unix socket from DOCKER_HOST when present.
+        if [ -n "${DOCKER_HOST:-}" ] && [[ "${DOCKER_HOST}" == unix://* ]]; then
+            desired_sock="${DOCKER_HOST#unix://}"
+        elif [ "$DOCKER_ROOTLESS" = true ]; then
+            desired_sock="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/docker.sock"
+        elif is_podman; then
+            # Podman (rootless) commonly exposes a Docker-compatible socket here.
+            if [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -S "$XDG_RUNTIME_DIR/podman/podman.sock" ]; then
+                desired_sock="$XDG_RUNTIME_DIR/podman/podman.sock"
+            fi
+        fi
+
+        # Only write DOCKER_SOCK when needed (non-default socket, missing/invalid config).
+        # Do not override an explicit, valid value.
+        if [ -n "$desired_sock" ] && [ "$desired_sock" != "/var/run/docker.sock" ]; then
+            local needs_update=false
+            if [ -z "$current_sock" ]; then
+                needs_update=true
+            elif [ ! -S "$current_sock" ]; then
+                needs_update=true
+            fi
+
+            if [ "$needs_update" = true ]; then
+                if grep -qE '^[# ]*DOCKER_SOCK=' "$SCRIPT_DIR/.env"; then
+                    sed -i.bak "s|^[# ]*DOCKER_SOCK=.*|DOCKER_SOCK=${desired_sock}|" "$SCRIPT_DIR/.env" 2>/dev/null || \
+                        sed -i '' "s|^[# ]*DOCKER_SOCK=.*|DOCKER_SOCK=${desired_sock}|" "$SCRIPT_DIR/.env"
+                else
+                    echo "" >> "$SCRIPT_DIR/.env"
+                    echo "DOCKER_SOCK=${desired_sock}" >> "$SCRIPT_DIR/.env"
+                fi
+                rm -f "$SCRIPT_DIR/.env.bak" 2>/dev/null || true
+                log_ok "Set DOCKER_SOCK in .env for Admin UI container control"
+                log_info "  DOCKER_SOCK=${desired_sock}"
+                log_info "  Recreate admin_ui to apply: ${COMPOSE_CMD:-docker compose} -p asterisk-ai-voice-agent up -d --force-recreate admin_ui"
+            fi
+        fi
+    fi
 }
 
 # ============================================================================
@@ -1522,6 +1569,15 @@ print_summary() {
         echo "  Tip (file playback):"
         echo "     If Asterisk file playback fails with 'File ... does not exist' and your project is under /root,"
         echo "     run: sudo ./preflight.sh --apply-fixes --persist-media-mount"
+        echo ""
+        echo "  Tip (local AI build mode):"
+        echo "     Local AI Server is optional (only needed for local_hybrid/local_only pipelines)."
+        echo "     Use a smaller image for most users:"
+        echo "       sudo ./preflight.sh --apply-fixes --local-ai-minimal"
+        echo "     Or enable the full build (more models / larger image):"
+        echo "       sudo ./preflight.sh --apply-fixes --local-ai-full"
+        echo "     After changing LOCAL_AI_MODE, rebuild/recreate local_ai_server:"
+        echo "       ${COMPOSE_CMD:-docker compose} -p asterisk-ai-voice-agent up -d --build --force-recreate local_ai_server"
         echo ""
         echo "  1. Start the Admin UI:"
         echo "     ${COMPOSE_CMD:-docker compose} -p asterisk-ai-voice-agent up -d admin_ui"
