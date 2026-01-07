@@ -18,6 +18,18 @@ ARG INCLUDE_LLAMA=true
 
 WORKDIR /usr/src/app
 
+# Some optional backends require native builds (e.g., llama-cpp-python) or git installs (MeloTTS).
+# Install build tooling only when those backends are enabled to keep CI "ci-min" builds lean.
+RUN apt-get -o Acquire::Retries=5 update && \
+    if [ "$INCLUDE_LLAMA" = "true" ] || [ "$INCLUDE_MELOTTS" = "true" ] || [ "$INCLUDE_WHISPER_CPP" = "true" ]; then \
+        apt-get install -y --no-install-recommends \
+            build-essential \
+            cmake \
+            git \
+            ; \
+    fi && \
+    rm -rf /var/lib/apt/lists/*
+
 # Create virtual environment
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
