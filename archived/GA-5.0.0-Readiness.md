@@ -11,6 +11,31 @@ This is a planning + readiness artifact for maintainers and contributors. It is 
 
 ---
 
+## Current Status (as of 2026-01-07)
+
+### Release candidate state
+
+- Release branch: `staging` (release candidate head)
+- Target tag: `v5.0.0`
+- Positioning: **GA** (project-wide), with **Outbound Campaign Dialer** explicitly labeled **Alpha** (validated at `max_concurrent=1`).
+
+### End-to-end verification completed (smoke)
+
+- Inbound calling: stable (baseline flows)
+- Outbound Campaign Dialer (Alpha):
+  - HUMAN path: correct context/provider attachment; conversation + tool-driven hangup
+  - Voicemail path: AMD MACHINE/NOTSURE → voicemail drop; no AI session attached
+  - Consent gate (optional): DTMF `1` accepted / `2` denied / timeout captured; outcomes visible in UI
+  - UI: campaign status, lead rows (time/duration/outcome/AMD/DTMF), and inline Call History modal verified
+
+### Final hardening completed on `staging`
+
+- Streaming playback regression fixed (agent responses were being truncated at ~2 seconds in `downstream_mode: stream`).
+  - Fix: streaming drain waits for buffered frames instead of a hard 2s cutoff.
+  - File playback remained stable throughout; streaming-first is now stable again.
+- Transport docs cleaned up to remove unhelpful “Call ID” references (kept validation results/notes).
+- Documentation scrub: removed internal development server hostname mentions from contributing docs.
+
 ## 1) Release Scope Summary (5.0.0)
 
 ### Core themes
@@ -174,8 +199,8 @@ This is a planning + readiness artifact for maintainers and contributors. It is 
 ## Open Questions (for maintainer confirmation)
 
 - Tag naming: confirmed `v5.0.0` (3-part).
-- Golden baseline claims: are we still advertising “5 production-ready golden baselines” in README, and do we have current evidence for all five on `main` head?
-- Release messaging: do we want the outbound dialer described as **GA** or **Alpha** (and keep the wording consistent across README/docs/changelog/release notes)?
+- Release messaging: outbound dialer must be consistently described as **Alpha** across README/docs/changelog/release notes.
+- Golden baseline claims: verify README messaging matches what we can support with current docs/case studies (avoid over-claiming).
 
 ---
 
