@@ -46,7 +46,7 @@ downstream_mode: file  # recommended + most validated for pipelines
   - TTS bytes → File → Asterisk Announcer channel → Caller
   - **No bridge conflict**: RTP ingestion separate from file playback
 
-**Status**: ✅ **VALIDATED** (Call 1761698845.2619)
+**Status**: ✅ **VALIDATED**
 - Clean two-way conversation
 - Proper gating (no feedback loop)
 - No audio routing issues
@@ -115,9 +115,9 @@ downstream_mode: file  # recommended + most validated for pipelines
   - TTS bytes → File → Asterisk Announcer channel → Caller
   - **Bridge coexistence**: Both AudioSocket and Announcer channels work together
 
-**Status**: ✅ **VALIDATED** (Call 1763610866.6294, November 19, 2025)
+**Status**: ✅ **VALIDATED** (November 2025)
 - Clean two-way conversation
-- Continuous audio frame flow (277 frames, 54.57s)
+- Continuous audio frame flow over full call duration
 - Multiple playback cycles (greeting + responses + farewell)
 - Tool execution functional (hangup with farewell)
 
@@ -135,7 +135,6 @@ downstream_mode: file  # recommended + most validated for pipelines
 **Historical Context** (archived):
 - **Pre-October 2025**: AudioSocket + Pipeline was unstable
 - **Issue**: Bridge routing conflict, single-frame reception
-- **Evidence**: Call 1761699424.2631 (only 1 frame received)
 - **Resolution**: Series of fixes in October 2025
 - **Current Status**: Fully functional and production-ready
 
@@ -286,15 +285,15 @@ else:
 
 ## Validation History
 
-| Date | Transport | Mode | Result | Call ID | Notes |
-|------|-----------|------|--------|---------|-------|
-| 2025-10-28 | RTP | Pipeline | ✅ Pass | 1761698845.2619 | Clean two-way, no feedback |
-| 2025-10-28 | AudioSocket | Pipeline | ❌ Fail | 1761699424.2631 | Pre-fix: Only greeting heard |
-| 2025-10-28 | AudioSocket | Full Agent | ✅ Pass | Multiple | Streaming playback |
-| 2025-11-19 | AudioSocket | Full Agent (Google Live) | ✅ Pass | 1763610697.6282 | 186 frames, 36.34s, clean conversation |
-| 2025-11-19 | AudioSocket | Full Agent (Deepgram) | ✅ Pass | 1763610742.6286 | 176 frames, 34.36s, clean conversation |
-| 2025-11-19 | AudioSocket | Full Agent (OpenAI) | ✅ Pass | 1763610785.6290 | 360 frames, 71.29s, tool execution |
-| 2025-11-19 | AudioSocket | Pipeline (local_hybrid) | ✅ Pass | 1763610866.6294 | 277 frames, 54.57s, post-fix validation |
+| Date | Transport | Mode | Result | Notes |
+|------|-----------|------|--------|-------|
+| 2025-10-28 | RTP | Pipeline | ✅ Pass | Clean two-way, no feedback |
+| 2025-10-28 | AudioSocket | Pipeline | ❌ Fail | Pre-fix: Only greeting heard |
+| 2025-10-28 | AudioSocket | Full Agent | ✅ Pass | Streaming playback |
+| 2025-11-19 | AudioSocket | Full Agent (Google Live) | ✅ Pass | Clean conversation |
+| 2025-11-19 | AudioSocket | Full Agent (Deepgram) | ✅ Pass | Clean conversation |
+| 2025-11-19 | AudioSocket | Full Agent (OpenAI) | ✅ Pass | Tool execution validated |
+| 2025-11-19 | AudioSocket | Pipeline (local_hybrid) | ✅ Pass | Post-fix validation |
 
 ---
 
