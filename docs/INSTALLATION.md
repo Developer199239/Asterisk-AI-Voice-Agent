@@ -72,6 +72,12 @@ curl -sS http://localhost:15000/health
 agent doctor
 ```
 
+> ⚠️ **Operator note (production hardening):** `ai_engine` exposes a health/metrics server on port `15000`.
+> In the default compose, it binds to `0.0.0.0` so `admin_ui` can reach it reliably on best-effort hosts.
+> For production, restrict access via firewall/VPN/reverse proxy, or bind it to localhost by setting:
+> - `HEALTH_BIND_HOST=127.0.0.1` in `.env` (then `docker compose up -d --force-recreate ai_engine`)
+> - Optional: set `HEALTH_API_TOKEN` in `.env` if you need authenticated remote access.
+
 ### Path A: Admin UI Setup Wizard (Recommended)
 
 **5-minute visual setup** with the new web-based Admin UI:
