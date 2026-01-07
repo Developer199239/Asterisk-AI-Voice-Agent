@@ -15,9 +15,13 @@ This is a planning + readiness artifact for maintainers and contributors. It is 
 
 ### Release candidate state
 
-- Release branch: `staging` (release candidate head)
+- Release head: `main` (promoted from `staging`)
 - Target tag: `v5.0.0`
 - Positioning: **GA** (project-wide), with **Outbound Campaign Dialer** explicitly labeled **Alpha** (validated at `max_concurrent=1`).
+
+Release promotion notes:
+- `staging → main` completed (history includes a merge commit to reconcile prior `main` hotfixes).
+- Local test suite green on release head (`pytest -q`).
 
 ### End-to-end verification completed (smoke)
 
