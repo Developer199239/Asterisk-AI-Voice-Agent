@@ -12,6 +12,7 @@ import audioop
 import base64
 import json
 import ipaddress
+import sqlite3
 from collections import deque
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
@@ -231,6 +232,8 @@ class Engine:
         self._outbound_attempt_meta_by_channel_id: Dict[str, Dict[str, Any]] = {}
         self._outbound_awaiting_amd_channel_ids: Set[str] = set()
         self._outbound_attempt_amd: Dict[str, Dict[str, Optional[str]]] = {}
+        # Throttle per-campaign scheduler error logs (avoid flooding when DB perms are wrong).
+        self._outbound_last_campaign_error_log_ts: Dict[str, float] = {}
         self._outbound_extension_identity = str(os.getenv("AAVA_OUTBOUND_EXTENSION_IDENTITY", "6789")).strip() or "6789"
         self._outbound_amd_context = str(os.getenv("AAVA_OUTBOUND_AMD_CONTEXT", "aava-outbound-amd")).strip() or "aava-outbound-amd"
         self._outbound_pjsip_endpoint_cache: Dict[str, Dict[str, Any]] = {}
@@ -974,8 +977,8 @@ class Engine:
 
                 now_utc = datetime.now(timezone.utc)
                 for campaign in campaigns:
+                    campaign_id = str(campaign.get("id") or "")
                     try:
-                        campaign_id = str(campaign.get("id") or "")
                         if not campaign_id:
                             continue
                         if not self._outbound_campaign_in_window(campaign, now_utc):
@@ -1066,8 +1069,28 @@ class Engine:
                             self._outbound_last_dial_ts[campaign_id] = time.time()
                             # Respect pacing: only one lead per tick for MVP.
                             break
-                    except Exception:
-                        logger.debug("Outbound scheduler: campaign loop failed", exc_info=True)
+                    except Exception as e:
+                        # Surface persistent failures (e.g., SQLite perms) in error logs for operators,
+                        # but throttle to avoid flooding.
+                        key = campaign_id or "<unknown>"
+                        now_ts = time.time()
+                        last_ts = float(self._outbound_last_campaign_error_log_ts.get(key, 0.0) or 0.0)
+                        is_sqlite_readonly = isinstance(e, sqlite3.OperationalError) and "readonly database" in str(e).lower()
+                        should_error = is_sqlite_readonly or (now_ts - last_ts) >= 30.0
+                        if should_error:
+                            self._outbound_last_campaign_error_log_ts[key] = now_ts
+                            logger.error(
+                                "Outbound scheduler: campaign loop failed",
+                                campaign_id=campaign_id,
+                                error=str(e),
+                                exc_info=True,
+                            )
+                        else:
+                            logger.debug(
+                                "Outbound scheduler: campaign loop failed",
+                                campaign_id=campaign_id,
+                                exc_info=True,
+                            )
                         continue
         except asyncio.CancelledError:
             logger.info("Outbound scheduler cancelled")
