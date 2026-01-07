@@ -1,6 +1,6 @@
 # Transport & Playback Mode Compatibility Guide
 
-**Last Updated**: November 19, 2025  
+**Last Updated**: January 7, 2026  
 **Issue**: Linear AAVA-28, AAVA-85
 
 ## Overview
@@ -10,6 +10,19 @@ This document defines the **validated and supported** combinations of audio tran
 For **v5.0.0+**: both **AudioSocket** and **ExternalMedia RTP** are validated options for pipeline deployments and full-agent deployments. Choose based on what fits your Asterisk environment and network constraints (TCP `8090` for AudioSocket vs UDP `18080` for ExternalMedia RTP), and confirm the combination you’re running matches the matrix below.
 
 ---
+
+## Key Concepts
+
+### `downstream_mode` (v5.0.0+)
+
+`downstream_mode` controls how the **ai-engine** delivers TTS back to the caller:
+
+- `downstream_mode: file`  
+  Always uses file playback (Asterisk Playback via Announcer). This is the **most validated** option for modular pipelines.
+- `downstream_mode: stream`  
+  Enables streaming playback when possible. In pipeline mode, the engine will **attempt streaming playback** and **fall back to file playback on errors**.
+
+The engine emits a startup warning when pipelines are configured and `downstream_mode` is `stream` so operators understand this is a streaming-first path with fallback.
 
 ## Validated Configurations
 
@@ -21,7 +34,7 @@ For **v5.0.0+**: both **AudioSocket** and **ExternalMedia RTP** are validated op
 ```yaml
 audio_transport: externalmedia
 active_pipeline: hybrid_support  # or any pipeline
-downstream_mode: stream  # ignored by pipelines
+downstream_mode: file  # recommended + most validated for pipelines
 ```
 
 **Technical Details**:
@@ -42,6 +55,8 @@ downstream_mode: stream  # ignored by pipelines
 - RTP audio ingestion doesn't use Asterisk bridge
 - File playback uses Announcer channel in bridge
 - No routing conflict between ingestion and playback
+
+**Optional (v5.0.0+)**: If you set `downstream_mode: stream`, the pipeline runner will attempt streaming playback first and fall back to file playback on errors. For GA stability, keep `file` unless you specifically want to test streaming behavior.
 
 ---
 
@@ -88,7 +103,7 @@ downstream_mode: stream
 ```yaml
 audio_transport: audiosocket
 active_pipeline: local_hybrid  # or any pipeline
-downstream_mode: stream  # Ignored by pipelines
+downstream_mode: file  # recommended + most validated for pipelines
 ```
 
 **Technical Details**:
@@ -133,6 +148,8 @@ downstream_mode: stream  # Ignored by pipelines
 | **ExternalMedia RTP** | Pipeline | File (PlaybackManager) | ✅ Working | ✅ **VALIDATED** |
 | **AudioSocket** | Full Agent | Streaming (StreamingPlaybackManager) | ✅ Working | ✅ **VALIDATED** |
 | **AudioSocket** | Pipeline | File (PlaybackManager) | ✅ Working | ✅ **VALIDATED** (v4.0+) |
+| **ExternalMedia RTP** | Pipeline | Streaming-first (fallback to file) | ✅ Working | ⚠️ **SUPPORTED (v5.0.0+)** |
+| **AudioSocket** | Pipeline | Streaming-first (fallback to file) | ✅ Working | ⚠️ **SUPPORTED (v5.0.0+)** |
 
 ---
 
@@ -140,7 +157,7 @@ downstream_mode: stream  # Ignored by pipelines
 
 ### Use ExternalMedia RTP When:
 - ✅ Running hybrid pipelines (modular STT/LLM/TTS)
-- ✅ Need file-based playback
+- ✅ Need file-based playback (most validated)
 - ✅ Want clean audio routing (no bridge conflicts)
 - ✅ Modern deployment
 
@@ -160,7 +177,7 @@ downstream_mode: stream  # Ignored by pipelines
 # config/ai-agent.yaml
 audio_transport: externalmedia
 active_pipeline: hybrid_support
-downstream_mode: stream  # Ignored by pipelines
+downstream_mode: file  # recommended for pipelines
 
 pipelines:
   hybrid_support:
@@ -226,26 +243,22 @@ providers:
 
 ## Implementation Notes
 
-### Why Pipelines Always Use File Playback
+### Pipeline Playback Behavior (v5.0.0+)
 
-**Code Location**: `src/engine.py:4242`
+Pipelines can use:
+- **File playback** when `downstream_mode: file` (always file)
+- **Streaming-first** when `downstream_mode: stream` (stream if possible; fallback to file on errors)
 
 ```python
-# Pipeline runner hardcoded to file playback
-playback_id = await self.playback_manager.play_audio(
-    call_id,
-    bytes(tts_bytes),
-    "pipeline-tts",
-)
+# Pipeline runner gating (simplified)
+use_streaming_playback = self.config.downstream_mode != "file"
 ```
 
-**Reason**: Pipelines were designed for discrete request/response cycles with file artifacts.
-
-**Future**: Could add `downstream_mode` check to enable streaming for pipelines (4-6 hour effort).
+Relevant logic lives in the pipeline runner in `src/engine.py` (search for `use_streaming_playback` and `Pipeline streaming playback failed; falling back to file playback`).
 
 ### Why Full Agents Respect downstream_mode
 
-**Code Location**: `src/engine.py:3598, 3669`
+Relevant logic lives in `src/engine.py` (search for `use_streaming = self.config.downstream_mode != "file"`).
 
 ```python
 # Full agents check downstream_mode
