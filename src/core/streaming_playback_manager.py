@@ -952,7 +952,14 @@ class StreamingPlaybackManager:
                 except Exception:
                     frames_remaining = 0
                 chunk_sec = max(0.02, self.chunk_size_ms / 1000.0)
-                drain_timeout = min(2.0, max(0.5, (frames_remaining * chunk_sec) + 0.1))
+                # NOTE: Do not cap drain time too aggressively.
+                # In downstream streaming mode, providers/pipelines may enqueue a large amount of audio quickly
+                # and then signal end-of-stream. The pacer must be allowed to drain frame remainders;
+                # otherwise playback truncates (observed ~2s cutoff when drain_timeout was capped at 2.0s).
+                #
+                # We still cap the wait to avoid hanging indefinitely on transport failures.
+                drain_timeout = max(0.5, (frames_remaining * chunk_sec) + 0.5)
+                drain_timeout = min(120.0, drain_timeout)
                 with suppress(asyncio.CancelledError, asyncio.TimeoutError):
                     await asyncio.wait_for(pacer_task, timeout=drain_timeout)
             if pacer_task and not pacer_task.done():
