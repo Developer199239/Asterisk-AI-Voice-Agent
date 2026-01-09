@@ -11,10 +11,11 @@ const ElevenLabsProviderForm: React.FC<ElevenLabsProviderFormProps> = ({ config,
         onChange({ ...config, [field]: value });
     };
 
-    // Determine mode based on presence of agent_id
-    // If agent_id is present, it's likely an Agent. If voice_id is present (and no agent_id), it's TTS.
-    // We default to 'agent' if ambiguous, unless explicitly set.
-    const mode = config.mode || (config.agent_id ? 'agent' : 'tts');
+    // Determine mode based on type or presence of agent_id
+    // type: 'full' indicates Conversational Agent (matches GenericProviderForm pattern)
+    // agent_id also indicates Agent mode
+    // Otherwise defaults to TTS mode
+    const mode = config.mode || ((config.agent_id || config.type === 'full') ? 'agent' : 'tts');
 
     const handleModeChange = (newMode: 'agent' | 'tts') => {
         if (newMode === 'agent') {
