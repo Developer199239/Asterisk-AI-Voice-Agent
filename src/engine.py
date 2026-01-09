@@ -3136,6 +3136,50 @@ class Engine:
         except Exception:
             return base
 
+    def _apply_prompt_template_substitution(self, text: str, session: CallSession) -> str:
+        """Apply template variable substitution to prompts and greetings.
+        
+        Available variables (with defaults if not available):
+        - {caller_name}: Caller ID name (default: "there")
+        - {caller_number}: Caller phone number/ANI (default: "unknown")
+        - {call_id}: Unique call identifier (always available)
+        - {context_name}: AI_CONTEXT from dialplan (default: "")
+        - {call_direction}: "inbound" or "outbound" (default: "inbound")
+        - {campaign_id}: Outbound campaign ID (default: "")
+        - {lead_id}: Outbound lead/contact ID (default: "")
+        
+        Unknown placeholders are left as-is (safe fallback).
+        Uses regex-based substitution to handle partial matches correctly.
+        """
+        if not text:
+            return text
+        
+        import re
+        
+        substitutions = {
+            "caller_name": getattr(session, 'caller_name', None) or "there",
+            "caller_number": getattr(session, 'caller_number', None) or "unknown",
+            "call_id": session.call_id,
+            "context_name": getattr(session, 'context_name', None) or "",
+            "call_direction": "outbound" if getattr(session, 'is_outbound', False) else "inbound",
+            "campaign_id": getattr(session, 'outbound_campaign_id', None) or "",
+            "lead_id": getattr(session, 'outbound_lead_id', None) or "",
+        }
+        
+        def replace_match(match):
+            key = match.group(1)
+            return substitutions.get(key, match.group(0))  # Leave unknown as-is
+        
+        try:
+            return re.sub(r'\{(\w+)\}', replace_match, text)
+        except Exception as e:
+            logger.debug(
+                "Prompt template substitution failed, leaving unchanged",
+                call_id=session.call_id,
+                error=str(e),
+            )
+            return text
+
     async def _wait_for_attended_transfer_dtmf(
         self,
         agent_channel_id: str,
@@ -7972,7 +8016,8 @@ class Engine:
                     if context_config and context_config.prompt:
                             # Create a copy to avoid mutating the pipeline's original options
                             llm_options = dict(llm_options)
-                            llm_options['system_prompt'] = context_config.prompt
+                            # Apply template substitution for caller context variables
+                            llm_options['system_prompt'] = self._apply_prompt_template_substitution(context_config.prompt, session)
                             prompt_source = "context_injection"
                             context_prompt_injected = True
                             logger.info(
@@ -7998,7 +8043,8 @@ class Engine:
                         global_prompt = getattr(self.config.llm, 'prompt', None)
                         if global_prompt:
                             llm_options = dict(llm_options)
-                            llm_options['system_prompt'] = global_prompt
+                            # Apply template substitution for caller context variables
+                            llm_options['system_prompt'] = self._apply_prompt_template_substitution(global_prompt, session)
                             prompt_source = "global_llm_config"
                             logger.info(
                                 "Pipeline LLM prompt resolved from global config",
@@ -9457,6 +9503,8 @@ class Engine:
                             )
                         if context_config.prompt:
                             prompt_to_apply = context_config.prompt
+                            # Apply template substitution for caller context variables
+                            prompt_to_apply = self._apply_prompt_template_substitution(prompt_to_apply, session)
                             if getattr(session, "is_outbound", False) and getattr(session, "outbound_custom_vars", None):
                                 prompt_to_apply = self._append_outbound_custom_vars_to_prompt(
                                     prompt_to_apply,
