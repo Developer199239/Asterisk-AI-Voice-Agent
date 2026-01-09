@@ -113,10 +113,14 @@ const ElevenLabsProviderForm: React.FC<ElevenLabsProviderFormProps> = ({ config,
                                 className="w-full p-2 rounded border border-input bg-background font-mono text-sm"
                                 value={config.agent_id || ''}
                                 onChange={(e) => handleChange('agent_id', e.target.value)}
-                                placeholder="agent_xxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                                placeholder="${ELEVENLABS_AGENT_ID}"
                             />
                             <p className="text-xs text-muted-foreground">
-                                Found in <a href="https://elevenlabs.io/app/agents" target="_blank" className="text-primary underline">Agents Dashboard</a>
+                                Found in <a href="https://elevenlabs.io/app/agents" target="_blank" rel="noopener noreferrer" className="text-primary underline">Agents Dashboard</a>
+                            </p>
+                            <p className="text-xs text-amber-600 dark:text-amber-400">
+                                <strong>Tip:</strong> Use <code className="bg-muted px-1 rounded">${'{'}ELEVENLABS_AGENT_ID{'}'}</code> and set the actual value in{' '}
+                                <a href="/env" className="text-primary underline">System → Environment</a>
                             </p>
                         </div>
 
