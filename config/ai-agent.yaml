@@ -974,6 +974,8 @@ providers:
     tts_voice_name: Aoede
     type: full
   local:
+    # Local AI Server WebSocket URL. Default deployment uses host networking, so 127.0.0.1 is correct.
+    # If you run containers on a user-defined bridge network (no host networking), use ws://local_ai_server:8765.
     base_url: ${LOCAL_WS_URL:-ws://127.0.0.1:8765}
     auth_token: ${LOCAL_WS_AUTH_TOKEN:-}
     capabilities:
@@ -1006,6 +1008,7 @@ providers:
     max_tokens: 32
     temperature: 0.4
     type: local
+    # Uses LOCAL_WS_URL (see providers.local.base_url note above).
     ws_url: ${LOCAL_WS_URL:-ws://127.0.0.1:8765}
   local_stt:
     auth_token: ${LOCAL_WS_AUTH_TOKEN:-}
@@ -1018,6 +1021,7 @@ providers:
     stt_backend: vosk
     stt_model: models/stt/vosk-model-en-us-0.22
     type: local
+    # Uses LOCAL_WS_URL (see providers.local.base_url note above).
     ws_url: ${LOCAL_WS_URL:-ws://127.0.0.1:8765}
   local_tts:
     auth_token: ${LOCAL_WS_AUTH_TOKEN:-}
@@ -1027,6 +1031,7 @@ providers:
     response_timeout_sec: ${LOCAL_WS_RESPONSE_TIMEOUT:=10.0}
     tts_voice: models/tts/en_US-lessac-medium.onnx
     type: local
+    # Uses LOCAL_WS_URL (see providers.local.base_url note above).
     ws_url: ${LOCAL_WS_URL:-ws://127.0.0.1:8765}
   openai_llm:
     capabilities:
