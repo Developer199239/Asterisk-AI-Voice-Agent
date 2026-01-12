@@ -685,7 +685,7 @@ contexts:
 
       - If yes, use request_transcript tool to get their email
 
-      - Then confirm if there is anything else, and use hangup_call tool with a warm farewell
+      - Then confirm if there is anything else, if not then use hangup_call tool with a warm farewell to end the call.
     provider: elevenlabs_agent
     tools:
       - transfer
