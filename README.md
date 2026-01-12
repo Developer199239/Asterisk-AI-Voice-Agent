@@ -107,10 +107,10 @@ For users who prefer the command line or need headless setup.
 ### Option A: Interactive CLI
 ```bash
 ./install.sh
-agent init
+agent setup
 ```
 
-> Note: `agent quickstart` is still available for backward compatibility, but `agent init` is the recommended CLI wizard for v5+.
+> Note: Legacy commands `agent init`, `agent doctor`, and `agent troubleshoot` remain available as hidden aliases in CLI v5.0.
 
 ### Option B: Manual Setup
 ```bash
@@ -143,7 +143,7 @@ Notes:
 ### Test Your Agent
 **Health check:**
 ```bash
-agent doctor
+agent check
 ```
 
 **View logs:**
@@ -294,7 +294,7 @@ active_pipeline: local_ollama
 ### Technical Features
 
 - **Tool Calling System**: AI-powered actions (transfers, emails) work with any provider.
-- **Agent CLI Tools**: `doctor`, `troubleshoot`, `demo`, `init` commands.
+- **Agent CLI Tools**: `setup`, `check`, `rca`, `version` commands (legacy aliases: `init`, `doctor`, `troubleshoot`).
 - **Modular Pipeline System**: Independent STT, LLM, and TTS provider selection.
 - **Dual Transport Support**: AudioSocket and ExternalMedia RTP (the shipped default config uses ExternalMedia; both are supported — see the transport matrix).
 - **Streaming-First Downstream**: Streaming playback when possible, with automatic fallback to file playback for robustness.
@@ -391,13 +391,10 @@ curl -sSL https://raw.githubusercontent.com/hkjarral/Asterisk-AI-Voice-Agent/mai
 
 **Commands:**
 ```bash
-agent init               # Interactive setup wizard (recommended)
-# agent quickstart        # Backward-compatible legacy wizard
-agent dialplan            # Generate dialplan snippets
-agent config validate     # Validate configuration
-agent doctor --fix        # System health check
-agent troubleshoot        # Analyze specific call
-agent demo                # Demo features
+agent setup               # Interactive setup wizard (recommended)
+agent check               # Standard diagnostics report (share this output when asking for help)
+agent rca --call <call_id> # Post-call RCA (use Call History to find call_id)
+agent version             # Version information
 ```
 
 ---

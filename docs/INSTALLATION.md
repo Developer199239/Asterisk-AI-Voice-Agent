@@ -41,7 +41,7 @@ sudo ./preflight.sh --apply-fixes
 If preflight reports warnings or failures, resolve them first, then re-run preflight until it returns clean:
 - Troubleshooting: `docs/TROUBLESHOOTING_GUIDE.md`
 - Re-run: `sudo ./preflight.sh --apply-fixes`
-- Verify: `agent doctor`
+- Verify: `agent check`
 
 ### 3) Upgrade checklist (4.5.3 → 4.6.0)
 
@@ -69,7 +69,7 @@ docker compose up -d --build --force-recreate local_ai_server
 
 ```bash
 curl -sS http://localhost:15000/health
-agent doctor
+agent check
 ```
 
 > ⚠️ **Operator note (production hardening):** `ai_engine` exposes a health/metrics server on port `15000`.
@@ -97,7 +97,7 @@ docker compose up -d ai_engine
 ```
 
 If you hit permission/container/health issues during setup, start with:
-- `agent doctor`
+- `agent check`
 - `sudo ./preflight.sh --apply-fixes`
 - `docs/TROUBLESHOOTING_GUIDE.md`
 
@@ -131,16 +131,16 @@ See [Admin UI Setup Guide](../admin_ui/UI_Setup_Guide.md) for detailed instructi
 git clone https://github.com/hkjarral/Asterisk-AI-Voice-Agent.git
 cd Asterisk-AI-Voice-Agent
 
-# Run installer
-./install.sh
+	# Run installer
+	./install.sh
 
-# Run CLI wizard
-agent init
-```
+	# Run CLI wizard
+	agent setup
+	```
 
 **Best for:** Headless servers, scripted deployments, CLI preference
 
-> Note: `agent quickstart` is still available for backward compatibility, but `agent init` is the recommended CLI wizard for v5+.
+	> Note: `agent quickstart` and `agent init` are still available for backward compatibility, but `agent setup` is the recommended CLI wizard for v5.0.
 
 ---
 

@@ -1419,9 +1419,10 @@ offer_cli_installation() {
         print_success "agent CLI already installed: $version"
         echo ""
         print_info "Available commands:"
-        print_info "  • agent dialplan  - Generate dialplan snippets"
-        print_info "  • agent doctor    - Health check"
-        print_info "  • agent demo      - Test audio pipeline"
+        print_info "  • agent setup     - Interactive setup wizard"
+        print_info "  • agent check     - Standard diagnostics report"
+        print_info "  • agent rca       - Post-call root cause analysis"
+        print_info "  • agent version   - Version information"
         echo ""
         return 0
     fi
@@ -1453,10 +1454,9 @@ offer_cli_installation() {
     
     # Offer installation
     echo "The agent CLI provides helpful tools for setup and troubleshooting:"
-    echo "  • agent dialplan  - Generate dialplan configuration"
-    echo "  • agent doctor    - System health check"
-    echo "  • agent demo      - Test audio pipeline"
-    echo "  • agent troubleshoot - Post-call analysis"
+    echo "  • agent setup     - Interactive setup wizard"
+    echo "  • agent check     - Standard diagnostics report"
+    echo "  • agent rca       - Post-call root cause analysis"
     echo ""
     
     read -p "Install agent CLI tool? [Y/n]: " install_cli
@@ -1503,18 +1503,10 @@ offer_cli_installation() {
             local version=$(agent version 2>/dev/null | head -1 || echo "installed")
             print_success "Verified: $version"
             echo ""
-            
-            # Offer to run dialplan generator
-            echo "Generate dialplan configuration now?"
-            echo "  This will print the dialplan snippet you need to add to Asterisk"
-            echo ""
-            read -p "Run 'agent dialplan' now? [Y/n]: " run_dialplan
-            
-            if [[ ! "$run_dialplan" =~ ^[Nn]$ ]]; then
-                echo ""
-                agent dialplan --provider "$PROFILE" --file /etc/asterisk/extensions_custom.conf || true
-                echo ""
-            fi
+            print_info "Next steps:"
+            print_info "  1) Run setup: agent setup"
+            print_info "  2) Run diagnostics: agent check"
+            print_info "  3) After a test call: agent rca"
         fi
     else
         print_warning "Could not download agent CLI (network issue or release not available)"
@@ -1593,7 +1585,7 @@ print_final_summary() {
     echo ""
     print_info "🔍 Next steps:"
     print_info "  1. Access Admin UI: http://<server-ip>:3003"
-    print_info "  2. Configure dialplan (see snippet above or run: agent dialplan)"
+    print_info "  2. Configure dialplan (see snippet above or run: agent setup)"
     print_info "  3. Make a test call to verify everything works"
     print_info "  4. Check logs: docker compose -p asterisk-ai-voice-agent logs -f ai_engine"
     print_info "  5. Switch pipelines: Edit config/ai-agent.yaml (change default_provider)"
