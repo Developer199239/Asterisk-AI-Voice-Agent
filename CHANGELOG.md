@@ -26,9 +26,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `agent setup` - Interactive setup wizard (renamed from `agent init`)
   - Legacy aliases (`doctor`, `troubleshoot`, `init`, `demo`) remain available as hidden commands for backward compatibility
 
-### Note
+- **Preflight Script - Remote Asterisk Support** (AAVA-150):
+  - New `check_data_permissions()` function runs regardless of Asterisk location
+  - Fixes `call_history.db` read-only error for users with remote/containerized Asterisk
+  - Detects and fixes root-owned database files that container user cannot write to
 
-- CLI-only release - no changes to ai-engine, local_ai_server, or Admin UI
+- **Preflight Script - Symlink Handling** (AAVA-150):
+  - Non-empty directories at `/var/lib/asterisk/sounds/ai-generated` now auto-backed up with `--apply-fixes`
+  - Fixes the "ai-generated/ai-generated/" double-path issue
+  - Prevents silent symlink creation failures
 
 ## [5.0.0] - 2026-01-07
 

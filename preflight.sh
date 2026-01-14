@@ -839,6 +839,93 @@ PY
 }
 
 # ============================================================================
+# Data Directory Permissions (AAVA-150)
+# Always runs regardless of Asterisk location - fixes remote Asterisk case
+# ============================================================================
+check_data_permissions() {
+    DATA_DIR="$SCRIPT_DIR/data"
+    
+    # Skip if data directory doesn't exist yet (check_directories handles creation)
+    [ ! -d "$DATA_DIR" ] && return 0
+    
+    # Check for root-owned call_history.db files that will break container
+    # Container runs as appuser (UID 1000), not root
+    local needs_fix=false
+    local db_files=("$DATA_DIR/call_history.db" "$DATA_DIR/call_history.db-wal" "$DATA_DIR/call_history.db-shm")
+    
+    for db_file in "${db_files[@]}"; do
+        if [ -f "$db_file" ]; then
+            # Get owner UID (works on both Linux and macOS)
+            local owner_uid
+            owner_uid=$(stat -c '%u' "$db_file" 2>/dev/null || stat -f '%u' "$db_file" 2>/dev/null || echo "unknown")
+            
+            if [ "$owner_uid" = "0" ]; then
+                needs_fix=true
+                break
+            fi
+        fi
+    done
+    
+    if [ "$needs_fix" = true ]; then
+        log_warn "call_history.db owned by root - container (appuser/UID 1000) cannot write"
+        log_info "  This typically happens when Admin UI creates the database"
+        
+        if [ "$APPLY_FIXES" = true ]; then
+            local fix_success=true
+            for db_file in "${db_files[@]}"; do
+                if [ -f "$db_file" ]; then
+                    if sudo chown 1000:1000 "$db_file" 2>/dev/null && sudo chmod 664 "$db_file" 2>/dev/null; then
+                        log_ok "Fixed ownership: $db_file"
+                    else
+                        log_warn "Could not fix ownership (may need sudo): $db_file"
+                        fix_success=false
+                    fi
+                fi
+            done
+            if [ "$fix_success" = true ]; then
+                log_ok "call_history.db ownership fixed for container user"
+            fi
+        else
+            FIX_CMDS+=("sudo chown 1000:1000 $DATA_DIR/call_history.db* 2>/dev/null || true")
+            FIX_CMDS+=("sudo chmod 664 $DATA_DIR/call_history.db* 2>/dev/null || true")
+        fi
+    else
+        # Check if any call_history.db exists and is properly configured
+        if [ -f "$DATA_DIR/call_history.db" ]; then
+            log_ok "call_history.db ownership: OK (writable by container)"
+        fi
+    fi
+    
+    # Verify data directory itself is writable by container user
+    # Use numeric UID check since container user doesn't exist on host
+    local dir_owner_uid
+    dir_owner_uid=$(stat -c '%u' "$DATA_DIR" 2>/dev/null || stat -f '%u' "$DATA_DIR" 2>/dev/null || echo "unknown")
+    local dir_perms
+    dir_perms=$(stat -c '%a' "$DATA_DIR" 2>/dev/null || stat -f '%Lp' "$DATA_DIR" 2>/dev/null || echo "unknown")
+    
+    # Check if directory is world-writable (xx7) or owned by UID 1000
+    if [ "$dir_owner_uid" != "1000" ] && [ "${dir_perms: -1}" != "7" ] && [ "${dir_perms: -1}" != "5" ]; then
+        # Directory may not be writable by container - check group permissions
+        local dir_mode
+        dir_mode=$(stat -c '%a' "$DATA_DIR" 2>/dev/null || stat -f '%Lp' "$DATA_DIR" 2>/dev/null || echo "000")
+        local group_write="${dir_mode:1:1}"
+        
+        if [ "$group_write" != "7" ] && [ "$group_write" != "6" ]; then
+            log_warn "Data directory may not be writable by container (owner UID: $dir_owner_uid, perms: $dir_perms)"
+            if [ "$APPLY_FIXES" = true ]; then
+                if sudo chmod 775 "$DATA_DIR" 2>/dev/null; then
+                    log_ok "Fixed data directory permissions: 775"
+                else
+                    log_warn "Could not fix data directory permissions (may need sudo)"
+                fi
+            else
+                FIX_CMDS+=("sudo chmod 775 $DATA_DIR")
+            fi
+        fi
+    fi
+}
+
+# ============================================================================
 # SELinux (RHEL family)
 # ============================================================================
 check_selinux() {
@@ -1246,19 +1333,53 @@ check_asterisk_uid_gid() {
                 fi
             else
                 # Symlink mode (works when Asterisk can traverse MEDIA_DIR)
+                # AAVA-150: Handle existing directory at symlink target
+                local symlink_blocked=false
                 if [ -e "$ASTERISK_SOUNDS_LINK" ] && [ ! -L "$ASTERISK_SOUNDS_LINK" ]; then
-                    if [ -d "$ASTERISK_SOUNDS_LINK" ] && [ -z "$(ls -A "$ASTERISK_SOUNDS_LINK" 2>/dev/null)" ]; then
-                        rmdir "$ASTERISK_SOUNDS_LINK" 2>/dev/null || sudo rmdir "$ASTERISK_SOUNDS_LINK" 2>/dev/null || true
+                    if [ -d "$ASTERISK_SOUNDS_LINK" ]; then
+                        if [ -z "$(ls -A "$ASTERISK_SOUNDS_LINK" 2>/dev/null)" ]; then
+                            # Empty directory - safe to remove
+                            rmdir "$ASTERISK_SOUNDS_LINK" 2>/dev/null || sudo rmdir "$ASTERISK_SOUNDS_LINK" 2>/dev/null || true
+                        elif [ "$APPLY_FIXES" = true ]; then
+                            # AAVA-150: Non-empty directory - auto-backup with --apply-fixes
+                            log_info "Backing up existing directory: ${ASTERISK_SOUNDS_LINK}.bak"
+                            if sudo mv "$ASTERISK_SOUNDS_LINK" "${ASTERISK_SOUNDS_LINK}.bak" 2>/dev/null; then
+                                log_ok "Backed up: $ASTERISK_SOUNDS_LINK → ${ASTERISK_SOUNDS_LINK}.bak"
+                            else
+                                log_warn "Could not backup existing directory (may need sudo)"
+                                symlink_blocked=true
+                            fi
+                        else
+                            # Without --apply-fixes, warn and add to FIX_CMDS
+                            log_warn "Asterisk sounds path exists but is not a symlink: $ASTERISK_SOUNDS_LINK"
+                            log_info "  This will cause 'ai-generated/ai-generated/' double-path issues"
+                            log_info "  Run with --apply-fixes to auto-backup and create symlink"
+                            FIX_CMDS+=("sudo mv $ASTERISK_SOUNDS_LINK ${ASTERISK_SOUNDS_LINK}.bak")
+                            FIX_CMDS+=("sudo ln -sfn $MEDIA_DIR $ASTERISK_SOUNDS_LINK")
+                            symlink_blocked=true
+                        fi
                     else
-                        log_warn "Asterisk sounds path exists but is not a symlink: $ASTERISK_SOUNDS_LINK"
-                        log_info "  Fix manually: sudo mv $ASTERISK_SOUNDS_LINK ${ASTERISK_SOUNDS_LINK}.bak && sudo ln -sfn $MEDIA_DIR $ASTERISK_SOUNDS_LINK"
+                        # It's a file, not a directory
+                        log_warn "Asterisk sounds path exists as a file (not directory): $ASTERISK_SOUNDS_LINK"
+                        if [ "$APPLY_FIXES" = true ]; then
+                            sudo mv "$ASTERISK_SOUNDS_LINK" "${ASTERISK_SOUNDS_LINK}.bak" 2>/dev/null || true
+                        else
+                            FIX_CMDS+=("sudo mv $ASTERISK_SOUNDS_LINK ${ASTERISK_SOUNDS_LINK}.bak")
+                            symlink_blocked=true
+                        fi
                     fi
                 fi
-                if ln -sfn "$MEDIA_DIR" "$ASTERISK_SOUNDS_LINK" 2>/dev/null; then
-                    log_ok "Asterisk sounds symlink: $ASTERISK_SOUNDS_LINK → $MEDIA_DIR"
-                else
-                    log_warn "Could not create Asterisk sounds symlink (may need sudo)"
-                    FIX_CMDS+=("sudo ln -sfn $MEDIA_DIR $ASTERISK_SOUNDS_LINK")
+                
+                # Only attempt symlink creation if not blocked
+                if [ "$symlink_blocked" = false ]; then
+                    if ln -sfn "$MEDIA_DIR" "$ASTERISK_SOUNDS_LINK" 2>/dev/null; then
+                        log_ok "Asterisk sounds symlink: $ASTERISK_SOUNDS_LINK → $MEDIA_DIR"
+                    elif sudo ln -sfn "$MEDIA_DIR" "$ASTERISK_SOUNDS_LINK" 2>/dev/null; then
+                        log_ok "Asterisk sounds symlink: $ASTERISK_SOUNDS_LINK → $MEDIA_DIR (via sudo)"
+                    else
+                        log_warn "Could not create Asterisk sounds symlink (may need sudo)"
+                        FIX_CMDS+=("sudo ln -sfn $MEDIA_DIR $ASTERISK_SOUNDS_LINK")
+                    fi
                 fi
             fi
         fi
@@ -1691,6 +1812,7 @@ main() {
     check_docker
     check_compose
     check_directories
+    check_data_permissions  # AAVA-150: Always runs, regardless of Asterisk location
     check_selinux
     check_env
     check_asterisk
