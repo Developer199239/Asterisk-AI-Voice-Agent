@@ -1798,19 +1798,6 @@ async def start_local_ai_server():
     media_setup = setup_media_paths()
     print(f"DEBUG: Media setup result: {media_setup}")
     
-    # Check if container is already running
-    already_running = False
-    try:
-        client = docker.from_env()
-        try:
-            container = client.containers.get("local_ai_server")
-            already_running = container.status == "running"
-            print(f"DEBUG: local_ai_server container status: {container.status}")
-        except docker.errors.NotFound:
-            print("DEBUG: local_ai_server container not found, will create")
-    except Exception as e:
-        print(f"DEBUG: Could not check container status: {e}")
-    
     try:
         # AAVA-140: Check if GPU is available (set by preflight.sh)
         gpu_available = os.environ.get("GPU_AVAILABLE", "").lower() == "true"
@@ -1818,9 +1805,9 @@ async def start_local_ai_server():
         # Build docker compose command - use GPU override file if GPU detected
         if gpu_available:
             print("DEBUG: GPU detected (GPU_AVAILABLE=true), using docker-compose.gpu.yml")
-            cmd = ["docker", "compose", "-f", "docker-compose.yml", "-f", "docker-compose.gpu.yml", "up", "-d"]
+            cmd = ["docker", "compose", "-f", "docker-compose.yml", "-f", "docker-compose.gpu.yml", "up", "-d", "--build"]
         else:
-            cmd = ["docker", "compose", "up", "-d"]
+            cmd = ["docker", "compose", "up", "-d", "--build"]
         
         # Explicitly remove container if it exists to avoid "Conflict" errors
         try:
@@ -1834,32 +1821,25 @@ async def start_local_ai_server():
         except Exception as e:
             print(f"DEBUG: Error removing container: {e}")
 
-        if already_running:
-            cmd.append("--force-recreate")
-            print("DEBUG: Container already running, using --force-recreate")
         cmd.append("local_ai_server")
-        
-        result = subprocess.run(
+
+        # NOTE: First-time builds can take many minutes. Don't block the HTTP request.
+        # The UI will poll logs and health until the server is ready.
+        subprocess.Popen(
             cmd,
             cwd=PROJECT_ROOT,
-            capture_output=True,
-            text=True,
-            timeout=120
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
         )
-        
-        if result.returncode == 0:
-            return {
-                "success": True,
-                "message": "Local AI Server started successfully" + (" (recreated)" if already_running else ""),
-                "media_setup": media_setup,
-                "recreated": already_running
-            }
-        else:
-            return {
-                "success": False,
-                "message": f"Failed to start: {result.stderr or result.stdout}",
-                "media_setup": media_setup
-            }
+
+        return {
+            "success": True,
+            "message": "Local AI Server start initiated. First-time build/pull may take several minutes; watch logs until ready.",
+            "media_setup": media_setup,
+        }
+    except FileNotFoundError as e:
+        return {"success": False, "message": f"Failed to start: {e}", "media_setup": media_setup}
     except Exception as e:
         return {"success": False, "message": str(e), "media_setup": media_setup}
 
@@ -2504,16 +2484,6 @@ async def save_setup_config(config: SetupConfig):
                     })
                 providers["local"]["greeting"] = config.greeting
                 providers["local"]["instructions"] = f"You are {config.ai_name}, a {config.ai_role}. Be helpful and concise."
-                # Start local-ai-server container with GPU support if available (AAVA-140)
-                try:
-                    gpu_available = os.environ.get("GPU_AVAILABLE", "").lower() == "true"
-                    if gpu_available:
-                        cmd = ["docker", "compose", "-p", "asterisk-ai-voice-agent", "-f", "docker-compose.yml", "-f", "docker-compose.gpu.yml", "up", "-d", "local_ai_server"]
-                    else:
-                        cmd = ["docker", "compose", "-p", "asterisk-ai-voice-agent", "up", "-d", "local_ai_server"]
-                    subprocess.run(cmd, cwd=PROJECT_ROOT, capture_output=True, timeout=120)
-                except Exception as e:
-                    print(f"Error starting local_ai_server: {e}")
 
             elif config.provider == "local_hybrid":
                 # local_hybrid is a PIPELINE (Local STT + Cloud/Local LLM + Local TTS)
@@ -2592,17 +2562,6 @@ async def save_setup_config(config: SetupConfig):
                     "llm": llm_component,
                     "tts": "local_tts"
                 }
-                
-                # Start local-ai-server container with GPU support if available (AAVA-140)
-                try:
-                    gpu_available = os.environ.get("GPU_AVAILABLE", "").lower() == "true"
-                    if gpu_available:
-                        cmd = ["docker", "compose", "-p", "asterisk-ai-voice-agent", "-f", "docker-compose.yml", "-f", "docker-compose.gpu.yml", "up", "-d", "local_ai_server"]
-                    else:
-                        cmd = ["docker", "compose", "-p", "asterisk-ai-voice-agent", "up", "-d", "local_ai_server"]
-                    subprocess.run(cmd, cwd=PROJECT_ROOT, capture_output=True, timeout=120)
-                except Exception as e:
-                    print(f"Error starting local_ai_server: {e}")
 
             # C6 Fix: Create default context
             yaml_config.setdefault("contexts", {})["default"] = {

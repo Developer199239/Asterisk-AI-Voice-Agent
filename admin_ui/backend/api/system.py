@@ -257,29 +257,40 @@ async def start_container(container_id: str):
         # Use docker compose with --build to ensure image exists
         compose_cmd = get_docker_compose_cmd()
         cmd = compose_cmd + ["-p", "asterisk-ai-voice-agent", "up", "-d", "--build", service_name]
-        
+
+        # local_ai_server can take many minutes to build on first run; don't block the request.
+        if service_name == "local_ai_server":
+            subprocess.Popen(
+                cmd,
+                cwd=project_root,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+            return {
+                "status": "starting",
+                "output": "Local AI Server start initiated. First-time build/pull may take several minutes; check logs until ready.",
+            }
+
         result = subprocess.run(
             cmd,
             cwd=project_root,
             capture_output=True,
             text=True,
-            timeout=300  # 5 min timeout for potential build
+            timeout=300,  # 5 min timeout for potential build (non-local-ai services)
         )
-        
+
         logger.debug(
             "start returncode=%s stdout=%s stderr=%s",
             result.returncode,
             (result.stdout or "")[:2000],
             (result.stderr or "")[:2000],
         )
-        
+
         if result.returncode == 0:
             return {"status": "success", "output": result.stdout or "Container started"}
         else:
-            raise HTTPException(
-                status_code=500, 
-                detail=f"Failed to start: {result.stderr or result.stdout}"
-            )
+            raise HTTPException(status_code=500, detail=f"Failed to start: {result.stderr or result.stdout}")
     except subprocess.TimeoutExpired:
         raise HTTPException(status_code=500, detail="Timeout waiting for container start")
     except FileNotFoundError:
@@ -456,14 +467,16 @@ async def _start_via_compose(container_id: str, service_map: dict):
     
     try:
         compose_cmd = get_docker_compose_cmd()
-        cmd = compose_cmd + ["-p", "asterisk-ai-voice-agent", "up", "-d", "--no-build", service_name]
+        build_flag = "--build" if service_name == "local_ai_server" else "--no-build"
+        timeout_sec = 1800 if service_name == "local_ai_server" else 120
+        cmd = compose_cmd + ["-p", "asterisk-ai-voice-agent", "up", "-d", build_flag, service_name]
         
         result = subprocess.run(
             cmd,
             cwd=project_root,
             capture_output=True,
             text=True,
-            timeout=120
+            timeout=timeout_sec
         )
         
         if result.returncode == 0:
