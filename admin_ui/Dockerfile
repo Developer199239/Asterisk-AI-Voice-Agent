@@ -61,4 +61,4 @@ USER appuser
 # NOTE: Binds to 0.0.0.0 by default for remote accessibility (common for Asterisk servers).
 # SECURITY: Change admin password on first login and restrict port 3003 via firewall/VPN/reverse proxy.
 # Port configurable via UVICORN_PORT env var.
-CMD sh -c 'uvicorn main:app --host ${UVICORN_HOST:-0.0.0.0} --port ${UVICORN_PORT:-3003}'
+CMD sh -c 'uvicorn main:app --host ${UVICORN_HOST:-0.0.0.0} --port ${UVICORN_PORT:-3003} --log-config /app/uvicorn_log_config.yaml'
