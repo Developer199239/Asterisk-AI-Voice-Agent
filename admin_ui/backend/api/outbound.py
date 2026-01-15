@@ -41,6 +41,22 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/outbound", tags=["outbound"])
 
+def _dotenv_value(key: str) -> Optional[str]:
+    """Read a key from the project's `.env` file (best-effort)."""
+    try:
+        env_path = os.path.join(project_root, ".env")
+        if not os.path.exists(env_path):
+            return None
+        from dotenv import dotenv_values
+
+        raw = dotenv_values(env_path)
+        val = raw.get(key)
+        if val is None:
+            return None
+        return str(val).strip()
+    except Exception:
+        return None
+
 
 def _get_outbound_store():
     try:
@@ -255,8 +271,15 @@ def _detect_server_timezone() -> str:
         except Exception:
             return None
 
-    # Prefer TZ (standard Docker env var), then legacy AAVA_SERVER_TIMEZONE.
+    # Prefer configured `.env` (UI saves here), then container environment.
+    env_tz = _validate_iana(_dotenv_value("TZ") or "")
+    if env_tz:
+        return env_tz
+    # Standard Docker env var
     env_tz = _validate_iana(os.getenv("TZ") or "")
+    if env_tz:
+        return env_tz
+    env_tz = _validate_iana(_dotenv_value("AAVA_SERVER_TIMEZONE") or "")
     if env_tz:
         return env_tz
     env_tz = _validate_iana(os.getenv("AAVA_SERVER_TIMEZONE") or "")
