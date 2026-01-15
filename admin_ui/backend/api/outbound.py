@@ -239,17 +239,29 @@ async def upload_recording_to_library(kind: str = Query("generic"), file: Upload
 def _detect_server_timezone() -> str:
     """
     Best-effort detection of server timezone as an IANA string.
-    Prefer explicit env var, then /etc/localtime symlink, then /etc/timezone.
+    Prefer explicit env var (TZ or AAVA_SERVER_TIMEZONE), then /etc/localtime symlink, then /etc/timezone.
     """
-    env_tz = (os.getenv("AAVA_SERVER_TIMEZONE") or "").strip()
-    if env_tz:
-        if ZoneInfo is None:
-            return env_tz
-        try:
-            ZoneInfo(env_tz)
-            return env_tz
-        except Exception:
+    def _validate_iana(tz: str) -> Optional[str]:
+        tz = (tz or "").strip()
+        if not tz:
+            return None
+        if tz.upper() == "UTC":
             return "UTC"
+        if ZoneInfo is None:
+            return tz
+        try:
+            ZoneInfo(tz)
+            return tz
+        except Exception:
+            return None
+
+    # Prefer TZ (standard Docker env var), then legacy AAVA_SERVER_TIMEZONE.
+    env_tz = _validate_iana(os.getenv("TZ") or "")
+    if env_tz:
+        return env_tz
+    env_tz = _validate_iana(os.getenv("AAVA_SERVER_TIMEZONE") or "")
+    if env_tz:
+        return env_tz
 
     try:
         target = os.path.realpath("/etc/localtime")
@@ -257,20 +269,17 @@ def _detect_server_timezone() -> str:
         if marker in target:
             tz = target.split(marker, 1)[1].strip(os.sep)
             if tz:
-                if ZoneInfo is None:
-                    return tz
-                ZoneInfo(tz)
-                return tz
+                validated = _validate_iana(tz)
+                if validated:
+                    return validated
     except Exception:
         pass
 
     try:
         tz = Path("/etc/timezone").read_text(encoding="utf-8").strip()
-        if tz:
-            if ZoneInfo is None:
-                return tz
-            ZoneInfo(tz)
-            return tz
+        validated = _validate_iana(tz)
+        if validated:
+            return validated
     except Exception:
         pass
 
