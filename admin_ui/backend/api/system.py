@@ -279,8 +279,6 @@ async def start_container(container_id: str):
             ]
             if any(m.lower() in stderr.lower() for m in needs_build_markers):
                 # Slow path: build may take many minutes. Run it in background and write output to a file.
-                import os
-
                 log_path = os.path.join(project_root, "logs", "local_ai_server_start.log")
                 os.makedirs(os.path.dirname(log_path), exist_ok=True)
                 logf = open(log_path, "a")

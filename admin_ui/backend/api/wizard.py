@@ -1863,8 +1863,6 @@ async def start_local_ai_server():
             "requires build",
         ]
         if any(m.lower() in stderr.lower() for m in needs_build_markers):
-            import os
-
             log_path = os.path.join(PROJECT_ROOT, "logs", "local_ai_server_start.log")
             os.makedirs(os.path.dirname(log_path), exist_ok=True)
             logf = open(log_path, "a")
