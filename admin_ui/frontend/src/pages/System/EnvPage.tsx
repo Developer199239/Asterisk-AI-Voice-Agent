@@ -264,6 +264,7 @@ const EnvPage = () => {
 	        'STREAMING_LOG_LEVEL', 'LOG_TO_FILE', 'LOG_FILE_PATH',
 	        'LOCAL_WS_URL', 'LOCAL_WS_CONNECT_TIMEOUT', 'LOCAL_WS_RESPONSE_TIMEOUT', 'LOCAL_WS_CHUNK_MS',
 	        'LOCAL_WS_HOST', 'LOCAL_WS_PORT', 'LOCAL_WS_AUTH_TOKEN',
+            'TZ',
 	        // STT backends
 	        'LOCAL_STT_BACKEND', 'LOCAL_STT_MODEL_PATH',
         'KROKO_URL', 'KROKO_API_KEY', 'KROKO_LANGUAGE', 'KROKO_EMBEDDED', 'KROKO_MODEL_PATH', 'KROKO_PORT',
@@ -489,6 +490,20 @@ const EnvPage = () => {
                             value={env['AI_ROLE'] || ''}
                             onChange={(e) => updateEnv('AI_ROLE', e.target.value)}
                             placeholder="Voice Assistant"
+                        />
+                    </div>
+                </ConfigCard>
+            </ConfigSection>
+
+            <ConfigSection title="Time Zone" description="Timezone used for timestamps and scheduling.">
+                <ConfigCard>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <FormInput
+                            label="TZ"
+                            tooltip="IANA timezone name used inside containers (e.g., America/Phoenix). Leave empty to use UTC. Requires restart to take effect."
+                            value={env['TZ'] || ''}
+                            onChange={(e) => updateEnv('TZ', e.target.value)}
+                            placeholder="America/Phoenix"
                         />
                     </div>
                 </ConfigCard>

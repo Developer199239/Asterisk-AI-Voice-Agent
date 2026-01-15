@@ -620,7 +620,7 @@ async def update_env(env_data: Dict[str, Optional[str]]):
 
         def _admin_ui_env_key(key: str) -> bool:
             return (
-                key in ("JWT_SECRET", "DOCKER_SOCK", "DOCKER_GID")
+                key in ("JWT_SECRET", "DOCKER_SOCK", "DOCKER_GID", "TZ")
                 or _is_prefix(key, ("UVICORN_", "ADMIN_UI_"))
             )
 
