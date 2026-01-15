@@ -147,6 +147,11 @@ services:
       network: host
     container_name: admin_ui
     network_mode: host
+    # Grant docker socket access to non-root user (appuser runs as UID 1000)
+    # Docker socket is typically owned by group 'docker' (GID 999 on most systems)
+    # Override DOCKER_GID in .env if your system uses a different GID
+    group_add:
+      - ${DOCKER_GID:-999}
     volumes:
       - ./:/app/project
       - ${DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock

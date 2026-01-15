@@ -34,6 +34,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
+# Create non-root user (UID 1000) matching ai_engine's appuser
+# This fixes SQLite permission issues when both containers write to shared ./data volume
+# Docker socket access provided via group_add in docker-compose.yml
+RUN useradd --create-home -u 1000 appuser
+
 # Install Python dependencies (bcrypt has manylinux wheels, no gcc needed)
 COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
@@ -47,10 +52,12 @@ COPY --from=frontend-builder /app/frontend/dist ./static
 # Expose default port (can be overridden by UVICORN_PORT)
 EXPOSE 3003
 
+# Run as non-root user (UID 1000) - matches ai_engine's appuser
+# This ensures both containers write files with the same ownership to shared volumes
+USER appuser
+
 # Run the application
 # NOTE: Binds to 0.0.0.0 by default for remote accessibility (common for Asterisk servers).
 # SECURITY: Change admin password on first login and restrict port 3003 via firewall/VPN/reverse proxy.
 # Port configurable via UVICORN_PORT env var.
-# IMPORTANT: Admin UI writes SQLite WAL/SHM files into the shared `./data` mount.
-# Set umask so files created by root inside this container are group-writable for `ai_engine` (runs as appuser).
-CMD sh -c 'umask 0002 && uvicorn main:app --host ${UVICORN_HOST:-0.0.0.0} --port ${UVICORN_PORT:-3003}'
+CMD sh -c 'uvicorn main:app --host ${UVICORN_HOST:-0.0.0.0} --port ${UVICORN_PORT:-3003}'
