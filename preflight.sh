@@ -1034,6 +1034,49 @@ PY
 }
 
 # ============================================================================
+# Project Directory Permissions (Admin UI needs to write .env + config)
+# ============================================================================
+check_project_permissions() {
+    local SHARED_GID
+    SHARED_GID="$(choose_shared_gid)"
+    local CONTAINER_UID="${CONTAINER_UID_DEFAULT}"
+
+    # Admin UI edits .env and config/ai-agent.yaml via atomic temp-file + rename.
+    # That requires the containing directories to be writable by the container UID.
+    local dirs=("$SCRIPT_DIR" "$SCRIPT_DIR/config")
+    for d in "${dirs[@]}"; do
+        [ -d "$d" ] || continue
+        local uid mode
+        uid="$(stat_uid "$d")"
+        mode="$(stat_mode "$d")"
+
+        local needs_fix=false
+        if [ "$uid" != "$CONTAINER_UID" ]; then
+            needs_fix=true
+        fi
+        if [[ "$mode" =~ ^[0-9]+$ ]]; then
+            local base_mode="${mode: -3}"
+            if [[ "$base_mode" =~ ^[0-9]{3}$ ]]; then
+                local base_oct=$((8#$base_mode))
+                # require owner write
+                if [ $((base_oct & 0200)) -eq 0 ]; then
+                    needs_fix=true
+                fi
+            fi
+        fi
+
+        if [ "$needs_fix" = true ]; then
+            log_warn "Project directory not writable by containers (host): $d"
+            log_info "  Required so Admin UI can save .env and config changes"
+            log_info "  Expected: owner UID $CONTAINER_UID, mode 2775 (recommended), group GID $SHARED_GID"
+            log_info "  Detected: uid=${uid:-unknown} mode=${mode:-unknown}"
+            FIX_CMDS+=("sudo chown $CONTAINER_UID:$SHARED_GID $d")
+            FIX_CMDS+=("sudo chmod 2775 $d")
+        fi
+    done
+}
+
+# ============================================================================
 # Data Directory Permissions (AAVA-150)
 # Always runs regardless of Asterisk location - fixes remote Asterisk case
 # ============================================================================
@@ -1854,6 +1897,7 @@ apply_fixes() {
         check_docker >/dev/null 2>&1
         check_compose >/dev/null 2>&1
         check_directories >/dev/null 2>&1
+        check_project_permissions >/dev/null 2>&1
         check_data_permissions >/dev/null 2>&1
         check_selinux >/dev/null 2>&1
         check_env >/dev/null 2>&1
@@ -2014,6 +2058,7 @@ main() {
     check_docker
     check_compose
     check_directories
+    check_project_permissions
     check_data_permissions  # AAVA-150: Always runs, regardless of Asterisk location
     check_selinux
     check_env
