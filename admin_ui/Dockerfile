@@ -19,12 +19,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 # Install Docker CLI and Compose plugin for container management
 # This allows admin-ui to start/stop/restart ai-engine and local-ai-server
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
     gnupg \
     build-essential \
     python3-dev \
+    tzdata \
     && install -m 0755 -d /etc/apt/keyrings \
     && curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg \
     && chmod a+r /etc/apt/keyrings/docker.gpg \
