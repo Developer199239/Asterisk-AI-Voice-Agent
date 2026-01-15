@@ -254,23 +254,56 @@ async def start_container(container_id: str):
     logger.info("Starting %s from %s", _sanitize_for_log(service_name), _sanitize_for_log(project_root))
     
     try:
-        # Use docker compose with --build to ensure image exists
         compose_cmd = get_docker_compose_cmd()
-        cmd = compose_cmd + ["-p", "asterisk-ai-voice-agent", "up", "-d", "--build", service_name]
 
-        # local_ai_server can take many minutes to build on first run; don't block the request.
         if service_name == "local_ai_server":
-            subprocess.Popen(
-                cmd,
+            # Fast path: start without build if the image is already present.
+            cmd_no_build = compose_cmd + ["-p", "asterisk-ai-voice-agent", "up", "-d", "--no-build", service_name]
+            result = subprocess.run(
+                cmd_no_build,
                 cwd=project_root,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.STDOUT,
-                start_new_session=True,
+                capture_output=True,
+                text=True,
+                timeout=60,
             )
-            return {
-                "status": "starting",
-                "output": "Local AI Server start initiated. First-time build/pull may take several minutes; check logs until ready.",
-            }
+            if result.returncode == 0:
+                return {"status": "success", "output": result.stdout or "Container started"}
+
+            stderr = (result.stderr or result.stdout or "").strip()
+            needs_build_markers = [
+                "No such image",
+                "pull access denied",
+                "failed to solve",
+                "unable to find image",
+                "requires build",
+            ]
+            if any(m.lower() in stderr.lower() for m in needs_build_markers):
+                # Slow path: build may take many minutes. Run it in background and write output to a file.
+                import os
+
+                log_path = os.path.join(project_root, "logs", "local_ai_server_start.log")
+                os.makedirs(os.path.dirname(log_path), exist_ok=True)
+                logf = open(log_path, "a")
+                logf.write("\n\n=== local_ai_server start (dashboard) ===\n")
+                logf.flush()
+
+                cmd_build = compose_cmd + ["-p", "asterisk-ai-voice-agent", "up", "-d", "--build", service_name]
+                subprocess.Popen(
+                    cmd_build,
+                    cwd=project_root,
+                    stdout=logf,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                )
+                return {
+                    "status": "starting",
+                    "output": f"Local AI Server build/start initiated in background; this can take several minutes. See {log_path} or container logs once created.",
+                }
+
+            raise HTTPException(status_code=500, detail=f"Failed to start: {stderr or 'Unknown error'}")
+
+        # Use docker compose with --build to ensure image exists
+        cmd = compose_cmd + ["-p", "asterisk-ai-voice-agent", "up", "-d", "--build", service_name]
 
         result = subprocess.run(
             cmd,
@@ -1094,6 +1127,7 @@ async def get_system_health():
             ])
 
             last_error: Optional[str] = None
+            errors_by_uri: dict = {}
             for uri in candidates:
                 logger.debug("Checking Local AI at %s", uri)
                 try:
@@ -1145,6 +1179,7 @@ async def get_system_health():
                                 "probe": {
                                     "selected": uri,
                                     "attempted": candidates,
+                                    "errors": errors_by_uri,
                                 }
                                 ,
                                 "warning": warning,
@@ -1153,15 +1188,27 @@ async def get_system_health():
                             last_error = "Invalid response type"
                 except Exception as e:
                     last_error = f"{type(e).__name__}: {str(e)}"
+                    errors_by_uri[uri] = last_error
                     continue
+
+            # Prefer an actionable error for the configured URL (if set),
+            # otherwise for localhost (most common on host-network installs).
+            preferred_error = None
+            if env_uri:
+                preferred_error = errors_by_uri.get(env_uri)
+            if not preferred_error:
+                preferred_error = errors_by_uri.get("ws://127.0.0.1:8765")
+            if not preferred_error:
+                preferred_error = last_error
 
             return {
                 "status": "error",
-                "details": {"error": last_error or "Unreachable"},
+                "details": {"error": preferred_error or "Unreachable"},
                 "probe": {
                     "selected": None,
                     "attempted": candidates,
-                    "error": last_error or "Unreachable",
+                    "errors": errors_by_uri,
+                    "error": preferred_error or "Unreachable",
                 }
             }
         except Exception as e:

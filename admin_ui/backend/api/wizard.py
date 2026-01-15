@@ -1788,7 +1788,7 @@ async def start_local_ai_server():
     """Start the local-ai-server container.
     
     Also sets up media paths for audio playback to work correctly.
-    Uses --force-recreate to handle cases where container is already running.
+    Uses --no-build when possible (fast), falls back to background build if needed.
     """
     import subprocess
     from settings import PROJECT_ROOT
@@ -1801,41 +1801,94 @@ async def start_local_ai_server():
     try:
         # AAVA-140: Check if GPU is available (set by preflight.sh)
         gpu_available = os.environ.get("GPU_AVAILABLE", "").lower() == "true"
-        
+
         # Build docker compose command - use GPU override file if GPU detected
+        cmd_base = ["docker", "compose", "-p", "asterisk-ai-voice-agent"]
         if gpu_available:
             print("DEBUG: GPU detected (GPU_AVAILABLE=true), using docker-compose.gpu.yml")
-            cmd = ["docker", "compose", "-f", "docker-compose.yml", "-f", "docker-compose.gpu.yml", "up", "-d", "--build"]
-        else:
-            cmd = ["docker", "compose", "up", "-d", "--build"]
-        
-        # Explicitly remove container if it exists to avoid "Conflict" errors
-        try:
-            client = docker.from_env()
-            try:
-                old_container = client.containers.get("local_ai_server")
-                print(f"DEBUG: Removing existing local_ai_server container ({old_container.status})")
-                old_container.remove(force=True)
-            except docker.errors.NotFound:
-                pass
-        except Exception as e:
-            print(f"DEBUG: Error removing container: {e}")
+            cmd_base += ["-f", "docker-compose.yml", "-f", "docker-compose.gpu.yml"]
 
-        cmd.append("local_ai_server")
-
-        # NOTE: First-time builds can take many minutes. Don't block the HTTP request.
-        # The UI will poll logs and health until the server is ready.
-        subprocess.Popen(
-            cmd,
+        # Fast path: start from existing image (avoid triggering a rebuild on every click)
+        cmd_no_build = cmd_base + ["up", "-d", "--no-build", "local_ai_server"]
+        result = subprocess.run(
+            cmd_no_build,
             cwd=PROJECT_ROOT,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
+            capture_output=True,
+            text=True,
+            timeout=60,
         )
+        if result.returncode == 0:
+            return {
+                "success": True,
+                "message": "Local AI Server started.",
+                "media_setup": media_setup,
+            }
+
+        stderr = (result.stderr or result.stdout or "").strip()
+
+        # If a stale container name is blocking startup, remove and retry once.
+        if "Conflict" in stderr and "local_ai_server" in stderr:
+            try:
+                client = docker.from_env()
+                try:
+                    old_container = client.containers.get("local_ai_server")
+                    print(f"DEBUG: Removing conflicting local_ai_server container ({old_container.status})")
+                    old_container.remove(force=True)
+                except docker.errors.NotFound:
+                    pass
+            except Exception as e:
+                print(f"DEBUG: Error removing conflicting container: {e}")
+
+            retry = subprocess.run(
+                cmd_no_build,
+                cwd=PROJECT_ROOT,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            if retry.returncode == 0:
+                return {
+                    "success": True,
+                    "message": "Local AI Server started.",
+                    "media_setup": media_setup,
+                }
+            stderr = (retry.stderr or retry.stdout or "").strip()
+
+        # Slow path: image missing or needs build; kick off build+up in background.
+        needs_build_markers = [
+            "No such image",
+            "pull access denied",
+            "failed to solve",
+            "unable to find image",
+            "requires build",
+        ]
+        if any(m.lower() in stderr.lower() for m in needs_build_markers):
+            import os
+
+            log_path = os.path.join(PROJECT_ROOT, "logs", "local_ai_server_start.log")
+            os.makedirs(os.path.dirname(log_path), exist_ok=True)
+            logf = open(log_path, "a")
+            logf.write("\n\n=== local_ai_server start (wizard) ===\n")
+            logf.flush()
+
+            cmd_build = cmd_base + ["up", "-d", "--build", "local_ai_server"]
+            subprocess.Popen(
+                cmd_build,
+                cwd=PROJECT_ROOT,
+                stdout=logf,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+
+            return {
+                "success": True,
+                "message": f"Local AI Server build/start initiated in background; this can take several minutes. See {log_path} or container logs once created.",
+                "media_setup": media_setup,
+            }
 
         return {
-            "success": True,
-            "message": "Local AI Server start initiated. First-time build/pull may take several minutes; watch logs until ready.",
+            "success": False,
+            "message": f"Failed to start local_ai_server: {stderr or 'Unknown error'}",
             "media_setup": media_setup,
         }
     except FileNotFoundError as e:
@@ -1883,6 +1936,17 @@ async def get_local_server_logs():
     except subprocess.TimeoutExpired:
         return {"logs": [], "ready": False, "error": "Timeout getting logs"}
     except Exception as e:
+        # Fallback: if container isn't created yet (e.g., still building), show the build/start log if present.
+        try:
+            import os
+
+            log_path = os.path.join(os.getenv("PROJECT_ROOT", "/app/project"), "logs", "local_ai_server_start.log")
+            if os.path.exists(log_path):
+                with open(log_path, "r") as f:
+                    tail = f.read().splitlines()[-50:]
+                return {"logs": tail[-20:], "ready": False, "error": str(e)}
+        except Exception:
+            pass
         return {"logs": [], "ready": False, "error": str(e)}
 
 
