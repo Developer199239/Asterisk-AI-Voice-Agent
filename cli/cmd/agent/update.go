@@ -428,7 +428,9 @@ func applyDockerActions(ctx *updateContext) error {
 	}
 
 	if ctx.composeChanged {
-		args := []string{"compose", "up", "-d", "--remove-orphans"}
+		// Avoid implicit builds when Compose files change (some deployments use pull_policy: build).
+		// The rebuild/restart logic below will handle builds explicitly when needed.
+		args := []string{"compose", "up", "-d", "--remove-orphans", "--no-build"}
 		if updateForceRecreate {
 			args = append(args, "--force-recreate")
 		}
@@ -454,7 +456,7 @@ func applyDockerActions(ctx *updateContext) error {
 	for _, svc := range restartServices {
 		if _, err := runCmd("docker", "compose", "restart", svc); err != nil {
 			// Fallback: start/recreate service if restart fails.
-			if _, err2 := runCmd("docker", "compose", "up", "-d", svc); err2 != nil {
+			if _, err2 := runCmd("docker", "compose", "up", "-d", "--no-build", svc); err2 != nil {
 				return fmt.Errorf("failed to restart %s (restart error: %v; up error: %w)", svc, err, err2)
 			}
 		}
