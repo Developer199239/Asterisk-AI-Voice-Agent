@@ -113,6 +113,7 @@
 - Default to **safe, non-destructive** Git behavior (no hard resets; no forced merges).
 - Preserve local operator changes (especially `.env` and `config/ai-agent.yaml`) using **stash + restore** and/or **backups**.
 - Keep Docker actions predictable: rebuild/recreate only what’s needed; verify with `agent check`.
+- Keep the CLI itself current: optionally self-update the `agent` binary from the latest GitHub Release before pulling code.
 
 ### Summary of the update flow
 

@@ -253,6 +253,7 @@ Notes:
 - Creates backups of `.env` and `config/ai-agent.yaml` before updating.
 - Uses fast-forward only; if your local branch has diverged, it will stop and print guidance.
 - Rebuilds/restarts only the impacted services, then runs `agent check` (unless `--skip-check`).
+- If a newer CLI release is available, `agent update` can self-update the `agent` binary first (default; disable with `--self-update=false`).
 
 ### `agent version` - Show Version
 
