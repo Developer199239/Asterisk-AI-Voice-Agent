@@ -119,6 +119,8 @@ class GoogleLiveProvider(AIProviderInterface):
         # Transcription buffering - hold latest partial until turnComplete
         self._input_transcription_buffer: str = ""
         self._output_transcription_buffer: str = ""
+        self._last_final_user_text: str = ""
+        self._last_final_assistant_text: str = ""
         
         # Turn latency tracking (Milestone 21 - Call History)
         self._turn_start_time: Optional[float] = None
@@ -797,6 +799,7 @@ class GoogleLiveProvider(AIProviderInterface):
         if turn_complete:
             # Save user speech if buffered
             if self._input_transcription_buffer:
+                self._last_final_user_text = self._input_transcription_buffer
                 logger.info(
                     "Google Live final user transcription (turnComplete)",
                     call_id=self._call_id,
@@ -807,12 +810,19 @@ class GoogleLiveProvider(AIProviderInterface):
             
             # Save AI speech if buffered
             if self._output_transcription_buffer:
+                self._last_final_assistant_text = self._output_transcription_buffer
                 logger.info(
                     "Google Live final AI transcription (turnComplete)",
                     call_id=self._call_id,
                     text=self._output_transcription_buffer[:150],
                 )
                 await self._track_conversation_message("assistant", self._output_transcription_buffer)
+                # Fallback: if the model speaks a clear farewell but doesn't emit a hangup_call toolCall,
+                # arm engine-level hangup after TTS completion.
+                await self._maybe_arm_cleanup_after_tts(
+                    user_text=self._last_final_user_text,
+                    assistant_text=self._last_final_assistant_text,
+                )
                 self._output_transcription_buffer = ""
             
             # Reset turn tracking for next turn (Milestone 21)
@@ -840,6 +850,74 @@ class GoogleLiveProvider(AIProviderInterface):
         # Handle turn completion
         if turn_complete:
             await self._handle_turn_complete()
+
+    async def _maybe_arm_cleanup_after_tts(self, *, user_text: str, assistant_text: str) -> None:
+        """
+        Gemini Live tool calling is model-driven (AUTO) and may not emit a `toolCall` even when it
+        speaks a farewell. To keep call teardown reliable, detect obvious end-of-call turns and set
+        `cleanup_after_tts=True` so the engine hangs up after audio playback completes.
+        """
+        if not self._call_id:
+            return
+        session_store = getattr(self, "_session_store", None)
+        if not session_store:
+            return
+
+        user = (user_text or "").strip().lower()
+        assistant = (assistant_text or "").strip().lower()
+        if not user or not assistant:
+            return
+
+        # Only arm hangup when the user indicates the call is ending and the assistant actually says goodbye.
+        user_end_markers = (
+            "goodbye",
+            "bye",
+            "hang up",
+            "hangup",
+            "end the call",
+            "end call",
+            "that's all",
+            "that is all",
+            "all set",
+            "no transcript",
+            "no transcript needed",
+            "no thanks",
+            "no thank you",
+        )
+        assistant_farewell_markers = (
+            "goodbye",
+            "bye",
+            "thank you for calling",
+            "have a great day",
+            "take care",
+        )
+
+        if not any(m in user for m in user_end_markers):
+            return
+        if not any(m in assistant for m in assistant_farewell_markers):
+            return
+
+        try:
+            session = await session_store.get_by_call_id(self._call_id)
+            if not session:
+                return
+            if getattr(session, "cleanup_after_tts", False):
+                return
+            session.cleanup_after_tts = True
+            await session_store.upsert_call(session)
+            logger.info(
+                "🔚 Armed cleanup_after_tts fallback (no toolCall required)",
+                call_id=self._call_id,
+                user_hint=(user_text or "")[:120],
+                assistant_hint=(assistant_text or "")[:120],
+            )
+        except Exception as e:
+            logger.debug(
+                "Failed to arm cleanup_after_tts fallback",
+                call_id=self._call_id,
+                error=str(e),
+                exc_info=True,
+            )
 
     async def _handle_audio_output(self, audio_b64: str) -> None:
         """
