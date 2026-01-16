@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,9 +12,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/hkjarral/asterisk-ai-voice-agent/cli/internal/check"
@@ -36,6 +39,7 @@ var (
 	updateRebuild       string
 	updateForceRecreate bool
 	updateSkipCheck     bool
+	updateSelfUpdate    bool
 	gitSafeDirectory    string
 )
 
@@ -67,6 +71,7 @@ func init() {
 	updateCmd.Flags().StringVar(&updateRebuild, "rebuild", string(rebuildAuto), "rebuild mode: auto|none|all")
 	updateCmd.Flags().BoolVar(&updateForceRecreate, "force-recreate", false, "force recreate containers during docker compose up")
 	updateCmd.Flags().BoolVar(&updateSkipCheck, "skip-check", false, "skip running agent check after update")
+	updateCmd.Flags().BoolVar(&updateSelfUpdate, "self-update", true, "auto-update the agent CLI binary if a newer release is available")
 	rootCmd.AddCommand(updateCmd)
 }
 
@@ -86,7 +91,9 @@ type updateContext struct {
 }
 
 func runUpdate() error {
-	printSelfUpdateHint()
+	if updateSelfUpdate {
+		maybeSelfUpdateAndReexec()
+	}
 
 	repoRoot, err := gitShowTopLevel()
 	if err != nil {
@@ -187,6 +194,184 @@ func runUpdate() error {
 	if failCount > 0 {
 		return errors.New("post-update check reported failures")
 	}
+	return nil
+}
+
+func maybeSelfUpdateAndReexec() {
+	// Avoid infinite loops if we successfully replaced ourselves and re-exec'd.
+	if os.Getenv("AAVA_AGENT_SKIP_SELF_UPDATE") == "1" {
+		return
+	}
+	if runtime.GOOS == "windows" {
+		// Windows in-place replacement is unreliable (binary-in-use); fall back to the installer hint.
+		printSelfUpdateHint()
+		return
+	}
+
+	current := strings.TrimSpace(version)
+	if !strings.HasPrefix(strings.ToLower(current), "v") {
+		// dev builds: best-effort hint only
+		printSelfUpdateHint()
+		return
+	}
+
+	latest, err := fetchLatestReleaseTag(context.Background(), "hkjarral/Asterisk-AI-Voice-Agent")
+	if err != nil || latest == "" {
+		return
+	}
+	if compareSemver(current, latest) >= 0 {
+		return
+	}
+
+	exePath, err := os.Executable()
+	if err != nil || exePath == "" {
+		printSelfUpdateHint()
+		return
+	}
+	if resolved, err := filepath.EvalSymlinks(exePath); err == nil && resolved != "" {
+		exePath = resolved
+	}
+
+	binName, ok := releaseBinaryName(runtime.GOOS, runtime.GOARCH)
+	if !ok {
+		printSelfUpdateHint()
+		return
+	}
+
+	if err := selfUpdateFromGitHubRelease(latest, binName, exePath); err != nil {
+		printSelfUpdateHint()
+		return
+	}
+
+	// Re-exec into the updated binary so the rest of `agent update` runs the newest logic.
+	env := append(os.Environ(), "AAVA_AGENT_SKIP_SELF_UPDATE=1")
+	args := append([]string{exePath}, os.Args[1:]...)
+	_ = syscall.Exec(exePath, args, env)
+}
+
+func releaseBinaryName(goos string, goarch string) (string, bool) {
+	switch goos {
+	case "linux":
+		switch goarch {
+		case "amd64":
+			return "agent-linux-amd64", true
+		case "arm64":
+			return "agent-linux-arm64", true
+		}
+	case "darwin":
+		switch goarch {
+		case "amd64":
+			return "agent-darwin-amd64", true
+		case "arm64":
+			return "agent-darwin-arm64", true
+		}
+	case "windows":
+		if goarch == "amd64" {
+			return "agent-windows-amd64.exe", true
+		}
+	}
+	return "", false
+}
+
+func selfUpdateFromGitHubRelease(tag string, binName string, installPath string) error {
+	installDir := filepath.Dir(installPath)
+	if installDir == "" {
+		return errors.New("invalid install path")
+	}
+	if err := ensureWritableDir(installDir); err != nil {
+		return err
+	}
+
+	base := fmt.Sprintf("https://github.com/hkjarral/Asterisk-AI-Voice-Agent/releases/download/%s", tag)
+	binURL := base + "/" + binName
+	sumsURL := base + "/SHA256SUMS"
+
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer cancel()
+
+	sums, err := httpGetBytes(ctx, sumsURL)
+	if err != nil {
+		return err
+	}
+	expected, err := parseSHA256SUMS(sums, binName)
+	if err != nil {
+		return err
+	}
+
+	payload, err := httpGetBytes(ctx, binURL)
+	if err != nil {
+		return err
+	}
+	actual := fmt.Sprintf("%x", sha256.Sum256(payload))
+	if !strings.EqualFold(actual, expected) {
+		return fmt.Errorf("checksum mismatch for %s", binName)
+	}
+
+	// Backup existing binary (best-effort).
+	if _, err := os.Stat(installPath); err == nil {
+		bak := filepath.Join(installDir, "agent.bak."+time.Now().UTC().Format("20060102_150405"))
+		_ = copyFile(installPath, bak)
+	}
+
+	tmp := filepath.Join(installDir, ".agent.new."+strconv.Itoa(os.Getpid()))
+	if err := os.WriteFile(tmp, payload, 0o755); err != nil {
+		return err
+	}
+	_ = os.Chmod(tmp, 0o755)
+
+	if err := os.Rename(tmp, installPath); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+func httpGetBytes(ctx context.Context, url string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "aava-agent-cli")
+	client := &http.Client{Timeout: 25 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("GET %s failed: %s", url, resp.Status)
+	}
+	return io.ReadAll(resp.Body)
+}
+
+func parseSHA256SUMS(sums []byte, filename string) (string, error) {
+	for _, line := range strings.Split(string(sums), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.Fields(line)
+		if len(parts) < 2 {
+			continue
+		}
+		hash := strings.TrimSpace(parts[0])
+		name := strings.TrimSpace(parts[1])
+		if name == filename {
+			if len(hash) != 64 {
+				return "", fmt.Errorf("invalid sha256 length for %s", filename)
+			}
+			return hash, nil
+		}
+	}
+	return "", fmt.Errorf("checksum for %s not found in SHA256SUMS", filename)
+}
+
+func ensureWritableDir(dir string) error {
+	testPath := filepath.Join(dir, ".agent.write-test."+strconv.Itoa(os.Getpid()))
+	if err := os.WriteFile(testPath, []byte("x"), 0o600); err != nil {
+		return err
+	}
+	_ = os.Remove(testPath)
 	return nil
 }
 
