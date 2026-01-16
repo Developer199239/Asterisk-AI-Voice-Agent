@@ -1673,21 +1673,44 @@ def _detect_os():
 
 def _detect_docker():
     """Detect Docker version and mode."""
+    sock_path = "/var/run/docker.sock"
+    socket_present = os.path.exists(sock_path)
     docker_info = {
         "installed": False,
+        "reachable": False,
         "version": None,
+        "api_version": None,
         "mode": "unknown",
         "status": "error",
         "message": "Docker not detected",
-        "socket_present": os.path.exists("/var/run/docker.sock"),
+        "socket_present": socket_present,
+        "socket_path": sock_path,
+        "socket_gid": None,
+        "socket_mode": None,
+        "process_uid": os.getuid(),
+        "process_gid": os.getgid(),
+        "process_groups": list(os.getgroups()),
         "cli_present": shutil.which("docker") is not None,
         "is_docker_desktop": False,
+        "permission_denied": False,
+        "needs_docker_gid": None,
     }
+
+    if socket_present:
+        try:
+            st = os.stat(sock_path)
+            docker_info["socket_gid"] = int(getattr(st, "st_gid", 0))
+            docker_info["socket_mode"] = oct(getattr(st, "st_mode", 0) & 0o777)
+            if docker_info["socket_gid"] is not None:
+                docker_info["needs_docker_gid"] = docker_info["socket_gid"] not in set(docker_info["process_groups"] or [])
+        except Exception:
+            pass
     
     try:
         client = docker.from_env()
         version_info = client.version()
         docker_info["installed"] = True
+        docker_info["reachable"] = True
         docker_info["version"] = version_info.get("Version", "unknown")
         docker_info["api_version"] = version_info.get("ApiVersion", "unknown")
         docker_info["status"] = "ok"
@@ -1724,7 +1747,18 @@ def _detect_docker():
             docker_info["mode"] = "rootful"
             
     except Exception as e:
-        docker_info["message"] = str(e)
+        msg = str(e) if e is not None else "unknown error"
+        docker_info["message"] = msg
+        docker_info["reachable"] = False
+
+        # Distinguish common "Docker installed but not accessible" cases.
+        # In practice this is usually a docker.sock mount/GID mismatch in admin_ui.
+        lowered = msg.lower()
+        if "permission denied" in lowered or "errno 13" in lowered:
+            docker_info["installed"] = docker_info["cli_present"] or docker_info["socket_present"]
+            docker_info["status"] = "error"
+            docker_info["permission_denied"] = True
+            docker_info["message"] = "Docker daemon not accessible from Admin UI (permission denied to docker.sock)"
     
     return docker_info
 
@@ -2090,6 +2124,28 @@ def _build_checks(os_info, docker_info, compose_info, selinux_info, dir_info, as
                     "docs_label": "AAVA installation docs",
                 }
             })
+    elif docker_info.get("permission_denied"):
+        checks.append({
+            "id": "docker_socket_perms",
+            "status": "error",
+            "message": (
+                "Admin UI cannot access Docker socket (permission denied). "
+                f"Socket gid={docker_info.get('socket_gid')}, process groups={docker_info.get('process_groups')}"
+            ),
+            "blocking": True,
+            "action": {
+                "type": "command",
+                "label": "Set DOCKER_GID and recreate admin_ui",
+                "value": "\n".join([
+                    "ls -ln /var/run/docker.sock",
+                    "DOCKER_GID=$(ls -ln /var/run/docker.sock | awk '{print $4}')",
+                    "grep -qE '^[# ]*DOCKER_GID=' .env && sed -i.bak -E \"s/^[# ]*DOCKER_GID=.*/DOCKER_GID=$DOCKER_GID/\" .env || echo \"DOCKER_GID=$DOCKER_GID\" >> .env",
+                    "docker compose -p asterisk-ai-voice-agent up -d --force-recreate admin_ui",
+                ]),
+                "docs_url": _github_docs_url("docs/TROUBLESHOOTING_GUIDE.md"),
+                "docs_label": "Troubleshooting guide",
+            },
+        })
     elif docker_info["status"] == "error":
         docs_url = _github_docs_url(docker_cfg.get("aava_docs")) or "https://docs.docker.com/engine/install/"
         start_cmd = docker_cfg.get("start_cmd") or "sudo systemctl start docker"

@@ -26,6 +26,7 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
     build-essential \
     python3-dev \
     tzdata \
+    gosu \
     && install -m 0755 -d /etc/apt/keyrings \
     && curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg \
     && chmod a+r /etc/apt/keyrings/docker.gpg \
@@ -50,12 +51,14 @@ COPY backend/ .
 # Copy built frontend assets to backend's static directory
 COPY --from=frontend-builder /app/frontend/dist ./static
 
+# Entrypoint: ensure appuser can access the Docker socket regardless of host docker group GID.
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
 # Expose default port (can be overridden by UVICORN_PORT)
 EXPOSE 3003
 
-# Run as non-root user (UID 1000) - matches ai_engine's appuser
-# This ensures both containers write files with the same ownership to shared volumes
-USER appuser
+ENTRYPOINT ["/app/entrypoint.sh"]
 
 # Run the application
 # NOTE: Binds to 0.0.0.0 by default for remote accessibility (common for Asterisk servers).

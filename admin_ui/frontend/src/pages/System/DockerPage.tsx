@@ -3,6 +3,7 @@ import { Container, RefreshCw, AlertCircle, Clock, CheckCircle2, XCircle, HardDr
 import { ConfigSection } from '../../components/ui/ConfigSection';
 import { ConfigCard } from '../../components/ui/ConfigCard';
 import axios from 'axios';
+import { ApiErrorInfo, buildDockerAccessHints, describeApiError } from '../../utils/apiErrors';
 
 interface ContainerInfo {
     id: string;
@@ -43,7 +44,7 @@ interface Toast {
 const DockerPage = () => {
     const [containers, setContainers] = useState<ContainerInfo[]>([]);
     const [loading, setLoading] = useState(true);
-    const [error, setError] = useState<string | null>(null);
+    const [error, setError] = useState<ApiErrorInfo | null>(null);
     const [actionLoading, setActionLoading] = useState<string | null>(null);
     const [toasts, setToasts] = useState<Toast[]>([]);
     const [diskUsage, setDiskUsage] = useState<DiskUsage | null>(null);
@@ -121,8 +122,9 @@ const DockerPage = () => {
             const res = await axios.get('/api/system/containers');
             setContainers(res.data);
         } catch (err: any) {
-            console.error('Failed to fetch containers', err);
-            setError('Failed to load container status. Ensure Docker is running and the backend has access.');
+            const info = describeApiError(err, '/api/system/containers');
+            console.error('Failed to fetch containers', info);
+            setError(info);
         } finally {
             setLoading(false);
         }
@@ -181,7 +183,21 @@ const DockerPage = () => {
             {error && (
                 <div className="bg-destructive/10 border border-destructive/20 text-destructive p-4 rounded-md flex items-center">
                     <AlertCircle className="w-5 h-5 mr-2" />
-                    {error}
+                    <div className="min-w-0">
+                        <div className="font-medium">Unable to load container status</div>
+                        <div className="text-sm text-muted-foreground break-words">
+                            {error.status ? `HTTP ${error.status}` : error.kind}
+                            {error.detail ? ` - ${error.detail}` : ''}
+                        </div>
+                        <details className="mt-2 text-sm text-muted-foreground">
+                            <summary className="cursor-pointer hover:text-foreground">Troubleshooting steps</summary>
+                            <ul className="list-disc pl-5 mt-2 space-y-1">
+                                {buildDockerAccessHints(error).map((h, idx) => (
+                                    <li key={idx}>{h}</li>
+                                ))}
+                            </ul>
+                        </details>
+                    </div>
                 </div>
             )}
 

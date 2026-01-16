@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { ConfigCard } from './ui/ConfigCard';
 import axios from 'axios';
+import { describeApiError } from '../utils/apiErrors';
 
 // Types
 interface PlatformCheck {
@@ -212,15 +213,19 @@ export const SystemStatus = () => {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [errorDetails, setErrorDetails] = useState<string | null>(null);
 
   const fetchPlatform = async () => {
     try {
       const res = await axios.get('/api/system/platform');
       setData(res.data);
       setError(null);
+      setErrorDetails(null);
     } catch (err) {
-      console.error('Failed to fetch platform status:', err);
+      const info = describeApiError(err, '/api/system/platform');
+      console.error('Failed to fetch platform status:', info);
       setError('Failed to load system status');
+      setErrorDetails(`${info.status ? `HTTP ${info.status}` : info.kind}${info.detail ? ` - ${info.detail}` : ''}`);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -256,6 +261,7 @@ export const SystemStatus = () => {
       <ConfigCard title="System Status" icon={<Server className="w-5 h-5" />}>
         <div className="p-4 text-center text-red-400">
           {error}
+          {errorDetails && <div className="mt-1 text-xs text-muted-foreground break-words">{errorDetails}</div>}
           <button 
             onClick={handleRefresh}
             className="ml-2 text-blue-400 hover:text-blue-300"

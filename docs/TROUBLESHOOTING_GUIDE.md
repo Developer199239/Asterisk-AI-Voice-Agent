@@ -150,6 +150,16 @@ If container control (start/stop/restart) fails from the UI:
 docker compose up -d --force-recreate admin_ui
 ```
 
+If the UI shows a 500 error and `admin_ui` logs contain `PermissionError: [Errno 13] Permission denied` for `/var/run/docker.sock`:
+- Your host’s `docker` group GID may not be `999` (Debian often differs), so the Admin UI user (UID 1000) can’t open the socket.
+- Fix by setting `DOCKER_GID` to the socket’s group ID and recreating `admin_ui`:
+```bash
+ls -ln /var/run/docker.sock
+DOCKER_GID=$(ls -ln /var/run/docker.sock | awk '{print $4}')
+grep -qE '^[# ]*DOCKER_GID=' .env && sed -i.bak -E "s/^[# ]*DOCKER_GID=.*/DOCKER_GID=$DOCKER_GID/" .env || echo "DOCKER_GID=$DOCKER_GID" >> .env
+docker compose up -d --force-recreate admin_ui
+```
+
 If containers are running but the UI shows “unreachable”:
 - Set explicit health probe URLs in `.env` (values must be reachable from `admin_ui`):
 ```bash
