@@ -13,6 +13,7 @@ The `agent` CLI provides a comprehensive set of tools for setup, diagnostics, an
 - **`agent setup`** - Interactive setup wizard
 - **`agent check`** - Standard diagnostics report
 - **`agent rca`** - Post-call root cause analysis
+- **`agent update`** - Pull latest code + rebuild/restart as needed
 - **`agent version`** - Show version information
 
 Legacy aliases (hidden from `--help` in v5.0):
@@ -234,10 +235,24 @@ agent troubleshoot --last --symptom <no-audio|garbled|echo|interruption|one-way>
 
 ## Hidden (Legacy) Commands
 
-CLI v5.0 intentionally keeps a small visible surface (`agent setup/check/rca/version`). For backwards compatibility and advanced workflows, these commands still exist but are hidden from `agent --help`:
+CLI v5.0 intentionally keeps a small visible surface (`agent setup/check/rca/update/version`). For backwards compatibility and advanced workflows, these commands still exist but are hidden from `agent --help`:
 
 - Compatibility aliases: `agent init`, `agent doctor`, `agent troubleshoot`
 - Advanced tools: `agent demo`, `agent dialplan`, `agent config validate`
+
+### `agent update` - Update Installation
+
+Safely updates an existing repo checkout to the latest `origin/main` and applies changes:
+
+```bash
+cd /root/Asterisk-AI-Voice-Agent
+agent update
+```
+
+Notes:
+- Creates backups of `.env` and `config/ai-agent.yaml` before updating.
+- Uses fast-forward only; if your local branch has diverged, it will stop and print guidance.
+- Rebuilds/restarts only the impacted services, then runs `agent check` (unless `--skip-check`).
 
 ### `agent version` - Show Version
 

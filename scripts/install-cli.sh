@@ -182,6 +182,7 @@ main() {
         info "Get started with:"
         echo "  agent setup          # Setup wizard"
         echo "  agent check          # Standard diagnostics report"
+        echo "  agent update         # Pull latest code + apply updates"
         echo "  agent rca            # Post-call root cause analysis"
         echo "  agent --help         # Show all commands"
     else

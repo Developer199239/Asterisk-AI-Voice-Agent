@@ -31,6 +31,7 @@ Available commands:
   setup       Interactive setup wizard
   check       Standard diagnostics report
   rca         Post-call root cause analysis
+  update      Pull latest code and apply updates
   version     Show version information`,
 	SilenceUsage:  true,
 	SilenceErrors: true,
