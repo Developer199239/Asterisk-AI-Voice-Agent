@@ -406,12 +406,14 @@ class GoogleLiveProvider(AIProviderInterface):
         setup_msg = {
             "setup": {
                 "model": f"models/{model_name}",
-                "generation_config": generation_config,
+                # Live API expects camelCase field names.
+                "generationConfig": generation_config,
             }
         }
 
         if system_prompt:
-            setup_msg["setup"]["system_instruction"] = {
+            # Live API expects `systemInstruction` (Content).
+            setup_msg["setup"]["systemInstruction"] = {
                 "parts": [{"text": system_prompt}]
             }
 
@@ -606,12 +608,11 @@ class GoogleLiveProvider(AIProviderInterface):
                 # Send realtime input (using camelCase keys per actual API)
                 message = {
                     "realtimeInput": {  # camelCase not snake_case
-                        "mediaChunks": [  # camelCase
-                            {
-                                "mimeType": f"audio/pcm;rate={provider_rate}",  # camelCase + rate from config
-                                "data": audio_b64,
-                            }
-                        ]
+                        # `mediaChunks` is deprecated in the Live API schema; prefer `audio`.
+                        "audio": {
+                            "mimeType": f"audio/pcm;rate={provider_rate}",
+                            "data": audio_b64,
+                        },
                     }
                 }
                 
