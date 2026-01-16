@@ -681,7 +681,7 @@ admin_ui/
 - Use label: `admin-ui`
 - Include: Version, deployment method, error logs
 
-**Discord Community**: [Join discussion](https://discord.gg/CAVACtaY)
+**Discord Community**: [Join discussion](https://discord.gg/ysg8fphxUe)
 - #support channel for questions
 - #admin-ui for UI-specific topics
 

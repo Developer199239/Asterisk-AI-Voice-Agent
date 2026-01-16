@@ -195,7 +195,7 @@ In Windsurf or your AI-enabled IDE:
   - “I want to add a calendar appointment tool.”
   - “I want to improve queue transfers.”
 - AVA (defined in `AVA.mdc`) will:
-  - Map your request to the roadmap and Linear specs (or [Discord discussions](https://discord.gg/CAVACtaY)).
+  - Map your request to the roadmap and Linear specs (or [Discord discussions](https://discord.gg/ysg8fphxUe)).
   - Tell you which files to touch, which configs to update, and which docs to read.
   - Propose a short plan and a checklist (tests, docs, PR requirements).
 
@@ -271,7 +271,7 @@ For branching and PR details, also see `CONTRIBUTING.md`.
   - `docs/TOOL_CALLING_GUIDE.md`
   - `docs/ASTERISK_QUEUE_SETUP.md`
 - For community-requested 4.2 features:
-  - Join our [Discord server](https://discord.gg/CAVACtaY) for discussions
+  - Join our [Discord server](https://discord.gg/ysg8fphxUe) for discussions
 
 If you get stuck at any point, ask AVA in your AI IDE to:
 

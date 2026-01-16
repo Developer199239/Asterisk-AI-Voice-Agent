@@ -456,7 +456,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Provider setup guides: `Provider-Deepgram-Setup.md`, `Provider-OpenAI-Setup.md`, `Provider-Google-Setup.md`
   - Developer guides: quickstart, architecture overview, architecture deep dive, common pitfalls
   - Technical references for all provider implementations
-- **Community Integration**: Discord server integration (https://discord.gg/CAVACtaY)
+- **Community Integration**: Discord server integration (https://discord.gg/ysg8fphxUe)
 - **Milestone 18**: Hybrid Pipelines Tool Implementation documentation
 
 ### Fixed
