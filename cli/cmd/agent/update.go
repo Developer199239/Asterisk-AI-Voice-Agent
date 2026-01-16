@@ -1,14 +1,18 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -81,6 +85,8 @@ type updateContext struct {
 }
 
 func runUpdate() error {
+	printSelfUpdateHint()
+
 	repoRoot, err := gitShowTopLevel()
 	if err != nil {
 		return err
@@ -181,6 +187,116 @@ func runUpdate() error {
 		return errors.New("post-update check reported failures")
 	}
 	return nil
+}
+
+func printSelfUpdateHint() {
+	latest, err := fetchLatestReleaseTag(context.Background(), "hkjarral/Asterisk-AI-Voice-Agent")
+	if err != nil || latest == "" {
+		return
+	}
+	current := strings.TrimSpace(version)
+	if !strings.HasPrefix(strings.ToLower(current), "v") {
+		// dev builds or unknown formats are best-effort only.
+		return
+	}
+	if compareSemver(current, latest) >= 0 {
+		return
+	}
+	fmt.Printf("Notice: a newer agent CLI is available (%s -> %s). Update with:\n", current, latest)
+	fmt.Printf("  curl -sSL https://raw.githubusercontent.com/hkjarral/Asterisk-AI-Voice-Agent/main/scripts/install-cli.sh | bash\n")
+}
+
+func fetchLatestReleaseTag(ctx context.Context, repo string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	defer cancel()
+
+	url := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", repo)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("User-Agent", "aava-agent-cli")
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("unexpected status %s", resp.Status)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	var payload struct {
+		TagName string `json:"tag_name"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return "", err
+	}
+	tag := strings.TrimSpace(payload.TagName)
+	if tag == "" {
+		return "", errors.New("missing tag_name in response")
+	}
+	return tag, nil
+}
+
+func compareSemver(a string, b string) int {
+	amaj, amin, apat, okA := parseSemver(a)
+	bmaj, bmin, bpat, okB := parseSemver(b)
+	if !okA || !okB {
+		return 0
+	}
+	if amaj != bmaj {
+		if amaj < bmaj {
+			return -1
+		}
+		return 1
+	}
+	if amin != bmin {
+		if amin < bmin {
+			return -1
+		}
+		return 1
+	}
+	if apat != bpat {
+		if apat < bpat {
+			return -1
+		}
+		return 1
+	}
+	return 0
+}
+
+func parseSemver(v string) (major int, minor int, patch int, ok bool) {
+	v = strings.TrimSpace(v)
+	v = strings.TrimPrefix(strings.ToLower(v), "v")
+	if v == "" {
+		return 0, 0, 0, false
+	}
+	if i := strings.IndexByte(v, '-'); i >= 0 {
+		v = v[:i]
+	}
+	parts := strings.Split(v, ".")
+	if len(parts) < 3 {
+		return 0, 0, 0, false
+	}
+	maj, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return 0, 0, 0, false
+	}
+	min, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return 0, 0, 0, false
+	}
+	pat, err := strconv.Atoi(parts[2])
+	if err != nil {
+		return 0, 0, 0, false
+	}
+	return maj, min, pat, true
 }
 
 func createUpdateBackups(ctx *updateContext) error {
