@@ -285,8 +285,12 @@ func gitRevParse(ref string) (string, error) {
 
 func gitIsDirty(includeUntracked bool) (bool, error) {
 	args := []string{"status", "--porcelain"}
+	// Default behavior: ignore untracked files so operator backup artifacts (e.g., *.bak, .preflight-ok)
+	// don't force a stash attempt on every update run. Use --stash-untracked to include them.
 	if includeUntracked {
 		args = append(args, "--untracked-files=all")
+	} else {
+		args = append(args, "--untracked-files=no")
 	}
 	out, err := runCmd("git", args...)
 	if err != nil {
