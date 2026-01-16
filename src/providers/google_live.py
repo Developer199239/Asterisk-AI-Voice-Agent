@@ -24,6 +24,7 @@ import json
 import time
 import struct
 import audioop
+import re
 from typing import Any, Dict, Optional, List
 from collections import deque
 
@@ -130,6 +131,77 @@ class GoogleLiveProvider(AIProviderInterface):
         self._session_start_time: Optional[float] = None
         # Tool response sizing: keep Google toolResponse payloads small to avoid provider errors.
         self._tool_response_max_bytes: int = 8000
+
+    @staticmethod
+    def _normalize_response_modalities(value: Any) -> List[str]:
+        """
+        Live API expects `generationConfig.responseModalities` as a list of modality strings.
+
+        Our config historically stores this as a string ("audio", "text", "audio_text").
+        Normalize to the documented list form, using the canonical "AUDIO"/"TEXT" tokens.
+        """
+        if value is None:
+            return ["AUDIO"]
+
+        def normalize_token(token: str) -> Optional[str]:
+            token_norm = (token or "").strip().upper()
+            if not token_norm:
+                return None
+            if token_norm in ("AUDIO", "AUDIO_ONLY"):
+                return "AUDIO"
+            if token_norm in ("TEXT", "TEXT_ONLY"):
+                return "TEXT"
+            if token_norm in ("AUDIO_TEXT", "TEXT_AUDIO", "AUDIO+TEXT", "TEXT+AUDIO", "AUDIO,TEXT", "TEXT,AUDIO"):
+                # Caller will expand this at the top-level.
+                return token_norm
+            return token_norm
+
+        tokens: List[str] = []
+        if isinstance(value, (list, tuple)):
+            for item in value:
+                if isinstance(item, str):
+                    t = normalize_token(item)
+                    if t:
+                        tokens.append(t)
+        elif isinstance(value, str):
+            # Support compact forms: "audio_text", "audio,text", "audio+text".
+            raw = value.strip()
+            if any(sep in raw for sep in (",", "+", " ")):
+                parts = [p for p in re.split(r"[,+\\s]+", raw) if p]
+                for p in parts:
+                    t = normalize_token(p)
+                    if t:
+                        tokens.append(t)
+            else:
+                t = normalize_token(raw)
+                if t:
+                    tokens.append(t)
+        else:
+            tokens = [str(value).strip().upper()]
+
+        modalities: List[str] = []
+        for t in tokens:
+            if t in ("AUDIO_TEXT", "TEXT_AUDIO", "AUDIO+TEXT", "TEXT+AUDIO", "AUDIO,TEXT", "TEXT,AUDIO"):
+                for expanded in ("AUDIO", "TEXT"):
+                    if expanded not in modalities:
+                        modalities.append(expanded)
+                continue
+            if t in ("AUDIO", "TEXT") and t not in modalities:
+                modalities.append(t)
+
+        return modalities or ["AUDIO"]
+
+    def _ws_is_open(self) -> bool:
+        ws = self.websocket
+        if not ws:
+            return False
+        try:
+            state = getattr(ws, "state", None)
+            if state is not None and getattr(state, "name", None) is not None:
+                return state.name == "OPEN"
+        except Exception:
+            pass
+        return bool(getattr(ws, "open", False))
 
     @staticmethod
     def get_capabilities() -> Optional[ProviderCapabilities]:
@@ -275,10 +347,12 @@ class GoogleLiveProvider(AIProviderInterface):
         # Use instructions from config (like OpenAI Realtime pattern)
         system_prompt = self.config.instructions
         
+        response_modalities = self._normalize_response_modalities(self.config.response_modalities)
+
         # Build generation config from configurable parameters
         # https://gist.github.com/quartzjer/9636066e96b4f904162df706210770e4
         generation_config = {
-            "responseModalities": self.config.response_modalities,  # Configurable: "audio", "text", or "audio_text"
+            "responseModalities": response_modalities,
             "speechConfig": {
                 "voiceConfig": {
                     "prebuiltVoiceConfig": {
@@ -300,7 +374,7 @@ class GoogleLiveProvider(AIProviderInterface):
             "Google Live speech configuration",
             call_id=self._call_id,
             voice_name=voice_cfg.get("voiceName"),
-            response_modalities=generation_config.get("responseModalities"),
+            response_modalities=response_modalities,
         )
 
         # Build tools config using context tool list (filtered by engine)
@@ -1067,12 +1141,21 @@ class GoogleLiveProvider(AIProviderInterface):
 
     async def _keepalive_loop(self) -> None:
         """Send periodic keepalive messages."""
-        while self.websocket and self.websocket.state.name == "OPEN":
+        while self._ws_is_open():
             try:
                 await asyncio.sleep(_KEEPALIVE_INTERVAL_SEC)
-                # Send empty realtime input as keepalive (camelCase)
-                if self._setup_complete:
-                    await self._send_message({"realtimeInput": {}})
+                # Use WebSocket ping frames (protocol-level) rather than undocumented API messages.
+                # The Live API docs require `realtimeInput` messages to have a valid payload; sending
+                # `{ "realtimeInput": {} }` can be treated as an unsupported operation (observed as
+                # 1008 close + 501 NotImplemented in dashboards).
+                if self._setup_complete and self.websocket:
+                    ping = getattr(self.websocket, "ping", None)
+                    if callable(ping):
+                        pong_waiter = ping()
+                        if asyncio.iscoroutine(pong_waiter):
+                            pong_waiter = await pong_waiter
+                        if pong_waiter is not None:
+                            await asyncio.wait_for(pong_waiter, timeout=5.0)
             except asyncio.CancelledError:
                 break
             except Exception as e:
