@@ -1,6 +1,6 @@
 # Milestone 13 — Config Cleanup & Migration
 
-Note (CLI v5.0): The public CLI surface is now `agent setup`, `agent check`, `agent rca`, and `agent version`. Legacy command names used below (`agent doctor`, etc.) remain available as hidden aliases for compatibility.
+Note (CLI v5.1+): The public CLI surface is now `agent setup`, `agent check`, `agent rca`, `agent update`, and `agent version`. Legacy command names used below (`agent doctor`, etc.) remain available as hidden aliases for compatibility.
 
 ## Objective
 

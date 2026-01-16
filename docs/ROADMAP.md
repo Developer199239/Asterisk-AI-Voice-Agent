@@ -203,6 +203,7 @@ Each milestone includes scope, implementation details, and verification criteria
   - `agent setup` — Interactive setup wizard (CLI v5.0; legacy aliases: `agent init`, `agent quickstart`).
   - `agent check` — Standard diagnostics report (CLI v5.0; legacy alias: `agent doctor`).
   - `agent rca` — Post-call RCA (CLI v5.0; legacy alias: `agent troubleshoot`).
+  - `agent update` — Safe updater for repo checkouts (CLI v5.1+).
   - Hidden advanced commands retained for compatibility: `agent demo`, `agent dialplan`, `agent config validate`.
   - Health checks with exit codes for CI/CD integration; JSON output for programmatic use.
 - **Verification (2025-10-26)**:
@@ -642,7 +643,7 @@ Keep this roadmap updated after each milestone to help any collaborator—or fut
 - **Binary Distribution**: Pre-built binaries for 5 platforms (Linux AMD64/ARM64, macOS Intel/Apple Silicon, Windows)
 - **One-Line Installer**: `curl -sSL ... | bash` with platform auto-detection
 - **GitHub Actions CI**: Automated builds and releases
-- **5 CLI Commands**: `doctor`, `troubleshoot`, `demo`, `init`, `version`
+- **CLI Commands (v5.0+)**: `setup`, `check`, `rca`, `update`, `version` (legacy aliases: `init`, `doctor`, `troubleshoot`)
 
 **Conversation Tracking**:
 

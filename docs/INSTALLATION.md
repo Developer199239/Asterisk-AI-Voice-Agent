@@ -32,6 +32,12 @@ git checkout main
 git pull
 ```
 
+If you have the CLI installed, this is equivalent (and safer for common operator workflows):
+
+```bash
+agent update
+```
+
 ### 2) Re-run preflight (recommended)
 
 ```bash

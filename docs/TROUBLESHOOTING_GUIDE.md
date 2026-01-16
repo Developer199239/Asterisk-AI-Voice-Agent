@@ -87,6 +87,7 @@ Note: The CLI binary and the Python engine may have different version strings de
 - **`agent setup`** - Interactive setup wizard (v5.0)
 - **`agent check`** - Standard diagnostics report (v5.0)
 - **`agent rca`** - Post-call root cause analysis (v5.0)
+- **`agent update`** - Pull latest code + rebuild/restart as needed (v5.1+)
 
 Legacy aliases (v5.0; hidden from `--help`):
 - `agent init` → `agent setup`
@@ -725,7 +726,7 @@ docker logs ai_engine 2>&1 | grep "missing_required_parameter"
 ```
 
 **Fix**: This is a code issue (should be fixed in v4.2+). If you see this error:
-- Verify you're on latest version: `git pull origin develop`
+- Verify you're on latest version: `agent update` (or `git pull origin main`)
 - Check that `src/tools/adapters/openai.py` uses `to_openai_realtime_schema()`
 - See [Common Pitfalls](contributing/COMMON_PITFALLS.md#pitfall-1-tool-schema-format-mismatch-openai-realtime) for details
 

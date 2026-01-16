@@ -294,7 +294,7 @@ active_pipeline: local_ollama
 ### Technical Features
 
 - **Tool Calling System**: AI-powered actions (transfers, emails) work with any provider.
-- **Agent CLI Tools**: `setup`, `check`, `rca`, `version` commands (legacy aliases: `init`, `doctor`, `troubleshoot`).
+- **Agent CLI Tools**: `setup`, `check`, `rca`, `update`, `version` commands (legacy aliases: `init`, `doctor`, `troubleshoot`).
 - **Modular Pipeline System**: Independent STT, LLM, and TTS provider selection.
 - **Dual Transport Support**: AudioSocket and ExternalMedia RTP (the shipped default config uses ExternalMedia; both are supported — see the transport matrix).
 - **Streaming-First Downstream**: Streaming playback when possible, with automatic fallback to file playback for robustness.
@@ -393,6 +393,7 @@ curl -sSL https://raw.githubusercontent.com/hkjarral/Asterisk-AI-Voice-Agent/mai
 ```bash
 agent setup               # Interactive setup wizard (recommended)
 agent check               # Standard diagnostics report (share this output when asking for help)
+agent update              # Pull latest code + rebuild/restart as needed
 agent rca --call <call_id> # Post-call RCA (use Call History to find call_id)
 agent version             # Version information
 ```

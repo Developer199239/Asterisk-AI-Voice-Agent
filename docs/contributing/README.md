@@ -68,6 +68,7 @@ Technical specs for each provider:
 agent check           # Standard diagnostics report
 agent rca             # Post-call root cause analysis (most recent call)
 agent setup           # Interactive setup wizard (if needed)
+agent update          # Pull latest code + apply updates
 ```
 
 See [cli/README.md](../../cli/README.md) for complete CLI reference.

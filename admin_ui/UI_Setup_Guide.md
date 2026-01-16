@@ -379,11 +379,12 @@ If you've been using `install.sh` and the Agent CLI, the Admin UI works alongsid
 
 ### CLI Tools Still Work
 
-The recommended v5.0 CLI commands are:
+The recommended CLI commands are:
 ```bash
 agent setup
 agent check
 agent rca
+agent update
 ```
 
 Both CLI and UI read/write the same files:
@@ -706,17 +707,14 @@ cat admin_ui.log
 
 **Docker deployment**:
 ```bash
-# Pull latest code
-git pull origin develop
-
-# Rebuild and restart
-docker compose up -d --build admin_ui
+# Recommended: update the whole deployment (code + containers)
+agent update
 ```
 
 **Standalone deployment**:
 ```bash
 # Pull latest code
-git pull origin develop
+git pull origin main
 
 # Rebuild frontend
 cd admin_ui/frontend
