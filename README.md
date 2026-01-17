@@ -2,7 +2,7 @@
 
 # Asterisk AI Voice Agent
 
-![Version](https://img.shields.io/badge/version-5.0.1-blue.svg)
+![Version](https://img.shields.io/badge/version-5.1.4-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![Python](https://img.shields.io/badge/python-3.11+-blue.svg)
 ![Docker](https://img.shields.io/badge/docker-compose-blue.svg)
@@ -21,7 +21,7 @@ The most powerful, flexible open-source AI voice agent for Asterisk/FreePBX. Fea
 ## 📖 Table of Contents
 
 - [🚀 Quick Start](#-quick-start)
-- [🎉 What's New](#-whats-new-in-v500)
+- [🎉 What's New](#-whats-new-in-v514)
 - [🌟 Why Asterisk AI Voice Agent?](#-why-asterisk-ai-voice-agent)
 - [✨ Features](#-features)
 - [🎥 Demo](#-demo)
@@ -110,7 +110,7 @@ For users who prefer the command line or need headless setup.
 agent setup
 ```
 
-> Note: Legacy commands `agent init`, `agent doctor`, and `agent troubleshoot` remain available as hidden aliases in CLI v5.0.
+> Note: Legacy commands `agent init`, `agent doctor`, and `agent troubleshoot` remain available as hidden aliases in CLI v5.1.4.
 
 ### Option B: Manual Setup
 ```bash
@@ -126,7 +126,7 @@ docker compose up -d
 Add this to your FreePBX (`extensions_custom.conf`):
 ```asterisk
 [from-ai-agent]
-exten => s,1,NoOp(Asterisk AI Voice Agent v5.0.0)
+exten => s,1,NoOp(Asterisk AI Voice Agent v5.1.4)
  ; Optional per-call overrides:
  ; - AI_PROVIDER selects a provider/pipeline (otherwise uses default_provider from ai-agent.yaml)
  ; - AI_CONTEXT selects a context/persona (otherwise uses default context)
@@ -153,7 +153,7 @@ docker compose logs -f ai_engine
 
 ---
 
-## 🎉 What's New in v5.0.0
+## 🎉 What's New in v5.1.4
 
 <details open>
 <summary><b>Latest Updates</b></summary>
