@@ -73,6 +73,129 @@ def _disk_preflight(path: str, *, required_bytes: int = 0) -> Tuple[bool, Option
     return True, None
 
 
+def _detect_host_project_path_via_docker() -> Optional[str]:
+    """
+    When the Admin UI calls docker-compose from inside the container, the daemon (on the host)
+    resolves bind mount paths using the host filesystem.
+
+    This helper finds the host-side path backing /app/project.
+    """
+    try:
+        client = docker.from_env()
+        container = client.containers.get("admin_ui")
+        mounts = container.attrs.get("Mounts", []) or []
+        for m in mounts:
+            if m.get("Destination") == "/app/project":
+                src = m.get("Source")
+                if src:
+                    return str(src)
+    except Exception:
+        return None
+    return None
+
+
+def _attempt_fix_models_permissions() -> Dict[str, Any]:
+    """
+    Best-effort remediation for common fresh-install issue:
+    - ./models (host) exists but is owned by root (or non-writable),
+      so admin_ui (UID 1000) can't create models/{stt,tts,llm,kroko}.
+    """
+    results: Dict[str, Any] = {"success": False, "messages": [], "errors": []}
+
+    host_project_path = _detect_host_project_path_via_docker()
+    if not host_project_path:
+        results["errors"].append("Could not detect host project path for /app/project mount")
+        return results
+
+    # Best-effort: align group ownership with the repo's install/preflight behavior.
+    # If ASTERISK_GID is set in .env, prefer it; otherwise, fall back to appuser's default GID (1000).
+    models_gid = "1000"
+    try:
+        from dotenv import dotenv_values
+
+        if os.path.exists(ENV_PATH):
+            env_values = dotenv_values(ENV_PATH)
+            gid = (env_values.get("ASTERISK_GID") or "").strip()
+            if gid.isdigit():
+                models_gid = gid
+    except Exception:
+        pass
+
+    try:
+        client = docker.from_env()
+
+        script = f"""
+set -eu
+mkdir -p /project/models/stt /project/models/tts /project/models/llm /project/models/kroko
+chown -R 1000:{models_gid} /project/models || true
+chmod -R ug+rwX /project/models || true
+find /project/models -type d -exec chmod 2775 {{}} + 2>/dev/null || true
+echo "models permissions fixed"
+"""
+        output = client.containers.run(
+            "alpine:latest",
+            command=["sh", "-c", script],
+            volumes={host_project_path: {"bind": "/project", "mode": "rw"}},
+            remove=True,
+        )
+        msg = (output.decode().strip() if output else "").strip()
+        if msg:
+            results["messages"].append(msg)
+        results["success"] = True
+        return results
+    except Exception as e:
+        results["errors"].append(f"models permission fix failed: {e}")
+        return results
+
+
+def _ensure_models_dir_ready(path: str) -> None:
+    def _is_writable_dir(dir_path: str) -> bool:
+        if not os.path.isdir(dir_path):
+            return False
+        try:
+            fd, tmp = tempfile.mkstemp(prefix=".model_write_test_", dir=dir_path)
+            os.close(fd)
+            os.remove(tmp)
+            return True
+        except Exception:
+            return False
+
+    if os.path.exists(path) and not os.path.isdir(path):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Models path exists but is not a directory: {path}. Remove or rename it and retry.",
+        )
+
+    if os.path.isdir(path) and _is_writable_dir(path):
+        return
+
+    try:
+        os.makedirs(path, exist_ok=True)
+    except PermissionError:
+        pass
+
+    if _is_writable_dir(path):
+        return
+
+    fix = _attempt_fix_models_permissions()
+    if not fix.get("success"):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Permission denied writing models directory ({path}). "
+                f"Run: sudo ./preflight.sh --apply-fixes"
+            ),
+        )
+    if not _is_writable_dir(path):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Permission denied writing models directory ({path}) after attempted auto-fix. "
+                f"Run: sudo ./preflight.sh --apply-fixes"
+            ),
+        )
+
+
 def _url_content_length(url: str) -> Optional[int]:
     try:
         req = urllib.request.Request(url, method="HEAD")
@@ -1043,7 +1166,7 @@ async def download_single_model(request: SingleModelDownload):
         return {"status": "error", "message": f"Invalid model type: {request.type}"}
     
     # Ensure target directory exists
-    os.makedirs(target_dir, exist_ok=True)
+    _ensure_models_dir_ready(target_dir)
 
     url_lower = (request.download_url or "").lower()
     is_archive_guess = any(x in url_lower for x in (".zip", ".tar.gz", ".tgz", ".tar.bz2", ".tar"))
@@ -1260,6 +1383,13 @@ async def download_selected_models(selection: ModelSelection):
     """Download user-selected models from the catalog."""
     from settings import PROJECT_ROOT
 
+    # Ensure base models directory exists and is writable before starting downloads.
+    _ensure_models_dir_ready(os.path.join(PROJECT_ROOT, "models"))
+    _ensure_models_dir_ready(os.path.join(PROJECT_ROOT, "models", "stt"))
+    _ensure_models_dir_ready(os.path.join(PROJECT_ROOT, "models", "tts"))
+    _ensure_models_dir_ready(os.path.join(PROJECT_ROOT, "models", "llm"))
+    _ensure_models_dir_ready(os.path.join(PROJECT_ROOT, "models", "kroko"))
+
     # Get full catalog
     catalog = get_full_catalog()
     
@@ -1341,7 +1471,7 @@ async def download_selected_models(selection: ModelSelection):
     skip_kokoro_download = tts_model.get("backend") == "kokoro" and kokoro_mode in ("api", "hf")
 
     models_dir = os.path.join(PROJECT_ROOT, "models")
-    os.makedirs(models_dir, exist_ok=True)
+    _ensure_models_dir_ready(models_dir)
 
     # Disk preflight (best-effort: HEAD Content-Length). Archives need extra room for extraction.
     urls: List[Tuple[str, bool]] = []

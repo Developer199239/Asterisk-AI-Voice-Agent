@@ -138,6 +138,50 @@ PY
     fi
 }
 
+setup_models_directory() {
+    print_info "Setting up models directory for local AI..."
+
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    MODELS_DIR="$SCRIPT_DIR/models"
+    CONTAINER_UID=1000
+
+    # Resolve asterisk group for shared access (best-effort).
+    AST_GID=$(id -g asterisk 2>/dev/null || echo 995)
+
+    # Create expected layout (Admin UI downloads expect these paths).
+    $SUDO mkdir -p "$MODELS_DIR/stt" "$MODELS_DIR/tts" "$MODELS_DIR/llm" "$MODELS_DIR/kroko" || true
+
+    # Ensure the appuser inside containers can write new model files.
+    $SUDO chown "$CONTAINER_UID:$AST_GID" "$MODELS_DIR" "$MODELS_DIR/stt" "$MODELS_DIR/tts" "$MODELS_DIR/llm" "$MODELS_DIR/kroko" 2>/dev/null || true
+    $SUDO chmod 2775 "$MODELS_DIR" "$MODELS_DIR/stt" "$MODELS_DIR/tts" "$MODELS_DIR/llm" "$MODELS_DIR/kroko" 2>/dev/null || true
+
+    # Handle SELinux context on RHEL-family systems (Sangoma/FreePBX)
+    if command -v getenforce &>/dev/null; then
+        SELINUX_MODE=$(getenforce 2>/dev/null || echo "Disabled")
+        if [ "$SELINUX_MODE" = "Enforcing" ]; then
+            print_info "SELinux is Enforcing - setting container context for models directory..."
+            if command -v semanage &>/dev/null; then
+                # Add SELinux context for container access
+                $SUDO semanage fcontext -a -t container_file_t "$MODELS_DIR(/.*)?" 2>/dev/null || true
+                $SUDO restorecon -Rv "$MODELS_DIR" 2>/dev/null || true
+                print_success "SELinux context applied to models directory"
+            else
+                print_warning "semanage not found - SELinux context not set"
+                print_info "  Install with: $SUDO yum install -y policycoreutils-python-utils"
+                print_info "  Then run: $SUDO semanage fcontext -a -t container_file_t '$MODELS_DIR(/.*)?'"
+                print_info "            $SUDO restorecon -Rv '$MODELS_DIR'"
+            fi
+        fi
+    fi
+
+    if [ -d "$MODELS_DIR" ]; then
+        print_success "Models directory ready: $MODELS_DIR"
+    else
+        print_warning "Models directory missing; local AI setup may fail (expected: $MODELS_DIR)"
+        print_info "  Tip: Run: sudo ./preflight.sh --apply-fixes"
+    fi
+}
+
 print_success() {
     echo -e "${COLOR_GREEN}SUCCESS: $1${COLOR_RESET}"
 }
@@ -1606,6 +1650,7 @@ main() {
     select_config_template
     setup_media_paths
     setup_data_directory
+    setup_models_directory
     start_services
 }
 
