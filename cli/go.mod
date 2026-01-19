@@ -1,6 +1,6 @@
 module github.com/hkjarral/asterisk-ai-voice-agent/cli
 
-go 1.13
+go 1.22
 
 require (
 	github.com/fatih/color v1.16.0
