@@ -17,8 +17,15 @@ contexts:
   default:
     greeting: Hello
     profile: telephony_ulaw_8k
-    prompt: You are Asterisk, an AI Assistant. Be helpful and concise.
+    prompt: >-
+      You are Asterisk, an AI Assistant. Be helpful and concise.
+
+
+      CALL ENDING:
+      - When the caller indicates they are done, say a brief farewell and use the hangup_call tool to end the call.
     provider: local
+    tools:
+      - hangup_call
   demo_deepgram:
     greeting: >-
       Hi {caller_name}, I'm Ava with the Deepgram voice demo. Ask me anything
@@ -115,7 +122,7 @@ contexts:
 
       - If yes, use request_transcript tool to get their email
 
-      - Then confirm if there is anything else, and use hangup_call tool with a warm farewell
+      - If they accept or decline the transcript, end the call with a warm farewell and immediately use hangup_call
     provider: deepgram
     tools:
       - transfer
@@ -231,7 +238,7 @@ contexts:
 
       - If yes, use request_transcript tool to get their email
 
-      - Then confirm if there is anything else, and use hangup_call tool with a warm farewell
+      - If they accept or decline the transcript, end the call with a warm farewell in the caller's language and immediately use hangup_call
     tools:
       - transfer
       - cancel_transfer
