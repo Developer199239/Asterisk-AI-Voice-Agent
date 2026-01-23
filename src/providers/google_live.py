@@ -1032,20 +1032,11 @@ class GoogleLiveProvider(AIProviderInterface):
                     call_id=self._call_id,
                     text_preview=text[:100],
                 )
+                # IMPORTANT:
+                # `modelTurn.text` is not guaranteed to be spoken text and may include non-audio
+                # reasoning/metadata. Do NOT use it for end-of-call detection or cleanup arming,
+                # otherwise we can hang up mid-conversation (e.g., during transcript email capture).
                 self._model_text_buffer += text
-                farewell = self._detect_assistant_farewell(self._model_text_buffer)
-                if farewell and not self._assistant_farewell_intent:
-                    self._assistant_farewell_intent = farewell
-                    logger.info(
-                        "Google Live detected assistant farewell intent (modelTurn.text)",
-                        call_id=self._call_id,
-                        intent=farewell,
-                        buffer_preview=self._model_text_buffer[:120],
-                    )
-                await self._maybe_arm_cleanup_after_tts(
-                    user_text=self._input_transcription_buffer,
-                    assistant_text=self._model_text_buffer,
-                )
 
         # Handle turn completion
         if turn_complete:
