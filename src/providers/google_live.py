@@ -237,6 +237,9 @@ class GoogleLiveProvider(AIProviderInterface):
         # Keep conservative defaults; engine still applies farewell_hangup_delay_sec before ARI hangup.
         idle_sec = float(getattr(self.config, "hangup_fallback_audio_idle_sec", 1.25) or 1.25)
         min_armed_sec = float(getattr(self.config, "hangup_fallback_min_armed_sec", 0.8) or 0.8)
+        # If the model called hangup_call but never produced any farewell audio, we still must end the call.
+        # This commonly happens when the model emits toolCalls but does not follow up with an assistant turn.
+        no_audio_timeout_sec = float(getattr(self.config, "hangup_fallback_no_audio_timeout_sec", 4.0) or 4.0)
 
         try:
             while self._call_id == call_id and not self._hangup_fallback_emitted:
@@ -253,6 +256,26 @@ class GoogleLiveProvider(AIProviderInterface):
                 if (now - armed_at) < min_armed_sec:
                     await asyncio.sleep(0.2)
                     continue
+                if not self._hangup_fallback_audio_started and (now - armed_at) >= no_audio_timeout_sec:
+                    if self.on_event:
+                        await self.on_event(
+                            {
+                                "type": "HangupReady",
+                                "call_id": call_id,
+                                "reason": "fallback_no_audio",
+                                "had_audio": False,
+                            }
+                        )
+                    self._hangup_ready_emitted = True
+                    self._hangup_fallback_emitted = True
+                    logger.info(
+                        "🔚 Hangup fallback watchdog emitted HangupReady (no assistant audio)",
+                        call_id=call_id,
+                        no_audio_timeout_sec=no_audio_timeout_sec,
+                        user_end_intent=self._user_end_intent,
+                        assistant_farewell_intent=self._assistant_farewell_intent,
+                    )
+                    return
                 if not self._hangup_fallback_audio_started or last_audio is None:
                     await asyncio.sleep(0.2)
                     continue
