@@ -450,6 +450,9 @@ class StreamingConfig(BaseModel):
     logging_level: str = Field(default="info")
     # Smaller warm-up only for the initial greeting to get first audio out sooner
     greeting_min_start_ms: int = Field(default=0)
+    # ExternalMedia-specific: how long to wait (ms) for inbound RTP to establish the remote endpoint
+    # before we fall back to file playback for the greeting.
+    greeting_rtp_wait_ms: int = Field(default=250)
     # Egress endianness control for PCM16 slin16 over AudioSocket: 'auto'|'force_true'|'force_false'
     # - auto: derive from inbound probe (current behavior)
     # - force_true: always byteswap outbound PCM16

@@ -243,6 +243,12 @@ class StreamingPlaybackManager:
             self.greeting_min_start_ms = int(self.streaming_config.get('greeting_min_start_ms', 0))
         except Exception:
             self.greeting_min_start_ms = 0
+        # ExternalMedia greeting: give Asterisk a short window to start sending inbound RTP
+        # (needed to learn the remote endpoint). After this window, we fall back to file playback.
+        try:
+            self.greeting_rtp_wait_ms = int(self.streaming_config.get('greeting_rtp_wait_ms', 250))
+        except Exception:
+            self.greeting_rtp_wait_ms = 250
         self.greeting_min_start_chunks = (
             max(1, int(math.ceil(self.greeting_min_start_ms / max(1, self.chunk_size_ms))))
             if self.greeting_min_start_ms > 0 else self.min_start_chunks
@@ -262,6 +268,8 @@ class StreamingPlaybackManager:
         # If explicit flag is not set, enable taps when logging is DEBUG to aid diagnostics
         if not self.diag_enable_taps and self.logging_level == "debug":
             self.diag_enable_taps = True
+        # Log guards (avoid warning spam while waiting for ExternalMedia RTP endpoint).
+        self._rtp_remote_wait_logged: set[str] = set()
         try:
             self.diag_pre_secs = int(self.streaming_config.get('diag_pre_secs', 2))
         except Exception:
@@ -1301,6 +1309,39 @@ class StreamingPlaybackManager:
             target_rate=target_rate,
         )
         if not success:
+            # Preserve audio for retry/fallback. Without this, a failed first outbound send can
+            # drain the jitter buffer and leave nothing for file playback fallback.
+            try:
+                rem = self.frame_remainders.get(call_id, b"") or b""
+                self.frame_remainders[call_id] = frame + rem
+            except Exception:
+                pass
+
+            # ExternalMedia greeting can fail before we learn the remote RTP endpoint (Asterisk may
+            # not emit RTP until the caller speaks). Wait briefly, then fall back.
+            try:
+                info = self.active_streams.get(call_id, {}) or {}
+                is_greeting = str(info.get("playback_type") or "") == "greeting"
+                if (
+                    is_greeting
+                    and self.audio_transport == "externalmedia"
+                    and self.rtp_server is not None
+                    and hasattr(self.rtp_server, "has_remote_endpoint")
+                    and not self.rtp_server.has_remote_endpoint(call_id)
+                ):
+                    wait_ms = int(getattr(self, "greeting_rtp_wait_ms", 0) or 0)
+                    if wait_ms > 0:
+                        now = time.time()
+                        start_ts = float(info.get("rtp_wait_started_ts") or 0.0) or now
+                        info["rtp_wait_started_ts"] = start_ts
+                        waited_ms = (now - start_ts) * 1000.0
+                        self.active_streams[call_id] = info
+                        if waited_ms < float(wait_ms):
+                            return "wait"
+                        info["end_reason"] = "rtp-remote-endpoint-timeout"
+                        self.active_streams[call_id] = info
+            except Exception:
+                pass
             return "error"
         if not filler:
             self._decrement_buffered_bytes(call_id, len(frame))
@@ -2472,7 +2513,25 @@ class StreamingPlaybackManager:
                 ssrc = getattr(session, "ssrc", None)
                 success = await self.rtp_server.send_audio(call_id, rtp_chunk, ssrc=ssrc)
                 if not success:
-                    logger.warning("RTP streaming send failed", call_id=call_id, stream_id=stream_id)
+                    # If the remote RTP endpoint isn't known yet, early sends are expected to be deferred.
+                    # Avoid warning spam; higher-level logic will wait briefly and then fall back for greetings.
+                    try:
+                        has_endpoint = True
+                        if hasattr(self.rtp_server, "has_remote_endpoint"):
+                            has_endpoint = bool(self.rtp_server.has_remote_endpoint(call_id))
+                        if not has_endpoint:
+                            if stream_id not in self._rtp_remote_wait_logged:
+                                logger.info(
+                                    "RTP send deferred; waiting for remote endpoint",
+                                    call_id=call_id,
+                                    stream_id=stream_id,
+                                    transport="externalmedia",
+                                )
+                                self._rtp_remote_wait_logged.add(stream_id)
+                        else:
+                            logger.warning("RTP streaming send failed", call_id=call_id, stream_id=stream_id)
+                    except Exception:
+                        logger.warning("RTP streaming send failed", call_id=call_id, stream_id=stream_id)
                 else:
                     try:
                         _STREAM_TX_BYTES.inc(len(rtp_chunk))
@@ -2912,6 +2971,14 @@ class StreamingPlaybackManager:
             
             # Collect any remaining audio chunks
             remaining_audio = bytearray()
+            # Include any remainder frames already drained from the jitter buffer.
+            # Otherwise, a failed first outbound send can leave nothing to play on fallback.
+            try:
+                rem = self.frame_remainders.pop(call_id, b"") or b""
+                if rem:
+                    remaining_audio.extend(rem)
+            except Exception:
+                pass
             if call_id in self.jitter_buffers:
                 jitter_buffer = self.jitter_buffers[call_id]
                 while not jitter_buffer.empty():
