@@ -1072,7 +1072,12 @@ class GoogleLiveProvider(AIProviderInterface):
         assistant_reason = self._detect_assistant_farewell(assistant_text) or self._assistant_farewell_intent
 
         # "No transcript" and explicit hangup intents are strong indicators that the call is ending,
-        # even if output transcription is missing or the model doesn't include a canonical "goodbye".
+        # even if output transcription is missing or the model doesn't include a canonical farewell.
+        #
+        # IMPORTANT: Do NOT treat a simple user "goodbye"/"bye" as a strong marker here.
+        # Many contexts (including our golden baselines) use a "goodbye → offer transcript" flow.
+        # Arming cleanup on the user's goodbye causes the engine to hang up right after the agent's
+        # transcript offer, cutting off the caller's ability to respond.
         strong_user_markers = {
             "no transcript",
             "no transcript needed",
@@ -1083,8 +1088,6 @@ class GoogleLiveProvider(AIProviderInterface):
             "hangup",
             "end the call",
             "end call",
-            "goodbye",
-            "bye",
         }
         if user_reason not in strong_user_markers and not assistant_reason:
             return
