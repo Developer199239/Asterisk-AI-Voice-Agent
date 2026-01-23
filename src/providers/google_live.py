@@ -142,6 +142,19 @@ class GoogleLiveProvider(AIProviderInterface):
         self._session_start_time: Optional[float] = None
         # Tool response sizing: keep Google toolResponse payloads small to avoid provider errors.
         self._tool_response_max_bytes: int = 8000
+        self._session_gauge_incremented: bool = False
+        self._ws_unavailable_logged: bool = False
+        self._ws_send_close_logged: bool = False
+
+    def _mark_ws_disconnected(self) -> None:
+        self._setup_complete = False
+        self.websocket = None
+        if self._session_gauge_incremented:
+            try:
+                _GOOGLE_LIVE_SESSIONS.dec()
+            except Exception:
+                pass
+            self._session_gauge_incremented = False
 
     @staticmethod
     def _norm_text(value: str) -> str:
@@ -400,6 +413,8 @@ class GoogleLiveProvider(AIProviderInterface):
         self._conversation_history = []
         self._setup_complete = False
         self._greeting_completed = False
+        self._ws_unavailable_logged = False
+        self._ws_send_close_logged = False
         # Per-call tool allowlist (contexts are the source of truth).
         # Missing/None is treated as [] for safety.
         if context and "tools" in context:
@@ -448,7 +463,8 @@ class GoogleLiveProvider(AIProviderInterface):
             )
             
             _GOOGLE_LIVE_SESSIONS.inc()
-            
+            self._session_gauge_incremented = True
+             
             logger.info(
                 "Google Live WebSocket connected",
                 call_id=call_id,
@@ -606,25 +622,41 @@ class GoogleLiveProvider(AIProviderInterface):
 
     async def _send_message(self, message: Dict[str, Any]) -> None:
         """Send a message to Google Live API."""
-        if not self.websocket or getattr(self.websocket, "closed", False):
-            logger.warning("No websocket connection", call_id=self._call_id)
+        if not self._ws_is_open():
+            if not self._ws_unavailable_logged:
+                logger.warning(
+                    "Google Live websocket not open; dropping outbound message",
+                    call_id=self._call_id,
+                )
+                self._ws_unavailable_logged = True
             return
 
         async with self._send_lock:
             try:
                 await self.websocket.send(json.dumps(message))
+                self._ws_unavailable_logged = False
             except Exception as e:
+                if isinstance(e, (ConnectionClosedError, ConnectionClosedOK)):
+                    close_reason = getattr(e, "reason", None)
+                    close_code = getattr(e, "code", None)
+                    if not self._ws_send_close_logged:
+                        logger.warning(
+                            "Google Live WebSocket closed during send",
+                            call_id=self._call_id,
+                            code=close_code,
+                            reason=close_reason,
+                        )
+                        self._ws_send_close_logged = True
+                    self._mark_ws_disconnected()
+                    return
                 logger.error(
                     "Failed to send message to Google Live",
                     call_id=self._call_id,
                     error=str(e),
                 )
                 # Prevent log storms when the socket is already closed.
-                try:
-                    if self.websocket and getattr(self.websocket, "closed", False):
-                        self.websocket = None
-                except Exception:
-                    pass
+                if not self._ws_is_open():
+                    self._mark_ws_disconnected()
 
     def _safe_jsonable(self, obj: Any, *, depth: int = 0, max_depth: int = 4, max_items: int = 30) -> Any:
         if depth >= max_depth:
@@ -815,7 +847,7 @@ class GoogleLiveProvider(AIProviderInterface):
                 1003: "Unsupported data",
                 1006: "Abnormal closure (no close frame)",
                 1007: "Invalid frame payload data",
-                1008: "Policy violation (likely auth/permission issue)",
+                1008: "Policy violation (unsupported operation, auth, or feature gating)",
                 1009: "Message too big",
                 1010: "Mandatory extension missing",
                 1011: "Internal server error",
@@ -832,11 +864,17 @@ class GoogleLiveProvider(AIProviderInterface):
             
             # Specific guidance for common errors
             if close_code == 1008:
+                hint = "Verify: 1) model supports Live (bidiGenerateContent) 2) API key + Live API access 3) request schema matches docs"
+                if isinstance(close_reason, str) and "not supported" in close_reason.lower():
+                    hint = "Model/endpoint feature gating: verify model supports bidiGenerateContent (Live) for your API version/region"
+                if isinstance(close_reason, str) and "not implemented" in close_reason.lower():
+                    hint = "Server rejected an unsupported operation; verify message schema + model supports the requested features"
                 logger.error(
-                    "Policy violation (1008) - Check API key permissions and Gemini Live API access",
+                    "Policy violation (1008)",
                     call_id=self._call_id,
-                    hint="Verify: 1) GOOGLE_API_KEY is correct 2) Gemini API is enabled 3) API key has generativelanguage.liveapi.user role",
+                    hint=hint,
                 )
+            self._mark_ws_disconnected()
         except Exception as e:
             logger.error(
                 "Google Live receive loop error",
@@ -1507,14 +1545,13 @@ class GoogleLiveProvider(AIProviderInterface):
                 await self._hangup_fallback_task
 
         # Close WebSocket
-        if self.websocket and self.websocket.state.name == "OPEN":
+        if self._ws_is_open():
             await self.websocket.close()
-            _GOOGLE_LIVE_SESSIONS.dec()
+        self._mark_ws_disconnected()
 
         # Clear state
         self._call_id = None
         self._session_id = None
-        self._setup_complete = False
         self._input_buffer.clear()  # Clear audio buffer
         self._conversation_history.clear()
         self._hangup_after_response = False
