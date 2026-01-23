@@ -115,6 +115,7 @@ class GoogleLiveProvider(AIProviderInterface):
         self._last_audio_out_monotonic: Optional[float] = None
         self._user_end_intent: Optional[str] = None
         self._assistant_farewell_intent: Optional[str] = None
+        self._turn_has_assistant_output: bool = False
         # Conversation state
         self._conversation_history: List[Dict[str, Any]] = []
         
@@ -992,6 +993,7 @@ class GoogleLiveProvider(AIProviderInterface):
         if output_transcription:
             text = output_transcription.get("text", "")
             if text:
+                self._turn_has_assistant_output = True
                 # Concatenate AI speech fragments
                 self._output_transcription_buffer += text
                 logger.debug(
@@ -1054,7 +1056,11 @@ class GoogleLiveProvider(AIProviderInterface):
             self._turn_first_audio_received = False
         
         # Extract parts (using camelCase keys from actual API)
-        for part in content.get("modelTurn", {}).get("parts", []):
+        model_turn = content.get("modelTurn", {})
+        model_parts = model_turn.get("parts", []) if isinstance(model_turn, dict) else []
+        if model_parts:
+            self._turn_has_assistant_output = True
+        for part in model_parts:
             # Handle audio output
             if "inlineData" in part:
                 inline_data = part["inlineData"]
@@ -1231,6 +1237,8 @@ class GoogleLiveProvider(AIProviderInterface):
     async def _handle_turn_complete(self) -> None:
         """Handle turn completion."""
         had_audio = self._in_audio_burst
+        turn_was_assistant = self._turn_has_assistant_output
+        self._turn_has_assistant_output = False
         
         # Note: Transcription is now saved in _handle_server_content when turnComplete=true
         # No need to flush here - it's already been handled
@@ -1260,6 +1268,15 @@ class GoogleLiveProvider(AIProviderInterface):
         
         # Handle hangup if requested after this turn
         if self._hangup_after_response:
+            # IMPORTANT: Live API emits turnComplete for both user turns and assistant turns.
+            # Only hang up after the assistant's farewell turn completes; otherwise we can
+            # drop the call right when the user answers the transcript question.
+            if not turn_was_assistant:
+                logger.info(
+                    "🔚 Hangup pending; ignoring non-assistant turnComplete",
+                    call_id=self._call_id,
+                )
+                return
             logger.info(
                 "🔚 Farewell response completed - triggering hangup",
                 call_id=self._call_id,
