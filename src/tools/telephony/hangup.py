@@ -36,6 +36,9 @@ class HangupCallTool(Tool):
                 "- Conversation naturally concludes after completing user's request\n"
                 "- User explicitly requests to end the call\n"
                 "IMPORTANT: Only use this tool when you are confident the caller wants to end the call.\n"
+                "SEQUENCE: When you decide to end the call, call hangup_call with farewell_message set to the\n"
+                "exact goodbye sentence you intend to say, then immediately speak that exact sentence as your\n"
+                "final response. Do not continue the conversation after invoking this tool.\n"
                 "If you are uncertain, ask 'Is there anything else I can help with?' as a normal response "
                 "(do NOT call this tool)."
             ),

@@ -260,7 +260,7 @@ After outputting a tool call, provide a brief spoken response.
 {tools_json}
 
 ### Important Rules:
-- When the user says goodbye, farewell, or wants to end the call, use hangup_call tool
+- When the user says goodbye, farewell, or wants to end the call, use hangup_call tool. Set farewell_message to the exact goodbye sentence you intend to say, then speak that exact sentence as your final response.
 - When the user asks to email the transcript, use request_transcript tool
 - When the user wants to transfer, use transfer tool
 - Always provide a spoken response along with tool calls
