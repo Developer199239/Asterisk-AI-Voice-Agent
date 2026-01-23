@@ -5113,6 +5113,94 @@ class Engine:
                     )
                     # Replace audio with silence (zero-filled PCM16)
                     pcm_bytes = b'\x00' * len(pcm_bytes)
+
+                # Provider-agnostic upstream squelch: replace non-speech audio with silence so
+                # server-side VAD providers can reliably detect end-of-turn even with background noise.
+                # This does NOT rely on any specific tool flows (e.g., request_transcript).
+                try:
+                    vad_cfg = getattr(self.config, "vad", None)
+                    squelch_enabled = bool(getattr(vad_cfg, "upstream_squelch_enabled", False)) if vad_cfg else False
+                except Exception:
+                    squelch_enabled = False
+
+                try:
+                    capabilities = None
+                    if provider_caps_source and hasattr(provider_caps_source, "get_capabilities"):
+                        capabilities = provider_caps_source.get_capabilities()
+                    squelch_applicable = bool(
+                        squelch_enabled
+                        and capabilities
+                        and getattr(capabilities, "requires_continuous_audio", False)
+                        and getattr(capabilities, "has_native_vad", False)
+                        and session.audio_capture_enabled
+                    )
+                except Exception:
+                    squelch_applicable = False
+
+                if squelch_applicable and pcm_bytes:
+                    try:
+                        import audioop
+
+                        state = session.vad_state.setdefault("upstream_squelch", {})
+                        energy = int(audioop.rms(pcm_bytes, 2)) if pcm_bytes else 0
+
+                        base_rms = 200
+                        noise_factor = 2.5
+                        alpha = 0.06
+                        min_speech_frames = 2
+                        end_silence_frames = 15
+                        try:
+                            vad_cfg = getattr(self.config, "vad", None)
+                            base_rms = int(getattr(vad_cfg, "upstream_squelch_base_rms", base_rms))
+                            noise_factor = float(getattr(vad_cfg, "upstream_squelch_noise_factor", noise_factor))
+                            alpha = float(getattr(vad_cfg, "upstream_squelch_noise_ema_alpha", alpha))
+                            min_speech_frames = int(getattr(vad_cfg, "upstream_squelch_min_speech_frames", min_speech_frames))
+                            end_silence_frames = int(getattr(vad_cfg, "upstream_squelch_end_silence_frames", end_silence_frames))
+                        except Exception:
+                            pass
+
+                        speaking = bool(state.get("speaking", False))
+                        speech_frames = int(state.get("speech_frames", 0) or 0)
+                        silence_frames = int(state.get("silence_frames", 0) or 0)
+                        noise_ema = float(state.get("noise_ema", 0.0) or 0.0)
+
+                        # Update noise floor estimate (only when not currently speaking).
+                        if not speaking:
+                            if noise_ema <= 0.0:
+                                noise_ema = float(energy)
+                            else:
+                                noise_ema = (1.0 - alpha) * noise_ema + alpha * float(energy)
+
+                        threshold = max(float(base_rms), noise_ema * float(noise_factor))
+                        raw_speech = energy > threshold
+
+                        if raw_speech:
+                            speech_frames += 1
+                            silence_frames = 0
+                            if not speaking and speech_frames >= max(1, min_speech_frames):
+                                speaking = True
+                        else:
+                            silence_frames += 1
+                            speech_frames = 0
+                            if speaking and silence_frames >= max(1, end_silence_frames):
+                                speaking = False
+
+                        state.update(
+                            {
+                                "speaking": speaking,
+                                "speech_frames": speech_frames,
+                                "silence_frames": silence_frames,
+                                "noise_ema": noise_ema,
+                                "last_energy": energy,
+                                "last_threshold": int(threshold),
+                            }
+                        )
+                        session.vad_state["upstream_squelch"] = state
+
+                        if not speaking:
+                            pcm_bytes = b"\x00" * len(pcm_bytes)
+                    except Exception:
+                        logger.debug("Upstream squelch failed", call_id=caller_channel_id, exc_info=True)
                 
                 # Forward to provider
                 logger.info(
