@@ -967,7 +967,7 @@ providers:
     input_gain_target_rms: 0
     input_sample_rate_hz: 8000
     llm_max_output_tokens: 8192
-    llm_model: gemini-2.5-flash-native-audio-preview-12-2025
+    llm_model: gemini-2.5-flash-native-audio-preview-09-2025
     llm_temperature: 0.8
     llm_top_k: 40
     llm_top_p: 0.95
