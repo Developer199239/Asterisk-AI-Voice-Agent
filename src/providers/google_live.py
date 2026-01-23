@@ -116,6 +116,7 @@ class GoogleLiveProvider(AIProviderInterface):
         self._user_end_intent: Optional[str] = None
         self._assistant_farewell_intent: Optional[str] = None
         self._turn_has_assistant_output: bool = False
+        self._hangup_ready_emitted: bool = False
         # Conversation state
         self._conversation_history: List[Dict[str, Any]] = []
         
@@ -242,6 +243,9 @@ class GoogleLiveProvider(AIProviderInterface):
                 if not self._hangup_fallback_armed:
                     await asyncio.sleep(0.2)
                     continue
+                if self._hangup_ready_emitted:
+                    self._hangup_fallback_emitted = True
+                    return
 
                 now = time.monotonic()
                 last_audio = self._last_audio_out_monotonic
@@ -279,6 +283,7 @@ class GoogleLiveProvider(AIProviderInterface):
                         }
                     )
 
+                self._hangup_ready_emitted = True
                 self._hangup_fallback_emitted = True
                 logger.info(
                     "🔚 Hangup fallback watchdog emitted HangupReady",
@@ -416,6 +421,7 @@ class GoogleLiveProvider(AIProviderInterface):
         self._greeting_completed = False
         self._ws_unavailable_logged = False
         self._ws_send_close_logged = False
+        self._hangup_ready_emitted = False
         # Per-call tool allowlist (contexts are the source of truth).
         # Missing/None is treated as [] for safety.
         if context and "tools" in context:
@@ -1277,6 +1283,9 @@ class GoogleLiveProvider(AIProviderInterface):
                     call_id=self._call_id,
                 )
                 return
+            if self._hangup_ready_emitted:
+                self._hangup_after_response = False
+                return
             logger.info(
                 "🔚 Farewell response completed - triggering hangup",
                 call_id=self._call_id,
@@ -1291,6 +1300,7 @@ class GoogleLiveProvider(AIProviderInterface):
                         "reason": "farewell_completed",
                         "had_audio": had_audio
                     })
+                self._hangup_ready_emitted = True
             except Exception as e:
                 logger.error(
                     "Failed to emit HangupReady event",
