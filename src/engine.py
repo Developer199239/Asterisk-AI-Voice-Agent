@@ -7754,8 +7754,41 @@ class Engine:
                                 )
                 except Exception as e:
                     logger.debug(f"Could not get provider delay, using global: {e}")
-                
-                await asyncio.sleep(hangup_delay)
+
+                # If no farewell audio was produced (common when the model emits hangup_call but never
+                # follows up with an assistant turn), play a minimal server-side goodbye prompt so the
+                # call doesn't end abruptly.
+                played_farewell_fallback = False
+                if not had_audio:
+                    try:
+                        session = await self.session_store.get_by_call_id(call_id)
+                        if session and session.caller_channel_id:
+                            tools_cfg = getattr(self.config, "tools", {}) or {}
+                            hangup_cfg = tools_cfg.get("hangup_call", {}) if isinstance(tools_cfg, dict) else {}
+                            media_uri = None
+                            if isinstance(hangup_cfg, dict):
+                                media_uri = hangup_cfg.get("fallback_media_uri") or hangup_cfg.get("farewell_fallback_media_uri")
+                            if not media_uri:
+                                media_uri = "sound:goodbye"
+
+                            pb = await self.ari_client.play_media(session.caller_channel_id, media_uri)
+                            playback_id = pb.get("id") if isinstance(pb, dict) else None
+                            if playback_id:
+                                waiter = asyncio.get_running_loop().create_future()
+                                self._ari_playback_waiters[playback_id] = waiter
+                                try:
+                                    await asyncio.wait_for(waiter, timeout=8.0)
+                                except asyncio.TimeoutError:
+                                    pass
+                                finally:
+                                    self._ari_playback_waiters.pop(playback_id, None)
+                                played_farewell_fallback = True
+                    except Exception:
+                        logger.debug("Farewell fallback playback failed", call_id=call_id, exc_info=True)
+
+                # For server-side farewell playback, we can hang up immediately after playback finishes.
+                if not played_farewell_fallback:
+                    await asyncio.sleep(hangup_delay)
                 
                 try:
                     session = await self.session_store.get_by_call_id(call_id)
