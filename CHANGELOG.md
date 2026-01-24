@@ -12,9 +12,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Additional provider integrations
 - Enhanced monitoring features
 
+## [5.1.7] - 2026-01-24
+
+### Added
+
+- Engine: provider-agnostic **Upstream Squelch** for continuous-audio providers with native VAD (improves end-of-turn detection in noisy environments).
+- Admin UI: new **Upstream Squelch** controls and tooltips under Advanced → VAD.
+- Streaming (ExternalMedia RTP): add a short, configurable wait for the remote RTP endpoint during the initial greeting before falling back to file playback (reduces “dead air until caller speaks” on some Asterisk setups).
+
+### Changed
+
+- Config: default `farewell_hangup_delay_sec` is now `5` seconds (provider override still wins when set).
+- Prompts: updated OpenAI Realtime demo greeting text.
+
 ### Fixed
 
 - Admin UI: auto-detect the media directory group inside the container and add `appuser` to that GID at startup, preventing false “media directory not writable” warnings after host reboots on systems where Asterisk uses a non-default group ID.
+- Hangup tool: provider-agnostic transcript gating and contact-confirmation guardrails to prevent premature hangups and repeated transcript prompts.
+- OpenAI Realtime: avoid cutting off farewell speech by waiting for `output_audio.done` before emitting `HangupReady`.
 
 ## [5.1.6] - 2026-01-20
 
@@ -1118,6 +1133,8 @@ Version 4.1 introduces **unified tool calling architecture** enabling AI agents 
 
 ## Version History
 
+- **v5.1.7** (2026-01-24) - ExternalMedia greeting reliability, upstream squelch, hangup/transcript robustness
+- **v5.1.6** (2026-01-20) - Admin UI + RCA improvements, CLI surface alignment, setup wizard fixes
 - **v5.0.0** (2026-01-07) - Outbound Campaign Dialer (Alpha), Groq Speech, Ollama improvements, attended transfer
 - **v4.6.0** (2025-12-29) - Admin UI config/health improvements, preflight enhancements
 - **v4.5.2** (2025-12-16) - Local AI Server UX, MCP tools, Aviation ATIS
@@ -1126,7 +1143,9 @@ Version 4.1 introduces **unified tool calling architecture** enabling AI agents 
 - **v4.0.0** (2025-10-29) - Modular pipeline architecture, production monitoring, golden baselines
 - **v3.0.0** (2025-09-16) - Modular pipeline architecture, file based playback
 
-[Unreleased]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/compare/v5.0.0...HEAD
+[Unreleased]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/compare/v5.1.7...HEAD
+[5.1.7]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/releases/tag/v5.1.7
+[5.1.6]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/releases/tag/v5.1.6
 [5.0.0]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/releases/tag/v5.0.0
 [4.6.0]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/releases/tag/v4.6.0
 [4.5.2]: https://github.com/hkjarral/Asterisk-AI-Voice-Agent/releases/tag/v4.5.2

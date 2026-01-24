@@ -8,12 +8,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var (
-	version   = "5.1.6"     // Overridden at build time via -ldflags
-	buildTime = "unknown"   // Overridden at build time via -ldflags
-	verbose   bool
-	noColor   bool
-)
+	var (
+		version   = "5.1.7"     // Overridden at build time via -ldflags
+		buildTime = "unknown"   // Overridden at build time via -ldflags
+		verbose   bool
+		noColor   bool
+	)
 
 func main() {
 	if err := rootCmd.Execute(); err != nil {

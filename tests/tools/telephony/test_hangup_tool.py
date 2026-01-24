@@ -20,6 +20,21 @@ class TestHangupCallTool:
     def hangup_tool(self):
         """Create HangupCallTool instance."""
         return HangupCallTool()
+
+    @pytest.fixture
+    def tool_context_no_transcript(self, tool_context):
+        """
+        Hangup tool unit tests historically assumed hangup_call always succeeds.
+        In v5.1.7, hangup_call can be blocked when request_transcript is enabled
+        but the transcript offer/decision flow hasn't been completed.
+
+        For the baseline hangup behavior tests, disable request_transcript.
+        """
+        try:
+            tool_context.config.setdefault("tools", {}).setdefault("request_transcript", {})["enabled"] = False
+        except Exception:
+            pass
+        return tool_context
     
     # ==================== Definition Tests ====================
     
@@ -52,12 +67,12 @@ class TestHangupCallTool:
     
     @pytest.mark.asyncio
     async def test_hangup_with_custom_farewell(
-        self, hangup_tool, tool_context
+        self, hangup_tool, tool_context_no_transcript
     ):
         """Test hangup with custom farewell message."""
         result = await hangup_tool.execute(
             parameters={"farewell_message": "Thank you for calling!"},
-            context=tool_context
+            context=tool_context_no_transcript
         )
         
         assert result["status"] == "success"
@@ -66,12 +81,12 @@ class TestHangupCallTool:
     
     @pytest.mark.asyncio
     async def test_hangup_with_default_farewell(
-        self, hangup_tool, tool_context
+        self, hangup_tool, tool_context_no_transcript
     ):
         """Test hangup with default farewell when none provided."""
         result = await hangup_tool.execute(
             parameters={},
-            context=tool_context
+            context=tool_context_no_transcript
         )
         
         assert result["status"] == "success"
@@ -85,14 +100,14 @@ class TestHangupCallTool:
     
     @pytest.mark.asyncio
     async def test_hangup_with_long_farewell(
-        self, hangup_tool, tool_context
+        self, hangup_tool, tool_context_no_transcript
     ):
         """Test hangup with longer farewell message."""
         long_farewell = "Thank you so much for calling today. We appreciate your business and hope to serve you again soon. Have a wonderful day!"
         
         result = await hangup_tool.execute(
             parameters={"farewell_message": long_farewell},
-            context=tool_context
+            context=tool_context_no_transcript
         )
         
         assert result["status"] == "success"
@@ -100,12 +115,12 @@ class TestHangupCallTool:
     
     @pytest.mark.asyncio
     async def test_hangup_with_empty_farewell(
-        self, hangup_tool, tool_context
+        self, hangup_tool, tool_context_no_transcript
     ):
         """Test hangup with empty farewell string."""
         result = await hangup_tool.execute(
             parameters={"farewell_message": ""},
-            context=tool_context
+            context=tool_context_no_transcript
         )
         
         assert result["status"] == "success"
@@ -116,12 +131,12 @@ class TestHangupCallTool:
     
     @pytest.mark.asyncio
     async def test_will_hangup_flag_is_true(
-        self, hangup_tool, tool_context
+        self, hangup_tool, tool_context_no_transcript
     ):
         """Test that will_hangup flag is always True."""
         result = await hangup_tool.execute(
             parameters={"farewell_message": "Goodbye!"},
-            context=tool_context
+            context=tool_context_no_transcript
         )
         
         # Critical: This flag tells provider to emit HangupReady event
@@ -129,12 +144,12 @@ class TestHangupCallTool:
     
     @pytest.mark.asyncio
     async def test_provider_receives_hangup_signal(
-        self, hangup_tool, tool_context
+        self, hangup_tool, tool_context_no_transcript
     ):
         """Test that hangup result includes provider signal."""
         result = await hangup_tool.execute(
             parameters={},
-            context=tool_context
+            context=tool_context_no_transcript
         )
         
         # Result should contain info for provider to handle hangup
@@ -146,12 +161,12 @@ class TestHangupCallTool:
     
     @pytest.mark.asyncio
     async def test_hangup_does_not_immediately_terminate(
-        self, hangup_tool, tool_context, mock_ari_client
+        self, hangup_tool, tool_context_no_transcript, mock_ari_client
     ):
         """Test that hangup tool doesn't immediately hang up channel."""
         await hangup_tool.execute(
             parameters={"farewell_message": "Goodbye!"},
-            context=tool_context
+            context=tool_context_no_transcript
         )
         
         # ARI hangup should NOT be called (provider handles after farewell)
@@ -159,7 +174,7 @@ class TestHangupCallTool:
     
     @pytest.mark.asyncio
     async def test_hangup_with_active_session(
-        self, hangup_tool, tool_context, sample_call_session
+        self, hangup_tool, tool_context_no_transcript, sample_call_session
     ):
         """Test hangup during active conversation."""
         sample_call_session.conversation_state = "active"
@@ -167,7 +182,7 @@ class TestHangupCallTool:
         
         result = await hangup_tool.execute(
             parameters={},
-            context=tool_context
+            context=tool_context_no_transcript
         )
         
         assert result["status"] == "success"
@@ -210,7 +225,7 @@ class TestHangupCallTool:
     
     @pytest.mark.asyncio
     async def test_hangup_after_transfer_failure(
-        self, hangup_tool, tool_context, sample_call_session
+        self, hangup_tool, tool_context_no_transcript, sample_call_session
     ):
         """Test hangup after failed transfer attempt."""
         # Simulate failed transfer
@@ -221,26 +236,26 @@ class TestHangupCallTool:
         
         result = await hangup_tool.execute(
             parameters={"farewell_message": "I apologize for the difficulty. Goodbye!"},
-            context=tool_context
+            context=tool_context_no_transcript
         )
         
         assert result["status"] == "success"
     
     @pytest.mark.asyncio
     async def test_hangup_multiple_times(
-        self, hangup_tool, tool_context
+        self, hangup_tool, tool_context_no_transcript
     ):
         """Test calling hangup tool multiple times (should be idempotent)."""
         # First hangup
         result1 = await hangup_tool.execute(
             parameters={},
-            context=tool_context
+            context=tool_context_no_transcript
         )
         
         # Second hangup (edge case, shouldn't happen but handle gracefully)
         result2 = await hangup_tool.execute(
             parameters={},
-            context=tool_context
+            context=tool_context_no_transcript
         )
         
         assert result1["status"] == "success"
@@ -251,7 +266,7 @@ class TestHangupCallTool:
     
     @pytest.mark.asyncio
     async def test_farewell_message_variants(
-        self, hangup_tool, tool_context
+        self, hangup_tool, tool_context_no_transcript
     ):
         """Test different farewell message styles."""
         farewells = [
@@ -265,7 +280,7 @@ class TestHangupCallTool:
         for farewell in farewells:
             result = await hangup_tool.execute(
                 parameters={"farewell_message": farewell},
-                context=tool_context
+                context=tool_context_no_transcript
             )
             
             assert result["status"] == "success"
@@ -273,14 +288,14 @@ class TestHangupCallTool:
     
     @pytest.mark.asyncio
     async def test_farewell_with_special_characters(
-        self, hangup_tool, tool_context
+        self, hangup_tool, tool_context_no_transcript
     ):
         """Test farewell with special characters."""
         farewell = "Thank you! It's been great helping you today. Goodbye! 😊"
         
         result = await hangup_tool.execute(
             parameters={"farewell_message": farewell},
-            context=tool_context
+            context=tool_context_no_transcript
         )
         
         assert result["status"] == "success"
@@ -290,7 +305,7 @@ class TestHangupCallTool:
     
     @pytest.mark.asyncio
     async def test_extra_parameters_ignored(
-        self, hangup_tool, tool_context
+        self, hangup_tool, tool_context_no_transcript
     ):
         """Test that extra parameters are ignored."""
         result = await hangup_tool.execute(
@@ -298,7 +313,7 @@ class TestHangupCallTool:
                 "farewell_message": "Goodbye!",
                 "extra_param": "should be ignored"
             },
-            context=tool_context
+            context=tool_context_no_transcript
         )
         
         assert result["status"] == "success"
@@ -306,14 +321,45 @@ class TestHangupCallTool:
     
     @pytest.mark.asyncio
     async def test_farewell_message_none_value(
-        self, hangup_tool, tool_context
+        self, hangup_tool, tool_context_no_transcript
     ):
         """Test hangup when farewell_message is explicitly None."""
         result = await hangup_tool.execute(
             parameters={"farewell_message": None},
-            context=tool_context
+            context=tool_context_no_transcript
         )
         
         assert result["status"] == "success"
         # Should handle None gracefully (use default or empty)
         assert "message" in result
+
+    # ==================== Transcript Guardrail Tests ====================
+
+    @pytest.mark.asyncio
+    async def test_hangup_blocked_when_transcript_enabled_and_not_offered(
+        self, hangup_tool, tool_context
+    ):
+        """If request_transcript is enabled, hangup_call should first require a transcript offer."""
+        result = await hangup_tool.execute(parameters={}, context=tool_context)
+        assert result["status"] == "blocked"
+        assert result.get("will_hangup") is False
+        assert result.get("ai_should_speak") is True
+        assert "transcript" in (result.get("message") or "").lower()
+
+    @pytest.mark.asyncio
+    async def test_hangup_allows_after_transcript_declined_in_history(
+        self, hangup_tool, tool_context, sample_call_session
+    ):
+        """
+        When the transcript offer exists and the latest user message declines it,
+        hangup_call should proceed successfully.
+        """
+        sample_call_session.conversation_history.append(
+            {"role": "assistant", "content": "Before we hang up, would you like me to email you a transcript of our conversation?"}
+        )
+        sample_call_session.conversation_history.append(
+            {"role": "user", "content": "No, I don't need the transcript."}
+        )
+        result = await hangup_tool.execute(parameters={"farewell_message": "Goodbye!"}, context=tool_context)
+        assert result["status"] == "success"
+        assert result["will_hangup"] is True
