@@ -13,6 +13,7 @@ barge_in:
   min_ms: 150
   post_tts_end_protection_ms: 800
 config_version: 4
+farewell_hangup_delay_sec: 5
 contexts:
   default:
     greeting: Hello
@@ -491,8 +492,8 @@ contexts:
     tools: []
   demo_openai:
     greeting: >-
-      Hi {caller_name}, I'm Ava with the OpenAI Realtime voice demo. Ask me
-      anything about the Asterisk AI Voice Agent project.
+      Hi {caller_name}, I'm Multilingual Ava with the OpenAI Realtime Live demo.
+      Ask me about the project in your preferred language.
     profile: telephony_ulaw_8k
     prompt: >
       You are Ava (Asterisk Voice Agent) demonstrating the OpenAI Realtime API

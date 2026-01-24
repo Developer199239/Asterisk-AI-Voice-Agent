@@ -98,7 +98,7 @@ class LocalProviderConfig(BaseModel):
     # Farewell hangup delay - seconds to wait after farewell audio completes before hangup
     # Ensures farewell message fully plays through RTP pipeline before disconnecting
     # Increase if farewell gets cut off (typical farewells need 2-4 seconds)
-    farewell_hangup_delay_sec: float = Field(default=2.5)
+    farewell_hangup_delay_sec: float = Field(default=5.0)
     chunk_ms: int = Field(default=200)
     max_tokens: int = Field(default=150)
     temperature: float = Field(default=0.4)
@@ -579,7 +579,7 @@ class AppConfig(BaseModel):
     # Farewell hangup delay - seconds to wait after farewell audio completes before hangup
     # Ensures farewell message fully plays through RTP pipeline before disconnecting
     # Increase if farewell gets cut off (typical farewells need 2-4 seconds)
-    farewell_hangup_delay_sec: float = Field(default=2.5)
+    farewell_hangup_delay_sec: float = Field(default=5.0)
 
     # Ensure tests that construct AppConfig(**dict) directly still get normalized pipelines
     # similar to load_config(), which calls _normalize_pipelines().
