@@ -418,7 +418,7 @@ contexts:
 
       CALL ENDING PROTOCOL:
 
-      - When user says goodbye, first offer to email them a transcript
+      - When user indicates they are done (goodbye, bye, that's all, nothing else, thank you), first offer to email them a transcript
 
       - If yes, use request_transcript tool to get their email
 

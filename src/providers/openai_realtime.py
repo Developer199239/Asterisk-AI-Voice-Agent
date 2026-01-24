@@ -608,6 +608,56 @@ class OpenAIRealtimeProvider(AIProviderInterface):
             
             # Send result back to OpenAI
             await self.tool_adapter.send_tool_result(result, context)
+
+            # For hangup_call, create a dedicated farewell response with tools disabled so OpenAI
+            # doesn't recurse into another tool call (which can lead to `farewell_no_audio` hangups).
+            if function_name == "hangup_call" and result and result.get("will_hangup"):
+                farewell_text = str(result.get("message") or "").strip()
+                if farewell_text and self.websocket and self.websocket.state.name == "OPEN":
+                    try:
+                        # Disable tool calling for the farewell response to force spoken audio.
+                        await self._send_json(
+                            {
+                                "type": "session.update",
+                                "event_id": f"sess-tools-none-{uuid.uuid4()}",
+                                "session": {"tool_choice": "none"},
+                            }
+                        )
+                    except Exception:
+                        logger.debug(
+                            "Failed to disable tool_choice for farewell response",
+                            call_id=self._call_id,
+                            exc_info=True,
+                        )
+
+                    output_modalities = [m for m in (self.config.response_modalities or []) if m in ("audio", "text")] or ["audio"]
+                    if "audio" not in output_modalities:
+                        output_modalities = ["audio"] + output_modalities
+
+                    try:
+                        await self._send_json(
+                            {
+                                "type": "response.create",
+                                "event_id": f"resp-farewell-{uuid.uuid4()}",
+                                "response": {
+                                    "modalities": output_modalities,
+                                    "instructions": (
+                                        "Say the following sentence to the user exactly, then stop. "
+                                        f"Do not call any tools: {farewell_text}"
+                                    ),
+                                    "input": [],
+                                },
+                            }
+                        )
+                        self._pending_response = True
+                        logger.info(
+                            "🎤 Farewell response.create sent (tools disabled)",
+                            call_id=self._call_id,
+                            farewell_preview=farewell_text[:80],
+                            modalities=output_modalities,
+                        )
+                    except Exception:
+                        logger.debug("Failed to send farewell response.create", call_id=self._call_id, exc_info=True)
             
             # Log tool call to session for call history (Milestone 21)
             try:
