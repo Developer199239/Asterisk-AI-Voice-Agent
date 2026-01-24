@@ -460,10 +460,6 @@ class Engine:
         # Track per-segment provider bytes vs. bytes enqueued to streaming
         self._provider_bytes: Dict[str, int] = {}
         self._enqueued_bytes: Dict[str, int] = {}
-        # Best-effort tracking to avoid hanging up while buffered agent audio is still playing out.
-        # Some providers (e.g., OpenAI Realtime) can deliver TTS audio bursts faster than real-time.
-        self._last_agent_audio_segment_enqueued_bytes: Dict[str, int] = {}
-        self._last_agent_audio_segment_wall_sec: Dict[str, float] = {}
         # Transport observability
         self._transport_card_logged: Set[str] = set()
         # Audio Profile Resolution card one-shot tracker
@@ -7688,15 +7684,6 @@ class Engine:
                             call_id=call_id,
                             segment_wall_seconds=round(wall, 3),
                         )
-                    # Capture segment stats for hangup timing before clearing byte counters.
-                    try:
-                        self._last_agent_audio_segment_wall_sec[call_id] = float(wall)
-                    except Exception:
-                        pass
-                    try:
-                        self._last_agent_audio_segment_enqueued_bytes[call_id] = int(self._enqueued_bytes.get(call_id, 0) or 0)
-                    except Exception:
-                        pass
                     # Segment byte accounting summary
                     prov = int(self._provider_bytes.pop(call_id, 0))
                     enq = int(self._enqueued_bytes.pop(call_id, 0))
@@ -7861,48 +7848,6 @@ class Engine:
                                 )
                 except Exception as e:
                     logger.debug(f"Could not get provider delay, using global: {e}")
-
-                # If we just streamed a farewell, base hangup delay on buffered audio duration so we
-                # don't cut off the tail when providers deliver audio bursts faster than real-time.
-                if had_audio:
-                    try:
-                        session = await self.session_store.get_by_call_id(call_id)
-                        if session and getattr(session, "transport_profile", None):
-                            fmt = self._canonicalize_encoding(getattr(session.transport_profile, "format", "ulaw"))
-                            rate = int(getattr(session.transport_profile, "wire_sample_rate", 8000) or 8000)
-                            bps = 1 if fmt in {"ulaw", "mulaw"} else 2
-                            bytes_per_sec = float(max(1, bps * max(1, rate)))
-                            enq_bytes = int(
-                                self._last_agent_audio_segment_enqueued_bytes.get(call_id, 0)
-                                or self._enqueued_bytes.get(call_id, 0)
-                                or 0
-                            )
-                            wall = float(self._last_agent_audio_segment_wall_sec.get(call_id, 0.0) or 0.0)
-                            enq_sec = float(enq_bytes) / bytes_per_sec
-                            remaining = max(0.0, enq_sec - wall)
-                            hangup_delay = max(float(hangup_delay), remaining + 0.4)
-                            try:
-                                max_delay = float(getattr(self.config, "farewell_hangup_max_delay_sec", 8.0) or 8.0)
-                            except Exception:
-                                max_delay = 8.0
-                            if float(hangup_delay) > max_delay:
-                                logger.info(
-                                    "Capping farewell hangup delay",
-                                    call_id=call_id,
-                                    computed_delay=round(float(hangup_delay), 3),
-                                    max_delay=round(float(max_delay), 3),
-                                )
-                                hangup_delay = max_delay
-                            logger.debug(
-                                "Computed hangup delay from buffered agent audio",
-                                call_id=call_id,
-                                enqueued_bytes=enq_bytes,
-                                enqueued_seconds=round(enq_sec, 3),
-                                wall_seconds=round(wall, 3),
-                                chosen_delay=round(float(hangup_delay), 3),
-                            )
-                    except Exception:
-                        logger.debug("Failed computing buffered-audio hangup delay", call_id=call_id, exc_info=True)
 
                 # If no farewell audio was produced (common when the model emits hangup_call but never
                 # follows up with an assistant turn), play a minimal server-side goodbye prompt so the

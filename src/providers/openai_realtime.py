@@ -100,6 +100,8 @@ class OpenAIRealtimeProvider(AIProviderInterface):
         # Track whether ANY audio was emitted during a given response (response_id -> bool).
         # _in_audio_burst is only "currently emitting", and is often false by response.done.
         self._audio_seen_response_ids: set[str] = set()
+        # For farewells, wait for output_audio.done before emitting HangupReady to avoid cutting off speech.
+        self._farewell_waiting_for_audio_done: bool = False
         self._response_audio_start_time: Optional[float] = None  # Track when audio started for interruption cooldown
         self._min_response_time_before_interrupt: float = 2.5  # Minimum seconds of audio before allowing interruption (increased for farewells)
         self._first_output_chunk_logged: bool = False
@@ -1421,6 +1423,8 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                     )
                     # Start fallback timeout in case OpenAI doesn't generate audio
                     self._start_farewell_timeout()
+                    # Wait for output_audio.done before emitting HangupReady so we don't cut off speech.
+                    self._farewell_waiting_for_audio_done = True
                 else:
                     logger.debug("OpenAI response created", call_id=self._call_id, response_id=response_id)
             return
@@ -1588,31 +1592,14 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                 # Cancel timeout if it's still running
                 self._cancel_farewell_timeout()
                 
-                # If farewell has audio, trigger hangup immediately
+                # If farewell has audio, we hang up on output_audio.done (not response.done) so we don't
+                # cut off the end of the spoken goodbye (provider can deliver audio faster than real-time).
                 if had_audio_for_response:
                     logger.info(
-                        "🔚 Farewell response completed with audio - triggering hangup",
+                        "🔚 Farewell response completed with audio - waiting for output_audio.done",
                         call_id=self._call_id,
                         response_id=self._current_response_id
                     )
-                    
-                    # Emit HangupReady event to trigger hangup in engine
-                    # Engine will wait 1.0s to ensure any audio completes playing
-                    try:
-                        if self.on_event:
-                            await self.on_event({
-                                "type": "HangupReady",
-                                "call_id": self._call_id,
-                                "reason": "farewell_completed",
-                                "had_audio": True
-                            })
-                    except Exception as e:
-                        logger.error(
-                            "Failed to emit HangupReady event",
-                            call_id=self._call_id,
-                            error=str(e),
-                            exc_info=True,
-                        )
                 else:
                     # No audio generated - trigger hangup immediately
                     logger.warning(
@@ -1638,8 +1625,10 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                             exc_info=True,
                         )
                 
-                # Reset farewell tracking
-                self._farewell_response_id = None
+                # Reset hangup marker; HangupReady will be emitted on output_audio.done if we had audio.
+                if not had_audio_for_response:
+                    self._farewell_waiting_for_audio_done = False
+                    self._farewell_response_id = None
                 self._hangup_after_response = False
             
             # Drop per-response audio tracking to avoid unbounded growth.
@@ -2017,16 +2006,17 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                     logger.error("Failed to emit AgentAudio event", call_id=self._call_id, exc_info=True)
 
     async def _emit_audio_done(self):
-        if not self._in_audio_burst or not self.on_event or not self._call_id:
+        if not self.on_event or not self._call_id:
             return
         try:
-            await self.on_event(
-                {
-                    "type": "AgentAudioDone",
-                    "streaming_done": True,
-                    "call_id": self._call_id,
-                }
-            )
+            if self._in_audio_burst:
+                await self.on_event(
+                    {
+                        "type": "AgentAudioDone",
+                        "streaming_done": True,
+                        "call_id": self._call_id,
+                    }
+                )
         except Exception:
             logger.error("Failed to emit AgentAudioDone event", call_id=self._call_id, exc_info=True)
         finally:
@@ -2040,6 +2030,22 @@ class OpenAIRealtimeProvider(AIProviderInterface):
                 logger.debug("Failed to pause pacer on AgentAudioDone", call_id=self._call_id, exc_info=True)
             self._output_resample_state = None
             self._first_output_chunk_logged = False
+
+        # If a hangup was requested and we just finished emitting the farewell audio, trigger hangup now.
+        if self._farewell_waiting_for_audio_done and self._farewell_response_id is not None:
+            self._farewell_waiting_for_audio_done = False
+            self._farewell_response_id = None
+            try:
+                await self.on_event(
+                    {
+                        "type": "HangupReady",
+                        "call_id": self._call_id,
+                        "reason": "farewell_completed",
+                        "had_audio": True,
+                    }
+                )
+            except Exception:
+                logger.error("Failed to emit HangupReady after output_audio.done", call_id=self._call_id, exc_info=True)
 
     async def _emit_transcript(self, text: str, *, is_final: bool):
         if not self.on_event or not self._call_id:
