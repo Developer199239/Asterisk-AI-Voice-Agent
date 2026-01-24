@@ -9,6 +9,7 @@ from src.tools.base import Tool, ToolDefinition, ToolParameter, ToolCategory
 from src.tools.context import ToolExecutionContext
 import structlog
 import re
+import time
 
 logger = structlog.get_logger(__name__)
 
@@ -23,7 +24,24 @@ _AFFIRMATIVE_MARKERS = (
     "thats right",
     "right",
     "exactly",
-    "affirmative",
+	"affirmative",
+)
+
+_NEGATIVE_MARKERS = (
+    "no",
+    "nope",
+    "nah",
+    "negative",
+    "don't",
+    "dont",
+    "do not",
+    "not",
+    "not needed",
+    "no need",
+    "no thanks",
+    "no thank you",
+    "decline",
+    "skip",
 )
 
 _END_CALL_MARKERS = (
@@ -65,6 +83,18 @@ def _is_affirmative(text: str) -> bool:
     if not t:
         return False
     return any(m in t for m in _AFFIRMATIVE_MARKERS)
+
+def _is_negative(text: str) -> bool:
+    t = _norm(text)
+    if not t:
+        return False
+    # Avoid treating "not sure" / "not really" as a transcript decline by requiring either
+    # a direct negative marker or explicit "don't/do not" phrases.
+    if any(m in t for m in ("don't", "dont", "do not")):
+        return True
+    if t in ("no", "nope", "nah", "negative"):
+        return True
+    return any(m in t for m in _NEGATIVE_MARKERS)
 
 
 def _is_end_call_intent(text: str) -> bool:
@@ -197,12 +227,74 @@ class HangupCallTool(Tool):
                     request_transcript_allowed = True
 
                 if transcript_enabled and request_transcript_allowed:
-                    recent = " ".join(
-                        str(m.get("content") or "")
-                        for m in history[-10:]
-                        if isinstance(m, dict) and m.get("role") in ("user", "assistant")
-                    ).lower()
-                    if "transcript" not in recent:
+                    # Provider-agnostic transcript offer state:
+                    # Some providers do not reliably persist assistant transcripts into conversation_history
+                    # before the model triggers the next tool call. Rely on an explicit per-call flag
+                    # instead of brittle substring scans to avoid repeated "transcript?" prompts.
+                    now = time.time()
+                    try:
+                        guard = session.vad_state.setdefault("hangup_guard", {}) if isinstance(getattr(session, "vad_state", None), dict) else {}
+                        tstate = guard.setdefault("transcript_offer", {}) if isinstance(guard, dict) else {}
+                    except Exception:
+                        guard = {}
+                        tstate = {}
+
+                    offered = bool(tstate.get("offered", False))
+                    pending = bool(tstate.get("pending_response", False))
+                    declined = bool(tstate.get("declined", False))
+                    accepted = bool(tstate.get("accepted", False))
+                    offered_at = float(tstate.get("offered_at_ts", 0.0) or 0.0)
+                    offered_count = int(tstate.get("offered_count", 0) or 0)
+
+                    # Back-compat: if recent history clearly contains a transcript offer, treat it as offered.
+                    # This helps providers where assistant transcripts ARE persisted.
+                    if not offered:
+                        recent = " ".join(
+                            str(m.get("content") or "")
+                            for m in history[-10:]
+                            if isinstance(m, dict) and m.get("role") in ("user", "assistant")
+                        ).lower()
+                        if ("email you a transcript" in recent) or ("email" in recent and "transcript" in recent):
+                            offered = True
+                            pending = True
+                            if offered_at <= 0.0:
+                                offered_at = now
+                            offered_count = max(1, offered_count)
+
+                    if offered and pending:
+                        # Interpret the most recent user utterance as the transcript decision when possible.
+                        if _is_affirmative(last_user_text):
+                            accepted = True
+                            pending = False
+                        elif _is_negative(last_user_text):
+                            declined = True
+                            pending = False
+
+                    if not offered:
+                        offered = True
+                        pending = True
+                        declined = False
+                        accepted = False
+                        offered_at = now
+                        offered_count = offered_count + 1
+                        try:
+                            tstate.update(
+                                {
+                                    "offered": True,
+                                    "pending_response": True,
+                                    "declined": False,
+                                    "accepted": False,
+                                    "offered_at_ts": offered_at,
+                                    "offered_count": offered_count,
+                                }
+                            )
+                            if isinstance(guard, dict):
+                                guard["transcript_offer"] = tstate
+                                session.vad_state["hangup_guard"] = guard
+                            if context.session_store:
+                                await context.session_store.upsert_call(session)
+                        except Exception:
+                            pass
                         logger.info(
                             "📞 Hangup blocked: transcript not offered yet",
                             call_id=context.call_id,
@@ -211,6 +303,50 @@ class HangupCallTool(Tool):
                         return {
                             "status": "blocked",
                             "message": "Before we hang up, would you like me to email you a transcript of our conversation?",
+                            "will_hangup": False,
+                            "ai_should_speak": True,
+                        }
+
+                    # Persist state updates from user answer parsing.
+                    try:
+                        tstate.update(
+                            {
+                                "offered": bool(offered),
+                                "pending_response": bool(pending),
+                                "declined": bool(declined),
+                                "accepted": bool(accepted),
+                                "offered_at_ts": float(offered_at or 0.0),
+                                "offered_count": int(offered_count or 0),
+                            }
+                        )
+                        if isinstance(guard, dict):
+                            guard["transcript_offer"] = tstate
+                            session.vad_state["hangup_guard"] = guard
+                        if context.session_store:
+                            await context.session_store.upsert_call(session)
+                    except Exception:
+                        pass
+
+                    if accepted:
+                        # Transcript accepted but no email captured yet: do not hang up.
+                        has_email = bool(getattr(session, "transcript_emails", None))
+                        if not has_email:
+                            return {
+                                "status": "blocked",
+                                "message": "Sure — what email address should I send the transcript to?",
+                                "will_hangup": False,
+                                "ai_should_speak": True,
+                            }
+
+                    if pending and not (declined or accepted):
+                        # Transcript was offered very recently but the user hasn't answered yet.
+                        # Use a short prompt to reduce repeated long questions if the model calls again.
+                        short = "Would you like a transcript emailed? Please say yes or no."
+                        long = "Before we hang up, would you like me to email you a transcript of our conversation?"
+                        msg = short if (offered_count >= 1 and offered_at and (now - offered_at) < 15.0) else long
+                        return {
+                            "status": "blocked",
+                            "message": msg,
                             "will_hangup": False,
                             "ai_should_speak": True,
                         }
