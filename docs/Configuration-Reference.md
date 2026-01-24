@@ -209,6 +209,7 @@ Controls the pacing and robustness of streamed agent audio.
 - streaming.provider_grace_ms: Absorb late provider chunks to avoid tail-chop artifacts.
 - streaming.logging_level: Verbosity for the streaming manager.
 - streaming.egress_force_mulaw: When true, converts outbound streaming audio to μ-law 8 kHz regardless of provider encoding.
+- streaming.greeting_rtp_wait_ms: ExternalMedia-only. How long to wait (ms) for the remote RTP endpoint to be discovered during the initial greeting before falling back to file playback (prevents “dead air until caller speaks” in some Asterisk setups).
 
 ## VAD (Voice Activity Detection)
 
@@ -223,6 +224,12 @@ Defines how inbound speech is segmented into utterances for STT.
 - vad.fallback_enabled: When true, sends audio at a fixed interval if VAD fails to detect speech.
 - vad.fallback_interval_ms: Interval between fallback sends.
 - vad.fallback_buffer_size: Bytes to accumulate at fallback thresholds.
+- vad.upstream_squelch_enabled: When true, replaces low-energy/noise frames with silence for continuous-audio providers that have native VAD (improves end-of-turn detection in noisy environments; may suppress quiet callers if too aggressive).
+- vad.upstream_squelch_base_rms: Minimum RMS threshold (PCM16 space) before audio is treated as “speech”.
+- vad.upstream_squelch_noise_factor: Dynamic threshold multiplier relative to estimated noise floor.
+- vad.upstream_squelch_noise_ema_alpha: EMA smoothing factor (0–1) for noise floor estimation.
+- vad.upstream_squelch_min_speech_frames: Hysteresis: speech frames required to enter “speaking”.
+- vad.upstream_squelch_end_silence_frames: Hysteresis: silence frames required to exit “speaking”.
 
 Common pitfalls:
 

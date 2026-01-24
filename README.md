@@ -2,7 +2,7 @@
 
 # Asterisk AI Voice Agent
 
-![Version](https://img.shields.io/badge/version-5.1.6-blue.svg)
+![Version](https://img.shields.io/badge/version-5.1.7-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![Python](https://img.shields.io/badge/python-3.11+-blue.svg)
 ![Docker](https://img.shields.io/badge/docker-compose-blue.svg)
@@ -21,7 +21,7 @@ The most powerful, flexible open-source AI voice agent for Asterisk/FreePBX. Fea
 ## 📖 Table of Contents
 
 - [🚀 Quick Start](#-quick-start)
-- [🎉 What's New](#-whats-new-in-v516)
+- [🎉 What's New](#-whats-new-in-v517)
 - [🌟 Why Asterisk AI Voice Agent?](#-why-asterisk-ai-voice-agent)
 - [✨ Features](#-features)
 - [🎥 Demo](#-demo)
@@ -110,7 +110,7 @@ For users who prefer the command line or need headless setup.
 agent setup
 ```
 
-> Note: Legacy commands `agent init`, `agent doctor`, and `agent troubleshoot` remain available as hidden aliases in CLI v5.1.6.
+> Note: Legacy commands `agent init`, `agent doctor`, and `agent troubleshoot` remain available as hidden aliases in CLI v5.1.7.
 
 ### Option B: Manual Setup
 ```bash
@@ -126,7 +126,7 @@ docker compose up -d
 Add this to your FreePBX (`extensions_custom.conf`):
 ```asterisk
 [from-ai-agent]
-exten => s,1,NoOp(Asterisk AI Voice Agent v5.1.6)
+exten => s,1,NoOp(Asterisk AI Voice Agent v5.1.7)
  ; Optional per-call overrides:
  ; - AI_PROVIDER selects a provider/pipeline (otherwise uses default_provider from ai-agent.yaml)
  ; - AI_CONTEXT selects a context/persona (otherwise uses default context)
@@ -153,15 +153,17 @@ docker compose logs -f ai_engine
 
 ---
 
-## 🎉 What's New in v5.1.6
+## 🎉 What's New in v5.1.7
 
 <details open>
 <summary><b>Latest Updates</b></summary>
 
-### 🧰 UI + RCA Improvements (v5.1.6)
-- Admin UI Setup Wizard: OpenAI Realtime now prompts for the OpenAI API key (no Groq key mix-up)
-- `agent rca`: detects AudioSocket vs ExternalMedia and tailors transport guidance
-- Admin UI Dashboard System Ready: more reliable Docker Compose version detection
+### 🎧 Transport + Turn-Taking Reliability (v5.1.7)
+- ExternalMedia RTP: reduce “first greeting” dead-air by waiting briefly for the remote RTP endpoint before falling back
+- Upstream Squelch: new engine-side noise squelch for continuous-audio providers + new UI controls (tunable; can be disabled for quiet callers)
+- End-of-call robustness: provider-agnostic transcript gating and hangup sequencing (prevents repeated “transcript?” loops and premature hangups)
+### 🔚 Farewell / Hangup Improvements (v5.1.7)
+- OpenAI Realtime: wait for `output_audio.done` before hangup to avoid cutting off farewell speech
 
 ### 📞 Outbound Campaign Dialer (Alpha)
 - **Call Scheduling UI**: create campaigns, import leads, view outcomes

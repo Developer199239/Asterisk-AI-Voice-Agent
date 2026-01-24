@@ -111,6 +111,78 @@ const VADConfig: React.FC<VADConfigProps> = ({ config, onChange }) => {
                     </div>
                 </div>
             </div>
+
+            <div className="space-y-4">
+                <h3 className="text-lg font-semibold">Upstream Squelch</h3>
+                <p className="text-sm text-muted-foreground">
+                    Optional: suppress non-speech frames for continuous-audio providers with server-side VAD.
+                </p>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="flex items-center space-x-2">
+                        <input
+                            type="checkbox"
+                            id="upstream_squelch_enabled"
+                            className="rounded border-input"
+                            checked={config.upstream_squelch_enabled ?? true}
+                            onChange={(e) => handleChange('upstream_squelch_enabled', e.target.checked)}
+                        />
+                        <label htmlFor="upstream_squelch_enabled" className="text-sm font-medium">Enable Upstream Squelch</label>
+                    </div>
+                    <div className="space-y-2">
+                        <label className="text-sm font-medium">Base RMS Threshold</label>
+                        <input
+                            type="number"
+                            min="0"
+                            className="w-full p-2 rounded border border-input bg-background"
+                            value={config.upstream_squelch_base_rms ?? 200}
+                            onChange={(e) => handleChange('upstream_squelch_base_rms', parseInt(e.target.value))}
+                        />
+                    </div>
+                    <div className="space-y-2">
+                        <label className="text-sm font-medium">Noise Factor</label>
+                        <input
+                            type="number"
+                            step="0.1"
+                            min="0"
+                            className="w-full p-2 rounded border border-input bg-background"
+                            value={config.upstream_squelch_noise_factor ?? 2.5}
+                            onChange={(e) => handleChange('upstream_squelch_noise_factor', parseFloat(e.target.value))}
+                        />
+                    </div>
+                    <div className="space-y-2">
+                        <label className="text-sm font-medium">Noise EMA Alpha</label>
+                        <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            max="1"
+                            className="w-full p-2 rounded border border-input bg-background"
+                            value={config.upstream_squelch_noise_ema_alpha ?? 0.06}
+                            onChange={(e) => handleChange('upstream_squelch_noise_ema_alpha', parseFloat(e.target.value))}
+                        />
+                    </div>
+                    <div className="space-y-2">
+                        <label className="text-sm font-medium">Min Speech Frames</label>
+                        <input
+                            type="number"
+                            min="1"
+                            className="w-full p-2 rounded border border-input bg-background"
+                            value={config.upstream_squelch_min_speech_frames ?? 2}
+                            onChange={(e) => handleChange('upstream_squelch_min_speech_frames', parseInt(e.target.value))}
+                        />
+                    </div>
+                    <div className="space-y-2">
+                        <label className="text-sm font-medium">End Silence Frames</label>
+                        <input
+                            type="number"
+                            min="1"
+                            className="w-full p-2 rounded border border-input bg-background"
+                            value={config.upstream_squelch_end_silence_frames ?? 15}
+                            onChange={(e) => handleChange('upstream_squelch_end_silence_frames', parseInt(e.target.value))}
+                        />
+                    </div>
+                </div>
+            </div>
         </div>
     );
 };

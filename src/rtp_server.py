@@ -285,6 +285,13 @@ class RTPServer:
         session.frames_processed += 1
         return True
 
+    def has_remote_endpoint(self, call_id: str) -> bool:
+        """Return True once we've learned the inbound RTP (ip,port) for this call."""
+        session = self.sessions.get(call_id)
+        if not session:
+            return False
+        return bool(session.remote_host) and bool(session.remote_port)
+
     async def _rtp_receiver_loop(self, session: RTPSession) -> None:
         """Per-session receive loop that forwards inbound audio to the engine."""
         loop = self._get_loop()

@@ -13,12 +13,20 @@ barge_in:
   min_ms: 150
   post_tts_end_protection_ms: 800
 config_version: 4
+farewell_hangup_delay_sec: 5
 contexts:
   default:
     greeting: Hello
     profile: telephony_ulaw_8k
-    prompt: You are Asterisk, an AI Assistant. Be helpful and concise.
+    prompt: >-
+      You are Asterisk, an AI Assistant. Be helpful and concise.
+
+
+      CALL ENDING:
+      - When the caller indicates they are done, say a brief farewell and use the hangup_call tool to end the call.
     provider: local
+    tools:
+      - hangup_call
   demo_deepgram:
     greeting: >-
       Hi {caller_name}, I'm Ava with the Deepgram voice demo. Ask me anything
@@ -115,7 +123,7 @@ contexts:
 
       - If yes, use request_transcript tool to get their email
 
-      - Then confirm if there is anything else, and use hangup_call tool with a warm farewell
+      - If they accept or decline the transcript, end the call with a warm farewell and immediately use hangup_call
     provider: deepgram
     tools:
       - transfer
@@ -231,7 +239,7 @@ contexts:
 
       - If yes, use request_transcript tool to get their email
 
-      - Then confirm if there is anything else, and use hangup_call tool with a warm farewell
+      - If they accept or decline the transcript, end the call with a warm farewell in the caller's language and immediately use hangup_call
     tools:
       - transfer
       - cancel_transfer
@@ -411,7 +419,7 @@ contexts:
 
       CALL ENDING PROTOCOL:
 
-      - When user says goodbye, first offer to email them a transcript
+      - When user indicates they are done (goodbye, bye, that's all, nothing else, thank you), first offer to email them a transcript
 
       - If yes, use request_transcript tool to get their email
 
@@ -484,8 +492,8 @@ contexts:
     tools: []
   demo_openai:
     greeting: >-
-      Hi {caller_name}, I'm Ava with the OpenAI Realtime voice demo. Ask me
-      anything about the Asterisk AI Voice Agent project.
+      Hi {caller_name}, I'm Multilingual Ava with the OpenAI Realtime Live demo.
+      Ask me about the project in your preferred language.
     profile: telephony_ulaw_8k
     prompt: >
       You are Ava (Asterisk Voice Agent) demonstrating the OpenAI Realtime API
@@ -1189,6 +1197,9 @@ streaming:
   empty_backoff_ticks_max: 5
   fallback_timeout_ms: 8000
   greeting_min_start_ms: 40
+  # ExternalMedia greeting reliability: wait briefly for inbound RTP to establish the remote endpoint,
+  # then fall back to file playback if RTP is still not routable (Asterisk may not emit RTP until speech).
+  greeting_rtp_wait_ms: 250
   jitter_buffer_ms: 950
   keepalive_interval_ms: 5000
   low_watermark_ms: 80

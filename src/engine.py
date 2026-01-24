@@ -269,6 +269,7 @@ class Engine:
                 'low_watermark_ms': config.streaming.low_watermark_ms,
                 'provider_grace_ms': config.streaming.provider_grace_ms,
                 'logging_level': config.streaming.logging_level,
+                'greeting_rtp_wait_ms': int(getattr(config.streaming, 'greeting_rtp_wait_ms', 250)),
                 'egress_swap_mode': getattr(config.streaming, 'egress_swap_mode', 'auto'),
                 'egress_force_mulaw': self._should_force_mulaw(
                     getattr(config.streaming, 'egress_force_mulaw', False),
@@ -5112,6 +5113,94 @@ class Engine:
                     )
                     # Replace audio with silence (zero-filled PCM16)
                     pcm_bytes = b'\x00' * len(pcm_bytes)
+
+                # Provider-agnostic upstream squelch: replace non-speech audio with silence so
+                # server-side VAD providers can reliably detect end-of-turn even with background noise.
+                # This does NOT rely on any specific tool flows (e.g., request_transcript).
+                try:
+                    vad_cfg = getattr(self.config, "vad", None)
+                    squelch_enabled = bool(getattr(vad_cfg, "upstream_squelch_enabled", False)) if vad_cfg else False
+                except Exception:
+                    squelch_enabled = False
+
+                try:
+                    capabilities = None
+                    if provider_caps_source and hasattr(provider_caps_source, "get_capabilities"):
+                        capabilities = provider_caps_source.get_capabilities()
+                    squelch_applicable = bool(
+                        squelch_enabled
+                        and capabilities
+                        and getattr(capabilities, "requires_continuous_audio", False)
+                        and getattr(capabilities, "has_native_vad", False)
+                        and session.audio_capture_enabled
+                    )
+                except Exception:
+                    squelch_applicable = False
+
+                if squelch_applicable and pcm_bytes:
+                    try:
+                        import audioop
+
+                        state = session.vad_state.setdefault("upstream_squelch", {})
+                        energy = int(audioop.rms(pcm_bytes, 2)) if pcm_bytes else 0
+
+                        base_rms = 200
+                        noise_factor = 2.5
+                        alpha = 0.06
+                        min_speech_frames = 2
+                        end_silence_frames = 15
+                        try:
+                            vad_cfg = getattr(self.config, "vad", None)
+                            base_rms = int(getattr(vad_cfg, "upstream_squelch_base_rms", base_rms))
+                            noise_factor = float(getattr(vad_cfg, "upstream_squelch_noise_factor", noise_factor))
+                            alpha = float(getattr(vad_cfg, "upstream_squelch_noise_ema_alpha", alpha))
+                            min_speech_frames = int(getattr(vad_cfg, "upstream_squelch_min_speech_frames", min_speech_frames))
+                            end_silence_frames = int(getattr(vad_cfg, "upstream_squelch_end_silence_frames", end_silence_frames))
+                        except Exception:
+                            pass
+
+                        speaking = bool(state.get("speaking", False))
+                        speech_frames = int(state.get("speech_frames", 0) or 0)
+                        silence_frames = int(state.get("silence_frames", 0) or 0)
+                        noise_ema = float(state.get("noise_ema", 0.0) or 0.0)
+
+                        # Update noise floor estimate (only when not currently speaking).
+                        if not speaking:
+                            if noise_ema <= 0.0:
+                                noise_ema = float(energy)
+                            else:
+                                noise_ema = (1.0 - alpha) * noise_ema + alpha * float(energy)
+
+                        threshold = max(float(base_rms), noise_ema * float(noise_factor))
+                        raw_speech = energy > threshold
+
+                        if raw_speech:
+                            speech_frames += 1
+                            silence_frames = 0
+                            if not speaking and speech_frames >= max(1, min_speech_frames):
+                                speaking = True
+                        else:
+                            silence_frames += 1
+                            speech_frames = 0
+                            if speaking and silence_frames >= max(1, end_silence_frames):
+                                speaking = False
+
+                        state.update(
+                            {
+                                "speaking": speaking,
+                                "speech_frames": speech_frames,
+                                "silence_frames": silence_frames,
+                                "noise_ema": noise_ema,
+                                "last_energy": energy,
+                                "last_threshold": int(threshold),
+                            }
+                        )
+                        session.vad_state["upstream_squelch"] = state
+
+                        if not speaking:
+                            pcm_bytes = b"\x00" * len(pcm_bytes)
+                    except Exception:
+                        logger.debug("Upstream squelch failed", call_id=caller_channel_id, exc_info=True)
                 
                 # Forward to provider
                 logger.info(
@@ -7512,6 +7601,11 @@ class Engine:
                             return
                     try:
                         # Track provider bytes
+                        try:
+                            if call_id not in self._provider_segment_start_ts:
+                                self._provider_segment_start_ts[call_id] = time.time()
+                        except Exception:
+                            pass
                         self._provider_bytes[call_id] = int(self._provider_bytes.get(call_id, 0)) + (len(chunk) if isinstance(chunk, (bytes, bytearray)) else sum(len(f) for f in (out_chunk if isinstance(out_chunk, list) else [out_chunk])))
                         if isinstance(out_chunk, list):
                             for frame in out_chunk:
@@ -7582,6 +7676,7 @@ class Engine:
                 # Log provider segment wall duration
                 try:
                     start_ts = self._provider_segment_start_ts.pop(call_id, None)
+                    wall = 0.0
                     if start_ts is not None:
                         wall = max(0.0, time.time() - float(start_ts))
                         logger.info(
@@ -7739,7 +7834,7 @@ class Engine:
                 try:
                     session = await self.session_store.get_by_call_id(call_id)
                     if session:
-                        provider_name = getattr(session, 'provider', None)
+                        provider_name = getattr(session, 'provider_name', None) or getattr(session, 'provider', None)
                         if provider_name and provider_name in self.config.providers:
                             provider_cfg = self.config.providers.get(provider_name, {})
                             provider_delay = provider_cfg.get('farewell_hangup_delay_sec') if isinstance(provider_cfg, dict) else getattr(provider_cfg, 'farewell_hangup_delay_sec', None)
@@ -7753,8 +7848,43 @@ class Engine:
                                 )
                 except Exception as e:
                     logger.debug(f"Could not get provider delay, using global: {e}")
-                
-                await asyncio.sleep(hangup_delay)
+
+                # If no farewell audio was produced (common when the model emits hangup_call but never
+                # follows up with an assistant turn), play a minimal server-side goodbye prompt so the
+                # call doesn't end abruptly.
+                played_farewell_fallback = False
+                # IMPORTANT: Do not play a canned farewell by default. This can clash with provider
+                # voices (e.g., Google Live / OpenAI Realtime) and can cut off in-flight streaming.
+                # If you want a fallback prompt, opt-in via tools.hangup_call.fallback_media_uri.
+                if not had_audio and reason in ("fallback_no_audio", "farewell_timeout", "farewell_no_audio"):
+                    try:
+                        session = await self.session_store.get_by_call_id(call_id)
+                        if session and session.caller_channel_id:
+                            tools_cfg = getattr(self.config, "tools", {}) or {}
+                            hangup_cfg = tools_cfg.get("hangup_call", {}) if isinstance(tools_cfg, dict) else {}
+                            media_uri = None
+                            if isinstance(hangup_cfg, dict):
+                                media_uri = hangup_cfg.get("fallback_media_uri") or hangup_cfg.get("farewell_fallback_media_uri")
+                            media_uri = (media_uri or "").strip()
+                            if media_uri:
+                                pb = await self.ari_client.play_media(session.caller_channel_id, media_uri)
+                                playback_id = pb.get("id") if isinstance(pb, dict) else None
+                                if playback_id:
+                                    waiter = asyncio.get_running_loop().create_future()
+                                    self._ari_playback_waiters[playback_id] = waiter
+                                    try:
+                                        await asyncio.wait_for(waiter, timeout=8.0)
+                                    except asyncio.TimeoutError:
+                                        pass
+                                    finally:
+                                        self._ari_playback_waiters.pop(playback_id, None)
+                                    played_farewell_fallback = True
+                    except Exception:
+                        logger.debug("Farewell fallback playback failed", call_id=call_id, exc_info=True)
+
+                # For server-side farewell playback, we can hang up immediately after playback finishes.
+                if not played_farewell_fallback:
+                    await asyncio.sleep(hangup_delay)
                 
                 try:
                     session = await self.session_store.get_by_call_id(call_id)
@@ -10773,6 +10903,13 @@ class Engine:
                     if context_config:
                         # Contexts are the source of truth for tool allowlisting.
                         provider_context["tools"] = list(getattr(context_config, "tools", None) or [])
+                        try:
+                            # Persist tool allowlist on session so provider-agnostic tools (e.g., hangup_call)
+                            # can decide whether follow-up tools like request_transcript are actually available.
+                            session.allowed_tools = list(provider_context["tools"])
+                            await self.session_store.upsert_call(session)
+                        except Exception:
+                            logger.debug("Failed to persist session.allowed_tools", call_id=call_id, exc_info=True)
                         logger.debug(
                             "Added tools to provider context",
                             call_id=call_id,

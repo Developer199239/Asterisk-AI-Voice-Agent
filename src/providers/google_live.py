@@ -115,6 +115,13 @@ class GoogleLiveProvider(AIProviderInterface):
         self._last_audio_out_monotonic: Optional[float] = None
         self._user_end_intent: Optional[str] = None
         self._assistant_farewell_intent: Optional[str] = None
+        self._turn_has_assistant_output: bool = False
+        self._hangup_ready_emitted: bool = False
+        # If the model calls hangup_call but does not produce any audio shortly after, prompt it
+        # to speak the farewell message (keeps the goodbye in the model's voice, avoids engine-side canned audio).
+        self._force_farewell_task: Optional[asyncio.Task] = None
+        self._force_farewell_text: str = ""
+        self._force_farewell_sent: bool = False
         # Conversation state
         self._conversation_history: List[Dict[str, Any]] = []
         
@@ -142,6 +149,19 @@ class GoogleLiveProvider(AIProviderInterface):
         self._session_start_time: Optional[float] = None
         # Tool response sizing: keep Google toolResponse payloads small to avoid provider errors.
         self._tool_response_max_bytes: int = 8000
+        self._session_gauge_incremented: bool = False
+        self._ws_unavailable_logged: bool = False
+        self._ws_send_close_logged: bool = False
+
+    def _mark_ws_disconnected(self) -> None:
+        self._setup_complete = False
+        self.websocket = None
+        if self._session_gauge_incremented:
+            try:
+                _GOOGLE_LIVE_SESSIONS.dec()
+            except Exception:
+                pass
+            self._session_gauge_incremented = False
 
     @staticmethod
     def _norm_text(value: str) -> str:
@@ -222,12 +242,18 @@ class GoogleLiveProvider(AIProviderInterface):
         # Keep conservative defaults; engine still applies farewell_hangup_delay_sec before ARI hangup.
         idle_sec = float(getattr(self.config, "hangup_fallback_audio_idle_sec", 1.25) or 1.25)
         min_armed_sec = float(getattr(self.config, "hangup_fallback_min_armed_sec", 0.8) or 0.8)
+        # If the model called hangup_call but never produced any farewell audio, we still must end the call.
+        # This commonly happens when the model emits toolCalls but does not follow up with an assistant turn.
+        no_audio_timeout_sec = float(getattr(self.config, "hangup_fallback_no_audio_timeout_sec", 4.0) or 4.0)
 
         try:
             while self._call_id == call_id and not self._hangup_fallback_emitted:
                 if not self._hangup_fallback_armed:
                     await asyncio.sleep(0.2)
                     continue
+                if self._hangup_ready_emitted:
+                    self._hangup_fallback_emitted = True
+                    return
 
                 now = time.monotonic()
                 last_audio = self._last_audio_out_monotonic
@@ -235,6 +261,26 @@ class GoogleLiveProvider(AIProviderInterface):
                 if (now - armed_at) < min_armed_sec:
                     await asyncio.sleep(0.2)
                     continue
+                if not self._hangup_fallback_audio_started and (now - armed_at) >= no_audio_timeout_sec:
+                    if self.on_event:
+                        await self.on_event(
+                            {
+                                "type": "HangupReady",
+                                "call_id": call_id,
+                                "reason": "fallback_no_audio",
+                                "had_audio": False,
+                            }
+                        )
+                    self._hangup_ready_emitted = True
+                    self._hangup_fallback_emitted = True
+                    logger.info(
+                        "🔚 Hangup fallback watchdog emitted HangupReady (no assistant audio)",
+                        call_id=call_id,
+                        no_audio_timeout_sec=no_audio_timeout_sec,
+                        user_end_intent=self._user_end_intent,
+                        assistant_farewell_intent=self._assistant_farewell_intent,
+                    )
+                    return
                 if not self._hangup_fallback_audio_started or last_audio is None:
                     await asyncio.sleep(0.2)
                     continue
@@ -265,6 +311,7 @@ class GoogleLiveProvider(AIProviderInterface):
                         }
                     )
 
+                self._hangup_ready_emitted = True
                 self._hangup_fallback_emitted = True
                 logger.info(
                     "🔚 Hangup fallback watchdog emitted HangupReady",
@@ -400,6 +447,9 @@ class GoogleLiveProvider(AIProviderInterface):
         self._conversation_history = []
         self._setup_complete = False
         self._greeting_completed = False
+        self._ws_unavailable_logged = False
+        self._ws_send_close_logged = False
+        self._hangup_ready_emitted = False
         # Per-call tool allowlist (contexts are the source of truth).
         # Missing/None is treated as [] for safety.
         if context and "tools" in context:
@@ -448,7 +498,8 @@ class GoogleLiveProvider(AIProviderInterface):
             )
             
             _GOOGLE_LIVE_SESSIONS.inc()
-            
+            self._session_gauge_incremented = True
+             
             logger.info(
                 "Google Live WebSocket connected",
                 call_id=call_id,
@@ -606,25 +657,41 @@ class GoogleLiveProvider(AIProviderInterface):
 
     async def _send_message(self, message: Dict[str, Any]) -> None:
         """Send a message to Google Live API."""
-        if not self.websocket or getattr(self.websocket, "closed", False):
-            logger.warning("No websocket connection", call_id=self._call_id)
+        if not self._ws_is_open():
+            if not self._ws_unavailable_logged:
+                logger.warning(
+                    "Google Live websocket not open; dropping outbound message",
+                    call_id=self._call_id,
+                )
+                self._ws_unavailable_logged = True
             return
 
         async with self._send_lock:
             try:
                 await self.websocket.send(json.dumps(message))
+                self._ws_unavailable_logged = False
             except Exception as e:
+                if isinstance(e, (ConnectionClosedError, ConnectionClosedOK)):
+                    close_reason = getattr(e, "reason", None)
+                    close_code = getattr(e, "code", None)
+                    if not self._ws_send_close_logged:
+                        logger.warning(
+                            "Google Live WebSocket closed during send",
+                            call_id=self._call_id,
+                            code=close_code,
+                            reason=close_reason,
+                        )
+                        self._ws_send_close_logged = True
+                    self._mark_ws_disconnected()
+                    return
                 logger.error(
                     "Failed to send message to Google Live",
                     call_id=self._call_id,
                     error=str(e),
                 )
                 # Prevent log storms when the socket is already closed.
-                try:
-                    if self.websocket and getattr(self.websocket, "closed", False):
-                        self.websocket = None
-                except Exception:
-                    pass
+                if not self._ws_is_open():
+                    self._mark_ws_disconnected()
 
     def _safe_jsonable(self, obj: Any, *, depth: int = 0, max_depth: int = 4, max_items: int = 30) -> Any:
         if depth >= max_depth:
@@ -815,7 +882,7 @@ class GoogleLiveProvider(AIProviderInterface):
                 1003: "Unsupported data",
                 1006: "Abnormal closure (no close frame)",
                 1007: "Invalid frame payload data",
-                1008: "Policy violation (likely auth/permission issue)",
+                1008: "Policy violation (unsupported operation, auth, or feature gating)",
                 1009: "Message too big",
                 1010: "Mandatory extension missing",
                 1011: "Internal server error",
@@ -832,11 +899,17 @@ class GoogleLiveProvider(AIProviderInterface):
             
             # Specific guidance for common errors
             if close_code == 1008:
+                hint = "Verify: 1) model supports Live (bidiGenerateContent) 2) API key + Live API access 3) request schema matches docs"
+                if isinstance(close_reason, str) and "not supported" in close_reason.lower():
+                    hint = "Model/endpoint feature gating: verify model supports bidiGenerateContent (Live) for your API version/region"
+                if isinstance(close_reason, str) and "not implemented" in close_reason.lower():
+                    hint = "Server rejected an unsupported operation; verify message schema + model supports the requested features"
                 logger.error(
-                    "Policy violation (1008) - Check API key permissions and Gemini Live API access",
+                    "Policy violation (1008)",
                     call_id=self._call_id,
-                    hint="Verify: 1) GOOGLE_API_KEY is correct 2) Gemini API is enabled 3) API key has generativelanguage.liveapi.user role",
+                    hint=hint,
                 )
+            self._mark_ws_disconnected()
         except Exception as e:
             logger.error(
                 "Google Live receive loop error",
@@ -954,6 +1027,7 @@ class GoogleLiveProvider(AIProviderInterface):
         if output_transcription:
             text = output_transcription.get("text", "")
             if text:
+                self._turn_has_assistant_output = True
                 # Concatenate AI speech fragments
                 self._output_transcription_buffer += text
                 logger.debug(
@@ -1016,7 +1090,11 @@ class GoogleLiveProvider(AIProviderInterface):
             self._turn_first_audio_received = False
         
         # Extract parts (using camelCase keys from actual API)
-        for part in content.get("modelTurn", {}).get("parts", []):
+        model_turn = content.get("modelTurn", {})
+        model_parts = model_turn.get("parts", []) if isinstance(model_turn, dict) else []
+        if model_parts:
+            self._turn_has_assistant_output = True
+        for part in model_parts:
             # Handle audio output
             if "inlineData" in part:
                 inline_data = part["inlineData"]
@@ -1032,20 +1110,11 @@ class GoogleLiveProvider(AIProviderInterface):
                     call_id=self._call_id,
                     text_preview=text[:100],
                 )
+                # IMPORTANT:
+                # `modelTurn.text` is not guaranteed to be spoken text and may include non-audio
+                # reasoning/metadata. Do NOT use it for end-of-call detection or cleanup arming,
+                # otherwise we can hang up mid-conversation (e.g., during transcript email capture).
                 self._model_text_buffer += text
-                farewell = self._detect_assistant_farewell(self._model_text_buffer)
-                if farewell and not self._assistant_farewell_intent:
-                    self._assistant_farewell_intent = farewell
-                    logger.info(
-                        "Google Live detected assistant farewell intent (modelTurn.text)",
-                        call_id=self._call_id,
-                        intent=farewell,
-                        buffer_preview=self._model_text_buffer[:120],
-                    )
-                await self._maybe_arm_cleanup_after_tts(
-                    user_text=self._input_transcription_buffer,
-                    assistant_text=self._model_text_buffer,
-                )
 
         # Handle turn completion
         if turn_complete:
@@ -1072,7 +1141,12 @@ class GoogleLiveProvider(AIProviderInterface):
         assistant_reason = self._detect_assistant_farewell(assistant_text) or self._assistant_farewell_intent
 
         # "No transcript" and explicit hangup intents are strong indicators that the call is ending,
-        # even if output transcription is missing or the model doesn't include a canonical "goodbye".
+        # even if output transcription is missing or the model doesn't include a canonical farewell.
+        #
+        # IMPORTANT: Do NOT treat a simple user "goodbye"/"bye" as a strong marker here.
+        # Many contexts (including our golden baselines) use a "goodbye → offer transcript" flow.
+        # Arming cleanup on the user's goodbye causes the engine to hang up right after the agent's
+        # transcript offer, cutting off the caller's ability to respond.
         strong_user_markers = {
             "no transcript",
             "no transcript needed",
@@ -1083,8 +1157,6 @@ class GoogleLiveProvider(AIProviderInterface):
             "hangup",
             "end the call",
             "end call",
-            "goodbye",
-            "bye",
         }
         if user_reason not in strong_user_markers and not assistant_reason:
             return
@@ -1199,6 +1271,8 @@ class GoogleLiveProvider(AIProviderInterface):
     async def _handle_turn_complete(self) -> None:
         """Handle turn completion."""
         had_audio = self._in_audio_burst
+        turn_was_assistant = self._turn_has_assistant_output
+        self._turn_has_assistant_output = False
         
         # Note: Transcription is now saved in _handle_server_content when turnComplete=true
         # No need to flush here - it's already been handled
@@ -1228,6 +1302,18 @@ class GoogleLiveProvider(AIProviderInterface):
         
         # Handle hangup if requested after this turn
         if self._hangup_after_response:
+            # IMPORTANT: Live API emits turnComplete for both user turns and assistant turns.
+            # Only hang up after the assistant's farewell turn completes; otherwise we can
+            # drop the call right when the user answers the transcript question.
+            if not turn_was_assistant:
+                logger.info(
+                    "🔚 Hangup pending; ignoring non-assistant turnComplete",
+                    call_id=self._call_id,
+                )
+                return
+            if self._hangup_ready_emitted:
+                self._hangup_after_response = False
+                return
             logger.info(
                 "🔚 Farewell response completed - triggering hangup",
                 call_id=self._call_id,
@@ -1242,6 +1328,7 @@ class GoogleLiveProvider(AIProviderInterface):
                         "reason": "farewell_completed",
                         "had_audio": had_audio
                     })
+                self._hangup_ready_emitted = True
             except Exception as e:
                 logger.error(
                     "Failed to emit HangupReady event",
@@ -1311,6 +1398,8 @@ class GoogleLiveProvider(AIProviderInterface):
                 if func_name == "hangup_call" and result:
                     if result.get("will_hangup"):
                         self._hangup_after_response = True
+                        self._force_farewell_text = str(result.get("message") or "").strip()
+                        self._force_farewell_sent = False
                         # Also arm the provider-side watchdog as a safety net if turnComplete never arrives.
                         if not self._hangup_fallback_armed:
                             self._hangup_fallback_armed = True
@@ -1342,6 +1431,9 @@ class GoogleLiveProvider(AIProviderInterface):
                     call_id=self._call_id,
                     function=func_name,
                 )
+
+                if func_name == "hangup_call" and self._force_farewell_text:
+                    self._schedule_forced_farewell_if_needed()
                 
                 # Log tool call to session for call history (Milestone 21)
                 try:
@@ -1389,6 +1481,57 @@ class GoogleLiveProvider(AIProviderInterface):
             ids=ids,
             cancellation_keys=list(cancellation.keys()) if isinstance(cancellation, dict) else None,
         )
+
+    def _schedule_forced_farewell_if_needed(self) -> None:
+        if self._force_farewell_sent:
+            return
+        if self._force_farewell_task and not self._force_farewell_task.done():
+            return
+        self._force_farewell_task = asyncio.create_task(self._maybe_force_farewell_after_hangup())
+
+    async def _maybe_force_farewell_after_hangup(self) -> None:
+        try:
+            # Grace window: if the model starts speaking, don't send a duplicate farewell request.
+            await asyncio.sleep(0.9)
+            if not self._call_id or not self._setup_complete or not self._ws_is_open():
+                return
+            if not self._hangup_after_response:
+                return
+            if self._force_farewell_sent:
+                return
+            if self._hangup_fallback_audio_started:
+                return
+
+            farewell = (self._force_farewell_text or "").strip()
+            if not farewell:
+                return
+
+            msg = {
+                "clientContent": {
+                    "turns": [
+                        {
+                            "role": "user",
+                            "parts": [{"text": f"Please say exactly this farewell to the caller, then stop: {farewell}"}],
+                        }
+                    ],
+                    "turnComplete": True,
+                }
+            }
+            await self._send_message(msg)
+            self._force_farewell_sent = True
+            logger.info(
+                "✅ Forced farewell prompt sent after hangup_call (no audio observed)",
+                call_id=self._call_id,
+                farewell_preview=farewell[:80],
+            )
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.debug(
+                "Failed to send forced farewell prompt",
+                call_id=self._call_id,
+                exc_info=True,
+            )
 
     async def _track_conversation_message(self, role: str, text: str) -> None:
         """
@@ -1512,15 +1655,19 @@ class GoogleLiveProvider(AIProviderInterface):
             with contextlib.suppress(asyncio.CancelledError):
                 await self._hangup_fallback_task
 
+        if self._force_farewell_task and not self._force_farewell_task.done():
+            self._force_farewell_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._force_farewell_task
+
         # Close WebSocket
-        if self.websocket and self.websocket.state.name == "OPEN":
+        if self._ws_is_open():
             await self.websocket.close()
-            _GOOGLE_LIVE_SESSIONS.dec()
+        self._mark_ws_disconnected()
 
         # Clear state
         self._call_id = None
         self._session_id = None
-        self._setup_complete = False
         self._input_buffer.clear()  # Clear audio buffer
         self._conversation_history.clear()
         self._hangup_after_response = False
@@ -1528,6 +1675,8 @@ class GoogleLiveProvider(AIProviderInterface):
         self._hangup_fallback_emitted = False
         self._hangup_fallback_armed_at = None
         self._hangup_fallback_audio_started = False
+        self._force_farewell_text = ""
+        self._force_farewell_sent = False
         self._last_audio_out_monotonic = None
         self._user_end_intent = None
         self._assistant_farewell_intent = None

@@ -248,6 +248,77 @@ const VADPage = () => {
                     </div>
                 </ConfigCard>
             </ConfigSection>
+
+            <ConfigSection
+                title="Upstream Squelch"
+                description="Optional upstream noise squelch for continuous-audio providers with server-side VAD."
+            >
+                <ConfigCard>
+                    <div className="space-y-6">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <FormSwitch
+                                label="Enable Upstream Squelch"
+                                description="Replace non-speech frames with silence for server-VAD providers."
+                                tooltip="When enabled, the AI Engine analyzes inbound PCM16 energy and replaces low-energy/noise frames with silence before forwarding audio to providers that require continuous audio and have native VAD. This can improve end-of-turn detection in noisy environments, but overly aggressive settings can clip quiet speech."
+                                checked={vadConfig.upstream_squelch_enabled ?? true}
+                                onChange={(e) => updateVADConfig('upstream_squelch_enabled', e.target.checked)}
+                            />
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <FormInput
+                                label="Base RMS Threshold"
+                                type="number"
+                                min="0"
+                                value={vadConfig.upstream_squelch_base_rms ?? 200}
+                                onChange={(e) => updateVADConfig('upstream_squelch_base_rms', parseInt(e.target.value))}
+                                tooltip="Minimum RMS threshold in PCM16 space. Higher blocks more low-energy audio (less noise leakage) but may suppress quiet callers."
+                            />
+                            <FormInput
+                                label="Noise Factor"
+                                type="number"
+                                step="0.1"
+                                min="0"
+                                value={vadConfig.upstream_squelch_noise_factor ?? 2.5}
+                                onChange={(e) => updateVADConfig('upstream_squelch_noise_factor', parseFloat(e.target.value))}
+                                tooltip="Dynamic threshold multiplier: threshold = max(base_rms, noise_floor_rms × noise_factor). Increase to be more conservative about what counts as speech."
+                            />
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <FormInput
+                                label="Noise EMA Alpha"
+                                type="number"
+                                step="0.01"
+                                min="0"
+                                max="1"
+                                value={vadConfig.upstream_squelch_noise_ema_alpha ?? 0.06}
+                                onChange={(e) => updateVADConfig('upstream_squelch_noise_ema_alpha', parseFloat(e.target.value))}
+                                tooltip="Noise floor smoothing factor (0–1). Higher adapts faster to changing background noise but can overreact to short bursts."
+                            />
+                            <FormInput
+                                label="Min Speech Frames"
+                                type="number"
+                                min="1"
+                                value={vadConfig.upstream_squelch_min_speech_frames ?? 2}
+                                onChange={(e) => updateVADConfig('upstream_squelch_min_speech_frames', parseInt(e.target.value))}
+                                tooltip="Hysteresis: number of consecutive speech frames required before the engine considers the caller “speaking”. Higher reduces false positives but can increase detection latency."
+                            />
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <FormInput
+                                label="End Silence Frames"
+                                type="number"
+                                min="1"
+                                value={vadConfig.upstream_squelch_end_silence_frames ?? 15}
+                                onChange={(e) => updateVADConfig('upstream_squelch_end_silence_frames', parseInt(e.target.value))}
+                                tooltip="Hysteresis: number of consecutive silence frames required to exit speaking state. Higher avoids toggling during noise, but may keep speech ‘open’ longer."
+                            />
+                        </div>
+                    </div>
+                </ConfigCard>
+            </ConfigSection>
         </div>
     );
 };

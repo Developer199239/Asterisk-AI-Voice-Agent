@@ -229,6 +229,11 @@ class OpenAIToolAdapter:
             await websocket.send(json.dumps(output_event))
             logger.info(f"✅ Sent function output to OpenAI: {safe_result.get('status')}", 
                        call_id=call_id)
+
+            # Special-case hangup flow: the provider will create the farewell response with tools disabled
+            # to prevent recursive tool calls (e.g., model calls hangup_call again instead of speaking).
+            if function_name == "hangup_call" and bool(safe_result.get("will_hangup", False)):
+                return
             
             # Step 2: Trigger response generation with audio modality AND instructions
             # CRITICAL: Must include explicit instructions to speak, otherwise OpenAI may respond

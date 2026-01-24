@@ -98,7 +98,7 @@ class LocalProviderConfig(BaseModel):
     # Farewell hangup delay - seconds to wait after farewell audio completes before hangup
     # Ensures farewell message fully plays through RTP pipeline before disconnecting
     # Increase if farewell gets cut off (typical farewells need 2-4 seconds)
-    farewell_hangup_delay_sec: float = Field(default=2.5)
+    farewell_hangup_delay_sec: float = Field(default=5.0)
     chunk_ms: int = Field(default=200)
     max_tokens: int = Field(default=150)
     temperature: float = Field(default=0.4)
@@ -436,6 +436,19 @@ class VADConfig(BaseModel):
     fallback_interval_ms: int = 1500
     fallback_buffer_size: int = 128000
 
+    # Provider-agnostic upstream squelch (helps server-side VAD providers terminate turns in noisy environments).
+    # Applies only to providers that require continuous audio.
+    upstream_squelch_enabled: bool = True
+    # Base RMS threshold in PCM16 space. Lower values are more permissive (less likely to clip quiet speakers).
+    upstream_squelch_base_rms: int = 200
+    # Dynamic threshold multiplier: threshold = max(base_rms, noise_floor_rms * noise_factor)
+    upstream_squelch_noise_factor: float = 2.5
+    # Exponential moving average factor for noise floor updates (0..1). Higher adapts faster.
+    upstream_squelch_noise_ema_alpha: float = 0.06
+    # Hysteresis: require N speech frames to enter speaking state, and M silence frames to exit.
+    upstream_squelch_min_speech_frames: int = 2
+    upstream_squelch_end_silence_frames: int = 15
+
 
 class StreamingConfig(BaseModel):
     sample_rate: int = Field(default=8000)
@@ -450,6 +463,9 @@ class StreamingConfig(BaseModel):
     logging_level: str = Field(default="info")
     # Smaller warm-up only for the initial greeting to get first audio out sooner
     greeting_min_start_ms: int = Field(default=0)
+    # ExternalMedia-specific: how long to wait (ms) for inbound RTP to establish the remote endpoint
+    # before we fall back to file playback for the greeting.
+    greeting_rtp_wait_ms: int = Field(default=250)
     # Egress endianness control for PCM16 slin16 over AudioSocket: 'auto'|'force_true'|'force_false'
     # - auto: derive from inbound probe (current behavior)
     # - force_true: always byteswap outbound PCM16
@@ -563,7 +579,7 @@ class AppConfig(BaseModel):
     # Farewell hangup delay - seconds to wait after farewell audio completes before hangup
     # Ensures farewell message fully plays through RTP pipeline before disconnecting
     # Increase if farewell gets cut off (typical farewells need 2-4 seconds)
-    farewell_hangup_delay_sec: float = Field(default=2.5)
+    farewell_hangup_delay_sec: float = Field(default=5.0)
 
     # Ensure tests that construct AppConfig(**dict) directly still get normalized pipelines
     # similar to load_config(), which calls _normalize_pipelines().
