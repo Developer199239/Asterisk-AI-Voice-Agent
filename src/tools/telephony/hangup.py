@@ -188,8 +188,15 @@ class HangupCallTool(Tool):
                     transcript_enabled = bool(isinstance(transcript_cfg, dict) and transcript_cfg.get("enabled", False))
                 except Exception:
                     transcript_enabled = False
+                try:
+                    allowed_tools = getattr(session, "allowed_tools", None) if session else None
+                    request_transcript_allowed = True
+                    if isinstance(allowed_tools, (list, tuple, set)):
+                        request_transcript_allowed = "request_transcript" in set(str(t) for t in allowed_tools)
+                except Exception:
+                    request_transcript_allowed = True
 
-                if transcript_enabled and _is_end_call_intent(last_user_text):
+                if transcript_enabled and request_transcript_allowed:
                     recent = " ".join(
                         str(m.get("content") or "")
                         for m in history[-10:]

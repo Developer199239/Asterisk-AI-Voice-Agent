@@ -7881,6 +7881,18 @@ class Engine:
                             enq_sec = float(enq_bytes) / bytes_per_sec
                             remaining = max(0.0, enq_sec - wall)
                             hangup_delay = max(float(hangup_delay), remaining + 0.4)
+                            try:
+                                max_delay = float(getattr(self.config, "farewell_hangup_max_delay_sec", 8.0) or 8.0)
+                            except Exception:
+                                max_delay = 8.0
+                            if float(hangup_delay) > max_delay:
+                                logger.info(
+                                    "Capping farewell hangup delay",
+                                    call_id=call_id,
+                                    computed_delay=round(float(hangup_delay), 3),
+                                    max_delay=round(float(max_delay), 3),
+                                )
+                                hangup_delay = max_delay
                             logger.debug(
                                 "Computed hangup delay from buffered agent audio",
                                 call_id=call_id,
@@ -10946,6 +10958,13 @@ class Engine:
                     if context_config:
                         # Contexts are the source of truth for tool allowlisting.
                         provider_context["tools"] = list(getattr(context_config, "tools", None) or [])
+                        try:
+                            # Persist tool allowlist on session so provider-agnostic tools (e.g., hangup_call)
+                            # can decide whether follow-up tools like request_transcript are actually available.
+                            session.allowed_tools = list(provider_context["tools"])
+                            await self.session_store.upsert_call(session)
+                        except Exception:
+                            logger.debug("Failed to persist session.allowed_tools", call_id=call_id, exc_info=True)
                         logger.debug(
                             "Added tools to provider context",
                             call_id=call_id,
