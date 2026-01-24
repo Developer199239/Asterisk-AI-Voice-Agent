@@ -232,7 +232,7 @@ class OpenAIToolAdapter:
 
             # Special-case hangup flow: the provider will create the farewell response with tools disabled
             # to prevent recursive tool calls (e.g., model calls hangup_call again instead of speaking).
-            if function_name == "hangup_call":
+            if function_name == "hangup_call" and bool(safe_result.get("will_hangup", False)):
                 return
             
             # Step 2: Trigger response generation with audio modality AND instructions

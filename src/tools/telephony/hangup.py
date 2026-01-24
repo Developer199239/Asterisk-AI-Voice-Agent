@@ -180,6 +180,34 @@ class HangupCallTool(Tool):
                 last_user_text = str((last_user or {}).get("content") or "")
                 last_assistant_text = str((last_assistant or {}).get("content") or "")
 
+                # If transcript sending is enabled, enforce a "offer transcript" step before hanging up.
+                # This keeps end-of-call UX consistent across providers, especially when the model tries
+                # to jump straight to hangup_call on "thanks/that's all".
+                try:
+                    transcript_cfg = context.get_config_value("tools.request_transcript", {}) or {}
+                    transcript_enabled = bool(isinstance(transcript_cfg, dict) and transcript_cfg.get("enabled", False))
+                except Exception:
+                    transcript_enabled = False
+
+                if transcript_enabled and _is_end_call_intent(last_user_text):
+                    recent = " ".join(
+                        str(m.get("content") or "")
+                        for m in history[-10:]
+                        if isinstance(m, dict) and m.get("role") in ("user", "assistant")
+                    ).lower()
+                    if "transcript" not in recent:
+                        logger.info(
+                            "📞 Hangup blocked: transcript not offered yet",
+                            call_id=context.call_id,
+                            last_user_preview=last_user_text[:80],
+                        )
+                        return {
+                            "status": "blocked",
+                            "message": "Before we hang up, would you like me to email you a transcript of our conversation?",
+                            "will_hangup": False,
+                            "ai_should_speak": True,
+                        }
+
                 pending_contact_confirmation = (
                     _looks_like_emailish(last_user_text)
                     and not _is_affirmative(last_user_text)
