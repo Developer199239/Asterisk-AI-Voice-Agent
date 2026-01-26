@@ -1214,6 +1214,59 @@ tools:
   ai_identity:
     name: AI Agent
     number: '6789'
+  
+  # ============================================================================
+  # Phase Tools (Milestone 24) - Pre-call and Post-call HTTP integrations
+  # ============================================================================
+  
+  # Example: Post-call webhook (global - fires for all calls)
+  # Sends call data to external system after call ends
+  demo_post_call_webhook:
+    kind: generic_webhook
+    phase: post_call
+    enabled: false  # Set to true and configure URL to test
+    is_global: true
+    timeout_ms: 5000
+    url: "https://your-webhook-endpoint.com/call-completed"
+    method: POST
+    headers:
+      Content-Type: "application/json"
+      # Authorization: "Bearer ${WEBHOOK_API_KEY}"
+    payload_template: |
+      {
+        "schema_version": 1,
+        "event_type": "call_completed",
+        "call_id": "{call_id}",
+        "caller_number": "{caller_number}",
+        "caller_name": "{caller_name}",
+        "call_duration": {call_duration},
+        "call_outcome": "{call_outcome}",
+        "transcript": {transcript_json},
+        "context": "{context_name}",
+        "provider": "{provider}",
+        "timestamp": "{call_end_time}"
+      }
+  
+  # Example: Pre-call CRM lookup (context-specific)
+  # Fetches customer data before AI speaks
+  # demo_crm_lookup:
+  #   kind: generic_http_lookup
+  #   phase: pre_call
+  #   enabled: false
+  #   is_global: false
+  #   timeout_ms: 2000
+  #   hold_audio_file: "custom/please-wait"  # Asterisk sound file
+  #   hold_audio_threshold_ms: 500
+  #   url: "https://api.example.com/contacts/lookup"
+  #   method: GET
+  #   headers:
+  #     Authorization: "Bearer ${CRM_API_KEY}"
+  #   query_params:
+  #     phone: "{caller_number}"
+  #   output_variables:
+  #     customer_name: "contact.name"
+  #     customer_email: "contact.email"
+  #     account_status: "contact.status"
   cancel_transfer:
     allow_after_answer: false
     allow_during_ring: true

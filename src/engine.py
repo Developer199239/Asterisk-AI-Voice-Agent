@@ -526,6 +526,10 @@ class Engine:
         try:
             from src.tools.registry import tool_registry
             tool_registry.initialize_default_tools()
+            # Initialize HTTP tools from config (Milestone 24)
+            tools_config = getattr(self.config, 'tools', None)
+            if tools_config:
+                tool_registry.initialize_http_tools_from_config(tools_config)
             logger.info("✅ Tool calling system initialized", tool_count=len(tool_registry.list_tools()))
         except Exception as e:
             logger.warning(f"Failed to initialize tool calling system: {e}", exc_info=True)
@@ -4311,6 +4315,13 @@ class Engine:
                                     )
             except Exception as e:
                 logger.warning("Failed to process transcript emails", call_id=call_id, error=str(e), exc_info=True)
+
+            # Execute post-call tools (webhooks, CRM updates) - Milestone 24
+            # These run fire-and-forget and do not block cleanup
+            try:
+                await self._execute_post_call_tools(call_id, session)
+            except Exception as e:
+                logger.debug("Post-call tool execution failed", call_id=call_id, error=str(e), exc_info=True)
 
             # Persist call to history before removing session (Milestone 21)
             try:
@@ -10772,6 +10783,19 @@ class Engine:
             if getattr(session, "provider_session_active", False) and call_id in self._call_providers:
                 return
 
+            # Execute pre-call tools before provider starts (Milestone 24)
+            # This runs CRM lookups etc. and injects results into session for prompt templating
+            try:
+                pre_call_results = await self._execute_pre_call_tools(call_id, session)
+                if pre_call_results:
+                    # Refresh session after pre-call tools updated it
+                    session = await self.session_store.get_by_call_id(call_id)
+                    logger.info("Pre-call enrichment complete",
+                               call_id=call_id,
+                               variables=list(pre_call_results.keys()))
+            except Exception:
+                logger.debug("Pre-call tool execution failed", call_id=call_id, exc_info=True)
+
             # Preserve any per-call override previously applied. Only assign a pipeline
             # here if one has already been selected (e.g., via AI_PROVIDER or active_pipeline)
             pipeline_resolution = None
@@ -11262,6 +11286,283 @@ class Engine:
                 )
         
         return result
+
+    async def _execute_pre_call_tools(
+        self,
+        call_id: str,
+        session: "CallSession",
+    ) -> Dict[str, str]:
+        """
+        Execute pre-call tools in parallel after call is answered, before AI speaks.
+        
+        Pre-call tools fetch enrichment data (CRM lookup) and return output variables
+        that are injected into the system prompt.
+        
+        Args:
+            call_id: Call identifier
+            session: Call session with context info
+        
+        Returns:
+            Dictionary of output_variable_name -> value (strings only)
+        """
+        from src.tools.base import ToolPhase
+        from src.tools.context import PreCallContext
+        from src.tools.registry import tool_registry
+        
+        results: Dict[str, str] = {}
+        
+        try:
+            # Get context config for this call
+            ctx_config = None
+            if session.context_name:
+                ctx_config = self.transport_orchestrator.get_context_config(session.context_name)
+            
+            if not ctx_config:
+                logger.debug("No context config for pre-call tools", call_id=call_id)
+                return results
+            
+            # Get pre-call tools for this context (context-specific + global minus opt-outs)
+            pre_call_tool_names = list(getattr(ctx_config, 'pre_call_tools', None) or [])
+            disabled_global = list(getattr(ctx_config, 'disable_global_pre_call_tools', None) or [])
+            
+            tools_to_run = tool_registry.get_tools_for_context(
+                phase=ToolPhase.PRE_CALL,
+                context_tool_names=pre_call_tool_names,
+                disabled_global_tools=disabled_global,
+            )
+            
+            if not tools_to_run:
+                logger.debug("No pre-call tools configured for context", 
+                           call_id=call_id, context=session.context_name)
+                return results
+            
+            logger.info("Executing pre-call tools",
+                       call_id=call_id,
+                       context=session.context_name,
+                       tool_count=len(tools_to_run),
+                       tools=[t.definition.name for t in tools_to_run])
+            
+            # Build pre-call context
+            pre_call_ctx = PreCallContext(
+                call_id=call_id,
+                caller_number=session.caller_number or "",
+                called_number=getattr(session, 'called_number', None),
+                caller_name=session.caller_name,
+                context_name=session.context_name or "",
+                call_direction="outbound" if getattr(session, 'is_outbound', False) else "inbound",
+                campaign_id=getattr(session, 'outbound_campaign_id', None),
+                lead_id=getattr(session, 'outbound_lead_id', None),
+                config=self.config.dict() if hasattr(self.config, 'dict') else {},
+                ari_client=self.ari_client,
+            )
+            
+            # Track if we need to play hold audio
+            hold_audio_tasks: Dict[str, asyncio.Task] = {}
+            
+            async def run_tool_with_timeout(tool) -> Dict[str, str]:
+                """Execute a single pre-call tool with timeout and hold audio."""
+                tool_name = tool.definition.name
+                timeout_ms = tool.definition.timeout_ms or 2000
+                hold_file = tool.definition.hold_audio_file
+                hold_threshold_ms = tool.definition.hold_audio_threshold_ms or 500
+                
+                tool_start = time.time()
+                tool_results: Dict[str, str] = {}
+                
+                # Schedule hold audio if configured
+                if hold_file and self.ari_client:
+                    async def play_hold_audio():
+                        await asyncio.sleep(hold_threshold_ms / 1000.0)
+                        try:
+                            # Play the configured hold audio file via ARI
+                            await self.ari_client.play_sound(session.caller_channel_id, hold_file)
+                            logger.debug("Playing hold audio for pre-call tool",
+                                       call_id=call_id, tool=tool_name, file=hold_file)
+                        except Exception as e:
+                            logger.debug("Failed to play hold audio", 
+                                       call_id=call_id, tool=tool_name, error=str(e))
+                    
+                    hold_task = asyncio.create_task(play_hold_audio())
+                    hold_audio_tasks[tool_name] = hold_task
+                
+                try:
+                    # Execute tool with timeout
+                    tool_results = await asyncio.wait_for(
+                        tool.execute(pre_call_ctx),
+                        timeout=timeout_ms / 1000.0
+                    )
+                    duration_ms = (time.time() - tool_start) * 1000
+                    logger.info("Pre-call tool completed",
+                               call_id=call_id,
+                               tool=tool_name,
+                               duration_ms=round(duration_ms, 2),
+                               output_keys=list(tool_results.keys()))
+                except asyncio.TimeoutError:
+                    duration_ms = (time.time() - tool_start) * 1000
+                    logger.warning("Pre-call tool timed out",
+                                  call_id=call_id,
+                                  tool=tool_name,
+                                  timeout_ms=timeout_ms,
+                                  duration_ms=round(duration_ms, 2))
+                    # Return empty strings for all expected output variables
+                    for var in tool.definition.output_variables:
+                        tool_results[var] = ""
+                except Exception as e:
+                    duration_ms = (time.time() - tool_start) * 1000
+                    logger.error("Pre-call tool failed",
+                                call_id=call_id,
+                                tool=tool_name,
+                                error=str(e),
+                                duration_ms=round(duration_ms, 2))
+                    # Return empty strings on error
+                    for var in tool.definition.output_variables:
+                        tool_results[var] = ""
+                finally:
+                    # Cancel hold audio if still pending
+                    if tool_name in hold_audio_tasks:
+                        hold_audio_tasks[tool_name].cancel()
+                
+                return tool_results
+            
+            # Run all pre-call tools in parallel
+            tool_tasks = [run_tool_with_timeout(tool) for tool in tools_to_run]
+            tool_outputs = await asyncio.gather(*tool_tasks, return_exceptions=True)
+            
+            # Merge results
+            for i, output in enumerate(tool_outputs):
+                if isinstance(output, Exception):
+                    logger.error("Pre-call tool raised exception",
+                               call_id=call_id,
+                               tool=tools_to_run[i].definition.name,
+                               error=str(output))
+                    continue
+                if isinstance(output, dict):
+                    results.update(output)
+            
+            # Store pre-call results in session for debugging and in-call access
+            session.pre_call_results = results
+            await self._save_session(session)
+            
+            logger.info("Pre-call tools completed",
+                       call_id=call_id,
+                       total_tools=len(tools_to_run),
+                       output_variables=list(results.keys()))
+            
+        except Exception as e:
+            logger.error("Pre-call tool execution failed",
+                        call_id=call_id,
+                        error=str(e),
+                        exc_info=True)
+        
+        return results
+
+    async def _execute_post_call_tools(
+        self,
+        call_id: str,
+        session: "CallSession",
+    ) -> None:
+        """
+        Execute post-call tools after the call ends (fire-and-forget).
+        
+        Post-call tools send data to external systems (webhooks, CRM updates).
+        They run asynchronously and do not block call cleanup.
+        
+        Args:
+            call_id: Call identifier
+            session: Call session with comprehensive data
+        """
+        from src.tools.base import ToolPhase
+        from src.tools.context import PostCallContext
+        from src.tools.registry import tool_registry
+        
+        try:
+            # Get context config for this call
+            ctx_config = None
+            if session.context_name:
+                ctx_config = self.transport_orchestrator.get_context_config(session.context_name)
+            
+            # Get post-call tools for this context (context-specific + global minus opt-outs)
+            post_call_tool_names = list(getattr(ctx_config, 'post_call_tools', None) or []) if ctx_config else []
+            disabled_global = list(getattr(ctx_config, 'disable_global_post_call_tools', None) or []) if ctx_config else []
+            
+            tools_to_run = tool_registry.get_tools_for_context(
+                phase=ToolPhase.POST_CALL,
+                context_tool_names=post_call_tool_names,
+                disabled_global_tools=disabled_global,
+            )
+            
+            if not tools_to_run:
+                logger.debug("No post-call tools configured", call_id=call_id)
+                return
+            
+            logger.info("Executing post-call tools",
+                       call_id=call_id,
+                       context=session.context_name,
+                       tool_count=len(tools_to_run),
+                       tools=[t.definition.name for t in tools_to_run])
+            
+            # Calculate call duration
+            call_duration_seconds = 0
+            try:
+                if call_id in _call_start_times:
+                    call_duration_seconds = int(time.time() - _call_start_times[call_id])
+            except Exception:
+                pass
+            
+            # Build post-call context
+            post_call_ctx = PostCallContext(
+                call_id=call_id,
+                caller_number=session.caller_number or "",
+                called_number=getattr(session, 'called_number', None),
+                caller_name=session.caller_name,
+                context_name=session.context_name or "",
+                provider=session.provider_name or self.config.default_provider,
+                call_direction="outbound" if getattr(session, 'is_outbound', False) else "inbound",
+                call_duration_seconds=call_duration_seconds,
+                call_outcome=getattr(session, 'call_outcome', '') or '',
+                call_start_time=session.start_time.isoformat() if session.start_time else None,
+                call_end_time=datetime.now(timezone.utc).isoformat(),
+                conversation_history=list(getattr(session, 'conversation_history', []) or []),
+                summary=getattr(session, 'summary', None),
+                tool_calls=list(getattr(session, 'tool_calls', []) or []),
+                pre_call_results=dict(getattr(session, 'pre_call_results', {}) or {}),
+                campaign_id=getattr(session, 'outbound_campaign_id', None),
+                lead_id=getattr(session, 'outbound_lead_id', None),
+                config=self.config.dict() if hasattr(self.config, 'dict') else {},
+            )
+            
+            # Fire-and-forget execution for each tool
+            async def run_post_call_tool(tool):
+                tool_name = tool.definition.name
+                try:
+                    tool_start = time.time()
+                    await tool.execute(post_call_ctx)
+                    duration_ms = (time.time() - tool_start) * 1000
+                    logger.info("Post-call tool completed",
+                               call_id=call_id,
+                               tool=tool_name,
+                               duration_ms=round(duration_ms, 2))
+                except Exception as e:
+                    logger.error("Post-call tool failed",
+                                call_id=call_id,
+                                tool=tool_name,
+                                error=str(e),
+                                exc_info=True)
+            
+            # Create fire-and-forget tasks for all post-call tools
+            for tool in tools_to_run:
+                asyncio.create_task(
+                    run_post_call_tool(tool),
+                    name=f"post-call-{tool.definition.name}-{call_id}"
+                )
+            
+            logger.info("Post-call tools fired", call_id=call_id, count=len(tools_to_run))
+            
+        except Exception as e:
+            logger.error("Post-call tool execution setup failed",
+                        call_id=call_id,
+                        error=str(e),
+                        exc_info=True)
 
     def _compute_nat_warnings(self) -> list:
         """Compute NAT/network configuration warnings for /health endpoint."""

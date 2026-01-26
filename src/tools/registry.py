@@ -4,8 +4,8 @@ Tool registry - central repository for all available tools.
 Singleton pattern ensures only one registry exists across the application.
 """
 
-from typing import Dict, List, Type, Optional, Iterable, Set
-from src.tools.base import Tool, ToolDefinition, ToolCategory
+from typing import Dict, List, Type, Optional, Iterable, Set, Union
+from src.tools.base import Tool, ToolDefinition, ToolCategory, ToolPhase, PreCallTool, PostCallTool
 import logging
 
 logger = logging.getLogger(__name__)
@@ -130,6 +130,120 @@ class ToolRegistry:
             tool for tool in self._tools.values()
             if tool.definition.category == category
         ]
+    
+    def get_by_phase(self, phase: ToolPhase) -> List[Tool]:
+        """
+        Get tools by execution phase.
+        
+        Args:
+            phase: ToolPhase enum value (PRE_CALL, IN_CALL, POST_CALL)
+        
+        Returns:
+            List of tools in that phase
+        """
+        return [
+            tool for tool in self._tools.values()
+            if tool.definition.phase == phase
+        ]
+    
+    def get_global_tools(self, phase: Optional[ToolPhase] = None) -> List[Tool]:
+        """
+        Get tools marked as global (is_global=True).
+        
+        Args:
+            phase: Optional phase filter. If None, returns all global tools.
+        
+        Returns:
+            List of global tools, optionally filtered by phase
+        """
+        tools = [
+            tool for tool in self._tools.values()
+            if tool.definition.is_global
+        ]
+        if phase is not None:
+            tools = [t for t in tools if t.definition.phase == phase]
+        return tools
+    
+    def get_pre_call_tools(self, include_global: bool = True) -> List[Tool]:
+        """
+        Get all pre-call tools.
+        
+        Args:
+            include_global: If True, includes global pre-call tools
+        
+        Returns:
+            List of pre-call tools
+        """
+        tools = self.get_by_phase(ToolPhase.PRE_CALL)
+        if not include_global:
+            tools = [t for t in tools if not t.definition.is_global]
+        return tools
+    
+    def get_post_call_tools(self, include_global: bool = True) -> List[Tool]:
+        """
+        Get all post-call tools.
+        
+        Args:
+            include_global: If True, includes global post-call tools
+        
+        Returns:
+            List of post-call tools
+        """
+        tools = self.get_by_phase(ToolPhase.POST_CALL)
+        if not include_global:
+            tools = [t for t in tools if not t.definition.is_global]
+        return tools
+    
+    def get_in_call_tools(self, include_global: bool = True) -> List[Tool]:
+        """
+        Get all in-call tools (existing behavior).
+        
+        Args:
+            include_global: If True, includes global in-call tools
+        
+        Returns:
+            List of in-call tools
+        """
+        tools = self.get_by_phase(ToolPhase.IN_CALL)
+        if not include_global:
+            tools = [t for t in tools if not t.definition.is_global]
+        return tools
+    
+    def get_tools_for_context(
+        self,
+        phase: ToolPhase,
+        context_tool_names: Optional[List[str]] = None,
+        disabled_global_tools: Optional[List[str]] = None
+    ) -> List[Tool]:
+        """
+        Get effective tools for a context and phase.
+        
+        Combines global tools with context-specific tools, respecting opt-outs.
+        
+        Args:
+            phase: The execution phase (PRE_CALL, IN_CALL, POST_CALL)
+            context_tool_names: Tool names explicitly enabled for this context
+            disabled_global_tools: Global tool names to exclude for this context
+        
+        Returns:
+            List of tools to execute for this context and phase
+        """
+        disabled = set(disabled_global_tools or [])
+        
+        # Start with global tools for this phase (minus opt-outs)
+        result_tools: Dict[str, Tool] = {}
+        for tool in self.get_global_tools(phase):
+            if tool.definition.name not in disabled:
+                result_tools[tool.definition.name] = tool
+        
+        # Add context-specific tools
+        if context_tool_names:
+            for name in context_tool_names:
+                tool = self.get(name)
+                if tool and tool.definition.phase == phase:
+                    result_tools[tool.definition.name] = tool
+        
+        return list(result_tools.values())
     
     def get_definitions(self) -> List[ToolDefinition]:
         """
@@ -329,6 +443,50 @@ After outputting a tool call, provide a brief spoken response.
         
         self._initialized = True
         logger.info(f"🛠️  Initialized {len(self._tools)} tools")
+    
+    def initialize_http_tools_from_config(self, tools_config: Dict[str, Any]) -> None:
+        """
+        Initialize HTTP lookup and webhook tools from YAML config.
+        
+        Scans the tools config for entries with 'kind: generic_http_lookup'
+        or 'kind: generic_webhook' and registers them.
+        
+        Args:
+            tools_config: The 'tools' section from ai-agent.yaml
+        """
+        if not tools_config:
+            return
+        
+        http_tool_count = 0
+        
+        for tool_name, tool_config in tools_config.items():
+            if not isinstance(tool_config, dict):
+                continue
+            
+            kind = tool_config.get('kind', '')
+            
+            if kind == 'generic_http_lookup':
+                try:
+                    from src.tools.http.generic_lookup import create_http_lookup_tool
+                    tool = create_http_lookup_tool(tool_name, tool_config)
+                    self.register_instance(tool)
+                    http_tool_count += 1
+                    logger.info(f"✅ Registered HTTP lookup tool: {tool_name}")
+                except Exception as e:
+                    logger.warning(f"Failed to create HTTP lookup tool {tool_name}: {e}")
+            
+            elif kind == 'generic_webhook':
+                try:
+                    from src.tools.http.generic_webhook import create_webhook_tool
+                    tool = create_webhook_tool(tool_name, tool_config)
+                    self.register_instance(tool)
+                    http_tool_count += 1
+                    logger.info(f"✅ Registered webhook tool: {tool_name}")
+                except Exception as e:
+                    logger.warning(f"Failed to create webhook tool {tool_name}: {e}")
+        
+        if http_tool_count > 0:
+            logger.info(f"🌐 Initialized {http_tool_count} HTTP tools from config")
     
     def list_tools(self) -> List[str]:
         """

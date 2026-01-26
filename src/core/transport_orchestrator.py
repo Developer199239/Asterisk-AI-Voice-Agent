@@ -45,8 +45,17 @@ class ContextConfig:
     profile: Optional[str] = None
     provider: Optional[str] = None
     pipeline: Optional[str] = None  # Pipeline name for modular STT/LLM/TTS (e.g., local_hybrid)
-    tools: Optional[list] = None  # Tool names for function calling
+    tools: Optional[list] = None  # In-call tool names for function calling
     background_music: Optional[str] = None  # MOH class name for background music during calls
+    
+    # Phase tool configuration (Milestone 24)
+    pre_call_tools: Optional[List[str]] = None  # Tool names to run after answer, before AI speaks
+    post_call_tools: Optional[List[str]] = None  # Tool names to run after call ends
+    
+    # Global tool opt-out per context (Milestone 24)
+    disable_global_pre_call_tools: Optional[List[str]] = None  # Global pre-call tools to disable
+    disable_global_in_call_tools: Optional[List[str]] = None  # Global in-call tools to disable
+    disable_global_post_call_tools: Optional[List[str]] = None  # Global post-call tools to disable
 
 
 @dataclass
@@ -136,8 +145,14 @@ class TransportOrchestrator:
                     profile=context_dict.get('profile'),
                     provider=context_dict.get('provider'),
                     pipeline=context_dict.get('pipeline'),  # Modular pipeline name (e.g., local_hybrid)
-                    tools=context_dict.get('tools'),  # Extract tools for function calling
+                    tools=context_dict.get('tools'),  # In-call tools for function calling
                     background_music=context_dict.get('background_music'),  # MOH class for background music
+                    # Phase tool configuration (Milestone 24)
+                    pre_call_tools=context_dict.get('pre_call_tools'),
+                    post_call_tools=context_dict.get('post_call_tools'),
+                    disable_global_pre_call_tools=context_dict.get('disable_global_pre_call_tools'),
+                    disable_global_in_call_tools=context_dict.get('disable_global_in_call_tools'),
+                    disable_global_post_call_tools=context_dict.get('disable_global_post_call_tools'),
                 )
                 logger.debug("Loaded context mapping", name=name, context=contexts[name])
             except Exception as exc:

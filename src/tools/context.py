@@ -1,9 +1,14 @@
 """
 Tool execution context - provides access to system resources during tool execution.
+
+Includes:
+- ToolExecutionContext: For in-call tool execution (existing)
+- PreCallContext: For pre-call tools (CRM lookup, enrichment)
+- PostCallContext: For post-call tools (webhooks, CRM updates)
 """
 
-from dataclasses import dataclass
-from typing import Optional, Any
+from dataclasses import dataclass, field
+from typing import Optional, Any, Dict, List
 import logging
 
 logger = logging.getLogger(__name__)
@@ -105,3 +110,120 @@ class ToolExecutionContext:
                 return default
         
         return value
+
+
+@dataclass
+class PreCallContext:
+    """
+    Context provided to pre-call tools.
+    
+    Pre-call tools run after the call is answered but before the AI speaks.
+    They fetch enrichment data (e.g., CRM lookup) to inject into prompts.
+    """
+    
+    # Call identifiers
+    call_id: str
+    caller_number: str  # ANI (caller's phone number)
+    called_number: Optional[str] = None  # DID that was called
+    caller_name: Optional[str] = None  # Caller ID name if available
+    
+    # Context information
+    context_name: str = ""  # AI_CONTEXT from dialplan
+    call_direction: str = "inbound"  # "inbound" or "outbound"
+    
+    # Outbound-specific (from campaign dialer)
+    campaign_id: Optional[str] = None
+    lead_id: Optional[str] = None
+    
+    # Channel variables from Asterisk
+    channel_vars: Dict[str, str] = field(default_factory=dict)
+    
+    # System access
+    config: Any = None  # Config dict
+    ari_client: Any = None  # ARIClient instance (for hold audio playback)
+    
+    def get_config_value(self, key: str, default: Any = None) -> Any:
+        """Get configuration value with dot notation support."""
+        if not self.config:
+            return default
+        
+        keys = key.split('.')
+        value = self.config
+        
+        for k in keys:
+            if isinstance(value, dict) and k in value:
+                value = value[k]
+            else:
+                return default
+        
+        return value
+
+
+@dataclass
+class PostCallContext:
+    """
+    Context provided to post-call tools.
+    
+    Post-call tools run after the call ends (fire-and-forget).
+    They receive comprehensive session data for webhooks, CRM updates, etc.
+    """
+    
+    # Call identifiers
+    call_id: str
+    caller_number: str  # ANI
+    called_number: Optional[str] = None  # DID
+    caller_name: Optional[str] = None
+    
+    # Context and provider
+    context_name: str = ""
+    provider: str = ""  # Provider used for the call
+    call_direction: str = "inbound"
+    
+    # Call metrics
+    call_duration_seconds: int = 0
+    call_outcome: str = ""  # e.g., "answered_human", "voicemail", "no_answer"
+    call_start_time: Optional[str] = None  # ISO timestamp
+    call_end_time: Optional[str] = None  # ISO timestamp
+    
+    # Conversation data
+    conversation_history: List[Dict[str, str]] = field(default_factory=list)  # Transcript
+    summary: Optional[str] = None  # AI-generated summary if available
+    
+    # Tool execution data
+    tool_calls: List[Dict[str, Any]] = field(default_factory=list)  # In-call tool executions
+    pre_call_results: Dict[str, str] = field(default_factory=dict)  # Data from pre-call tools
+    
+    # Outbound-specific
+    campaign_id: Optional[str] = None
+    lead_id: Optional[str] = None
+    
+    # System access
+    config: Any = None
+    
+    def to_payload_dict(self) -> Dict[str, Any]:
+        """
+        Convert context to a dictionary suitable for webhook payloads.
+        
+        Returns:
+            Dictionary with all call data for templating.
+        """
+        import json
+        return {
+            "call_id": self.call_id,
+            "caller_number": self.caller_number,
+            "called_number": self.called_number or "",
+            "caller_name": self.caller_name or "",
+            "context_name": self.context_name,
+            "provider": self.provider,
+            "call_direction": self.call_direction,
+            "call_duration": self.call_duration_seconds,
+            "call_outcome": self.call_outcome,
+            "call_start_time": self.call_start_time or "",
+            "call_end_time": self.call_end_time or "",
+            "transcript_json": json.dumps(self.conversation_history),
+            "summary": self.summary or "",
+            "tool_calls_json": json.dumps(self.tool_calls),
+            "pre_call_results_json": json.dumps(self.pre_call_results),
+            "campaign_id": self.campaign_id or "",
+            "lead_id": self.lead_id or "",
+        }
