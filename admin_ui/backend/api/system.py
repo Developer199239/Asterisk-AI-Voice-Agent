@@ -8,10 +8,25 @@ import shutil
 import logging
 import re
 import subprocess
+import uuid
 import yaml
 from services.fs import upsert_env_vars
 
 logger = logging.getLogger(__name__)
+
+
+def _validate_git_ref(ref: str) -> str:
+    """
+    Basic defense-in-depth: reject values that could be interpreted by git as options.
+
+    We intentionally keep this permissive (allow typical branch names with `/._-`) and
+    rely on `git` to enforce full refname rules.
+    """
+    r = (ref or "").strip()
+    if not r or r.startswith("-") or any(c.isspace() for c in r):
+        raise HTTPException(status_code=400, detail="Invalid ref")
+    return r
+
 
 def _extract_mounts(container) -> List[dict]:
     """
@@ -539,7 +554,11 @@ async def _recreate_via_compose(service_name: str, health_check: bool = True):
     import subprocess
     import httpx
 
-    project_root = os.getenv("PROJECT_ROOT", "/app/project")
+    # Container path where docker-compose.yml is mounted (for subprocess cwd)
+    container_project_root = os.getenv("PROJECT_ROOT", "/app/project")
+    # Host path for Docker daemon to resolve volume mounts correctly
+    # Docker interprets volume paths relative to HOST filesystem, not container
+    host_project_root = os.getenv("HOST_PROJECT_ROOT", "")
 
     # Normalize legacy hyphenated service names to canonical underscored service names.
     legacy_to_canonical = {
@@ -592,6 +611,12 @@ async def _recreate_via_compose(service_name: str, health_check: bool = True):
         cmd = compose_cmd + [
             "-p",
             "asterisk-ai-voice-agent",
+        ]
+        # If HOST_PROJECT_ROOT is set, use --project-directory to tell Docker
+        # where to resolve volume mounts on the HOST filesystem
+        if host_project_root:
+            cmd += ["--project-directory", host_project_root]
+        cmd += [
             "up",
             "-d",
             "--force-recreate",
@@ -601,7 +626,7 @@ async def _recreate_via_compose(service_name: str, health_check: bool = True):
 
         result = subprocess.run(
             cmd,
-            cwd=project_root,
+            cwd=container_project_root,
             capture_output=True,
             text=True,
             timeout=300,
@@ -2753,3 +2778,899 @@ async def test_ari_connection(request: AriTestRequest):
             "success": False,
             "error": "Connection failed - check host/port/scheme and credentials."
         }
+
+
+# =============================================================================
+# Updates API (UI-driven agent update)
+# =============================================================================
+
+_UPDATER_IMAGE_REPO = "asterisk-ai-voice-agent-updater"
+_UPDATER_IMAGE_LOCK = None
+
+
+def _updater_lock():
+    global _UPDATER_IMAGE_LOCK
+    if _UPDATER_IMAGE_LOCK is None:
+        import threading
+        _UPDATER_IMAGE_LOCK = threading.Lock()
+    return _UPDATER_IMAGE_LOCK
+
+
+def _project_host_root_from_admin_ui_container() -> str:
+    """
+    Resolve the host path that backs /app/project in the admin_ui container.
+
+    We need a host path because Docker binds are evaluated by the daemon on the host,
+    not from inside this container.
+    """
+    project_root = os.getenv("PROJECT_ROOT", "/app/project")
+    # Prefer a stable container name. Our compose file uses `container_name: admin_ui`.
+    # HOSTNAME can be the host's hostname in some deployments, so it's not reliable.
+    explicit_name = (os.getenv("AAVA_ADMIN_UI_CONTAINER_NAME") or "").strip()
+    candidates = [c for c in [explicit_name, "admin_ui", (os.getenv("HOSTNAME") or "").strip()] if c]
+
+    try:
+        client = docker.from_env()
+
+        c = None
+        last_err = None
+        for ident in candidates:
+            try:
+                c = client.containers.get(ident)
+                break
+            except Exception as e:
+                last_err = e
+                continue
+        if c is None:
+            raise last_err or RuntimeError("container lookup failed")
+
+        mounts = c.attrs.get("Mounts", []) or []
+        for m in mounts:
+            if m.get("Destination") == project_root and m.get("Type") == "bind":
+                src = (m.get("Source") or "").strip()
+                if src:
+                    return src
+        raise HTTPException(status_code=500, detail=f"Cannot resolve host mount backing {project_root}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Failed to resolve project host root: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to resolve project host root")
+
+
+def _docker_sock_host_path_from_admin_ui_container() -> str:
+    """
+    Resolve the host path that backs /var/run/docker.sock in the admin_ui container.
+
+    Some deployments mount a non-standard Docker socket path (via DOCKER_SOCK in `.env`).
+    When starting updater containers, we must mount the *host* socket path.
+    """
+    explicit_name = (os.getenv("AAVA_ADMIN_UI_CONTAINER_NAME") or "").strip()
+    candidates = [c for c in [explicit_name, "admin_ui", (os.getenv("HOSTNAME") or "").strip()] if c]
+
+    try:
+        client = docker.from_env()
+
+        c = None
+        last_err = None
+        for ident in candidates:
+            try:
+                c = client.containers.get(ident)
+                break
+            except Exception as e:
+                last_err = e
+                continue
+        if c is None:
+            raise last_err or RuntimeError("container lookup failed")
+
+        mounts = c.attrs.get("Mounts", []) or []
+        for m in mounts:
+            if m.get("Destination") == "/var/run/docker.sock" and m.get("Type") == "bind":
+                src = (m.get("Source") or "").strip()
+                if src:
+                    return src
+    except Exception:
+        # Fall back to the default path; most hosts use /var/run/docker.sock (or a symlink).
+        pass
+
+    return "/var/run/docker.sock"
+
+
+def _ensure_updater_image(host_project_root: str) -> None:
+    """
+    Ensure the updater image exists locally; build it on-demand from the project checkout.
+    """
+    raise RuntimeError("_ensure_updater_image requires a tag; use _ensure_updater_image_for_sha")
+
+
+def _current_project_head_sha() -> Optional[str]:
+    project_root = os.getenv("PROJECT_ROOT", "/app/project")
+    try:
+        # Prefer git when available, but fall back to reading `.git/HEAD` directly because
+        # the admin_ui container may not include the git binary.
+        import shutil
+        if shutil.which("git"):
+            proc = subprocess.run(
+                ["git", "-c", f"safe.directory={project_root}", "-C", project_root, "rev-parse", "HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=1.5,
+            )
+            if proc.returncode == 0:
+                sha = (proc.stdout or "").strip()
+                if sha:
+                    return sha
+
+        def _read_text(path: str) -> Optional[str]:
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    return f.read()
+            except Exception:
+                return None
+
+        def _resolve_gitdir(root: str) -> Optional[str]:
+            git_path = os.path.join(root, ".git")
+            if os.path.isdir(git_path):
+                return git_path
+            if os.path.isfile(git_path):
+                # Worktree/submodule style: `.git` file contains `gitdir: <path>`
+                raw = _read_text(git_path) or ""
+                raw = raw.strip()
+                if raw.startswith("gitdir:"):
+                    gd = raw.split(":", 1)[1].strip()
+                    if not gd:
+                        return None
+                    if not os.path.isabs(gd):
+                        gd = os.path.normpath(os.path.join(root, gd))
+                    return gd
+            return None
+
+        def _read_packed_ref(gitdir: str, ref: str) -> Optional[str]:
+            import os
+            packed = _read_text(os.path.join(gitdir, "packed-refs"))
+            if not packed:
+                return None
+            for line in packed.splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or line.startswith("^"):
+                    continue
+                parts = line.split()
+                if len(parts) != 2:
+                    continue
+                sha, name = parts
+                if name == ref:
+                    return sha
+            return None
+
+        gitdir = _resolve_gitdir(project_root)
+        if not gitdir:
+            return None
+
+        head = (_read_text(f"{gitdir}/HEAD") or "").strip()
+        if not head:
+            return None
+        if head.startswith("ref:"):
+            ref = head.split(":", 1)[1].strip()
+            if not ref:
+                return None
+            ref_path = os.path.join(gitdir, ref)
+            sha = (_read_text(ref_path) or "").strip()
+            if sha:
+                return sha
+            return _read_packed_ref(gitdir, ref)
+        return head
+    except Exception:
+        pass
+    return None
+
+
+def _updater_image_tag_for_sha(sha: Optional[str]) -> str:
+    if not sha:
+        return f"{_UPDATER_IMAGE_REPO}:latest"
+    return f"{_UPDATER_IMAGE_REPO}:sha-{sha[:12]}"
+
+
+def _ensure_updater_image_for_sha(host_project_root: str, tag: str) -> None:
+    lock = _updater_lock()
+    with lock:
+        try:
+            # `host_project_root` is used for bind mounts when *running* updater containers, but for
+            # building the updater image we must use a path that exists inside this container
+            # (docker-py builds by tarring local files and sending them to the daemon).
+            if not host_project_root:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Invalid project root for updater build: {host_project_root!r}",
+                )
+
+            client = docker.from_env()
+            try:
+                client.images.get(tag)
+                return
+            except Exception:
+                pass
+
+            build_root = os.getenv("PROJECT_ROOT", "/app/project")
+            logger.info("Building updater image: %s (context=%s)", tag, build_root)
+            client.images.build(
+                path=build_root,
+                dockerfile="updater/Dockerfile",
+                tag=tag,
+                rm=True,
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.exception("Failed to build updater image: %s", e)
+            raise HTTPException(status_code=500, detail="Failed to build updater image")
+
+
+def _run_updater_ephemeral(host_project_root: str, *, env: dict, command: Optional[str] = None, timeout_sec: int = 30, capture_stderr: bool = True) -> tuple[int, str]:
+    """
+    Run the updater image as a short-lived container and return (exit_code, stdout/stderr).
+
+    If command is provided, we override the default entrypoint with bash -lc <command>.
+    """
+    import uuid
+
+    sha = _current_project_head_sha()
+    tag = _updater_image_tag_for_sha(sha)
+    _ensure_updater_image_for_sha(host_project_root, tag)
+
+    client = docker.from_env()
+    name = f"aava-update-ephemeral-{uuid.uuid4().hex[:10]}"
+
+    host_docker_sock = _docker_sock_host_path_from_admin_ui_container()
+    volumes = {
+        # IMPORTANT: mount the project at the same absolute path inside the container as on the host.
+        # Docker Compose resolves relative bind mounts on the HOST filesystem, so if we mounted the repo
+        # at a different in-container path (e.g. /app/project), compose would hand Docker non-existent
+        # host paths like /app/project/src.
+        host_project_root: {"bind": host_project_root, "mode": "rw"},
+        host_docker_sock: {"bind": "/var/run/docker.sock", "mode": "rw"},
+    }
+
+    try:
+        if command:
+            # NOTE: docker-py will split string commands (like a shell), which breaks `bash -lc "<cmd>"`
+            # by making only the first token the `-c` argument (often `set`), and the remainder positional args.
+            # Always pass the command as a single argv element so bash receives it as one string.
+            container = client.containers.run(
+                tag,
+                command=[command],
+                entrypoint=["bash", "-lc"],
+                environment=env,
+                volumes=volumes,
+                name=name,
+                detach=True,
+            )
+        else:
+            container = client.containers.run(
+                tag,
+                environment=env,
+                volumes=volumes,
+                name=name,
+                detach=True,
+            )
+
+        result = container.wait(timeout=timeout_sec)
+        status = int((result or {}).get("StatusCode", 1))
+        logs = (container.logs(stdout=True, stderr=capture_stderr) or b"").decode("utf-8", errors="replace")
+        return status, logs
+    finally:
+        try:
+            c = client.containers.get(name)
+            c.remove(force=True)
+        except Exception:
+            pass
+
+
+def _parse_semver_tag(tag: str) -> Optional[tuple[int, int, int]]:
+    tag = (tag or "").strip()
+    if not tag.startswith("v"):
+        return None
+    parts = tag[1:].split(".")
+    if len(parts) < 3:
+        return None
+    try:
+        return int(parts[0]), int(parts[1]), int(parts[2])
+    except Exception:
+        return None
+
+
+def _select_latest_v_tag(ls_remote_text: str) -> Optional[dict]:
+    """
+    Parse `git ls-remote --tags origin 'refs/tags/v*'` output and return:
+      { "tag": "vX.Y.Z", "sha": "<commit-sha>" }
+
+    Handles annotated tags by preferring peeled `^{}` lines.
+    """
+    refs: dict[str, dict] = {}
+    for line in (ls_remote_text or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            sha, ref = line.split("\t", 1)
+        except Exception:
+            continue
+        if not ref.startswith("refs/tags/"):
+            continue
+        name = ref[len("refs/tags/"):]
+        peeled = False
+        if name.endswith("^{}"):
+            name = name[:-3]
+            peeled = True
+        if not name.startswith("v"):
+            continue
+        ent = refs.get(name) or {"sha": None, "peeled_sha": None}
+        if peeled:
+            ent["peeled_sha"] = sha
+        else:
+            ent["sha"] = sha
+        refs[name] = ent
+
+    best = None
+    best_ver = None
+    for tag, ent in refs.items():
+        ver = _parse_semver_tag(tag)
+        if not ver:
+            continue
+        if best_ver is None or ver > best_ver:
+            best_ver = ver
+            best = {"tag": tag, "sha": ent.get("peeled_sha") or ent.get("sha")}
+    if best and best.get("sha"):
+        return best
+    return None
+
+
+class UpdateStatusResponse(BaseModel):
+    local: dict
+    remote: Optional[dict] = None
+    update_available: Optional[bool] = None
+    error: Optional[str] = None
+
+
+@router.get("/updates/status", response_model=UpdateStatusResponse)
+async def updates_status():
+    host_root = _project_host_root_from_admin_ui_container()
+
+    try:
+        # Gather local info
+        code, out = _run_updater_ephemeral(
+            host_root,
+            env={"PROJECT_ROOT": host_root},
+            command=(
+                "set -euo pipefail; "
+                "cd \"$PROJECT_ROOT\"; "
+                "git -c safe.directory=\"$PROJECT_ROOT\" rev-parse --abbrev-ref HEAD; "
+                "git -c safe.directory=\"$PROJECT_ROOT\" rev-parse HEAD; "
+                "git -c safe.directory=\"$PROJECT_ROOT\" describe --tags --always --dirty"
+            ),
+            timeout_sec=30,
+        )
+        if code != 0:
+            return UpdateStatusResponse(
+                local={"branch": "unknown", "head_sha": "unknown", "describe": "unknown"},
+                remote=None,
+                update_available=None,
+                error="Local status unavailable (updater image not ready)",
+            )
+
+        lines = [l.strip() for l in out.splitlines() if l.strip()]
+        if len(lines) < 3:
+            return UpdateStatusResponse(
+                local={"branch": "unknown", "head_sha": "unknown", "describe": "unknown"},
+                remote=None,
+                update_available=None,
+                error="Local status unavailable (unexpected git output)",
+            )
+        branch = lines[0]
+        head_sha = lines[1]
+        describe = lines[2]
+        if branch == "HEAD":
+            branch = "detached"
+    except Exception:
+        return UpdateStatusResponse(
+            local={"branch": "unknown", "head_sha": "unknown", "describe": "unknown"},
+            remote=None,
+            update_available=None,
+            error="Local status unavailable (updater not built yet)",
+        )
+
+    # Remote info (best-effort; offline returns unknown)
+    code2, out2 = _run_updater_ephemeral(
+        host_root,
+        env={"PROJECT_ROOT": host_root},
+        command=(
+            "set -euo pipefail; "
+            "cd \"$PROJECT_ROOT\"; "
+            "git -c safe.directory=\"$PROJECT_ROOT\" ls-remote --tags origin 'refs/tags/v*'"
+        ),
+        timeout_sec=15,
+    )
+    if code2 != 0:
+        return UpdateStatusResponse(
+            local={"head_sha": head_sha, "describe": describe},
+            remote=None,
+            update_available=None,
+            error="Remote unavailable (offline or blocked)",
+        )
+
+    latest = _select_latest_v_tag(out2)
+    if not latest:
+        return UpdateStatusResponse(
+            local={"head_sha": head_sha, "describe": describe},
+            remote=None,
+            update_available=None,
+            error="No v* tags found on remote",
+        )
+
+    # Determine update availability using commit ancestry (handles "local ahead" cleanly).
+    # Note: we intentionally avoid relying on SHA inequality alone because it incorrectly
+    # reports updates when running a newer (ahead) local branch.
+    tag = latest["tag"]
+    tag_sha = latest["sha"]
+
+    rel_cmd = (
+        "cd \"$PROJECT_ROOT\"; "
+        # Best-effort: fetch the tag object so merge-base comparisons work even if the tag wasn't present locally.
+        f"git -c safe.directory=\"$PROJECT_ROOT\" fetch -q origin refs/tags/{tag}:refs/tags/{tag} >/dev/null 2>&1 || true; "
+        f"head='{head_sha.strip()}'; target='{tag_sha.strip()}'; "
+        # If we can't resolve the target commit locally, degrade gracefully to unknown.
+        "git -c safe.directory=\"$PROJECT_ROOT\" cat-file -e \"$target^{commit}\" >/dev/null 2>&1 || { echo unknown; exit 0; }; "
+        "if [ \"$head\" = \"$target\" ]; then echo equal; exit 0; fi; "
+        "git -c safe.directory=\"$PROJECT_ROOT\" merge-base --is-ancestor \"$head\" \"$target\" >/dev/null 2>&1 && { echo behind; exit 0; }; "
+        "git -c safe.directory=\"$PROJECT_ROOT\" merge-base --is-ancestor \"$target\" \"$head\" >/dev/null 2>&1 && { echo ahead; exit 0; }; "
+        "echo diverged; exit 0"
+    )
+
+    code3, out3 = _run_updater_ephemeral(
+        host_root,
+        env={"PROJECT_ROOT": host_root},
+        command=rel_cmd,
+        timeout_sec=20,
+    )
+    relation = (out3 or "").strip().splitlines()[-1].strip() if code3 == 0 and (out3 or "").strip() else "unknown"
+
+    if relation == "equal":
+        update_available = False
+        error = None
+    elif relation == "behind":
+        update_available = True
+        error = None
+    elif relation == "ahead":
+        update_available = False
+        error = None
+    elif relation == "diverged":
+        update_available = None
+        error = "Local branch diverged from latest release (run plan for details)"
+    else:
+        update_available = None
+        error = "Unable to compare local version to remote (offline or missing objects)"
+
+    return UpdateStatusResponse(
+        local={"branch": branch, "head_sha": head_sha, "describe": describe},
+        remote={"latest_tag": tag, "latest_tag_sha": tag_sha},
+        update_available=update_available,
+        error=error,
+    )
+
+
+class UpdatePlanResponse(BaseModel):
+    plan: dict
+
+
+class UpdateBranchesResponse(BaseModel):
+    branches: list[str]
+    error: Optional[str] = None
+
+
+@router.get("/updates/branches", response_model=UpdateBranchesResponse)
+async def updates_branches():
+    """
+    Return the list of remote branches on origin for the Updates UI dropdown.
+    """
+    host_root = _project_host_root_from_admin_ui_container()
+
+    code, out = _run_updater_ephemeral(
+        host_root,
+        env={"PROJECT_ROOT": host_root},
+        command=(
+            "set -euo pipefail; "
+            "cd \"$PROJECT_ROOT\"; "
+            "git -c safe.directory=\"$PROJECT_ROOT\" ls-remote --heads origin"
+        ),
+        timeout_sec=20,
+    )
+    if code != 0:
+        return UpdateBranchesResponse(branches=[], error="Remote branches unavailable (offline or blocked)")
+
+    branches: list[str] = []
+    for line in (out or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            _sha, ref = line.split("\t", 1)
+        except Exception:
+            continue
+        if not ref.startswith("refs/heads/"):
+            continue
+        name = ref[len("refs/heads/") :].strip()
+        if not name:
+            continue
+        branches.append(name)
+
+    branches = sorted(set(branches))
+    return UpdateBranchesResponse(branches=branches, error=None)
+
+
+@router.get("/updates/plan", response_model=UpdatePlanResponse)
+async def updates_plan(ref: str = "main", include_ui: bool = False, checkout: bool = True):
+    """
+    Return a pre-update plan from `agent update --plan --plan-json`.
+    """
+    host_root = _project_host_root_from_admin_ui_container()
+
+    ref = _validate_git_ref(ref)
+    env = {
+        "PROJECT_ROOT": host_root,
+        "AAVA_UPDATE_MODE": "plan",
+        "AAVA_UPDATE_INCLUDE_UI": "true" if include_ui else "false",
+        "AAVA_UPDATE_REMOTE": "origin",
+        "AAVA_UPDATE_REF": ref,
+        "AAVA_UPDATE_CHECKOUT": "true" if checkout else "false",
+    }
+    # Capture stdout only so JSON output isn't polluted by installer/self-update hints on stderr.
+    code, out = _run_updater_ephemeral(host_root, env=env, timeout_sec=120, capture_stderr=False)
+    if code != 0:
+        raise HTTPException(status_code=500, detail=f"Failed to compute update plan: {out.strip()[:400]}")
+
+    import json
+    try:
+        plan = json.loads(out)
+    except Exception:
+        raise HTTPException(status_code=500, detail="Updater returned invalid JSON")
+    return UpdatePlanResponse(plan=plan)
+
+
+class UpdateRunRequest(BaseModel):
+    include_ui: bool = False
+    ref: str = "main"
+    checkout: bool = True
+    update_cli_host: bool = True
+    cli_install_path: Optional[str] = None
+
+
+class UpdateRunResponse(BaseModel):
+    job_id: str
+
+
+@router.post("/updates/run", response_model=UpdateRunResponse)
+async def updates_run(body: UpdateRunRequest):
+    host_root = _project_host_root_from_admin_ui_container()
+    host_docker_sock = _docker_sock_host_path_from_admin_ui_container()
+    sha = _current_project_head_sha()
+    tag = _updater_image_tag_for_sha(sha)
+    _ensure_updater_image_for_sha(host_root, tag)
+
+    job_id = uuid.uuid4().hex
+
+    # Create an initial job marker immediately so the UI doesn't hit a race where the
+    # updater container hasn't created its state/log files yet.
+    try:
+        project_root = os.getenv("PROJECT_ROOT", "/app/project")
+        jobs_dir = os.path.join(project_root, ".agent", "updates", "jobs")
+        os.makedirs(jobs_dir, exist_ok=True)
+        state_path = os.path.join(jobs_dir, f"{job_id}.json")
+        log_path = os.path.join(jobs_dir, f"{job_id}.log")
+        import json
+        from datetime import datetime, timezone
+
+        payload = {
+            "job_id": job_id,
+            "status": "starting",
+            "started_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "finished_at": None,
+            "include_ui": bool(body.include_ui),
+            "exit_code": None,
+            "log_path": log_path,
+            "ref": (body.ref or "main").strip(),
+            "checkout": bool(body.checkout),
+            "update_cli_host": bool(body.update_cli_host),
+            "cli_install_path": (body.cli_install_path or "").strip() or None,
+        }
+        with open(state_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f)
+    except Exception:
+        # Best-effort only; the updater container will still manage state/logs.
+        pass
+
+    client = docker.from_env()
+    name = f"aava-update-{job_id[:12]}"
+
+    volumes = {
+        host_root: {"bind": host_root, "mode": "rw"},
+        host_docker_sock: {"bind": "/var/run/docker.sock", "mode": "rw"},
+    }
+    ref = _validate_git_ref(body.ref or "main")
+    env = {
+        "PROJECT_ROOT": host_root,
+        "AAVA_UPDATE_MODE": "run",
+        "AAVA_UPDATE_JOB_ID": job_id,
+        "AAVA_UPDATE_INCLUDE_UI": "true" if body.include_ui else "false",
+        "AAVA_UPDATE_REMOTE": "origin",
+        "AAVA_UPDATE_REF": ref,
+        "AAVA_UPDATE_CHECKOUT": "true" if body.checkout else "false",
+        "AAVA_UPDATE_UPDATE_CLI_HOST": "true" if body.update_cli_host else "false",
+    }
+    cli_path = (body.cli_install_path or "").strip()
+    if cli_path:
+        env["AAVA_UPDATE_CLI_INSTALL_PATH"] = cli_path
+
+    try:
+        client.containers.run(
+            tag,
+            environment=env,
+            volumes=volumes,
+            name=name,
+            detach=True,
+            auto_remove=True,
+        )
+    except Exception as e:
+        logger.exception("Failed to start update runner: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to start update runner")
+
+    return UpdateRunResponse(job_id=job_id)
+
+
+class UpdateRollbackRequest(BaseModel):
+    from_job_id: str
+
+
+class UpdateRollbackResponse(BaseModel):
+    job_id: str
+
+
+@router.post("/updates/rollback", response_model=UpdateRollbackResponse)
+async def updates_rollback(body: UpdateRollbackRequest):
+    """
+    Roll back to the pre-update branch + restore config from the backup captured by a prior update job.
+
+    This starts a detached updater container with `AAVA_UPDATE_MODE=rollback`.
+    """
+    host_root = _project_host_root_from_admin_ui_container()
+    host_docker_sock = _docker_sock_host_path_from_admin_ui_container()
+    sha = _current_project_head_sha()
+    tag = _updater_image_tag_for_sha(sha)
+    _ensure_updater_image_for_sha(host_root, tag)
+
+    from_job_id_raw = (body.from_job_id or "").strip()
+    if not from_job_id_raw:
+        raise HTTPException(status_code=400, detail="from_job_id is required")
+    try:
+        from_job_id = uuid.UUID(from_job_id_raw).hex
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid from_job_id format")
+
+    project_root = os.getenv("PROJECT_ROOT", "/app/project")
+    jobs_dir = os.path.join(project_root, ".agent", "updates", "jobs")
+    src_state_path = os.path.join(jobs_dir, f"{from_job_id}.json")
+    if not os.path.exists(src_state_path):
+        raise HTTPException(status_code=404, detail="Source update job not found")
+
+    import json
+    from datetime import datetime, timezone
+
+    src_job = {}
+    try:
+        with open(src_state_path, "r", encoding="utf-8") as f:
+            src_job = json.load(f) or {}
+    except Exception:
+        src_job = {}
+
+    include_ui = bool(src_job.get("include_ui"))
+    pre_update_branch = (src_job.get("pre_update_branch") or "").strip() or None
+    backup_dir_rel = (src_job.get("backup_dir_rel") or "").strip() or None
+    update_cli_host = bool(src_job.get("update_cli_host", True))
+    cli_install_path = (src_job.get("cli_install_path") or "").strip() or None
+
+    import uuid
+    job_id = uuid.uuid4().hex
+
+    # Create an initial job marker immediately so the UI can start polling right away.
+    try:
+        os.makedirs(jobs_dir, exist_ok=True)
+        state_path = os.path.join(jobs_dir, f"{job_id}.json")
+        log_path = os.path.join(jobs_dir, f"{job_id}.log")
+        payload = {
+            "job_id": job_id,
+            "type": "rollback",
+            "rollback_from_job_id": from_job_id,
+            "status": "starting",
+            "started_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "finished_at": None,
+            "include_ui": include_ui,
+            "update_cli_host": update_cli_host,
+            "cli_install_path": cli_install_path,
+            "exit_code": None,
+            "log_path": log_path,
+        }
+        if pre_update_branch:
+            payload["ref"] = pre_update_branch
+            payload["pre_update_branch"] = pre_update_branch
+        if backup_dir_rel:
+            payload["backup_dir_rel"] = backup_dir_rel
+
+        with open(state_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f)
+    except Exception:
+        pass
+
+    client = docker.from_env()
+    name = f"aava-rollback-{job_id[:12]}"
+
+    volumes = {
+        host_root: {"bind": host_root, "mode": "rw"},
+        host_docker_sock: {"bind": "/var/run/docker.sock", "mode": "rw"},
+    }
+    env = {
+        "PROJECT_ROOT": host_root,
+        "AAVA_UPDATE_MODE": "rollback",
+        "AAVA_UPDATE_JOB_ID": job_id,
+        "AAVA_UPDATE_ROLLBACK_FROM_JOB": from_job_id,
+        # Prefer the include_ui setting from the source job as a fallback for older jobs.
+        "AAVA_UPDATE_INCLUDE_UI": "true" if include_ui else "false",
+        "AAVA_UPDATE_UPDATE_CLI_HOST": "true" if update_cli_host else "false",
+    }
+    if cli_install_path:
+        env["AAVA_UPDATE_CLI_INSTALL_PATH"] = cli_install_path
+
+    try:
+        client.containers.run(
+            tag,
+            environment=env,
+            volumes=volumes,
+            name=name,
+            detach=True,
+            auto_remove=True,
+        )
+    except Exception as e:
+        logger.exception("Failed to start rollback runner: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to start rollback runner")
+
+    return UpdateRollbackResponse(job_id=job_id)
+
+
+class UpdateJobResponse(BaseModel):
+    job: dict
+    log_tail: Optional[str] = None
+
+
+def _tail_text_file(path: str, max_lines: int = 250, max_bytes: int = 512 * 1024) -> str:
+    """
+    Return the last `max_lines` lines of a text file without reading the entire file into memory.
+    """
+    if max_lines < 1:
+        max_lines = 1
+    if max_bytes < 4 * 1024:
+        max_bytes = 4 * 1024
+
+    try:
+        file_size = os.path.getsize(path)
+        if file_size <= 0:
+            return ""
+
+        with open(path, "rb") as f:
+            chunk_size = 32 * 1024
+            pos = file_size
+            remaining = min(file_size, max_bytes)
+            data = b""
+
+            while remaining > 0:
+                read_size = min(chunk_size, remaining)
+                pos -= read_size
+                f.seek(pos)
+                chunk = f.read(read_size)
+                data = chunk + data
+                if data.count(b"\n") >= max_lines + 1:
+                    break
+                remaining -= read_size
+
+        text = data.decode("utf-8", errors="replace")
+        lines = text.splitlines()
+        return "\n".join(lines[-max_lines:])
+    except Exception:
+        return ""
+
+
+class UpdateHistoryItem(BaseModel):
+    job: dict
+
+
+class UpdateHistoryResponse(BaseModel):
+    jobs: list[dict]
+
+
+@router.get("/updates/history", response_model=UpdateHistoryResponse)
+async def updates_history(limit: int = 10):
+    """
+    Return the most recent update jobs (summary).
+
+    Data source: `.agent/updates/jobs/*.json` persisted on the project volume.
+    """
+    if limit < 1:
+        limit = 1
+    if limit > 25:
+        limit = 25
+
+    project_root = os.getenv("PROJECT_ROOT", "/app/project")
+    jobs_dir = os.path.join(project_root, ".agent", "updates", "jobs")
+    if not os.path.isdir(jobs_dir):
+        return UpdateHistoryResponse(jobs=[])
+
+    import glob
+    import json
+    from datetime import datetime
+
+    def _parse_dt(s: Optional[str]) -> Optional[datetime]:
+        if not s:
+            return None
+        try:
+            # Most of our timestamps are Zulu ISO.
+            return datetime.fromisoformat(s.replace("Z", "+00:00"))
+        except Exception:
+            return None
+
+    items: list[tuple[float, dict]] = []
+    for path in glob.glob(os.path.join(jobs_dir, "*.json")):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                job = json.load(f) or {}
+        except Exception:
+            continue
+
+        # Sort key: finished_at > started_at > mtime.
+        st = _parse_dt(job.get("finished_at")) or _parse_dt(job.get("started_at"))
+        ts = st.timestamp() if st else os.path.getmtime(path)
+        items.append((ts, job))
+
+    items.sort(key=lambda x: x[0], reverse=True)
+    return UpdateHistoryResponse(jobs=[j for _, j in items[:limit]])
+
+
+@router.get("/updates/jobs/{job_id}", response_model=UpdateJobResponse)
+async def updates_job(job_id: str):
+    job_id_raw = (job_id or "").strip()
+    if not job_id_raw:
+        raise HTTPException(status_code=400, detail="Invalid job_id format")
+    try:
+        job_id = uuid.UUID(job_id_raw).hex
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid job_id format")
+    project_root = os.getenv("PROJECT_ROOT", "/app/project")
+    jobs_dir = os.path.join(project_root, ".agent", "updates", "jobs")
+    state_path = os.path.join(jobs_dir, f"{job_id}.json")
+    log_path = os.path.join(jobs_dir, f"{job_id}.log")
+
+    import json
+
+    if not os.path.exists(state_path) and not os.path.exists(log_path):
+        raise HTTPException(status_code=404, detail="Update job not found")
+
+    job = {}
+    if os.path.exists(state_path):
+        try:
+            with open(state_path, "r", encoding="utf-8") as f:
+                job = json.load(f) or {}
+        except Exception:
+            job = {"job_id": job_id, "status": "unknown"}
+    else:
+        job = {"job_id": job_id, "status": "running"}
+
+    tail = None
+    if os.path.exists(log_path):
+        tail = _tail_text_file(log_path, max_lines=250)
+
+    return UpdateJobResponse(job=job, log_tail=tail)

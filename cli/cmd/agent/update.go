@@ -41,6 +41,11 @@ var (
 	updateForceRecreate bool
 	updateSkipCheck     bool
 	updateSelfUpdate    bool
+	updateIncludeUI     bool
+	updateCheckout      bool
+	updateBackupID      string
+	updatePlan          bool
+	updatePlanJSON      bool
 	gitSafeDirectory    string
 )
 
@@ -50,7 +55,7 @@ var updateCmd = &cobra.Command{
 	Long: `Update Asterisk AI Voice Agent to the latest code and apply changes safely.
 
 This command:
-  - Backs up operator-owned config (.env, config/ai-agent.yaml, config/contexts/)
+  - Backs up operator-owned config (.env, config/ai-agent.yaml, config/users.json, config/contexts/)
   - Safely fast-forwards to origin/main (no forced merges by default)
   - Preserves local tracked changes using git stash (optional)
   - Rebuilds/restarts only the containers impacted by the change set
@@ -73,6 +78,11 @@ func init() {
 	updateCmd.Flags().BoolVar(&updateForceRecreate, "force-recreate", false, "force recreate containers during docker compose up")
 	updateCmd.Flags().BoolVar(&updateSkipCheck, "skip-check", false, "skip running agent check after update")
 	updateCmd.Flags().BoolVar(&updateSelfUpdate, "self-update", true, "auto-update the agent CLI binary if a newer release is available")
+	updateCmd.Flags().BoolVar(&updateIncludeUI, "include-ui", true, "include admin_ui rebuild/restart when changes require it")
+	updateCmd.Flags().BoolVar(&updateCheckout, "checkout", false, "allow switching to --ref branch before updating (UI-driven updates typically enable this)")
+	updateCmd.Flags().StringVar(&updateBackupID, "backup-id", "", "use a stable backup identifier (creates .agent/update-backups/<id>)")
+	updateCmd.Flags().BoolVar(&updatePlan, "plan", false, "print the update plan (git/diff/docker actions) without applying it")
+	updateCmd.Flags().BoolVar(&updatePlanJSON, "plan-json", false, "when used with --plan, output the plan as JSON")
 	rootCmd.AddCommand(updateCmd)
 }
 
@@ -89,9 +99,40 @@ type updateContext struct {
 	servicesToRebuild map[string]bool
 	servicesToRestart map[string]bool
 	composeChanged    bool
+
+	skippedServices map[string]string // service -> "rebuild"|"restart" (filtered by flags)
 }
 
-func runUpdate() error {
+type updatePlanReport struct {
+	RepoRoot         string              `json:"repo_root"`
+	Remote           string              `json:"remote"`
+	Ref              string              `json:"ref"`
+	CurrentBranch    string              `json:"current_branch"`
+	TargetBranch     string              `json:"target_branch"`
+	Checkout         bool                `json:"checkout"`
+	WouldCheckout    bool                `json:"would_checkout"`
+	OldSHA           string              `json:"old_sha"`
+	NewSHA           string              `json:"new_sha"`
+	Relation         string              `json:"relation"` // equal|behind|ahead|diverged
+	CodeChanged      bool                `json:"code_changed"`
+	UpdateAvailable  bool                `json:"update_available"`
+	Dirty            bool                `json:"dirty"`
+	NoStash          bool                `json:"no_stash"`
+	StashUntracked   bool                `json:"stash_untracked"`
+	WouldStash       bool                `json:"would_stash"`
+	WouldAbort       bool                `json:"would_abort"`
+	RebuildMode      string              `json:"rebuild_mode"`
+	ComposeChanged   bool                `json:"compose_changed"`
+	ServicesRebuild  []string            `json:"services_rebuild"`
+	ServicesRestart  []string            `json:"services_restart"`
+	SkippedServices  map[string]string   `json:"skipped_services,omitempty"`
+	ChangedFileCount int                 `json:"changed_file_count"`
+	ChangedFiles     []string            `json:"changed_files,omitempty"`
+	FilesTruncated   bool                `json:"changed_files_truncated,omitempty"`
+	Warnings         []string            `json:"warnings,omitempty"`
+}
+
+func runUpdate() (retErr error) {
 	printUpdateStep("Preparing update")
 	if updateSelfUpdate {
 		maybeSelfUpdateAndReexec()
@@ -109,11 +150,23 @@ func runUpdate() error {
 		repoRoot:          repoRoot,
 		servicesToRebuild: map[string]bool{},
 		servicesToRestart: map[string]bool{},
+		skippedServices:   map[string]string{},
 	}
+
+	defer func() {
+		if retErr != nil && !updatePlan {
+			printUpdateFailureRecovery(ctx, retErr)
+		}
+	}()
 
 	ctx.oldSHA, err = gitRevParse("HEAD")
 	if err != nil {
 		return err
+	}
+
+	// Plan-only: show what would happen without changing the repo or containers.
+	if updatePlan {
+		return runUpdatePlan(ctx)
 	}
 
 	printUpdateStep("Creating backups")
@@ -140,41 +193,68 @@ func runUpdate() error {
 	if err := gitFetch(updateRemote, updateRef); err != nil {
 		return err
 	}
-	ctx.newSHA, err = gitRevParse(fmt.Sprintf("%s/%s", updateRemote, updateRef))
+	// Keep tags current so "git describe --tags" reflects newly published versions.
+	_ = gitFetchTags(updateRemote)
+	targetRemoteRef := fmt.Sprintf("%s/%s", updateRemote, updateRef)
+	targetSHA, err := gitRevParse(targetRemoteRef)
+	if err != nil {
+		return err
+	}
+	ctx.newSHA = targetSHA
+
+	currentBranch, _ := gitCurrentBranch()
+	branchMismatch := strings.TrimSpace(currentBranch) == "" || strings.TrimSpace(currentBranch) == "HEAD" || strings.TrimSpace(currentBranch) != strings.TrimSpace(updateRef)
+	if branchMismatch {
+		if !updateCheckout {
+			return fmt.Errorf("target ref %q differs from current branch %q; re-run with --checkout to allow switching branches", updateRef, currentBranch)
+		}
+		printUpdateStep(fmt.Sprintf("Checking out %s", updateRef))
+		exists, existsErr := gitLocalBranchExists(updateRef)
+		if existsErr != nil {
+			return existsErr
+		}
+		if exists {
+			if err := gitCheckout(updateRef); err != nil {
+				return err
+			}
+		} else {
+			if err := gitCheckoutTrack(updateRef, targetRemoteRef); err != nil {
+				return err
+			}
+		}
+	}
+
+	branchHead, err := gitRevParse("HEAD")
 	if err != nil {
 		return err
 	}
 
-	if ctx.newSHA == ctx.oldSHA {
-		printUpdateInfo("Already up to date (%s)", shortSHA(ctx.oldSHA))
-		if ctx.stashed {
-			printUpdateStep("Restoring stashed changes")
-			if err := gitStashPop(ctx); err != nil {
-				return err
-			}
-		}
-		if updateSkipCheck {
-			printUpdateSummary(ctx, "", 0, 0)
-			return nil
-		}
+	updateAvailable, relErr := gitIsAncestor(branchHead, targetSHA)
+	if relErr != nil {
+		return relErr
+	}
+	remoteIsAncestor, relErr2 := gitIsAncestor(targetSHA, branchHead)
+	if relErr2 != nil {
+		return relErr2
+	}
 
-		printUpdateStep("Running agent check")
-		report, status, warnCount, failCount, err := runPostUpdateCheck()
-		printPostUpdateCheck(report, warnCount, failCount)
-		printUpdateSummary(ctx, status, warnCount, failCount)
-		if err != nil {
+	finalSHA := branchHead
+	if strings.TrimSpace(branchHead) == strings.TrimSpace(targetSHA) {
+		printUpdateInfo("Already up to date on %s (%s)", updateRef, shortSHA(branchHead))
+		finalSHA = branchHead
+	} else if updateAvailable {
+		printUpdateStep("Fast-forwarding code")
+		if err := gitMergeFastForward(targetRemoteRef); err != nil {
 			return err
 		}
-		if failCount > 0 {
-			return errors.New("post-update check reported failures")
-		}
-		return nil
+		finalSHA = targetSHA
+	} else if remoteIsAncestor {
+		printUpdateInfo("Local branch is ahead of %s; skipping fast-forward update", targetRemoteRef)
+		finalSHA = branchHead
+	} else {
+		return fmt.Errorf("cannot fast-forward: local branch has diverged from %s (resolve manually and re-run)", targetRemoteRef)
 	}
-
-	printUpdateStep("Fast-forwarding code")
-	if err := gitMergeFastForward(fmt.Sprintf("%s/%s", updateRemote, updateRef)); err != nil {
-		return err
-	}
+	ctx.newSHA = finalSHA
 
 	if ctx.stashed {
 		printUpdateStep("Restoring stashed changes")
@@ -182,12 +262,14 @@ func runUpdate() error {
 			return err
 		}
 	}
-
-	ctx.changedFiles, err = gitDiffNames(ctx.oldSHA, ctx.newSHA)
-	if err != nil {
-		return err
+	if strings.TrimSpace(ctx.oldSHA) != strings.TrimSpace(ctx.newSHA) {
+		ctx.changedFiles, err = gitDiffNames(ctx.oldSHA, ctx.newSHA)
+		if err != nil {
+			return err
+		}
+		decideDockerActions(ctx)
+		applyServiceFilters(ctx)
 	}
-	decideDockerActions(ctx)
 
 	printUpdateStep("Applying Docker changes")
 	printDockerActionsPlanned(ctx)
@@ -211,6 +293,156 @@ func runUpdate() error {
 		return errors.New("post-update check reported failures")
 	}
 	return nil
+}
+
+func runUpdatePlan(ctx *updateContext) error {
+	dirty, err := gitIsDirty(updateStashUntracked)
+	if err != nil {
+		return err
+	}
+
+	currentBranch, _ := gitCurrentBranch()
+	wouldCheckout := updateCheckout && (strings.TrimSpace(currentBranch) == "" || strings.TrimSpace(currentBranch) == "HEAD" || strings.TrimSpace(currentBranch) != strings.TrimSpace(updateRef))
+
+	if err := gitFetch(updateRemote, updateRef); err != nil {
+		return err
+	}
+	_ = gitFetchTags(updateRemote)
+
+	newSHA, err := gitRevParse(fmt.Sprintf("%s/%s", updateRemote, updateRef))
+	if err != nil {
+		return err
+	}
+
+	ctx.newSHA = newSHA
+	updateAvailable, relErr := gitIsAncestor(ctx.oldSHA, ctx.newSHA)
+	if relErr != nil {
+		return relErr
+	}
+	remoteIsAncestor, relErr2 := gitIsAncestor(ctx.newSHA, ctx.oldSHA)
+	if relErr2 != nil {
+		return relErr2
+	}
+	codeChanged := strings.TrimSpace(ctx.oldSHA) != strings.TrimSpace(ctx.newSHA)
+	// Git treats a commit as its own ancestor, so when SHAs match `gitIsAncestor(old,new)` is true.
+	// For plan/reporting, treat identical SHAs as "no update available".
+	updateAvailable = updateAvailable && codeChanged
+	if codeChanged {
+		ctx.changedFiles, err = gitDiffNames(ctx.oldSHA, ctx.newSHA)
+		if err != nil {
+			return err
+		}
+		decideDockerActions(ctx)
+		applyServiceFilters(ctx)
+	} else {
+		ctx.changedFiles = nil
+	}
+
+	wouldStash := dirty && !updateNoStash
+	wouldAbort := dirty && updateNoStash
+
+	relation := "equal"
+	if codeChanged {
+		switch {
+		case updateAvailable:
+			relation = "behind"
+		case remoteIsAncestor:
+			relation = "ahead"
+		default:
+			relation = "diverged"
+		}
+	}
+
+	limit := 200
+	files := ctx.changedFiles
+	truncated := false
+	if len(files) > limit {
+		files = files[:limit]
+		truncated = true
+	}
+
+	rep := &updatePlanReport{
+		RepoRoot:         ctx.repoRoot,
+		Remote:           updateRemote,
+		Ref:              updateRef,
+		CurrentBranch:    strings.TrimSpace(currentBranch),
+		TargetBranch:     strings.TrimSpace(updateRef),
+		Checkout:         updateCheckout,
+		WouldCheckout:    wouldCheckout,
+		OldSHA:           ctx.oldSHA,
+		NewSHA:           ctx.newSHA,
+		Relation:         relation,
+		CodeChanged:      codeChanged,
+		UpdateAvailable:  updateAvailable,
+		Dirty:            dirty,
+		NoStash:          updateNoStash,
+		StashUntracked:   updateStashUntracked,
+		WouldStash:       wouldStash,
+		WouldAbort:       wouldAbort,
+		RebuildMode:      strings.ToLower(strings.TrimSpace(updateRebuild)),
+		ComposeChanged:   ctx.composeChanged,
+		ServicesRebuild:  sortedKeys(ctx.servicesToRebuild),
+		ServicesRestart:  sortedKeys(ctx.servicesToRestart),
+		SkippedServices:  nil,
+		ChangedFileCount: len(ctx.changedFiles),
+		ChangedFiles:     files,
+		FilesTruncated:   truncated,
+	}
+	if len(ctx.skippedServices) > 0 {
+		rep.SkippedServices = ctx.skippedServices
+	}
+	if wouldCheckout && strings.TrimSpace(currentBranch) != "" && strings.TrimSpace(currentBranch) != "HEAD" && strings.TrimSpace(currentBranch) != strings.TrimSpace(updateRef) {
+		rep.Warnings = append(rep.Warnings, fmt.Sprintf("Selected ref %q differs from current branch %q; update will checkout/switch branches (use --checkout=false to disallow).", updateRef, currentBranch))
+	}
+	if !updateIncludeUI && (ctx.skippedServices["admin_ui"] != "") {
+		rep.Warnings = append(rep.Warnings, "Admin UI changes detected but excluded (use --include-ui to apply admin_ui rebuild/restart).")
+	}
+	if !updateIncludeUI && ctx.composeChanged {
+		rep.Warnings = append(rep.Warnings, "Compose files changed; admin_ui changes (if any) are excluded unless --include-ui is enabled.")
+	}
+	if !updateAvailable && remoteIsAncestor && strings.TrimSpace(ctx.newSHA) != strings.TrimSpace(ctx.oldSHA) {
+		rep.Warnings = append(rep.Warnings, fmt.Sprintf("Local branch is ahead of %s/%s; no fast-forward update available.", updateRemote, updateRef))
+	}
+	if !updateAvailable && !remoteIsAncestor && strings.TrimSpace(ctx.newSHA) != strings.TrimSpace(ctx.oldSHA) {
+		rep.Warnings = append(rep.Warnings, fmt.Sprintf("Local branch has diverged from %s/%s; update requires manual resolution.", updateRemote, updateRef))
+	}
+
+	if updatePlanJSON {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(rep)
+	}
+
+	printUpdateStep("Update plan")
+	printUpdateInfo("Repo: %s", ctx.repoRoot)
+	printUpdateInfo("From: %s", shortSHA(ctx.oldSHA))
+	printUpdateInfo("To:   %s", shortSHA(ctx.newSHA))
+	if wouldAbort {
+		printUpdateInfo("Would abort: working tree is dirty and --no-stash was set")
+	} else if wouldStash {
+		printUpdateInfo("Would stash: working tree has local changes")
+	}
+	printDockerActionsPlanned(ctx)
+	if len(rep.Warnings) > 0 {
+		for _, w := range rep.Warnings {
+			printUpdateInfo("Warning: %s", w)
+		}
+	}
+	return nil
+}
+
+func applyServiceFilters(ctx *updateContext) {
+	// UI-driven updates may want to avoid restarting/rebuilding admin_ui by default.
+	if !updateIncludeUI {
+		if ctx.servicesToRebuild["admin_ui"] {
+			delete(ctx.servicesToRebuild, "admin_ui")
+			ctx.skippedServices["admin_ui"] = "rebuild"
+		}
+		if ctx.servicesToRestart["admin_ui"] {
+			delete(ctx.servicesToRestart, "admin_ui")
+			ctx.skippedServices["admin_ui"] = "restart"
+		}
+	}
 }
 
 func maybeSelfUpdateAndReexec() {
@@ -502,8 +734,20 @@ func parseSemver(v string) (major int, minor int, patch int, ok bool) {
 }
 
 func createUpdateBackups(ctx *updateContext) error {
-	timestamp := time.Now().UTC().Format("20060102_150405")
-	backupDir := filepath.Join(ctx.repoRoot, ".agent", "update-backups", timestamp)
+	id := strings.TrimSpace(updateBackupID)
+	if id != "" {
+		id = sanitizeBackupID(id)
+		if id == "" {
+			return errors.New("invalid --backup-id")
+		}
+	}
+
+	dirName := time.Now().UTC().Format("20060102_150405")
+	if id != "" {
+		dirName = id
+	}
+
+	backupDir := filepath.Join(ctx.repoRoot, ".agent", "update-backups", dirName)
 	if err := os.MkdirAll(backupDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create backup directory: %w", err)
 	}
@@ -512,6 +756,7 @@ func createUpdateBackups(ctx *updateContext) error {
 	paths := []string{
 		".env",
 		filepath.Join("config", "ai-agent.yaml"),
+		filepath.Join("config", "users.json"),
 		filepath.Join("config", "contexts"),
 	}
 
@@ -521,6 +766,33 @@ func createUpdateBackups(ctx *updateContext) error {
 		}
 	}
 	return nil
+}
+
+func sanitizeBackupID(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	if len(s) > 80 {
+		s = s[:80]
+	}
+	var out strings.Builder
+	out.Grow(len(s))
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z':
+			out.WriteRune(r)
+		case r >= 'A' && r <= 'Z':
+			out.WriteRune(r)
+		case r >= '0' && r <= '9':
+			out.WriteRune(r)
+		case r == '-' || r == '_' || r == '.':
+			out.WriteRune(r)
+		default:
+			out.WriteByte('_')
+		}
+	}
+	return strings.Trim(out.String(), "._-")
 }
 
 func backupPathIfExists(relPath string, backupRoot string) error {
@@ -694,10 +966,75 @@ func gitFetch(remote string, ref string) error {
 	return nil
 }
 
+func gitFetchTags(remote string) error {
+	_, err := runGitCmd("fetch", "--tags", remote)
+	if err != nil {
+		return fmt.Errorf("git fetch --tags %s failed: %w", remote, err)
+	}
+	return nil
+}
+
 func gitMergeFastForward(remoteRef string) error {
 	_, err := runGitCmd("merge", "--ff-only", remoteRef)
 	if err != nil {
 		return fmt.Errorf("git merge --ff-only %s failed (branch likely diverged or local conflicts). Fix manually and retry: %w", remoteRef, err)
+	}
+	return nil
+}
+
+func gitCurrentBranch() (string, error) {
+	out, err := runGitCmd("rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil {
+		return "", fmt.Errorf("git rev-parse --abbrev-ref HEAD failed: %w", err)
+	}
+	return strings.TrimSpace(out), nil
+}
+
+func gitLocalBranchExists(branch string) (bool, error) {
+	branch = strings.TrimSpace(branch)
+	if branch == "" {
+		return false, errors.New("branch name is empty")
+	}
+
+	gitArgs := make([]string, 0, 6)
+	if gitSafeDirectory != "" {
+		gitArgs = append(gitArgs, "-c", "safe.directory="+gitSafeDirectory)
+	}
+	gitArgs = append(gitArgs, "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
+
+	cmd := exec.Command("git", gitArgs...)
+	cmd.Stdin = nil
+	cmd.Stdout = io.Discard
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if err == nil {
+		return true, nil
+	}
+	if exitErr, ok := err.(*exec.ExitError); ok {
+		if exitErr.ExitCode() == 1 {
+			return false, nil
+		}
+	}
+	msg := strings.TrimSpace(stderr.String())
+	if msg != "" {
+		return false, fmt.Errorf("git show-ref failed: %s", msg)
+	}
+	return false, fmt.Errorf("git show-ref failed: %w", err)
+}
+
+func gitCheckout(branch string) error {
+	_, err := runGitCmd("checkout", branch)
+	if err != nil {
+		return fmt.Errorf("git checkout %s failed: %w", branch, err)
+	}
+	return nil
+}
+
+func gitCheckoutTrack(branch string, remoteRef string) error {
+	_, err := runGitCmd("checkout", "-b", branch, "--track", remoteRef)
+	if err != nil {
+		return fmt.Errorf("git checkout -b %s --track %s failed: %w", branch, remoteRef, err)
 	}
 	return nil
 }
@@ -784,6 +1121,21 @@ func applyDockerActions(ctx *updateContext) error {
 		if updateForceRecreate {
 			args = append(args, "--force-recreate")
 		}
+		// If admin_ui updates are excluded, scope the compose up to the non-UI services to
+		// avoid unintended recreate/restart of admin_ui.
+		if !updateIncludeUI {
+			targets := map[string]bool{
+				"ai_engine":       true,
+				"local_ai_server": true,
+			}
+			for svc := range ctx.servicesToRebuild {
+				targets[svc] = true
+			}
+			for svc := range ctx.servicesToRestart {
+				targets[svc] = true
+			}
+			args = append(args, sortedKeys(targets)...)
+		}
 		if _, err := runCmd("docker", args...); err != nil {
 			return fmt.Errorf("docker compose up (remove-orphans) failed: %w", err)
 		}
@@ -832,6 +1184,40 @@ func runPostUpdateCheck() (report *check.Report, status string, warnCount int, f
 	return report, "PASS", 0, 0, nil
 }
 
+func printUpdateFailureRecovery(ctx *updateContext, err error) {
+	fmt.Printf("\n==> Update failed\n")
+	printUpdateInfo("Error: %v", err)
+
+	if ctx == nil {
+		return
+	}
+
+	if ctx.backupDir != "" {
+		printUpdateInfo("Backups: %s", ctx.backupDir)
+		fmt.Println("Recovery (restore operator-owned config):")
+		fmt.Printf("  cp %s .env\n", filepath.Join(ctx.backupDir, ".env"))
+		fmt.Printf("  cp %s %s\n", filepath.Join(ctx.backupDir, "config", "ai-agent.yaml"), filepath.Join("config", "ai-agent.yaml"))
+		fmt.Printf("  cp %s %s\n", filepath.Join(ctx.backupDir, "config", "users.json"), filepath.Join("config", "users.json"))
+		fmt.Println("  # Replace contexts directory (if needed):")
+		fmt.Printf("  rm -rf %s && cp -r %s %s\n",
+			filepath.Join("config", "contexts"),
+			filepath.Join(ctx.backupDir, "config", "contexts"),
+			filepath.Join("config", "contexts"),
+		)
+	}
+
+	if ctx.stashed {
+		fmt.Println("Recovery (git stash):")
+		fmt.Println("  git stash list")
+		fmt.Println("  git stash pop   # may conflict; resolve if needed")
+	}
+
+	if ctx.repoRoot != "" {
+		fmt.Println("If git reports 'dubious ownership':")
+		fmt.Printf("  git config --global --add safe.directory %s\n", ctx.repoRoot)
+	}
+}
+
 func printUpdateSummary(ctx *updateContext, checkStatus string, warnCount int, failCount int) {
 	if strings.TrimSpace(ctx.oldSHA) == strings.TrimSpace(ctx.newSHA) {
 		fmt.Printf("Up to date: %s\n", shortSHA(ctx.oldSHA))
@@ -862,12 +1248,20 @@ func printUpdateSummary(ctx *updateContext, checkStatus string, warnCount int, f
 	}
 }
 
+func updateHumanWriter() io.Writer {
+	// When emitting machine-readable JSON plans, keep human output on stderr so stdout stays valid JSON.
+	if updatePlan && updatePlanJSON {
+		return os.Stderr
+	}
+	return os.Stdout
+}
+
 func printUpdateStep(title string) {
-	fmt.Printf("\n==> %s\n", title)
+	fmt.Fprintf(updateHumanWriter(), "\n==> %s\n", title)
 }
 
 func printUpdateInfo(format string, args ...any) {
-	fmt.Printf(" - "+format+"\n", args...)
+	fmt.Fprintf(updateHumanWriter(), " - "+format+"\n", args...)
 }
 
 func printDockerActionsPlanned(ctx *updateContext) {
@@ -949,6 +1343,36 @@ func runGitCmd(args ...string) (string, error) {
 	}
 	gitArgs = append(gitArgs, args...)
 	return runCmd("git", gitArgs...)
+}
+
+func gitIsAncestor(ancestor string, descendant string) (bool, error) {
+	gitArgs := make([]string, 0, 6)
+	if gitSafeDirectory != "" {
+		gitArgs = append(gitArgs, "-c", "safe.directory="+gitSafeDirectory)
+	}
+	gitArgs = append(gitArgs, "merge-base", "--is-ancestor", ancestor, descendant)
+
+	cmd := exec.Command("git", gitArgs...)
+	cmd.Stdin = nil
+	cmd.Stdout = io.Discard
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	if err == nil {
+		return true, nil
+	}
+	if exitErr, ok := err.(*exec.ExitError); ok {
+		// Exit status 1 means "not an ancestor" for --is-ancestor.
+		if exitErr.ExitCode() == 1 {
+			return false, nil
+		}
+	}
+	msg := strings.TrimSpace(stderr.String())
+	if msg != "" {
+		return false, fmt.Errorf("git merge-base --is-ancestor failed: %s", msg)
+	}
+	return false, fmt.Errorf("git merge-base --is-ancestor failed: %w", err)
 }
 
 func findGitRootFromCWD() (string, error) {
