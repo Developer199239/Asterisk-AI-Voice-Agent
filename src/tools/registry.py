@@ -4,7 +4,7 @@ Tool registry - central repository for all available tools.
 Singleton pattern ensures only one registry exists across the application.
 """
 
-from typing import Dict, List, Type, Optional, Iterable, Set, Union
+from typing import Dict, List, Type, Optional, Iterable, Set, Union, Any
 from src.tools.base import Tool, ToolDefinition, ToolCategory, ToolPhase, PreCallTool, PostCallTool
 import logging
 
