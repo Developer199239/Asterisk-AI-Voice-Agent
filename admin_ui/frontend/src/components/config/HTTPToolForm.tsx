@@ -341,19 +341,40 @@ const HTTPToolForm = ({ config, onChange, phase }: HTTPToolFormProps) => {
                         </>
                     )}
 
-                    {/* Post-call specific: Payload Template */}
+                    {/* Post-call specific: Payload Template + Summary */}
                     {phase === 'post_call' && (
-                        <div className="space-y-2">
-                            <FormLabel tooltip="JSON payload with variable substitution. Available: {call_id}, {caller_number}, {call_duration}, {transcript_json}, {summary}, etc.">
-                                Payload Template
-                            </FormLabel>
-                            <textarea
-                                className="w-full p-3 rounded-md border border-input bg-transparent text-sm font-mono min-h-[200px] focus:outline-none focus:ring-1 focus:ring-ring"
-                                value={toolForm.payload_template || ''}
-                                onChange={(e) => setToolForm({ ...toolForm, payload_template: e.target.value })}
-                                placeholder={DEFAULT_WEBHOOK_PAYLOAD}
-                            />
-                        </div>
+                        <>
+                            <div className="border border-border rounded-lg p-3 bg-card/30">
+                                <FormSwitch
+                                    label="Generate AI Summary"
+                                    description="Use OpenAI to generate a concise summary instead of sending full transcript. Requires OPENAI_API_KEY."
+                                    checked={toolForm.generate_summary ?? false}
+                                    onChange={(e) => setToolForm({ ...toolForm, generate_summary: e.target.checked })}
+                                />
+                                {toolForm.generate_summary && (
+                                    <div className="mt-3">
+                                        <FormInput
+                                            label="Max Summary Words"
+                                            type="number"
+                                            value={toolForm.summary_max_words || 100}
+                                            onChange={(e) => setToolForm({ ...toolForm, summary_max_words: parseInt(e.target.value) })}
+                                            tooltip="Maximum words for the generated summary"
+                                        />
+                                    </div>
+                                )}
+                            </div>
+                            <div className="space-y-2">
+                                <FormLabel tooltip="JSON payload with variable substitution. Available: {call_id}, {caller_number}, {call_duration}, {transcript_json}, {summary}, etc.">
+                                    Payload Template
+                                </FormLabel>
+                                <textarea
+                                    className="w-full p-3 rounded-md border border-input bg-transparent text-sm font-mono min-h-[200px] focus:outline-none focus:ring-1 focus:ring-ring"
+                                    value={toolForm.payload_template || ''}
+                                    onChange={(e) => setToolForm({ ...toolForm, payload_template: e.target.value })}
+                                    placeholder={DEFAULT_WEBHOOK_PAYLOAD}
+                                />
+                            </div>
+                        </>
                     )}
                 </div>
             </Modal>

@@ -39,6 +39,10 @@ class WebhookConfig:
     
     # Default content type
     content_type: str = "application/json"
+    
+    # Summary generation (optional - uses LLM to summarize transcript)
+    generate_summary: bool = False
+    summary_max_words: int = 100
 
 
 class GenericWebhookTool(PostCallTool):
@@ -111,6 +115,10 @@ class GenericWebhookTool(PostCallTool):
             return
         
         try:
+            # Generate summary if requested and not already present
+            if self.config.generate_summary and not context.summary:
+                context.summary = await self._generate_summary(context)
+            
             # Build request
             url = self._substitute_variables(self.config.url, context)
             headers = {
@@ -234,6 +242,62 @@ class GenericWebhookTool(PostCallTool):
         """Redact sensitive parts of URL for logging."""
         redacted = re.sub(r'(api_key|apikey|key|token|auth)=([^&]+)', r'\1=***', url, flags=re.IGNORECASE)
         return redacted
+    
+    async def _generate_summary(self, context: PostCallContext) -> str:
+        """
+        Generate a concise summary of the conversation using OpenAI.
+        
+        Returns:
+            Summary string, or empty string if generation fails.
+        """
+        if not context.conversation_history:
+            return ""
+        
+        try:
+            import openai
+            
+            # Format transcript for summarization
+            transcript_text = "\n".join([
+                f"{msg.get('role', 'unknown')}: {msg.get('content', '')}"
+                for msg in context.conversation_history
+            ])
+            
+            if not transcript_text.strip():
+                return ""
+            
+            # Use OpenAI to generate summary
+            api_key = os.environ.get('OPENAI_API_KEY')
+            if not api_key:
+                logger.warning(f"Cannot generate summary - OPENAI_API_KEY not set: {self.config.name}")
+                return ""
+            
+            client = openai.AsyncOpenAI(api_key=api_key)
+            
+            max_words = self.config.summary_max_words
+            
+            response = await client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": f"You are a call summarizer. Summarize the following phone conversation in {max_words} words or less. Focus on: the caller's main request, key information exchanged, and the outcome. Be concise and factual."
+                    },
+                    {
+                        "role": "user",
+                        "content": transcript_text
+                    }
+                ],
+                max_tokens=200,
+                temperature=0.3,
+            )
+            
+            summary = response.choices[0].message.content.strip() if response.choices else ""
+            logger.info(f"Generated summary for webhook: {self.config.name} length={len(summary)}")
+            return summary
+            
+        except Exception as e:
+            logger.warning(f"Failed to generate summary: {self.config.name} error={e}")
+            return ""
 
 
 def create_webhook_tool(name: str, config_dict: Dict[str, Any]) -> GenericWebhookTool:
@@ -258,6 +322,8 @@ def create_webhook_tool(name: str, config_dict: Dict[str, Any]) -> GenericWebhoo
         headers=config_dict.get('headers', {}),
         payload_template=config_dict.get('payload_template'),
         content_type=config_dict.get('content_type', 'application/json'),
+        generate_summary=config_dict.get('generate_summary', False),
+        summary_max_words=config_dict.get('summary_max_words', 100),
     )
     
     return GenericWebhookTool(config)
