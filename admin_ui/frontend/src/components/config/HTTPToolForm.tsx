@@ -24,6 +24,8 @@ interface HTTPToolConfig {
     output_variables?: Record<string, string>;
     hold_audio_file?: string;
     hold_audio_threshold_ms?: number;
+    generate_summary?: boolean;
+    summary_max_words?: number;
 }
 
 const DEFAULT_WEBHOOK_PAYLOAD = `{
