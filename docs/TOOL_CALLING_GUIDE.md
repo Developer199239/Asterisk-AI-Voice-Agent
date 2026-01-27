@@ -346,50 +346,50 @@ contexts:
 
 ```yaml
 tools:
-  http_lookups:
-    hubspot_lookup:
-      kind: generic_http_lookup
-      enabled: true
-      timeout_ms: 3000
-      url: "https://api.hubapi.com/crm/v3/objects/contacts/search"
-      method: POST
-      headers:
-        Authorization: "Bearer ${HUBSPOT_API_KEY}"
-        Content-Type: "application/json"
-      body_template: |
-        {
-          "filterGroups": [{
-            "filters": [{
-              "propertyName": "phone",
-              "operator": "EQ",
-              "value": "{caller_number}"
-            }]
+  hubspot_lookup:
+    kind: generic_http_lookup
+    phase: pre_call
+    enabled: true
+    timeout_ms: 3000
+    url: "https://api.hubapi.com/crm/v3/objects/contacts/search"
+    method: POST
+    headers:
+      Authorization: "Bearer ${HUBSPOT_API_KEY}"
+      Content-Type: "application/json"
+    body_template: |
+      {
+        "filterGroups": [{
+          "filters": [{
+            "propertyName": "phone",
+            "operator": "EQ",
+            "value": "{caller_number}"
           }]
-        }
-      output_variables:
-        customer_name: "results[0].properties.firstname"
-        customer_company: "results[0].properties.company"
+        }]
+      }
+    output_variables:
+      customer_name: "results[0].properties.firstname"
+      customer_company: "results[0].properties.company"
 ```
 
 **Custom CRM API**:
 
 ```yaml
 tools:
-  http_lookups:
-    custom_crm:
-      kind: generic_http_lookup
-      enabled: true
-      url: "https://api.yourcrm.com/v1/lookup"
-      method: GET
-      headers:
-        X-API-Key: "${CRM_API_KEY}"
-      query_params:
-        phone: "{caller_number}"
-        context: "{context_name}"
-      output_variables:
-        customer_name: "data.full_name"
-        customer_status: "data.status"
-        last_interaction: "data.last_call_date"
+  custom_crm:
+    kind: generic_http_lookup
+    phase: pre_call
+    enabled: true
+    url: "https://api.yourcrm.com/v1/lookup"
+    method: GET
+    headers:
+      X-API-Key: "${CRM_API_KEY}"
+    query_params:
+      phone: "{caller_number}"
+      context: "{context_name}"
+    output_variables:
+      customer_name: "data.full_name"
+      customer_status: "data.status"
+      last_interaction: "data.last_call_date"
 ```
 
 ---
@@ -416,31 +416,32 @@ The `generic_webhook` tool sends HTTP requests with call data to external endpoi
 ```yaml
 tools:
   n8n_call_completed:
-      kind: generic_webhook
-      phase: post_call
-      enabled: true
-      is_global: true              # Run for ALL calls
-      timeout_ms: 10000
-      url: "https://n8n.yourserver.com/webhook/call-completed"
-      method: POST
-      headers:
-        Authorization: "Bearer ${N8N_WEBHOOK_TOKEN}"
-        Content-Type: "application/json"
-      payload_template: |
-        {
-          "call_id": "{call_id}",
-          "caller_number": "{caller_number}",
-          "called_number": "{called_number}",
-          "caller_name": "{caller_name}",
-          "context": "{context_name}",
-          "provider": "{provider}",
-          "duration_seconds": {call_duration},
-          "outcome": "{call_outcome}",
-          "start_time": "{call_start_time}",
-          "end_time": "{call_end_time}",
-          "transcript": {transcript_json},
-          "summary": "{summary}"
-        }
+    kind: generic_webhook
+    phase: post_call
+    enabled: true
+    is_global: true              # Run for ALL calls
+    timeout_ms: 10000
+    url: "https://n8n.yourserver.com/webhook/call-completed"
+    method: POST
+    headers:
+      Authorization: "Bearer ${N8N_WEBHOOK_TOKEN}"
+      Content-Type: "application/json"
+    payload_template: |
+      {
+        "call_id": "{call_id}",
+        "caller_number": "{caller_number}",
+        "called_number": "{called_number}",
+        "caller_name": "{caller_name}",
+        "context": "{context_name}",
+        "provider": "{provider}",
+        "duration_seconds": {call_duration},
+        "outcome": "{call_outcome}",
+        "start_time": "{call_start_time}",
+        "end_time": "{call_end_time}",
+        "transcript": {transcript_json},
+        "summary": "{summary}",
+        "summary_json": {summary_json}
+      }
 ```
 
 **AI-Powered Summary Generation**:
@@ -448,18 +449,19 @@ tools:
 ```yaml
 tools:
   crm_update:
-      kind: generic_webhook
-      enabled: true
-      is_global: true
-      url: "https://api.crm.com/calls"
-      generate_summary: true        # Generate AI summary using OpenAI
-      summary_max_words: 100        # Limit summary length
-      payload_template: |
-        {
-          "phone": "{caller_number}",
-          "summary": "{summary}",
-          "transcript": {transcript_json}
-        }
+    kind: generic_webhook
+    enabled: true
+    is_global: true
+    url: "https://api.crm.com/calls"
+    generate_summary: true        # Generate AI summary using OpenAI
+    summary_max_words: 100        # Limit summary length
+    payload_template: |
+      {
+        "phone": "{caller_number}",
+        "summary": "{summary}",
+        "summary_json": {summary_json},
+        "transcript": {transcript_json}
+      }
 ```
 
 When `generate_summary: true`, the tool uses OpenAI to create a concise summary of the conversation before sending the webhook.
@@ -481,6 +483,7 @@ When `generate_summary: true`, the tool uses OpenAI to create a concise summary 
 | `{call_end_time}` | string | ISO timestamp |
 | `{transcript_json}` | JSON | Full conversation as JSON array |
 | `{summary}` | string | AI-generated summary (if enabled) |
+| `{summary_json}` | JSON | AI-generated summary as a JSON string (safe for unquoted insertion) |
 | `{campaign_id}` | string | Outbound campaign ID |
 | `{lead_id}` | string | Outbound lead ID |
 
@@ -493,19 +496,19 @@ When `generate_summary: true`, the tool uses OpenAI to create a concise summary 
 ```yaml
 tools:
   ghl_update:
-      kind: generic_webhook
-      enabled: true
-      is_global: true
-      url: "https://rest.gohighlevel.com/v1/contacts/{lead_id}/notes"
-      method: POST
-      headers:
-        Authorization: "Bearer ${GHL_API_KEY}"
-        Content-Type: "application/json"
-      generate_summary: true
-      payload_template: |
-        {
-          "body": "AI Call Summary:\n{summary}\n\nDuration: {call_duration}s"
-        }
+    kind: generic_webhook
+    enabled: true
+    is_global: true
+    url: "https://rest.gohighlevel.com/v1/contacts/{lead_id}/notes"
+    method: POST
+    headers:
+      Authorization: "Bearer ${GHL_API_KEY}"
+      Content-Type: "application/json"
+    generate_summary: true
+    payload_template: |
+      {
+        "body": "AI Call Summary:\n{summary}\n\nDuration: {call_duration}s"
+      }
 ```
 
 **Make (Integromat) Webhook**:
@@ -513,21 +516,21 @@ tools:
 ```yaml
 tools:
   make_webhook:
-      kind: generic_webhook
-      enabled: true
-      is_global: true
-      url: "https://hook.us1.make.com/xxxxxxxxxxxxx"
-      method: POST
-      payload_template: |
-        {
-          "event": "call_completed",
-          "data": {
-            "call_id": "{call_id}",
-            "phone": "{caller_number}",
-            "duration": {call_duration},
-            "transcript": {transcript_json}
-          }
+    kind: generic_webhook
+    enabled: true
+    is_global: true
+    url: "https://hook.us1.make.com/xxxxxxxxxxxxx"
+    method: POST
+    payload_template: |
+      {
+        "event": "call_completed",
+        "data": {
+          "call_id": "{call_id}",
+          "phone": "{caller_number}",
+          "duration": {call_duration},
+          "transcript": {transcript_json}
         }
+      }
 ```
 
 **Zapier Webhook**:
@@ -535,19 +538,20 @@ tools:
 ```yaml
 tools:
   zapier_trigger:
-      kind: generic_webhook
-      enabled: true
-      is_global: true
-      url: "https://hooks.zapier.com/hooks/catch/xxxxx/yyyyy/"
-      method: POST
-      generate_summary: true
-      payload_template: |
-        {
-          "caller_phone": "{caller_number}",
-          "call_summary": "{summary}",
-          "call_duration": {call_duration},
-          "timestamp": "{call_end_time}"
-        }
+    kind: generic_webhook
+    enabled: true
+    is_global: true
+    url: "https://hooks.zapier.com/hooks/catch/xxxxx/yyyyy/"
+    method: POST
+    generate_summary: true
+    payload_template: |
+      {
+        "caller_phone": "{caller_number}",
+        "call_summary": "{summary}",
+        "call_summary_json": {summary_json},
+        "call_duration": {call_duration},
+        "timestamp": "{call_end_time}"
+      }
 ```
 
 ### Context-Specific Webhooks
@@ -557,12 +561,12 @@ Run webhooks only for specific contexts:
 ```yaml
 tools:
   sales_webhook:
-      kind: generic_webhook
-      enabled: true
-      is_global: false              # Not global
-      url: "https://sales.example.com/webhook"
-      payload_template: |
-        {"call_id": "{call_id}", "outcome": "{call_outcome}"}
+    kind: generic_webhook
+    enabled: true
+    is_global: false              # Not global
+    url: "https://sales.example.com/webhook"
+    payload_template: |
+      {"call_id": "{call_id}", "outcome": "{call_outcome}", "summary_json": {summary_json}}
 
 contexts:
   sales:
@@ -838,6 +842,7 @@ Context prompts support template variables for call-specific data. This is espec
 |----------|-------------|---------|
 | `{caller_name}` | Caller ID name | `"there"` |
 | `{caller_number}` | Caller phone number (ANI) | `"unknown"` |
+| `{caller_id}` | Alias for `{caller_number}` | `"unknown"` |
 | `{call_id}` | Unique call identifier | (always set) |
 | `{context_name}` | AI_CONTEXT from dialplan | `""` |
 | `{call_direction}` | `"inbound"` or `"outbound"` | `"inbound"` |

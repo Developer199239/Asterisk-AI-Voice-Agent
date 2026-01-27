@@ -47,7 +47,7 @@ The existing `SendEmailSummaryTool` is effectively a post-call tool but runs dur
 
 Both use `Authorization: Bearer <token>` header. Private tokens are simpler but lack granular scopes.
 
-**Pre-Call Use Case (CRM Lookup by Phone)** (validate request/response shape via official docs + Admin UI “Test Connection”):
+**Pre-Call Use Case (CRM Lookup by Phone)** (validate request/response shape via official docs; “Test Connection” is **Post-MVP**):
 
 ```http
 POST https://services.leadconnectorhq.com/contacts/search
@@ -93,15 +93,16 @@ Content-Type: application/json
 }
 ```
 
-**Response Mapping (JMESPath, string-only outputs)**:
+**Response Mapping (MVP = dot-path only, string-only outputs)**:
 
-| Output Variable | Expression | Notes |
+| Output Variable | Path | Notes |
 |-----------------|------------|-------|
-| `customer_name` | `join(' ', [contacts[0].firstName, contacts[0].lastName])` | Concatenate first/last |
+| `customer_first_name` | `contacts[0].firstName` | Direct field |
+| `customer_last_name` | `contacts[0].lastName` | Direct field |
 | `customer_email` | `contacts[0].email` | Direct field |
-| `customer_tags` | `join(', ', contacts[0].tags)` | Array → comma-separated string |
-| `last_call_notes` | `contacts[0].customFields[?key=='last_call_notes']|[0].value` | Filter by key; defaults to empty |
 | `contact_id` | `contacts[0].id` | **Store for post-call update** |
+
+> Note: JMESPath-style expressions (e.g., `join(...)`, filtering `customFields` by key) are **Post-MVP**.
 
 **Post-Call Use Case (Add Note)**:
 
@@ -159,7 +160,7 @@ All major automation platforms support **incoming webhooks** with similar patter
   "called_number": "+15559876543",
   "context_name": "sales",
   "provider": "deepgram",
-  "call_duration_seconds": 127,
+  "call_duration": 127,
   "call_outcome": "answered_human",
   "transcript": [
     {"role": "assistant", "content": "Hello, how can I help you today?"},
@@ -434,45 +435,38 @@ For configured tools (HTTP lookup/webhook), add a discriminator field so the eng
 - `kind: generic_webhook` (post-call)
 - `kind: builtin` (optional, default when absent)
 
-Example (revised from earlier YAML in this doc; note the new `kind` field and comments about env vars):
+Example (revised from earlier YAML in this doc; note the `kind` field and env-var substitution):
 
 ```yaml
 tools:
-  # Pre-call tools
+  # Pre-call tools (run after answer, before AI speaks)
   ghl_contact_lookup:
     kind: generic_http_lookup
     phase: pre_call
     enabled: true
     is_global: false
     timeout_ms: 2000
-    hold_audio_file: "custom/please-wait"  # Asterisk sound file played via ARI if threshold exceeded
+    hold_audio_file: "custom/please-wait"  # played via ARI if threshold exceeded
     hold_audio_threshold_ms: 500  # ms before playing hold audio (default: 500)
+    method: POST
+    url: "https://services.leadconnectorhq.com/contacts/search"
+    headers:
+      Authorization: "Bearer ${GHL_API_KEY}"
+      Version: "2021-07-28"
+      Content-Type: "application/json"
+    body_template: |
+      {
+        "locationId": "${GHL_LOCATION_ID}",
+        "filters": [
+          {"field": "phone", "operator": "eq", "value": "{caller_number}"}
+        ],
+        "limit": 1
+      }
+    # MVP mapping: dot paths + `[index]` only; output values are strings.
     output_variables:
-      - customer_name
-      - customer_email
-      - last_call_notes
-      - customer_tags
-    config:
-      url: "https://services.leadconnectorhq.com/contacts/search"
-      method: POST
-      headers:
-        Authorization: "Bearer ${GHL_API_KEY}"
-        Version: "2021-07-28"
-        Content-Type: "application/json"
-      body_template: |
-        {
-          "locationId": "${GHL_LOCATION_ID}",
-          "filters": [
-            {"field": "phone", "operator": "eq", "value": "{caller_number}"}
-          ],
-          "limit": 1
-        }
-      response_mapping:
-        # JMESPath (string-only outputs)
-        customer_name: "join(' ', [contacts[0].firstName, contacts[0].lastName])"
-        customer_email: "contacts[0].email"
-        last_call_notes: "contacts[0].customFields[?key=='last_call_notes']|[0].value"
-        customer_tags: "join(', ', contacts[0].tags)"
+      customer_first_name: "contacts[0].firstName"
+      customer_email: "contacts[0].email"
+      contact_id: "contacts[0].id"
 
   custom_crm_lookup:
     kind: generic_http_lookup
@@ -480,86 +474,67 @@ tools:
     enabled: false
     is_global: false
     timeout_ms: 3000
+    method: POST
+    url: "${CUSTOM_CRM_URL}/api/lookup"
+    headers:
+      X-API-Key: "${CUSTOM_CRM_API_KEY}"
+      Content-Type: "application/json"
+    body_template: |
+      {"phone": "{caller_number}"}
     output_variables:
-      - account_status
-      - account_balance
-    config:
-      url: "${CUSTOM_CRM_URL}/api/lookup"
-      method: POST
-      headers:
-        X-API-Key: "${CUSTOM_CRM_API_KEY}"
-        Content-Type: "application/json"
-      body_template: |
-        {"phone": "{caller_number}"}
-      response_mapping:
-        account_status: "$.status"
-        account_balance: "$.balance"
+      account_status: "status"
+      account_balance: "balance"
 
-  # In-call tools (existing, phase defaults to in_call)
-  transfer:
-    phase: in_call
-    enabled: true
-    is_global: false
-    # ... existing config
-
-  hangup_call:
-    phase: in_call
-    enabled: true
-    is_global: true  # Available in all contexts
-    # ... existing config
-
-  # Post-call tools
+  # Post-call tools (fire-and-forget after call ends)
   webhook_automation:
     kind: generic_webhook
     phase: post_call
     enabled: true
-    is_global: true  # Fires for ALL calls
-    config:
-      url: "${WEBHOOK_URL}"
-      method: POST
-      headers:
-        Content-Type: "application/json"
-        X-API-Key: "${WEBHOOK_API_KEY}"
-      payload_template: |
-        {
-          "schema_version": 1,
-          "event_type": "call_completed",
-          "call_id": "{call_id}",
-          "caller_number": "{caller_number}",
-          "called_number": "{called_number}",
-          "context_name": "{context_name}",
-          "provider": "{provider}",
-          "call_duration_seconds": {call_duration},
-          "call_outcome": "{call_outcome}",
-          "transcript": {transcript_json},
-          "summary": "{summary}",
-          "tool_calls": {tool_calls_json},
-          "pre_call_data": {pre_call_results_json}
-        }
+    is_global: true  # fires for ALL calls (unless opted out per context)
+    timeout_ms: 10000
+    method: POST
+    url: "${WEBHOOK_URL}"
+    headers:
+      Content-Type: "application/json"
+      X-API-Key: "${WEBHOOK_API_KEY}"
+    generate_summary: true
+    summary_max_words: 120
+    payload_template: |
+      {
+        "schema_version": 1,
+        "event_type": "call_completed",
+        "call_id": "{call_id}",
+        "caller_number": "{caller_number}",
+        "called_number": "{called_number}",
+        "context_name": "{context_name}",
+        "provider": "{provider}",
+        "call_duration": {call_duration},
+        "call_outcome": "{call_outcome}",
+        "summary_json": {summary_json},
+        "transcript": {transcript_json},
+        "tool_calls": {tool_calls_json},
+        "pre_call_results": {pre_call_results_json}
+      }
 
   ghl_update_contact:
     kind: generic_webhook
     phase: post_call
     enabled: false
     is_global: false
-    config:
-      url: "https://services.leadconnectorhq.com/contacts/{contact_id}/notes"
-      method: POST
-      headers:
-        Authorization: "Bearer ${GHL_API_KEY}"
-        Version: "2021-07-28"
-        Content-Type: "application/json"
-      payload_template: |
-        {
-          "userId": "${GHL_USER_ID}",
-          "body": "AI Call Summary ({call_duration}s):\n\n{summary}"
-        }
+    timeout_ms: 10000
+    method: POST
+    url: "https://services.leadconnectorhq.com/contacts/{contact_id}/notes"
+    headers:
+      Authorization: "Bearer ${GHL_API_KEY}"
+      Version: "2021-07-28"
+      Content-Type: "application/json"
+    payload_template: |
+      {
+        "userId": "${GHL_USER_ID}",
+        "body": "AI Call Summary ({call_duration}s):\\n\\n{summary}"
+      }
 
-  send_email_summary:
-    phase: post_call  # Recategorized from in-call
-    enabled: true
-    is_global: false
-    # ... existing config
+# Note: `send_email_summary` is auto-triggered during call cleanup when enabled and is not configured as a post-call tool.
 ```
 
 ### Context-Level Tool Assignment
@@ -571,13 +546,12 @@ contexts:
       You are a helpful sales assistant for Acme Corp.
       
       Customer Information:
-      - Name: {customer_name}
+      - Name: {customer_first_name}
       - Email: {customer_email}
-      - Last Interaction: {last_call_notes}
-      - Tags: {customer_tags}
+      - Contact ID: {contact_id}
       
       Use this information to provide personalized service.
-    greeting: "Hello {customer_name}, thanks for calling Acme Corp sales!"
+    greeting: "Hello {customer_first_name}, thanks for calling Acme Corp sales!"
     provider: deepgram
     
     # Pre-call tools (run after answer, before AI speaks)
@@ -592,14 +566,13 @@ contexts:
     
     # Post-call tools (fire-and-forget after call ends)
     post_call_tools:
-      - send_email_summary
       - ghl_update_contact
     # Note: webhook_automation is global, fires automatically unless opted out per context
 
   support:
     prompt: |
-      You are a support agent. Customer: {customer_name}
-    greeting: "Hi {customer_name}, how can I help you today?"
+      You are a support agent. Customer: {customer_first_name}
+    greeting: "Hi {customer_first_name}, how can I help you today?"
     provider: deepgram
     
     pre_call_tools:
@@ -747,13 +720,13 @@ contexts:
 │ Output Variables (for pre-call tools)                               │
 │ Map response fields to prompt variables                             │
 │ ┌─────────────────────────────────────────────────────────────────┐ │
-│ │ customer_name:       [ join(' ', [contacts[0].firstName, contacts[0].lastName]) ] [−] │
+│ │ customer_first_name: [ contacts[0].firstName ] [−]              │ │
+│ │ customer_last_name:  [ contacts[0].lastName ] [−]               │ │
 │ │ customer_email:      [ contacts[0].email ] [−]                  │ │
-│ │ last_call_notes:     [ contacts[0].customFields[?key=='last_call_notes']|[0].value ] [−] │
 │ │ [ + Add Variable ]                                              │ │
 │ └─────────────────────────────────────────────────────────────────┘ │
 │                                                                     │
-│ [ Test Connection ]                                   [ Cancel ]    │
+│ [ Save ]                                             [ Cancel ]    │
 │                                                                     │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -966,7 +939,7 @@ Post-call tool completed duration_ms=6074.03 tool=demo_post_call_webhook
 
 - [ ] Configurable URL, method, headers, query params
 - [ ] Environment variable substitution (`${API_KEY}`)
-- [ ] JMESPath response mapping to output_variables (string-only outputs)
+- [ ] Dot-path response mapping to output_variables (string-only outputs)
 - [ ] Works with GoHighLevel Contacts API
 
 ### GenericWebhookTool
@@ -1091,7 +1064,7 @@ This section documents known risks introduced by the pre-call and post-call HTTP
 
 ### Outbound HTTP Safety (Recommended, Post-MVP)
 
-Phase tools introduce operator-configured outbound HTTP requests (including “Test Connection”), which can create **SSRF-style risk** if misconfigured.
+Phase tools introduce operator-configured outbound HTTP requests (and future “Test Connection” UI, Post-MVP), which can create **SSRF-style risk** if misconfigured.
 
 MVP stance:
 - Allow outbound requests to any URL (operator-managed), but keep strong defaults: short timeouts, response size limits, and secret redaction in logs/UI.

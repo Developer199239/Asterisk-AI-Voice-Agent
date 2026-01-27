@@ -3169,6 +3169,7 @@ class Engine:
         Available variables (with defaults if not available):
         - {caller_name}: Caller ID name (default: "there")
         - {caller_number}: Caller phone number/ANI (default: "unknown")
+        - {caller_id}: Alias for {caller_number} (default: "unknown")
         - {call_id}: Unique call identifier (always available)
         - {context_name}: AI_CONTEXT from dialplan (default: "")
         - {call_direction}: "inbound" or "outbound" (default: "inbound")
@@ -3186,6 +3187,7 @@ class Engine:
         substitutions = {
             "caller_name": getattr(session, 'caller_name', None) or "there",
             "caller_number": getattr(session, 'caller_number', None) or "unknown",
+            "caller_id": getattr(session, 'caller_number', None) or "unknown",
             "call_id": session.call_id,
             "context_name": getattr(session, 'context_name', None) or "",
             "call_direction": "outbound" if getattr(session, 'is_outbound', False) else "inbound",
@@ -8188,19 +8190,19 @@ class Engine:
                 if context_name:
                     context_config = self.transport_orchestrator.get_context_config(context_name)
                     if context_config and context_config.prompt:
-                            # Create a copy to avoid mutating the pipeline's original options
-                            llm_options = dict(llm_options)
-                            # Apply template substitution for caller context variables
-                            llm_options['system_prompt'] = self._apply_prompt_template_substitution(context_config.prompt, session)
-                            prompt_source = "context_injection"
-                            context_prompt_injected = True
-                            logger.info(
-                                "Pipeline LLM prompt resolved from context",
-                                call_id=call_id,
-                                context=context_name,
-                                prompt_length=len(context_config.prompt),
-                                prompt_preview=context_config.prompt[:80] + "..." if len(context_config.prompt) > 80 else context_config.prompt,
-                            )
+                        # Create a copy to avoid mutating the pipeline's original options
+                        llm_options = dict(llm_options)
+                        # Apply template substitution for caller context variables
+                        llm_options['system_prompt'] = self._apply_prompt_template_substitution(context_config.prompt, session)
+                        prompt_source = "context_injection"
+                        context_prompt_injected = True
+                        logger.info(
+                            "Pipeline LLM prompt resolved from context",
+                            call_id=call_id,
+                            context=context_name,
+                            prompt_length=len(context_config.prompt),
+                            prompt_preview=context_config.prompt[:80] + "..." if len(context_config.prompt) > 80 else context_config.prompt,
+                        )
                 
                 # Priority 2: If no context prompt, check if pipeline has default or use global
                 if not context_prompt_injected:
@@ -8243,6 +8245,20 @@ class Engine:
                     context_config = self.transport_orchestrator.get_context_config(context_name)
                     if context_config and hasattr(context_config, "tools"):
                         allowed_tools = list(getattr(context_config, "tools") or [])
+                # Defense-in-depth: never expose pre-call/post-call tools as in-call tools (YAML edits).
+                if allowed_tools:
+                    try:
+                        from src.tools.base import ToolPhase
+                        from src.tools.registry import tool_registry
+
+                        filtered: List[str] = []
+                        for name in allowed_tools:
+                            t = tool_registry.get(name) if tool_registry else None
+                            if t and getattr(t.definition, "phase", ToolPhase.IN_CALL) == ToolPhase.IN_CALL:
+                                filtered.append(t.definition.name)
+                        allowed_tools = filtered
+                    except Exception:
+                        pass
 
                 # Always override any legacy pipeline/provider tool settings.
                 llm_options = dict(llm_options)
@@ -8304,7 +8320,7 @@ class Engine:
                 if context_name:
                     context_config = self.transport_orchestrator.get_context_config(context_name)
                     if context_config and context_config.greeting:
-                        greeting = context_config.greeting.strip()
+                        greeting = self._apply_prompt_template_substitution(context_config.greeting.strip(), session)
                         greeting_source = "context_injection"
                         logger.info(
                             "Pipeline greeting resolved from context",
@@ -8317,7 +8333,7 @@ class Engine:
                 if not greeting:
                     global_greeting = (getattr(self.config.llm, "initial_greeting", None) or "").strip()
                     if global_greeting:
-                        greeting = global_greeting
+                        greeting = self._apply_prompt_template_substitution(global_greeting, session)
                         greeting_source = "global_llm_config"
                         logger.info(
                             "Pipeline greeting resolved from global config",
@@ -8341,33 +8357,9 @@ class Engine:
                 greeting = ""
                 greeting_source = "error"
             
-            # Apply template substitution for personalized greetings
+            # Final pass: ensure greeting can safely reference template variables.
             if greeting:
-                try:
-                    caller_name = getattr(session, 'caller_name', None) or "there"
-                    caller_number = getattr(session, 'caller_number', None) or "unknown"
-                    greeting = greeting.format(
-                        caller_name=caller_name,
-                        caller_number=caller_number
-                    )
-                    logger.debug(
-                        "Applied greeting template substitution",
-                        call_id=call_id,
-                        caller_name=caller_name,
-                        greeting_length=len(greeting)
-                    )
-                except KeyError as e:
-                    logger.warning(
-                        "Greeting template has invalid placeholder",
-                        call_id=call_id,
-                        error=str(e)
-                    )
-                except Exception as e:
-                    logger.warning(
-                        "Failed to apply greeting template substitution",
-                        call_id=call_id,
-                        error=str(e)
-                    )
+                greeting = self._apply_prompt_template_substitution(greeting, session)
             
             if greeting:
                 max_attempts = 2
@@ -10802,9 +10794,39 @@ class Engine:
                 if pre_call_results:
                     # Refresh session after pre-call tools updated it
                     session = await self.session_store.get_by_call_id(call_id)
-                    logger.info("Pre-call enrichment complete",
-                               call_id=call_id,
-                               variables=list(pre_call_results.keys()))
+                    # Recompute per-call provider overrides now that pre-call enrichment is available.
+                    # This is required for full-agent providers because prompt/greeting overrides are composed
+                    # earlier during audio profile resolution, before pre-call tools run.
+                    try:
+                        if session and getattr(session, "context_name", None):
+                            ctx_cfg = self.transport_orchestrator.get_context_config(session.context_name)
+                            if ctx_cfg:
+                                session.provider_overrides = dict(getattr(session, "provider_overrides", {}) or {})
+                                greeting_tpl = getattr(ctx_cfg, "greeting", None)
+                                if greeting_tpl:
+                                    session.provider_overrides["greeting"] = self._apply_prompt_template_substitution(
+                                        str(greeting_tpl), session
+                                    )
+                                prompt_tpl = getattr(ctx_cfg, "prompt", None)
+                                if prompt_tpl:
+                                    prompt_to_apply = self._apply_prompt_template_substitution(str(prompt_tpl), session)
+                                    if getattr(session, "is_outbound", False) and getattr(session, "outbound_custom_vars", None):
+                                        prompt_to_apply = self._append_outbound_custom_vars_to_prompt(
+                                            prompt_to_apply, getattr(session, "outbound_custom_vars", {}) or {}
+                                        )
+                                    session.provider_overrides["prompt"] = prompt_to_apply
+                                await self._save_session(session)
+                    except Exception:
+                        logger.debug(
+                            "Failed to refresh provider overrides after pre-call enrichment",
+                            call_id=call_id,
+                            exc_info=True,
+                        )
+                    logger.info(
+                        "Pre-call enrichment complete",
+                        call_id=call_id,
+                        variables=list(pre_call_results.keys()),
+                    )
             except Exception:
                 logger.debug("Pre-call tool execution failed", call_id=call_id, exc_info=True)
 
@@ -10937,8 +10959,22 @@ class Engine:
                         has_tools_attr=hasattr(context_config, 'tools') if context_config else False,
                     )
                     if context_config:
-                        # Contexts are the source of truth for tool allowlisting.
-                        provider_context["tools"] = list(getattr(context_config, "tools", None) or [])
+                        # Contexts are the source of truth for tool allowlisting, but never expose
+                        # pre-call/post-call phase tools as in-call tools (defense-in-depth for YAML edits).
+                        allowed = list(getattr(context_config, "tools", None) or [])
+                        try:
+                            from src.tools.base import ToolPhase
+                            from src.tools.registry import tool_registry
+
+                            filtered: List[str] = []
+                            for name in allowed:
+                                t = tool_registry.get(name) if tool_registry else None
+                                if t and getattr(t.definition, "phase", ToolPhase.IN_CALL) == ToolPhase.IN_CALL:
+                                    filtered.append(t.definition.name)
+                            allowed = filtered
+                        except Exception:
+                            pass
+                        provider_context["tools"] = allowed
                         try:
                             # Persist tool allowlist on session so provider-agnostic tools (e.g., hangup_call)
                             # can decide whether follow-up tools like request_transcript are actually available.
@@ -10952,12 +10988,21 @@ class Engine:
                             tools=provider_context["tools"],
                             tools_count=len(provider_context["tools"]),
                         )
-                        # Include prompt for reference (though config.instructions should already be set)
-                        if hasattr(context_config, 'prompt') and context_config.prompt:
+                        # Prefer per-call provider overrides (includes pre-call enrichment variables).
+                        overrides = dict(getattr(session, "provider_overrides", {}) or {})
+                        prompt_override = overrides.get("prompt")
+                        greeting_override = overrides.get("greeting")
+
+                        if isinstance(prompt_override, str) and prompt_override.strip():
+                            provider_context["prompt"] = prompt_override
+                            provider_context["instructions"] = prompt_override  # Alias for ElevenLabs
+                        elif hasattr(context_config, 'prompt') and context_config.prompt:
                             provider_context['prompt'] = context_config.prompt
                             provider_context['instructions'] = context_config.prompt  # Alias for ElevenLabs
-                        # Include greeting for ElevenLabs first message override
-                        if hasattr(context_config, 'greeting') and context_config.greeting:
+
+                        if isinstance(greeting_override, str) and greeting_override.strip():
+                            provider_context["greeting"] = greeting_override
+                        elif hasattr(context_config, 'greeting') and context_config.greeting:
                             provider_context['greeting'] = context_config.greeting
             except Exception as e:
                 logger.warning(f"Failed to build provider context: {e}", call_id=call_id, exc_info=True)
@@ -11218,6 +11263,18 @@ class Engine:
 
                 # Execute tool via registry (tool_registry is a module-level singleton)
                 tool = tool_registry.get(function_name) if tool_registry else None
+                if tool:
+                    # Defense-in-depth: prevent pre-call/post-call tools from being executed during the call.
+                    try:
+                        from src.tools.base import ToolPhase
+                        if getattr(tool.definition, "phase", ToolPhase.IN_CALL) != ToolPhase.IN_CALL:
+                            result = {
+                                "status": "error",
+                                "message": f"Tool '{function_name}' is not callable during the conversation",
+                            }
+                            tool = None
+                    except Exception:
+                        pass
                 if tool:
                     result = await tool.execute(parameters, context)
 

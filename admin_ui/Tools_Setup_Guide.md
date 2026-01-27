@@ -29,13 +29,14 @@ This guide explains how to set up **Pre-Call HTTP Lookups** and **Post-Call Webh
 
 ## Part 1: Pre-Call HTTP Lookups
 
-Pre-call lookups fetch data from external APIs (like CRMs) **before the AI speaks**. This allows the AI to greet callers by name and provide personalized service.
+Pre-call lookups fetch data from external APIs (like CRMs) **after the call is answered but before the AI speaks**. This allows the AI to greet callers by name and provide personalized service.
 
-### Step 1: Navigate to HTTP Tools
+### Step 1: Navigate to Tools
 
 1. Log in to Admin UI
-2. Go to **Configuration** → **HTTP Tools** tab
-3. Click **Add Lookup** button
+2. Go to **Tools**
+3. Select the **Pre-Call** tab
+4. Click **+ Add Pre-Call Tool**
 
 ### Step 2: Configure the Lookup
 
@@ -45,7 +46,8 @@ Fill in the following fields:
 |-------|-------------|---------|
 | **Name** | Unique identifier for this tool | `ghl_contact_lookup` |
 | **Enabled** | Toggle to enable/disable | ✓ |
-| **URL** | API endpoint URL | `https://rest.gohighlevel.com/v1/contacts/lookup` |
+| **Global** | Run for all contexts (can be opted out per context) | ☐ |
+| **URL** | API endpoint URL | `https://api.example.com/contacts/lookup` |
 | **Method** | HTTP method | `GET` |
 | **Timeout (ms)** | Request timeout | `2000` |
 
@@ -82,9 +84,13 @@ Output variables map API response fields to prompt variables:
 - Nested field: `contact.email`
 - Array element: `contacts[0].name`
 
+> **MVP note**: Output mappings support **simple dot paths + `[index]`** only. Expressions (concatenation, filters, joins) are Post-MVP.
+
 ### Step 6: Save
 
-Click **Save Configuration** to apply changes.
+Click **Save** to apply changes.
+
+> **Test Connection** is **Post-MVP** (not required for MVP).
 
 ---
 
@@ -92,10 +98,11 @@ Click **Save Configuration** to apply changes.
 
 Post-call webhooks send call data to external systems **after the call ends**. Use them to update CRMs, trigger automations, or log calls.
 
-### Step 1: Navigate to HTTP Tools
+### Step 1: Navigate to Tools
 
-1. Go to **Configuration** → **HTTP Tools** tab
-2. Click **Add Webhook** button
+1. Go to **Tools**
+2. Select the **Post-Call** tab
+3. Click **+ Add Post-Call Tool**
 
 ### Step 2: Configure the Webhook
 
@@ -127,7 +134,10 @@ Enter your JSON payload template in the **Payload Template** field:
   "duration_seconds": {call_duration},
   "outcome": "{call_outcome}",
   "summary": "{summary}",
-  "transcript": {transcript_json}
+  "summary_json": {summary_json},
+  "transcript": {transcript_json},
+  "pre_call_results": {pre_call_results_json},
+  "tool_calls": {tool_calls_json}
 }
 ```
 
@@ -140,7 +150,7 @@ Toggle **Generate Summary** to have the AI create a summary of the conversation:
 | **Generate Summary** | ✓ Enable |
 | **Max Words** | `100` |
 
-When enabled, `{summary}` contains an AI-generated summary instead of being empty.
+When enabled, `{summary}` contains an AI-generated summary and `{summary_json}` contains the same summary as a JSON string (safe for unquoted insertion).
 
 ### Step 6: Save
 
@@ -154,7 +164,7 @@ After setting up lookups and webhooks, you need to use the output variables in y
 
 ### Step 1: Navigate to Contexts
 
-1. Go to **Configuration** → **Contexts** tab
+1. Go to **Contexts**
 2. Select an existing context or click **Add Context**
 
 ### Step 2: Use Pre-Call Variables in Prompts
@@ -175,15 +185,15 @@ If the customer name is empty, ask for their name politely.
 
 ### Step 3: Enable Tools for the Context
 
-In the **Tools** section, enable the tools you want available:
+In the **Tools Configuration** section, enable tools per phase:
 
-- ✓ `transfer` - Transfer calls
-- ✓ `hangup_call` - End calls gracefully
-- ✓ `request_transcript` - Email transcripts
-- ✓ `ghl_contact_lookup` - Your pre-call lookup (if not global)
-- ✓ `n8n_call_completed` - Your webhook (if not global)
+- **Pre-Call Tools**: select lookups to run after answer and before the AI speaks (`pre_call_tools`).
+- **In-Call Tools**: select callable tools for the live conversation (`tools`).
+- **Post-Call Tools**: select webhooks/actions to run after hangup (`post_call_tools`).
 
-> **Tip**: Global webhooks run automatically for all calls. Non-global tools must be enabled per context.
+> **Global tools** run for all contexts by default. Per context you can opt out via:
+> - `disable_global_pre_call_tools`
+> - `disable_global_post_call_tools`
 
 ### Step 4: Save Context
 
@@ -202,11 +212,14 @@ Use these in lookup URLs, query params, and headers:
 | `{caller_number}` | Caller's phone number | `+15551234567` |
 | `{called_number}` | DID that was called | `+18005551234` |
 | `{caller_name}` | Caller ID name | `John Smith` |
+| `{caller_id}` | Alias for `{caller_number}` (best for prompt/greeting templates) | `+15551234567` |
 | `{call_id}` | Unique call identifier | `1763582071.6214` |
 | `{context_name}` | AI context name | `support` |
 | `{campaign_id}` | Outbound campaign ID | `camp_abc123` |
 | `{lead_id}` | Outbound lead ID | `lead_xyz789` |
 | `${ENV_VAR}` | Environment variable | (from .env file) |
+
+> Note: `{caller_id}` is primarily intended for **prompt/greeting templates**. For lookup URL/query/body templates, use `{caller_number}`.
 
 ### Post-Call Variables (Output)
 
@@ -226,8 +239,10 @@ Use these in webhook payloads:
 | `{call_start_time}` | string | ISO timestamp |
 | `{call_end_time}` | string | ISO timestamp |
 | `{summary}` | string | AI-generated summary (if enabled) |
-| `{summary_json}` | JSON | AI-generated summary (JSON-escaped) |
+| `{summary_json}` | JSON | AI-generated summary as a JSON string (safe for unquoted insertion) |
 | `{transcript_json}` | JSON | Full conversation array |
+| `{pre_call_results_json}` | JSON | Pre-call tool outputs (key/value JSON) |
+| `{tool_calls_json}` | JSON | In-call tool call log (JSON) |
 | `{campaign_id}` | string | Campaign ID |
 | `{lead_id}` | string | Lead ID |
 
@@ -239,38 +254,9 @@ Use these in webhook payloads:
 
 ### GoHighLevel Integration
 
-**Pre-Call: Contact Lookup**
+GoHighLevel API endpoints and authentication details can change; validate request/response shape against GoHighLevel’s official docs.
 
-1. **URL**: `https://rest.gohighlevel.com/v1/contacts/lookup`
-2. **Method**: `GET`
-3. **Headers**:
-   - `Authorization`: `Bearer ${GHL_API_KEY}`
-4. **Query Params**:
-   - `phone`: `{caller_number}`
-5. **Output Variables**:
-   - `customer_name`: `contacts[0].firstName`
-   - `customer_email`: `contacts[0].email`
-   - `ghl_contact_id`: `contacts[0].id`
-
-**Post-Call: Add Note to Contact**
-
-1. **URL**: `https://rest.gohighlevel.com/v1/contacts/{ghl_contact_id}/notes`
-2. **Method**: `POST`
-3. **Headers**:
-   - `Authorization`: `Bearer ${GHL_API_KEY}`
-   - `Content-Type`: `application/json`
-4. **Generate Summary**: ✓ Enabled
-5. **Payload**:
-```json
-{
-  "body": "AI Call Summary\n\nDuration: {call_duration}s\nOutcome: {call_outcome}\n\n{summary}"
-}
-```
-
-**Environment Variables** (add to `.env`):
-```
-GHL_API_KEY=your_gohighlevel_api_key_here
-```
+- MVP pattern: run a **pre-call lookup** to fetch the contact and store a `contact_id` in pre-call results, then send a **post-call webhook** including `{pre_call_results_json}` and `{summary_json}` so your automation can update the contact.
 
 ---
 
@@ -301,7 +287,7 @@ GHL_API_KEY=your_gohighlevel_api_key_here
   },
   "duration": {call_duration},
   "outcome": "{call_outcome}",
-  "summary": "{summary}",
+  "summary_json": {summary_json},
   "transcript": {transcript_json},
   "timestamp": "{call_end_time}"
 }
@@ -340,7 +326,7 @@ GHL_API_KEY=your_gohighlevel_api_key_here
   "caller_phone": "{caller_number}",
   "duration_seconds": {call_duration},
   "outcome": "{call_outcome}",
-  "ai_summary": "{summary}",
+  "ai_summary_json": {summary_json},
   "transcript": {transcript_json}
 }
 ```

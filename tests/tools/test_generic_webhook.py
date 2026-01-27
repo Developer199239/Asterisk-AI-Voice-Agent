@@ -276,12 +276,12 @@ class TestPayloadBuilding:
             data = json.loads(payload)
             assert data["key"] == "secret123"
     
-    def test_summary_replaces_transcript_when_enabled(self, context):
-        """Test that summary replaces transcript_json when generate_summary is enabled."""
+    def test_summary_json_available_and_transcript_preserved(self, context):
+        """Test that summary_json is available and transcript_json remains the transcript."""
         context.summary = "Customer called about billing question."
         config = WebhookConfig(
             name="test",
-            payload_template='{"transcript": {transcript_json}}',
+            payload_template='{"transcript": {transcript_json}, "summary": "{summary}", "summary_json": {summary_json}}',
             generate_summary=True,
         )
         tool = GenericWebhookTool(config)
@@ -289,8 +289,9 @@ class TestPayloadBuilding:
         payload = tool._build_payload(context)
         data = json.loads(payload)
         
-        # transcript_json should now contain the summary
-        assert data["transcript"] == "Customer called about billing question."
+        assert data["transcript"] == context.conversation_history
+        assert data["summary"] == "Customer called about billing question."
+        assert data["summary_json"] == "Customer called about billing question."
     
     def test_all_context_fields_available(self, context):
         """Test that all PostCallContext fields are available for substitution."""
