@@ -180,6 +180,10 @@ class GenericWebhookTool(PostCallTool):
         # Add schema_version
         payload_vars["schema_version"] = "1"
         
+        # If generate_summary is enabled, replace transcript_json with the summary
+        if self.config.generate_summary and context.summary:
+            payload_vars["transcript_json"] = json.dumps(context.summary)
+        
         # Substitute variables
         result = template
         

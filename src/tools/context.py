@@ -222,7 +222,6 @@ class PostCallContext:
             "call_end_time": self.call_end_time or "",
             "transcript_json": json.dumps(self.conversation_history),
             "summary": self.summary or "",
-            "summary_json": json.dumps(self.summary or ""),  # Pre-quoted for direct JSON insertion
             "tool_calls_json": json.dumps(self.tool_calls),
             "pre_call_results_json": json.dumps(self.pre_call_results),
             "campaign_id": self.campaign_id or "",
