@@ -878,6 +878,56 @@ contexts:
 - `admin_ui/frontend/src/components/config/ContextForm.tsx` — Phase-based tool sections
 - `admin_ui/frontend/src/pages/ContextsPage.tsx` — Pass httpTools prop
 
+### Phase 5.1 — Webhook Summary Generation ✅ COMPLETE (Jan 26, 2026)
+
+**Feature**: AI-generated call summaries for post-call webhooks instead of sending full transcripts.
+
+**Configuration**:
+
+```yaml
+demo_post_call_webhook:
+  kind: generic_webhook
+  phase: post_call
+  generate_summary: true       # Enable AI summarization
+  summary_max_words: 100       # Max words for summary
+  payload_template: |
+    {
+      "transcript": "{summary}",  # Use {summary} instead of {transcript_json}
+      ...
+    }
+```
+
+**Implementation**:
+- ✅ Added `generate_summary` and `summary_max_words` to `WebhookConfig` dataclass
+- ✅ Added `_generate_summary()` method using OpenAI gpt-4o-mini
+- ✅ Summary generated before payload template substitution
+- ✅ Admin UI toggle in HTTPToolForm for post-call webhooks
+- ✅ Added `openai>=1.0.0` to requirements.txt
+
+**Files modified**:
+- `src/tools/http/generic_webhook.py` — Summary generation logic
+- `admin_ui/frontend/src/components/config/HTTPToolForm.tsx` — UI toggle
+- `requirements.txt` — Added openai dependency
+
+**Test Evidence** (Call 1769480034.541):
+
+```log
+Generated summary for webhook: demo_post_call_webhook length=327
+Sending webhook: demo_post_call_webhook POST https://hub.cybridllc.com/webhook/whatsapp-hook
+Webhook sent successfully: demo_post_call_webhook status=200
+Post-call tool completed duration_ms=6074.03 tool=demo_post_call_webhook
+```
+
+### Lessons Learned (Phase 5.1)
+
+1. **Missing dependency**: Initial summary generation failed with `No module named 'openai'`. The openai package wasn't in requirements.txt because monolithic providers import it dynamically. Added `openai>=1.0.0` to requirements.txt.
+
+2. **Admin UI persistence**: TypeScript interface `HTTPToolConfig` must include all fields that need to be saved. Added `generate_summary?: boolean` and `summary_max_words?: number` to the interface.
+
+3. **Two-step save flow**: Admin UI requires (1) Save in modal → updates local state, then (2) Save Changes button → persists to YAML. Users may miss step 2.
+
+4. **Docker cache**: When debugging UI issues, `docker compose build --no-cache` may be needed to ensure frontend changes are included.
+
 ### Phase 6 — Testing & Documentation (0.5 week)
 
 - Unit tests for new tool base classes
