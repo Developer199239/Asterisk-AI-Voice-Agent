@@ -4070,6 +4070,9 @@ class Engine:
                     logger.debug("Cleanup already in progress (in-memory guard)", call_id=call_id)
                     return
                 _cleanup_in_progress.add(call_id)
+                # Set TTL guard IMMEDIATELY to block late events (AAVA-148 fix)
+                import time as _time
+                _cleanup_completed_at[call_id] = _time.time()
             
             logger.info("Cleaning up call", call_id=call_id)
             
