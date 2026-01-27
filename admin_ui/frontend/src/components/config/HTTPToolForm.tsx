@@ -49,6 +49,8 @@ const HTTPToolForm = ({ config, onChange, phase }: HTTPToolFormProps) => {
     const [headerValue, setHeaderValue] = useState('');
     const [outputVarKey, setOutputVarKey] = useState('');
     const [outputVarPath, setOutputVarPath] = useState('');
+    const [queryParamKey, setQueryParamKey] = useState('');
+    const [queryParamValue, setQueryParamValue] = useState('');
 
     const getHTTPTools = () => {
         const tools: Record<string, HTTPToolConfig> = {};
@@ -138,6 +140,22 @@ const HTTPToolForm = ({ config, onChange, phase }: HTTPToolFormProps) => {
         const vars = { ...toolForm.output_variables };
         delete vars[key];
         setToolForm({ ...toolForm, output_variables: vars });
+    };
+
+    const addQueryParam = () => {
+        if (!queryParamKey) return;
+        setToolForm({
+            ...toolForm,
+            query_params: { ...toolForm.query_params, [queryParamKey]: queryParamValue }
+        });
+        setQueryParamKey('');
+        setQueryParamValue('');
+    };
+
+    const removeQueryParam = (key: string) => {
+        const params = { ...toolForm.query_params };
+        delete params[key];
+        setToolForm({ ...toolForm, query_params: params });
     };
 
     const phaseIcon = phase === 'pre_call' ? <Search className="w-4 h-4" /> : <Webhook className="w-4 h-4" />;
@@ -297,9 +315,59 @@ const HTTPToolForm = ({ config, onChange, phase }: HTTPToolFormProps) => {
                         </div>
                     </div>
 
-                    {/* Pre-call specific: Output Variables */}
+                    {/* Pre-call specific: Query Params, Body Template, Output Variables */}
                     {phase === 'pre_call' && (
                         <>
+                            {/* Query Parameters */}
+                            <div className="space-y-2">
+                                <FormLabel tooltip="URL query parameters. Use {caller_number}, {call_id}, etc. for variable substitution.">
+                                    Query Parameters
+                                </FormLabel>
+                                <div className="space-y-1">
+                                    {Object.entries(toolForm.query_params || {}).map(([k, v]) => (
+                                        <div key={k} className="flex items-center gap-2 text-xs bg-accent/50 px-2 py-1 rounded">
+                                            <span className="font-mono">{k}={String(v)}</span>
+                                            <button onClick={() => removeQueryParam(k)} className="ml-auto text-destructive hover:text-destructive/80">
+                                                <Trash2 className="w-3 h-3" />
+                                            </button>
+                                        </div>
+                                    ))}
+                                </div>
+                                <div className="flex gap-2">
+                                    <input
+                                        className="flex-1 px-2 py-1 text-sm border rounded"
+                                        placeholder="Parameter name (e.g., phone)"
+                                        value={queryParamKey}
+                                        onChange={(e) => setQueryParamKey(e.target.value)}
+                                    />
+                                    <input
+                                        className="flex-1 px-2 py-1 text-sm border rounded"
+                                        placeholder="Value (e.g., {caller_number})"
+                                        value={queryParamValue}
+                                        onChange={(e) => setQueryParamValue(e.target.value)}
+                                    />
+                                    <button onClick={addQueryParam} className="px-2 py-1 bg-secondary rounded text-xs hover:bg-secondary/80">
+                                        <Plus className="w-3 h-3" />
+                                    </button>
+                                </div>
+                            </div>
+
+                            {/* Body Template (for POST requests) */}
+                            {(toolForm.method === 'POST' || toolForm.method === 'PUT' || toolForm.method === 'PATCH') && (
+                                <div className="space-y-2">
+                                    <FormLabel tooltip="JSON body template for POST/PUT/PATCH requests. Use {caller_number}, {call_id}, etc. for variable substitution.">
+                                        Body Template
+                                    </FormLabel>
+                                    <textarea
+                                        className="w-full p-3 rounded-md border border-input bg-transparent text-sm font-mono min-h-[120px] focus:outline-none focus:ring-1 focus:ring-ring"
+                                        value={toolForm.body_template || ''}
+                                        onChange={(e) => setToolForm({ ...toolForm, body_template: e.target.value })}
+                                        placeholder='{"phone": "{caller_number}", "context": "{context_name}"}'
+                                    />
+                                </div>
+                            )}
+
+                            {/* Output Variables */}
                             <div className="space-y-2">
                                 <FormLabel tooltip="Map JSON response paths to variables for prompt injection. Use dot notation like 'contact.name' or 'contacts[0].email'">
                                     Output Variables
@@ -333,13 +401,22 @@ const HTTPToolForm = ({ config, onChange, phase }: HTTPToolFormProps) => {
                                 </div>
                             </div>
 
-                            <FormInput
-                                label="Hold Audio File (optional)"
-                                value={toolForm.hold_audio_file || ''}
-                                onChange={(e) => setToolForm({ ...toolForm, hold_audio_file: e.target.value })}
-                                placeholder="custom/please-wait"
-                                tooltip="Asterisk sound file to play while waiting for lookup (if > threshold)"
-                            />
+                            <div className="grid grid-cols-2 gap-4">
+                                <FormInput
+                                    label="Hold Audio File (optional)"
+                                    value={toolForm.hold_audio_file || ''}
+                                    onChange={(e) => setToolForm({ ...toolForm, hold_audio_file: e.target.value })}
+                                    placeholder="custom/please-wait"
+                                    tooltip="Asterisk sound file to play while waiting for lookup"
+                                />
+                                <FormInput
+                                    label="Hold Audio Threshold (ms)"
+                                    type="number"
+                                    value={toolForm.hold_audio_threshold_ms || 500}
+                                    onChange={(e) => setToolForm({ ...toolForm, hold_audio_threshold_ms: parseInt(e.target.value) })}
+                                    tooltip="Play hold audio if lookup takes longer than this threshold"
+                                />
+                            </div>
                         </>
                     )}
 

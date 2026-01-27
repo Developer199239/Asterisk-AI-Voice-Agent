@@ -3193,6 +3193,13 @@ class Engine:
             "lead_id": getattr(session, 'outbound_lead_id', None) or "",
         }
         
+        # Add pre-call tool results (Milestone 24 - CRM enrichment variables)
+        pre_call_results = getattr(session, 'pre_call_results', None) or {}
+        for key, value in pre_call_results.items():
+            # Don't override built-in variables
+            if key not in substitutions:
+                substitutions[key] = str(value) if value else ""
+        
         def replace_match(match):
             key = match.group(1)
             return substitutions.get(key, match.group(0))  # Leave unknown as-is

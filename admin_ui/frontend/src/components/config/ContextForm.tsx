@@ -50,6 +50,19 @@ const ContextForm = ({ config, providers, pipelines, availableTools, toolEnabled
         updateConfig(phase, newTools);
     };
 
+    const handleGlobalToolDisable = (phase: 'disable_global_pre_call_tools' | 'disable_global_post_call_tools', toolName: string) => {
+        const currentDisabled = config[phase] || [];
+        const newDisabled = currentDisabled.includes(toolName)
+            ? currentDisabled.filter((t: string) => t !== toolName)
+            : [...currentDisabled, toolName];
+        updateConfig(phase, newDisabled);
+    };
+
+    const isGlobalToolDisabled = (phase: 'pre_call' | 'post_call', toolName: string) => {
+        const key = phase === 'pre_call' ? 'disable_global_pre_call_tools' : 'disable_global_post_call_tools';
+        return (config[key] || []).includes(toolName);
+    };
+
     const fallbackTools = [
         'transfer',
         'attended_transfer',
@@ -199,15 +212,41 @@ const ContextForm = ({ config, providers, pipelines, availableTools, toolEnabled
                             ) : (
                                 <div className="grid grid-cols-2 gap-2">
                                     {getHttpToolsByPhase('pre_call').map(tool => (
-                                        <label key={tool.name} className="flex items-center space-x-2 p-2 rounded border border-border bg-card/30 hover:bg-accent cursor-pointer">
-                                            <input
-                                                type="checkbox"
-                                                className="rounded border-input text-primary focus:ring-primary"
-                                                checked={(config.pre_call_tools || []).includes(tool.name)}
-                                                onChange={() => handlePhaseToolToggle('pre_call_tools', tool.name)}
-                                            />
-                                            <span className="text-xs font-medium">{tool.name}</span>
-                                            {tool.is_global && <span title="Global tool"><Lock className="w-3 h-3 text-blue-500" /></span>}
+                                        <label 
+                                            key={tool.name} 
+                                            className={`flex items-center justify-between p-2 rounded border border-border bg-card/30 ${
+                                                tool.is_global && isGlobalToolDisabled('pre_call', tool.name) ? 'opacity-50' : 'hover:bg-accent'
+                                            } cursor-pointer`}
+                                        >
+                                            <div className="flex items-center space-x-2">
+                                                {!tool.is_global && (
+                                                    <input
+                                                        type="checkbox"
+                                                        className="rounded border-input text-primary focus:ring-primary"
+                                                        checked={(config.pre_call_tools || []).includes(tool.name)}
+                                                        onChange={() => handlePhaseToolToggle('pre_call_tools', tool.name)}
+                                                    />
+                                                )}
+                                                <span className="text-xs font-medium">{tool.name}</span>
+                                                {tool.is_global && <span title="Global tool (runs for all contexts)"><Lock className="w-3 h-3 text-blue-500" /></span>}
+                                            </div>
+                                            {tool.is_global && (
+                                                <button
+                                                    type="button"
+                                                    onClick={(e) => {
+                                                        e.preventDefault();
+                                                        handleGlobalToolDisable('disable_global_pre_call_tools', tool.name);
+                                                    }}
+                                                    className={`text-xs px-2 py-0.5 rounded ${
+                                                        isGlobalToolDisabled('pre_call', tool.name)
+                                                            ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30'
+                                                            : 'bg-green-500/20 text-green-400 hover:bg-green-500/30'
+                                                    }`}
+                                                    title={isGlobalToolDisabled('pre_call', tool.name) ? 'Click to enable for this context' : 'Click to disable for this context'}
+                                                >
+                                                    {isGlobalToolDisabled('pre_call', tool.name) ? 'Disabled' : 'Enabled'}
+                                                </button>
+                                            )}
                                         </label>
                                     ))}
                                 </div>
@@ -278,15 +317,41 @@ const ContextForm = ({ config, providers, pipelines, availableTools, toolEnabled
                             ) : (
                                 <div className="grid grid-cols-2 gap-2">
                                     {getHttpToolsByPhase('post_call').map(tool => (
-                                        <label key={tool.name} className="flex items-center space-x-2 p-2 rounded border border-border bg-card/30 hover:bg-accent cursor-pointer">
-                                            <input
-                                                type="checkbox"
-                                                className="rounded border-input text-primary focus:ring-primary"
-                                                checked={(config.post_call_tools || []).includes(tool.name)}
-                                                onChange={() => handlePhaseToolToggle('post_call_tools', tool.name)}
-                                            />
-                                            <span className="text-xs font-medium">{tool.name}</span>
-                                            {tool.is_global && <span title="Global tool (runs for all contexts)"><Lock className="w-3 h-3 text-blue-500" /></span>}
+                                        <label 
+                                            key={tool.name} 
+                                            className={`flex items-center justify-between p-2 rounded border border-border bg-card/30 ${
+                                                tool.is_global && isGlobalToolDisabled('post_call', tool.name) ? 'opacity-50' : 'hover:bg-accent'
+                                            } cursor-pointer`}
+                                        >
+                                            <div className="flex items-center space-x-2">
+                                                {!tool.is_global && (
+                                                    <input
+                                                        type="checkbox"
+                                                        className="rounded border-input text-primary focus:ring-primary"
+                                                        checked={(config.post_call_tools || []).includes(tool.name)}
+                                                        onChange={() => handlePhaseToolToggle('post_call_tools', tool.name)}
+                                                    />
+                                                )}
+                                                <span className="text-xs font-medium">{tool.name}</span>
+                                                {tool.is_global && <span title="Global tool (runs for all contexts)"><Lock className="w-3 h-3 text-blue-500" /></span>}
+                                            </div>
+                                            {tool.is_global && (
+                                                <button
+                                                    type="button"
+                                                    onClick={(e) => {
+                                                        e.preventDefault();
+                                                        handleGlobalToolDisable('disable_global_post_call_tools', tool.name);
+                                                    }}
+                                                    className={`text-xs px-2 py-0.5 rounded ${
+                                                        isGlobalToolDisabled('post_call', tool.name)
+                                                            ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30'
+                                                            : 'bg-green-500/20 text-green-400 hover:bg-green-500/30'
+                                                    }`}
+                                                    title={isGlobalToolDisabled('post_call', tool.name) ? 'Click to enable for this context' : 'Click to disable for this context'}
+                                                >
+                                                    {isGlobalToolDisabled('post_call', tool.name) ? 'Disabled' : 'Enabled'}
+                                                </button>
+                                            )}
                                         </label>
                                     ))}
                                 </div>

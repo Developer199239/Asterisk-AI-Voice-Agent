@@ -287,24 +287,23 @@ The `generic_http_lookup` tool makes HTTP requests to external APIs and maps res
 
 ```yaml
 tools:
-  http_lookups:
-    ghl_contact_lookup:
-      kind: generic_http_lookup
-      phase: pre_call
-      enabled: true
-      timeout_ms: 2000
-      hold_audio_file: "custom/please-wait"  # Optional MOH during lookup
-      hold_audio_threshold_ms: 500           # Play if lookup takes >500ms
-      url: "https://rest.gohighlevel.com/v1/contacts/lookup"
-      method: GET
-      headers:
-        Authorization: "Bearer ${GHL_API_KEY}"
-      query_params:
-        phone: "{caller_number}"
-      output_variables:
-        customer_name: "contacts[0].firstName"
-        customer_email: "contacts[0].email"
-        account_type: "contacts[0].customFields.account_type"
+  ghl_contact_lookup:
+    kind: generic_http_lookup
+    phase: pre_call
+    enabled: true
+    timeout_ms: 2000
+    hold_audio_file: "custom/please-wait"  # Optional MOH during lookup
+    hold_audio_threshold_ms: 500           # Play if lookup takes >500ms
+    url: "https://rest.gohighlevel.com/v1/contacts/lookup"
+    method: GET
+    headers:
+      Authorization: "Bearer ${GHL_API_KEY}"
+    query_params:
+      phone: "{caller_number}"
+    output_variables:
+      customer_name: "contacts[0].firstName"
+      customer_email: "contacts[0].email"
+      account_type: "contacts[0].customFields.account_type"
 ```
 
 **Variable Substitution**:
@@ -416,8 +415,7 @@ The `generic_webhook` tool sends HTTP requests with call data to external endpoi
 
 ```yaml
 tools:
-  http_webhooks:
-    n8n_call_completed:
+  n8n_call_completed:
       kind: generic_webhook
       phase: post_call
       enabled: true
@@ -449,8 +447,7 @@ tools:
 
 ```yaml
 tools:
-  http_webhooks:
-    crm_update:
+  crm_update:
       kind: generic_webhook
       enabled: true
       is_global: true
@@ -495,8 +492,7 @@ When `generate_summary: true`, the tool uses OpenAI to create a concise summary 
 
 ```yaml
 tools:
-  http_webhooks:
-    ghl_update:
+  ghl_update:
       kind: generic_webhook
       enabled: true
       is_global: true
@@ -516,8 +512,7 @@ tools:
 
 ```yaml
 tools:
-  http_webhooks:
-    make_webhook:
+  make_webhook:
       kind: generic_webhook
       enabled: true
       is_global: true
@@ -539,8 +534,7 @@ tools:
 
 ```yaml
 tools:
-  http_webhooks:
-    zapier_trigger:
+  zapier_trigger:
       kind: generic_webhook
       enabled: true
       is_global: true
@@ -562,8 +556,7 @@ Run webhooks only for specific contexts:
 
 ```yaml
 tools:
-  http_webhooks:
-    sales_webhook:
+  sales_webhook:
       kind: generic_webhook
       enabled: true
       is_global: false              # Not global

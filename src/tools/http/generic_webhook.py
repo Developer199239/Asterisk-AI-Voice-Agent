@@ -10,7 +10,6 @@ import json
 import logging
 from typing import Dict, Any, Optional
 from dataclasses import dataclass, field
-from string import Template
 
 import aiohttp
 
@@ -180,9 +179,11 @@ class GenericWebhookTool(PostCallTool):
         # Add schema_version
         payload_vars["schema_version"] = "1"
         
-        # If generate_summary is enabled, replace transcript_json with the summary
-        if self.config.generate_summary and context.summary:
-            payload_vars["transcript_json"] = json.dumps(context.summary)
+        # Add summary_json as separate variable (keeps transcript_json intact)
+        if context.summary:
+            payload_vars["summary_json"] = json.dumps(context.summary)
+        else:
+            payload_vars["summary_json"] = json.dumps("")
         
         # Substitute variables
         result = template

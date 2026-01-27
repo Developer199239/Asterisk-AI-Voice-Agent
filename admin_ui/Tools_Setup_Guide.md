@@ -225,7 +225,8 @@ Use these in webhook payloads:
 | `{call_outcome}` | string | Call outcome |
 | `{call_start_time}` | string | ISO timestamp |
 | `{call_end_time}` | string | ISO timestamp |
-| `{summary}` | string | AI-generated summary |
+| `{summary}` | string | AI-generated summary (if enabled) |
+| `{summary_json}` | JSON | AI-generated summary (JSON-escaped) |
 | `{transcript_json}` | JSON | Full conversation array |
 | `{campaign_id}` | string | Campaign ID |
 | `{lead_id}` | string | Lead ID |

@@ -1042,6 +1042,53 @@ aava_postcall_fire_total{tool_name}
 - Webhook payloads may contain PII; ensure endpoints are secured
 - Rate limiting for pre-call HTTP calls (per-minute limits configurable)
 
+## Regression Risks
+
+This section documents known risks introduced by the pre-call and post-call HTTP tool system.
+
+### SSRF (Server-Side Request Forgery)
+
+**Risk**: Operators can configure arbitrary URLs in HTTP tools, which could be exploited to:
+- Probe internal network services
+- Access cloud metadata endpoints (e.g., `169.254.169.254`)
+- Exfiltrate data via DNS/HTTP
+
+**Mitigations (MVP)**:
+- Short timeouts (default 2-5s) limit exposure
+- Response size limits prevent large data exfiltration
+- Secrets redacted in logs and UI
+
+**Recommended Hardening (Post-MVP)**:
+- Outbound HTTP allowlist (host/scheme policy)
+- Block private/loopback/link-local IP ranges by default
+- Operator override for self-hosted tools (`allow_private_ips: true`)
+
+### Prompt Injection via CRM Data
+
+**Risk**: Malicious data in CRM responses could be injected into AI prompts, potentially:
+- Altering AI behavior
+- Exfiltrating conversation data
+- Bypassing safety guardrails
+
+**Mitigations**:
+- Output variables are string-only (no structured injection)
+- Variable values are truncated to configurable max length
+- Only operator-configured paths are extracted from responses
+- Values are inserted as literal text, not evaluated as prompts
+
+**Recommendation**: Document that operators should validate CRM data sources and use trusted integrations.
+
+### Dependency Surface Expansion
+
+**Risk**: Adding aiohttp as a runtime dependency expands the attack surface:
+- aiohttp vulnerabilities could affect the system
+- SSL/TLS configuration must be maintained
+
+**Mitigations**:
+- aiohttp is a well-maintained, widely-used library
+- SSL verification enabled by default
+- Regular dependency updates via CI/CD
+
 ### Outbound HTTP Safety (Recommended, Post-MVP)
 
 Phase tools introduce operator-configured outbound HTTP requests (including “Test Connection”), which can create **SSRF-style risk** if misconfigured.

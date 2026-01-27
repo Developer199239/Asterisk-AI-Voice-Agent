@@ -58,7 +58,11 @@ const ContextsPage = () => {
                     if (!v || typeof v !== 'object' || Array.isArray(v)) return false;
                     // Tool configs are dict-like and typically include an `enabled` flag.
                     // Exclude tool-system settings like ai_identity/extensions/default_action_timeout.
-                    return Object.prototype.hasOwnProperty.call(v, 'enabled');
+                    if (!Object.prototype.hasOwnProperty.call(v, 'enabled')) return false;
+                    // Exclude HTTP phase tools (pre_call/post_call) - these are shown in separate sections
+                    const kind = (v as any)?.kind;
+                    if (kind === 'generic_http_lookup' || kind === 'generic_webhook') return false;
+                    return true;
                 })
                 .map(([k, v]) => ({ name: k, enabled: (v as any)?.enabled !== false }));
             const toolsFromYaml = yamlToolEntries.map((t) => t.name);
@@ -92,7 +96,11 @@ const ContextsPage = () => {
                 .filter(([k, v]) => {
                     if (typeof k !== 'string' || !k) return false;
                     if (!v || typeof v !== 'object' || Array.isArray(v)) return false;
-                    return Object.prototype.hasOwnProperty.call(v, 'enabled');
+                    if (!Object.prototype.hasOwnProperty.call(v, 'enabled')) return false;
+                    // Exclude HTTP phase tools - they have separate UI sections
+                    const kind = (v as any)?.kind;
+                    if (kind === 'generic_http_lookup' || kind === 'generic_webhook') return false;
+                    return true;
                 })
                 .map(([k, v]) => ({ name: k, enabled: (v as any)?.enabled !== false }));
             const toolsFromYaml = yamlToolEntries.map((t) => t.name);
