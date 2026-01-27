@@ -840,7 +840,25 @@ contexts:
 - `config/ai-agent.yaml` — Example HTTP tool configurations
 - `src/core/transport_orchestrator.py` — ContextConfig phase tool fields (Phase 2)
 
-### Phase 5 — Admin UI (1 week)
+### Production Validation ✅ COMPLETE (Jan 26, 2026)
+
+**Test Environment**:
+- Server: voiprnd.nemtclouddispatch.com
+- Webhook URL: `https://hub.cybridllc.com/webhook/whatsapp-hook`
+- Provider: google_live
+
+**Test Results**:
+- ✅ Post-call webhook fired successfully after call hangup
+- ✅ Webhook received full call payload (call_id, caller, transcript, duration, etc.)
+- ✅ HTTP 200 response confirmed
+- ✅ No errors in ai_engine logs
+
+**Bug Fixed During Testing**:
+- Logging used structlog-style kwargs but standard Python logger doesn't support that
+- Fix: Changed to f-string format in `generic_webhook.py` and `generic_lookup.py`
+- Commit: 09a8d89
+
+### Phase 5 — Admin UI (1 week) — DEFERRED
 
 **Tools Page Enhancements**:
 - Three-tab layout (Pre-Call, In-Call, Post-Call)
