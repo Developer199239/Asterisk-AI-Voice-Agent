@@ -184,6 +184,7 @@ _call_start_times = {}  # call_id -> timestamp
 # In-memory set to prevent duplicate cleanup (race condition guard)
 _cleanup_in_progress: set = set()  # call_ids currently being cleaned up
 _cleanup_completed_at: dict = {}  # call_id -> epoch seconds (best-effort dedupe for repeated StasisEnd/Destroyed)
+_cleanup_lock = asyncio.Lock()  # Lock to make cleanup guard atomic (AAVA-148)
 
 
 class Engine:
@@ -4063,11 +4064,12 @@ class Engine:
             except Exception:
                 pass
             
-            # In-memory re-entrancy guard (atomic, no race condition)
-            if call_id in _cleanup_in_progress:
-                logger.debug("Cleanup already in progress (in-memory guard)", call_id=call_id)
-                return
-            _cleanup_in_progress.add(call_id)
+            # In-memory re-entrancy guard - use lock for atomicity (AAVA-148)
+            async with _cleanup_lock:
+                if call_id in _cleanup_in_progress:
+                    logger.debug("Cleanup already in progress (in-memory guard)", call_id=call_id)
+                    return
+                _cleanup_in_progress.add(call_id)
             
             logger.info("Cleaning up call", call_id=call_id)
             
