@@ -2955,17 +2955,94 @@ def _ensure_updater_image_for_sha(host_project_root: str, tag: str) -> None:
 
             build_root = os.getenv("PROJECT_ROOT", "/app/project")
             logger.info("Building updater image: %s (context=%s)", tag, build_root)
-            client.images.build(
-                path=build_root,
-                dockerfile="updater/Dockerfile",
-                tag=tag,
-                rm=True,
-            )
+            last_lines: list[str] = []
+
+            def _capture_line(line: str) -> None:
+                line = (line or "").rstrip()
+                if not line:
+                    return
+                last_lines.append(line)
+                if len(last_lines) > 60:
+                    del last_lines[: len(last_lines) - 60]
+
+            def _ingest_build_logs(logs) -> None:
+                try:
+                    for chunk in logs:
+                        if isinstance(chunk, dict):
+                            if "stream" in chunk:
+                                _capture_line(str(chunk.get("stream") or ""))
+                            if "error" in chunk:
+                                _capture_line(str(chunk.get("error") or ""))
+                        elif isinstance(chunk, (bytes, bytearray)):
+                            _capture_line(chunk.decode("utf-8", errors="replace"))
+                        else:
+                            _capture_line(str(chunk))
+                except Exception:
+                    pass
+
+            try:
+                # Always build with host networking to avoid failures in restricted Docker bridge DNS
+                # environments (e.g., proxy.golang.org resolution timeouts during `go mod download`).
+                _image, logs = client.images.build(
+                    path=build_root,
+                    dockerfile="updater/Dockerfile",
+                    tag=tag,
+                    rm=True,
+                    network_mode="host",
+                    decode=True,
+                )
+                _ingest_build_logs(logs)
+            except TypeError:
+                logger.warning(
+                    "docker-py images.build TypeError with network_mode/decode; retrying without decode (network_mode=host).",
+                    exc_info=True,
+                )
+                try:
+                    _image, logs = client.images.build(
+                        path=build_root,
+                        dockerfile="updater/Dockerfile",
+                        tag=tag,
+                        rm=True,
+                        network_mode="host",
+                    )
+                    _ingest_build_logs(logs)
+                except TypeError:
+                    # Older docker-py versions may not accept network_mode on images.build.
+                    # IMPORTANT: this fallback omits host networking and may fail in restricted networks.
+                    logger.warning(
+                        "docker-py images.build TypeError for network_mode=host; falling back without host networking. "
+                        "This may fail in restricted DNS/egress environments. "
+                        "Workaround: upgrade docker SDK for Python (docker-py) or run: "
+                        "docker buildx build --network=host --progress=plain -f updater/Dockerfile .",
+                        exc_info=True,
+                    )
+                    client.images.build(
+                        path=build_root,
+                        dockerfile="updater/Dockerfile",
+                        tag=tag,
+                        rm=True,
+                    )
         except HTTPException:
             raise
+        except docker.errors.BuildError as e:
+            _ingest_build_logs(getattr(e, "build_log", None) or [])
+
+            tail = "\n".join(last_lines[-25:]).strip()
+            if tail:
+                logger.error("Updater build log tail:\n%s", tail)
+
+            hint = (
+                "If this is a DNS/network restriction, run: "
+                "docker buildx build --network=host --progress=plain -f updater/Dockerfile ."
+            )
+            detail = "Failed to build updater image"
+            if tail:
+                detail = f"{detail}: {tail[-800:]}"
+            detail = f"{detail}\n{hint}"
+            raise HTTPException(status_code=500, detail=detail) from e
         except Exception as e:
-            logger.exception("Failed to build updater image: %s", e)
-            raise HTTPException(status_code=500, detail="Failed to build updater image")
+            logger.exception("Failed to build updater image")
+            raise HTTPException(status_code=500, detail="Failed to build updater image") from e
 
 
 def _run_updater_ephemeral(host_project_root: str, *, env: dict, command: Optional[str] = None, timeout_sec: int = 30, capture_stderr: bool = True) -> tuple[int, str]:
