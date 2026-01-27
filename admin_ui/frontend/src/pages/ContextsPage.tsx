@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import axios from 'axios';
 import yaml from 'js-yaml';
 import { sanitizeConfigForSave } from '../utils/configSanitizers';
@@ -440,6 +440,7 @@ const ContextsPage = () => {
                     toolEnabledMap={toolEnabledMap}
                     availableProfiles={availableProfiles}
                     defaultProfileName={defaultProfileName}
+                    httpTools={config.tools}
                     onChange={setContextForm}
                     isNew={isNewContext}
                 />
