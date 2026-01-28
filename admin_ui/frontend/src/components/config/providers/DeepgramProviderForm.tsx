@@ -32,6 +32,22 @@ const DeepgramProviderForm: React.FC<DeepgramProviderFormProps> = ({ config, onC
                             Deepgram Voice Agent WebSocket endpoint for full agent provider. Change for EU region (wss://agent.eu.deepgram.com/v1/agent/converse).
                         </p>
                     </div>
+                    <div className="space-y-2">
+                        <label className="text-sm font-medium">
+                            REST API Base URL
+                            <span className="text-xs text-muted-foreground ml-2">(base_url)</span>
+                        </label>
+                        <input
+                            type="text"
+                            className="w-full p-2 rounded border border-input bg-background"
+                            value={config.base_url || 'https://api.deepgram.com'}
+                            onChange={(e) => handleChange('base_url', e.target.value)}
+                            placeholder="https://api.deepgram.com"
+                        />
+                        <p className="text-xs text-muted-foreground">
+                            Deepgram REST API endpoint for STT/TTS in pipeline mode. Change for EU region (https://api.eu.deepgram.com) or proxy.
+                        </p>
+                    </div>
                 </div>
             </div>
 

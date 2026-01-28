@@ -273,6 +273,31 @@ const StreamingPage = () => {
                 </ConfigCard>
             </ConfigSection>
 
+            <ConfigSection title="Egress Format" description="Control audio byte ordering and format for downstream playback.">
+                <ConfigCard>
+                    <div className="space-y-6">
+                        <FormSelect
+                            label="Egress Swap Mode"
+                            value={streamingConfig.egress_swap_mode || 'auto'}
+                            onChange={(e) => updateStreamingConfig('egress_swap_mode', e.target.value)}
+                            options={[
+                                { value: 'auto', label: 'Auto (detect from system)' },
+                                { value: 'swap', label: 'Swap (force byte swap)' },
+                                { value: 'none', label: 'None (no byte swap)' }
+                            ]}
+                            tooltip="Controls PCM16 byte ordering for downstream playback. 'auto' detects system endianness. Use 'swap' if audio sounds garbled/static, 'none' if already correct."
+                        />
+                        <FormSwitch
+                            label="Force μ-law Encoding"
+                            description="Always encode egress audio as μ-law regardless of profile."
+                            checked={streamingConfig.egress_force_mulaw ?? false}
+                            onChange={(e) => updateStreamingConfig('egress_force_mulaw', e.target.checked)}
+                            tooltip="Force μ-law (G.711) encoding for all downstream audio. Enable if Asterisk expects μ-law but provider sends PCM16. Typically needed for telephony compatibility."
+                        />
+                    </div>
+                </ConfigCard>
+            </ConfigSection>
+
             <ConfigSection title="Diagnostics" description="Tools for debugging audio stream issues.">
                 <ConfigCard>
                     <div className="space-y-6">
