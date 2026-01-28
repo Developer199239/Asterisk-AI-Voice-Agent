@@ -1246,7 +1246,48 @@ tools:
         "provider": "{provider}",
         "timestamp": "{call_end_time}"
       }
-  
+
+  # Example: Discord webhook - posts call summary to a Discord channel
+  # discord_webhook:
+  #   kind: generic_webhook
+  #   phase: post_call
+  #   enabled: false  # Set to true and add your webhook URL
+  #   is_global: true
+  #   timeout_ms: 5000
+  #   url: "https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN"
+  #   method: POST
+  #   headers:
+  #     Content-Type: "application/json"
+  #   payload_template: |
+  #     {"content": "📞 **Call Completed**\n\n**Duration:** {call_duration}s\n**Outcome:** {call_outcome}\n**Context:** {context_name}\n**Provider:** {provider}\n**Time:** {call_end_time}\n\n**Summary:**\n{summary}"}
+  #   generate_summary: true
+
+  # Example: n8n workflow webhook - triggers n8n automation after calls
+  # n8n_webhook:
+  #   kind: generic_webhook
+  #   phase: post_call
+  #   enabled: false  # Set to true and add your n8n webhook URL
+  #   is_global: true
+  #   timeout_ms: 5000
+  #   url: "https://your-n8n-instance.com/webhook/your-webhook-path"
+  #   method: POST
+  #   headers:
+  #     Content-Type: "application/json"
+  #   payload_template: |
+  #     {
+  #       "event_type": "call_completed",
+  #       "call_id": "{call_id}",
+  #       "caller_number": "{caller_number}",
+  #       "caller_name": "{caller_name}",
+  #       "call_duration": {call_duration},
+  #       "call_outcome": "{call_outcome}",
+  #       "summary": "{summary}",
+  #       "context": "{context_name}",
+  #       "provider": "{provider}",
+  #       "timestamp": "{call_end_time}"
+  #     }
+  #   generate_summary: true
+
   # Example: Pre-call CRM lookup (context-specific)
   # Fetches customer data before AI speaks
   # demo_crm_lookup:
