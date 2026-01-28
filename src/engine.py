@@ -2438,6 +2438,33 @@ class Engine:
             session.enhanced_vad_enabled = bool(self.vad_manager)
             await self._save_session(session, new=True)
 
+            # Read called_number: DIALED_NUMBER > __FROM_DID > "unknown"
+            called_number = None
+            for var_name in ["DIALED_NUMBER", "__FROM_DID"]:
+                try:
+                    resp = await self.ari_client.send_command(
+                        "GET",
+                        f"channels/{caller_channel_id}/variable",
+                        params={"variable": var_name},
+                        tolerate_statuses=[404],
+                    )
+                    if isinstance(resp, dict):
+                        value = (resp.get("value") or "").strip()
+                        if value:
+                            called_number = value
+                            logger.debug("Called number resolved from channel variable",
+                                        call_id=caller_channel_id,
+                                        variable=var_name,
+                                        called_number=called_number)
+                            break
+                except Exception:
+                    pass
+            session.called_number = called_number or "unknown"
+            await self._save_session(session)
+            logger.info("Called number captured",
+                       call_id=caller_channel_id,
+                       called_number=session.called_number)
+
             # If outbound, pull outbound metadata from channel vars (set during origination).
             if is_outbound:
                 try:
@@ -4270,6 +4297,7 @@ class Engine:
                                 call_id=call_id,
                                 caller_channel_id=session.caller_channel_id,
                                 bridge_id=session.bridge_id,
+                                called_number=getattr(session, 'called_number', None),
                                 session_store=self.session_store,
                                 ari_client=self.ari_client,
                                 config=self.config.dict()
@@ -4307,6 +4335,7 @@ class Engine:
                                         call_id=call_id,
                                         caller_channel_id=session.caller_channel_id,
                                         bridge_id=session.bridge_id,
+                                        called_number=getattr(session, 'called_number', None),
                                         session_store=self.session_store,
                                         ari_client=self.ari_client,
                                         config=self.config.dict()
@@ -9041,6 +9070,7 @@ class Engine:
                             call_id=call_id,
                             caller_channel_id=getattr(session, "caller_channel_id", None) or call_id,
                             bridge_id=getattr(session, "bridge_id", None),
+                            called_number=getattr(session, "called_number", None),
                             session_store=self.session_store,
                             ari_client=self.ari_client,
                             config=self.config.dict(),
@@ -11033,6 +11063,7 @@ class Engine:
                 try:
                     provider._caller_channel_id = session.caller_channel_id
                     provider._bridge_id = session.bridge_id
+                    provider._called_number = getattr(session, 'called_number', None)
                     provider._session_store = self.session_store
                     provider._ari_client = self.ari_client
                     provider._full_config = self.config.dict()  # Convert Pydantic model to dict
@@ -11271,6 +11302,7 @@ class Engine:
                     call_id=call_id,
                     caller_channel_id=session.caller_channel_id,
                     bridge_id=session.bridge_id,
+                    called_number=getattr(session, 'called_number', None),
                     session_store=self.session_store,
                     ari_client=self.ari_client,
                     config=self.config.dict() if hasattr(self.config, 'dict') else {},

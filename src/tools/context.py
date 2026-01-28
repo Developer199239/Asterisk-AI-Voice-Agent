@@ -27,6 +27,7 @@ class ToolExecutionContext:
     call_id: str
     caller_channel_id: Optional[str] = None
     bridge_id: Optional[str] = None
+    called_number: Optional[str] = None  # DIALED_NUMBER or __FROM_DID - the number that was dialed
     
     # System access (injected by provider)
     session_store: Any = None  # SessionStore instance

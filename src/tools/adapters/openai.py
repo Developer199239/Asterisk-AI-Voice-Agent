@@ -149,6 +149,7 @@ class OpenAIToolAdapter:
             call_id=context['call_id'],
             caller_channel_id=context.get('caller_channel_id'),
             bridge_id=context.get('bridge_id'),
+            called_number=context.get('called_number'),
             session_store=context['session_store'],
             ari_client=context['ari_client'],
             config=context.get('config'),

@@ -55,6 +55,7 @@ class CallSession:
     caller_channel_id: str
     caller_name: Optional[str] = None     # CALLERID(name) for personalized greetings
     caller_number: Optional[str] = None   # CALLERID(num) for context
+    called_number: Optional[str] = None   # DIALED_NUMBER or __FROM_DID - the number that was dialed
     local_channel_id: Optional[str] = None
     external_media_id: Optional[str] = None
     external_media_call_id: Optional[str] = None
