@@ -160,7 +160,8 @@ const VADPage = () => {
                                 type="number"
                                 value={vadConfig.energy_threshold ?? 1500}
                                 onChange={(e) => updateVADConfig('energy_threshold', parseInt(e.target.value))}
-                                tooltip="Engine VAD energy threshold (RMS over PCM16). Higher = less sensitive (fewer false triggers), lower = more sensitive (better for quiet callers)."
+                                tooltip="Engine VAD energy threshold (RMS over PCM16). Higher = less sensitive (fewer false triggers), lower = more sensitive (better for quiet callers). Only applies when Enhanced VAD is enabled."
+                                disabled={!vadConfig.enhanced_enabled}
                             />
                             <FormInput
                                 label="Confidence Threshold"
@@ -170,7 +171,8 @@ const VADPage = () => {
                                 max="1"
                                 value={vadConfig.confidence_threshold ?? 0.6}
                                 onChange={(e) => updateVADConfig('confidence_threshold', parseFloat(e.target.value))}
-                                tooltip="Confidence required for engine VAD decisions (0.0–1.0). Used by engine heuristics; providers may implement their own confidence/endpointing."
+                                tooltip="Confidence required for engine VAD decisions (0.0–1.0). Used by engine heuristics; providers may implement their own confidence/endpointing. Only applies when Enhanced VAD is enabled."
+                                disabled={!vadConfig.enhanced_enabled}
                             />
                         </div>
 

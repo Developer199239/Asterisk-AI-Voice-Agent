@@ -19,13 +19,13 @@ const DeepgramProviderForm: React.FC<DeepgramProviderFormProps> = ({ config, onC
                     <div className="space-y-2">
                         <label className="text-sm font-medium">
                             Voice Agent WebSocket URL
-                            <span className="text-xs text-muted-foreground ml-2">(base_url)</span>
+                            <span className="text-xs text-muted-foreground ml-2">(voice_agent_base_url)</span>
                         </label>
                         <input
                             type="text"
                             className="w-full p-2 rounded border border-input bg-background"
-                            value={config.base_url || 'wss://agent.deepgram.com/v1/agent/converse'}
-                            onChange={(e) => handleChange('base_url', e.target.value)}
+                            value={config.voice_agent_base_url || 'wss://agent.deepgram.com/v1/agent/converse'}
+                            onChange={(e) => handleChange('voice_agent_base_url', e.target.value)}
                             placeholder="wss://agent.deepgram.com/v1/agent/converse"
                         />
                         <p className="text-xs text-muted-foreground">

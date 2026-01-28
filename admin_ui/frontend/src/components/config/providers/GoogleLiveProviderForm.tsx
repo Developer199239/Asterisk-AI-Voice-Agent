@@ -17,14 +17,14 @@ const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config,
                 <h4 className="font-semibold mb-3">API Endpoint</h4>
                 <div className="space-y-2">
                     <label className="text-sm font-medium">
-                        WebSocket Base URL
-                        <span className="text-xs text-muted-foreground ml-2">(base_url)</span>
+                        WebSocket Endpoint
+                        <span className="text-xs text-muted-foreground ml-2">(websocket_endpoint)</span>
                     </label>
                     <input
                         type="text"
                         className="w-full p-2 rounded border border-input bg-background"
-                        value={config.base_url || 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent'}
-                        onChange={(e) => handleChange('base_url', e.target.value)}
+                        value={config.websocket_endpoint || 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent'}
+                        onChange={(e) => handleChange('websocket_endpoint', e.target.value)}
                         placeholder="wss://generativelanguage.googleapis.com/ws/..."
                     />
                     <p className="text-xs text-muted-foreground">

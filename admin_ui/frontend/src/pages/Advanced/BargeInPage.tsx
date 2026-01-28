@@ -158,7 +158,7 @@ const BargeInPage = () => {
                                 type="number"
                                 value={bargeInConfig.energy_threshold ?? 1000}
                                 onChange={(e) => updateBargeInConfig('energy_threshold', parseInt(e.target.value))}
-                                tooltip="Caller energy threshold (RMS over PCM16). Higher = less sensitive (fewer false barge-ins), lower = more sensitive (better for quiet callers)."
+                                tooltip="Caller energy threshold (RMS over PCM16) for provider-owned mode. Higher = less sensitive (fewer false barge-ins), lower = more sensitive (better for quiet callers). For pipelines, see 'Pipeline Energy Threshold' in Advanced settings below."
                             />
                             <FormInput
                                 label="Minimum Duration (ms)"
