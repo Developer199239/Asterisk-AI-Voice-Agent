@@ -1,5 +1,7 @@
 import { useState } from 'react';
-import { Plus, Trash2, Settings, Webhook, Search } from 'lucide-react';
+import axios from 'axios';
+import { Plus, Trash2, Settings, Webhook, Search, Play, Loader2, CheckCircle2, XCircle, ChevronDown, ChevronRight } from 'lucide-react';
+import { useAuth } from '../../auth/AuthContext';
 import { FormInput, FormSwitch, FormSelect, FormLabel } from '../ui/FormComponents';
 import { Modal } from '../ui/Modal';
 
@@ -42,7 +44,32 @@ const DEFAULT_WEBHOOK_PAYLOAD = `{
   "timestamp": "{call_end_time}"
 }`;
 
+interface TestResult {
+    success: boolean;
+    status_code?: number;
+    response_time_ms: number;
+    headers: Record<string, string>;
+    body?: any;
+    body_raw?: string;
+    error?: string;
+    resolved_url: string;
+    resolved_body?: string;
+    suggested_mappings: Array<{ path: string; value: string; type: string }>;
+}
+
+const DEFAULT_TEST_VALUES: Record<string, string> = {
+    caller_number: '+15551234567',
+    called_number: '+18005551234',
+    caller_name: 'Test Caller',
+    caller_id: '+15551234567',
+    call_id: '1234567890.123',
+    context_name: 'test-context',
+    campaign_id: 'test-campaign',
+    lead_id: 'test-lead-123',
+};
+
 const HTTPToolForm = ({ config, onChange, phase }: HTTPToolFormProps) => {
+    const { token } = useAuth();
     const [editingTool, setEditingTool] = useState<string | null>(null);
     const [toolForm, setToolForm] = useState<any>({});
     const [headerKey, setHeaderKey] = useState('');
@@ -51,6 +78,13 @@ const HTTPToolForm = ({ config, onChange, phase }: HTTPToolFormProps) => {
     const [outputVarPath, setOutputVarPath] = useState('');
     const [queryParamKey, setQueryParamKey] = useState('');
     const [queryParamValue, setQueryParamValue] = useState('');
+    
+    // Test functionality state
+    const [testValues, setTestValues] = useState<Record<string, string>>(DEFAULT_TEST_VALUES);
+    const [testing, setTesting] = useState(false);
+    const [testResult, setTestResult] = useState<TestResult | null>(null);
+    const [showTestPanel, setShowTestPanel] = useState(false);
+    const [showTestValues, setShowTestValues] = useState(false);
 
     const getHTTPTools = () => {
         const tools: Record<string, HTTPToolConfig> = {};
@@ -158,6 +192,52 @@ const HTTPToolForm = ({ config, onChange, phase }: HTTPToolFormProps) => {
         setToolForm({ ...toolForm, query_params: params });
     };
 
+    const handleTestTool = async () => {
+        if (!toolForm.url) {
+            alert('Please enter a URL first');
+            return;
+        }
+        
+        setTesting(true);
+        setTestResult(null);
+        setShowTestPanel(true);
+        
+        try {
+            const response = await axios.post('/api/tools/test-http', {
+                url: toolForm.url,
+                method: toolForm.method || 'GET',
+                headers: toolForm.headers || {},
+                query_params: toolForm.query_params || {},
+                body_template: toolForm.body_template || null,
+                timeout_ms: toolForm.timeout_ms || 5000,
+                test_values: testValues,
+            }, {
+                headers: { Authorization: `Bearer ${token}` },
+            });
+            
+            setTestResult(response.data);
+        } catch (err: any) {
+            setTestResult({
+                success: false,
+                response_time_ms: 0,
+                headers: {},
+                resolved_url: toolForm.url,
+                error: err.response?.data?.detail || err.message || 'Test failed',
+                suggested_mappings: [],
+            });
+        } finally {
+            setTesting(false);
+        }
+    };
+
+    const handleAddMapping = (path: string) => {
+        const varName = path.replace(/\[\d+\]/g, '').replace(/\./g, '_').toLowerCase();
+        setToolForm({
+            ...toolForm,
+            output_variables: { ...toolForm.output_variables, [varName]: path }
+        });
+    };
+
     const phaseIcon = phase === 'pre_call' ? <Search className="w-4 h-4" /> : <Webhook className="w-4 h-4" />;
     const phaseTitle = phase === 'pre_call' ? 'Pre-Call HTTP Lookups' : 'Post-Call Webhooks';
     const phaseDesc = phase === 'pre_call' 
@@ -229,6 +309,16 @@ const HTTPToolForm = ({ config, onChange, phase }: HTTPToolFormProps) => {
                 footer={
                     <>
                         <button onClick={() => setEditingTool(null)} className="px-4 py-2 border rounded hover:bg-accent">Cancel</button>
+                        {phase === 'pre_call' && (
+                            <button 
+                                onClick={handleTestTool} 
+                                disabled={testing || !toolForm.url}
+                                className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
+                            >
+                                {testing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
+                                {testing ? 'Testing...' : 'Test'}
+                            </button>
+                        )}
                         <button onClick={handleSaveTool} className="px-4 py-2 bg-primary text-primary-foreground rounded hover:bg-primary/90">Save</button>
                     </>
                 }
@@ -417,6 +507,121 @@ const HTTPToolForm = ({ config, onChange, phase }: HTTPToolFormProps) => {
                                     tooltip="Play hold audio if lookup takes longer than this threshold"
                                 />
                             </div>
+
+                            {/* Test Values Configuration */}
+                            <div className="border border-border rounded-lg p-3 bg-card/30">
+                                <button
+                                    type="button"
+                                    onClick={() => setShowTestValues(!showTestValues)}
+                                    className="flex items-center gap-2 text-sm font-medium w-full"
+                                >
+                                    {showTestValues ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                                    Test Values (for variable substitution)
+                                </button>
+                                {showTestValues && (
+                                    <div className="mt-3 grid grid-cols-2 gap-2">
+                                        {Object.entries(testValues).map(([key, value]) => (
+                                            <div key={key} className="flex items-center gap-1">
+                                                <span className="text-xs text-muted-foreground w-28 truncate">{`{${key}}`}</span>
+                                                <input
+                                                    className="flex-1 px-2 py-1 text-xs border rounded bg-background"
+                                                    value={value}
+                                                    onChange={(e) => setTestValues({ ...testValues, [key]: e.target.value })}
+                                                />
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Test Results Panel */}
+                            {showTestPanel && (
+                                <div className="border border-border rounded-lg overflow-hidden">
+                                    <div className="bg-accent/50 px-3 py-2 flex items-center justify-between">
+                                        <span className="text-sm font-medium">Test Results</span>
+                                        {testResult && (
+                                            <div className="flex items-center gap-2">
+                                                {testResult.success ? (
+                                                    <span className="flex items-center gap-1 text-xs text-green-600">
+                                                        <CheckCircle2 className="w-3 h-3" />
+                                                        {testResult.status_code} OK
+                                                    </span>
+                                                ) : (
+                                                    <span className="flex items-center gap-1 text-xs text-red-600">
+                                                        <XCircle className="w-3 h-3" />
+                                                        {testResult.error || 'Failed'}
+                                                    </span>
+                                                )}
+                                                <span className="text-xs text-muted-foreground">
+                                                    {testResult.response_time_ms.toFixed(0)}ms
+                                                </span>
+                                            </div>
+                                        )}
+                                    </div>
+                                    
+                                    {testing && (
+                                        <div className="p-4 text-center text-muted-foreground">
+                                            <Loader2 className="w-5 h-5 animate-spin mx-auto mb-2" />
+                                            Testing endpoint...
+                                        </div>
+                                    )}
+                                    
+                                    {testResult && !testing && (
+                                        <div className="p-3 space-y-3 max-h-[300px] overflow-y-auto">
+                                            {/* Resolved URL */}
+                                            <div>
+                                                <div className="text-xs text-muted-foreground mb-1">Resolved URL:</div>
+                                                <code className="text-xs bg-accent/50 px-2 py-1 rounded block break-all">
+                                                    {testResult.resolved_url}
+                                                </code>
+                                            </div>
+                                            
+                                            {/* Response Body Preview */}
+                                            {testResult.body && (
+                                                <div>
+                                                    <div className="text-xs text-muted-foreground mb-1">Response:</div>
+                                                    <pre className="text-xs bg-accent/30 p-2 rounded overflow-x-auto max-h-[150px]">
+                                                        {typeof testResult.body === 'object' 
+                                                            ? JSON.stringify(testResult.body, null, 2)
+                                                            : testResult.body}
+                                                    </pre>
+                                                </div>
+                                            )}
+                                            
+                                            {/* Click-to-Map Suggestions */}
+                                            {testResult.suggested_mappings && testResult.suggested_mappings.length > 0 && (
+                                                <div>
+                                                    <div className="text-xs text-muted-foreground mb-1">
+                                                        Click to add output variable mapping:
+                                                    </div>
+                                                    <div className="space-y-1">
+                                                        {testResult.suggested_mappings.slice(0, 20).map((mapping, idx) => (
+                                                            <button
+                                                                key={idx}
+                                                                type="button"
+                                                                onClick={() => handleAddMapping(mapping.path)}
+                                                                className="flex items-center justify-between w-full text-left px-2 py-1.5 text-xs bg-accent/30 hover:bg-accent rounded group"
+                                                            >
+                                                                <div className="flex items-center gap-2">
+                                                                    <code className="font-mono text-blue-600">{mapping.path}</code>
+                                                                    <span className="text-muted-foreground">→</span>
+                                                                    <span className="truncate max-w-[150px]">{mapping.value}</span>
+                                                                </div>
+                                                                <Plus className="w-3 h-3 opacity-0 group-hover:opacity-100 text-green-600" />
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                    {testResult.suggested_mappings.length > 20 && (
+                                                        <div className="text-xs text-muted-foreground mt-1">
+                                                            +{testResult.suggested_mappings.length - 20} more fields...
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
+                            )}
                         </>
                     )}
 
