@@ -4110,7 +4110,8 @@ class Engine:
             # Determine call outcome based on session state
             call_outcome = "caller_hangup"  # Default: caller hung up
             try:
-                if getattr(session, 'transfer_destination', None):
+                # Check transfer state - UnifiedTransferTool sets transfer_active/transfer_state
+                if getattr(session, 'transfer_active', False) or getattr(session, 'transfer_state', None):
                     call_outcome = "transferred"
                 elif getattr(session, 'cleanup_after_tts', False):
                     call_outcome = "agent_hangup"  # AI agent initiated hangup via hangup_call tool
