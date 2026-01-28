@@ -139,27 +139,67 @@ const DeepgramProviderForm: React.FC<DeepgramProviderFormProps> = ({ config, onC
                                 <option value="aura-2-pluto-en">Pluto (EN)</option>
                                 <option value="aura-2-saturn-en">Saturn (EN)</option>
                             </optgroup>
-                            <optgroup label="🇪🇸 Spanish - Aura-2">
-                                <option value="aura-2-helena-es">Helena (ES)</option>
-                                <option value="aura-2-aurora-es">Aurora (ES)</option>
-                                <option value="aura-2-sol-es">Sol (ES-MX)</option>
-                                <option value="aura-2-luna-es">Luna (ES)</option>
+                            <optgroup label="🇪🇸 Spanish - Aura-2 (17 voices)">
+                                <option value="aura-2-celeste-es">Celeste (ES) ⭐</option>
+                                <option value="aura-2-estrella-es">Estrella (ES) ⭐</option>
+                                <option value="aura-2-nestor-es">Nestor (ES) ⭐</option>
+                                <option value="aura-2-diana-es">Diana (ES) 🔄</option>
+                                <option value="aura-2-javier-es">Javier (ES) 🔄</option>
+                                <option value="aura-2-selena-es">Selena (ES) 🔄</option>
+                                <option value="aura-2-aquila-es">Aquila (ES) 🔄</option>
+                                <option value="aura-2-carina-es">Carina (ES) 🔄</option>
+                                <option value="aura-2-agustina-es">Agustina (ES)</option>
+                                <option value="aura-2-antonia-es">Antonia (ES)</option>
+                                <option value="aura-2-gloria-es">Gloria (ES)</option>
+                                <option value="aura-2-olivia-es">Olivia (ES)</option>
+                                <option value="aura-2-silvia-es">Silvia (ES)</option>
+                                <option value="aura-2-sirio-es">Sirio (ES)</option>
+                                <option value="aura-2-alvaro-es">Alvaro (ES)</option>
+                                <option value="aura-2-luciano-es">Luciano (ES)</option>
+                                <option value="aura-2-valerio-es">Valerio (ES)</option>
                             </optgroup>
-                            <optgroup label="🇩🇪 German - Aura-2">
-                                <option value="aura-2-hera-de">Hera (DE)</option>
-                                <option value="aura-2-athena-de">Athena (DE)</option>
+                            <optgroup label="🇩🇪 German - Aura-2 (7 voices)">
+                                <option value="aura-2-julius-de">Julius (DE) ⭐</option>
+                                <option value="aura-2-viktoria-de">Viktoria (DE) ⭐</option>
+                                <option value="aura-2-elara-de">Elara (DE)</option>
+                                <option value="aura-2-aurelia-de">Aurelia (DE)</option>
+                                <option value="aura-2-lara-de">Lara (DE)</option>
+                                <option value="aura-2-fabian-de">Fabian (DE)</option>
+                                <option value="aura-2-kara-de">Kara (DE)</option>
                             </optgroup>
-                            <optgroup label="🇫🇷 French - Aura-2">
-                                <option value="aura-2-ophelia-fr">Ophelia (FR)</option>
+                            <optgroup label="🇫🇷 French - Aura-2 (2 voices)">
+                                <option value="aura-2-agathe-fr">Agathe (FR) ⭐</option>
+                                <option value="aura-2-hector-fr">Hector (FR) ⭐</option>
                             </optgroup>
-                            <optgroup label="🇮🇹 Italian - Aura-2">
-                                <option value="aura-2-giulia-it">Giulia (IT)</option>
+                            <optgroup label="🇮🇹 Italian - Aura-2 (10 voices)">
+                                <option value="aura-2-livia-it">Livia (IT) ⭐</option>
+                                <option value="aura-2-dionisio-it">Dionisio (IT) ⭐</option>
+                                <option value="aura-2-melia-it">Melia (IT)</option>
+                                <option value="aura-2-elio-it">Elio (IT)</option>
+                                <option value="aura-2-flavio-it">Flavio (IT)</option>
+                                <option value="aura-2-maia-it">Maia (IT)</option>
+                                <option value="aura-2-cinzia-it">Cinzia (IT)</option>
+                                <option value="aura-2-cesare-it">Cesare (IT)</option>
+                                <option value="aura-2-perseo-it">Perseo (IT)</option>
+                                <option value="aura-2-demetra-it">Demetra (IT)</option>
                             </optgroup>
-                            <optgroup label="🇳🇱 Dutch - Aura-2">
-                                <option value="aura-2-anna-nl">Anna (NL)</option>
+                            <optgroup label="🇳🇱 Dutch - Aura-2 (9 voices)">
+                                <option value="aura-2-rhea-nl">Rhea (NL) ⭐</option>
+                                <option value="aura-2-sander-nl">Sander (NL) ⭐</option>
+                                <option value="aura-2-beatrix-nl">Beatrix (NL) ⭐</option>
+                                <option value="aura-2-daphne-nl">Daphne (NL)</option>
+                                <option value="aura-2-cornelia-nl">Cornelia (NL)</option>
+                                <option value="aura-2-hestia-nl">Hestia (NL)</option>
+                                <option value="aura-2-lars-nl">Lars (NL)</option>
+                                <option value="aura-2-roman-nl">Roman (NL)</option>
+                                <option value="aura-2-leda-nl">Leda (NL)</option>
                             </optgroup>
-                            <optgroup label="🇯🇵 Japanese - Aura-2">
-                                <option value="aura-2-sakura-ja">Sakura (JA)</option>
+                            <optgroup label="🇯🇵 Japanese - Aura-2 (5 voices)">
+                                <option value="aura-2-fujin-ja">Fujin (JA) ⭐</option>
+                                <option value="aura-2-izanami-ja">Izanami (JA) ⭐</option>
+                                <option value="aura-2-uzume-ja">Uzume (JA)</option>
+                                <option value="aura-2-ebisu-ja">Ebisu (JA)</option>
+                                <option value="aura-2-ama-ja">Ama (JA)</option>
                             </optgroup>
                             <optgroup label="🇺🇸 English - Aura Legacy">
                                 <option value="aura-asteria-en">Asteria (EN Legacy)</option>
@@ -177,7 +217,7 @@ const DeepgramProviderForm: React.FC<DeepgramProviderFormProps> = ({ config, onC
                             </optgroup>
                         </select>
                         <p className="text-xs text-muted-foreground">
-                            TTS voices by language. EN (53), ES (17), DE (7), FR (2), IT (9), NL (9), JA (5).
+                            ⭐ = Featured, 🔄 = Codeswitching (ES↔EN). EN (53), ES (17), DE (7), FR (2), IT (10), NL (9), JA (5).
                             <a href="https://developers.deepgram.com/docs/tts-models" target="_blank" rel="noopener noreferrer" className="ml-1 text-blue-500 hover:underline">All Voices ↗</a>
                         </p>
                     </div>
