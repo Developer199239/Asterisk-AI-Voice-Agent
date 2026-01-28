@@ -159,7 +159,7 @@ const ProvidersPage: React.FC = () => {
         const templates: Record<string, any> = {
             openai_realtime: {
                 enabled: false,
-                model: 'gpt-4o-realtime-preview-2024-12-17',
+                model: 'gpt-4o-realtime-preview',
                 voice: 'alloy',
                 input_encoding: 'ulaw',
                 input_sample_rate_hz: 8000,
@@ -171,8 +171,8 @@ const ProvidersPage: React.FC = () => {
             },
             deepgram: {
                 enabled: false,
-                model: 'nova-2-general',
-                tts_model: 'aura-asteria-en',
+                model: 'nova-2-phonecall',
+                tts_model: 'aura-2-thalia-en',
                 input_encoding: 'mulaw',
                 input_sample_rate_hz: 8000,
                 output_encoding: 'mulaw',
@@ -185,7 +185,7 @@ const ProvidersPage: React.FC = () => {
                 type: 'full',
                 capabilities: ['stt', 'llm', 'tts'],
                 api_key: '${GOOGLE_API_KEY}',
-                llm_model: 'gemini-2.0-flash-exp',
+                llm_model: 'gemini-2.5-flash-native-audio-preview-12-2025',
                 input_encoding: 'ulaw',
                 input_sample_rate_hz: 8000,
                 target_encoding: 'ulaw',

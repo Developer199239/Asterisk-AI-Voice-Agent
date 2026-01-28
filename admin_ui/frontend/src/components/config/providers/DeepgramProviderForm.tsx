@@ -43,8 +43,8 @@ const DeepgramProviderForm: React.FC<DeepgramProviderFormProps> = ({ config, onC
                         <label className="text-sm font-medium">STT Model</label>
                         <select
                             className="w-full p-2 rounded border border-input bg-background"
-                            value={config.stt_model || 'nova-2-phonecall'}
-                            onChange={(e) => handleChange('stt_model', e.target.value)}
+                            value={config.model || 'nova-2-phonecall'}
+                            onChange={(e) => handleChange('model', e.target.value)}
                         >
                             <optgroup label="Nova-3 Multilingual (47+ languages)">
                                 <option value="nova-3">Nova-3 General — EN, ES, FR, DE, HI, RU, PT, JA, IT, NL +37 more</option>
