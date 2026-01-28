@@ -4085,29 +4085,37 @@ class Engine:
             
             logger.info("Cleaning up call", call_id=call_id)
             
-            # Record call duration if we have start time
+            # Calculate call duration early (keep _call_start_times entry until after post-call tools)
+            call_duration_seconds = 0
             try:
                 import time
                 if call_id in _call_start_times:
-                    duration = time.time() - _call_start_times[call_id]
+                    call_duration_seconds = int(time.time() - _call_start_times[call_id])
                     pipeline_name = getattr(session, 'pipeline_name', None) or "default"
                     provider_name = getattr(session, 'provider_name', None) or "unknown"
                     
                     _CALL_DURATION.labels(
                         pipeline=pipeline_name,
                         provider=provider_name,
-                    ).observe(duration)
-                    
-                    # Clean up start time
-                    del _call_start_times[call_id]
+                    ).observe(call_duration_seconds)
                     
                     logger.info("Recorded call duration", 
                                call_id=call_id,
-                               duration_seconds=round(duration, 2),
+                               duration_seconds=call_duration_seconds,
                                pipeline=pipeline_name,
                                provider=provider_name)
             except Exception as e:
                 logger.debug("Failed to record call duration", call_id=call_id, error=str(e))
+            
+            # Determine call outcome based on session state
+            call_outcome = "caller_hangup"  # Default: caller hung up
+            try:
+                if getattr(session, 'transfer_destination', None):
+                    call_outcome = "transferred"
+                elif getattr(session, 'cleanup_after_tts', False):
+                    call_outcome = "agent_hangup"  # AI agent initiated hangup via hangup_call tool
+            except Exception:
+                pass
 
             # Stop any active streaming playback.
             try:
@@ -4333,9 +4341,16 @@ class Engine:
             # Execute post-call tools (webhooks, CRM updates) - Milestone 24
             # These run fire-and-forget and do not block cleanup
             try:
-                await self._execute_post_call_tools(call_id, session)
+                await self._execute_post_call_tools(
+                    call_id, session,
+                    call_duration_seconds=call_duration_seconds,
+                    call_outcome=call_outcome
+                )
             except Exception as e:
                 logger.debug("Post-call tool execution failed", call_id=call_id, error=str(e), exc_info=True)
+            
+            # Clean up call start time after post-call tools have used it
+            _call_start_times.pop(call_id, None)
 
             # Persist call to history before removing session (Milestone 21)
             try:
@@ -11529,6 +11544,9 @@ class Engine:
         self,
         call_id: str,
         session: "CallSession",
+        *,
+        call_duration_seconds: int = 0,
+        call_outcome: str = "caller_hangup",
     ) -> None:
         """
         Execute post-call tools after the call ends (fire-and-forget).
@@ -11539,6 +11557,8 @@ class Engine:
         Args:
             call_id: Call identifier
             session: Call session with comprehensive data
+            call_duration_seconds: Pre-calculated call duration in seconds
+            call_outcome: How the call ended (caller_hangup, agent_hangup, transferred)
         """
         from src.tools.base import ToolPhase
         from src.tools.context import PostCallContext
@@ -11568,15 +11588,9 @@ class Engine:
                        call_id=call_id,
                        context=session.context_name,
                        tool_count=len(tools_to_run),
-                       tools=[t.definition.name for t in tools_to_run])
-            
-            # Calculate call duration
-            call_duration_seconds = 0
-            try:
-                if call_id in _call_start_times:
-                    call_duration_seconds = int(time.time() - _call_start_times[call_id])
-            except Exception:
-                pass
+                       tools=[t.definition.name for t in tools_to_run],
+                       call_duration=call_duration_seconds,
+                       call_outcome=call_outcome)
             
             # Build post-call context
             post_call_ctx = PostCallContext(
@@ -11588,7 +11602,7 @@ class Engine:
                 provider=session.provider_name or self.config.default_provider,
                 call_direction="outbound" if getattr(session, 'is_outbound', False) else "inbound",
                 call_duration_seconds=call_duration_seconds,
-                call_outcome=getattr(session, 'call_outcome', '') or '',
+                call_outcome=call_outcome,
                 call_start_time=session.start_time.isoformat() if session.start_time else None,
                 call_end_time=datetime.now(timezone.utc).isoformat(),
                 conversation_history=list(getattr(session, 'conversation_history', []) or []),
