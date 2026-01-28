@@ -476,6 +476,9 @@ class Engine:
         self._pipeline_tasks: Dict[str, asyncio.Task] = {}
         # Track calls where a pipeline was explicitly requested via AI_PROVIDER
         self._pipeline_forced: Dict[str, bool] = {}
+        # Cache for called_number variables (DIALED_NUMBER, __FROM_DID) from ChannelVarSet events
+        # These are set early in dialplan but may not be available via GET when StasisStart fires
+        self._called_number_cache: Dict[str, str] = {}  # channel_id -> called_number
         # Health server runner
         self._health_runner: Optional[web.AppRunner] = None
         # MCP client manager (experimental)
@@ -2438,27 +2441,35 @@ class Engine:
             session.enhanced_vad_enabled = bool(self.vad_manager)
             await self._save_session(session, new=True)
 
-            # Read called_number: DIALED_NUMBER > __FROM_DID > "unknown"
-            called_number = None
-            for var_name in ["DIALED_NUMBER", "__FROM_DID"]:
-                try:
-                    resp = await self.ari_client.send_command(
-                        "GET",
-                        f"channels/{caller_channel_id}/variable",
-                        params={"variable": var_name},
-                        tolerate_statuses=[404],
-                    )
-                    if isinstance(resp, dict):
-                        value = (resp.get("value") or "").strip()
-                        if value:
-                            called_number = value
-                            logger.debug("Called number resolved from channel variable",
-                                        call_id=caller_channel_id,
-                                        variable=var_name,
-                                        called_number=called_number)
-                            break
-                except Exception:
-                    pass
+            # Read called_number: cache (from ChannelVarSet events) > GET request > "unknown"
+            # The cache is populated from DIALED_NUMBER and __FROM_DID ChannelVarSet events
+            # which fire early in dialplan, before StasisStart. GET requests may fail due to timing.
+            called_number = self._called_number_cache.pop(caller_channel_id, None)
+            if called_number:
+                logger.debug("Called number resolved from cache",
+                            call_id=caller_channel_id,
+                            called_number=called_number)
+            else:
+                # Fallback: try GET request (may work for variables set just before Stasis)
+                for var_name in ["DIALED_NUMBER", "__FROM_DID"]:
+                    try:
+                        resp = await self.ari_client.send_command(
+                            "GET",
+                            f"channels/{caller_channel_id}/variable",
+                            params={"variable": var_name},
+                            tolerate_statuses=[404],
+                        )
+                        if isinstance(resp, dict):
+                            value = (resp.get("value") or "").strip()
+                            if value:
+                                called_number = value
+                                logger.debug("Called number resolved from channel variable GET",
+                                            call_id=caller_channel_id,
+                                            variable=var_name,
+                                            called_number=called_number)
+                                break
+                    except Exception:
+                        pass
             session.called_number = called_number or "unknown"
             await self._save_session(session)
             logger.info("Called number captured",
@@ -3905,6 +3916,25 @@ class Engine:
                 variable=variable,
                 value=value,
             )
+            
+            # Cache called_number variables - these are set early in dialplan
+            # but may not be available via GET when StasisStart fires (timing race)
+            # Priority: DIALED_NUMBER > __FROM_DID (only cache if not already set)
+            if channel_id and value:
+                if variable == "DIALED_NUMBER":
+                    self._called_number_cache[channel_id] = value
+                    logger.debug(
+                        "Cached called_number from DIALED_NUMBER",
+                        channel_id=channel_id,
+                        called_number=value,
+                    )
+                elif variable == "__FROM_DID" and channel_id not in self._called_number_cache:
+                    self._called_number_cache[channel_id] = value
+                    logger.debug(
+                        "Cached called_number from __FROM_DID",
+                        channel_id=channel_id,
+                        called_number=value,
+                    )
         except Exception as exc:
             logger.error("Error handling ChannelVarset", error=str(exc), exc_info=True)
 
