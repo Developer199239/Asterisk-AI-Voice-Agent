@@ -36,23 +36,25 @@ const ContextsPage = () => {
     const fetchConfig = async () => {
         try {
             const res = await axios.get('/api/config/yaml');
-            const parsed = yaml.load(res.data.content) as any;
-            setConfig(parsed || {});
-            await fetchMcpTools(parsed || {});
-            setError(null);
-            setYamlError(null);
+            // Check if there's a YAML error in the response (content still provided for Raw YAML editing)
+            if (res.data.yaml_error) {
+                setYamlError(res.data.yaml_error);
+                setConfig({});
+                setError(null);
+            } else {
+                const parsed = yaml.load(res.data.content) as any;
+                setConfig(parsed || {});
+                await fetchMcpTools(parsed || {});
+                setError(null);
+                setYamlError(null);
+            }
         } catch (err) {
             console.error('Failed to load config', err);
             const status = (err as any)?.response?.status;
-            const detail = (err as any)?.response?.data?.detail;
             
             if (status === 401) {
                 setError('Not authenticated. Please refresh and log in again.');
                 setYamlError(null);
-            } else if (status === 400 && detail?.type === 'yaml_error') {
-                // Structured YAML error from backend
-                setYamlError(detail);
-                setError(null);
             } else {
                 setError('Failed to load configuration. Check backend logs and try again.');
                 setYamlError(null);

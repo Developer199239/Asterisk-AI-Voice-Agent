@@ -426,10 +426,11 @@ async def get_yaml_config():
                 error_info["snippet"] = "\n".join(snippet_lines)
             except Exception:
                 pass
-        raise HTTPException(
-            status_code=400,
-            detail=error_info
-        )
+        # Return content along with error so Raw YAML editor can still load it for fixing
+        return {
+            "content": config_content,
+            "yaml_error": error_info
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {str(e)}")
 
