@@ -44,14 +44,14 @@ const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config,
                             value={config.llm_model || 'gemini-2.5-flash-native-audio-preview-12-2025'}
                             onChange={(e) => handleChange('llm_model', e.target.value)}
                         >
-                            <optgroup label="Native Audio Models (Live API)">
+                            <optgroup label="Native Audio Models (Live API) - 24 Languages">
                                 <option value="gemini-2.5-flash-native-audio-latest">Gemini 2.5 Flash Native Audio (Latest)</option>
                                 <option value="gemini-2.5-flash-native-audio-preview-12-2025">Gemini 2.5 Flash Native Audio (Dec 2025)</option>
                                 <option value="gemini-2.5-flash-native-audio-preview-09-2025">Gemini 2.5 Flash Native Audio (Sep 2025)</option>
                             </optgroup>
                         </select>
                         <p className="text-xs text-muted-foreground">
-                            Only models supporting bidiGenerateContent (Live API) are shown.
+                            Supports 24 languages with seamless multilingual switching. 30 HD voices available.
                             <a href="https://ai.google.dev/gemini-api/docs/live-guide" target="_blank" rel="noopener noreferrer" className="ml-1 text-blue-500 hover:underline">API Docs ↗</a>
                         </p>
                     </div>
@@ -76,7 +76,7 @@ const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config,
                             </optgroup>
                         </select>
                         <p className="text-xs text-muted-foreground">
-                            Google Gemini Live API built-in voices.
+                            Multilingual voices - auto-switches between 24 languages without configuration.
                             <a href="https://firebase.google.com/docs/ai-logic/live-api/configuration" target="_blank" rel="noopener noreferrer" className="ml-1 text-blue-500 hover:underline">Voice Docs ↗</a>
                         </p>
                     </div>

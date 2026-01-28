@@ -66,7 +66,7 @@ const OpenAIRealtimeProviderForm: React.FC<OpenAIRealtimeProviderFormProps> = ({
                             </optgroup>
                         </select>
                         <p className="text-xs text-muted-foreground">
-                            OpenAI Realtime API models for speech-to-speech.
+                            Multilingual speech-to-speech. Supports EN, ES, FR, DE, IT, PT, JA, KO, ZH, AR +more.
                             <a href="https://platform.openai.com/docs/guides/realtime-conversations" target="_blank" rel="noopener noreferrer" className="ml-1 text-blue-500 hover:underline">API Docs ↗</a>
                         </p>
                     </div>
@@ -91,7 +91,7 @@ const OpenAIRealtimeProviderForm: React.FC<OpenAIRealtimeProviderFormProps> = ({
                             </optgroup>
                         </select>
                         <p className="text-xs text-muted-foreground">
-                            OpenAI Realtime voices. New voices added Oct 2024.
+                            All voices support multilingual output. New voices (Ash, Ballad, etc.) added Oct 2024.
                             <a href="https://platform.openai.com/docs/api-reference/audio" target="_blank" rel="noopener noreferrer" className="ml-1 text-blue-500 hover:underline">Voice Docs ↗</a>
                         </p>
                     </div>

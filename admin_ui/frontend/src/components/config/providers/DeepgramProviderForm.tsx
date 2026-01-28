@@ -46,24 +46,26 @@ const DeepgramProviderForm: React.FC<DeepgramProviderFormProps> = ({ config, onC
                             value={config.stt_model || 'nova-2-phonecall'}
                             onChange={(e) => handleChange('stt_model', e.target.value)}
                         >
-                            <optgroup label="Nova-3 (Latest)">
-                                <option value="nova-3">Nova-3 General</option>
-                                <option value="nova-3-medical">Nova-3 Medical</option>
+                            <optgroup label="Nova-3 Multilingual (47+ languages)">
+                                <option value="nova-3">Nova-3 General — EN, ES, FR, DE, HI, RU, PT, JA, IT, NL +37 more</option>
+                                <option value="nova-3-medical">Nova-3 Medical — English only</option>
                             </optgroup>
-                            <optgroup label="Nova-2 (Recommended)">
-                                <option value="nova-2">Nova-2 General</option>
-                                <option value="nova-2-phonecall">Nova-2 Phone Call</option>
-                                <option value="nova-2-meeting">Nova-2 Meeting</option>
-                                <option value="nova-2-voicemail">Nova-2 Voicemail</option>
-                                <option value="nova-2-finance">Nova-2 Finance</option>
-                                <option value="nova-2-conversationalai">Nova-2 Conversational AI</option>
-                                <option value="nova-2-video">Nova-2 Video</option>
-                                <option value="nova-2-medical">Nova-2 Medical</option>
-                                <option value="nova-2-drivethru">Nova-2 Drive-thru</option>
-                                <option value="nova-2-automotive">Nova-2 Automotive</option>
-                                <option value="nova-2-atc">Nova-2 Air Traffic Control</option>
+                            <optgroup label="Nova-2 Multilingual (36+ languages)">
+                                <option value="nova-2">Nova-2 General — EN, ES, FR, DE, JA, KO, ZH, PT, IT +27 more</option>
                             </optgroup>
-                            <optgroup label="Nova (Legacy)">
+                            <optgroup label="Nova-2 English Optimized">
+                                <option value="nova-2-phonecall">Nova-2 Phone Call — English (telephony optimized)</option>
+                                <option value="nova-2-meeting">Nova-2 Meeting — English (meetings/conferences)</option>
+                                <option value="nova-2-voicemail">Nova-2 Voicemail — English</option>
+                                <option value="nova-2-finance">Nova-2 Finance — English (financial terms)</option>
+                                <option value="nova-2-conversationalai">Nova-2 Conversational AI — English (voice agents)</option>
+                                <option value="nova-2-video">Nova-2 Video — English</option>
+                                <option value="nova-2-medical">Nova-2 Medical — English (medical terminology)</option>
+                                <option value="nova-2-drivethru">Nova-2 Drive-thru — English (noisy environments)</option>
+                                <option value="nova-2-automotive">Nova-2 Automotive — English (in-car)</option>
+                                <option value="nova-2-atc">Nova-2 Air Traffic Control — English (aviation)</option>
+                            </optgroup>
+                            <optgroup label="Nova Legacy (English)">
                                 <option value="nova">Nova General</option>
                                 <option value="nova-phonecall">Nova Phone Call</option>
                                 <option value="nova-drivethru">Nova Drive-thru</option>
@@ -71,14 +73,14 @@ const DeepgramProviderForm: React.FC<DeepgramProviderFormProps> = ({ config, onC
                                 <option value="nova-voicemail">Nova Voicemail</option>
                             </optgroup>
                             <optgroup label="Other Models">
-                                <option value="enhanced">Enhanced</option>
-                                <option value="base">Base</option>
-                                <option value="whisper-cloud">Whisper Cloud</option>
+                                <option value="enhanced">Enhanced — Legacy multilingual</option>
+                                <option value="base">Base — Legacy</option>
+                                <option value="whisper-cloud">Whisper Cloud — Multilingual</option>
                             </optgroup>
                         </select>
                         <p className="text-xs text-muted-foreground">
-                            Deepgram Speech-to-Text models.
-                            <a href="https://developers.deepgram.com/docs/models-overview" target="_blank" rel="noopener noreferrer" className="ml-1 text-blue-500 hover:underline">STT Models ↗</a>
+                            Nova-3/Nova-2 General for multilingual; specialized models for English use-cases.
+                            <a href="https://developers.deepgram.com/docs/models-languages-overview" target="_blank" rel="noopener noreferrer" className="ml-1 text-blue-500 hover:underline">Language Support ↗</a>
                         </p>
                     </div>
 
@@ -92,71 +94,91 @@ const DeepgramProviderForm: React.FC<DeepgramProviderFormProps> = ({ config, onC
                             value={config.tts_model || 'aura-2-thalia-en'}
                             onChange={(e) => handleChange('tts_model', e.target.value)}
                         >
-                            <optgroup label="Aura-2 Female (Latest)">
-                                <option value="aura-2-thalia-en">Thalia</option>
-                                <option value="aura-2-asteria-en">Asteria</option>
-                                <option value="aura-2-luna-en">Luna</option>
-                                <option value="aura-2-athena-en">Athena</option>
-                                <option value="aura-2-hera-en">Hera</option>
-                                <option value="aura-2-andromeda-en">Andromeda</option>
-                                <option value="aura-2-aurora-en">Aurora</option>
-                                <option value="aura-2-callista-en">Callista</option>
-                                <option value="aura-2-cora-en">Cora</option>
-                                <option value="aura-2-cordelia-en">Cordelia</option>
-                                <option value="aura-2-delia-en">Delia</option>
-                                <option value="aura-2-electra-en">Electra</option>
-                                <option value="aura-2-harmonia-en">Harmonia</option>
-                                <option value="aura-2-helena-en">Helena</option>
-                                <option value="aura-2-iris-en">Iris</option>
-                                <option value="aura-2-juno-en">Juno</option>
-                                <option value="aura-2-minerva-en">Minerva</option>
-                                <option value="aura-2-ophelia-en">Ophelia</option>
-                                <option value="aura-2-pandora-en">Pandora</option>
-                                <option value="aura-2-phoebe-en">Phoebe</option>
-                                <option value="aura-2-selene-en">Selene</option>
-                                <option value="aura-2-theia-en">Theia</option>
-                                <option value="aura-2-vesta-en">Vesta</option>
-                                <option value="aura-2-amalthea-en">Amalthea</option>
+                            <optgroup label="🇺🇸 English - Aura-2 Female">
+                                <option value="aura-2-thalia-en">Thalia (EN)</option>
+                                <option value="aura-2-asteria-en">Asteria (EN)</option>
+                                <option value="aura-2-luna-en">Luna (EN)</option>
+                                <option value="aura-2-athena-en">Athena (EN)</option>
+                                <option value="aura-2-hera-en">Hera (EN)</option>
+                                <option value="aura-2-andromeda-en">Andromeda (EN)</option>
+                                <option value="aura-2-aurora-en">Aurora (EN)</option>
+                                <option value="aura-2-callista-en">Callista (EN)</option>
+                                <option value="aura-2-cora-en">Cora (EN)</option>
+                                <option value="aura-2-cordelia-en">Cordelia (EN)</option>
+                                <option value="aura-2-delia-en">Delia (EN)</option>
+                                <option value="aura-2-electra-en">Electra (EN)</option>
+                                <option value="aura-2-harmonia-en">Harmonia (EN)</option>
+                                <option value="aura-2-helena-en">Helena (EN)</option>
+                                <option value="aura-2-iris-en">Iris (EN)</option>
+                                <option value="aura-2-juno-en">Juno (EN)</option>
+                                <option value="aura-2-minerva-en">Minerva (EN)</option>
+                                <option value="aura-2-ophelia-en">Ophelia (EN)</option>
+                                <option value="aura-2-pandora-en">Pandora (EN)</option>
+                                <option value="aura-2-phoebe-en">Phoebe (EN)</option>
+                                <option value="aura-2-selene-en">Selene (EN)</option>
+                                <option value="aura-2-theia-en">Theia (EN)</option>
+                                <option value="aura-2-vesta-en">Vesta (EN)</option>
+                                <option value="aura-2-amalthea-en">Amalthea (EN)</option>
                             </optgroup>
-                            <optgroup label="Aura-2 Male (Latest)">
-                                <option value="aura-2-orion-en">Orion</option>
-                                <option value="aura-2-arcas-en">Arcas</option>
-                                <option value="aura-2-orpheus-en">Orpheus</option>
-                                <option value="aura-2-zeus-en">Zeus</option>
-                                <option value="aura-2-apollo-en">Apollo</option>
-                                <option value="aura-2-aries-en">Aries</option>
-                                <option value="aura-2-atlas-en">Atlas</option>
-                                <option value="aura-2-draco-en">Draco</option>
-                                <option value="aura-2-hermes-en">Hermes</option>
-                                <option value="aura-2-hyperion-en">Hyperion</option>
-                                <option value="aura-2-janus-en">Janus</option>
-                                <option value="aura-2-jupiter-en">Jupiter</option>
-                                <option value="aura-2-mars-en">Mars</option>
-                                <option value="aura-2-neptune-en">Neptune</option>
-                                <option value="aura-2-odysseus-en">Odysseus</option>
-                                <option value="aura-2-pluto-en">Pluto</option>
-                                <option value="aura-2-saturn-en">Saturn</option>
+                            <optgroup label="🇺🇸 English - Aura-2 Male">
+                                <option value="aura-2-orion-en">Orion (EN)</option>
+                                <option value="aura-2-arcas-en">Arcas (EN)</option>
+                                <option value="aura-2-orpheus-en">Orpheus (EN)</option>
+                                <option value="aura-2-zeus-en">Zeus (EN)</option>
+                                <option value="aura-2-apollo-en">Apollo (EN)</option>
+                                <option value="aura-2-aries-en">Aries (EN)</option>
+                                <option value="aura-2-atlas-en">Atlas (EN)</option>
+                                <option value="aura-2-draco-en">Draco (EN)</option>
+                                <option value="aura-2-hermes-en">Hermes (EN)</option>
+                                <option value="aura-2-hyperion-en">Hyperion (EN)</option>
+                                <option value="aura-2-janus-en">Janus (EN)</option>
+                                <option value="aura-2-jupiter-en">Jupiter (EN)</option>
+                                <option value="aura-2-mars-en">Mars (EN)</option>
+                                <option value="aura-2-neptune-en">Neptune (EN)</option>
+                                <option value="aura-2-odysseus-en">Odysseus (EN)</option>
+                                <option value="aura-2-pluto-en">Pluto (EN)</option>
+                                <option value="aura-2-saturn-en">Saturn (EN)</option>
                             </optgroup>
-                            <optgroup label="Aura Legacy Female">
-                                <option value="aura-asteria-en">Asteria</option>
-                                <option value="aura-luna-en">Luna</option>
-                                <option value="aura-stella-en">Stella</option>
-                                <option value="aura-athena-en">Athena</option>
-                                <option value="aura-hera-en">Hera</option>
+                            <optgroup label="🇪🇸 Spanish - Aura-2">
+                                <option value="aura-2-helena-es">Helena (ES)</option>
+                                <option value="aura-2-aurora-es">Aurora (ES)</option>
+                                <option value="aura-2-sol-es">Sol (ES-MX)</option>
+                                <option value="aura-2-luna-es">Luna (ES)</option>
                             </optgroup>
-                            <optgroup label="Aura Legacy Male">
-                                <option value="aura-orion-en">Orion</option>
-                                <option value="aura-arcas-en">Arcas</option>
-                                <option value="aura-perseus-en">Perseus</option>
-                                <option value="aura-angus-en">Angus</option>
-                                <option value="aura-orpheus-en">Orpheus</option>
-                                <option value="aura-helios-en">Helios</option>
-                                <option value="aura-zeus-en">Zeus</option>
+                            <optgroup label="🇩🇪 German - Aura-2">
+                                <option value="aura-2-hera-de">Hera (DE)</option>
+                                <option value="aura-2-athena-de">Athena (DE)</option>
+                            </optgroup>
+                            <optgroup label="🇫🇷 French - Aura-2">
+                                <option value="aura-2-ophelia-fr">Ophelia (FR)</option>
+                            </optgroup>
+                            <optgroup label="🇮🇹 Italian - Aura-2">
+                                <option value="aura-2-giulia-it">Giulia (IT)</option>
+                            </optgroup>
+                            <optgroup label="🇳🇱 Dutch - Aura-2">
+                                <option value="aura-2-anna-nl">Anna (NL)</option>
+                            </optgroup>
+                            <optgroup label="🇯🇵 Japanese - Aura-2">
+                                <option value="aura-2-sakura-ja">Sakura (JA)</option>
+                            </optgroup>
+                            <optgroup label="🇺🇸 English - Aura Legacy">
+                                <option value="aura-asteria-en">Asteria (EN Legacy)</option>
+                                <option value="aura-luna-en">Luna (EN Legacy)</option>
+                                <option value="aura-stella-en">Stella (EN Legacy)</option>
+                                <option value="aura-athena-en">Athena (EN Legacy)</option>
+                                <option value="aura-hera-en">Hera (EN Legacy)</option>
+                                <option value="aura-orion-en">Orion (EN Legacy)</option>
+                                <option value="aura-arcas-en">Arcas (EN Legacy)</option>
+                                <option value="aura-perseus-en">Perseus (EN Legacy)</option>
+                                <option value="aura-angus-en">Angus (EN Legacy)</option>
+                                <option value="aura-orpheus-en">Orpheus (EN Legacy)</option>
+                                <option value="aura-helios-en">Helios (EN Legacy)</option>
+                                <option value="aura-zeus-en">Zeus (EN Legacy)</option>
                             </optgroup>
                         </select>
                         <p className="text-xs text-muted-foreground">
-                            Deepgram Aura TTS voices. Aura-2 recommended for enterprise use.
-                            <a href="https://developers.deepgram.com/docs/tts-models" target="_blank" rel="noopener noreferrer" className="ml-1 text-blue-500 hover:underline">TTS Voices ↗</a>
+                            TTS voices by language. EN (53), ES (17), DE (7), FR (2), IT (9), NL (9), JA (5).
+                            <a href="https://developers.deepgram.com/docs/tts-models" target="_blank" rel="noopener noreferrer" className="ml-1 text-blue-500 hover:underline">All Voices ↗</a>
                         </p>
                     </div>
 
