@@ -12,6 +12,14 @@ const ContextsPage = () => {
     const [config, setConfig] = useState<any>({});
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    const [yamlError, setYamlError] = useState<{
+        type?: string;
+        message?: string;
+        line?: number;
+        column?: number;
+        problem?: string;
+        snippet?: string;
+    } | null>(null);
     const [availableTools, setAvailableTools] = useState<string[]>([]);
     const [toolEnabledMap, setToolEnabledMap] = useState<Record<string, boolean>>({});
     const [editingContext, setEditingContext] = useState<string | null>(null);
@@ -32,13 +40,22 @@ const ContextsPage = () => {
             setConfig(parsed || {});
             await fetchMcpTools(parsed || {});
             setError(null);
+            setYamlError(null);
         } catch (err) {
             console.error('Failed to load config', err);
             const status = (err as any)?.response?.status;
+            const detail = (err as any)?.response?.data?.detail;
+            
             if (status === 401) {
                 setError('Not authenticated. Please refresh and log in again.');
+                setYamlError(null);
+            } else if (status === 400 && detail?.type === 'yaml_error') {
+                // Structured YAML error from backend
+                setYamlError(detail);
+                setError(null);
             } else {
                 setError('Failed to load configuration. Check backend logs and try again.');
+                setYamlError(null);
             }
         } finally {
             setLoading(false);
@@ -326,6 +343,49 @@ const ContextsPage = () => {
                     >
                         Reload
                     </button>
+                </div>
+            )}
+
+            {yamlError && (
+                <div className="bg-red-500/15 border border-red-500/30 text-red-700 dark:text-red-400 p-4 rounded-md space-y-3">
+                    <div className="flex items-center justify-between">
+                        <div className="flex items-center font-semibold">
+                            <AlertCircle className="w-5 h-5 mr-2" />
+                            YAML Configuration Error
+                        </div>
+                        <button
+                            onClick={() => window.location.reload()}
+                            className="flex items-center text-xs px-3 py-1.5 rounded transition-colors bg-red-500 text-white hover:bg-red-600 font-medium"
+                        >
+                            Reload
+                        </button>
+                    </div>
+                    
+                    {yamlError.line && (
+                        <div className="text-sm">
+                            <span className="font-medium">Location:</span> Line {yamlError.line}
+                            {yamlError.column && <>, Column {yamlError.column}</>}
+                        </div>
+                    )}
+                    
+                    {yamlError.problem && (
+                        <div className="text-sm">
+                            <span className="font-medium">Problem:</span> {yamlError.problem}
+                        </div>
+                    )}
+                    
+                    {yamlError.snippet && (
+                        <div className="mt-2">
+                            <span className="font-medium text-sm">Code snippet:</span>
+                            <pre className="mt-1 p-3 bg-gray-900 text-gray-100 rounded-md text-xs overflow-x-auto font-mono whitespace-pre">
+{yamlError.snippet}
+                            </pre>
+                        </div>
+                    )}
+                    
+                    <div className="text-sm text-red-600 dark:text-red-300 mt-2">
+                        <strong>How to fix:</strong> Edit the YAML file directly at <code className="bg-red-200 dark:bg-red-900/50 px-1 rounded">config/ai-agent.yaml</code> and fix the syntax error at the indicated line, then reload this page.
+                    </div>
                 </div>
             )}
 

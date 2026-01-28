@@ -391,7 +391,45 @@ async def get_yaml_config():
         _safe_load_no_duplicates(config_content)  # Validate YAML and reject duplicate keys
         return {"content": config_content}
     except yaml.YAMLError as e:
-        raise HTTPException(status_code=500, detail=f"Error reading or parsing YAML config: {str(e)}")
+        # Extract detailed error information for user-friendly display
+        error_info = {
+            "type": "yaml_error",
+            "message": str(e),
+            "line": None,
+            "column": None,
+            "context": None,
+            "snippet": None,
+        }
+        # Extract line/column from YAML error marks
+        if hasattr(e, 'problem_mark') and e.problem_mark:
+            mark = e.problem_mark
+            error_info["line"] = mark.line + 1  # Convert to 1-indexed
+            error_info["column"] = mark.column + 1
+        if hasattr(e, 'context_mark') and e.context_mark:
+            ctx_mark = e.context_mark
+            error_info["context"] = f"Line {ctx_mark.line + 1}, column {ctx_mark.column + 1}"
+        if hasattr(e, 'problem') and e.problem:
+            error_info["problem"] = e.problem
+        if hasattr(e, 'context') and e.context:
+            error_info["context_msg"] = e.context
+        # Try to extract a snippet around the error line
+        if error_info["line"]:
+            try:
+                lines = config_content.splitlines()
+                line_num = error_info["line"] - 1  # 0-indexed
+                start = max(0, line_num - 2)
+                end = min(len(lines), line_num + 3)
+                snippet_lines = []
+                for i in range(start, end):
+                    prefix = ">>> " if i == line_num else "    "
+                    snippet_lines.append(f"{prefix}{i+1}: {lines[i]}")
+                error_info["snippet"] = "\n".join(snippet_lines)
+            except Exception:
+                pass
+        raise HTTPException(
+            status_code=400,
+            detail=error_info
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {str(e)}")
 
