@@ -41,24 +41,19 @@ const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config,
                         <label className="text-sm font-medium">LLM Model</label>
                         <select
                             className="w-full p-2 rounded border border-input bg-background"
-                            value={config.llm_model || 'gemini-2.0-flash-exp'}
+                            value={config.llm_model || 'gemini-2.5-flash-native-audio-preview-12-2025'}
                             onChange={(e) => handleChange('llm_model', e.target.value)}
                         >
-                            <optgroup label="Gemini 2.5 (Latest)">
-                                <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
-                                <option value="gemini-2.5-flash-exp">Gemini 2.5 Flash (Experimental)</option>
-                                <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
-                            </optgroup>
-                            <optgroup label="Gemini 2.0">
-                                <option value="gemini-2.0-flash-exp">Gemini 2.0 Flash (Experimental)</option>
-                                <option value="gemini-2.0-flash-thinking-exp">Gemini 2.0 Flash Thinking (Experimental)</option>
-                            </optgroup>
-                            <optgroup label="Gemini 1.5">
-                                <option value="gemini-1.5-flash">Gemini 1.5 Flash</option>
-                                <option value="gemini-1.5-flash-8b">Gemini 1.5 Flash-8B</option>
-                                <option value="gemini-1.5-pro">Gemini 1.5 Pro</option>
+                            <optgroup label="Native Audio Models (Live API)">
+                                <option value="gemini-2.5-flash-native-audio-latest">Gemini 2.5 Flash Native Audio (Latest)</option>
+                                <option value="gemini-2.5-flash-native-audio-preview-12-2025">Gemini 2.5 Flash Native Audio (Dec 2025)</option>
+                                <option value="gemini-2.5-flash-native-audio-preview-09-2025">Gemini 2.5 Flash Native Audio (Sep 2025)</option>
                             </optgroup>
                         </select>
+                        <p className="text-xs text-muted-foreground">
+                            Only models supporting bidiGenerateContent (Live API) are shown.
+                            <a href="https://ai.google.dev/gemini-api/docs/live-guide" target="_blank" rel="noopener noreferrer" className="ml-1 text-blue-500 hover:underline">API Docs ↗</a>
+                        </p>
                     </div>
                     <div className="space-y-2">
                         <label className="text-sm font-medium">TTS Voice Name</label>
@@ -80,6 +75,10 @@ const GoogleLiveProviderForm: React.FC<GoogleLiveProviderFormProps> = ({ config,
                                 <option value="Zephyr">Zephyr</option>
                             </optgroup>
                         </select>
+                        <p className="text-xs text-muted-foreground">
+                            Google Gemini Live API built-in voices.
+                            <a href="https://firebase.google.com/docs/ai-logic/live-api/configuration" target="_blank" rel="noopener noreferrer" className="ml-1 text-blue-500 hover:underline">Voice Docs ↗</a>
+                        </p>
                     </div>
                     <div className="space-y-2">
                         <label className="text-sm font-medium">Temperature</label>

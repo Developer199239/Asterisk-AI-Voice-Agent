@@ -51,13 +51,24 @@ const OpenAIRealtimeProviderForm: React.FC<OpenAIRealtimeProviderFormProps> = ({
                         <label className="text-sm font-medium">Model</label>
                         <select
                             className="w-full p-2 rounded border border-input bg-background"
-                            value={config.model || 'gpt-4o-realtime-preview-2024-12-17'}
+                            value={config.model || 'gpt-4o-realtime-preview'}
                             onChange={(e) => handleChange('model', e.target.value)}
                         >
-                            <option value="gpt-4o-realtime-preview-2024-12-17">GPT-4o Realtime (2024-12-17)</option>
-                            <option value="gpt-4o-realtime-preview-2024-10-01">GPT-4o Realtime (2024-10-01)</option>
-                            <option value="gpt-4o-mini-realtime-preview-2024-12-17">GPT-4o Mini Realtime (2024-12-17)</option>
+                            <optgroup label="GPT-4o Realtime">
+                                <option value="gpt-4o-realtime-preview">GPT-4o Realtime (Latest)</option>
+                                <option value="gpt-4o-realtime-preview-2025-06-03">GPT-4o Realtime (2025-06-03)</option>
+                                <option value="gpt-4o-realtime-preview-2024-12-17">GPT-4o Realtime (2024-12-17)</option>
+                                <option value="gpt-4o-realtime-preview-2024-10-01">GPT-4o Realtime (2024-10-01)</option>
+                            </optgroup>
+                            <optgroup label="GPT-4o Mini Realtime">
+                                <option value="gpt-4o-mini-realtime-preview">GPT-4o Mini Realtime (Latest)</option>
+                                <option value="gpt-4o-mini-realtime-preview-2024-12-17">GPT-4o Mini Realtime (2024-12-17)</option>
+                            </optgroup>
                         </select>
+                        <p className="text-xs text-muted-foreground">
+                            OpenAI Realtime API models for speech-to-speech.
+                            <a href="https://platform.openai.com/docs/guides/realtime-conversations" target="_blank" rel="noopener noreferrer" className="ml-1 text-blue-500 hover:underline">API Docs ↗</a>
+                        </p>
                     </div>
                     <div className="space-y-2">
                         <label className="text-sm font-medium">Voice</label>
@@ -66,15 +77,23 @@ const OpenAIRealtimeProviderForm: React.FC<OpenAIRealtimeProviderFormProps> = ({
                             value={config.voice || 'alloy'}
                             onChange={(e) => handleChange('voice', e.target.value)}
                         >
-                            <option value="alloy">Alloy</option>
-                            <option value="echo">Echo</option>
-                            <option value="shimmer">Shimmer</option>
-                            <option value="ash">Ash</option>
-                            <option value="ballad">Ballad</option>
-                            <option value="coral">Coral</option>
-                            <option value="sage">Sage</option>
-                            <option value="verse">Verse</option>
+                            <optgroup label="Original Voices">
+                                <option value="alloy">Alloy</option>
+                                <option value="echo">Echo</option>
+                                <option value="shimmer">Shimmer</option>
+                            </optgroup>
+                            <optgroup label="New Voices (Oct 2024)">
+                                <option value="ash">Ash</option>
+                                <option value="ballad">Ballad</option>
+                                <option value="coral">Coral</option>
+                                <option value="sage">Sage</option>
+                                <option value="verse">Verse</option>
+                            </optgroup>
                         </select>
+                        <p className="text-xs text-muted-foreground">
+                            OpenAI Realtime voices. New voices added Oct 2024.
+                            <a href="https://platform.openai.com/docs/api-reference/audio" target="_blank" rel="noopener noreferrer" className="ml-1 text-blue-500 hover:underline">Voice Docs ↗</a>
+                        </p>
                     </div>
                     <div className="space-y-2">
                         <label className="text-sm font-medium">Temperature</label>
