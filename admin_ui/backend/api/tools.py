@@ -157,7 +157,19 @@ async def test_http_tool(request: TestHTTPRequest):
             
             # Add body for POST/PUT/PATCH
             if request.method.upper() in ("POST", "PUT", "PATCH") and resolved_body:
-                kwargs["content"] = resolved_body
+                # Check if Content-Type is JSON
+                content_type = resolved_headers.get("Content-Type", resolved_headers.get("content-type", ""))
+                if "application/json" in content_type.lower():
+                    # Parse and send as JSON to ensure proper encoding
+                    try:
+                        import json
+                        json_data = json.loads(resolved_body)
+                        kwargs["json"] = json_data
+                    except json.JSONDecodeError:
+                        # If it's not valid JSON, send as content
+                        kwargs["content"] = resolved_body
+                else:
+                    kwargs["content"] = resolved_body
             
             # Make the request
             resp = await client.request(**kwargs)
