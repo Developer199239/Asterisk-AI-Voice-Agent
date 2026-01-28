@@ -124,7 +124,14 @@ const HTTPToolForm = ({ config, onChange, phase }: HTTPToolFormProps) => {
     };
 
     const handleSaveTool = () => {
-        if (!toolForm.key) return;
+        if (!toolForm.key) {
+            alert('Please enter a Tool Name');
+            return;
+        }
+        if (!toolForm.url) {
+            alert('Please enter a URL');
+            return;
+        }
 
         const { key, ...data } = toolForm;
         const updated = { ...config };
