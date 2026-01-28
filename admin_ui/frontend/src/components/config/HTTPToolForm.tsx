@@ -85,6 +85,7 @@ const HTTPToolForm = ({ config, onChange, phase }: HTTPToolFormProps) => {
     const [testResult, setTestResult] = useState<TestResult | null>(null);
     const [showTestPanel, setShowTestPanel] = useState(false);
     const [showTestValues, setShowTestValues] = useState(false);
+    const [showAllMappings, setShowAllMappings] = useState(false);
 
     const getHTTPTools = () => {
         const tools: Record<string, HTTPToolConfig> = {};
@@ -232,10 +233,11 @@ const HTTPToolForm = ({ config, onChange, phase }: HTTPToolFormProps) => {
 
     const handleAddMapping = (path: string) => {
         const varName = path.replace(/\[\d+\]/g, '').replace(/\./g, '_').toLowerCase();
-        setToolForm({
-            ...toolForm,
-            output_variables: { ...toolForm.output_variables, [varName]: path }
-        });
+        // Use functional update to avoid stale closure issues
+        setToolForm((prev: any) => ({
+            ...prev,
+            output_variables: { ...(prev.output_variables || {}), [varName]: path }
+        }));
     };
 
     const phaseIcon = phase === 'pre_call' ? <Search className="w-4 h-4" /> : <Webhook className="w-4 h-4" />;
@@ -595,7 +597,7 @@ const HTTPToolForm = ({ config, onChange, phase }: HTTPToolFormProps) => {
                                                         Click to add output variable mapping:
                                                     </div>
                                                     <div className="space-y-1">
-                                                        {testResult.suggested_mappings.slice(0, 20).map((mapping, idx) => (
+                                                        {(showAllMappings ? testResult.suggested_mappings : testResult.suggested_mappings.slice(0, 20)).map((mapping, idx) => (
                                                             <button
                                                                 key={idx}
                                                                 type="button"
@@ -605,16 +607,22 @@ const HTTPToolForm = ({ config, onChange, phase }: HTTPToolFormProps) => {
                                                                 <div className="flex items-center gap-2">
                                                                     <code className="font-mono text-blue-600">{mapping.path}</code>
                                                                     <span className="text-muted-foreground">→</span>
-                                                                    <span className="truncate max-w-[150px]">{mapping.value}</span>
+                                                                    <span className="truncate max-w-[150px]">{String(mapping.value ?? 'null')}</span>
                                                                 </div>
                                                                 <Plus className="w-3 h-3 opacity-0 group-hover:opacity-100 text-green-600" />
                                                             </button>
                                                         ))}
                                                     </div>
                                                     {testResult.suggested_mappings.length > 20 && (
-                                                        <div className="text-xs text-muted-foreground mt-1">
-                                                            +{testResult.suggested_mappings.length - 20} more fields...
-                                                        </div>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setShowAllMappings(!showAllMappings)}
+                                                            className="text-xs text-blue-600 hover:text-blue-800 mt-2 underline"
+                                                        >
+                                                            {showAllMappings 
+                                                                ? 'Show less' 
+                                                                : `+${testResult.suggested_mappings.length - 20} more fields...`}
+                                                        </button>
                                                     )}
                                                 </div>
                                             )}
