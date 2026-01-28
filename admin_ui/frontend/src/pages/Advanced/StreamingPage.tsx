@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import yaml from 'js-yaml';
 import { Save, Zap, AlertCircle, RefreshCw, Loader2 } from 'lucide-react';
+import { YamlErrorBanner, YamlErrorInfo } from '../../components/ui/YamlErrorBanner';
 import { ConfigSection } from '../../components/ui/ConfigSection';
 import { ConfigCard } from '../../components/ui/ConfigCard';
 import { FormInput, FormSelect, FormSwitch } from '../../components/ui/FormComponents';
@@ -10,6 +11,7 @@ import { sanitizeConfigForSave } from '../../utils/configSanitizers';
 const StreamingPage = () => {
     const [config, setConfig] = useState<any>({});
     const [loading, setLoading] = useState(true);
+    const [yamlError, setYamlError] = useState<YamlErrorInfo | null>(null);
     const [saving, setSaving] = useState(false);
     const [pendingRestart, setPendingRestart] = useState(false);
     const [restartingEngine, setRestartingEngine] = useState(false);
@@ -21,10 +23,17 @@ const StreamingPage = () => {
     const fetchConfig = async () => {
         try {
             const res = await axios.get('/api/config/yaml');
-            const parsed = yaml.load(res.data.content) as any;
-            setConfig(parsed || {});
+            if (res.data.yaml_error) {
+                setYamlError(res.data.yaml_error);
+                setConfig({});
+            } else {
+                const parsed = yaml.load(res.data.content) as any;
+                setConfig(parsed || {});
+                setYamlError(null);
+            }
         } catch (err) {
             console.error('Failed to load config', err);
+            setYamlError(null);
         } finally {
             setLoading(false);
         }
@@ -89,6 +98,12 @@ const StreamingPage = () => {
     };
 
     if (loading) return <div className="p-8 text-center text-muted-foreground">Loading configuration...</div>;
+
+    if (yamlError) return (
+        <div className="space-y-6">
+            <YamlErrorBanner error={yamlError} />
+        </div>
+    );
 
     const streamingConfig = config.streaming || {};
 

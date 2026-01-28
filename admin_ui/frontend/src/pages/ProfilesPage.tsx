@@ -3,6 +3,7 @@ import axios from 'axios';
 import yaml from 'js-yaml';
 import { sanitizeConfigForSave } from '../utils/configSanitizers';
 import { Settings, Radio, Star, AlertCircle, RefreshCw, Loader2, Plus, Trash2 } from 'lucide-react';
+import { YamlErrorBanner, YamlErrorInfo } from '../components/ui/YamlErrorBanner';
 import { ConfigSection } from '../components/ui/ConfigSection';
 import { ConfigCard } from '../components/ui/ConfigCard';
 import { Modal } from '../components/ui/Modal';
@@ -12,6 +13,7 @@ const ProfilesPage = () => {
 	const [config, setConfig] = useState<any>({});
 	const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    const [yamlError, setYamlError] = useState<YamlErrorInfo | null>(null);
 	const [editingProfile, setEditingProfile] = useState<string | null>(null);
 	const [profileForm, setProfileForm] = useState<any>({});
 	const [isNewProfile, setIsNewProfile] = useState(false);
@@ -27,9 +29,16 @@ const ProfilesPage = () => {
     const fetchConfig = async () => {
         try {
             const res = await axios.get('/api/config/yaml');
-            const parsed = yaml.load(res.data.content) as any;
-            setConfig(parsed || {});
-            setError(null);
+            if (res.data.yaml_error) {
+                setYamlError(res.data.yaml_error);
+                setConfig({});
+                setError(null);
+            } else {
+                const parsed = yaml.load(res.data.content) as any;
+                setConfig(parsed || {});
+                setError(null);
+                setYamlError(null);
+            }
         } catch (err) {
             console.error('Failed to load config', err);
             const status = (err as any)?.response?.status;
@@ -38,6 +47,7 @@ const ProfilesPage = () => {
             } else {
                 setError('Failed to load configuration. Check backend logs and try again.');
             }
+            setYamlError(null);
         } finally {
             setLoading(false);
         }
@@ -260,6 +270,12 @@ const ProfilesPage = () => {
     };
 
     if (loading) return <div className="p-8 text-center text-muted-foreground">Loading profiles...</div>;
+
+    if (yamlError) return (
+        <div className="space-y-6">
+            <YamlErrorBanner error={yamlError} />
+        </div>
+    );
 
     const profiles = config.profiles || {};
     const profileKeys = Object.keys(profiles).filter(k => k !== 'default');

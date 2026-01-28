@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import axios from 'axios';
 import yaml from 'js-yaml';
 import { Save, AlertCircle, RefreshCw, Loader2, Phone, Webhook, Search } from 'lucide-react';
+import { YamlErrorBanner, YamlErrorInfo } from '../components/ui/YamlErrorBanner';
 import { ConfigSection } from '../components/ui/ConfigSection';
 import { ConfigCard } from '../components/ui/ConfigCard';
 import ToolForm from '../components/config/ToolForm';
@@ -15,6 +16,7 @@ const ToolsPage = () => {
     const { token } = useAuth();
     const [config, setConfig] = useState<any>({});
     const [loading, setLoading] = useState(true);
+    const [yamlError, setYamlError] = useState<YamlErrorInfo | null>(null);
     const [saving, setSaving] = useState(false);
     const [pendingRestart, setPendingRestart] = useState(false);
     const [restartingEngine, setRestartingEngine] = useState(false);
@@ -27,10 +29,17 @@ const ToolsPage = () => {
     const fetchConfig = async () => {
         try {
             const res = await axios.get('/api/config/yaml');
-            const parsed = yaml.load(res.data.content) as any;
-            setConfig(parsed || {});
+            if (res.data.yaml_error) {
+                setYamlError(res.data.yaml_error);
+                setConfig({});
+            } else {
+                const parsed = yaml.load(res.data.content) as any;
+                setConfig(parsed || {});
+                setYamlError(null);
+            }
         } catch (err) {
             console.error('Failed to load config', err);
+            setYamlError(null);
         } finally {
             setLoading(false);
         }
@@ -103,6 +112,7 @@ const ToolsPage = () => {
 
     return (
         <div className="space-y-6">
+            {yamlError && <YamlErrorBanner error={yamlError} />}
             <div className={`${pendingRestart ? 'bg-orange-500/15 border-orange-500/30' : 'bg-yellow-500/10 border-yellow-500/20'} border text-yellow-600 dark:text-yellow-500 p-4 rounded-md flex items-center justify-between`}>
                 <div className="flex items-center">
                     <AlertCircle className="w-5 h-5 mr-2" />
