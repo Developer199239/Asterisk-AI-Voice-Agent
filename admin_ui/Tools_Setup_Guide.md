@@ -8,11 +8,12 @@
 
 ## Overview
 
-This guide explains how to set up **Pre-Call HTTP Lookups** and **Post-Call Webhooks** using the Admin UI. These tools enable CRM integration with platforms like GoHighLevel, n8n, and Make.
+This guide explains how to set up **Pre-Call HTTP Lookups**, **In-Call HTTP Tools**, and **Post-Call Webhooks** using the Admin UI. These tools enable CRM integration with platforms like GoHighLevel, n8n, and Make.
 
 ### What You'll Learn
 
 - Setting up pre-call CRM lookups (fetch customer data before AI speaks)
+- Configuring in-call HTTP tools (AI-invoked API calls during conversation)
 - Configuring post-call webhooks (send call data to external systems)
 - Using variables in prompts and payloads
 - Integration examples for GoHighLevel, n8n, and Make
@@ -94,7 +95,98 @@ Click **Save** to apply changes.
 
 ---
 
-## Part 2: Post-Call Webhooks
+## Part 2: In-Call HTTP Tools
+
+In-call HTTP tools are **AI-invoked** during a live conversation. Unlike pre-call tools (automatic) or post-call webhooks (after hangup), these tools are called by the AI when it needs real-time data.
+
+### Use Cases
+
+- Check appointment availability
+- Look up order status
+- Query inventory levels
+- Fetch account balance
+- Any API call where the AI needs fresh data mid-conversation
+
+### Step 1: Navigate to Tools
+
+1. Go to **Tools**
+2. Select the **In-Call** tab
+3. Scroll to **In-Call HTTP Tools** section
+4. Click **+ Add Tool**
+
+### Step 2: Configure the Tool
+
+| Field | Description | Example |
+|-------|-------------|---------|
+| **Name** | Unique identifier | `check_availability` |
+| **Enabled** | Toggle on/off | ✓ |
+| **Description** | What this tool does (shown to AI) | `Check appointment availability for a date and time` |
+| **URL** | API endpoint | `https://api.example.com/availability` |
+| **Method** | HTTP method | `POST` |
+| **Timeout (ms)** | Request timeout | `5000` |
+
+### Step 3: Define AI Parameters
+
+These are the parameters the AI will provide when calling the tool. Click **Add Parameter**:
+
+| Parameter Name | Type | Description | Required |
+|----------------|------|-------------|----------|
+| `date` | string | Date in YYYY-MM-DD format | ✓ |
+| `time` | string | Time in HH:MM format | ✓ |
+
+### Step 4: Configure Request
+
+**Headers**:
+| Header Name | Value |
+|-------------|-------|
+| `Authorization` | `Bearer ${API_KEY}` |
+| `Content-Type` | `application/json` |
+
+**Body Template** (for POST/PUT/PATCH):
+```json
+{
+  "customer_id": "{customer_id}",
+  "date": "{date}",
+  "time": "{time}"
+}
+```
+
+> **Note**: `{customer_id}` comes from a pre-call lookup. `{date}` and `{time}` are provided by the AI at runtime.
+
+### Step 5: Configure Response Handling
+
+**Option A: Extract specific fields** (recommended)
+
+| Variable Name | Response Path |
+|---------------|---------------|
+| `available` | `data.available` |
+| `next_slot` | `data.next_available_slot` |
+
+**Option B: Return raw JSON**
+
+Toggle **Return Raw JSON** to return the entire response to the AI.
+
+### Step 6: Configure Error Handling
+
+| Field | Description | Example |
+|-------|-------------|---------|
+| **Error Message** | Message AI speaks on failure | `I'm sorry, I couldn't check availability right now.` |
+
+### Step 7: Test the Tool
+
+1. Expand **Test Values** section
+2. Enter test values for AI parameters (e.g., `date: 2026-01-30`)
+3. Enter test values for context variables (e.g., `caller_number: +15551234567`)
+4. Click **Test**
+5. Review results in the Test Results Panel
+
+### Step 8: Save
+
+Click **Save** to apply changes.
+
+---
+
+## Part 3: Post-Call Webhooks
 
 Post-call webhooks send call data to external systems **after the call ends**. Use them to update CRMs, trigger automations, or log calls.
 
@@ -158,7 +250,7 @@ Click **Save Configuration** to apply changes.
 
 ---
 
-## Part 3: Using Variables in Contexts
+## Part 4: Using Variables in Contexts
 
 After setting up lookups and webhooks, you need to use the output variables in your AI context prompts.
 
@@ -201,7 +293,7 @@ Click **Save** to apply the context configuration.
 
 ---
 
-## Part 4: Variable Reference
+## Part 5: Variable Reference
 
 ### Pre-Call Variables (Input)
 
@@ -252,7 +344,7 @@ Use these in webhook payloads:
 
 ---
 
-## Part 5: Platform-Specific Setup
+## Part 6: Platform-Specific Setup
 
 ### GoHighLevel Integration
 

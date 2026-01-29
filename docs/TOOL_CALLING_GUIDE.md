@@ -14,6 +14,7 @@ Complete guide to AI tool calling in Asterisk AI Voice Agent—enabling AI agent
 - [Supported Providers](#supported-providers)
 - [Available Tools](#available-tools)
 - [Pre-Call Tools (HTTP Lookups)](#pre-call-tools-http-lookups)
+- [In-Call HTTP Tools](#in-call-http-tools)
 - [Post-Call Tools (Webhooks)](#post-call-tools-webhooks)
 - [Configuration](#configuration)
 - [Dialplan Setup](#dialplan-setup)
@@ -390,6 +391,147 @@ tools:
       customer_name: "data.full_name"
       customer_status: "data.status"
       last_interaction: "data.last_call_date"
+```
+
+---
+
+## In-Call HTTP Tools
+
+**New in v4.2** — In-call HTTP tools are AI-invoked during a live conversation to fetch real-time data from external APIs.
+
+### In-Call Overview
+
+Unlike pre-call tools (automatic, before AI speaks) and post-call webhooks (after hangup), in-call HTTP tools are invoked by the AI during the conversation when it needs fresh data. The AI decides when to call them based on conversation context.
+
+**Use Cases**:
+- Check appointment availability
+- Look up order status  
+- Query real-time inventory
+- Fetch account balance
+- Any API call where the AI needs data mid-conversation
+
+### In-Call HTTP Tool Configuration
+
+```yaml
+in_call_http_tools:
+  check_availability:
+    kind: in_call_http_lookup
+    enabled: true
+    description: "Check appointment availability for a given date and time"
+    timeout_ms: 5000
+    url: "https://api.example.com/availability"
+    method: POST
+    headers:
+      Authorization: "Bearer ${API_KEY}"
+      Content-Type: "application/json"
+    parameters:
+      - name: date
+        type: string
+        description: "Date in YYYY-MM-DD format"
+        required: true
+      - name: time
+        type: string
+        description: "Time in HH:MM format"
+        required: true
+    body_template: |
+      {
+        "customer_id": "{customer_id}",
+        "date": "{date}",
+        "time": "{time}"
+      }
+    return_raw_json: false
+    output_variables:
+      available: "data.available"
+      next_slot: "data.next_available_slot"
+    error_message: "I'm sorry, I couldn't check availability right now."
+```
+
+### Variable Substitution (Precedence)
+
+In-call HTTP tools have access to three types of variables:
+
+1. **Context variables** (auto-injected): `{caller_number}`, `{called_number}`, `{call_id}`, etc.
+2. **Pre-call variables** (from pre-call HTTP lookups): `{customer_id}`, `{customer_name}`, etc.
+3. **AI parameters** (provided at runtime): Whatever the AI passes when invoking the tool
+
+This means you can use data fetched by pre-call tools in your in-call tool requests. For example, if a pre-call lookup fetches `customer_id`, you can use `{customer_id}` in the in-call tool's body template.
+
+### Key Differences from Other Tool Types
+
+| Aspect | Pre-Call Tools | In-Call HTTP Tools | Post-Call Webhooks |
+|--------|---------------|--------------------|--------------------|
+| Trigger | Automatic (after answer) | AI-invoked | Automatic (after hangup) |
+| Parameters | Context variables only | AI params + context + pre-call vars | Call data + context |
+| Timing | Before AI speaks | During conversation | After call ends |
+| Results | Injected into prompt | Returned to AI | Fire-and-forget |
+
+### In-Call Example Configurations
+
+**Order Status Lookup**:
+
+```yaml
+in_call_http_tools:
+  order_status:
+    kind: in_call_http_lookup
+    enabled: true
+    description: "Look up the status of an order by order number"
+    timeout_ms: 5000
+    url: "https://api.example.com/orders/{order_number}"
+    method: GET
+    headers:
+      Authorization: "Bearer ${API_KEY}"
+    parameters:
+      - name: order_number
+        type: string
+        description: "The order number to look up"
+        required: true
+    output_variables:
+      status: "data.status"
+      estimated_delivery: "data.estimated_delivery"
+      tracking_number: "data.tracking_number"
+    error_message: "I couldn't find that order. Please verify the order number."
+```
+
+**Appointment Booking**:
+
+```yaml
+in_call_http_tools:
+  book_appointment:
+    kind: in_call_http_lookup
+    enabled: true
+    description: "Book an appointment for a customer"
+    timeout_ms: 8000
+    url: "https://api.example.com/appointments"
+    method: POST
+    headers:
+      Authorization: "Bearer ${API_KEY}"
+      Content-Type: "application/json"
+    parameters:
+      - name: date
+        type: string
+        description: "Appointment date (YYYY-MM-DD)"
+        required: true
+      - name: time
+        type: string
+        description: "Appointment time (HH:MM)"
+        required: true
+      - name: service_type
+        type: string
+        description: "Type of service requested"
+        required: true
+    body_template: |
+      {
+        "customer_phone": "{caller_number}",
+        "customer_id": "{customer_id}",
+        "date": "{date}",
+        "time": "{time}",
+        "service": "{service_type}"
+      }
+    return_raw_json: false
+    output_variables:
+      confirmation_number: "data.confirmation_id"
+      appointment_time: "data.scheduled_time"
+    error_message: "I wasn't able to book that appointment. Would you like to try a different time?"
 ```
 
 ---

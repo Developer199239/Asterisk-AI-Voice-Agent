@@ -1,9 +1,9 @@
 # Milestone 24: Tool System Enhancements (Pre-Call, In-Call, Post-Call)
 
-**Status**: 🔵 Planned  
+**Status**: � In Progress  
 **Priority**: High  
 **Estimated Effort**: 3–4 weeks (MVP)  
-**Branch**: `feature/tool-enhancements`  
+**Branch**: `develop`  
 
 ## Summary
 
@@ -853,6 +853,102 @@ contexts:
 
 ### Phase 5.1 — Webhook Summary Generation ✅ COMPLETE (Jan 26, 2026)
 
+### Phase 5.2 — In-Call HTTP Tools ✅ COMPLETE (Jan 28, 2026)
+
+**Feature**: HTTP tools that the AI can invoke during a conversation to fetch real-time data.
+
+Unlike pre-call tools (which run before AI speaks) and post-call webhooks (which fire after hangup), in-call HTTP tools are **AI-invoked** during the live conversation. The AI decides when to call them based on conversation context.
+
+**Use Cases**:
+- Check appointment availability
+- Look up order status
+- Query real-time inventory
+- Fetch account balance
+- Any API call where the AI needs fresh data mid-conversation
+
+**Configuration Example**:
+
+```yaml
+in_call_http_tools:
+  check_availability:
+    kind: in_call_http_lookup
+    enabled: true
+    description: "Check appointment availability for a given date and time"
+    timeout_ms: 5000
+    url: "https://api.example.com/availability"
+    method: POST
+    headers:
+      Authorization: "Bearer ${API_KEY}"
+      Content-Type: "application/json"
+    parameters:
+      - name: date
+        type: string
+        description: "Date in YYYY-MM-DD format"
+        required: true
+      - name: time
+        type: string
+        description: "Time in HH:MM format"
+        required: true
+    body_template: |
+      {
+        "customer_id": "{customer_id}",
+        "date": "{date}",
+        "time": "{time}"
+      }
+    return_raw_json: false
+    output_variables:
+      available: "data.available"
+      next_slot: "data.next_available_slot"
+    error_message: "I'm sorry, I couldn't check availability right now."
+```
+
+**Key Differences from Pre-Call Tools**:
+
+| Aspect | Pre-Call Tools | In-Call HTTP Tools |
+|--------|---------------|--------------------|
+| Trigger | Automatic (after answer) | AI-invoked (during conversation) |
+| Parameters | Context variables only | AI provides parameters + context variables |
+| Timing | Before AI speaks | During live conversation |
+| Results | Injected into prompt | Returned to AI for response |
+
+**Variable Substitution (Precedence)**:
+1. **Context variables** (auto-injected): `{caller_number}`, `{called_number}`, `{call_id}`, etc.
+2. **Pre-call variables** (from pre-call HTTP lookups): `{customer_id}`, `{customer_name}`, etc.
+3. **AI parameters** (provided at runtime): Whatever the AI passes when invoking the tool
+
+**Implementation**:
+- ✅ `InCallHTTPTool` class in `src/tools/http/in_call_lookup.py`
+- ✅ `InCallHTTPConfig` dataclass for tool configuration
+- ✅ AI parameters schema generation for provider function calling
+- ✅ Variable substitution from context, pre-call results, and AI params
+- ✅ Output variable extraction or raw JSON return
+- ✅ Error handling with configurable error message
+- ✅ Hold audio support during long requests
+- ✅ Pre-call variables accessible in in-call tools via `session.pre_call_results`
+
+**Admin UI**:
+- ✅ In-Call HTTP Tools section in Tools page (In-Call tab)
+- ✅ Tool configuration modal with:
+  - Description field for AI context
+  - AI parameters definition (name, type, description, required)
+  - URL, method, headers, query params, body template
+  - Output variables mapping
+  - Return raw JSON toggle
+  - Error message configuration
+  - Test values for AI parameters
+- ✅ Test functionality with results panel
+- ✅ Correct phase-specific titles and labels
+
+**Files created**:
+- `src/tools/http/in_call_lookup.py` — In-call HTTP tool implementation
+
+**Files modified**:
+- `src/tools/registry.py` — Added `initialize_in_call_http_tools_from_config()` method
+- `src/engine.py` — Added per-context in-call HTTP tool registration
+- `src/core/transport_orchestrator.py` — Extended `ContextConfig` with `in_call_http_tools`
+- `admin_ui/frontend/src/pages/ToolsPage.tsx` — Added In-Call HTTP Tools section
+- `admin_ui/frontend/src/components/config/HTTPToolForm.tsx` — Extended for in_call phase
+
 **Feature**: AI-generated call summaries for post-call webhooks instead of sending full transcripts.
 
 **Configuration**:
@@ -890,6 +986,14 @@ Sending webhook: demo_post_call_webhook POST https://hub.cybridllc.com/webhook/w
 Webhook sent successfully: demo_post_call_webhook status=200
 Post-call tool completed duration_ms=6074.03 tool=demo_post_call_webhook
 ```
+
+### Lessons Learned (Phase 5.2)
+
+1. **Pre-call variables in in-call tools**: Initially, in-call tools only had access to context variables and AI parameters. Added support to fetch `session.pre_call_results` so variables from pre-call CRM lookups can be used in in-call tool requests.
+
+2. **Phase-specific UI labels**: The HTTPToolForm component needed phase-aware titles, descriptions, and button labels. Initially showed "Post-Call Webhooks" for in-call tools due to fallback logic.
+
+3. **Test Results Panel**: Had to duplicate the Test Results Panel rendering for the in_call phase section since it was only conditionally rendered for pre_call.
 
 ### Lessons Learned (Phase 5.1)
 
