@@ -916,6 +916,101 @@ const HTTPToolForm = ({ config, onChange, phase }: HTTPToolFormProps) => {
                                     </div>
                                 )}
                             </div>
+
+                            {/* Test Results Panel */}
+                            {showTestPanel && (
+                                <div className="border border-border rounded-lg overflow-hidden">
+                                    <div className="bg-accent/50 px-3 py-2 flex items-center justify-between">
+                                        <span className="text-sm font-medium">Test Results</span>
+                                        {testResult && (
+                                            <div className="flex items-center gap-2">
+                                                {testResult.success ? (
+                                                    <span className="flex items-center gap-1 text-xs text-green-600">
+                                                        <CheckCircle2 className="w-3 h-3" />
+                                                        {testResult.status_code} OK
+                                                    </span>
+                                                ) : (
+                                                    <span className="flex items-center gap-1 text-xs text-red-600">
+                                                        <XCircle className="w-3 h-3" />
+                                                        {testResult.error || 'Failed'}
+                                                    </span>
+                                                )}
+                                                <span className="text-xs text-muted-foreground">
+                                                    {testResult.response_time_ms.toFixed(0)}ms
+                                                </span>
+                                            </div>
+                                        )}
+                                    </div>
+                                    
+                                    {testing && (
+                                        <div className="p-4 text-center text-muted-foreground">
+                                            <Loader2 className="w-5 h-5 animate-spin mx-auto mb-2" />
+                                            Testing endpoint...
+                                        </div>
+                                    )}
+                                    
+                                    {testResult && !testing && (
+                                        <div className="p-3 space-y-3 max-h-[300px] overflow-y-auto">
+                                            {/* Resolved URL */}
+                                            <div>
+                                                <div className="text-xs text-muted-foreground mb-1">Resolved URL:</div>
+                                                <code className="text-xs bg-accent/50 px-2 py-1 rounded block break-all">
+                                                    {testResult.resolved_url}
+                                                </code>
+                                            </div>
+                                            
+                                            {/* Response Body Preview */}
+                                            {testResult.body && (
+                                                <div>
+                                                    <div className="text-xs text-muted-foreground mb-1">Response:</div>
+                                                    <pre className="text-xs bg-accent/30 p-2 rounded overflow-x-auto max-h-[150px]">
+                                                        {typeof testResult.body === 'object' 
+                                                            ? JSON.stringify(testResult.body, null, 2)
+                                                            : testResult.body}
+                                                    </pre>
+                                                </div>
+                                            )}
+                                            
+                                            {/* Click-to-Map Suggestions */}
+                                            {testResult.suggested_mappings && testResult.suggested_mappings.length > 0 && (
+                                                <div>
+                                                    <div className="text-xs text-muted-foreground mb-1">
+                                                        Click to add output variable mapping:
+                                                    </div>
+                                                    <div className="space-y-1">
+                                                        {(showAllMappings ? testResult.suggested_mappings : testResult.suggested_mappings.slice(0, 20)).map((mapping, idx) => (
+                                                            <button
+                                                                key={idx}
+                                                                type="button"
+                                                                onClick={() => handleAddMapping(mapping.path)}
+                                                                className="flex items-center justify-between w-full text-left px-2 py-1.5 text-xs bg-accent/30 hover:bg-accent rounded group"
+                                                            >
+                                                                <div className="flex items-center gap-2">
+                                                                    <code className="font-mono text-blue-600">{mapping.path}</code>
+                                                                    <span className="text-muted-foreground">→</span>
+                                                                    <span className="truncate max-w-[150px]">{String(mapping.value ?? 'null')}</span>
+                                                                </div>
+                                                                <Plus className="w-3 h-3 opacity-0 group-hover:opacity-100 text-green-600" />
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                    {testResult.suggested_mappings.length > 20 && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setShowAllMappings(!showAllMappings)}
+                                                            className="text-xs text-blue-600 hover:text-blue-800 mt-2 underline"
+                                                        >
+                                                            {showAllMappings 
+                                                                ? 'Show less' 
+                                                                : `+${testResult.suggested_mappings.length - 20} more fields...`}
+                                                        </button>
+                                                    )}
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
+                            )}
                         </>
                     )}
 
