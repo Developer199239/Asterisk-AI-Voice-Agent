@@ -434,6 +434,73 @@ GoHighLevel API endpoints and authentication details can change; validate reques
 
 ---
 
+### Discord Webhook Integration
+
+**Post-Call: Send Notifications to Discord Channel**
+
+1. In Discord, go to **Server Settings > Integrations > Webhooks**
+2. Click **New Webhook**, name it, and select the target channel
+3. Click **Copy Webhook URL**
+4. In Admin UI, create a webhook:
+
+| Field | Value |
+|-------|-------|
+| **Name** | `discord_call_notification` |
+| **URL** | `https://discord.com/api/webhooks/xxxxx/xxxxx` |
+| **Method** | `POST` |
+| **Global** | ✓ |
+| **Generate Summary** | ✓ |
+
+5. **Payload** (Discord embed format):
+
+```json
+{
+  "username": "AI Voice Agent",
+  "avatar_url": "https://cdn-icons-png.flaticon.com/512/4712/4712109.png",
+  "embeds": [
+    {
+      "title": "📞 Call Completed",
+      "color": 5814783,
+      "fields": [
+        {
+          "name": "Duration",
+          "value": "{call_duration} seconds",
+          "inline": true
+        },
+        {
+          "name": "Context",
+          "value": "{context_name}",
+          "inline": true
+        },
+        {
+          "name": "Outcome",
+          "value": "{call_outcome}",
+          "inline": true
+        },
+        {
+          "name": "Provider",
+          "value": "{provider}",
+          "inline": true
+        },
+        {
+          "name": "Summary",
+          "value": "{summary}",
+          "inline": false
+        }
+      ],
+      "footer": {
+        "text": "Asterisk AI Voice Agent"
+      },
+      "timestamp": "{call_end_time}"
+    }
+  ]
+}
+```
+
+> **Note**: Discord requires the `embeds` format for rich messages. The `color` field is a decimal color code (5814783 = blue). Enable **Generate Summary** to populate the `{summary}` field.
+
+---
+
 ## Troubleshooting
 
 ### Lookup Returns Empty Values
