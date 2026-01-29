@@ -27,7 +27,10 @@ class ToolExecutionContext:
     call_id: str
     caller_channel_id: Optional[str] = None
     bridge_id: Optional[str] = None
-    called_number: Optional[str] = None  # DIALED_NUMBER or __FROM_DID - the number that was dialed
+    caller_number: Optional[str] = None   # CALLERID(num) - caller's phone number
+    called_number: Optional[str] = None   # DIALED_NUMBER or __FROM_DID - the number that was dialed
+    caller_name: Optional[str] = None     # CALLERID(name) for personalization
+    context_name: Optional[str] = None    # AI_CONTEXT from dialplan
     
     # System access (injected by provider)
     session_store: Any = None  # SessionStore instance
