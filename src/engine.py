@@ -3242,10 +3242,18 @@ class Engine:
         
         def replace_match(match):
             key = match.group(1)
-            return substitutions.get(key, match.group(0))  # Leave unknown as-is
+            # Try exact match first
+            if key in substitutions:
+                return substitutions[key]
+            # Convert dot notation to underscore (e.g., patient.name -> patient_name)
+            underscore_key = key.replace('.', '_')
+            if underscore_key in substitutions:
+                return substitutions[underscore_key]
+            return match.group(0)  # Leave unknown as-is
         
         try:
-            return re.sub(r'\{(\w+)\}', replace_match, text)
+            # Match both {word} and {word.subword} patterns
+            return re.sub(r'\{([\w.]+)\}', replace_match, text)
         except Exception as e:
             logger.debug(
                 "Prompt template substitution failed, leaving unchanged",
