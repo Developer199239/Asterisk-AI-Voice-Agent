@@ -456,7 +456,7 @@ GoHighLevel API endpoints and authentication details can change; validate reques
 ```json
 {
   "username": "AI Voice Agent",
-  "avatar_url": "https://cdn.discordapp.com/icons/1422410207363076138/518de7efac8e795dfedda676c5bba770.png?size=512",
+  "avatar_url": "https://cdn.discordapp.com/icons/1422410207363076138/518de7efac8e795dfedda676c5bba770.png",
   "embeds": [
     {
       "title": "📞 Call Completed",
