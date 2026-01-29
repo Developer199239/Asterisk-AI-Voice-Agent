@@ -269,32 +269,58 @@ const HTTPToolForm = ({ config, onChange, phase }: HTTPToolFormProps) => {
         }));
     };
 
-    const phaseIcon = phase === 'pre_call' ? <Search className="w-4 h-4" /> : <Webhook className="w-4 h-4" />;
-    const phaseTitle = phase === 'pre_call' ? 'Pre-Call HTTP Lookups' : 'Post-Call Webhooks';
-    const phaseDesc = phase === 'pre_call' 
-        ? 'Fetch data from external APIs (CRM, database) before the AI speaks. Output variables are injected into the system prompt.'
-        : 'Send call data to external systems (n8n, Make, CRM) after the call ends. Fire-and-forget.';
+    const getPhaseConfig = () => {
+        switch (phase) {
+            case 'pre_call':
+                return {
+                    icon: <Search className="w-4 h-4" />,
+                    title: 'Pre-Call HTTP Lookups',
+                    desc: 'Fetch data from external APIs (CRM, database) before the AI speaks. Output variables are injected into the system prompt.',
+                    addLabel: 'Add Lookup',
+                    emptyLabel: 'pre-call lookups',
+                };
+            case 'in_call':
+                return {
+                    icon: <Search className="w-4 h-4" />,
+                    title: 'In-Call HTTP Tools',
+                    desc: 'HTTP lookup tools the AI can invoke during conversation to fetch data (e.g., check availability, lookup order status).',
+                    addLabel: 'Add Tool',
+                    emptyLabel: 'in-call HTTP tools',
+                };
+            case 'post_call':
+            default:
+                return {
+                    icon: <Webhook className="w-4 h-4" />,
+                    title: 'Post-Call Webhooks',
+                    desc: 'Send call data to external systems (n8n, Make, CRM) after the call ends. Fire-and-forget.',
+                    addLabel: 'Add Webhook',
+                    emptyLabel: 'post-call webhooks',
+                };
+        }
+    };
+
+    const phaseConfig = getPhaseConfig();
 
     return (
         <div className="space-y-4">
             <div className="flex justify-between items-center">
                 <div>
                     <h4 className="text-md font-medium flex items-center gap-2">
-                        {phaseIcon} {phaseTitle}
+                        {phaseConfig.icon} {phaseConfig.title}
                     </h4>
-                    <p className="text-xs text-muted-foreground mt-1">{phaseDesc}</p>
+                    <p className="text-xs text-muted-foreground mt-1">{phaseConfig.desc}</p>
                 </div>
                 <button
                     onClick={handleAddTool}
                     className="text-xs flex items-center bg-primary text-primary-foreground px-3 py-1.5 rounded hover:bg-primary/90 transition-colors"
                 >
-                    <Plus className="w-3 h-3 mr-1" /> Add {phase === 'pre_call' ? 'Lookup' : 'Webhook'}
+                    <Plus className="w-3 h-3 mr-1" /> {phaseConfig.addLabel}
                 </button>
             </div>
 
             {Object.keys(httpTools).length === 0 ? (
                 <div className="text-sm text-muted-foreground p-4 border border-dashed border-border rounded-lg text-center">
-                    No {phase === 'pre_call' ? 'pre-call lookups' : 'post-call webhooks'} configured.
+                    No {phaseConfig.emptyLabel} configured.
                 </div>
             ) : (
                 <div className="space-y-2">
